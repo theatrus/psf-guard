@@ -58,6 +58,7 @@ pub struct ImageResponse {
     pub grading_status: i32,
     pub reject_reason: Option<String>,
     pub metadata: serde_json::Value,
+    pub filesystem_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

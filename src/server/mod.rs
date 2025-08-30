@@ -29,20 +29,57 @@ pub async fn run_server(
     host: String,
     port: u16,
 ) -> anyhow::Result<()> {
-    // Initialize tracing
-    tracing_subscriber::fmt::init();
+    // Initialize tracing with environment-based filtering
+    // Set RUST_LOG=debug for debug logs, RUST_LOG=info for info logs, etc.
+    // Default to info level if no RUST_LOG is set
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::filter::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::filter::EnvFilter::new("info")),
+        )
+        .with_target(false) // Don't show module paths in logs
+        .with_level(true) // Show log levels
+        .with_thread_ids(false) // Don't show thread IDs for cleaner output
+        .init();
+
+    tracing::info!("🚀 Starting PSF Guard server");
+    tracing::info!("📊 Database: {}", database_path);
+    tracing::info!("📁 Image directory: {}", image_dir);
+    tracing::info!("💾 Cache directory: {}", cache_dir);
 
     // Create cache directory if it doesn't exist
     std::fs::create_dir_all(&cache_dir)?;
 
     // Create app state
-    let state = match AppState::new(database_path, image_dir, cache_dir.clone()) {
-        Ok(state) => Arc::new(state),
+    let state = match AppState::new(database_path.clone(), image_dir.clone(), cache_dir.clone()) {
+        Ok(state) => {
+            tracing::info!("✅ Application state initialized successfully");
+            Arc::new(state)
+        }
         Err(e) => {
-            eprintln!("Failed to initialize server: {}", e);
+            tracing::error!("❌ Failed to initialize server: {}", e);
             return Err(e);
         }
     };
+
+    // Refresh file cache on startup
+    tracing::info!("🔄 Refreshing file cache on startup...");
+    if let Err(e) = handlers::refresh_project_cache(&state).await {
+        tracing::warn!("⚠️ Failed to refresh cache on startup: {:?}", e);
+        tracing::info!("📝 Server will continue, cache will be refreshed on first request");
+    } else {
+        let (projects_checked, projects_with_files) = {
+            let cache = state.file_check_cache.read().unwrap();
+            let total = cache.projects_with_files.len();
+            let found = cache.projects_with_files.values().filter(|&&v| v).count();
+            (total, found)
+        };
+        tracing::info!(
+            "✅ Startup cache refresh completed - {}/{} projects have files",
+            projects_with_files,
+            projects_checked
+        );
+    }
 
     // Create API routes
     let api_routes = Router::new()
@@ -108,11 +145,16 @@ pub async fn run_server(
     // Create listener
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", host, port)).await?;
 
-    tracing::info!("Server listening on http://{}:{}", host, port);
-    tracing::info!("Using cache directory: {}", cache_dir);
+    tracing::info!("🌐 Server listening on http://{}:{}", host, port);
+    tracing::info!(
+        "🔧 Environment: RUST_LOG={}",
+        std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string())
+    );
+    tracing::info!("🎯 Ready to serve requests!");
 
     // Run server
     axum::serve(listener, app).await?;
 
+    tracing::info!("🛑 Server shutdown");
     Ok(())
 }

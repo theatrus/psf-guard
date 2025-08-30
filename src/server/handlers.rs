@@ -37,13 +37,9 @@ pub async fn refresh_file_cache(
 ) -> Result<Json<ApiResponse<FileCheckResponse>>, AppError> {
     let start_time = std::time::Instant::now();
 
-    // Clear existing cache
-    {
-        let mut cache = state.file_check_cache.write().unwrap();
-        cache.clear();
-    }
+    tracing::info!("🔄 Starting file cache refresh");
 
-    // Refresh projects
+    // Refresh projects (this will do its own atomic cache update)
     refresh_project_cache(&state).await?;
 
     // Get stats
@@ -62,16 +58,35 @@ pub async fn refresh_file_cache(
         check_time_ms: start_time.elapsed().as_millis(),
     };
 
+    tracing::info!(
+        "✅ File cache refresh completed in {}ms - {} projects checked, {} with files, {} missing",
+        response.check_time_ms,
+        images_checked,
+        files_found,
+        files_missing
+    );
+
     Ok(Json(ApiResponse::success(response)))
 }
 
 pub async fn list_projects(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Vec<ProjectResponse>>>, AppError> {
+    tracing::debug!("📋 Listing projects");
+
     // Check if cache is expired
     let needs_refresh = {
         let cache = state.file_check_cache.read().unwrap();
-        cache.is_expired() || cache.projects_with_files.is_empty()
+        let expired = cache.is_expired();
+        let empty = cache.projects_with_files.is_empty();
+
+        if expired {
+            tracing::debug!("⏰ Project cache expired, refreshing");
+        } else if empty {
+            tracing::debug!("📭 Project cache empty, refreshing");
+        }
+
+        expired || empty
     };
 
     if needs_refresh {
@@ -105,36 +120,122 @@ pub async fn list_projects(
         })
         .collect();
 
+    tracing::debug!("📋 Returning {} projects", response.len());
+
     Ok(Json(ApiResponse::success(response)))
 }
 
-async fn refresh_project_cache(state: &Arc<AppState>) -> Result<(), AppError> {
-    let projects_to_check = {
+pub async fn refresh_project_cache(state: &Arc<AppState>) -> Result<(), AppError> {
+    let start_time = std::time::Instant::now();
+    tracing::debug!("🔄 Refreshing project cache");
+
+    // Get all projects and their sample images in one database operation to minimize lock time
+    let projects_with_sample_images = {
         let conn = state.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
-        db.get_projects_with_images()
-            .map_err(|_| AppError::DatabaseError)?
+
+        let projects = db
+            .get_projects_with_images()
+            .map_err(|_| AppError::DatabaseError)?;
+
+        let mut project_images = HashMap::new();
+
+        // Get sample images for all projects in one query
+        let all_images = db
+            .query_images(None, None, None, None)
+            .map_err(|_| AppError::DatabaseError)?;
+
+        // Group images by project and take samples
+        for (image, _, target_name) in all_images {
+            project_images
+                .entry(image.project_id)
+                .or_insert_with(Vec::new)
+                .push((image, target_name));
+        }
+
+        // Limit to 5 samples per project
+        for samples in project_images.values_mut() {
+            samples.truncate(5);
+        }
+
+        (projects, project_images)
     };
 
-    let mut cache_updates = HashMap::new();
+    let (projects, project_images) = projects_with_sample_images;
+    let project_count = projects.len();
 
-    for project in projects_to_check {
-        // Check a few sample images for this project
-        let has_files = check_project_has_files(state, project.id).await?;
+    tracing::debug!("🔍 Checking {} projects for file existence", project_count);
+
+    // Perform all expensive filesystem operations WITHOUT holding any locks
+    let mut cache_updates = HashMap::new();
+    let mut projects_with_files = 0;
+
+    for project in projects {
+        let has_files = if let Some(images) = project_images.get(&project.id) {
+            tracing::trace!(
+                "🔎 Checking project '{}' (ID: {}) with {} sample images",
+                project.name,
+                project.id,
+                images.len()
+            );
+            check_project_files_from_samples(state, images).await?
+        } else {
+            tracing::trace!(
+                "🔎 Project '{}' (ID: {}) has no images",
+                project.name,
+                project.id
+            );
+            false
+        };
+
+        if has_files {
+            projects_with_files += 1;
+        }
+
         cache_updates.insert(project.id, has_files);
     }
 
-    // Update cache
+    // Only acquire write lock for the final atomic update
     {
         let mut cache = state.file_check_cache.write().unwrap();
         cache.projects_with_files = cache_updates;
         cache.last_updated = std::time::Instant::now();
     }
 
+    let duration = start_time.elapsed();
+    tracing::debug!(
+        "✅ Project cache refresh completed in {:?} - {}/{} projects have files",
+        duration,
+        projects_with_files,
+        project_count
+    );
+
     Ok(())
 }
 
+// Helper function that doesn't require additional database access
+async fn check_project_files_from_samples(
+    state: &Arc<AppState>,
+    images: &[(crate::models::AcquiredImage, String)],
+) -> Result<bool, AppError> {
+    for (image, target_name) in images {
+        if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&image.metadata) {
+            if let Some(filename) = metadata["FileName"].as_str() {
+                let file_only = filename
+                    .split(&['\\', '/'][..])
+                    .next_back()
+                    .unwrap_or(filename);
+                if find_fits_file(state, image, target_name, file_only).is_ok() {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+// Legacy function kept for compatibility with target cache refresh
 async fn check_project_has_files(state: &Arc<AppState>, project_id: i32) -> Result<bool, AppError> {
     let images_to_check = {
         let conn = state.db();
@@ -170,14 +271,24 @@ pub async fn list_targets(
     State(state): State<Arc<AppState>>,
     Path(project_id): Path<i32>,
 ) -> Result<Json<ApiResponse<Vec<TargetResponse>>>, AppError> {
+    tracing::debug!("🎯 Listing targets for project {}", project_id);
+
     // Check if we need to refresh target cache for this project
     let needs_refresh = {
         let cache = state.file_check_cache.read().unwrap();
-        cache.is_expired()
-            || !cache.targets_with_files.iter().any(|(_tid, _)| {
-                // Check if we have any cached data for targets in this project
-                true // We'll need to track project_id per target for more efficient caching
-            })
+        let expired = cache.is_expired();
+        let empty = !cache.targets_with_files.iter().any(|(_tid, _)| {
+            // Check if we have any cached data for targets in this project
+            true // We'll need to track project_id per target for more efficient caching
+        });
+
+        if expired {
+            tracing::debug!("⏰ Target cache expired for project {}", project_id);
+        } else if empty {
+            tracing::debug!("📭 Target cache empty for project {}", project_id);
+        }
+
+        expired || empty
     };
 
     if needs_refresh {
@@ -216,10 +327,19 @@ pub async fn list_targets(
         })
         .collect();
 
+    tracing::debug!(
+        "🎯 Returning {} targets for project {}",
+        response.len(),
+        project_id
+    );
+
     Ok(Json(ApiResponse::success(response)))
 }
 
 async fn refresh_target_cache(state: &Arc<AppState>, project_id: i32) -> Result<(), AppError> {
+    let start_time = std::time::Instant::now();
+    tracing::debug!("🔄 Refreshing target cache for project {}", project_id);
+
     let targets_to_check = {
         let conn = state.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
@@ -228,15 +348,29 @@ async fn refresh_target_cache(state: &Arc<AppState>, project_id: i32) -> Result<
             .map_err(|_| AppError::DatabaseError)?
     };
 
+    let target_count = targets_to_check.len();
+    tracing::debug!(
+        "🔍 Checking {} targets in project {}",
+        target_count,
+        project_id
+    );
+
+    // Perform all expensive filesystem operations WITHOUT holding any locks
     let mut cache_updates = HashMap::new();
+    let mut targets_with_files = 0;
 
     for (target, _, _, _) in targets_to_check {
-        // Check a few sample images for this target
+        tracing::trace!("🔎 Checking target '{}' (ID: {})", target.name, target.id);
         let has_files = check_target_has_files(state, target.id).await?;
+
+        if has_files {
+            targets_with_files += 1;
+        }
+
         cache_updates.insert(target.id, has_files);
     }
 
-    // Update cache
+    // Only acquire write lock for the final atomic update
     {
         let mut cache = state.file_check_cache.write().unwrap();
         // Merge updates into existing cache
@@ -245,6 +379,15 @@ async fn refresh_target_cache(state: &Arc<AppState>, project_id: i32) -> Result<
         }
         cache.last_updated = std::time::Instant::now();
     }
+
+    let duration = start_time.elapsed();
+    tracing::debug!(
+        "✅ Target cache refresh completed for project {} in {:?} - {}/{} targets have files",
+        project_id,
+        duration,
+        targets_with_files,
+        target_count
+    );
 
     Ok(())
 }
@@ -332,6 +475,7 @@ pub async fn get_images(
                 grading_status: img.grading_status,
                 reject_reason: img.reject_reason,
                 metadata,
+                filesystem_path: None, // Not calculated for bulk operations for performance
             }
         })
         .collect();
@@ -375,13 +519,32 @@ pub async fn get_image(
     }; // Database connection is dropped here
 
     // Now we can do async operations
-    let stats_cache_filename = format!("stats_{}.json", image_id);
+    let stats_cache_filename = format!(
+        "stats_{}_{}_{}_{}.json",
+        image_id,
+        image.project_id,
+        image.target_id,
+        image.acquired_date.unwrap_or(0)
+    );
     let stats_cache_path = state.get_cache_path("stats", &stats_cache_filename);
 
     // Ensure cache directory exists
     if let Some(parent) = stats_cache_path.parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
+
+    // Try to resolve the filesystem path for the FITS file
+    let filesystem_path = metadata["FileName"].as_str().and_then(|filename| {
+        filename
+            .split(&['\\', '/'][..])
+            .next_back()
+            .map(|file_only| find_fits_file(&state, &image, &target_name, file_only))
+    });
+
+    let resolved_fits_path = filesystem_path
+        .as_ref()
+        .and_then(|result| result.as_ref().ok());
+    let filesystem_path_string = resolved_fits_path.map(|p| p.to_string_lossy().to_string());
 
     // Check if statistics are already cached
     let fits_stats = if tokio::fs::metadata(&stats_cache_path).await.is_ok() {
@@ -390,54 +553,45 @@ pub async fn get_image(
             Ok(cached_data) => serde_json::from_str::<serde_json::Value>(&cached_data).ok(),
             Err(_) => None,
         }
-    } else {
+    } else if let Some(fits_path) = resolved_fits_path {
         // Calculate statistics from FITS file
-        let filename_result = metadata["FileName"].as_str().and_then(|filename| {
-            filename
-                .split(&['\\', '/'][..])
-                .next_back()
-                .map(|file_only| find_fits_file(&state, &image, &target_name, file_only))
-        });
+        if let Ok(fits) = FitsImage::from_file(fits_path) {
+            let stats = fits.calculate_basic_statistics();
 
-        if let Some(Ok(fits_path)) = filename_result {
-            if let Ok(fits) = FitsImage::from_file(&fits_path) {
-                let stats = fits.calculate_basic_statistics();
+            // Extract temperature and camera model from FITS headers
+            let temperature = FitsImage::extract_temperature(fits_path);
+            let camera_model = FitsImage::extract_camera_model(fits_path);
 
-                // Extract temperature and camera model from FITS headers
-                let temperature = FitsImage::extract_temperature(&fits_path);
-                let camera_model = FitsImage::extract_camera_model(&fits_path);
+            let mut stats_json = serde_json::json!({
+                "Min": stats.min,
+                "Max": stats.max,
+                "Mean": stats.mean,
+                "Median": stats.median,
+                "StdDev": stats.std_dev,
+                "Mad": stats.mad
+            });
 
-                let mut stats_json = serde_json::json!({
-                    "Min": stats.min,
-                    "Max": stats.max,
-                    "Mean": stats.mean,
-                    "Median": stats.median,
-                    "StdDev": stats.std_dev,
-                    "Mad": stats.mad
-                });
-
-                // Add temperature if available
-                if let Some(temp) = temperature {
-                    stats_json["Temperature"] = serde_json::json!(temp);
-                }
-
-                // Add camera model if available
-                if let Some(camera) = camera_model {
-                    stats_json["Camera"] = serde_json::json!(camera);
-                }
-
-                // Cache the statistics
-                if let Ok(cached_data) = serde_json::to_string(&stats_json) {
-                    let _ = tokio::fs::write(&stats_cache_path, cached_data).await;
-                }
-
-                Some(stats_json)
-            } else {
-                None
+            // Add temperature if available
+            if let Some(temp) = temperature {
+                stats_json["Temperature"] = serde_json::json!(temp);
             }
+
+            // Add camera model if available
+            if let Some(camera) = camera_model {
+                stats_json["Camera"] = serde_json::json!(camera);
+            }
+
+            // Cache the statistics
+            if let Ok(cached_data) = serde_json::to_string(&stats_json) {
+                let _ = tokio::fs::write(&stats_cache_path, cached_data).await;
+            }
+
+            Some(stats_json)
         } else {
             None
         }
+    } else {
+        None
     };
 
     // Merge statistics into metadata if available
@@ -460,6 +614,7 @@ pub async fn get_image(
         grading_status: image.grading_status,
         reject_reason: image.reject_reason,
         metadata,
+        filesystem_path: filesystem_path_string,
     };
 
     Ok(Json(ApiResponse::success(response)))
@@ -494,6 +649,14 @@ pub async fn get_image_preview(
     Path(image_id): Path<i32>,
     Query(options): Query<PreviewOptions>,
 ) -> Result<impl IntoResponse, AppError> {
+    let start_time = std::time::Instant::now();
+    let size = options.size.as_deref().unwrap_or("screen");
+    tracing::debug!(
+        "🖼️  Generating preview for image {} (size: {})",
+        image_id,
+        size
+    );
+
     use crate::image_analysis::FitsImage;
     use crate::server::cache::CacheManager;
 
@@ -537,20 +700,25 @@ pub async fn get_image_preview(
     }; // Connection is dropped here
 
     // Determine cache parameters
-    let size = options.size.as_deref().unwrap_or("screen");
     let stretch = options.stretch.unwrap_or(true);
     let midtone = options.midtone.unwrap_or(0.2);
     let shadow = options.shadow.unwrap_or(-2.8);
 
-    // Create cache key
+    // Create comprehensive cache key including file identity and acquisition details
     let cache_key = format!(
-        "{}_{}_{}_{}_{}",
+        "{}_{}_{}_{}_{}_{}_{}_{}_{}",
         image_id,
+        image.project_id,
+        image.target_id,
+        image.acquired_date.unwrap_or(0), // Include acquisition timestamp
+        file_only.replace(&['.', ' ', '-'][..], "_"), // Include filename
         size,
-        if stretch { "stretched" } else { "linear" },
-        (midtone * 1000.0) as i32,
-        (shadow * 1000.0) as i32
+        if stretch { "stretch" } else { "linear" },
+        (midtone * 10000.0) as i32, // Higher precision
+        (shadow * 10000.0) as i32   // Higher precision
     );
+
+    tracing::trace!("🔑 Cache key for image {}: {}", image_id, cache_key);
 
     let cache_manager = CacheManager::new(PathBuf::from(&state.cache_dir));
     cache_manager
@@ -560,6 +728,8 @@ pub async fn get_image_preview(
 
     // Check if cached version exists
     if cache_manager.is_cached(&cache_path) {
+        tracing::debug!("💾 Cache HIT for image {} - serving from cache", image_id);
+
         // Serve from cache
         let mut file = File::open(&cache_path)
             .await
@@ -569,6 +739,12 @@ pub async fn get_image_preview(
         file.read_to_end(&mut buffer)
             .await
             .map_err(|_| AppError::InternalError("Failed to read file".to_string()))?;
+
+        tracing::debug!(
+            "⚡ Preview served from cache for image {} in {:?}",
+            image_id,
+            start_time.elapsed()
+        );
 
         return Ok((
             StatusCode::OK,
@@ -580,8 +756,11 @@ pub async fn get_image_preview(
         ));
     }
 
+    tracing::debug!("💫 Cache MISS for image {} - generating preview", image_id);
+
     // Find the FITS file
     let fits_path = find_fits_file(&state, &image, &target_name, &file_only)?;
+    tracing::trace!("📁 Found FITS file for image {}: {:?}", image_id, fits_path);
 
     // Load FITS file (just to verify it exists and is valid)
     let _fits = FitsImage::from_file(&fits_path)
@@ -602,6 +781,12 @@ pub async fn get_image_preview(
     let cache_path_str = cache_path.to_string_lossy().to_string();
 
     // Generate the stretched PNG with optional resizing
+    tracing::trace!(
+        "🎨 Generating PNG for image {} with size {:?}",
+        image_id,
+        max_dimensions
+    );
+
     stretch_to_png_with_resize(
         &fits_path.to_string_lossy(),
         Some(cache_path_str.clone()),
@@ -617,6 +802,13 @@ pub async fn get_image_preview(
     let png_buffer = tokio::fs::read(&cache_path)
         .await
         .map_err(|_| AppError::InternalError("Failed to read generated PNG".to_string()))?;
+
+    tracing::debug!(
+        "✅ Generated and cached preview for image {} in {:?} ({} bytes)",
+        image_id,
+        start_time.elapsed(),
+        png_buffer.len()
+    );
 
     Ok((
         StatusCode::OK,
@@ -709,8 +901,15 @@ pub async fn get_image_stars(
         (image, file_only, target_name)
     };
 
-    // Create cache key for star detection results
-    let cache_key = format!("stars_{}", image_id);
+    // Create comprehensive cache key for star detection results
+    let cache_key = format!(
+        "stars_{}_{}_{}_{}_{}",
+        image_id,
+        image.project_id,
+        image.target_id,
+        image.acquired_date.unwrap_or(0),
+        file_only.replace(&['.', ' ', '-'][..], "_")
+    );
     let cache_manager = CacheManager::new(PathBuf::from(&state.cache_dir));
     cache_manager
         .ensure_category_dir("stars")
@@ -834,8 +1033,16 @@ pub async fn get_annotated_image(
     // Determine size parameter
     let size = options.size.as_deref().unwrap_or("screen");
 
-    // Create cache key for annotated image
-    let cache_key = format!("annotated_{}_{}", image_id, size);
+    // Create comprehensive cache key for annotated image
+    let cache_key = format!(
+        "annotated_{}_{}_{}_{}_{}_{}",
+        image_id,
+        image.project_id,
+        image.target_id,
+        image.acquired_date.unwrap_or(0),
+        file_only.replace(&['.', ' ', '-'][..], "_"),
+        size
+    );
     let cache_manager = CacheManager::new(PathBuf::from(&state.cache_dir));
     cache_manager
         .ensure_category_dir("annotated")
@@ -1038,10 +1245,14 @@ pub async fn get_psf_visualization(
 
     let psf_type: PSFType = psf_type_str.parse().unwrap_or(PSFType::Moffat4);
 
-    // Create cache key for PSF multi image
+    // Create comprehensive cache key for PSF multi image
     let cache_key = format!(
-        "psf_multi_{}_{}_{}_{}_{}_{}",
+        "psf_multi_{}_{}_{}_{}_{}_{}_{}_{}_{}_{}",
         image_id,
+        image.project_id,
+        image.target_id,
+        image.acquired_date.unwrap_or(0),
+        file_only.replace(&['.', ' ', '-'][..], "_"),
         num_stars,
         psf_type_str,
         sort_by,
@@ -1134,21 +1345,35 @@ pub enum AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, error_message) = match self {
-            AppError::NotFound => (StatusCode::NOT_FOUND, "Resource not found"),
-            AppError::DatabaseError => (StatusCode::INTERNAL_SERVER_ERROR, "Database error"),
+        let (status, error_message) = match &self {
+            AppError::NotFound => {
+                tracing::warn!("🔍 Resource not found");
+                (StatusCode::NOT_FOUND, "Resource not found")
+            }
+            AppError::DatabaseError => {
+                tracing::error!("💾 Database error occurred");
+                (StatusCode::INTERNAL_SERVER_ERROR, "Database error")
+            }
             AppError::BadRequest(msg) => {
-                return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::error(msg)))
-                    .into_response()
+                tracing::warn!("❌ Bad request: {}", msg);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiResponse::<()>::error(msg.clone())),
+                )
+                    .into_response();
             }
             AppError::InternalError(msg) => {
+                tracing::error!("⚠️  Internal server error: {}", msg);
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ApiResponse::<()>::error(msg)),
+                    Json(ApiResponse::<()>::error(msg.clone())),
                 )
-                    .into_response()
+                    .into_response();
             }
-            AppError::NotImplemented => (StatusCode::NOT_IMPLEMENTED, "Not implemented yet"),
+            AppError::NotImplemented => {
+                tracing::debug!("🚧 Not implemented endpoint accessed");
+                (StatusCode::NOT_IMPLEMENTED, "Not implemented yet")
+            }
         };
 
         (

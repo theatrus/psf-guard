@@ -197,6 +197,86 @@ cargo clippy
 cargo fmt
 ```
 
+### Server Logging (2025-08-30)
+
+The server now includes comprehensive tracing-based logging with environment-controlled log levels.
+
+#### Log Levels and Usage
+
+**Environment Variable**: `RUST_LOG`
+- `RUST_LOG=error` - Only errors and critical issues
+- `RUST_LOG=warn` - Warnings and errors (production recommended)  
+- `RUST_LOG=info` - General server information (default)
+- `RUST_LOG=debug` - Detailed operation logging (development)
+- `RUST_LOG=trace` - Verbose debugging with fine-grained details
+
+#### Server Startup Logging
+```bash
+# Production server with info logging (default)
+cargo run -- server /path/to/db.sqlite /path/to/images
+
+# Development server with debug logging
+RUST_LOG=debug cargo run -- server /path/to/db.sqlite /path/to/images
+
+# Trace all operations including cache keys and file paths
+RUST_LOG=trace cargo run -- server /path/to/db.sqlite /path/to/images
+```
+
+#### Key Logged Operations
+
+1. **Cache Refresh Operations**
+   - Project/target cache refresh timing and results
+   - File existence checking progress and statistics  
+   - Lock acquisition and release timing
+
+2. **Image Preview Generation**
+   - Cache hit/miss ratios for performance monitoring
+   - Preview generation timing and file sizes
+   - FITS file loading and PNG conversion steps
+
+3. **API Request Handling** 
+   - Project/target listing with counts
+   - Database query performance
+   - Error conditions with context
+
+4. **Server Lifecycle**
+   - Startup configuration and initialization
+   - Database and directory validation
+   - Static file serving mode (embedded vs filesystem)
+
+#### Example Log Output
+
+```
+INFO  🚀 Starting PSF Guard server
+INFO  📊 Database: /path/to/schedulerdb.sqlite  
+INFO  📁 Image directory: /path/to/images
+INFO  💾 Cache directory: /tmp/psf-guard-cache
+INFO  ✅ Application state initialized successfully
+INFO  🌐 Server listening on http://127.0.0.1:3000
+DEBUG 📋 Listing projects
+DEBUG 🔄 Refreshing project cache
+DEBUG 🔍 Checking 15 projects for file existence
+DEBUG ✅ Project cache refresh completed in 1.2s - 12/15 projects have files
+DEBUG 🖼️  Generating preview for image 1234 (size: screen)
+DEBUG 💾 Cache HIT for image 1234 - serving from cache
+DEBUG ⚡ Preview served from cache for image 1234 in 3ms
+```
+
+#### Performance Monitoring
+
+The logging system enables monitoring of:
+- **Cache Performance**: Hit/miss ratios and response times
+- **Lock Contention**: Database and cache lock acquisition times  
+- **File I/O Performance**: FITS loading and preview generation timing
+- **Error Patterns**: Failed requests and their causes
+
+#### Log Format Features
+
+- **Emoji Prefixes**: Visual categorization of log types 🚀🔄💾🖼️
+- **Structured Data**: Request IDs, timing, and metrics
+- **Clean Output**: Module paths hidden, thread IDs disabled
+- **Environment Control**: Easy level adjustment without code changes
+
 ### Known Issues
 
 1. **Path Separator Handling**: The code handles both Windows (`\`) and Unix (`/`) paths, but mixed paths might cause issues

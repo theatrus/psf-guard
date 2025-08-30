@@ -28,6 +28,7 @@ export interface Image {
   grading_status: number;
   reject_reason: string | null;
   metadata: Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+  filesystem_path: string | null;
 }
 
 export interface StarInfo {
