@@ -13,15 +13,11 @@ import FilterControls, { type FilterOptions } from './FilterControls';
 import StatsDashboard from './StatsDashboard';
 import UndoRedoToolbar from './UndoRedoToolbar';
 
-interface ImageGridProps {
-  projectId: number;
-  targetId: number | null;
-}
-
-
 type GroupingMode = 'filter' | 'date' | 'both';
 
-interface GroupedImageGridProps extends ImageGridProps {
+interface GroupedImageGridProps {
+  projectId: number;
+  targetId: number | null;
   useLazyImages?: boolean;
   showStats?: boolean;
 }
