@@ -508,6 +508,16 @@
   min-width: 120px;
 }
 
+/* Status Banner in comparison view - inline positioning */
+.panel-title-row .status-banner {
+  position: static;
+  transform: none;
+  padding: 0.25rem 0.75rem;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  min-width: 80px;
+}
+
 .status-banner.status-accepted {
   background: rgba(76, 175, 80, 0.2);
   border-color: #4caf50;
@@ -1042,6 +1052,13 @@
   align-items: center;
   border-bottom: 1px solid #333;
   flex-shrink: 0;
+}
+
+.panel-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
 }
 
 .panel-header h3 {

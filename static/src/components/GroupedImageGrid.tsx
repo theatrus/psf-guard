@@ -163,7 +163,7 @@ export default function GroupedImageGrid({ projectId, targetId, useLazyImages = 
     if (expandedGroups.size === 0 && imageGroups.length > 0) {
       setExpandedGroups(new Set(imageGroups.map(g => g.filterName)));
     }
-  }, [imageGroups]); // Remove expandedGroups.size dependency to avoid circular updates
+  }, [imageGroups, expandedGroups.size]);
 
   // Reset expanded groups when grouping mode changes
   useEffect(() => {
@@ -630,18 +630,29 @@ export default function GroupedImageGrid({ projectId, targetId, useLazyImages = 
               ? flatImages.findIndex(item => item.image.id === comparisonRightId)
               : -1;
             
+            let nextImageId = null;
+            
+            // Look forward first
             for (let i = currentIndex + 1; i < flatImages.length; i++) {
               if (flatImages[i].image.id !== selectedImageId) {
-                setComparisonRightId(flatImages[i].image.id);
-                return;
+                nextImageId = flatImages[i].image.id;
+                break;
               }
             }
-            // Wrap to beginning if needed
-            for (let i = 0; i <= currentIndex; i++) {
-              if (flatImages[i].image.id !== selectedImageId) {
-                setComparisonRightId(flatImages[i].image.id);
-                return;
+            
+            // If not found, wrap to beginning
+            if (!nextImageId) {
+              for (let i = 0; i <= currentIndex; i++) {
+                if (flatImages[i].image.id !== selectedImageId) {
+                  nextImageId = flatImages[i].image.id;
+                  break;
+                }
               }
+            }
+            
+            // Only update if we found a valid next image
+            if (nextImageId) {
+              setComparisonRightId(nextImageId);
             }
           }}
           onNavigateRightPrev={() => {
@@ -650,18 +661,29 @@ export default function GroupedImageGrid({ projectId, targetId, useLazyImages = 
               ? flatImages.findIndex(item => item.image.id === comparisonRightId)
               : -1;
             
+            let prevImageId = null;
+            
+            // Look backward first
             for (let i = currentIndex - 1; i >= 0; i--) {
               if (flatImages[i].image.id !== selectedImageId) {
-                setComparisonRightId(flatImages[i].image.id);
-                return;
+                prevImageId = flatImages[i].image.id;
+                break;
               }
             }
-            // Wrap to end if needed
-            for (let i = flatImages.length - 1; i >= currentIndex; i--) {
-              if (flatImages[i].image.id !== selectedImageId) {
-                setComparisonRightId(flatImages[i].image.id);
-                return;
+            
+            // If not found, wrap to end
+            if (!prevImageId) {
+              for (let i = flatImages.length - 1; i >= currentIndex; i--) {
+                if (flatImages[i].image.id !== selectedImageId) {
+                  prevImageId = flatImages[i].image.id;
+                  break;
+                }
               }
+            }
+            
+            // Only update if we found a valid previous image
+            if (prevImageId) {
+              setComparisonRightId(prevImageId);
             }
           }}
           onGradeLeft={(status) => grading.gradeImage(selectedImageId, status)}

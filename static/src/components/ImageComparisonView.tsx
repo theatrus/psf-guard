@@ -60,10 +60,11 @@ export default function ImageComparisonView({
   });
 
   // Fetch right image (if selected)
-  const { data: rightImage } = useQuery({
+  const { data: rightImage, isFetching: isRightImageFetching } = useQuery({
     queryKey: ['image', rightImageId],
     queryFn: () => rightImageId ? apiClient.getImage(rightImageId) : Promise.resolve(null),
     enabled: !!rightImageId,
+    placeholderData: (previousData) => previousData, // Keep showing previous image while loading new one
   });
 
   // Keyboard shortcuts
@@ -82,8 +83,8 @@ export default function ImageComparisonView({
   useHotkeys('9', () => rightImageId && onGradeRight('pending'), [rightImageId, onGradeRight]);
   
   // Navigate right image
-  useHotkeys('shift+right,shift+k', onNavigateRightNext, [onNavigateRightNext]);
-  useHotkeys('shift+left,shift+j', onNavigateRightPrev, [onNavigateRightPrev]);
+  useHotkeys('right,k', onNavigateRightNext, [onNavigateRightNext]);
+  useHotkeys('left,j', onNavigateRightPrev, [onNavigateRightPrev]);
 
   // Reset loaded state when images change
   useEffect(() => {
@@ -95,6 +96,7 @@ export default function ImageComparisonView({
     setRightImageLoaded(false);
     rightZoom.resetInitialization();
   }, [rightImageId, showStars, rightZoom]);
+
 
   // Fit images when they load
   useEffect(() => {
@@ -345,11 +347,13 @@ export default function ImageComparisonView({
           {/* Left Image */}
           <div className="comparison-panel">
             <div className="panel-header">
-              <h3>Left Image</h3>
-              <div className={`status-badge ${getStatusClass(leftImage)}`}>
-                {leftImage.grading_status === GradingStatus.Accepted && '✓ ACCEPTED'}
-                {leftImage.grading_status === GradingStatus.Rejected && '✗ REJECTED'}
-                {leftImage.grading_status === GradingStatus.Pending && '○ PENDING'}
+              <div className="panel-title-row">
+                <h3>Left Image</h3>
+                <div className={`status-banner ${getStatusClass(leftImage)}`}>
+                  {leftImage.grading_status === GradingStatus.Accepted && '✓ ACCEPTED'}
+                  {leftImage.grading_status === GradingStatus.Rejected && '✗ REJECTED'}
+                  {leftImage.grading_status === GradingStatus.Pending && '○ PENDING'}
+                </div>
               </div>
             </div>
             
@@ -442,11 +446,13 @@ export default function ImageComparisonView({
             {rightImage ? (
               <>
                 <div className="panel-header">
-                  <h3>Right Image</h3>
-                  <div className={`status-badge ${getStatusClass(rightImage)}`}>
-                    {rightImage.grading_status === GradingStatus.Accepted && '✓ ACCEPTED'}
-                    {rightImage.grading_status === GradingStatus.Rejected && '✗ REJECTED'}
-                    {rightImage.grading_status === GradingStatus.Pending && '○ PENDING'}
+                  <div className="panel-title-row">
+                    <h3>Right Image {isRightImageFetching && '(Loading...)'}</h3>
+                    <div className={`status-banner ${getStatusClass(rightImage)}`}>
+                      {rightImage.grading_status === GradingStatus.Accepted && '✓ ACCEPTED'}
+                      {rightImage.grading_status === GradingStatus.Rejected && '✗ REJECTED'}
+                      {rightImage.grading_status === GradingStatus.Pending && '○ PENDING'}
+                    </div>
                   </div>
                 </div>
                 
@@ -569,8 +575,8 @@ export default function ImageComparisonView({
             <span>ESC Close</span>
             <span>S Toggle Stars</span>
             <span>Z Toggle Sync Zoom</span>
-            <span>Shift+→/K Next Right</span>
-            <span>Shift+←/J Prev Right</span>
+            <span>→/K Next Right</span>
+            <span>←/J Prev Right</span>
           </div>
           <div className="shortcut-section">
             <h4>Left Image</h4>

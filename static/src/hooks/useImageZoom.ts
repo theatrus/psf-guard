@@ -396,6 +396,7 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
   }, []);
   
   // Adjust zoom when switching between different image sizes
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const adjustZoomForNewImage = useCallback((oldWidth: number, oldHeight: number, newWidth: number, _newHeight: number) => {
     if (oldWidth === 0 || oldHeight === 0 || !originalDimensionsRef.current) return;
     
@@ -479,7 +480,7 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
       // Reset the intentional flag after any potential auto-fit
       intentionalZoomRef.current = false;
     }
-  }, [calculateFitScale]);
+  }, [calculateFitScale, zoomState.scale]);
 
   // Calculate whether the image overflows the container
   const hasOverflow = (() => {

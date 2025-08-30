@@ -23,8 +23,8 @@ interface ImageDetailViewProps {
     redoStackSize: number;
     undo: () => Promise<boolean>;
     redo: () => Promise<boolean>;
-    getLastAction: () => any;
-    getNextRedoAction: () => any;
+    getLastAction: () => any; // eslint-disable-line @typescript-eslint/no-explicit-any
+    getNextRedoAction: () => any; // eslint-disable-line @typescript-eslint/no-explicit-any
   };
 }
 
@@ -118,7 +118,7 @@ export default function ImageDetailView({
     }, 300);
     
     return () => clearTimeout(timer);
-  }, [imageId, showStars, showPsf, imageSize, zoom.zoomToFit]);
+  }, [imageId, showStars, showPsf, imageSize, zoom]);
   
   // Load original dimensions from metadata if available
   useEffect(() => {
