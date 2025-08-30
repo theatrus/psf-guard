@@ -14,7 +14,7 @@ export function useImagePreloader(
     preloadCount?: number;
     includeAnnotated?: boolean;
     includeStarData?: boolean;
-    imageSize?: 'screen' | 'large';
+    imageSize?: 'screen' | 'large' | 'original';
   } = {}
 ) {
   const { 

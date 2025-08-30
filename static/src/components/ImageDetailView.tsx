@@ -39,7 +39,7 @@ export default function ImageDetailView({
 }: ImageDetailViewProps) {
   const [showStars, setShowStars] = useState(false);
   const [showPsf, setShowPsf] = useState(false);
-  const [imageSize, setImageSize] = useState<'screen' | 'large'>('large');
+  const [imageSize, setImageSize] = useState<'screen' | 'large' | 'original'>('large');
 
   // Initialize zoom functionality
   const zoom = useImageZoom({
@@ -176,7 +176,7 @@ export default function ImageDetailView({
             >
               <img
                 ref={zoom.imageRef}
-                key={`${imageId}-${showStars ? 'stars' : showPsf ? 'psf' : 'normal'}-${imageSize}`}
+                key={`${imageId}-${showStars ? 'stars' : showPsf ? 'psf' : 'normal'}-${zoom.zoomState.scale > 1 ? 'original' : 'large'}`}
                 className={isFetching ? 'loading' : ''}
                 src={
                   showPsf
@@ -187,8 +187,8 @@ export default function ImageDetailView({
                         selection: 'top-n'
                       })
                     : showStars 
-                      ? apiClient.getAnnotatedUrl(imageId, imageSize)
-                      : apiClient.getPreviewUrl(imageId, { size: imageSize })
+                      ? apiClient.getAnnotatedUrl(imageId, zoom.zoomState.scale > 1 ? 'original' : 'large')
+                      : apiClient.getPreviewUrl(imageId, { size: zoom.zoomState.scale > 1 ? 'original' : 'large' })
                 }
                 alt={`${image.target_name} - ${image.filter_name || 'No filter'}`}
                 style={{

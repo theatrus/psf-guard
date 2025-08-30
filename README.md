@@ -285,6 +285,7 @@ Once started, open your browser to `http://localhost:3000` (or your configured p
 **Image Detail View**:
 - Full-resolution FITS preview with MTF stretching
 - Comprehensive zoom and pan controls (mouse wheel, click-drag, keyboard shortcuts)
+- Dynamic image loading: starts with large (2000px) images, switches to original size when zoomed
 - Star detection overlay toggle (S key)
 - PSF residual visualization toggle (P key)
 - Complete metadata display (exposure, temperature, camera, statistics)

@@ -92,7 +92,7 @@ export const apiClient = {
   },
 
   // Annotated image URL
-  getAnnotatedUrl: (imageId: number, size: 'screen' | 'large' = 'large'): string => {
+  getAnnotatedUrl: (imageId: number, size: 'screen' | 'large' | 'original' = 'large'): string => {
     return `/api/images/${imageId}/annotated?size=${size}`;
   },
 

@@ -209,8 +209,8 @@ export default function ImageComparisonView({
                 <img
                   ref={leftZoom.imageRef}
                   src={showStars 
-                    ? apiClient.getAnnotatedUrl(leftImageId, 'large')
-                    : apiClient.getPreviewUrl(leftImageId, { size: 'original' })
+                    ? apiClient.getAnnotatedUrl(leftImageId, leftZoom.zoomState.scale > 1 ? 'original' : 'large')
+                    : apiClient.getPreviewUrl(leftImageId, { size: leftZoom.zoomState.scale > 1 ? 'original' : 'large' })
                   }
                   alt={`${leftImage.target_name} - ${leftImage.filter_name || 'No filter'}`}
                   onLoad={() => setLeftImageLoaded(true)}
@@ -284,8 +284,8 @@ export default function ImageComparisonView({
                     <img
                       ref={rightZoom.imageRef}
                       src={showStars 
-                        ? apiClient.getAnnotatedUrl(rightImageId!, 'large')
-                        : apiClient.getPreviewUrl(rightImageId!, { size: 'original' })
+                        ? apiClient.getAnnotatedUrl(rightImageId!, rightZoom.zoomState.scale > 1 ? 'original' : 'large')
+                        : apiClient.getPreviewUrl(rightImageId!, { size: rightZoom.zoomState.scale > 1 ? 'original' : 'large' })
                       }
                       alt={`${rightImage.target_name} - ${rightImage.filter_name || 'No filter'}`}
                       onLoad={() => setRightImageLoaded(true)}
