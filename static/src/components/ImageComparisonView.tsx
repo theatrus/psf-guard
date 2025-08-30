@@ -243,8 +243,20 @@ export default function ImageComparisonView({
     if (!syncZoom) {
       rightZoom.handleWheel(e);
     } else {
-      // When synced, apply zoom to left image and it will sync to right via effect
-      leftZoom.handleWheel(e);
+      // When synced, translate coordinates and apply to left image
+      const leftContainer = leftZoom.containerRef.current;
+      const rightContainer = rightZoom.containerRef.current;
+      if (leftContainer && rightContainer) {
+        const rightRect = rightContainer.getBoundingClientRect();
+        const leftRect = leftContainer.getBoundingClientRect();
+        
+        // Create a new wheel event with translated coordinates
+        const adjustedEvent = Object.create(e);
+        adjustedEvent.clientX = e.clientX - rightRect.left + leftRect.left;
+        adjustedEvent.clientY = e.clientY - rightRect.top + leftRect.top;
+        
+        leftZoom.handleWheel(adjustedEvent);
+      }
     }
   }, [leftZoom, rightZoom, syncZoom]);
   
@@ -256,9 +268,23 @@ export default function ImageComparisonView({
   const handleRightMouseMove = useCallback((e: React.MouseEvent) => {
     if (!syncZoom) {
       rightZoom.handleMouseMove(e);
+    } else {
+      // When synced, translate coordinates and apply to left image
+      const leftContainer = leftZoom.containerRef.current;
+      const rightContainer = rightZoom.containerRef.current;
+      if (leftContainer && rightContainer) {
+        const rightRect = rightContainer.getBoundingClientRect();
+        const leftRect = leftContainer.getBoundingClientRect();
+        
+        // Create a new mouse event with translated coordinates
+        const adjustedEvent = Object.create(e);
+        adjustedEvent.clientX = e.clientX - rightRect.left + leftRect.left;
+        adjustedEvent.clientY = e.clientY - rightRect.top + leftRect.top;
+        
+        leftZoom.handleMouseMove(adjustedEvent);
+      }
     }
-    // When synced, disable panning on right side to prevent conflicts
-  }, [rightZoom, syncZoom]);
+  }, [leftZoom, rightZoom, syncZoom]);
 
   const getStatusClass = (image: Image | null | undefined) => {
     if (!image) return '';
@@ -421,7 +447,26 @@ export default function ImageComparisonView({
                     className={`zoom-container ${rightZoom.hasOverflow ? 'zoomed' : ''}`}
                     ref={rightZoom.containerRef}
                     onWheel={handleRightZoom}
-                    onMouseDown={syncZoom ? leftZoom.handleMouseDown : rightZoom.handleMouseDown}
+                    onMouseDown={(e) => {
+                      if (!syncZoom) {
+                        rightZoom.handleMouseDown(e);
+                      } else {
+                        // When synced, translate coordinates and apply to left image
+                        const leftContainer = leftZoom.containerRef.current;
+                        const rightContainer = rightZoom.containerRef.current;
+                        if (leftContainer && rightContainer) {
+                          const rightRect = rightContainer.getBoundingClientRect();
+                          const leftRect = leftContainer.getBoundingClientRect();
+                          
+                          // Create a new mouse event with translated coordinates
+                          const adjustedEvent = Object.create(e);
+                          adjustedEvent.clientX = e.clientX - rightRect.left + leftRect.left;
+                          adjustedEvent.clientY = e.clientY - rightRect.top + leftRect.top;
+                          
+                          leftZoom.handleMouseDown(adjustedEvent);
+                        }
+                      }
+                    }}
                     onMouseMove={handleRightMouseMove}
                     onMouseUp={syncZoom ? leftZoom.handleMouseUp : rightZoom.handleMouseUp}
                     onMouseLeave={syncZoom ? leftZoom.handleMouseUp : rightZoom.handleMouseUp}
