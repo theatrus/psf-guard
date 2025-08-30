@@ -98,3 +98,19 @@ pub struct PreviewOptions {
     pub midtone: Option<f64>,
     pub shadow: Option<f64>,
 }
+
+#[derive(Debug, Serialize)]
+pub struct ServerInfo {
+    pub database_path: String,
+    pub image_directory: String,
+    pub cache_directory: String,
+    pub version: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileCheckResponse {
+    pub images_checked: usize,
+    pub files_found: usize,
+    pub files_missing: usize,
+    pub check_time_ms: u128,
+}

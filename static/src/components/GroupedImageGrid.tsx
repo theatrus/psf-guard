@@ -45,7 +45,7 @@ export default function GroupedImageGrid({ projectId, targetId, useLazyImages = 
   const [lastSelectedImageId, setLastSelectedImageId] = useState<number | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
 
-  // Fetch ALL images (no pagination for grouping)
+  // Fetch ALL images (no pagination for grouping) with periodic refresh
   const { data: allImages = [], isLoading } = useQuery({
     queryKey: ['all-images', projectId, targetId],
     queryFn: () => apiClient.getImages({
@@ -53,6 +53,8 @@ export default function GroupedImageGrid({ projectId, targetId, useLazyImages = 
       target_id: targetId || undefined,
       limit: 10000, // Get all images
     }),
+    refetchInterval: 30000, // Refresh every 30 seconds
+    refetchIntervalInBackground: true,
   });
 
   // Filter images based on current filters

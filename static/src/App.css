@@ -42,6 +42,92 @@
   border-color: #555;
 }
 
+/* Server Info Button */
+.info-button {
+  background: #333;
+  color: #e0e0e0;
+  border: 1px solid #444;
+  padding: 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+}
+
+.info-button:hover {
+  background: #444;
+  border-color: #555;
+}
+
+/* Server Info Panel */
+.info-panel-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 2rem;
+  z-index: 1000;
+}
+
+.info-panel {
+  background: #252525;
+  border-radius: 8px;
+  width: 400px;
+  max-width: 90vw;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  border: 1px solid #444;
+}
+
+.info-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  border-bottom: 1px solid #444;
+}
+
+.info-panel-header h3 {
+  margin: 0;
+  color: #61dafb;
+}
+
+.info-panel-content {
+  padding: 1rem;
+}
+
+.info-panel-content dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.5rem 1rem;
+  margin: 0;
+}
+
+.info-panel-content dt {
+  font-weight: bold;
+  color: #aaa;
+}
+
+.info-panel-content dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.info-panel-content dd.path {
+  font-family: monospace;
+  font-size: 0.9em;
+  color: #ddd;
+  cursor: help;
+}
+
 /* Controls */
 .app-controls {
   background: #202020;
@@ -84,6 +170,44 @@
 .selection-stats {
   color: #999;
   font-size: 0.9rem;
+}
+
+.selector-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.refresh-button {
+  background: #444;
+  color: #e0e0e0;
+  border: 1px solid #555;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 0.9rem;
+}
+
+.refresh-button:hover:not(:disabled) {
+  background: #555;
+  border-color: #666;
+}
+
+.refresh-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.refresh-status {
+  color: #61dafb;
+  font-size: 0.85rem;
+  animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* Main Content */

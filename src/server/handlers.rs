@@ -8,6 +8,8 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
@@ -17,14 +19,87 @@ use crate::models::GradingStatus;
 use crate::server::api::*;
 use crate::server::state::AppState;
 
+pub async fn get_server_info(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<ServerInfo>>, AppError> {
+    let info = ServerInfo {
+        database_path: state.database_path.clone(),
+        image_directory: state.image_dir.clone(),
+        cache_directory: state.cache_dir.clone(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+    
+    Ok(Json(ApiResponse::success(info)))
+}
+
+pub async fn refresh_file_cache(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<FileCheckResponse>>, AppError> {
+    let start_time = std::time::Instant::now();
+    
+    // Clear existing cache
+    {
+        let mut cache = state.file_check_cache.write().unwrap();
+        cache.clear();
+    }
+    
+    // Refresh projects
+    refresh_project_cache(&state).await?;
+    
+    // Get stats
+    let (images_checked, files_found, files_missing) = {
+        let cache = state.file_check_cache.read().unwrap();
+        let total_projects = cache.projects_with_files.len();
+        let found = cache.projects_with_files.values().filter(|&&v| v).count();
+        let missing = total_projects - found;
+        (total_projects, found, missing)
+    };
+    
+    let response = FileCheckResponse {
+        images_checked,
+        files_found,
+        files_missing,
+        check_time_ms: start_time.elapsed().as_millis(),
+    };
+    
+    Ok(Json(ApiResponse::success(response)))
+}
+
 pub async fn list_projects(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Vec<ProjectResponse>>>, AppError> {
-    let conn = state.db();
-    let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
-    let db = Database::new(&conn);
+    // Check if cache is expired
+    let needs_refresh = {
+        let cache = state.file_check_cache.read().unwrap();
+        cache.is_expired() || cache.projects_with_files.is_empty()
+    };
 
-    let projects = db.get_all_projects().map_err(|_| AppError::DatabaseError)?;
+    if needs_refresh {
+        // Refresh the cache
+        refresh_project_cache(&state).await?;
+    }
+
+    // Get cached results
+    let project_ids_with_files: Vec<i32> = {
+        let cache = state.file_check_cache.read().unwrap();
+        cache.projects_with_files
+            .iter()
+            .filter_map(|(id, has_files)| if *has_files { Some(*id) } else { None })
+            .collect()
+    };
+
+    // Get project details from database
+    let projects = {
+        let conn = state.db();
+        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+        let db = Database::new(&conn);
+        
+        db.get_projects_with_images()
+            .map_err(|_| AppError::DatabaseError)?
+            .into_iter()
+            .filter(|p| project_ids_with_files.contains(&p.id))
+            .collect::<Vec<_>>()
+    };
 
     let response: Vec<ProjectResponse> = projects
         .into_iter()
@@ -38,17 +113,99 @@ pub async fn list_projects(
     Ok(Json(ApiResponse::success(response)))
 }
 
+async fn refresh_project_cache(state: &Arc<AppState>) -> Result<(), AppError> {
+    let projects_to_check = {
+        let conn = state.db();
+        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+        let db = Database::new(&conn);
+        db.get_projects_with_images().map_err(|_| AppError::DatabaseError)?
+    };
+
+    let mut cache_updates = HashMap::new();
+    
+    for project in projects_to_check {
+        // Check a few sample images for this project
+        let has_files = check_project_has_files(state, project.id).await?;
+        cache_updates.insert(project.id, has_files);
+    }
+
+    // Update cache
+    {
+        let mut cache = state.file_check_cache.write().unwrap();
+        cache.projects_with_files = cache_updates;
+        cache.last_updated = std::time::Instant::now();
+    }
+
+    Ok(())
+}
+
+async fn check_project_has_files(state: &Arc<AppState>, project_id: i32) -> Result<bool, AppError> {
+    let images_to_check = {
+        let conn = state.db();
+        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+        let db = Database::new(&conn);
+        
+        db.query_images(None, None, None, None)
+            .map_err(|_| AppError::DatabaseError)?
+            .into_iter()
+            .filter(|(img, _, _)| img.project_id == project_id)
+            .take(5) // Check up to 5 images
+            .collect::<Vec<_>>()
+    };
+
+    for (image, _, target_name) in images_to_check {
+        if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&image.metadata) {
+            if let Some(filename) = metadata["FileName"].as_str() {
+                let file_only = filename.split(&['\\', '/'][..]).last().unwrap_or(filename);
+                if find_fits_file(state, &image, &target_name, file_only).is_ok() {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+
+    Ok(false)
+}
+
 pub async fn list_targets(
     State(state): State<Arc<AppState>>,
     Path(project_id): Path<i32>,
 ) -> Result<Json<ApiResponse<Vec<TargetResponse>>>, AppError> {
-    let conn = state.db();
-    let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
-    let db = Database::new(&conn);
+    // Check if we need to refresh target cache for this project
+    let needs_refresh = {
+        let cache = state.file_check_cache.read().unwrap();
+        cache.is_expired() || !cache.targets_with_files.iter().any(|(_tid, _)| {
+            // Check if we have any cached data for targets in this project
+            true // We'll need to track project_id per target for more efficient caching
+        })
+    };
 
-    let targets = db
-        .get_targets_with_stats(project_id)
-        .map_err(|_| AppError::DatabaseError)?;
+    if needs_refresh {
+        // Refresh target cache for this project
+        refresh_target_cache(&state, project_id).await?;
+    }
+
+    // Get cached results
+    let target_ids_with_files: Vec<i32> = {
+        let cache = state.file_check_cache.read().unwrap();
+        cache.targets_with_files
+            .iter()
+            .filter_map(|(id, has_files)| if *has_files { Some(*id) } else { None })
+            .collect()
+    };
+
+    // Get target details from database
+    let targets = {
+        let conn = state.db();
+        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+        let db = Database::new(&conn);
+        
+        db.get_targets_with_images(project_id)
+            .map_err(|_| AppError::DatabaseError)?
+            .into_iter()
+            .filter(|(t, _, _, _)| target_ids_with_files.is_empty() || target_ids_with_files.contains(&t.id))
+            .collect::<Vec<_>>()
+    };
 
     let response: Vec<TargetResponse> = targets
         .into_iter()
@@ -67,6 +224,63 @@ pub async fn list_targets(
     Ok(Json(ApiResponse::success(response)))
 }
 
+async fn refresh_target_cache(state: &Arc<AppState>, project_id: i32) -> Result<(), AppError> {
+    let targets_to_check = {
+        let conn = state.db();
+        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+        let db = Database::new(&conn);
+        db.get_targets_with_images(project_id).map_err(|_| AppError::DatabaseError)?
+    };
+
+    let mut cache_updates = HashMap::new();
+    
+    for (target, _, _, _) in targets_to_check {
+        // Check a few sample images for this target
+        let has_files = check_target_has_files(state, target.id).await?;
+        cache_updates.insert(target.id, has_files);
+    }
+
+    // Update cache
+    {
+        let mut cache = state.file_check_cache.write().unwrap();
+        // Merge updates into existing cache
+        for (tid, has_files) in cache_updates {
+            cache.targets_with_files.insert(tid, has_files);
+        }
+        cache.last_updated = std::time::Instant::now();
+    }
+
+    Ok(())
+}
+
+async fn check_target_has_files(state: &Arc<AppState>, target_id: i32) -> Result<bool, AppError> {
+    let images_to_check = {
+        let conn = state.db();
+        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+        let db = Database::new(&conn);
+        
+        db.query_images(None, None, None, None)
+            .map_err(|_| AppError::DatabaseError)?
+            .into_iter()
+            .filter(|(img, _, _)| img.target_id == target_id)
+            .take(3) // Check up to 3 images
+            .collect::<Vec<_>>()
+    };
+
+    for (image, _, target_name) in images_to_check {
+        if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&image.metadata) {
+            if let Some(filename) = metadata["FileName"].as_str() {
+                let file_only = filename.split(&['\\', '/'][..]).last().unwrap_or(filename);
+                if find_fits_file(state, &image, &target_name, file_only).is_ok() {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+
+    Ok(false)
+}
+
 pub async fn get_images(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ImageQuery>,
@@ -83,7 +297,6 @@ pub async fn get_images(
         _ => None,
     });
 
-    // For now, we'll use None for project/target filters since we have IDs
     let images = db
         .query_images(status_filter, None, None, None)
         .map_err(|_| AppError::DatabaseError)?;
@@ -340,7 +553,7 @@ pub async fn get_image_preview(
         (shadow * 1000.0) as i32
     );
 
-    let cache_manager = CacheManager::new(state.cache_dir.clone());
+    let cache_manager = CacheManager::new(PathBuf::from(&state.cache_dir));
     cache_manager
         .ensure_category_dir("previews")
         .map_err(|e| AppError::InternalError(format!("Failed to create cache directory: {}", e)))?;
@@ -434,7 +647,7 @@ fn find_fits_file(
 
     // Try to find the file in different possible locations
     let possible_paths = get_possible_paths(
-        &state.image_dir.to_string_lossy(),
+        &state.image_dir,
         &date_str,
         target_name,
         filename,
@@ -447,7 +660,7 @@ fn find_fits_file(
     }
 
     // Try recursive search as fallback
-    match find_file_recursive(&state.image_dir.to_string_lossy(), filename)
+    match find_file_recursive(&state.image_dir, filename)
         .map_err(|e| AppError::InternalError(format!("Search failed: {}", e)))?
     {
         Some(path) => Ok(path),
@@ -503,7 +716,7 @@ pub async fn get_image_stars(
 
     // Create cache key for star detection results
     let cache_key = format!("stars_{}", image_id);
-    let cache_manager = CacheManager::new(state.cache_dir.clone());
+    let cache_manager = CacheManager::new(PathBuf::from(&state.cache_dir));
     cache_manager
         .ensure_category_dir("stars")
         .map_err(|e| AppError::InternalError(format!("Failed to create cache directory: {}", e)))?;
@@ -628,7 +841,7 @@ pub async fn get_annotated_image(
 
     // Create cache key for annotated image
     let cache_key = format!("annotated_{}_{}", image_id, size);
-    let cache_manager = CacheManager::new(state.cache_dir.clone());
+    let cache_manager = CacheManager::new(PathBuf::from(&state.cache_dir));
     cache_manager
         .ensure_category_dir("annotated")
         .map_err(|e| AppError::InternalError(format!("Failed to create cache directory: {}", e)))?;
@@ -821,7 +1034,7 @@ pub async fn get_psf_visualization(
         selection,
         options.grid_cols.unwrap_or(0)
     );
-    let cache_manager = CacheManager::new(state.cache_dir.clone());
+    let cache_manager = CacheManager::new(PathBuf::from(&state.cache_dir));
     cache_manager
         .ensure_category_dir("psf_multi")
         .map_err(|e| AppError::InternalError(format!("Failed to create cache directory: {}", e)))?;

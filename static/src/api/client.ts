@@ -8,6 +8,8 @@ import type {
   UpdateGradeRequest,
   StarDetectionResponse,
   PreviewOptions,
+  ServerInfo,
+  FileCheckResponse,
 } from './types';
 
 const api = axios.create({
@@ -27,6 +29,20 @@ api.interceptors.response.use(
 );
 
 export const apiClient = {
+  // Server info
+  getServerInfo: async (): Promise<ServerInfo> => {
+    const { data } = await api.get<ApiResponse<ServerInfo>>('/info');
+    if (!data.data) throw new Error('Failed to get server info');
+    return data.data;
+  },
+
+  // Refresh file cache
+  refreshFileCache: async (): Promise<FileCheckResponse> => {
+    const { data } = await api.put<ApiResponse<FileCheckResponse>>('/refresh-cache');
+    if (!data.data) throw new Error('Failed to refresh cache');
+    return data.data;
+  },
+
   // Projects
   getProjects: async (): Promise<Project[]> => {
     const { data } = await api.get<ApiResponse<Project[]>>('/projects');

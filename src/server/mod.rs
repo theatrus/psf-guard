@@ -46,6 +46,8 @@ pub async fn run_server(
 
     // Create API routes
     let api_routes = Router::new()
+        .route("/info", get(handlers::get_server_info))
+        .route("/refresh-cache", put(handlers::refresh_file_cache))
         .route("/projects", get(handlers::list_projects))
         .route(
             "/projects/{project_id}/targets",

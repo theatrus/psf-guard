@@ -33,6 +33,28 @@ impl<'a> Database<'a> {
 
         Ok(projects)
     }
+    
+    pub fn get_projects_with_images(&self) -> Result<Vec<Project>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT p.Id, p.profileId, p.name, p.description 
+             FROM project p
+             INNER JOIN acquiredimage ai ON p.Id = ai.projectId
+             ORDER BY p.name",
+        )?;
+
+        let projects = stmt
+            .query_map([], |row| {
+                Ok(Project {
+                    id: row.get(0)?,
+                    profile_id: row.get(1)?,
+                    name: row.get(2)?,
+                    description: row.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(projects)
+    }
 
     pub fn find_project_id_by_name(&self, name: &str) -> Result<i32> {
         let mut stmt = self.conn.prepare("SELECT Id FROM project WHERE name = ?")?;
@@ -51,6 +73,41 @@ impl<'a> Database<'a> {
              LEFT JOIN acquiredimage ai ON t.Id = ai.targetId
              WHERE t.projectid = ?
              GROUP BY t.Id, t.name, t.active, t.ra, t.dec
+             ORDER BY t.name",
+        )?;
+
+        let targets = stmt
+            .query_map([project_id], |row| {
+                Ok((
+                    Target {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        active: row.get(2)?,
+                        ra: row.get(3)?,
+                        dec: row.get(4)?,
+                        project_id,
+                    },
+                    row.get::<_, i32>(5)?, // image_count
+                    row.get::<_, i32>(6)?, // accepted_count
+                    row.get::<_, i32>(7)?, // rejected_count
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(targets)
+    }
+    
+    pub fn get_targets_with_images(&self, project_id: i32) -> Result<Vec<(Target, i32, i32, i32)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.Id, t.name, t.active, t.ra, t.dec,
+                    COUNT(ai.Id) as image_count,
+                    SUM(CASE WHEN ai.gradingStatus = 1 THEN 1 ELSE 0 END) as accepted_count,
+                    SUM(CASE WHEN ai.gradingStatus = 2 THEN 1 ELSE 0 END) as rejected_count
+             FROM target t
+             INNER JOIN acquiredimage ai ON t.Id = ai.targetId
+             WHERE t.projectid = ?
+             GROUP BY t.Id, t.name, t.active, t.ra, t.dec
+             HAVING COUNT(ai.Id) > 0
              ORDER BY t.name",
         )?;
 

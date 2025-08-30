@@ -1,4 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 
 interface ProjectTargetSelectorProps {
@@ -14,17 +15,42 @@ export default function ProjectTargetSelector({
   onProjectChange,
   onTargetChange,
 }: ProjectTargetSelectorProps) {
-  // Fetch projects
+  const queryClient = useQueryClient();
+  const [lastRefreshStatus, setLastRefreshStatus] = useState<string | null>(null);
+
+  // Refresh cache mutation
+  const refreshCacheMutation = useMutation({
+    mutationFn: apiClient.refreshFileCache,
+    onSuccess: (data) => {
+      // Invalidate and refetch projects and targets
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['targets'] });
+      setLastRefreshStatus(`Found ${data.files_found} files, ${data.files_missing} missing (${data.check_time_ms}ms)`);
+      
+      // Clear status after 5 seconds
+      setTimeout(() => setLastRefreshStatus(null), 5000);
+    },
+    onError: () => {
+      setLastRefreshStatus('Refresh failed');
+      setTimeout(() => setLastRefreshStatus(null), 5000);
+    },
+  });
+
+  // Fetch projects with periodic refresh
   const { data: projects = [], isLoading: projectsLoading } = useQuery({
     queryKey: ['projects'],
     queryFn: apiClient.getProjects,
+    refetchInterval: 30000, // Refresh every 30 seconds
+    refetchIntervalInBackground: true,
   });
 
-  // Fetch targets for selected project
+  // Fetch targets for selected project with periodic refresh
   const { data: targets = [], isLoading: targetsLoading } = useQuery({
     queryKey: ['targets', selectedProjectId],
     queryFn: () => apiClient.getTargets(selectedProjectId!),
     enabled: !!selectedProjectId,
+    refetchInterval: 30000, // Refresh every 30 seconds
+    refetchIntervalInBackground: true,
   });
 
   const handleProjectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -81,6 +107,20 @@ export default function ProjectTargetSelector({
           Rejected: {targets.reduce((sum, t) => sum + t.rejected_count, 0)}
         </div>
       )}
+
+      <div className="selector-actions">
+        <button
+          className="refresh-button"
+          onClick={() => refreshCacheMutation.mutate()}
+          disabled={refreshCacheMutation.isPending}
+          title="Refresh file existence cache"
+        >
+          {refreshCacheMutation.isPending ? 'Refreshing...' : 'Refresh Files'}
+        </button>
+        {lastRefreshStatus && (
+          <span className="refresh-status">{lastRefreshStatus}</span>
+        )}
+      </div>
     </div>
   );
 }

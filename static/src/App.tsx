@@ -3,6 +3,7 @@ import { useHotkeys } from 'react-hotkeys-hook';
 import ProjectTargetSelector from './components/ProjectTargetSelector';
 import GroupedImageGrid from './components/GroupedImageGrid';
 import KeyboardShortcutHelp from './components/KeyboardShortcutHelp';
+import ServerInfoPanel from './components/ServerInfoPanel';
 import './App.css';
 
 function App() {
@@ -25,6 +26,7 @@ function App() {
           <button onClick={() => setShowHelp(true)} className="help-button">
             Help (?)
           </button>
+          <ServerInfoPanel />
         </div>
       </header>
 

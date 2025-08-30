@@ -70,6 +70,20 @@ export interface PreviewOptions {
   shadow?: number;
 }
 
+export interface ServerInfo {
+  database_path: string;
+  image_directory: string;
+  cache_directory: string;
+  version: string;
+}
+
+export interface FileCheckResponse {
+  images_checked: number;
+  files_found: number;
+  files_missing: number;
+  check_time_ms: number;
+}
+
 export const GradingStatus = {
   Pending: 0,
   Accepted: 1,
