@@ -256,23 +256,9 @@ export default function ImageComparisonView({
   const handleRightMouseMove = useCallback((e: React.MouseEvent) => {
     if (!syncZoom) {
       rightZoom.handleMouseMove(e);
-    } else {
-      // When synced, move left image and it will sync to right via effect
-      // Calculate the equivalent mouse position for the left image
-      const leftContainer = leftZoom.containerRef.current;
-      const rightContainer = rightZoom.containerRef.current;
-      if (leftContainer && rightContainer) {
-        const rightRect = rightContainer.getBoundingClientRect();
-        const leftRect = leftContainer.getBoundingClientRect();
-        const adjustedEvent = {
-          ...e,
-          clientX: e.clientX - rightRect.left + leftRect.left,
-          clientY: e.clientY - rightRect.top + leftRect.top,
-        } as React.MouseEvent;
-        leftZoom.handleMouseMove(adjustedEvent);
-      }
     }
-  }, [leftZoom, rightZoom, syncZoom]);
+    // When synced, disable panning on right side to prevent conflicts
+  }, [rightZoom, syncZoom]);
 
   const getStatusClass = (image: Image | null | undefined) => {
     if (!image) return '';
