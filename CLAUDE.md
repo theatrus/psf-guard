@@ -242,6 +242,7 @@ RUST_LOG=trace cargo run -- server /path/to/db.sqlite /path/to/images
 4. **Server Lifecycle**
    - Startup configuration and initialization
    - Database and directory validation
+   - Non-blocking background cache refresh on startup
    - Static file serving mode (embedded vs filesystem)
 
 #### Example Log Output
@@ -253,10 +254,10 @@ INFO  📁 Image directory: /path/to/images
 INFO  💾 Cache directory: /tmp/psf-guard-cache
 INFO  ✅ Application state initialized successfully
 INFO  🌐 Server listening on http://127.0.0.1:3000
+INFO  🎯 Ready to serve requests!
+INFO  🔄 Starting background cache refresh...
 DEBUG 📋 Listing projects
-DEBUG 🔄 Refreshing project cache
-DEBUG 🔍 Checking 15 projects for file existence
-DEBUG ✅ Project cache refresh completed in 1.2s - 12/15 projects have files
+INFO  ✅ Background cache refresh completed - 12/15 projects have files
 DEBUG 🖼️  Generating preview for image 1234 (size: screen)
 DEBUG 💾 Cache HIT for image 1234 - serving from cache
 DEBUG ⚡ Preview served from cache for image 1234 in 3ms
@@ -276,6 +277,44 @@ The logging system enables monitoring of:
 - **Structured Data**: Request IDs, timing, and metrics
 - **Clean Output**: Module paths hidden, thread IDs disabled
 - **Environment Control**: Easy level adjustment without code changes
+
+#### Startup Behavior (2025-08-30)
+
+The server now uses **non-blocking startup** for optimal responsiveness:
+
+1. **Immediate Server Start**: Server becomes available for requests immediately after initialization
+2. **Background Cache Refresh**: File cache population happens asynchronously in the background  
+3. **Graceful Fallback**: If background refresh fails, cache is populated on first request
+4. **No Startup Delays**: Server startup is not blocked by potentially slow filesystem operations
+
+**Benefits**:
+- Faster server startup times
+- Improved reliability (server starts even if cache refresh fails)
+- Better user experience (no waiting for cache population)
+- Maintains existing cache behavior for API requests
+
+#### Cache Key Improvements (2025-08-30)
+
+Enhanced cache uniqueness to prevent cache collisions and inconsistent results:
+
+**Previous Issue**: Cache keys only used `image_id`, causing collisions between different databases/contexts
+**Solution**: Comprehensive cache keys including:
+- `project_id` and `target_id` for database context
+- `acquired_date` timestamp for temporal uniqueness  
+- `filename` for file-specific identity
+- Higher precision parameters (10000x vs 1000x for floating point values)
+
+**Affected Operations**:
+- Image previews (`/api/images/{id}/preview`)
+- Star detection results (`/api/images/{id}/stars`)
+- Annotated images (`/api/images/{id}/annotated`)
+- PSF visualizations (`/api/images/{id}/psf`)
+- Statistics caching (internal)
+
+**Example Cache Key**: 
+`1234_5_89_1692140234_NGC7635_OIII_180s_001_fits_screen_stretch_2000_-28000`
+
+This eliminates the issue where valid images would return 404 errors due to cached results from different contexts.
 
 ### Known Issues
 

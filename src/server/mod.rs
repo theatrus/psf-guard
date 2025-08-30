@@ -62,24 +62,27 @@ pub async fn run_server(
         }
     };
 
-    // Refresh file cache on startup
-    tracing::info!("🔄 Refreshing file cache on startup...");
-    if let Err(e) = handlers::refresh_project_cache(&state).await {
-        tracing::warn!("⚠️ Failed to refresh cache on startup: {:?}", e);
-        tracing::info!("📝 Server will continue, cache will be refreshed on first request");
-    } else {
-        let (projects_checked, projects_with_files) = {
-            let cache = state.file_check_cache.read().unwrap();
-            let total = cache.projects_with_files.len();
-            let found = cache.projects_with_files.values().filter(|&&v| v).count();
-            (total, found)
-        };
-        tracing::info!(
-            "✅ Startup cache refresh completed - {}/{} projects have files",
-            projects_with_files,
-            projects_checked
-        );
-    }
+    // Start background cache refresh (non-blocking)
+    let state_clone = Arc::clone(&state);
+    tokio::spawn(async move {
+        tracing::info!("🔄 Starting background cache refresh...");
+        if let Err(e) = handlers::refresh_project_cache(&state_clone).await {
+            tracing::warn!("⚠️ Background cache refresh failed: {:?}", e);
+            tracing::info!("📝 Cache will be refreshed on first request");
+        } else {
+            let (projects_checked, projects_with_files) = {
+                let cache = state_clone.file_check_cache.read().unwrap();
+                let total = cache.projects_with_files.len();
+                let found = cache.projects_with_files.values().filter(|&&v| v).count();
+                (total, found)
+            };
+            tracing::info!(
+                "✅ Background cache refresh completed - {}/{} projects have files",
+                projects_with_files,
+                projects_checked
+            );
+        }
+    });
 
     // Create API routes
     let api_routes = Router::new()
