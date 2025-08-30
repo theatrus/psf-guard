@@ -87,6 +87,20 @@ Testing focused on:
 - Minimal file system checks (only when necessary)
 - Efficient path parsing without regex where possible
 
+### Recent Updates (2025-08-30)
+
+#### Web UI Enhancements
+- **Side-by-Side Image Comparison**: Added comparison mode for easier A/B grading
+  - Press 'C' or click "Compare" button to open comparison view
+  - Independent zoom/pan controls for each image with optional sync (Z key)
+  - Separate grading controls: 1/2/3 for left image, 7/8/9 for right image
+  - Star overlay toggle (S key) and ESC to close
+- **File Existence Checking**: Projects and targets show visual indicators for file availability
+  - 1-minute cache for performance with manual refresh option
+  - Disabled entries shown for database items without corresponding files
+- **Server Info Panel**: Shows database path, image directory, cache directory, and version
+- **Periodic Refresh**: Auto-refresh every 30 seconds for new images/database changes
+
 ### Recent Updates (2025-08-27)
 
 #### Code Refactoring

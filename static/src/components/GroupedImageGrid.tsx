@@ -8,6 +8,7 @@ import { useGrading } from '../hooks/useGrading';
 import ImageCard from './ImageCard';
 import LazyImageCard from './LazyImageCard';
 import ImageDetailView from './ImageDetailView';
+import ImageComparisonView from './ImageComparisonView';
 import FilterControls, { type FilterOptions } from './FilterControls';
 import StatsDashboard from './StatsDashboard';
 import UndoRedoToolbar from './UndoRedoToolbar';
@@ -32,6 +33,8 @@ export default function GroupedImageGrid({ projectId, targetId, useLazyImages = 
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
   const [selectedImageId, setSelectedImageId] = useState<number | null>(null);
   const [showDetail, setShowDetail] = useState(false);
+  const [showComparison, setShowComparison] = useState(false);
+  const [comparisonRightId, setComparisonRightId] = useState<number | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [imageSize, setImageSize] = useState(300); // Default thumbnail size
   const [groupingMode, setGroupingMode] = useState<GroupingMode>('filter');
@@ -332,11 +335,28 @@ export default function GroupedImageGrid({ projectId, targetId, useLazyImages = 
   }, [gradeImage, gradeBatch, selectedImages.size]);
   useHotkeys('enter', () => setShowDetail(true), []);
   useHotkeys('escape', () => {
-    setShowDetail(false);
+    if (showComparison) {
+      setShowComparison(false);
+      setComparisonRightId(null);
+    } else {
+      setShowDetail(false);
+    }
     // Also clear selection on escape
     setSelectedImages(new Set());
     setLastSelectedImageId(null);
-  }, []);
+  }, [showComparison]);
+  
+  // Add comparison keyboard shortcut
+  useHotkeys('c', () => {
+    if (selectedImageId && !showDetail && !showComparison) {
+      setShowComparison(true);
+      // Find next image for comparison
+      const currentIndex = flatImages.findIndex(item => item.image.id === selectedImageId);
+      if (currentIndex !== -1 && currentIndex < flatImages.length - 1) {
+        setComparisonRightId(flatImages[currentIndex + 1].image.id);
+      }
+    }
+  }, [selectedImageId, showDetail, showComparison, flatImages]);
   
   // Grouping mode shortcuts
   useHotkeys('g', () => {
@@ -387,18 +407,38 @@ export default function GroupedImageGrid({ projectId, targetId, useLazyImages = 
           </div>
           
           {/* Undo/Redo Toolbar */}
-          <UndoRedoToolbar
-            canUndo={grading.canUndo}
-            canRedo={grading.canRedo}
-            isProcessing={grading.isLoading}
-            undoStackSize={grading.undoStackSize}
-            redoStackSize={grading.redoStackSize}
-            onUndo={grading.undo}
-            onRedo={grading.redo}
-            getLastAction={grading.getLastAction}
-            getNextRedoAction={grading.getNextRedoAction}
-            className="compact"
-          />
+          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+            <UndoRedoToolbar
+              canUndo={grading.canUndo}
+              canRedo={grading.canRedo}
+              isProcessing={grading.isLoading}
+              undoStackSize={grading.undoStackSize}
+              redoStackSize={grading.redoStackSize}
+              onUndo={grading.undo}
+              onRedo={grading.redo}
+              getLastAction={grading.getLastAction}
+              getNextRedoAction={grading.getNextRedoAction}
+              className="compact"
+            />
+            {selectedImageId && (
+              <button
+                className="toolbar-button compare-button"
+                onClick={() => {
+                  if (selectedImageId && !showDetail && !showComparison) {
+                    setShowComparison(true);
+                    const currentIndex = flatImages.findIndex(item => item.image.id === selectedImageId);
+                    if (currentIndex !== -1 && currentIndex < flatImages.length - 1) {
+                      setComparisonRightId(flatImages[currentIndex + 1].image.id);
+                    }
+                  }
+                }}
+                disabled={!selectedImageId || showDetail || showComparison}
+                title="Compare images side-by-side (C)"
+              >
+                Compare (C)
+              </button>
+            )}
+          </div>
           
           <div className="group-stats">
             Total: {filteredImages.length} of {allImages.length} images in {imageGroups.length} groups
@@ -547,6 +587,26 @@ export default function GroupedImageGrid({ projectId, targetId, useLazyImages = 
             
             return { next, previous };
           })()}
+        />
+      )}
+
+      {showComparison && selectedImageId && (
+        <ImageComparisonView
+          leftImageId={selectedImageId}
+          rightImageId={comparisonRightId}
+          onClose={() => {
+            setShowComparison(false);
+            setComparisonRightId(null);
+          }}
+          onSelectRightImage={() => {
+            // Find next image for comparison
+            const currentIndex = flatImages.findIndex(item => item.image.id === comparisonRightId);
+            if (currentIndex !== -1 && currentIndex < flatImages.length - 1) {
+              setComparisonRightId(flatImages[currentIndex + 1].image.id);
+            }
+          }}
+          onGradeLeft={(status) => grading.gradeImage(selectedImageId, status)}
+          onGradeRight={(status) => comparisonRightId && grading.gradeImage(comparisonRightId, status)}
         />
       )}
     </>

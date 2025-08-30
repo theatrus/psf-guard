@@ -26,6 +26,8 @@ export interface UseImageZoomReturn {
   zoomTo100: () => void;
   resetZoom: () => void;
   getZoomPercentage: () => number;
+  resetInitialization: () => void;
+  setZoomState: React.Dispatch<React.SetStateAction<ZoomState>>;
 }
 
 const DEFAULT_BOUNDS: ZoomBounds = {
@@ -45,6 +47,7 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
   
   // Flag to prevent auto-fit interference with intentional zoom operations
   const intentionalZoomRef = useRef(false);
+  const hasInitializedRef = useRef(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
@@ -106,6 +109,9 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
       offsetX: offsetX,
       offsetY: offsetY,
     });
+    
+    // Mark as initialized when we manually fit
+    hasInitializedRef.current = true;
   }, [calculateFitScale]);
 
   // Zoom to 100% (actual size)
@@ -206,6 +212,9 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     const rect = container.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
+    
+    // Mark this as an intentional zoom operation
+    intentionalZoomRef.current = true;
 
     setZoomState(prevState => {
       const delta = -e.deltaY * 0.01;
@@ -227,7 +236,7 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
         offsetY: constrained.offsetY,
       };
     });
-  }, [clampScale]);
+  }, [clampScale, constrainPan]);
 
   // Handle mouse down for panning
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -263,12 +272,15 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
   }, [constrainPan]);
 
   // Handle mouse up for panning
-  const handleMouseUp = useCallback((_e: React.MouseEvent) => {
+  const handleMouseUp = useCallback(() => {
     isPanningRef.current = false;
   }, []);
 
   // Zoom in function
   const zoomIn = useCallback(() => {
+    // Mark this as an intentional zoom operation
+    intentionalZoomRef.current = true;
+    
     setZoomState(prevState => {
       const newScale = clampScale(prevState.scale + KEYBOARD_ZOOM_STEP);
       const constrained = constrainPan(prevState.offsetX, prevState.offsetY, newScale);
@@ -282,6 +294,9 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
 
   // Zoom out function
   const zoomOut = useCallback(() => {
+    // Mark this as an intentional zoom operation
+    intentionalZoomRef.current = true;
+    
     setZoomState(prevState => {
       const newScale = clampScale(prevState.scale - KEYBOARD_ZOOM_STEP);
       const constrained = constrainPan(prevState.offsetX, prevState.offsetY, newScale);
@@ -325,6 +340,12 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
   const getZoomPercentage = useCallback((): number => {
     return Math.round(zoomState.scale * 100);
   }, [zoomState.scale]);
+  
+  // Reset initialization state (for when image changes)
+  const resetInitialization = useCallback(() => {
+    hasInitializedRef.current = false;
+    intentionalZoomRef.current = false;
+  }, []);
 
   // Initialize fit scale when component mounts or image changes
   useEffect(() => {
@@ -333,18 +354,20 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     if (container && image && image.complete && image.naturalWidth > 0) {
       const fitScale = calculateFitScale();
       initialFitScaleRef.current = fitScale;
-      if (zoomState.scale === 1 && !intentionalZoomRef.current) {
-        // Only auto-fit if we're at the default scale and it's not intentional
+      
+      // Only auto-fit if we haven't initialized yet
+      if (!hasInitializedRef.current && zoomState.scale === 1 && !intentionalZoomRef.current) {
         setZoomState({
           scale: fitScale,
           offsetX: 0,
           offsetY: 0,
         });
+        hasInitializedRef.current = true;
       }
-      // Reset the flag after any potential auto-fit
+      // Reset the intentional flag after any potential auto-fit
       intentionalZoomRef.current = false;
     }
-  }, [calculateFitScale, zoomState.scale]);
+  }, [calculateFitScale]);
 
   return {
     zoomState,
@@ -361,5 +384,7 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     zoomTo100,
     resetZoom,
     getZoomPercentage,
+    resetInitialization,
+    setZoomState,
   };
 }

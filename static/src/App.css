@@ -289,6 +289,17 @@
   height: 20px;
 }
 
+.compare-button {
+  margin-left: 1rem;
+  background: #4a5568;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+.compare-button:hover:not(:disabled) {
+  background: #5a6578;
+}
+
 /* Image Grid */
 .image-grid {
   display: grid;
@@ -961,6 +972,7 @@
   border-radius: 8px;
   width: 100%;
   max-width: 1600px;
+  height: 90vh;
   max-height: 90vh;
   display: flex;
   flex-direction: column;
@@ -974,6 +986,7 @@
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid #333;
+  flex-shrink: 0;
 }
 
 .comparison-header h2 {
@@ -1007,6 +1020,7 @@
   gap: 1rem;
   padding: 1rem;
   overflow: hidden;
+  min-height: 0; /* Important for nested flex containers */
 }
 
 .comparison-panel {
@@ -1017,6 +1031,7 @@
   border-radius: 8px;
   overflow: hidden;
   border: 1px solid #333;
+  min-height: 0; /* Allow panel to shrink in flex container */
 }
 
 .panel-header {
@@ -1026,6 +1041,7 @@
   justify-content: space-between;
   align-items: center;
   border-bottom: 1px solid #333;
+  flex-shrink: 0;
 }
 
 .panel-header h3 {
@@ -1042,6 +1058,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  min-height: 0; /* Important for flexbox to allow shrinking */
 }
 
 .panel-image .zoom-container {
@@ -1050,23 +1067,36 @@
   position: relative;
   overflow: hidden;
   cursor: default;
+  /* Ensure the container can receive mouse events */
+  pointer-events: auto;
+  transition: border-color 0.2s ease;
+  border: 2px solid transparent;
+  box-sizing: border-box;
+}
+
+.panel-image .zoom-container.zoomed {
+  border-color: #61dafb;
 }
 
 .panel-image img {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  transform-origin: center;
+  top: 0;
+  left: 0;
   max-width: none;
+  max-height: none;
+  width: auto;
   height: auto;
   user-select: none;
   -webkit-user-drag: none;
+  /* Transform origin should be top-left for proper positioning */
+  transform-origin: top left;
 }
 
 .panel-info {
   padding: 1rem;
   background: #202020;
   border-top: 1px solid #333;
+  flex-shrink: 0;
 }
 
 .panel-info .info-row {
@@ -1091,6 +1121,7 @@
   padding: 1rem;
   background: #202020;
   border-top: 1px solid #333;
+  flex-shrink: 0;
 }
 
 .panel-actions .action-button {
@@ -1170,6 +1201,7 @@
   display: flex;
   gap: 3rem;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .shortcut-section {

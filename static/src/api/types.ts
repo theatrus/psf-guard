@@ -66,7 +66,7 @@ export interface UpdateGradeRequest {
 }
 
 export interface PreviewOptions {
-  size?: 'screen' | 'large';
+  size?: 'screen' | 'large' | 'original';
   stretch?: boolean;
   midtone?: number;
   shadow?: number;

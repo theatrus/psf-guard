@@ -291,11 +291,13 @@ Once started, open your browser to `http://localhost:3000` (or your configured p
 - One-click grading with keyboard shortcuts (A=accept, R=reject, U=unmark)
 - Navigation between images with J/K or arrow keys
 - **Undo/Redo System**: Full undo/redo support for all grading actions with Ctrl+Z/Ctrl+Y
+- **Side-by-Side Comparison**: Compare two images simultaneously with independent zoom/pan controls
 
 **Keyboard Shortcuts**:
 - `?` - Show help modal with all shortcuts
 - `K / →` - Next image
 - `J / ←` - Previous image
+- `C` - Open comparison view (side-by-side)
 - `A` - Accept image
 - `R` - Reject image
 - `U` - Unmark (set to pending)
@@ -311,6 +313,12 @@ Once started, open your browser to `http://localhost:3000` (or your configured p
 - Mouse wheel - Zoom toward cursor
 - Click & drag - Pan when zoomed
 - `Esc` - Close modals/views
+
+**Comparison View** (side-by-side mode):
+- `1/2/3` - Grade left image (accept/reject/unmark)
+- `7/8/9` - Grade right image (accept/reject/unmark)
+- `S` - Toggle star overlay
+- `Z` - Toggle zoom synchronization between images
 
 #### REST API Endpoints
 

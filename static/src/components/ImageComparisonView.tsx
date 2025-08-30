@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../api/client';
@@ -28,6 +28,10 @@ export default function ImageComparisonView({
   // Initialize zoom for both images
   const leftZoom = useImageZoom({ minScale: 0.1, maxScale: 10.0 });
   const rightZoom = useImageZoom({ minScale: 0.1, maxScale: 10.0 });
+  
+  // Track image loading
+  const [leftImageLoaded, setLeftImageLoaded] = useState(false);
+  const [rightImageLoaded, setRightImageLoaded] = useState(false);
 
   // Fetch left image
   const { data: leftImage } = useQuery({
@@ -57,16 +61,81 @@ export default function ImageComparisonView({
   useHotkeys('8', () => rightImageId && onGradeRight('rejected'), [rightImageId, onGradeRight]);
   useHotkeys('9', () => rightImageId && onGradeRight('pending'), [rightImageId, onGradeRight]);
 
+  // Reset loaded state when images change
+  useEffect(() => {
+    setLeftImageLoaded(false);
+    leftZoom.resetInitialization();
+  }, [leftImageId, showStars, leftZoom]);
+  
+  useEffect(() => {
+    setRightImageLoaded(false);
+    rightZoom.resetInitialization();
+  }, [rightImageId, showStars, rightZoom]);
+
+  // Fit images when they load
+  useEffect(() => {
+    if (leftImageLoaded) {
+      leftZoom.zoomToFit();
+    }
+  }, [leftImageLoaded, leftZoom]);
+  
+  useEffect(() => {
+    if (rightImageLoaded) {
+      rightZoom.zoomToFit();
+    }
+  }, [rightImageLoaded, rightZoom]);
+
+  // Sync zoom states when syncZoom is enabled
+  useEffect(() => {
+    if (syncZoom) {
+      // Sync right zoom to match left zoom whenever left changes
+      rightZoom.setZoomState(leftZoom.zoomState);
+    }
+  }, [syncZoom, leftZoom.zoomState, rightZoom]);
+
   // Handle zoom events
   const handleLeftZoom = useCallback((e: React.WheelEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
     leftZoom.handleWheel(e);
-    // Sync zoom will be handled via effect
   }, [leftZoom]);
 
   const handleRightZoom = useCallback((e: React.WheelEvent) => {
-    rightZoom.handleWheel(e);
-    // Sync zoom will be handled via effect
-  }, [rightZoom]);
+    e.preventDefault();
+    e.stopPropagation();
+    if (!syncZoom) {
+      rightZoom.handleWheel(e);
+    } else {
+      // When synced, apply zoom to left image and it will sync to right via effect
+      leftZoom.handleWheel(e);
+    }
+  }, [leftZoom, rightZoom, syncZoom]);
+  
+  // Handle mouse move for panning
+  const handleLeftMouseMove = useCallback((e: React.MouseEvent) => {
+    leftZoom.handleMouseMove(e);
+  }, [leftZoom]);
+  
+  const handleRightMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!syncZoom) {
+      rightZoom.handleMouseMove(e);
+    } else {
+      // When synced, move left image and it will sync to right via effect
+      // Calculate the equivalent mouse position for the left image
+      const leftContainer = leftZoom.containerRef.current;
+      const rightContainer = rightZoom.containerRef.current;
+      if (leftContainer && rightContainer) {
+        const rightRect = rightContainer.getBoundingClientRect();
+        const leftRect = leftContainer.getBoundingClientRect();
+        const adjustedEvent = {
+          ...e,
+          clientX: e.clientX - rightRect.left + leftRect.left,
+          clientY: e.clientY - rightRect.top + leftRect.top,
+        } as React.MouseEvent;
+        leftZoom.handleMouseMove(adjustedEvent);
+      }
+    }
+  }, [leftZoom, rightZoom, syncZoom]);
 
   const getStatusClass = (image: Image | null | undefined) => {
     if (!image) return '';
@@ -86,7 +155,7 @@ export default function ImageComparisonView({
   };
 
   if (!leftImage) {
-    return null;
+    return <div className="comparison-overlay"><div className="loading">Loading...</div></div>;
   }
 
   return (
@@ -129,21 +198,22 @@ export default function ImageComparisonView({
             
             <div className="panel-image">
               <div 
-                className="zoom-container"
+                className={`zoom-container ${leftZoom.zoomState.scale >= 0.95 ? 'zoomed' : ''}`}
                 ref={leftZoom.containerRef}
                 onWheel={handleLeftZoom}
                 onMouseDown={leftZoom.handleMouseDown}
-                onMouseMove={leftZoom.handleMouseMove}
+                onMouseMove={handleLeftMouseMove}
                 onMouseUp={leftZoom.handleMouseUp}
                 onMouseLeave={leftZoom.handleMouseUp}
               >
                 <img
                   ref={leftZoom.imageRef}
                   src={showStars 
-                    ? apiClient.getAnnotatedUrl(leftImageId)
-                    : apiClient.getPreviewUrl(leftImageId, { size: 'large' })
+                    ? apiClient.getAnnotatedUrl(leftImageId, 'large')
+                    : apiClient.getPreviewUrl(leftImageId, { size: 'original' })
                   }
                   alt={`${leftImage.target_name} - ${leftImage.filter_name || 'No filter'}`}
+                  onLoad={() => setLeftImageLoaded(true)}
                   style={{
                     transform: `translate(${leftZoom.zoomState.offsetX}px, ${leftZoom.zoomState.offsetY}px) scale(${leftZoom.zoomState.scale})`,
                     cursor: leftZoom.zoomState.scale > 1 ? 'grab' : 'default',
@@ -203,21 +273,22 @@ export default function ImageComparisonView({
                 
                 <div className="panel-image">
                   <div 
-                    className="zoom-container"
+                    className={`zoom-container ${rightZoom.zoomState.scale >= 0.95 ? 'zoomed' : ''}`}
                     ref={rightZoom.containerRef}
                     onWheel={handleRightZoom}
-                    onMouseDown={rightZoom.handleMouseDown}
-                    onMouseMove={rightZoom.handleMouseMove}
-                    onMouseUp={rightZoom.handleMouseUp}
-                    onMouseLeave={rightZoom.handleMouseUp}
+                    onMouseDown={syncZoom ? leftZoom.handleMouseDown : rightZoom.handleMouseDown}
+                    onMouseMove={handleRightMouseMove}
+                    onMouseUp={syncZoom ? leftZoom.handleMouseUp : rightZoom.handleMouseUp}
+                    onMouseLeave={syncZoom ? leftZoom.handleMouseUp : rightZoom.handleMouseUp}
                   >
                     <img
                       ref={rightZoom.imageRef}
                       src={showStars 
-                        ? apiClient.getAnnotatedUrl(rightImageId!)
-                        : apiClient.getPreviewUrl(rightImageId!, { size: 'large' })
+                        ? apiClient.getAnnotatedUrl(rightImageId!, 'large')
+                        : apiClient.getPreviewUrl(rightImageId!, { size: 'original' })
                       }
                       alt={`${rightImage.target_name} - ${rightImage.filter_name || 'No filter'}`}
+                      onLoad={() => setRightImageLoaded(true)}
                       style={{
                         transform: `translate(${rightZoom.zoomState.offsetX}px, ${rightZoom.zoomState.offsetY}px) scale(${rightZoom.zoomState.scale})`,
                         cursor: rightZoom.zoomState.scale > 1 ? 'grab' : 'default',
