@@ -335,7 +335,7 @@ export default function ImageComparisonView({
             
             <div className="panel-image">
               <div 
-                className={`zoom-container ${leftZoom.zoomState.scale >= 0.95 ? 'zoomed' : ''}`}
+                className={`zoom-container ${leftZoom.hasOverflow ? 'zoomed' : ''}`}
                 ref={leftZoom.containerRef}
                 onWheel={handleLeftZoom}
                 onMouseDown={leftZoom.handleMouseDown}
@@ -432,7 +432,7 @@ export default function ImageComparisonView({
                 
                 <div className="panel-image">
                   <div 
-                    className={`zoom-container ${rightZoom.zoomState.scale >= 0.95 ? 'zoomed' : ''}`}
+                    className={`zoom-container ${rightZoom.hasOverflow ? 'zoomed' : ''}`}
                     ref={rightZoom.containerRef}
                     onWheel={handleRightZoom}
                     onMouseDown={syncZoom ? leftZoom.handleMouseDown : rightZoom.handleMouseDown}

@@ -32,6 +32,7 @@ export interface UseImageZoomReturn {
   adjustZoomForNewImage: (oldWidth: number, oldHeight: number, newWidth: number, newHeight: number) => void;
   setImageDimensions: (width: number, height: number, isOriginal: boolean) => void;
   getVisualScale: () => number;
+  hasOverflow: boolean;
 }
 
 const DEFAULT_BOUNDS: ZoomBounds = {
@@ -480,6 +481,23 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     }
   }, [calculateFitScale]);
 
+  // Calculate whether the image overflows the container
+  const hasOverflow = (() => {
+    const container = containerRef.current;
+    const image = imageRef.current;
+    
+    if (!container || !image || !image.naturalWidth || !image.naturalHeight) {
+      return false;
+    }
+    
+    const containerRect = container.getBoundingClientRect();
+    const scaledImageWidth = image.naturalWidth * zoomState.scale;
+    const scaledImageHeight = image.naturalHeight * zoomState.scale;
+    
+    // Check if either dimension exceeds the container
+    return scaledImageWidth > containerRect.width || scaledImageHeight > containerRect.height;
+  })();
+
   return {
     zoomState,
     containerRef,
@@ -500,5 +518,6 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     adjustZoomForNewImage,
     setImageDimensions,
     getVisualScale,
+    hasOverflow,
   };
 }

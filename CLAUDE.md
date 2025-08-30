@@ -996,20 +996,22 @@ onLoad={(e) => {
 const ratio = currentImageWidth / originalImageWidth;
 const visualScale = actualScale * ratio;
 
-// When switching images, maintain the same visual scale
+// When switching images, maintain the same DISPLAYED pixel size
 const adjustZoomForNewImage = (oldWidth, oldHeight, newWidth, newHeight) => {
+  // Key insight: displayed size = image width × scale
+  const currentDisplayedWidth = oldWidth * prevState.scale;
+  
+  // Calculate scale needed to maintain same displayed size
+  const newScale = currentDisplayedWidth / newWidth;
+  
+  // Visual scale remains unchanged
   const targetVisualScale = prevState.visualScale || prevState.scale;
-  const isNowOriginal = Math.abs(newWidth - originalDimensionsRef.current.width) < 10;
   
-  // Calculate actual scale based on which image we're viewing
-  if (isNowOriginal) {
-    newScale = targetVisualScale; // Original: scale = visual scale
-  } else {
-    const sizeRatio = newWidth / originalDimensionsRef.current.width;
-    newScale = targetVisualScale / sizeRatio; // Large: scale up to match visual
-  }
+  // Example: switching from 2000px at scale 3.0 to 6000px image
+  // - Current displayed: 2000 × 3.0 = 6000px
+  // - New scale needed: 6000 ÷ 6000 = 1.0
+  // - Result: no visual jump, same 6000px displayed
   
-  // Return with unchanged visual scale
   return { scale: newScale, visualScale: targetVisualScale };
 }
 ```
