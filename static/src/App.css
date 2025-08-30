@@ -236,6 +236,59 @@
   margin-top: 4rem;
 }
 
+/* Grid Toolbar */
+.grid-toolbar {
+  background: #252525;
+  border-radius: 8px;
+  padding: 1rem 1.5rem;
+  margin-bottom: 1.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  max-width: 1400px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.toolbar-info {
+  color: #999;
+  font-size: 0.9rem;
+}
+
+.toolbar-actions {
+  display: flex;
+  gap: 1rem;
+}
+
+.toolbar-button {
+  background: #333;
+  color: #e0e0e0;
+  border: 1px solid #444;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.toolbar-button:hover:not(:disabled) {
+  background: #444;
+  border-color: #555;
+}
+
+.toolbar-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toolbar-button svg {
+  width: 20px;
+  height: 20px;
+}
+
 /* Image Grid */
 .image-grid {
   display: grid;
@@ -886,6 +939,255 @@
   text-align: center;
   padding: 2rem;
   color: #666;
+}
+
+/* Image Comparison View */
+.comparison-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  padding: 2rem;
+}
+
+.comparison-container {
+  background: #1a1a1a;
+  border-radius: 8px;
+  width: 100%;
+  max-width: 1600px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.comparison-header {
+  background: #252525;
+  padding: 1rem 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #333;
+}
+
+.comparison-header h2 {
+  margin: 0;
+  color: #61dafb;
+  font-size: 1.3rem;
+}
+
+.comparison-controls {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+}
+
+.comparison-controls label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #ccc;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.comparison-controls input[type="checkbox"] {
+  cursor: pointer;
+}
+
+.comparison-content {
+  flex: 1;
+  display: flex;
+  gap: 1rem;
+  padding: 1rem;
+  overflow: hidden;
+}
+
+.comparison-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #252525;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #333;
+}
+
+.panel-header {
+  padding: 1rem;
+  background: #202020;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #333;
+}
+
+.panel-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #e0e0e0;
+}
+
+.panel-image {
+  flex: 1;
+  background: #1a1a1a;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.panel-image .zoom-container {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  cursor: default;
+}
+
+.panel-image img {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform-origin: center;
+  max-width: none;
+  height: auto;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.panel-info {
+  padding: 1rem;
+  background: #202020;
+  border-top: 1px solid #333;
+}
+
+.panel-info .info-row {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+  color: #ccc;
+}
+
+.panel-info .info-row:last-child {
+  margin-bottom: 0;
+}
+
+.panel-info .info-row strong {
+  color: #999;
+}
+
+.panel-actions {
+  display: flex;
+  gap: 0.5rem;
+  padding: 1rem;
+  background: #202020;
+  border-top: 1px solid #333;
+}
+
+.panel-actions .action-button {
+  flex: 1;
+  padding: 0.75rem;
+  border: 1px solid #444;
+  background: #333;
+  color: #e0e0e0;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 0.9rem;
+}
+
+.panel-actions .action-button.accept {
+  border-color: #4caf50;
+}
+
+.panel-actions .action-button.accept:hover {
+  background: #4caf50;
+  color: white;
+}
+
+.panel-actions .action-button.reject {
+  border-color: #f44336;
+}
+
+.panel-actions .action-button.reject:hover {
+  background: #f44336;
+  color: white;
+}
+
+.panel-actions .action-button.pending {
+  border-color: #ff9800;
+}
+
+.panel-actions .action-button.pending:hover {
+  background: #ff9800;
+  color: white;
+}
+
+.panel-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+  padding: 2rem;
+}
+
+.panel-empty p {
+  margin-bottom: 1.5rem;
+  font-size: 1.1rem;
+}
+
+.select-button {
+  background: #333;
+  color: #e0e0e0;
+  border: 1px solid #444;
+  padding: 0.75rem 1.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 1rem;
+}
+
+.select-button:hover {
+  background: #444;
+  border-color: #555;
+}
+
+.comparison-shortcuts {
+  background: #202020;
+  padding: 1rem 1.5rem;
+  border-top: 1px solid #333;
+  display: flex;
+  gap: 3rem;
+  justify-content: center;
+}
+
+.shortcut-section {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+}
+
+.shortcut-section h4 {
+  margin: 0;
+  color: #61dafb;
+  font-size: 0.9rem;
+}
+
+.shortcut-section span {
+  color: #999;
+  font-size: 0.85rem;
+  font-family: monospace;
 }
 
 /* Statistics Dashboard */

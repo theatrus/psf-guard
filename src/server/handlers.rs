@@ -152,7 +152,7 @@ async fn check_project_has_files(state: &Arc<AppState>, project_id: i32) -> Resu
     for (image, _, target_name) in images_to_check {
         if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&image.metadata) {
             if let Some(filename) = metadata["FileName"].as_str() {
-                let file_only = filename.split(&['\\', '/'][..]).last().unwrap_or(filename);
+                let file_only = filename.split(&['\\', '/'][..]).next_back().unwrap_or(filename);
                 if find_fits_file(state, &image, &target_name, file_only).is_ok() {
                     return Ok(true);
                 }
@@ -263,7 +263,7 @@ async fn check_target_has_files(state: &Arc<AppState>, target_id: i32) -> Result
     for (image, _, target_name) in images_to_check {
         if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&image.metadata) {
             if let Some(filename) = metadata["FileName"].as_str() {
-                let file_only = filename.split(&['\\', '/'][..]).last().unwrap_or(filename);
+                let file_only = filename.split(&['\\', '/'][..]).next_back().unwrap_or(filename);
                 if find_fits_file(state, &image, &target_name, file_only).is_ok() {
                     return Ok(true);
                 }

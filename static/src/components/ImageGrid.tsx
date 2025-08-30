@@ -6,6 +6,7 @@ import { apiClient } from '../api/client';
 import type { UpdateGradeRequest } from '../api/types';
 import ImageCard from './ImageCard';
 import ImageDetailView from './ImageDetailView';
+import ImageComparisonView from './ImageComparisonView';
 
 interface ImageGridProps {
   projectId: number;
@@ -19,6 +20,8 @@ export default function ImageGrid({ projectId, targetId }: ImageGridProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [selectedImageId, setSelectedImageId] = useState<number | null>(null);
   const [showDetail, setShowDetail] = useState(false);
+  const [showComparison, setShowComparison] = useState(false);
+  const [comparisonRightId, setComparisonRightId] = useState<number | null>(null);
   const [page, setPage] = useState(0);
   const gridRef = useRef<HTMLDivElement>(null);
 
@@ -57,12 +60,16 @@ export default function ImageGrid({ projectId, targetId }: ImageGridProps) {
     }
   }, [inView, isFetching, images.length]);
 
-  // Update selected image when index changes
+  // Update selected image when index changes or images load
   useEffect(() => {
     if (images[selectedIndex]) {
       setSelectedImageId(images[selectedIndex].id);
+    } else if (images.length > 0 && selectedImageId === null) {
+      // Auto-select first image if none selected
+      setSelectedImageId(images[0].id);
+      setSelectedIndex(0);
     }
-  }, [selectedIndex, images]);
+  }, [selectedIndex, images, selectedImageId]);
 
   const navigateImages = useCallback((direction: 'next' | 'prev') => {
     setSelectedIndex(current => {
@@ -86,14 +93,81 @@ export default function ImageGrid({ projectId, targetId }: ImageGridProps) {
     setTimeout(() => navigateImages('next'), 100);
   }, [selectedImageId, gradeMutation, navigateImages]);
 
+  // Handle grading in comparison view
+  const gradeComparisonImage = useCallback((imageId: number, status: 'accepted' | 'rejected' | 'pending') => {
+    gradeMutation.mutate({
+      imageId,
+      request: { status },
+    });
+  }, [gradeMutation]);
+
+  // Select right image for comparison
+  const selectRightImage = useCallback(() => {
+    console.log('selectRightImage called:', {
+      selectedIndex,
+      imagesLength: images.length,
+      nextIndex: selectedIndex + 1
+    });
+    // Find next image after selected
+    const nextIndex = selectedIndex + 1;
+    if (nextIndex < images.length) {
+      console.log('Setting comparison right ID to:', images[nextIndex].id);
+      setComparisonRightId(images[nextIndex].id);
+    } else {
+      console.log('No next image available for comparison');
+    }
+  }, [selectedIndex, images]);
+
+  // Debug: Log state changes
+  useEffect(() => {
+    console.log('ImageGrid state:', {
+      selectedImageId,
+      selectedIndex,
+      showDetail,
+      showComparison,
+      comparisonRightId,
+      imagesLength: images.length
+    });
+  }, [selectedImageId, selectedIndex, showDetail, showComparison, comparisonRightId, images.length]);
+
   // Keyboard shortcuts
-  useHotkeys('j', () => navigateImages('next'), [navigateImages]);
-  useHotkeys('k', () => navigateImages('prev'), [navigateImages]);
+  useHotkeys('k,right', () => {
+    console.log('K/Right key pressed');
+    navigateImages('next');
+  }, [navigateImages]);
+  useHotkeys('j,left', () => {
+    console.log('J/Left key pressed');
+    navigateImages('prev');
+  }, [navigateImages]);
   useHotkeys('a', () => gradeImage('accepted'), [gradeImage]);
   useHotkeys('r', () => gradeImage('rejected'), [gradeImage]);
   useHotkeys('u', () => gradeImage('pending'), [gradeImage]);
-  useHotkeys('enter', () => setShowDetail(true), []);
-  useHotkeys('escape', () => setShowDetail(false), []);
+  useHotkeys('enter', () => {
+    console.log('Enter key pressed, opening detail view');
+    setShowDetail(true);
+  }, []);
+  useHotkeys('escape', () => {
+    console.log('Escape key pressed');
+    if (showComparison) {
+      setShowComparison(false);
+      setComparisonRightId(null);
+    } else {
+      setShowDetail(false);
+    }
+  }, [showComparison]);
+  useHotkeys('c', () => {
+    console.log('C key pressed - checking conditions:', {
+      selectedImageId,
+      showDetail,
+      showComparison,
+      condition: selectedImageId && !showDetail && !showComparison
+    });
+    if (selectedImageId && !showDetail && !showComparison) {
+      console.log('Opening comparison view!');
+      setShowComparison(true);
+      selectRightImage();
+    }
+  }, { enabled: !showDetail && !showComparison }, [selectedImageId, selectRightImage, showDetail, showComparison]);
 
   if (isLoading && page === 0) {
     return <div className="loading">Loading images...</div>;
@@ -101,6 +175,42 @@ export default function ImageGrid({ projectId, targetId }: ImageGridProps) {
 
   return (
     <>
+      {images.length > 0 && (
+        <div className="grid-toolbar">
+          <div className="toolbar-info">
+            {images.length} images loaded
+            {selectedImageId ? ` • Selected: Image #${selectedImageId}` : ' • Click an image to select it'}
+          </div>
+          <div className="toolbar-actions">
+            <button 
+              className="toolbar-button"
+              onClick={() => {
+                console.log('Compare button clicked:', {
+                  selectedImageId,
+                  showDetail,
+                  showComparison,
+                  imagesLength: images.length
+                });
+                if (selectedImageId) {
+                  console.log('Opening comparison from button!');
+                  setShowComparison(true);
+                  selectRightImage();
+                } else {
+                  console.log('No image selected!');
+                }
+              }}
+              disabled={!selectedImageId}
+              title="Compare images side-by-side (C)"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="2" y="4" width="9" height="16" rx="1" />
+                <rect x="13" y="4" width="9" height="16" rx="1" />
+              </svg>
+              Compare
+            </button>
+          </div>
+        </div>
+      )}
       <div className="image-grid" ref={gridRef}>
         {images.map((image, index) => (
           <ImageCard
@@ -124,7 +234,7 @@ export default function ImageGrid({ projectId, targetId }: ImageGridProps) {
         </div>
       </div>
 
-      {showDetail && selectedImageId && (
+      {showDetail && selectedImageId && !showComparison && (
         <ImageDetailView
           imageId={selectedImageId}
           onClose={() => setShowDetail(false)}
@@ -132,6 +242,27 @@ export default function ImageGrid({ projectId, targetId }: ImageGridProps) {
           onPrevious={() => navigateImages('prev')}
           onGrade={gradeImage}
         />
+      )}
+
+      {showComparison && selectedImageId && (
+        <>
+          {console.log('Rendering ImageComparisonView with:', {
+            leftImageId: selectedImageId,
+            rightImageId: comparisonRightId
+          })}
+          <ImageComparisonView
+            leftImageId={selectedImageId}
+            rightImageId={comparisonRightId}
+            onClose={() => {
+              console.log('Closing comparison view');
+              setShowComparison(false);
+              setComparisonRightId(null);
+            }}
+            onSelectRightImage={selectRightImage}
+            onGradeLeft={(status) => gradeComparisonImage(selectedImageId, status)}
+            onGradeRight={(status) => comparisonRightId && gradeComparisonImage(comparisonRightId, status)}
+          />
+        </>
       )}
     </>
   );

@@ -25,6 +25,12 @@ pub struct FileCheckCache {
     pub cache_duration: Duration,
 }
 
+impl Default for FileCheckCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FileCheckCache {
     pub fn new() -> Self {
         Self {

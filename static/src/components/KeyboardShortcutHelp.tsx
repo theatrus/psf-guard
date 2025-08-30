@@ -25,6 +25,7 @@ export default function KeyboardShortcutHelp({ onClose }: KeyboardShortcutHelpPr
       { key: 'S', description: 'Toggle star detection overlay' },
       { key: 'P', description: 'Toggle PSF residual visualization' },
       { key: 'Z', description: 'Toggle image size' },
+      { key: 'C', description: 'Open comparison view (side-by-side)' },
       { key: 'G', description: 'Cycle grouping mode (Filter → Date → Both)' },
       { key: '?', description: 'Show this help' },
     ]},
