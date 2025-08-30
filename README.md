@@ -285,7 +285,12 @@ Once started, open your browser to `http://localhost:3000` (or your configured p
 **Image Detail View**:
 - Full-resolution FITS preview with MTF stretching
 - Comprehensive zoom and pan controls (mouse wheel, click-drag, keyboard shortcuts)
-- Dynamic image loading: starts with large (2000px) images, switches to original size when zoomed
+- **Smart Dynamic Loading**: 
+  - Starts with large (2000px) images for fast initial loading
+  - Automatically switches to original resolution when zooming past 100%
+  - Once original is loaded, stays at full resolution (no switching back)
+  - Seamless transitions maintain visual zoom continuity (no jumping or snapping)
+  - Visual zoom percentage always represents actual display size (100% = original resolution)
 - Star detection overlay toggle (S key)
 - PSF residual visualization toggle (P key)
 - Complete metadata display (exposure, temperature, camera, statistics)
@@ -309,7 +314,7 @@ Once started, open your browser to `http://localhost:3000` (or your configured p
 - `Z` - Toggle image size
 - `+/-` - Zoom in/out
 - `F` - Fit to screen
-- `1` - 100% zoom
+- `1` - 100% zoom (original image resolution)
 - `0` - Reset zoom
 - Mouse wheel - Zoom toward cursor
 - Click & drag - Pan when zoomed
@@ -320,6 +325,9 @@ Once started, open your browser to `http://localhost:3000` (or your configured p
 - `7/8/9` - Grade right image (accept/reject/unmark)
 - `S` - Toggle star overlay
 - `Z` - Toggle zoom synchronization between images
+- **Smart Dynamic Loading**: same seamless one-way image switching as detail view
+- Blue border indicates zoomed images (>= 95% zoom)
+- Synchronized zoom maintains consistent visual scale between images
 
 #### REST API Endpoints
 

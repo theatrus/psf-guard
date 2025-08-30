@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../api/client';
@@ -32,6 +32,22 @@ export default function ImageComparisonView({
   // Track image loading
   const [leftImageLoaded, setLeftImageLoaded] = useState(false);
   const [rightImageLoaded, setRightImageLoaded] = useState(false);
+  
+  // Track original image preloading
+  const [leftOriginalLoaded, setLeftOriginalLoaded] = useState(false);
+  const [rightOriginalLoaded, setRightOriginalLoaded] = useState(false);
+  const leftOriginalRef = useRef<HTMLImageElement | null>(null);
+  const rightOriginalRef = useRef<HTMLImageElement | null>(null);
+  
+  // Track whether to use original images
+  const [useLeftOriginal, setUseLeftOriginal] = useState(false);
+  const [useRightOriginal, setUseRightOriginal] = useState(false);
+  const leftDimensionsRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
+  const rightDimensionsRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
+  
+  // State machine to prevent feedback loops
+  const leftImageStateRef = useRef<'large' | 'switching-to-original' | 'original'>('large');
+  const rightImageStateRef = useRef<'large' | 'switching-to-original' | 'original'>('large');
 
   // Fetch left image
   const { data: leftImage } = useQuery({
@@ -84,6 +100,127 @@ export default function ImageComparisonView({
       rightZoom.zoomToFit();
     }
   }, [rightImageLoaded, rightZoom]);
+  
+  // Load original dimensions from metadata if available
+  useEffect(() => {
+    // Try different possible field names for image dimensions
+    const width = leftImage?.metadata?.ImageWidth || 
+                  leftImage?.metadata?.NAXIS1 || 
+                  leftImage?.metadata?.ImageSize?.[0];
+    const height = leftImage?.metadata?.ImageHeight || 
+                   leftImage?.metadata?.NAXIS2 || 
+                   leftImage?.metadata?.ImageSize?.[1];
+    
+    if (width && height && typeof width === 'number' && typeof height === 'number') {
+      leftZoom.setImageDimensions(width, height, true);
+    }
+  }, [leftImage, leftZoom]);
+  
+  // Combined effect for left image preloading and switching
+  useEffect(() => {
+    if (!leftImage) return;
+    
+    const visualScale = leftZoom.getVisualScale();
+    const state = leftImageStateRef.current;
+    
+    // Preload when visual zoom > 80%
+    if (visualScale > 0.8 && !leftOriginalLoaded && state === 'large') {
+      const originalUrl = showStars 
+        ? apiClient.getAnnotatedUrl(leftImageId, 'original')
+        : apiClient.getPreviewUrl(leftImageId, { size: 'original' });
+      
+      const img = new Image();
+      img.src = originalUrl;
+      leftOriginalRef.current = img;
+      
+      img.onload = () => {
+        setLeftOriginalLoaded(true);
+      };
+    }
+    
+    // State machine transitions based on visual scale - only switch to original, never back
+    if (state === 'large' && visualScale > 1.0 && leftOriginalLoaded) {
+      // Switch to original
+      leftImageStateRef.current = 'switching-to-original';
+      setUseLeftOriginal(true);
+      // Delay state update to allow render
+      setTimeout(() => {
+        if (leftImageStateRef.current === 'switching-to-original') {
+          leftImageStateRef.current = 'original';
+        }
+      }, 300);
+    }
+    // Never switch back from original to large
+  }, [leftZoom, leftImageId, showStars, leftImage, leftOriginalLoaded]);
+  
+  // Load original dimensions from metadata if available
+  useEffect(() => {
+    // Try different possible field names for image dimensions
+    const width = rightImage?.metadata?.ImageWidth || 
+                  rightImage?.metadata?.NAXIS1 || 
+                  rightImage?.metadata?.ImageSize?.[0];
+    const height = rightImage?.metadata?.ImageHeight || 
+                   rightImage?.metadata?.NAXIS2 || 
+                   rightImage?.metadata?.ImageSize?.[1];
+    
+    if (width && height && typeof width === 'number' && typeof height === 'number') {
+      rightZoom.setImageDimensions(width, height, true);
+    }
+  }, [rightImage, rightZoom]);
+  
+  // Combined effect for right image preloading and switching
+  useEffect(() => {
+    if (!rightImage || !rightImageId) return;
+    
+    const visualScale = rightZoom.getVisualScale();
+    const state = rightImageStateRef.current;
+    
+    // Preload when visual zoom > 80%
+    if (visualScale > 0.8 && !rightOriginalLoaded && state === 'large') {
+      const originalUrl = showStars 
+        ? apiClient.getAnnotatedUrl(rightImageId, 'original')
+        : apiClient.getPreviewUrl(rightImageId, { size: 'original' });
+      
+      const img = new Image();
+      img.src = originalUrl;
+      rightOriginalRef.current = img;
+      
+      img.onload = () => {
+        setRightOriginalLoaded(true);
+      };
+    }
+    
+    // State machine transitions based on visual scale - only switch to original, never back
+    if (state === 'large' && visualScale > 1.0 && rightOriginalLoaded) {
+      // Switch to original
+      rightImageStateRef.current = 'switching-to-original';
+      setUseRightOriginal(true);
+      // Delay state update to allow render
+      setTimeout(() => {
+        if (rightImageStateRef.current === 'switching-to-original') {
+          rightImageStateRef.current = 'original';
+        }
+      }, 300);
+    }
+    // Never switch back from original to large
+  }, [rightZoom, rightImageId, showStars, rightImage, rightOriginalLoaded]);
+  
+  // Reset preload state when images change
+  useEffect(() => {
+    setLeftOriginalLoaded(false);
+    leftOriginalRef.current = null;
+    setUseLeftOriginal(false);
+    leftDimensionsRef.current = { width: 0, height: 0 };
+    leftImageStateRef.current = 'large';
+  }, [leftImageId, showStars]);
+  
+  useEffect(() => {
+    setRightOriginalLoaded(false);
+    rightOriginalRef.current = null;
+    setUseRightOriginal(false);
+    rightDimensionsRef.current = { width: 0, height: 0 };
+    rightImageStateRef.current = 'large';
+  }, [rightImageId, showStars]);
 
   // Sync zoom states when syncZoom is enabled
   useEffect(() => {
@@ -209,11 +346,33 @@ export default function ImageComparisonView({
                 <img
                   ref={leftZoom.imageRef}
                   src={showStars 
-                    ? apiClient.getAnnotatedUrl(leftImageId, leftZoom.zoomState.scale > 1 ? 'original' : 'large')
-                    : apiClient.getPreviewUrl(leftImageId, { size: leftZoom.zoomState.scale > 1 ? 'original' : 'large' })
+                    ? apiClient.getAnnotatedUrl(leftImageId, useLeftOriginal ? 'original' : 'large')
+                    : apiClient.getPreviewUrl(leftImageId, { size: useLeftOriginal ? 'original' : 'large' })
                   }
                   alt={`${leftImage.target_name} - ${leftImage.filter_name || 'No filter'}`}
-                  onLoad={() => setLeftImageLoaded(true)}
+                  onLoad={(e) => {
+                    setLeftImageLoaded(true);
+                    
+                    const img = e.currentTarget;
+                    const newWidth = img.naturalWidth;
+                    const newHeight = img.naturalHeight;
+                    const oldWidth = leftDimensionsRef.current.width;
+                    const oldHeight = leftDimensionsRef.current.height;
+                    
+                    // Update image dimensions in zoom hook
+                    leftZoom.setImageDimensions(newWidth, newHeight, useLeftOriginal);
+                    
+                    // Check if dimensions actually changed
+                    const dimensionsChanged = oldWidth > 0 && (Math.abs(newWidth - oldWidth) > 10 || Math.abs(newHeight - oldHeight) > 10);
+                    
+                    if (dimensionsChanged && leftImageStateRef.current === 'switching-to-original') {
+                      // Adjust zoom to maintain visual continuity
+                      leftZoom.adjustZoomForNewImage(oldWidth, oldHeight, newWidth, newHeight);
+                    }
+                    
+                    // Update stored dimensions
+                    leftDimensionsRef.current = { width: newWidth, height: newHeight };
+                  }}
                   style={{
                     transform: `translate(${leftZoom.zoomState.offsetX}px, ${leftZoom.zoomState.offsetY}px) scale(${leftZoom.zoomState.scale})`,
                     cursor: leftZoom.zoomState.scale > 1 ? 'grab' : 'default',
@@ -284,11 +443,33 @@ export default function ImageComparisonView({
                     <img
                       ref={rightZoom.imageRef}
                       src={showStars 
-                        ? apiClient.getAnnotatedUrl(rightImageId!, rightZoom.zoomState.scale > 1 ? 'original' : 'large')
-                        : apiClient.getPreviewUrl(rightImageId!, { size: rightZoom.zoomState.scale > 1 ? 'original' : 'large' })
+                        ? apiClient.getAnnotatedUrl(rightImageId!, useRightOriginal ? 'original' : 'large')
+                        : apiClient.getPreviewUrl(rightImageId!, { size: useRightOriginal ? 'original' : 'large' })
                       }
                       alt={`${rightImage.target_name} - ${rightImage.filter_name || 'No filter'}`}
-                      onLoad={() => setRightImageLoaded(true)}
+                      onLoad={(e) => {
+                        setRightImageLoaded(true);
+                        
+                        const img = e.currentTarget;
+                        const newWidth = img.naturalWidth;
+                        const newHeight = img.naturalHeight;
+                        const oldWidth = rightDimensionsRef.current.width;
+                        const oldHeight = rightDimensionsRef.current.height;
+                        
+                        // Update image dimensions in zoom hook
+                        rightZoom.setImageDimensions(newWidth, newHeight, useRightOriginal);
+                        
+                        // Check if dimensions actually changed
+                        const dimensionsChanged = oldWidth > 0 && (Math.abs(newWidth - oldWidth) > 10 || Math.abs(newHeight - oldHeight) > 10);
+                        
+                        if (dimensionsChanged && rightImageStateRef.current === 'switching-to-original') {
+                          // Adjust zoom to maintain visual continuity
+                          rightZoom.adjustZoomForNewImage(oldWidth, oldHeight, newWidth, newHeight);
+                        }
+                        
+                        // Update stored dimensions
+                        rightDimensionsRef.current = { width: newWidth, height: newHeight };
+                      }}
                       style={{
                         transform: `translate(${rightZoom.zoomState.offsetX}px, ${rightZoom.zoomState.offsetY}px) scale(${rightZoom.zoomState.scale})`,
                         cursor: rightZoom.zoomState.scale > 1 ? 'grab' : 'default',

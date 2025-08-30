@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../api/client';
@@ -40,6 +40,13 @@ export default function ImageDetailView({
   const [showStars, setShowStars] = useState(false);
   const [showPsf, setShowPsf] = useState(false);
   const [imageSize, setImageSize] = useState<'screen' | 'large' | 'original'>('large');
+  const [isOriginalLoaded, setIsOriginalLoaded] = useState(false);
+  const preloadedOriginalRef = useRef<HTMLImageElement | null>(null);
+  const [useOriginalImage, setUseOriginalImage] = useState(false);
+  const imageDimensionsRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
+  
+  // State machine to prevent feedback loops
+  const imageStateRef = useRef<'large' | 'switching-to-original' | 'original'>('large');
 
   // Initialize zoom functionality
   const zoom = useImageZoom({
@@ -112,6 +119,67 @@ export default function ImageDetailView({
     
     return () => clearTimeout(timer);
   }, [imageId, showStars, showPsf, imageSize, zoom.zoomToFit]);
+  
+  // Load original dimensions from metadata if available
+  useEffect(() => {
+    // Try different possible field names for image dimensions
+    const width = image?.metadata?.ImageWidth || 
+                  image?.metadata?.NAXIS1 || 
+                  image?.metadata?.ImageSize?.[0];
+    const height = image?.metadata?.ImageHeight || 
+                   image?.metadata?.NAXIS2 || 
+                   image?.metadata?.ImageSize?.[1];
+    
+    if (width && height && typeof width === 'number' && typeof height === 'number') {
+      zoom.setImageDimensions(width, height, true);
+    }
+  }, [image, zoom]);
+  
+  // Combined effect for image preloading and switching
+  useEffect(() => {
+    if (!image || showPsf) return;
+    
+    const visualScale = zoom.getVisualScale();
+    const state = imageStateRef.current;
+    
+    // Preload when visual zoom > 80%
+    if (visualScale > 0.8 && !isOriginalLoaded && state === 'large') {
+      const originalUrl = showStars 
+        ? apiClient.getAnnotatedUrl(imageId, 'original')
+        : apiClient.getPreviewUrl(imageId, { size: 'original' });
+      
+      const img = new Image();
+      img.src = originalUrl;
+      preloadedOriginalRef.current = img;
+      
+      img.onload = () => {
+        setIsOriginalLoaded(true);
+      };
+    }
+    
+    // State machine transitions based on visual scale - only switch to original, never back
+    if (state === 'large' && visualScale > 1.0 && isOriginalLoaded) {
+      // Switch to original
+      imageStateRef.current = 'switching-to-original';
+      setUseOriginalImage(true);
+      // Delay state update to allow render
+      setTimeout(() => {
+        if (imageStateRef.current === 'switching-to-original') {
+          imageStateRef.current = 'original';
+        }
+      }, 300);
+    }
+    // Never switch back from original to large
+  }, [zoom, imageId, showStars, showPsf, image, isOriginalLoaded]);
+  
+  // Reset preload state when image changes
+  useEffect(() => {
+    setIsOriginalLoaded(false);
+    preloadedOriginalRef.current = null;
+    setUseOriginalImage(false);
+    imageDimensionsRef.current = { width: 0, height: 0 };
+    imageStateRef.current = 'large';
+  }, [imageId, showStars]);
 
   // Show loading state only on initial load
   if (!image && isLoading) {
@@ -176,7 +244,7 @@ export default function ImageDetailView({
             >
               <img
                 ref={zoom.imageRef}
-                key={`${imageId}-${showStars ? 'stars' : showPsf ? 'psf' : 'normal'}-${zoom.zoomState.scale > 1 ? 'original' : 'large'}`}
+                key={`${imageId}-${showStars ? 'stars' : showPsf ? 'psf' : 'normal'}`}
                 className={isFetching ? 'loading' : ''}
                 src={
                   showPsf
@@ -187,8 +255,8 @@ export default function ImageDetailView({
                         selection: 'top-n'
                       })
                     : showStars 
-                      ? apiClient.getAnnotatedUrl(imageId, zoom.zoomState.scale > 1 ? 'original' : 'large')
-                      : apiClient.getPreviewUrl(imageId, { size: zoom.zoomState.scale > 1 ? 'original' : 'large' })
+                      ? apiClient.getAnnotatedUrl(imageId, useOriginalImage ? 'original' : 'large')
+                      : apiClient.getPreviewUrl(imageId, { size: useOriginalImage ? 'original' : 'large' })
                 }
                 alt={`${image.target_name} - ${image.filter_name || 'No filter'}`}
                 style={{
@@ -199,10 +267,31 @@ export default function ImageDetailView({
                 onLoad={(e) => {
                   // Remove loading class when image loads
                   e.currentTarget.classList.remove('loading');
-                  // Trigger zoom to fit when image actually loads
-                  setTimeout(() => {
-                    zoom.zoomToFit();
-                  }, 50);
+                  
+                  const img = e.currentTarget;
+                  const newWidth = img.naturalWidth;
+                  const newHeight = img.naturalHeight;
+                  const oldWidth = imageDimensionsRef.current.width;
+                  const oldHeight = imageDimensionsRef.current.height;
+                  
+                  // Update image dimensions in zoom hook
+                  zoom.setImageDimensions(newWidth, newHeight, useOriginalImage);
+                  
+                  // Check if dimensions actually changed (indicating size switch)
+                  const dimensionsChanged = oldWidth > 0 && (Math.abs(newWidth - oldWidth) > 10 || Math.abs(newHeight - oldHeight) > 10);
+                  
+                  if (dimensionsChanged && imageStateRef.current === 'switching-to-original') {
+                    // Adjust zoom to maintain visual continuity
+                    zoom.adjustZoomForNewImage(oldWidth, oldHeight, newWidth, newHeight);
+                  } else if (imageDimensionsRef.current.width === 0) {
+                    // Only zoom to fit on initial load
+                    setTimeout(() => {
+                      zoom.zoomToFit();
+                    }, 50);
+                  }
+                  
+                  // Update stored dimensions
+                  imageDimensionsRef.current = { width: newWidth, height: newHeight };
                 }}
                 draggable={false}
               />

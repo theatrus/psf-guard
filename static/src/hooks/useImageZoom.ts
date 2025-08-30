@@ -4,6 +4,7 @@ interface ZoomState {
   scale: number;
   offsetX: number;
   offsetY: number;
+  visualScale?: number; // Visual scale relative to original image size
 }
 
 interface ZoomBounds {
@@ -28,6 +29,9 @@ export interface UseImageZoomReturn {
   getZoomPercentage: () => number;
   resetInitialization: () => void;
   setZoomState: React.Dispatch<React.SetStateAction<ZoomState>>;
+  adjustZoomForNewImage: (oldWidth: number, oldHeight: number, newWidth: number, newHeight: number) => void;
+  setImageDimensions: (width: number, height: number, isOriginal: boolean) => void;
+  getVisualScale: () => number;
 }
 
 const DEFAULT_BOUNDS: ZoomBounds = {
@@ -43,6 +47,7 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     scale: 1,
     offsetX: 0,
     offsetY: 0,
+    visualScale: 1,
   });
   
   // Flag to prevent auto-fit interference with intentional zoom operations
@@ -54,6 +59,10 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
   const isPanningRef = useRef(false);
   const lastMousePosRef = useRef({ x: 0, y: 0 });
   const initialFitScaleRef = useRef(1);
+  
+  // Track original image dimensions
+  const originalDimensionsRef = useRef<{ width: number; height: number } | null>(null);
+  const currentImageIsOriginalRef = useRef(false);
 
   // Calculate the fit-to-screen scale when image loads
   const calculateFitScale = useCallback(() => {
@@ -104,10 +113,19 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     const offsetX = (containerWidth - scaledImageWidth) / 2;
     const offsetY = (containerHeight - scaledImageHeight) / 2;
     
+    // Calculate visual scale based on original dimensions if available
+    let visualScale = fitScale;
+    if (originalDimensionsRef.current && !currentImageIsOriginalRef.current) {
+      const currentWidth = image.naturalWidth;
+      const ratio = currentWidth / originalDimensionsRef.current.width;
+      visualScale = fitScale * ratio;
+    }
+    
     setZoomState({
       scale: fitScale,
       offsetX: offsetX,
       offsetY: offsetY,
+      visualScale: visualScale,
     });
     
     // Mark as initialized when we manually fit
@@ -336,16 +354,101 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     }
   }, [zoomIn, zoomOut, resetZoom, zoomTo100]);
 
-  // Get zoom percentage
+  // Get zoom percentage (visual scale)
   const getZoomPercentage = useCallback((): number => {
-    return Math.round(zoomState.scale * 100);
-  }, [zoomState.scale]);
+    return Math.round((zoomState.visualScale || zoomState.scale) * 100);
+  }, [zoomState.scale, zoomState.visualScale]);
+  
+  // Get visual scale
+  const getVisualScale = useCallback((): number => {
+    return zoomState.visualScale || zoomState.scale;
+  }, [zoomState.scale, zoomState.visualScale]);
   
   // Reset initialization state (for when image changes)
   const resetInitialization = useCallback(() => {
     hasInitializedRef.current = false;
     intentionalZoomRef.current = false;
   }, []);
+  
+  // Set image dimensions and update visual scale
+  const setImageDimensions = useCallback((width: number, height: number, isOriginal: boolean) => {
+    const isFirstTime = !originalDimensionsRef.current;
+    
+    if (isOriginal && !originalDimensionsRef.current) {
+      originalDimensionsRef.current = { width, height };
+    }
+    
+    // Update which image we're currently viewing
+    currentImageIsOriginalRef.current = isOriginal;
+    
+    // Only update visual scale if this is the first time we're learning the original dimensions
+    if (isFirstTime && originalDimensionsRef.current) {
+      setZoomState(prevState => {
+        const sizeRatio = isOriginal ? 1 : width / originalDimensionsRef.current!.width;
+        const visualScale = prevState.scale * sizeRatio;
+        return {
+          ...prevState,
+          visualScale,
+        };
+      });
+    }
+  }, []);
+  
+  // Adjust zoom when switching between different image sizes
+  const adjustZoomForNewImage = useCallback((oldWidth: number, oldHeight: number, newWidth: number, _newHeight: number) => {
+    if (oldWidth === 0 || oldHeight === 0 || !originalDimensionsRef.current) return;
+    
+    const container = containerRef.current;
+    if (!container) return;
+    
+    // Determine which image we're NOW viewing (not updated yet)
+    const isNowOriginal = Math.abs(newWidth - originalDimensionsRef.current.width) < 10;
+    
+    setZoomState(prevState => {
+      // The key insight: we need to maintain the same DISPLAYED pixel size
+      // If we were showing a 2000px image at scale 3.0 (displaying 6000px)
+      // When we switch to a 6000px image, we need scale 1.0 (still displaying 6000px)
+      
+      // Calculate the displayed size with the current image and scale
+      const currentDisplayedWidth = oldWidth * prevState.scale;
+      
+      // Calculate what scale we need for the new image to maintain the same displayed size
+      const newScale = currentDisplayedWidth / newWidth;
+      
+      // The visual scale should remain unchanged
+      const targetVisualScale = prevState.visualScale || prevState.scale;
+      
+      // Get current view center in viewport coordinates
+      const containerRect = container.getBoundingClientRect();
+      const viewportCenterX = containerRect.width / 2;
+      const viewportCenterY = containerRect.height / 2;
+      
+      // Calculate what point in the old image was at the center
+      const oldImageX = (viewportCenterX - prevState.offsetX) / prevState.scale;
+      const oldImageY = (viewportCenterY - prevState.offsetY) / prevState.scale;
+      
+      // Scale the image coordinates by the size change ratio
+      const sizeChangeRatio = newWidth / oldWidth;
+      const newImageX = oldImageX * sizeChangeRatio;
+      const newImageY = oldImageY * sizeChangeRatio;
+      
+      // Calculate new offsets to keep the same point at the center
+      const newOffsetX = viewportCenterX - (newImageX * newScale);
+      const newOffsetY = viewportCenterY - (newImageY * newScale);
+      
+      const constrained = constrainPan(newOffsetX, newOffsetY, newScale);
+      
+      return {
+        scale: newScale,
+        offsetX: constrained.offsetX,
+        offsetY: constrained.offsetY,
+        visualScale: targetVisualScale, // Keep visual scale unchanged
+      };
+    });
+    
+    // Update which image we're currently viewing AFTER the state update
+    currentImageIsOriginalRef.current = isNowOriginal;
+  }, [constrainPan]);
 
   // Initialize fit scale when component mounts or image changes
   useEffect(() => {
@@ -357,10 +460,18 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
       
       // Only auto-fit if we haven't initialized yet
       if (!hasInitializedRef.current && zoomState.scale === 1 && !intentionalZoomRef.current) {
+        // Visual scale is always based on original dimensions
+        let visualScale = fitScale;
+        if (originalDimensionsRef.current && !currentImageIsOriginalRef.current) {
+          const ratio = image.naturalWidth / originalDimensionsRef.current.width;
+          visualScale = fitScale * ratio;
+        }
+        
         setZoomState({
           scale: fitScale,
           offsetX: 0,
           offsetY: 0,
+          visualScale: visualScale,
         });
         hasInitializedRef.current = true;
       }
@@ -386,5 +497,8 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     getZoomPercentage,
     resetInitialization,
     setZoomState,
+    adjustZoomForNewImage,
+    setImageDimensions,
+    getVisualScale,
   };
 }

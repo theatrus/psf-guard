@@ -936,4 +936,103 @@ Added a comprehensive image comparison mode that allows users to compare two ima
 - Sync zoom properly handles both zoom and pan operations
 - Visual feedback with blue border for zoomed images
 
+#### Smart Dynamic Image Loading (2025-08-30)
+Implemented an intelligent image loading system that provides seamless transitions between different image resolutions:
+
+**Key Concepts**:
+1. **Visual Scale vs Actual Scale**: 
+   - Visual scale represents the zoom level as seen by the user (100% = original resolution)
+   - Actual scale is the technical scale factor applied to the current image
+   - When viewing a 2000px version of a 6000px original:
+     - Visual scale of 100% means showing at 6000px size
+     - Actual scale would be 3.0 (scaling the 2000px image up by 3x)
+   - Visual scale is always based on original dimensions from image metadata
+   - Original dimensions are read from metadata fields (ImageWidth/ImageHeight, NAXIS1/NAXIS2, or ImageSize)
+   - Visual scale = actual scale × (current image width / original image width)
+   - This ensures the percentage always represents size relative to the original
+
+2. **State Machine Approach**:
+   - States: `'large'`, `'switching-to-original'`, `'original'`
+   - One-way transition: once original is loaded, never switch back to large
+   - Prevents feedback loops by controlling state transitions
+   - Transition states act as buffers during image switches
+
+3. **Preloading Strategy**:
+   - Get original dimensions from image metadata on load
+   - Preload original image when visual zoom reaches 80%
+   - Switch to original at 100% zoom
+   - Never switch back to large (better performance, no visual disruption)
+   - Visual scale is consistent from the start (based on metadata dimensions)
+
+4. **Seamless Transitions**:
+   - Track image dimensions to detect size changes
+   - Adjust zoom proportionally when switching images
+   - Maintain visual continuity (no jumping or resetting)
+   - 300ms transition delay for smooth rendering
+
+**Technical Implementation**:
+```typescript
+// Try to get original dimensions from metadata first
+const width = image?.metadata?.ImageWidth || 
+              image?.metadata?.NAXIS1 || 
+              image?.metadata?.ImageSize?.[0];
+if (width && height) {
+  zoom.setImageDimensions(width, height, true);
+}
+
+// Update dimensions when images load (confirming or correcting metadata)
+onLoad={(e) => {
+  const img = e.currentTarget;
+  zoom.setImageDimensions(img.naturalWidth, img.naturalHeight, useOriginalImage);
+}
+
+// Visual scale calculation
+// For a 2000px image from a 6000px original at fit-to-screen:
+// - Actual scale might be 0.3 (to fit the 2000px image)
+// - Size ratio = 2000/6000 = 0.333
+// - Visual scale = 0.3 × 0.333 = 0.1 (10%)
+// This correctly shows we're viewing at 10% of original size
+
+const ratio = currentImageWidth / originalImageWidth;
+const visualScale = actualScale * ratio;
+
+// When switching images, maintain the same visual scale
+const adjustZoomForNewImage = (oldWidth, oldHeight, newWidth, newHeight) => {
+  const targetVisualScale = prevState.visualScale || prevState.scale;
+  const isNowOriginal = Math.abs(newWidth - originalDimensionsRef.current.width) < 10;
+  
+  // Calculate actual scale based on which image we're viewing
+  if (isNowOriginal) {
+    newScale = targetVisualScale; // Original: scale = visual scale
+  } else {
+    const sizeRatio = newWidth / originalDimensionsRef.current.width;
+    newScale = targetVisualScale / sizeRatio; // Large: scale up to match visual
+  }
+  
+  // Return with unchanged visual scale
+  return { scale: newScale, visualScale: targetVisualScale };
+}
+```
+
+// One-way state machine transitions in components
+if (state === 'large' && visualScale > 1.0 && originalLoaded) {
+  imageStateRef.current = 'switching-to-original';
+  setUseOriginalImage(true);
+  setTimeout(() => {
+    if (imageStateRef.current === 'switching-to-original') {
+      imageStateRef.current = 'original';
+    }
+  }, 300);
+}
+// Never switch back from original to large
+```
+
+**Benefits**:
+- Fast initial load with 2000px images
+- Full resolution available when needed for detailed inspection
+- No jarring transitions, zoom snapping, or resets
+- Consistent zoom percentage display (100% always means original size)
+- Once at full resolution, no performance penalty from switching back
+- Works seamlessly in both detail and comparison views
+
 This comprehensive web architecture provides a modern, performant, and secure platform for astronomical image grading and analysis, suitable for both individual use and team collaboration.
