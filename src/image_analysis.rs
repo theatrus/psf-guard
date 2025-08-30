@@ -25,6 +25,67 @@ pub struct FitsImage {
 }
 
 impl FitsImage {
+    /// Extract temperature from FITS headers
+    pub fn extract_temperature(path: &Path) -> Option<f64> {
+        use fitrs::Fits;
+
+        if let Ok(fits) = Fits::open(path) {
+            if let Some(hdu) = fits.get(0) {
+                // Try common temperature header keywords
+                let temp_keywords = [
+                    "CCD-TEMP", "TEMP", "SET-TEMP", "CCD_TEMP", "TEMPERAT", "CCDTEMP",
+                ];
+
+                // Compile regex once outside the loop
+                let number_regex =
+                    regex::Regex::new(r"(?:FloatingPoint|Integer|RealFloatingNumber)\(([^)]+)\)")
+                        .unwrap();
+
+                for keyword in &temp_keywords {
+                    if let Some(value) = hdu.value(keyword) {
+                        // Parse the value as a number
+                        let value_str = format!("{:?}", value);
+                        // Extract numeric value from debug string like "RealFloatingNumber(-10.1)" or "Integer(-10)"
+                        if let Some(captures) = number_regex.captures(&value_str) {
+                            if let Ok(temp) = captures[1].parse::<f64>() {
+                                return Some(temp);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract camera model from FITS headers
+    pub fn extract_camera_model(path: &Path) -> Option<String> {
+        use fitrs::Fits;
+
+        if let Ok(fits) = Fits::open(path) {
+            if let Some(hdu) = fits.get(0) {
+                // Try common camera/instrument header keywords
+                let camera_keywords = ["INSTRUME", "CAMERA", "DETECTOR", "CCD_NAME", "CCDNAME"];
+
+                // Compile regex once outside the loop - handle both CharacterString and String formats
+                let string_regex =
+                    regex::Regex::new(r#"(?:CharacterString|String)\("([^"]+)"\)"#).unwrap();
+
+                for keyword in &camera_keywords {
+                    if let Some(value) = hdu.value(keyword) {
+                        // Extract string value from debug format
+                        let value_str = format!("{:?}", value);
+                        // Extract string from debug format like "CharacterString(\"ZWO ASI294MC Pro\")"
+                        if let Some(captures) = string_regex.captures(&value_str) {
+                            return Some(captures[1].to_string());
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Load FITS image data from file using fitrs
     pub fn from_file(path: &Path) -> Result<Self> {
         use fitrs::Fits;

@@ -16,6 +16,7 @@ pub mod opencv_morphology;
 pub mod opencv_utils;
 pub mod opencv_wavelets;
 pub mod psf_fitting;
+pub mod server;
 pub mod utils;
 
 #[cfg(test)]

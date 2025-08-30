@@ -322,6 +322,31 @@ pub enum Commands {
         #[arg(long, short)]
         verbose: bool,
     },
+
+    /// Start the web server for API access and static file serving
+    Server {
+        /// Database file to use
+        database: String,
+
+        /// Base directory containing the image files
+        image_dir: String,
+
+        /// Directory to serve static files from (for React app, optional - uses embedded files if not provided)
+        #[arg(long)]
+        static_dir: Option<String>,
+
+        /// Cache directory for processed images
+        #[arg(long, default_value = "./cache")]
+        cache_dir: String,
+
+        /// Port to listen on
+        #[arg(short, long, default_value = "3000")]
+        port: u16,
+
+        /// Host to bind to
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+    },
 }
 
 #[derive(Parser, Debug, Clone)]

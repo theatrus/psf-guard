@@ -248,6 +248,162 @@ The utility automatically detects and handles two common directory structures:
 
 The utility also handles files already in `LIGHT/rejected/` subdirectories and moves them to the appropriate `LIGHT_REJECT/` directory.
 
+### Web Server and Frontend
+
+PSF Guard includes a built-in web server with a React-based frontend for visual image grading and analysis. The server provides both a REST API and a complete web interface.
+
+#### Starting the Web Server
+
+```bash
+# Start server with embedded frontend (production)
+psf-guard server schedulerdb.sqlite /path/to/images/
+
+# Custom port and host
+psf-guard server schedulerdb.sqlite /path/to/images/ --port 8080 --host 0.0.0.0
+
+# Development mode (serve from filesystem for hot reload)
+psf-guard server schedulerdb.sqlite /path/to/images/ --static-dir ./static/dist
+```
+
+Once started, open your browser to `http://localhost:3000` (or your configured port) to access the web interface.
+
+#### Web Interface Features
+
+**Project & Target Navigation**:
+- Dropdown selectors for projects and targets
+- Live statistics showing total, accepted, and rejected image counts
+- Filter images by status, date range, or filter name
+
+**Image Browser**:
+- Grid view with lazy loading and virtualization for performance
+- Grouping by filter name, date, or both
+- Adjustable thumbnail sizes with slider control
+- Batch operations with shift+click and ctrl+click selection
+- Visual status indicators (accepted=green, rejected=red, pending=orange)
+- HFR and star count statistics on image cards
+
+**Image Detail View**:
+- Full-resolution FITS preview with MTF stretching
+- Comprehensive zoom and pan controls (mouse wheel, click-drag, keyboard shortcuts)
+- Star detection overlay toggle (S key)
+- PSF residual visualization toggle (P key)
+- Complete metadata display (exposure, temperature, camera, statistics)
+- One-click grading with keyboard shortcuts (A=accept, R=reject, U=unmark)
+- Navigation between images with J/K or arrow keys
+- **Undo/Redo System**: Full undo/redo support for all grading actions with Ctrl+Z/Ctrl+Y
+
+**Keyboard Shortcuts**:
+- `?` - Show help modal with all shortcuts
+- `K / →` - Next image
+- `J / ←` - Previous image
+- `A` - Accept image
+- `R` - Reject image
+- `U` - Unmark (set to pending)
+- `Ctrl+Z / ⌘Z` - Undo last grading action
+- `Ctrl+Y / ⌘Y` - Redo last grading action
+- `S` - Toggle star overlay
+- `P` - Toggle PSF visualization
+- `Z` - Toggle image size
+- `+/-` - Zoom in/out
+- `F` - Fit to screen
+- `1` - 100% zoom
+- `0` - Reset zoom
+- Mouse wheel - Zoom toward cursor
+- Click & drag - Pan when zoomed
+- `Esc` - Close modals/views
+
+#### REST API Endpoints
+
+The server provides a complete REST API for programmatic access:
+
+**Projects and Targets**:
+- `GET /api/projects` - List all projects
+- `GET /api/projects/{id}/targets` - List targets for a project
+
+**Images**:
+- `GET /api/images?project_id=X&target_id=Y&status=pending&limit=100&offset=0` - List images with filters
+- `GET /api/images/{id}` - Get detailed image information
+- `PUT /api/images/{id}/grade` - Update grading status
+  ```json
+  {"status": "accepted|rejected|pending", "reason": "optional reason"}
+  ```
+
+**Image Data**:
+- `GET /api/images/{id}/preview?size=screen&stretch=true&midtone=0.2&shadow=-2.8` - Stretched FITS preview (PNG)
+- `GET /api/images/{id}/annotated?size=large` - Star-annotated image (PNG)
+- `GET /api/images/{id}/psf?num_stars=9&psf_type=moffat&sort_by=r2` - PSF visualization (PNG)
+- `GET /api/images/{id}/stars` - Star detection results (JSON)
+
+**Response Format**:
+```json
+{
+  "success": true,
+  "data": { /* response data */ },
+  "error": null
+}
+```
+
+#### Caching System
+
+The server includes intelligent caching for performance:
+- **Preview Images**: Cached PNG files with different stretch parameters
+- **Star Detection**: Cached JSON results for HocusFocus analysis
+- **PSF Visualizations**: Cached multi-star PSF residual images
+- **Statistics**: Cached FITS metadata and image statistics
+- **Cache Management**: Automatic cleanup and configurable cache directory
+
+#### Frontend Technology Stack
+
+- **React 18** with TypeScript
+- **Vite** for fast development and building
+- **TanStack Query** for API state management and caching
+- **React Hotkeys Hook** for keyboard shortcuts
+- **Custom hooks** for image zoom/pan functionality
+- **CSS Grid/Flexbox** for responsive layouts
+- **Single Page Application** with client-side routing
+
+#### Deployment Options
+
+**Production (Single Binary)**:
+The frontend is automatically built and embedded into the Rust binary during compilation, creating a self-contained executable:
+```bash
+cargo build --release
+./target/release/psf-guard server database.db images/
+# No separate web server needed - everything is embedded!
+```
+
+**Development**:
+For frontend development with hot reload:
+```bash
+# Terminal 1: Start frontend dev server
+cd static
+npm run dev
+
+# Terminal 2: Start backend with filesystem serving
+cargo run -- server database.db images/ --static-dir ./static/dist
+```
+
+#### API Integration Examples
+
+```bash
+# Get all projects
+curl http://localhost:3000/api/projects
+
+# Get images for a specific target
+curl "http://localhost:3000/api/images?target_id=5&status=pending&limit=10"
+
+# Accept an image
+curl -X PUT http://localhost:3000/api/images/123/grade \
+  -H "Content-Type: application/json" \
+  -d '{"status": "accepted"}'
+
+# Get star detection data
+curl http://localhost:3000/api/images/123/stars
+
+# Download annotated image
+wget http://localhost:3000/api/images/123/annotated?size=large -O annotated.png
+```
+
 ### Statistical Grading
 
 Beyond the database grading status, PSF Guard can perform statistical analysis to identify additional outliers:
@@ -419,6 +575,19 @@ Options:
 - `--runs <N>`: Number of benchmark runs [default: 3]
 - `-v, --verbose`: Show detailed analysis
 
+#### server
+Start the web server with embedded React frontend
+
+Arguments:
+- `<DATABASE>`: Database file to use
+- `<IMAGE_DIR>`: Base directory containing the image files
+
+Options:
+- `-p, --port <PORT>`: Port to listen on [default: 3000]
+- `--host <HOST>`: Host to bind to [default: 127.0.0.1]
+- `--static-dir <DIR>`: Directory to serve static files from (optional - uses embedded files if not provided)
+- `--cache-dir <DIR>`: Cache directory for processed images [default: ./cache]
+
 #### regrade
 Regrade images in the database based on statistical analysis
 
@@ -437,6 +606,59 @@ Options:
 - Statistical analysis options (same as filter-rejected command)
 
 ## Examples
+
+### Web Server Examples
+
+```bash
+# Start web server on default port (3000)
+psf-guard server schedulerdb.sqlite /path/to/images/
+
+# Start on custom port and allow external access
+psf-guard server schedulerdb.sqlite /path/to/images/ --port 8080 --host 0.0.0.0
+
+# Development mode with filesystem serving
+psf-guard server schedulerdb.sqlite /path/to/images/ --static-dir ./static/dist
+
+# Custom cache directory
+psf-guard server schedulerdb.sqlite /path/to/images/ --cache-dir /tmp/psf-cache
+```
+
+### API Usage Examples
+
+```bash
+# List all projects
+curl http://localhost:3000/api/projects | jq '.data'
+
+# Get images for project 2, target 5, only rejected ones
+curl "http://localhost:3000/api/images?project_id=2&target_id=5&status=rejected" | jq '.data'
+
+# Get detailed info for image 123
+curl http://localhost:3000/api/images/123 | jq '.data'
+
+# Accept image 123
+curl -X PUT http://localhost:3000/api/images/123/grade \
+  -H "Content-Type: application/json" \
+  -d '{"status": "accepted", "reason": "Good focus and tracking"}'
+
+# Reject image 456 with reason
+curl -X PUT http://localhost:3000/api/images/456/grade \
+  -H "Content-Type: application/json" \
+  -d '{"status": "rejected", "reason": "Poor focus"}'
+
+# Download stretched preview
+wget "http://localhost:3000/api/images/123/preview?size=large&midtone=0.3" -O preview.png
+
+# Download star-annotated image
+wget "http://localhost:3000/api/images/123/annotated?size=screen" -O stars.png
+
+# Download PSF visualization
+wget "http://localhost:3000/api/images/123/psf?num_stars=25&psf_type=moffat" -O psf.png
+
+# Get star detection results
+curl http://localhost:3000/api/images/123/stars | jq '.data.stars[0:5]'
+```
+
+### CLI Examples
 
 ```bash
 # Check what rejected files exist for a project

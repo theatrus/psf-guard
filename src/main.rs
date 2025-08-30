@@ -214,6 +214,23 @@ fn main() -> Result<()> {
         } => {
             benchmark_psf(&fits_path, runs, verbose)?;
         }
+        Commands::Server {
+            database,
+            image_dir,
+            static_dir,
+            cache_dir,
+            port,
+            host,
+        } => {
+            // Use tokio runtime for async server
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(async {
+                psf_guard::server::run_server(
+                    database, image_dir, static_dir, cache_dir, host, port,
+                )
+                .await
+            })?;
+        }
     }
 
     Ok(())

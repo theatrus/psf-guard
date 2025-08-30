@@ -17,6 +17,26 @@ pub fn stretch_to_png(
     logarithmic: bool,
     invert: bool,
 ) -> Result<()> {
+    stretch_to_png_with_resize(
+        fits_path,
+        output,
+        midtone_factor,
+        shadow_clipping,
+        logarithmic,
+        invert,
+        None, // No resize
+    )
+}
+
+pub fn stretch_to_png_with_resize(
+    fits_path: &str,
+    output: Option<String>,
+    midtone_factor: f64,
+    shadow_clipping: f64,
+    logarithmic: bool,
+    invert: bool,
+    max_dimensions: Option<(u32, u32)>,
+) -> Result<()> {
     // Load FITS file
     let fits_path = Path::new(fits_path);
     println!("Loading FITS file: {}", fits_path.display());
@@ -62,6 +82,37 @@ pub fn stretch_to_png(
     )
     .context("Failed to create image buffer")?;
 
+    // Resize if requested
+    let final_buffer = if let Some((max_width, max_height)) = max_dimensions {
+        let (orig_width, orig_height) = (img_buffer.width(), img_buffer.height());
+
+        // Calculate scaling to fit within max dimensions while preserving aspect ratio
+        let scale_x = max_width as f32 / orig_width as f32;
+        let scale_y = max_height as f32 / orig_height as f32;
+        let scale = scale_x.min(scale_y).min(1.0); // Don't upscale
+
+        if scale < 1.0 {
+            let new_width = (orig_width as f32 * scale) as u32;
+            let new_height = (orig_height as f32 * scale) as u32;
+
+            println!(
+                "Resizing from {}x{} to {}x{}",
+                orig_width, orig_height, new_width, new_height
+            );
+
+            image::imageops::resize(
+                &img_buffer,
+                new_width,
+                new_height,
+                image::imageops::FilterType::Lanczos3,
+            )
+        } else {
+            img_buffer
+        }
+    } else {
+        img_buffer
+    };
+
     // Save PNG with compression
     let file = File::create(&output_path)
         .with_context(|| format!("Failed to create output file: {}", output_path.display()))?;
@@ -73,9 +124,9 @@ pub fn stretch_to_png(
     // Write the image data
     encoder
         .write_image(
-            &img_buffer,
-            image.width as u32,
-            image.height as u32,
+            &final_buffer,
+            final_buffer.width(),
+            final_buffer.height(),
             ColorType::L8.into(),
         )
         .with_context(|| format!("Failed to write PNG image to {}", output_path.display()))?;

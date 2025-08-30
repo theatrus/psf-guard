@@ -258,7 +258,7 @@ fn process_file_movement(
     Ok(true)
 }
 
-fn get_possible_paths(
+pub fn get_possible_paths(
     base_dir: &str,
     date_str: &str,
     target_name: &str,
@@ -294,6 +294,17 @@ fn get_possible_paths(
             .join("LIGHT")
             .join("rejected")
             .join(filename),
+        // date/target/date/LIGHT_REJECT/file.fits
+        base.join(date_str)
+            .join(clean_target)
+            .join(date_str)
+            .join("LIGHT_REJECT")
+            .join(filename),
+        // target/date/LIGHT_REJECT/file.fits
+        base.join(clean_target)
+            .join(date_str)
+            .join("LIGHT_REJECT")
+            .join(filename),
         // Direct under base_dir: LIGHT/file.fits
         base.join("LIGHT").join(filename),
         // Direct under base_dir: target/LIGHT/file.fits
@@ -303,12 +314,12 @@ fn get_possible_paths(
     ]
 }
 
-fn find_file_recursive(base_dir: &str, filename: &str) -> Result<Option<PathBuf>> {
+pub fn find_file_recursive(base_dir: &str, filename: &str) -> Result<Option<PathBuf>> {
     fn search_dir(dir: &Path, filename: &str) -> Result<Option<PathBuf>> {
         // Skip certain directories to avoid infinite loops or unwanted areas
         if let Some(dir_name) = dir.file_name() {
             let name = dir_name.to_string_lossy();
-            if name == "LIGHT_REJECT" || name == "DARK" || name == "FLAT" || name == "BIAS" {
+            if name == "DARK" || name == "FLAT" || name == "BIAS" {
                 return Ok(None);
             }
         }
