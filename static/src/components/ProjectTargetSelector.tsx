@@ -25,7 +25,7 @@ export default function ProjectTargetSelector({
       // Invalidate and refetch projects and targets
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       queryClient.invalidateQueries({ queryKey: ['targets'] });
-      setLastRefreshStatus(`Found ${data.files_found} files, ${data.files_missing} missing (${data.check_time_ms}ms)`);
+      setLastRefreshStatus(`Checked ${data.images_checked} projects: ${data.files_found} with files, ${data.files_missing} without (${data.check_time_ms}ms)`);
       
       // Clear status after 5 seconds
       setTimeout(() => setLastRefreshStatus(null), 5000);
@@ -76,8 +76,12 @@ export default function ProjectTargetSelector({
         >
           <option value="">Select a project</option>
           {projects.map(project => (
-            <option key={project.id} value={project.id}>
-              {project.name}
+            <option 
+              key={project.id} 
+              value={project.id}
+              disabled={!project.has_files}
+            >
+              {project.name} {!project.has_files && '(no files)'}
             </option>
           ))}
         </select>
@@ -93,8 +97,12 @@ export default function ProjectTargetSelector({
         >
           <option value="">All targets</option>
           {targets.map(target => (
-            <option key={target.id} value={target.id}>
-              {target.name} ({target.accepted_count}/{target.image_count} accepted)
+            <option 
+              key={target.id} 
+              value={target.id}
+              disabled={!target.has_files}
+            >
+              {target.name} ({target.accepted_count}/{target.image_count} accepted) {!target.has_files && '- no files'}
             </option>
           ))}
         </select>

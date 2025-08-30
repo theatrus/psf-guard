@@ -30,6 +30,7 @@ pub struct ProjectResponse {
     pub id: i32,
     pub name: String,
     pub description: Option<String>,
+    pub has_files: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -42,6 +43,7 @@ pub struct TargetResponse {
     pub image_count: i32,
     pub accepted_count: i32,
     pub rejected_count: i32,
+    pub has_files: bool,
 }
 
 #[derive(Debug, Serialize)]

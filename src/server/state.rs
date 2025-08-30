@@ -34,11 +34,11 @@ impl FileCheckCache {
             cache_duration: Duration::from_secs(60), // 1 minute cache
         }
     }
-    
+
     pub fn is_expired(&self) -> bool {
         self.last_updated.elapsed() > self.cache_duration
     }
-    
+
     pub fn clear(&mut self) {
         self.projects_with_files.clear();
         self.targets_with_files.clear();

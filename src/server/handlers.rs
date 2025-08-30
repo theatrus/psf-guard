@@ -28,7 +28,7 @@ pub async fn get_server_info(
         cache_directory: state.cache_dir.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
     };
-    
+
     Ok(Json(ApiResponse::success(info)))
 }
 
@@ -36,16 +36,16 @@ pub async fn refresh_file_cache(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<FileCheckResponse>>, AppError> {
     let start_time = std::time::Instant::now();
-    
+
     // Clear existing cache
     {
         let mut cache = state.file_check_cache.write().unwrap();
         cache.clear();
     }
-    
+
     // Refresh projects
     refresh_project_cache(&state).await?;
-    
+
     // Get stats
     let (images_checked, files_found, files_missing) = {
         let cache = state.file_check_cache.read().unwrap();
@@ -54,14 +54,14 @@ pub async fn refresh_file_cache(
         let missing = total_projects - found;
         (total_projects, found, missing)
     };
-    
+
     let response = FileCheckResponse {
         images_checked,
         files_found,
         files_missing,
         check_time_ms: start_time.elapsed().as_millis(),
     };
-    
+
     Ok(Json(ApiResponse::success(response)))
 }
 
@@ -79,26 +79,20 @@ pub async fn list_projects(
         refresh_project_cache(&state).await?;
     }
 
-    // Get cached results
-    let project_ids_with_files: Vec<i32> = {
+    // Get file existence info from cache
+    let file_existence_map: HashMap<i32, bool> = {
         let cache = state.file_check_cache.read().unwrap();
-        cache.projects_with_files
-            .iter()
-            .filter_map(|(id, has_files)| if *has_files { Some(*id) } else { None })
-            .collect()
+        cache.projects_with_files.clone()
     };
 
-    // Get project details from database
+    // Get ALL projects from database (not just those with files)
     let projects = {
         let conn = state.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
-        
+
         db.get_projects_with_images()
             .map_err(|_| AppError::DatabaseError)?
-            .into_iter()
-            .filter(|p| project_ids_with_files.contains(&p.id))
-            .collect::<Vec<_>>()
     };
 
     let response: Vec<ProjectResponse> = projects
@@ -107,6 +101,7 @@ pub async fn list_projects(
             id: p.id,
             name: p.name,
             description: p.description,
+            has_files: file_existence_map.get(&p.id).copied().unwrap_or(false),
         })
         .collect();
 
@@ -118,11 +113,12 @@ async fn refresh_project_cache(state: &Arc<AppState>) -> Result<(), AppError> {
         let conn = state.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
-        db.get_projects_with_images().map_err(|_| AppError::DatabaseError)?
+        db.get_projects_with_images()
+            .map_err(|_| AppError::DatabaseError)?
     };
 
     let mut cache_updates = HashMap::new();
-    
+
     for project in projects_to_check {
         // Check a few sample images for this project
         let has_files = check_project_has_files(state, project.id).await?;
@@ -144,7 +140,7 @@ async fn check_project_has_files(state: &Arc<AppState>, project_id: i32) -> Resu
         let conn = state.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
-        
+
         db.query_images(None, None, None, None)
             .map_err(|_| AppError::DatabaseError)?
             .into_iter()
@@ -174,10 +170,11 @@ pub async fn list_targets(
     // Check if we need to refresh target cache for this project
     let needs_refresh = {
         let cache = state.file_check_cache.read().unwrap();
-        cache.is_expired() || !cache.targets_with_files.iter().any(|(_tid, _)| {
-            // Check if we have any cached data for targets in this project
-            true // We'll need to track project_id per target for more efficient caching
-        })
+        cache.is_expired()
+            || !cache.targets_with_files.iter().any(|(_tid, _)| {
+                // Check if we have any cached data for targets in this project
+                true // We'll need to track project_id per target for more efficient caching
+            })
     };
 
     if needs_refresh {
@@ -185,26 +182,20 @@ pub async fn list_targets(
         refresh_target_cache(&state, project_id).await?;
     }
 
-    // Get cached results
-    let target_ids_with_files: Vec<i32> = {
+    // Get file existence info from cache
+    let file_existence_map: HashMap<i32, bool> = {
         let cache = state.file_check_cache.read().unwrap();
-        cache.targets_with_files
-            .iter()
-            .filter_map(|(id, has_files)| if *has_files { Some(*id) } else { None })
-            .collect()
+        cache.targets_with_files.clone()
     };
 
-    // Get target details from database
+    // Get ALL targets from database (not just those with files)
     let targets = {
         let conn = state.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
-        
+
         db.get_targets_with_images(project_id)
             .map_err(|_| AppError::DatabaseError)?
-            .into_iter()
-            .filter(|(t, _, _, _)| target_ids_with_files.is_empty() || target_ids_with_files.contains(&t.id))
-            .collect::<Vec<_>>()
     };
 
     let response: Vec<TargetResponse> = targets
@@ -218,6 +209,7 @@ pub async fn list_targets(
             image_count: img_count,
             accepted_count: accepted,
             rejected_count: rejected,
+            has_files: file_existence_map.get(&target.id).copied().unwrap_or(false),
         })
         .collect();
 
@@ -229,11 +221,12 @@ async fn refresh_target_cache(state: &Arc<AppState>, project_id: i32) -> Result<
         let conn = state.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
-        db.get_targets_with_images(project_id).map_err(|_| AppError::DatabaseError)?
+        db.get_targets_with_images(project_id)
+            .map_err(|_| AppError::DatabaseError)?
     };
 
     let mut cache_updates = HashMap::new();
-    
+
     for (target, _, _, _) in targets_to_check {
         // Check a few sample images for this target
         let has_files = check_target_has_files(state, target.id).await?;
@@ -258,7 +251,7 @@ async fn check_target_has_files(state: &Arc<AppState>, target_id: i32) -> Result
         let conn = state.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
-        
+
         db.query_images(None, None, None, None)
             .map_err(|_| AppError::DatabaseError)?
             .into_iter()
@@ -646,12 +639,7 @@ fn find_fits_file(
     let date_str = acquired_date.format("%Y-%m-%d").to_string();
 
     // Try to find the file in different possible locations
-    let possible_paths = get_possible_paths(
-        &state.image_dir,
-        &date_str,
-        target_name,
-        filename,
-    );
+    let possible_paths = get_possible_paths(&state.image_dir, &date_str, target_name, filename);
 
     for path in &possible_paths {
         if path.exists() {

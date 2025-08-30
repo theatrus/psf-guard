@@ -139,8 +139,54 @@ fn build_react_app() {
 
     eprintln!("cargo:warning=Building React frontend...");
 
-    // Change to static directory
-    let output = Command::new("npm")
+    // Use npm.cmd on Windows, npm on other platforms
+    let npm_cmd = if cfg!(target_os = "windows") {
+        "npm.cmd"
+    } else {
+        "npm"
+    };
+
+    // Check if node_modules exists, if not run npm install
+    let node_modules = static_dir.join("node_modules");
+    if !node_modules.exists() {
+        eprintln!("cargo:warning=node_modules not found, running npm install...");
+        let install_output = Command::new(npm_cmd)
+            .args(["install"])
+            .current_dir(&static_dir)
+            .output();
+
+        match install_output {
+            Ok(output) => {
+                if !output.status.success() {
+                    eprintln!("cargo:warning=npm install failed:");
+                    eprintln!(
+                        "cargo:warning=stdout: {}",
+                        String::from_utf8_lossy(&output.stdout)
+                    );
+                    eprintln!(
+                        "cargo:warning=stderr: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    panic!("npm install failed");
+                }
+                eprintln!("cargo:warning=npm install completed successfully");
+            }
+            Err(e) => {
+                eprintln!("cargo:warning=Failed to run npm install: {}", e);
+                eprintln!("cargo:warning=Make sure Node.js and npm are installed and in PATH");
+                if cfg!(target_os = "windows") {
+                    eprintln!("cargo:warning=On Windows, npm might need to be in your PATH.");
+                    eprintln!(
+                        "cargo:warning=Try running 'where npm' in a command prompt to check."
+                    );
+                }
+                panic!("Could not execute npm install");
+            }
+        }
+    }
+
+    // Run npm build
+    let output = Command::new(npm_cmd)
         .args(["run", "build"])
         .current_dir(&static_dir)
         .output();
@@ -164,7 +210,11 @@ fn build_react_app() {
         }
         Err(e) => {
             eprintln!("cargo:warning=Failed to run npm build: {}", e);
-            eprintln!("cargo:warning=Make sure npm is installed and accessible");
+            eprintln!("cargo:warning=Make sure Node.js and npm are installed and in PATH");
+            if cfg!(target_os = "windows") {
+                eprintln!("cargo:warning=On Windows, npm might need to be in your PATH.");
+                eprintln!("cargo:warning=Try running 'where npm' in a command prompt to check.");
+            }
             panic!("Could not execute npm build");
         }
     }

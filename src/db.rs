@@ -33,7 +33,7 @@ impl<'a> Database<'a> {
 
         Ok(projects)
     }
-    
+
     pub fn get_projects_with_images(&self) -> Result<Vec<Project>> {
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT p.Id, p.profileId, p.name, p.description 
@@ -96,7 +96,7 @@ impl<'a> Database<'a> {
 
         Ok(targets)
     }
-    
+
     pub fn get_targets_with_images(&self, project_id: i32) -> Result<Vec<(Target, i32, i32, i32)>> {
         let mut stmt = self.conn.prepare(
             "SELECT t.Id, t.name, t.active, t.ra, t.dec,

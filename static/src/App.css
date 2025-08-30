@@ -167,6 +167,11 @@
   border-color: #61dafb;
 }
 
+.selector-group select option:disabled {
+  color: #666;
+  font-style: italic;
+}
+
 .selection-stats {
   color: #999;
   font-size: 0.9rem;

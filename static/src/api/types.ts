@@ -2,6 +2,7 @@ export interface Project {
   id: number;
   name: string;
   description: string | null;
+  has_files: boolean;
 }
 
 export interface Target {
@@ -13,6 +14,7 @@ export interface Target {
   image_count: number;
   accepted_count: number;
   rejected_count: number;
+  has_files: boolean;
 }
 
 export interface Image {
