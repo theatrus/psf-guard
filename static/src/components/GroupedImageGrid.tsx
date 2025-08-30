@@ -344,15 +344,24 @@ export default function GroupedImageGrid({ projectId, targetId, useLazyImages = 
   
   // Add comparison keyboard shortcut
   useHotkeys('c', () => {
-    if (selectedImageId && !showDetail && !showComparison) {
-      setShowComparison(true);
-      // Find next image for comparison
-      const currentIndex = flatImages.findIndex(item => item.image.id === selectedImageId);
-      if (currentIndex !== -1 && currentIndex < flatImages.length - 1) {
-        setComparisonRightId(flatImages[currentIndex + 1].image.id);
+    if (!showDetail && !showComparison) {
+      if (selectedImages.size === 2) {
+        // Use the two selected images for comparison
+        const selectedArray = Array.from(selectedImages);
+        setShowComparison(true);
+        setSelectedImageId(selectedArray[0]); // Left image
+        setComparisonRightId(selectedArray[1]); // Right image
+      } else if (selectedImageId) {
+        // Use current image + next image for comparison
+        setShowComparison(true);
+        // Find next image for comparison
+        const currentIndex = flatImages.findIndex(item => item.image.id === selectedImageId);
+        if (currentIndex !== -1 && currentIndex < flatImages.length - 1) {
+          setComparisonRightId(flatImages[currentIndex + 1].image.id);
+        }
       }
     }
-  }, [selectedImageId, showDetail, showComparison, flatImages]);
+  }, [selectedImages, selectedImageId, showDetail, showComparison, flatImages]);
   
   // Grouping mode shortcuts
   useHotkeys('g', () => {
@@ -416,22 +425,31 @@ export default function GroupedImageGrid({ projectId, targetId, useLazyImages = 
               getNextRedoAction={grading.getNextRedoAction}
               className="compact"
             />
-            {selectedImageId && (
+            {(selectedImageId || selectedImages.size === 2) && (
               <button
                 className="toolbar-button compare-button"
                 onClick={() => {
-                  if (selectedImageId && !showDetail && !showComparison) {
-                    setShowComparison(true);
-                    const currentIndex = flatImages.findIndex(item => item.image.id === selectedImageId);
-                    if (currentIndex !== -1 && currentIndex < flatImages.length - 1) {
-                      setComparisonRightId(flatImages[currentIndex + 1].image.id);
+                  if (!showDetail && !showComparison) {
+                    if (selectedImages.size === 2) {
+                      // Use the two selected images for comparison
+                      const selectedArray = Array.from(selectedImages);
+                      setShowComparison(true);
+                      setSelectedImageId(selectedArray[0]); // Left image
+                      setComparisonRightId(selectedArray[1]); // Right image
+                    } else if (selectedImageId) {
+                      // Use current image + next image for comparison
+                      setShowComparison(true);
+                      const currentIndex = flatImages.findIndex(item => item.image.id === selectedImageId);
+                      if (currentIndex !== -1 && currentIndex < flatImages.length - 1) {
+                        setComparisonRightId(flatImages[currentIndex + 1].image.id);
+                      }
                     }
                   }
                 }}
-                disabled={!selectedImageId || showDetail || showComparison}
-                title="Compare images side-by-side (C)"
+                disabled={(!selectedImageId && selectedImages.size !== 2) || showDetail || showComparison}
+                title={selectedImages.size === 2 ? "Compare selected images (C)" : "Compare images side-by-side (C)"}
               >
-                Compare (C)
+                {selectedImages.size === 2 ? "Compare Selected (C)" : "Compare (C)"}
               </button>
             )}
           </div>
@@ -598,7 +616,52 @@ export default function GroupedImageGrid({ projectId, targetId, useLazyImages = 
             // Find next image for comparison
             const currentIndex = flatImages.findIndex(item => item.image.id === comparisonRightId);
             if (currentIndex !== -1 && currentIndex < flatImages.length - 1) {
-              setComparisonRightId(flatImages[currentIndex + 1].image.id);
+              const nextImage = flatImages[currentIndex + 1];
+              if (nextImage.image.id !== selectedImageId) {
+                setComparisonRightId(nextImage.image.id);
+              } else if (currentIndex + 2 < flatImages.length) {
+                setComparisonRightId(flatImages[currentIndex + 2].image.id);
+              }
+            }
+          }}
+          onNavigateRightNext={() => {
+            // Find next image for comparison that's not the left image
+            const currentIndex = comparisonRightId 
+              ? flatImages.findIndex(item => item.image.id === comparisonRightId)
+              : -1;
+            
+            for (let i = currentIndex + 1; i < flatImages.length; i++) {
+              if (flatImages[i].image.id !== selectedImageId) {
+                setComparisonRightId(flatImages[i].image.id);
+                return;
+              }
+            }
+            // Wrap to beginning if needed
+            for (let i = 0; i <= currentIndex; i++) {
+              if (flatImages[i].image.id !== selectedImageId) {
+                setComparisonRightId(flatImages[i].image.id);
+                return;
+              }
+            }
+          }}
+          onNavigateRightPrev={() => {
+            // Find previous image for comparison that's not the left image
+            const currentIndex = comparisonRightId 
+              ? flatImages.findIndex(item => item.image.id === comparisonRightId)
+              : -1;
+            
+            for (let i = currentIndex - 1; i >= 0; i--) {
+              if (flatImages[i].image.id !== selectedImageId) {
+                setComparisonRightId(flatImages[i].image.id);
+                return;
+              }
+            }
+            // Wrap to end if needed
+            for (let i = flatImages.length - 1; i >= currentIndex; i--) {
+              if (flatImages[i].image.id !== selectedImageId) {
+                setComparisonRightId(flatImages[i].image.id);
+                return;
+              }
             }
           }}
           onGradeLeft={(status) => grading.gradeImage(selectedImageId, status)}

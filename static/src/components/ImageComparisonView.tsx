@@ -12,6 +12,8 @@ interface ImageComparisonViewProps {
   onSelectRightImage: () => void;
   onGradeLeft: (status: 'accepted' | 'rejected' | 'pending') => void;
   onGradeRight: (status: 'accepted' | 'rejected' | 'pending') => void;
+  onNavigateRightNext: () => void;
+  onNavigateRightPrev: () => void;
 }
 
 export default function ImageComparisonView({
@@ -21,6 +23,8 @@ export default function ImageComparisonView({
   onSelectRightImage,
   onGradeLeft,
   onGradeRight,
+  onNavigateRightNext,
+  onNavigateRightPrev,
 }: ImageComparisonViewProps) {
   const [showStars, setShowStars] = useState(false);
   const [syncZoom, setSyncZoom] = useState(true);
@@ -76,6 +80,10 @@ export default function ImageComparisonView({
   useHotkeys('7', () => rightImageId && onGradeRight('accepted'), [rightImageId, onGradeRight]);
   useHotkeys('8', () => rightImageId && onGradeRight('rejected'), [rightImageId, onGradeRight]);
   useHotkeys('9', () => rightImageId && onGradeRight('pending'), [rightImageId, onGradeRight]);
+  
+  // Navigate right image
+  useHotkeys('shift+right,shift+k', onNavigateRightNext, [onNavigateRightNext]);
+  useHotkeys('shift+left,shift+j', onNavigateRightPrev, [onNavigateRightPrev]);
 
   // Reset loaded state when images change
   useEffect(() => {
@@ -561,6 +569,8 @@ export default function ImageComparisonView({
             <span>ESC Close</span>
             <span>S Toggle Stars</span>
             <span>Z Toggle Sync Zoom</span>
+            <span>Shift+→/K Next Right</span>
+            <span>Shift+←/J Prev Right</span>
           </div>
           <div className="shortcut-section">
             <h4>Left Image</h4>
