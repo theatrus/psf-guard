@@ -1024,6 +1024,26 @@
   cursor: pointer;
 }
 
+.swap-button {
+  background: #333;
+  color: #e0e0e0;
+  border: 1px solid #444;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.swap-button:hover {
+  background: #444;
+  border-color: #555;
+  color: #61dafb;
+}
+
 .comparison-content {
   flex: 1;
   display: flex;

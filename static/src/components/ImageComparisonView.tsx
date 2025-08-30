@@ -14,6 +14,7 @@ interface ImageComparisonViewProps {
   onGradeRight: (status: 'accepted' | 'rejected' | 'pending') => void;
   onNavigateRightNext: () => void;
   onNavigateRightPrev: () => void;
+  onSwapImages: () => void;
 }
 
 export default function ImageComparisonView({
@@ -25,6 +26,7 @@ export default function ImageComparisonView({
   onGradeRight,
   onNavigateRightNext,
   onNavigateRightPrev,
+  onSwapImages,
 }: ImageComparisonViewProps) {
   const [showStars, setShowStars] = useState(false);
   const [syncZoom, setSyncZoom] = useState(true);
@@ -85,6 +87,9 @@ export default function ImageComparisonView({
   // Navigate right image
   useHotkeys('right,k', onNavigateRightNext, [onNavigateRightNext]);
   useHotkeys('left,j', onNavigateRightPrev, [onNavigateRightPrev]);
+  
+  // Swap images
+  useHotkeys('w', () => rightImageId && onSwapImages(), [rightImageId, onSwapImages]);
 
   // Reset loaded state when images change
   useEffect(() => {
@@ -339,6 +344,15 @@ export default function ImageComparisonView({
               />
               Show Stars
             </label>
+            {rightImageId && (
+              <button
+                className="swap-button"
+                onClick={onSwapImages}
+                title="Swap left and right images (W)"
+              >
+                ↔ Swap
+              </button>
+            )}
           </div>
           <button className="close-button" onClick={onClose}>×</button>
         </div>
@@ -575,6 +589,7 @@ export default function ImageComparisonView({
             <span>ESC Close</span>
             <span>S Toggle Stars</span>
             <span>Z Toggle Sync Zoom</span>
+            <span>W Swap Images</span>
             <span>→/K Next Right</span>
             <span>←/J Prev Right</span>
           </div>

@@ -688,6 +688,15 @@ export default function GroupedImageGrid({ projectId, targetId, useLazyImages = 
           }}
           onGradeLeft={(status) => grading.gradeImage(selectedImageId, status)}
           onGradeRight={(status) => comparisonRightId && grading.gradeImage(comparisonRightId, status)}
+          onSwapImages={() => {
+            if (comparisonRightId) {
+              // Swap the left and right images
+              const currentLeftId = selectedImageId;
+              const currentRightId = comparisonRightId;
+              setSelectedImageId(currentRightId);
+              setComparisonRightId(currentLeftId);
+            }
+          }}
         />
       )}
     </>
