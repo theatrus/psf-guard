@@ -133,6 +133,41 @@ impl<'a> Database<'a> {
     }
 
     // Image queries
+    pub fn get_images_by_project_id(
+        &self,
+        project_id: i32,
+    ) -> Result<Vec<(AcquiredImage, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ai.Id, ai.projectId, ai.targetId, ai.acquireddate, ai.filtername, 
+                    ai.gradingStatus, ai.metadata, ai.rejectreason, ai.profileId,
+                    p.name as project_name, t.name as target_name
+             FROM acquiredimage ai
+             JOIN project p ON ai.projectId = p.Id
+             JOIN target t ON ai.targetId = t.Id
+             WHERE ai.projectId = ?
+             ORDER BY ai.acquireddate DESC",
+        )?;
+
+        let rows = stmt.query_map([project_id], |row| {
+            let image = AcquiredImage {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                target_id: row.get(2)?,
+                acquired_date: row.get(3)?,
+                filter_name: row.get(4)?,
+                grading_status: row.get(5)?,
+                metadata: row.get(6)?,
+                reject_reason: row.get(7)?,
+                profile_id: row.get(8).unwrap_or_default(),
+            };
+            let project_name: String = row.get(9)?;
+            let target_name: String = row.get(10)?;
+            Ok((image, project_name, target_name))
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.into())
+    }
+
     pub fn query_images(
         &self,
         status_filter: Option<GradingStatus>,

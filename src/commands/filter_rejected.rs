@@ -285,10 +285,10 @@ pub fn get_possible_paths(
 
     // Clean target name for directory matching
     let clean_target = target_name.trim();
-    
+
     // Generate date variations to handle timezone/session date mismatches
     let mut date_variations = vec![date_str.to_string()];
-    
+
     // Add date - 1 day (common case: DB has UTC date, directory uses local date)
     if let Ok(parsed_date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
         if let Some(prev_date) = parsed_date.pred_opt() {
@@ -299,9 +299,9 @@ pub fn get_possible_paths(
             date_variations.push(next_date.format("%Y-%m-%d").to_string());
         }
     }
-    
+
     let mut paths = Vec::new();
-    
+
     // Generate all path combinations for each date variation
     for date_variant in &date_variations {
         // Standard structure: target/date/LIGHT/file.fits
@@ -309,117 +309,117 @@ pub fn get_possible_paths(
             base.join(clean_target)
                 .join(date_variant)
                 .join("LIGHT")
-                .join(filename)
+                .join(filename),
         );
-        
+
         // Alternative structure: date/target/date/LIGHT/file.fits
         paths.push(
             base.join(date_variant)
                 .join(clean_target)
                 .join(date_variant)
                 .join("LIGHT")
-                .join(filename)
+                .join(filename),
         );
-        
+
         // Rejected folder variants - LIGHT/rejected/
         paths.push(
             base.join(clean_target)
                 .join(date_variant)
                 .join("LIGHT")
                 .join("rejected")
-                .join(filename)
+                .join(filename),
         );
-        
+
         paths.push(
             base.join(date_variant)
                 .join(clean_target)
                 .join(date_variant)
                 .join("LIGHT")
                 .join("rejected")
-                .join(filename)
+                .join(filename),
         );
-        
+
         // Rejected folder variants - LIGHT_REJECT/
         paths.push(
             base.join(clean_target)
                 .join(date_variant)
                 .join("LIGHT_REJECT")
-                .join(filename)
+                .join(filename),
         );
-        
+
         paths.push(
             base.join(date_variant)
                 .join(clean_target)
                 .join(date_variant)
                 .join("LIGHT_REJECT")
-                .join(filename)
+                .join(filename),
         );
-        
+
         // Rejected folder variants - LIGHT_reject/ (lowercase)
         paths.push(
             base.join(clean_target)
                 .join(date_variant)
                 .join("LIGHT_reject")
-                .join(filename)
+                .join(filename),
         );
-        
+
         paths.push(
             base.join(date_variant)
                 .join(clean_target)
                 .join(date_variant)
                 .join("LIGHT_reject")
-                .join(filename)
+                .join(filename),
         );
-        
+
         // Rejected folder variants - reject_light/
         paths.push(
             base.join(clean_target)
                 .join(date_variant)
                 .join("reject_light")
-                .join(filename)
+                .join(filename),
         );
-        
+
         paths.push(
             base.join(date_variant)
                 .join(clean_target)
                 .join(date_variant)
                 .join("reject_light")
-                .join(filename)
+                .join(filename),
         );
-        
+
         // Rejected folder variants - rejected_light/
         paths.push(
             base.join(clean_target)
                 .join(date_variant)
                 .join("rejected_light")
-                .join(filename)
+                .join(filename),
         );
-        
+
         paths.push(
             base.join(date_variant)
                 .join(clean_target)
                 .join(date_variant)
                 .join("rejected_light")
-                .join(filename)
+                .join(filename),
         );
-        
+
         // Rejected folder variants - light_reject/
         paths.push(
             base.join(clean_target)
                 .join(date_variant)
                 .join("light_reject")
-                .join(filename)
+                .join(filename),
         );
-        
+
         paths.push(
             base.join(date_variant)
                 .join(clean_target)
                 .join(date_variant)
                 .join("light_reject")
-                .join(filename)
+                .join(filename),
         );
     }
-    
+
     // Add non-date-specific paths at the end
     paths.extend(vec![
         // Direct under base_dir: LIGHT/file.fits
@@ -427,7 +427,7 @@ pub fn get_possible_paths(
         // Direct under base_dir: target/LIGHT/file.fits
         base.join(clean_target).join("LIGHT").join(filename),
     ]);
-    
+
     paths
 }
 
