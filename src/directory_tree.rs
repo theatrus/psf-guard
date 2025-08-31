@@ -103,7 +103,7 @@ impl DirectoryTree {
                 if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
                     file_map
                         .entry(filename.to_string())
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .push(path.clone());
                     *total_files += 1;
                 }
