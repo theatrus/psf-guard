@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import { useProjectTarget } from '../hooks/useUrlState';
@@ -6,23 +5,17 @@ import { useProjectTarget } from '../hooks/useUrlState';
 export default function ProjectTargetSelector() {
   const { projectId: selectedProjectId, targetId: selectedTargetId, setProjectId, setTargetId } = useProjectTarget();
   const queryClient = useQueryClient();
-  const [lastRefreshStatus, setLastRefreshStatus] = useState<string | null>(null);
 
   // Refresh cache mutation
   const refreshCacheMutation = useMutation({
     mutationFn: apiClient.refreshFileCache,
-    onSuccess: (data) => {
+    onSuccess: () => {
       // Invalidate and refetch projects and targets
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       queryClient.invalidateQueries({ queryKey: ['targets'] });
-      setLastRefreshStatus(`Checked ${data.images_checked} projects: ${data.files_found} with files, ${data.files_missing} without (${data.check_time_ms}ms)`);
-      
-      // Clear status after 5 seconds
-      setTimeout(() => setLastRefreshStatus(null), 5000);
     },
-    onError: () => {
-      setLastRefreshStatus('Refresh failed');
-      setTimeout(() => setLastRefreshStatus(null), 5000);
+    onError: (error) => {
+      console.error('Cache refresh failed:', error);
     },
   });
 
@@ -54,16 +47,17 @@ export default function ProjectTargetSelector() {
   };
 
   return (
-    <div className="project-target-selector">
-      <div className="selector-group">
+    <div className="project-target-selector compact">
+      <div className="selector-group compact">
         <label htmlFor="project-select">Project:</label>
         <select
           id="project-select"
+          className="compact-select"
           value={selectedProjectId || ''}
           onChange={handleProjectChange}
           disabled={projectsLoading}
         >
-          <option value="">Select a project</option>
+          <option value="">Select project</option>
           {projects.map(project => (
             <option 
               key={project.id} 
@@ -76,10 +70,11 @@ export default function ProjectTargetSelector() {
         </select>
       </div>
 
-      <div className="selector-group">
+      <div className="selector-group compact">
         <label htmlFor="target-select">Target:</label>
         <select
           id="target-select"
+          className="compact-select"
           value={selectedTargetId || ''}
           onChange={handleTargetChange}
           disabled={!selectedProjectId || targetsLoading}
@@ -91,33 +86,20 @@ export default function ProjectTargetSelector() {
               value={target.id}
               disabled={!target.has_files}
             >
-              {target.name} ({target.accepted_count}/{target.image_count} accepted) {!target.has_files && '- no files'}
+              {target.name} ({target.accepted_count}/{target.image_count})
             </option>
           ))}
         </select>
       </div>
 
-      {selectedProjectId && targets.length > 0 && (
-        <div className="selection-stats">
-          Total images: {targets.reduce((sum, t) => sum + t.image_count, 0)} | 
-          Accepted: {targets.reduce((sum, t) => sum + t.accepted_count, 0)} | 
-          Rejected: {targets.reduce((sum, t) => sum + t.rejected_count, 0)}
-        </div>
-      )}
-
-      <div className="selector-actions">
-        <button
-          className="refresh-button"
-          onClick={() => refreshCacheMutation.mutate()}
-          disabled={refreshCacheMutation.isPending}
-          title="Refresh file existence cache"
-        >
-          {refreshCacheMutation.isPending ? 'Refreshing...' : 'Refresh Files'}
-        </button>
-        {lastRefreshStatus && (
-          <span className="refresh-status">{lastRefreshStatus}</span>
-        )}
-      </div>
+      <button
+        className="refresh-button compact"
+        onClick={() => refreshCacheMutation.mutate()}
+        disabled={refreshCacheMutation.isPending}
+        title={refreshCacheMutation.isPending ? 'Refreshing file cache...' : 'Refresh file cache'}
+      >
+        {refreshCacheMutation.isPending ? '⟳' : '↻'}
+      </button>
     </div>
   );
 }

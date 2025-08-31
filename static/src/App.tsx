@@ -16,22 +16,25 @@ function App() {
 
   return (
     <div className="app">
-      <header className="app-header">
-        <h1>PSF Guard - Image Grading</h1>
-        <div className="header-actions">
-          <button onClick={() => setShowStats(!showStats)} className="help-button">
-            {showStats ? 'Hide Stats' : 'Show Stats'}
+      <header className="app-header compact">
+        <div className="header-left">
+          <h1>PSF Guard</h1>
+        </div>
+        
+        <div className="header-center">
+          <ProjectTargetSelector />
+        </div>
+        
+        <div className="header-right">
+          <button onClick={() => setShowStats(!showStats)} className="header-button">
+            {showStats ? 'Hide Stats' : 'Stats'}
           </button>
-          <button onClick={() => setShowHelp(true)} className="help-button">
-            Help (?)
+          <button onClick={() => setShowHelp(true)} className="header-button">
+            Help
           </button>
           <ServerInfoPanel />
         </div>
       </header>
-
-      <div className="app-controls">
-        <ProjectTargetSelector />
-      </div>
 
       <main className="app-main">
         <Outlet />
