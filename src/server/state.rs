@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex as TokioMutex;
 
 pub struct AppState {
     pub database_path: String,
@@ -18,6 +19,8 @@ pub struct AppState {
     pub file_check_cache: Arc<RwLock<FileCheckCache>>,
     // Directory tree cache for fast file lookups
     pub directory_tree_cache: Arc<RwLock<Option<DirectoryTree>>>,
+    // Background refresh coordination
+    pub refresh_mutex: Arc<TokioMutex<()>>,
 }
 
 #[derive(Clone)]
@@ -84,6 +87,7 @@ impl AppState {
             db_connection: Arc::new(Mutex::new(conn)),
             file_check_cache: Arc::new(RwLock::new(FileCheckCache::new())),
             directory_tree_cache: Arc::new(RwLock::new(None)),
+            refresh_mutex: Arc::new(TokioMutex::new(())),
         })
     }
 
@@ -139,6 +143,29 @@ impl AppState {
         Ok(Arc::new(tree))
     }
 
+    /// Refresh directory tree cache only if needed (not recently built)
+    pub fn refresh_directory_tree_if_needed(&self) -> Result<Arc<DirectoryTree>> {
+        // Check if we have a valid cache first
+        {
+            let cache = self.directory_tree_cache.read().unwrap();
+            if let Some(ref tree) = *cache {
+                // Check if cache is still valid (not too old)
+                if !tree.is_older_than(Duration::from_secs(300)) {
+                    // Cache is fresh, no need to rebuild
+                    tracing::debug!("🌳 Directory tree cache is fresh, skipping rebuild");
+                    return Ok(Arc::new(tree.clone()));
+                } else {
+                    tracing::debug!("🌳 Directory tree cache is stale (>5min), rebuilding");
+                }
+            } else {
+                tracing::debug!("🌳 Directory tree cache is empty, building");
+            }
+        }
+
+        // Cache is stale or empty, rebuild it
+        self.rebuild_directory_tree()
+    }
+
     /// Clear the directory tree cache (force rebuild on next access)
     pub fn clear_directory_tree_cache(&self) {
         let mut cache = self.directory_tree_cache.write().unwrap();
@@ -150,5 +177,53 @@ impl AppState {
     pub fn get_directory_tree_stats(&self) -> Option<crate::directory_tree::DirectoryTreeStats> {
         let cache = self.directory_tree_cache.read().unwrap();
         cache.as_ref().map(|tree| tree.stats())
+    }
+
+    /// Spawn background cache refresh if not already running
+    pub fn spawn_background_refresh(&self) -> bool {
+        let refresh_mutex = self.refresh_mutex.clone();
+        let state = Arc::new(self.clone());
+
+        // Spawn the task and let it try to acquire the lock
+        tokio::spawn(async move {
+            // Try to acquire the refresh lock without blocking
+            if let Ok(guard) = refresh_mutex.try_lock() {
+                tracing::info!("🔄 Starting background cache refresh");
+
+                // Import refresh function here to avoid circular dependencies
+                if let Err(e) = crate::server::handlers::refresh_project_cache(&state).await {
+                    tracing::error!("❌ Background project cache refresh failed: {:?}", e);
+                } else {
+                    tracing::info!("✅ Background cache refresh completed");
+                }
+
+                // Guard is automatically dropped here
+                drop(guard);
+
+                // Note: We only refresh the project cache in background since it's much more expensive
+                // than target cache. Target cache refresh is relatively fast and can be done on-demand.
+            } else {
+                tracing::debug!("🔄 Background refresh already running, skipping");
+            }
+        });
+
+        // We always return true since we spawned the task (even if it might not get the lock)
+        true
+    }
+}
+
+impl Clone for AppState {
+    fn clone(&self) -> Self {
+        Self {
+            database_path: self.database_path.clone(),
+            image_dir: self.image_dir.clone(),
+            cache_dir: self.cache_dir.clone(),
+            image_dir_path: self.image_dir_path.clone(),
+            cache_dir_path: self.cache_dir_path.clone(),
+            db_connection: self.db_connection.clone(),
+            file_check_cache: self.file_check_cache.clone(),
+            directory_tree_cache: self.directory_tree_cache.clone(),
+            refresh_mutex: self.refresh_mutex.clone(),
+        }
     }
 }

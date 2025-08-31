@@ -109,27 +109,38 @@ pub async fn list_projects(
 ) -> Result<Json<ApiResponse<Vec<ProjectResponse>>>, AppError> {
     tracing::debug!("📋 Listing projects");
 
-    // Check if cache is expired
-    let needs_refresh = {
+    // Check if cache is expired or empty
+    let (needs_refresh, has_stale_data) = {
         let cache = state.file_check_cache.read().unwrap();
         let expired = cache.is_expired();
         let empty = cache.projects_with_files.is_empty();
 
         if expired {
-            tracing::debug!("⏰ Project cache expired, refreshing");
+            tracing::debug!("⏰ Project cache expired");
         } else if empty {
-            tracing::debug!("📭 Project cache empty, refreshing");
+            tracing::debug!("📭 Project cache empty");
         }
 
-        expired || empty
+        let needs_refresh = expired || empty;
+        let has_stale_data = !empty; // We have stale data if cache is not empty
+
+        (needs_refresh, has_stale_data)
     };
 
+    // If cache is expired but we have stale data, serve stale and refresh in background
     if needs_refresh {
-        // Refresh the cache
-        refresh_project_cache(&state).await?;
+        if has_stale_data {
+            // Serve stale cache immediately, refresh in background
+            tracing::debug!("🔄 Serving stale cache, refreshing in background");
+            state.spawn_background_refresh();
+        } else {
+            // Cache is empty, we must refresh synchronously
+            tracing::debug!("🔄 Cache empty, refreshing synchronously");
+            refresh_project_cache(&state).await?;
+        }
     }
 
-    // Get file existence info from cache
+    // Get file existence info from cache (may be stale, but that's okay)
     let file_existence_map: HashMap<i32, bool> = {
         let cache = state.file_check_cache.read().unwrap();
         cache.projects_with_files.clone()
@@ -165,14 +176,14 @@ pub async fn refresh_project_cache(state: &Arc<AppState>) -> Result<(), AppError
     tracing::debug!("🔄 Refreshing project cache");
 
     // First, refresh the directory tree cache to ensure file lookups are up-to-date
-    if let Err(e) = state.rebuild_directory_tree() {
+    if let Err(e) = state.refresh_directory_tree_if_needed() {
         tracing::warn!(
             "⚠️ Directory tree cache refresh failed during project cache refresh: {}",
             e
         );
         // Continue with project cache refresh even if directory tree refresh fails
     } else {
-        tracing::debug!("✅ Directory tree cache refreshed");
+        tracing::debug!("✅ Directory tree cache ready for project cache refresh");
     }
 
     // Get all projects and their sample images in one database operation to minimize lock time
@@ -287,14 +298,11 @@ pub async fn list_targets(
 ) -> Result<Json<ApiResponse<Vec<TargetResponse>>>, AppError> {
     tracing::debug!("🎯 Listing targets for project {}", project_id);
 
-    // Check if we need to refresh target cache for this project
-    let needs_refresh = {
+    // Check if cache is expired or empty
+    let (needs_refresh, has_stale_data) = {
         let cache = state.file_check_cache.read().unwrap();
         let expired = cache.is_expired();
-        let empty = !cache.targets_with_files.iter().any(|(_tid, _)| {
-            // Check if we have any cached data for targets in this project
-            true // We'll need to track project_id per target for more efficient caching
-        });
+        let empty = cache.targets_with_files.is_empty();
 
         if expired {
             tracing::debug!("⏰ Target cache expired for project {}", project_id);
@@ -302,15 +310,26 @@ pub async fn list_targets(
             tracing::debug!("📭 Target cache empty for project {}", project_id);
         }
 
-        expired || empty
+        let needs_refresh = expired || empty;
+        let has_stale_data = !empty; // We have stale data if cache is not empty
+
+        (needs_refresh, has_stale_data)
     };
 
+    // If cache is expired but we have stale data, serve stale and refresh in background
     if needs_refresh {
-        // Refresh target cache for this project
-        refresh_target_cache(&state, project_id).await?;
+        if has_stale_data {
+            // Serve stale cache immediately, refresh in background
+            tracing::debug!("🔄 Serving stale target cache, refreshing in background");
+            state.spawn_background_refresh();
+        } else {
+            // Cache is empty, we must refresh synchronously
+            tracing::debug!("🔄 Target cache empty, refreshing synchronously");
+            refresh_target_cache(&state, project_id).await?;
+        }
     }
 
-    // Get file existence info from cache
+    // Get file existence info from cache (may be stale, but that's okay)
     let file_existence_map: HashMap<i32, bool> = {
         let cache = state.file_check_cache.read().unwrap();
         cache.targets_with_files.clone()
@@ -354,26 +373,15 @@ async fn refresh_target_cache(state: &Arc<AppState>, project_id: i32) -> Result<
     let start_time = std::time::Instant::now();
     tracing::debug!("🔄 Refreshing target cache for project {}", project_id);
 
-    // Check if directory tree cache needs refreshing before file lookups
-    {
-        let cache = state.directory_tree_cache.read().unwrap();
-        let needs_refresh = match cache.as_ref() {
-            Some(tree) => tree.is_older_than(std::time::Duration::from_secs(300)), // 5 minutes
-            None => true, // No cache exists
-        };
-
-        if needs_refresh {
-            drop(cache); // Release read lock before rebuilding
-            if let Err(e) = state.rebuild_directory_tree() {
-                tracing::warn!(
-                    "⚠️ Directory tree cache refresh failed during target cache refresh: {}",
-                    e
-                );
-                // Continue with target cache refresh even if directory tree refresh fails
-            } else {
-                tracing::debug!("✅ Directory tree cache refreshed for target cache");
-            }
-        }
+    // Ensure directory tree cache is available before file lookups
+    if let Err(e) = state.refresh_directory_tree_if_needed() {
+        tracing::warn!(
+            "⚠️ Directory tree cache refresh failed during target cache refresh: {}",
+            e
+        );
+        // Continue with target cache refresh even if directory tree refresh fails
+    } else {
+        tracing::debug!("✅ Directory tree cache ready for target cache refresh");
     }
 
     let targets_to_check = {
