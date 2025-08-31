@@ -87,20 +87,23 @@ export default function ImageDetailView({
     enabled: showStars,
   });
 
+
   // Keyboard shortcuts
   useHotkeys('escape', onClose, [onClose]);
-  useHotkeys('k,right', onNext, [onNext]);
-  useHotkeys('j,left', onPrevious, [onPrevious]);
+  useHotkeys('k,right', () => {
+    onNext(); // K/Right goes to newer image (higher index in oldest-first sort)
+  }, { enableOnFormTags: true }, [onNext]);
+  useHotkeys('j,left', () => {
+    onPrevious(); // J/Left goes to older image (lower index in oldest-first sort)
+  }, { enableOnFormTags: true }, [onPrevious]);
   useHotkeys('a', () => onGrade('accepted'), [onGrade]);
   useHotkeys('r', () => onGrade('rejected'), [onGrade]);
   useHotkeys('u', () => onGrade('pending'), [onGrade]);
   useHotkeys('s', () => {
-    console.log('Toggling star overlay:', !showStars);
     setShowStars(s => !s);
     setShowPsf(false); // Turn off PSF when showing stars
   }, [showStars]);
   useHotkeys('p', () => {
-    console.log('Toggling PSF visualization:', !showPsf);
     setShowPsf(s => !s);
     setShowStars(false); // Turn off stars when showing PSF
   }, [showPsf]);

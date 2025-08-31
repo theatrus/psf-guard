@@ -1587,6 +1587,26 @@
   transform: scale(1.02);
 }
 
+/* Return-to-selection animation */
+.image-card-wrapper.scroll-target .image-card {
+  animation: returnHighlight 0.8s ease-out;
+}
+
+@keyframes returnHighlight {
+  0% {
+    box-shadow: 0 0 0 3px rgba(97, 218, 251, 0.5), 0 0 20px rgba(97, 218, 251, 0.8);
+    transform: scale(1.05);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(97, 218, 251, 0.7), 0 0 30px rgba(97, 218, 251, 0.9);
+    transform: scale(1.08);
+  }
+  100% {
+    box-shadow: 0 0 0 3px rgba(97, 218, 251, 0.5);
+    transform: scale(1.02);
+  }
+}
+
 /* Selection count indicator */
 .image-card-wrapper.multi-selected::after {
   content: "✓";

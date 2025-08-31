@@ -1,20 +1,10 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
+import { useProjectTarget } from '../hooks/useUrlState';
 
-interface ProjectTargetSelectorProps {
-  selectedProjectId: number | null;
-  selectedTargetId: number | null;
-  onProjectChange: (projectId: number | null) => void;
-  onTargetChange: (targetId: number | null) => void;
-}
-
-export default function ProjectTargetSelector({
-  selectedProjectId,
-  selectedTargetId,
-  onProjectChange,
-  onTargetChange,
-}: ProjectTargetSelectorProps) {
+export default function ProjectTargetSelector() {
+  const { projectId: selectedProjectId, targetId: selectedTargetId, setProjectId, setTargetId } = useProjectTarget();
   const queryClient = useQueryClient();
   const [lastRefreshStatus, setLastRefreshStatus] = useState<string | null>(null);
 
@@ -55,13 +45,12 @@ export default function ProjectTargetSelector({
 
   const handleProjectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const projectId = e.target.value ? Number(e.target.value) : null;
-    onProjectChange(projectId);
-    onTargetChange(null); // Reset target when project changes
+    setProjectId(projectId);
   };
 
   const handleTargetChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const targetId = e.target.value ? Number(e.target.value) : null;
-    onTargetChange(targetId);
+    setTargetId(targetId);
   };
 
   return (
