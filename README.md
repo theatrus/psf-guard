@@ -21,7 +21,25 @@ A comprehensive Rust utility for astronomical image analysis and grading, with N
 
 ## Quick Start
 
-### Installation
+### Docker (Recommended)
+
+```bash
+# Pull from GitHub Container Registry
+docker pull ghcr.io/theatrus/psf-guard:latest
+
+# Run the web server
+docker run -d \
+  -p 3000:3000 \
+  -v /path/to/database.sqlite:/data/database.sqlite:ro \
+  -v /path/to/images:/images:ro \
+  ghcr.io/theatrus/psf-guard:latest \
+  server /data/database.sqlite /images
+
+# Or use docker-compose (see docker-compose.yml)
+docker-compose up -d
+```
+
+### Build from Source
 
 ```bash
 # Clone and build
@@ -57,6 +75,94 @@ psf-guard annotate-stars image.fits --max-stars 100
 psf-guard filter-rejected db.sqlite /images --dry-run
 psf-guard filter-rejected db.sqlite /images --project "M31"
 ```
+
+## Docker Usage
+
+### Running with Docker
+
+PSF Guard is available as a Docker image with all dependencies pre-installed, including OpenCV support.
+
+```bash
+# Pull the latest image
+docker pull ghcr.io/theatrus/psf-guard:latest
+
+# Run the web server (read-only mounts recommended)
+docker run -d \
+  --name psf-guard \
+  -p 3000:3000 \
+  -v /path/to/schedulerdb.sqlite:/data/database.sqlite:ro \
+  -v /path/to/images:/images:ro \
+  ghcr.io/theatrus/psf-guard:latest \
+  server /data/database.sqlite /images
+
+# Run CLI commands
+docker run --rm \
+  -v /path/to/schedulerdb.sqlite:/data/database.sqlite:ro \
+  ghcr.io/theatrus/psf-guard:latest \
+  list-projects -d /data/database.sqlite
+
+# Analyze FITS files
+docker run --rm \
+  -v /path/to/images:/images:ro \
+  ghcr.io/theatrus/psf-guard:latest \
+  analyze-fits /images/M31/2025-08-30/LIGHT/M31_Ha_300s_001.fits
+```
+
+### Docker Compose
+
+Create a `docker-compose.yml` file:
+
+```yaml
+version: '3.8'
+
+services:
+  psf-guard:
+    image: ghcr.io/theatrus/psf-guard:latest
+    container_name: psf-guard
+    ports:
+      - "3000:3000"
+    volumes:
+      - /path/to/schedulerdb.sqlite:/data/database.sqlite:ro
+      - /path/to/images:/images:ro
+    command: server /data/database.sqlite /images
+    restart: unless-stopped
+```
+
+Then run:
+```bash
+docker-compose up -d
+docker-compose logs -f  # View logs
+docker-compose down     # Stop
+```
+
+### Building Your Own Image
+
+```bash
+# Build locally with podman or docker
+podman build -t psf-guard:local .
+docker build -t psf-guard:local .
+
+# Run your local build
+docker run -p 3000:3000 \
+  -v ./database.sqlite:/data/database.sqlite:ro \
+  -v ./images:/images:ro \
+  psf-guard:local server /data/database.sqlite /images
+```
+
+### Volume Mounts
+
+- `/data/database.sqlite` - N.I.N.A. Target Scheduler database (read-only recommended)
+- `/images` - Directory containing your FITS images (read-only recommended)
+
+Use `:ro` for read-only mounts to prevent accidental modifications.
+
+### Container Tags
+
+- `latest` - Latest stable release
+- `main` - Latest development build
+- `v1.0.0` - Specific version
+- `v1.0` - Latest patch of v1.0
+- `v1` - Latest minor/patch of v1
 
 ## Target Scheduler Database Location
 
