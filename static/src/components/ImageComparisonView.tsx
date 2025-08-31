@@ -30,6 +30,7 @@ export default function ImageComparisonView({
 }: ImageComparisonViewProps) {
   const [showStars, setShowStars] = useState(false);
   const [syncZoom, setSyncZoom] = useState(true);
+  const [maxStars] = useState(1000);
   
   // Initialize zoom for both images
   const leftZoom = useImageZoom({ minScale: 0.1, maxScale: 10.0 });
@@ -198,7 +199,7 @@ export default function ImageComparisonView({
     
     if (shouldPreload && !leftOriginalLoaded && !leftOriginalRef.current) {
       const originalUrl = showStars 
-        ? apiClient.getAnnotatedUrl(leftImageId, 'original')
+        ? apiClient.getAnnotatedUrl(leftImageId, 'original', maxStars)
         : apiClient.getPreviewUrl(leftImageId, { size: 'original' });
       
       const img = new Image();
@@ -271,7 +272,7 @@ export default function ImageComparisonView({
     
     if (shouldPreload && !rightOriginalLoaded && !rightOriginalRef.current) {
       const originalUrl = showStars 
-        ? apiClient.getAnnotatedUrl(rightImageId, 'original')
+        ? apiClient.getAnnotatedUrl(rightImageId, 'original', maxStars)
         : apiClient.getPreviewUrl(rightImageId, { size: 'original' });
       
       const img = new Image();
@@ -514,7 +515,7 @@ export default function ImageComparisonView({
                   <img
                     ref={leftZoom.imageRef}
                     src={showStars 
-                      ? apiClient.getAnnotatedUrl(leftImageId, (useLeftOriginal || (leftOriginalLoaded && targetLeftZoomRef.current && targetLeftZoomRef.current > 1.0)) ? 'original' : 'large')
+                      ? apiClient.getAnnotatedUrl(leftImageId, (useLeftOriginal || (leftOriginalLoaded && targetLeftZoomRef.current && targetLeftZoomRef.current > 1.0)) ? 'original' : 'large', maxStars)
                       : apiClient.getPreviewUrl(leftImageId, { size: (useLeftOriginal || (leftOriginalLoaded && targetLeftZoomRef.current && targetLeftZoomRef.current > 1.0)) ? 'original' : 'large' })
                     }
                     alt={`${leftImage.target_name} - ${leftImage.filter_name || 'No filter'}`}
@@ -672,7 +673,7 @@ export default function ImageComparisonView({
                         <img
                           ref={rightZoom.imageRef}
                           src={showStars 
-                            ? apiClient.getAnnotatedUrl(rightImageId!, imageSize)
+                            ? apiClient.getAnnotatedUrl(rightImageId!, imageSize, maxStars)
                             : apiClient.getPreviewUrl(rightImageId!, { size: imageSize })
                           }
                         alt={`${rightImage.target_name} - ${rightImage.filter_name || 'No filter'}`}

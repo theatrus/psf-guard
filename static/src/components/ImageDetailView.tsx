@@ -40,6 +40,7 @@ export default function ImageDetailView({
   const [showStars, setShowStars] = useState(false);
   const [showPsf, setShowPsf] = useState(false);
   const [psfImageLoading, setPsfImageLoading] = useState(false);
+  const [maxStars] = useState(1000);
   const [imageSize, setImageSize] = useState<'screen' | 'large' | 'original'>('large');
   const [isOriginalLoaded, setIsOriginalLoaded] = useState(false);
   const preloadedOriginalRef = useRef<HTMLImageElement | null>(null);
@@ -185,7 +186,7 @@ export default function ImageDetailView({
     // Preload when visual zoom > 80%
     if (visualScale > 0.8 && !isOriginalLoaded && state === 'large') {
       const originalUrl = showStars 
-        ? apiClient.getAnnotatedUrl(imageId, 'original')
+        ? apiClient.getAnnotatedUrl(imageId, 'original', maxStars)
         : apiClient.getPreviewUrl(imageId, { size: 'original' });
       
       const img = new Image();
@@ -332,7 +333,7 @@ export default function ImageDetailView({
                           selection: 'top-n'
                         })
                       : showStars 
-                        ? apiClient.getAnnotatedUrl(imageId, useOriginalImage ? 'original' : 'large')
+                        ? apiClient.getAnnotatedUrl(imageId, useOriginalImage ? 'original' : 'large', maxStars)
                         : apiClient.getPreviewUrl(imageId, { size: useOriginalImage ? 'original' : 'large' })
                   }
                   alt={`${image.target_name} - ${image.filter_name || 'No filter'}`}

@@ -100,6 +100,7 @@ pub struct PreviewOptions {
     pub stretch: Option<bool>,
     pub midtone: Option<f64>,
     pub shadow: Option<f64>,
+    pub max_stars: Option<u32>, // Max number of stars to annotate
 }
 
 #[derive(Debug, Serialize)]

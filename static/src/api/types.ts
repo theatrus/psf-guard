@@ -71,6 +71,7 @@ export interface PreviewOptions {
   stretch?: boolean;
   midtone?: number;
   shadow?: number;
+  max_stars?: number;
 }
 
 export interface ServerInfo {

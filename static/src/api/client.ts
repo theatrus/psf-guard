@@ -92,8 +92,13 @@ export const apiClient = {
   },
 
   // Annotated image URL
-  getAnnotatedUrl: (imageId: number, size: 'screen' | 'large' | 'original' = 'large'): string => {
-    return `/api/images/${imageId}/annotated?size=${size}`;
+  getAnnotatedUrl: (imageId: number, size: 'screen' | 'large' | 'original' = 'large', maxStars?: number): string => {
+    const params = new URLSearchParams();
+    params.append('size', size);
+    if (maxStars !== undefined) {
+      params.append('max_stars', String(maxStars));
+    }
+    return `/api/images/${imageId}/annotated?${params.toString()}`;
   },
 
   // PSF visualization URL

@@ -1359,14 +1359,16 @@ pub async fn get_annotated_image(
     let size = options.size.as_deref().unwrap_or("screen");
 
     // Create comprehensive cache key for annotated image
+    let max_stars = options.max_stars.unwrap_or(1000);
     let cache_key = format!(
-        "annotated_{}_{}_{}_{}_{}_{}",
+        "annotated_{}_{}_{}_{}_{}_{}_{}",
         image_id,
         image.project_id,
         image.target_id,
         image.acquired_date.unwrap_or(0),
         file_only.replace(&['.', ' ', '-'][..], "_"),
-        size
+        size,
+        max_stars
     );
     let cache_manager = CacheManager::new(PathBuf::from(&state.cache_dir));
     cache_manager
@@ -1408,9 +1410,10 @@ pub async fn get_annotated_image(
             .map_err(|e| anyhow::anyhow!("Failed to load FITS: {}", e))?;
 
         // Create annotated image using the common function
+        let max_stars = options.max_stars.unwrap_or(1000) as usize;
         let rgb_image = create_annotated_image(
             &fits,
-            100,                // max_stars
+            max_stars,          // max_stars from parameter
             0.2,                // midtone_factor
             -2.8,               // shadow_clipping
             Rgb([255, 255, 0]), // yellow color
