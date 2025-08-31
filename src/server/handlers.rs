@@ -69,6 +69,42 @@ pub async fn refresh_file_cache(
     Ok(Json(ApiResponse::success(response)))
 }
 
+pub async fn refresh_directory_tree_cache(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<DirectoryTreeResponse>>, AppError> {
+    let start_time = std::time::Instant::now();
+
+    tracing::info!("🌳 Starting directory tree cache refresh");
+
+    // Force rebuild the directory tree cache
+    let directory_tree = state.rebuild_directory_tree()
+        .map_err(|e| {
+            tracing::error!("Failed to rebuild directory tree cache: {}", e);
+            AppError::InternalError(format!("Cache rebuild failed: {}", e))
+        })?;
+
+    let build_time_ms = start_time.elapsed().as_millis();
+    let stats = directory_tree.stats();
+
+    let response = DirectoryTreeResponse {
+        total_files: stats.total_files,
+        unique_filenames: stats.unique_filenames,
+        total_directories: stats.total_directories,
+        age_seconds: stats.age.as_secs(),
+        build_time_ms,
+        root_directory: stats.root.display().to_string(),
+    };
+
+    tracing::info!(
+        "✅ Directory tree cache refresh completed in {}ms - {} files, {} directories",
+        build_time_ms,
+        stats.total_files,
+        stats.total_directories
+    );
+
+    Ok(Json(ApiResponse::success(response)))
+}
+
 pub async fn list_projects(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Vec<ProjectResponse>>>, AppError> {
@@ -768,25 +804,35 @@ pub async fn get_image_preview(
 
     tracing::debug!("💫 Cache MISS for image {} - generating preview", image_id);
 
+    // Add timeout for file finding to prevent hanging
+    let find_start = std::time::Instant::now();
+
     // Find the FITS file
     let fits_path = match find_fits_file(&state, &image, &target_name, &file_only) {
         Ok(path) => {
-            tracing::trace!("📁 Found FITS file for image {}: {:?}", image_id, path);
+            tracing::info!(
+                "✅ Found FITS file for image {} in {:?}: {:?}",
+                image_id,
+                find_start.elapsed(),
+                path
+            );
             path
         }
         Err(AppError::NotFound) => {
             tracing::warn!(
-                "🔍 FITS file not found for image {} (filename: {})",
+                "⚠️ FITS file not found for image {} (filename: {}) after {:?}",
                 image_id,
-                file_only
+                file_only,
+                find_start.elapsed()
             );
             return Err(AppError::NotFound);
         }
         Err(e) => {
             tracing::error!(
-                "❌ Error finding FITS file for image {} (filename: {}): {:?}",
+                "❌ Error finding FITS file for image {} (filename: {}) after {:?}: {:?}",
                 image_id,
                 file_only,
+                find_start.elapsed(),
                 e
             );
             return Err(e);
@@ -928,32 +974,94 @@ fn find_fits_file(
     target_name: &str,
     filename: &str,
 ) -> Result<std::path::PathBuf, AppError> {
-    use crate::commands::filter_rejected::{find_file_recursive, get_possible_paths};
+    use crate::commands::filter_rejected::get_possible_paths;
+
+    tracing::debug!(
+        "🔍 find_fits_file called for image_id={}, filename={}, target={}",
+        image.id,
+        filename,
+        target_name
+    );
 
     // Extract date from acquired_date
     let acquired_date = image
         .acquired_date
         .and_then(|d| chrono::DateTime::from_timestamp(d, 0))
-        .ok_or_else(|| AppError::BadRequest("Invalid date".to_string()))?;
+        .ok_or_else(|| {
+            tracing::error!(
+                "❌ Invalid date for image {}: {:?}",
+                image.id,
+                image.acquired_date
+            );
+            AppError::BadRequest("Invalid date".to_string())
+        })?;
 
     let date_str = acquired_date.format("%Y-%m-%d").to_string();
+    tracing::trace!("📅 Date string for image {}: {}", image.id, date_str);
 
     // Try to find the file in different possible locations
     let possible_paths = get_possible_paths(&state.image_dir, &date_str, target_name, filename);
 
-    for path in &possible_paths {
+    tracing::debug!(
+        "🔎 Checking {} possible paths for image {} in base_dir: {}",
+        possible_paths.len(),
+        image.id,
+        state.image_dir
+    );
+
+    for (idx, path) in possible_paths.iter().enumerate() {
+        tracing::trace!("  📁 Path {}: {:?}", idx + 1, path);
         if path.exists() {
+            tracing::info!("✅ Found file at path {}: {:?}", idx + 1, path);
             return Ok(path.clone());
         }
     }
 
-    // Try recursive search as fallback
-    match find_file_recursive(&state.image_dir, filename)
-        .map_err(|e| AppError::InternalError(format!("Search failed: {}", e)))?
-    {
-        Some(path) => Ok(path),
-        None => Err(AppError::NotFound),
+    tracing::debug!(
+        "❌ File not found in standard paths for image {}, trying directory tree cache lookup",
+        image.id
+    );
+
+    // Try directory tree cache lookup as fallback
+    let search_start = std::time::Instant::now();
+    let directory_tree = state.get_directory_tree()
+        .map_err(|e| {
+            tracing::error!("Failed to get directory tree cache: {}", e);
+            AppError::InternalError("Directory cache error".to_string())
+        })?;
+
+    if let Some(matching_paths) = directory_tree.find_file(filename) {
+        // Find the first path that actually exists (in case of stale cache)
+        if let Some(found_path) = matching_paths.iter().find(|p| p.exists()) {
+            tracing::info!(
+                "✅ Found file via directory tree cache in {:?}: {:?}",
+                search_start.elapsed(),
+                found_path
+            );
+            if matching_paths.len() > 1 {
+                tracing::debug!(
+                    "🔍 Found {} total matches for {} (using first existing one)",
+                    matching_paths.len(),
+                    filename
+                );
+            }
+            return Ok(found_path.clone());
+        } else {
+            tracing::warn!(
+                "❌ All cached paths are stale for {} (found {} stale paths)",
+                filename,
+                matching_paths.len()
+            );
+        }
     }
+
+    tracing::warn!(
+        "❌ File not found in directory tree cache after {:?} for image {} ({})",
+        search_start.elapsed(),
+        image.id,
+        filename
+    );
+    Err(AppError::NotFound)
 }
 
 #[axum::debug_handler]

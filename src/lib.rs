@@ -3,6 +3,7 @@ pub mod cli;
 pub mod commands;
 pub mod db;
 pub mod debug;
+pub mod directory_tree;
 pub mod grading;
 pub mod hocus_focus_star_detection;
 pub mod image_analysis;

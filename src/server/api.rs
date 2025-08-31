@@ -117,3 +117,13 @@ pub struct FileCheckResponse {
     pub files_missing: usize,
     pub check_time_ms: u128,
 }
+
+#[derive(Debug, Serialize)]
+pub struct DirectoryTreeResponse {
+    pub total_files: usize,
+    pub unique_filenames: usize,
+    pub total_directories: usize,
+    pub age_seconds: u64,
+    pub build_time_ms: u128,
+    pub root_directory: String,
+}

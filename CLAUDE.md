@@ -31,6 +31,10 @@ The application uses a command-pattern architecture with the following main comp
 - **SQL Injection Prevention**: All database queries use parameterized statements
 - **Safe File Operations**: Explicit dry-run mode before any destructive operations
 - **Path Validation**: Careful handling of file paths from database to prevent directory traversal
+- **CORS Configuration**: Permissive CORS for development, configurable for production
+- **Input Validation**: Proper validation of all API inputs
+- **Error Information**: Error messages don't leak sensitive system information
+- **File Access Control**: Access limited to configured image directory
 
 ### Complex Implementation Areas
 
@@ -87,17 +91,6 @@ Testing focused on:
 - Minimal file system checks (only when necessary)
 - Efficient path parsing without regex where possible
 
-#### Web UI Enhancements
-- **Side-by-Side Image Comparison**: Added comparison mode for easier A/B grading
-  - Press 'C' or click "Compare" button to open comparison view
-  - Independent zoom/pan controls for each image with optional sync (Z key)
-  - Separate grading controls: 1/2/3 for left image, 7/8/9 for right image
-  - Star overlay toggle (S key) and ESC to close
-- **File Existence Checking**: Projects and targets show visual indicators for file availability
-  - 1-minute cache for performance with manual refresh option
-  - Disabled entries shown for database items without corresponding files
-- **Server Info Panel**: Shows database path, image directory, cache directory, and version
-- **Periodic Refresh**: Auto-refresh every 30 seconds for new images/database changes
 
 ### Recent Updates (2025-08-27)
 
@@ -173,12 +166,56 @@ The statistical grading module provides advanced outlier detection:
 - Extreme outliers (0 HFR values)
 - Baseline reset after cloud events
 
-### Development Commands
+### Directory Tree Caching (2025-08-31)
 
+#### Overview
+
+Replaced recursive file finding with an in-memory directory tree cache for better performance and reliability:
+
+- **Single Scan**: Build complete directory tree once at startup instead of repeated recursive searches
+- **No Recursion Limits**: Removed MAX_DEPTH and MAX_ENTRIES constraints 
+- **Fast Lookups**: O(1) filename lookups via HashMap instead of O(n) directory traversal
+- **Smart Skipping**: Skip unwanted directories (DARK, FLAT, BIAS, .git, node_modules, target, .cache)
+- **Multiple Matches**: Handle duplicate filenames across different paths
+- **Stale Detection**: Verify cached paths still exist before returning them
+
+#### Implementation Details
+
+**DirectoryTree Module** (`src/directory_tree.rs`):
+- `DirectoryTree::build(root)` - Scan entire directory tree once
+- `find_file(filename)` - Get all paths for a filename
+- `get_fits_files()` - Get all FITS files in the tree
+- `find_files_matching(predicate)` - Pattern-based file finding
+- Comprehensive statistics and age tracking
+
+**Updated Components**:
+- `filter-rejected` - Uses cached tree instead of `find_file_recursive()`
+- `read-fits` - Directory scanning via cache
+- `analyze-fits` - FITS discovery via cache  
+- **Server handlers** - Updated to use DirectoryTree cache with automatic rebuild
+- **AppState** - Added persistent DirectoryTree cache with 5-minute TTL
+- **API endpoints** - Added `/api/refresh-directory-cache` for manual refresh
+
+**Performance Improvements**:
+- Eliminated recursion depth limits (was MAX_DEPTH=5)
+- Eliminated entry count limits (was MAX_ENTRIES=10000)
+- Single upfront cost instead of repeated expensive searches
+- Better handling of large directory structures
+- **Server Benefits**:
+  - 5-minute cache TTL reduces filesystem operations
+  - Automatic background cache building on server startup
+  - O(1) file lookups for image preview/access
+  - Cache rebuilds only when needed or manually triggered
+
+### Development Workflow
+
+#### Essential Commands
 ```bash
-# macOS: Set up libclang for OpenCV (required before building)
-export DYLD_FALLBACK_LIBRARY_PATH="$(xcode-select --print-path)/Toolchains/XcodeDefault.xctoolchain/usr/lib/"
-# Or add to ~/.zshrc for permanent setup
+# Format, lint, and test (run before committing)
+cargo fmt && cargo clippy && cargo test
+
+# Test with OpenCV feature
+cargo check --features opencv
 
 # Run with verbose logging
 RUST_LOG=debug cargo run -- filter-rejected db.sqlite files --dry-run
@@ -186,15 +223,15 @@ RUST_LOG=debug cargo run -- filter-rejected db.sqlite files --dry-run
 # Test statistical grading
 cargo run -- filter-rejected schedulerdb.sqlite files --dry-run \
   --enable-statistical --stat-hfr --stat-stars --stat-clouds
+```
 
-# Run tests
-cargo test
+#### OpenCV Setup (macOS)
+```bash
+# Install dependencies
+brew install opencv
 
-# Check for common issues
-cargo clippy
-
-# Format code
-cargo fmt
+# Required for compilation (add to ~/.zshrc for permanent setup)
+export DYLD_FALLBACK_LIBRARY_PATH="$(xcode-select --print-path)/Toolchains/XcodeDefault.xctoolchain/usr/lib/"
 ```
 
 ### Server Logging (2025-08-30)
@@ -616,36 +653,7 @@ Added optional OpenCV support to enhance star detection capabilities with profes
 
 ### Building with OpenCV
 
-#### Prerequisites
-
-Follow the [opencv-rust installation guide](https://github.com/twistedfall/opencv-rust/blob/master/INSTALL.md):
-
-**Linux/macOS**:
-```bash
-# Ubuntu/Debian
-sudo apt-get install libopencv-dev clang
-
-# macOS
-brew install opencv
-
-# IMPORTANT: macOS libclang setup (required)
-export DYLD_FALLBACK_LIBRARY_PATH="$(xcode-select --print-path)/Toolchains/XcodeDefault.xctoolchain/usr/lib/"
-# Add to ~/.zshrc or ~/.bash_profile for permanent setup
-
-# Set environment variables if needed
-export OPENCV_LINK_LIBS=opencv_world
-export OPENCV_LINK_PATHS=/usr/local/lib
-```
-
-**Windows**:
-Use vcpkg for easiest setup:
-```powershell
-vcpkg install opencv4[contrib,nonfree]:x64-windows
-set VCPKG_ROOT=C:\vcpkg
-set OPENCV_LINK_LIBS=opencv_world
-```
-
-#### Building
+#### Building Options
 
 ```bash
 # Build with OpenCV support (default)
@@ -653,12 +661,6 @@ cargo build
 
 # Build without OpenCV (pure Rust fallbacks)
 cargo build --no-default-features
-
-# Run tests with OpenCV (default)
-cargo test
-
-# Run tests without OpenCV
-cargo test --no-default-features
 ```
 
 ### Benefits of OpenCV Integration
@@ -1022,43 +1024,28 @@ cd static && npm run dev
 cargo run -- server db.sqlite images/ --static-dir ./static/dist
 ```
 
-### Security Considerations
 
-1. **SQL Injection Prevention**: All database queries use parameterized statements
-2. **Path Traversal Protection**: Careful validation of file paths from database
-3. **CORS Configuration**: Permissive CORS for development, configurable for production
-4. **Input Validation**: Proper validation of all API inputs
-5. **Error Information**: Error messages don't leak sensitive system information
-6. **File Access Control**: Access limited to configured image directory
+### Advanced Web UI Features (2025-08-30)
 
-### Web UI Enhancements (2025-08-30)
+#### Side-by-Side Image Comparison
+- Press 'C' or click "Compare" button to open comparison view
+- Independent zoom/pan controls for each image with optional sync (Z key)
+- Separate grading controls: 1/2/3 for left image, 7/8/9 for right image
+- Star overlay toggle (S key) and ESC to close
+- Blue border when zoomed for visual feedback
+- Uses original resolution images for maximum detail
 
-#### Side-by-Side Comparison View
-Added a comprehensive image comparison mode that allows users to compare two images side-by-side:
+#### File Existence Checking
+- Projects and targets show visual indicators for file availability
+- 1-minute cache for performance with manual refresh option
+- Disabled entries for database items without corresponding files
 
-**Features**:
-- Triggered by 'C' key or Compare button in the grouped image grid
-- Independent zoom/pan controls for each image
-- Sync zoom option to link zoom/pan between images
-- Star overlay toggle (S key)
-- Separate grading controls for each image (1-3 for left, 7-9 for right)
-- Visual status indicators and metadata display
-- Blue border appears when images are zoomed (>= 95% scale)
-- Uses original size images for best quality
-- Keyboard navigation between comparison pairs
+#### Server Info Panel
+- Shows database path, image directory, cache directory, and version
+- Periodic refresh every 30 seconds for new images/database changes
 
-**Implementation Details**:
-- `ImageComparisonView.tsx` - Main comparison component
-- Enhanced `useImageZoom` hook with sync capabilities and initialization tracking
-- Added "original" size option to preview API (no resizing)
-- Fixed zoom flashing issue with proper initialization state management
-- Sync zoom properly handles both zoom and pan operations
-- Visual feedback with blue border for zoomed images
-
-#### Smart Dynamic Image Loading (2025-08-30)
-Implemented an intelligent image loading system that provides seamless transitions between different image resolutions:
-
-**Key Concepts**:
+#### Smart Dynamic Image Loading
+Key concepts for intelligent image resolution switching:
 1. **Visual Scale vs Actual Scale**: 
    - Visual scale represents the zoom level as seen by the user (100% = original resolution)
    - Actual scale is the technical scale factor applied to the current image
@@ -1088,65 +1075,6 @@ Implemented an intelligent image loading system that provides seamless transitio
    - Adjust zoom proportionally when switching images
    - Maintain visual continuity (no jumping or resetting)
    - 300ms transition delay for smooth rendering
-
-**Technical Implementation**:
-```typescript
-// Try to get original dimensions from metadata first
-const width = image?.metadata?.ImageWidth || 
-              image?.metadata?.NAXIS1 || 
-              image?.metadata?.ImageSize?.[0];
-if (width && height) {
-  zoom.setImageDimensions(width, height, true);
-}
-
-// Update dimensions when images load (confirming or correcting metadata)
-onLoad={(e) => {
-  const img = e.currentTarget;
-  zoom.setImageDimensions(img.naturalWidth, img.naturalHeight, useOriginalImage);
-}
-
-// Visual scale calculation
-// For a 2000px image from a 6000px original at fit-to-screen:
-// - Actual scale might be 0.3 (to fit the 2000px image)
-// - Size ratio = 2000/6000 = 0.333
-// - Visual scale = 0.3 × 0.333 = 0.1 (10%)
-// This correctly shows we're viewing at 10% of original size
-
-const ratio = currentImageWidth / originalImageWidth;
-const visualScale = actualScale * ratio;
-
-// When switching images, maintain the same DISPLAYED pixel size
-const adjustZoomForNewImage = (oldWidth, oldHeight, newWidth, newHeight) => {
-  // Key insight: displayed size = image width × scale
-  const currentDisplayedWidth = oldWidth * prevState.scale;
-  
-  // Calculate scale needed to maintain same displayed size
-  const newScale = currentDisplayedWidth / newWidth;
-  
-  // Visual scale remains unchanged
-  const targetVisualScale = prevState.visualScale || prevState.scale;
-  
-  // Example: switching from 2000px at scale 3.0 to 6000px image
-  // - Current displayed: 2000 × 3.0 = 6000px
-  // - New scale needed: 6000 ÷ 6000 = 1.0
-  // - Result: no visual jump, same 6000px displayed
-  
-  return { scale: newScale, visualScale: targetVisualScale };
-}
-```
-
-// One-way state machine transitions in components
-if (state === 'large' && visualScale > 1.0 && originalLoaded) {
-  imageStateRef.current = 'switching-to-original';
-  setUseOriginalImage(true);
-  setTimeout(() => {
-    if (imageStateRef.current === 'switching-to-original') {
-      imageStateRef.current = 'original';
-    }
-  }, 300);
-}
-// Never switch back from original to large
-```
 
 **Benefits**:
 - Fast initial load with 2000px images

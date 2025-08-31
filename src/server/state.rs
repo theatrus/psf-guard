@@ -1,3 +1,4 @@
+use crate::directory_tree::DirectoryTree;
 use anyhow::Result;
 use rusqlite::{Connection, OpenFlags};
 use std::collections::HashMap;
@@ -15,6 +16,8 @@ pub struct AppState {
     db_connection: Arc<Mutex<Connection>>,
     // Cache for file existence checks
     pub file_check_cache: Arc<RwLock<FileCheckCache>>,
+    // Directory tree cache for fast file lookups
+    pub directory_tree_cache: Arc<RwLock<Option<DirectoryTree>>>,
 }
 
 #[derive(Clone)]
@@ -80,6 +83,7 @@ impl AppState {
             cache_dir_path: PathBuf::from(cache_dir),
             db_connection: Arc::new(Mutex::new(conn)),
             file_check_cache: Arc::new(RwLock::new(FileCheckCache::new())),
+            directory_tree_cache: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -93,5 +97,57 @@ impl AppState {
 
     pub fn get_image_path(&self, relative_path: &str) -> PathBuf {
         self.image_dir_path.join(relative_path)
+    }
+
+    /// Get or build the directory tree cache
+    pub fn get_directory_tree(&self) -> Result<Arc<DirectoryTree>> {
+        // First, try to read the existing cache
+        {
+            let cache = self.directory_tree_cache.read().unwrap();
+            if let Some(ref tree) = *cache {
+                // Check if cache is still valid (not too old)
+                if !tree.is_older_than(Duration::from_secs(300)) { // 5 minute cache
+                    return Ok(Arc::new(tree.clone()));
+                }
+            }
+        }
+
+        // Need to rebuild cache
+        self.rebuild_directory_tree()
+    }
+
+    /// Force rebuild of the directory tree cache
+    pub fn rebuild_directory_tree(&self) -> Result<Arc<DirectoryTree>> {
+        tracing::info!("🌳 Building directory tree cache for: {}", self.image_dir);
+        let tree = DirectoryTree::build(&self.image_dir_path)?;
+        let stats = tree.stats();
+        
+        tracing::info!(
+            "✅ Directory tree built: {} files, {} directories (age: {})",
+            stats.total_files,
+            stats.total_directories,
+            stats.format_age()
+        );
+
+        // Store in cache
+        {
+            let mut cache = self.directory_tree_cache.write().unwrap();
+            *cache = Some(tree.clone());
+        }
+
+        Ok(Arc::new(tree))
+    }
+
+    /// Clear the directory tree cache (force rebuild on next access)
+    pub fn clear_directory_tree_cache(&self) {
+        let mut cache = self.directory_tree_cache.write().unwrap();
+        *cache = None;
+        tracing::info!("🗑️  Directory tree cache cleared");
+    }
+
+    /// Get directory tree cache statistics
+    pub fn get_directory_tree_stats(&self) -> Option<crate::directory_tree::DirectoryTreeStats> {
+        let cache = self.directory_tree_cache.read().unwrap();
+        cache.as_ref().map(|tree| tree.stats())
     }
 }

@@ -1,3 +1,4 @@
+use crate::directory_tree::DirectoryTree;
 use crate::hocus_focus_star_detection::{detect_stars_hocus_focus, HocusFocusParams};
 use crate::image_analysis::{FitsImage, ImageStatistics as ComputedStats};
 use crate::mtf_stretch::{stretch_image, StretchParameters};
@@ -375,26 +376,9 @@ fn analyze_fits_directory(
     apply_stretch: bool,
     psf_type: &str,
 ) -> Result<()> {
-    let mut fits_files = Vec::new();
-
-    // Recursively find all FITS files
-    fn find_fits_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.is_dir() {
-                find_fits_files(&path, files)?;
-            } else if let Some(ext) = path.extension() {
-                if ext == "fits" || ext == "fit" || ext == "FIT" || ext == "FITS" {
-                    files.push(path);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    find_fits_files(dir_path, &mut fits_files)?;
+    // Build directory tree cache and get FITS files
+    let directory_tree = DirectoryTree::build(dir_path)?;
+    let fits_files: Vec<PathBuf> = directory_tree.get_fits_files().into_iter().cloned().collect();
 
     if fits_files.is_empty() {
         println!("No FITS files found in directory: {}", dir_path.display());

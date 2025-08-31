@@ -66,8 +66,23 @@ pub async fn run_server(
     let state_clone = Arc::clone(&state);
     tokio::spawn(async move {
         tracing::info!("🔄 Starting background cache refresh...");
+        
+        // Build directory tree cache first (this is fast and needed for file finding)
+        if let Err(e) = state_clone.rebuild_directory_tree() {
+            tracing::warn!("⚠️ Directory tree cache build failed: {:?}", e);
+        } else {
+            if let Some(stats) = state_clone.get_directory_tree_stats() {
+                tracing::info!(
+                    "✅ Directory tree cache built - {} files, {} directories",
+                    stats.total_files,
+                    stats.total_directories
+                );
+            }
+        }
+        
+        // Then refresh project file existence cache
         if let Err(e) = handlers::refresh_project_cache(&state_clone).await {
-            tracing::warn!("⚠️ Background cache refresh failed: {:?}", e);
+            tracing::warn!("⚠️ Project cache refresh failed: {:?}", e);
             tracing::info!("📝 Cache will be refreshed on first request");
         } else {
             let (projects_checked, projects_with_files) = {
@@ -88,6 +103,7 @@ pub async fn run_server(
     let api_routes = Router::new()
         .route("/info", get(handlers::get_server_info))
         .route("/refresh-cache", put(handlers::refresh_file_cache))
+        .route("/refresh-directory-cache", put(handlers::refresh_directory_tree_cache))
         .route("/projects", get(handlers::list_projects))
         .route(
             "/projects/{project_id}/targets",

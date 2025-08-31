@@ -1,4 +1,5 @@
 use crate::db::Database;
+use crate::directory_tree::DirectoryTree;
 use crate::grading;
 use crate::models::{AcquiredImage, GradingStatus};
 use anyhow::Result;
@@ -80,6 +81,18 @@ pub fn filter_rejected_files(
         println!();
     }
 
+    // Build directory tree cache once at the start
+    println!("Building directory tree cache...");
+    let directory_tree = DirectoryTree::build(Path::new(base_dir))?;
+    let tree_stats = directory_tree.stats();
+    println!(
+        "✅ Directory tree cached: {} files, {} directories ({})",
+        tree_stats.total_files,
+        tree_stats.total_directories,
+        tree_stats.format_age()
+    );
+    println!();
+
     let mut moved_count = 0;
     let mut not_found_count = 0;
     let mut error_count = 0;
@@ -112,6 +125,7 @@ pub fn filter_rejected_files(
             dry_run,
             &statistical_rejections,
             verbose,
+            &directory_tree,
         ) {
             Ok(true) => moved_count += 1,
             Ok(false) => not_found_count += 1,
@@ -143,6 +157,7 @@ fn process_file_movement(
     dry_run: bool,
     statistical_rejections: &HashMap<i32, grading::StatisticalRejection>,
     verbose: bool,
+    directory_tree: &DirectoryTree,
 ) -> Result<bool> {
     let metadata = serde_json::from_str::<serde_json::Value>(&image.metadata)?;
 
@@ -187,40 +202,27 @@ fn process_file_movement(
     let source_path = match source_path {
         Some(path) => path,
         None => {
-            // Try recursive search as a fallback
-            let recursive_path = find_file_recursive(base_dir, &file_only)?;
-
-            match recursive_path {
-                Some(path) => {
-                    println!("  Found via recursive search: {}", path.display());
-                    path
-                }
-                None => {
-                    let rejection_reason =
-                        if let Some(stat_rejection) = statistical_rejections.get(&image.id) {
-                            format!("{} - {}", stat_rejection.reason, stat_rejection.details)
-                        } else {
-                            image
-                                .reject_reason
-                                .clone()
-                                .unwrap_or_else(|| "No reason".to_string())
-                        };
-
-                    println!(
-                        "  {:6} NOT FOUND: {} ({})",
-                        image.id, file_only, rejection_reason
-                    );
-
-                    // In verbose mode, show what paths were tried
-                    if verbose {
-                        println!("         Searched paths:");
-                        for path in &possible_paths {
-                            println!("           - {}", path.display());
+            // Try directory tree lookup as a fallback
+            if let Some(matching_paths) = directory_tree.find_file(&file_only) {
+                // Find the first path that actually exists (in case of stale cache)
+                if let Some(found_path) = matching_paths.iter().find(|p| p.exists()) {
+                    if verbose || matching_paths.len() > 1 {
+                        println!("  Found via directory tree cache: {}", found_path.display());
+                        if matching_paths.len() > 1 {
+                            println!("  (Found {} total matches, using first existing one)", matching_paths.len());
                         }
                     }
-
-                    return Ok(false);
+                    found_path.clone()
+                } else {
+                    // All cached paths are stale (files were moved/deleted)
+                    if verbose {
+                        println!("  All cached paths are stale for: {}", file_only);
+                    }
+                    return handle_file_not_found(image, &file_only, statistical_rejections, verbose, &possible_paths);
                 }
+            } else {
+                // File not found in directory tree cache
+                return handle_file_not_found(image, &file_only, statistical_rejections, verbose, &possible_paths);
             }
         }
     };
@@ -364,26 +366,115 @@ pub fn get_possible_paths(
     ]
 }
 
+fn handle_file_not_found(
+    image: &AcquiredImage,
+    file_only: &str,
+    statistical_rejections: &HashMap<i32, grading::StatisticalRejection>,
+    verbose: bool,
+    possible_paths: &[PathBuf],
+) -> Result<bool> {
+    let rejection_reason = if let Some(stat_rejection) = statistical_rejections.get(&image.id) {
+        format!("{} - {}", stat_rejection.reason, stat_rejection.details)
+    } else {
+        image
+            .reject_reason
+            .clone()
+            .unwrap_or_else(|| "No reason".to_string())
+    };
+
+    println!(
+        "  {:6} NOT FOUND: {} ({})",
+        image.id, file_only, rejection_reason
+    );
+
+    // In verbose mode, show what paths were tried
+    if verbose {
+        println!("         Searched paths:");
+        for path in possible_paths {
+            println!("           - {}", path.display());
+        }
+    }
+
+    Ok(false)
+}
+
 pub fn find_file_recursive(base_dir: &str, filename: &str) -> Result<Option<PathBuf>> {
-    fn search_dir(dir: &Path, filename: &str) -> Result<Option<PathBuf>> {
+    const MAX_DEPTH: usize = 5; // Limit recursion depth to prevent hanging on large volumes
+    const MAX_ENTRIES: usize = 10000; // Limit total entries scanned
+
+    let mut entries_scanned = 0;
+
+    fn search_dir(
+        dir: &Path,
+        filename: &str,
+        depth: usize,
+        entries_scanned: &mut usize,
+    ) -> Result<Option<PathBuf>> {
+        // Check depth limit
+        if depth > MAX_DEPTH {
+            tracing::trace!("🛑 Max depth {} reached at {:?}", MAX_DEPTH, dir);
+            return Ok(None);
+        }
+
+        // Check entries limit
+        if *entries_scanned > MAX_ENTRIES {
+            tracing::warn!(
+                "🛑 Max entries {} reached, stopping recursive search",
+                MAX_ENTRIES
+            );
+            return Ok(None);
+        }
+
         // Skip certain directories to avoid infinite loops or unwanted areas
         if let Some(dir_name) = dir.file_name() {
             let name = dir_name.to_string_lossy();
-            if name == "DARK" || name == "FLAT" || name == "BIAS" {
+            if name == "DARK"
+                || name == "FLAT"
+                || name == "BIAS"
+                || name == ".git"
+                || name == "node_modules"
+            {
+                tracing::trace!("⏭️  Skipping directory: {:?}", dir);
                 return Ok(None);
             }
         }
 
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
+        // Log directory being searched at higher depths
+        if depth <= 2 {
+            tracing::trace!("📂 Searching directory (depth {}): {:?}", depth, dir);
+        }
+
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                tracing::trace!("⚠️  Cannot read directory {:?}: {}", dir, e);
+                return Ok(None);
+            }
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(e) => {
+                    tracing::trace!("⚠️  Error reading entry in {:?}: {}", dir, e);
+                    continue;
+                }
+            };
+
+            *entries_scanned += 1;
             let path = entry.path();
 
             if path.is_dir() {
-                if let Some(found) = search_dir(&path, filename)? {
+                if let Some(found) = search_dir(&path, filename, depth + 1, entries_scanned)? {
                     return Ok(Some(found));
                 }
             } else if path.file_name().and_then(|n| n.to_str()) == Some(filename) {
                 // Found the file!
+                tracing::debug!(
+                    "✅ Found file via recursive search at depth {}: {:?}",
+                    depth,
+                    path
+                );
                 return Ok(Some(path));
             }
         }
@@ -391,7 +482,17 @@ pub fn find_file_recursive(base_dir: &str, filename: &str) -> Result<Option<Path
         Ok(None)
     }
 
-    search_dir(Path::new(base_dir), filename)
+    tracing::debug!(
+        "🔍 Starting recursive search for {} in {}",
+        filename,
+        base_dir
+    );
+    let result = search_dir(Path::new(base_dir), filename, 0, &mut entries_scanned);
+    tracing::debug!(
+        "🔍 Recursive search completed, scanned {} entries",
+        entries_scanned
+    );
+    result
 }
 
 fn get_reject_path(source_path: &Path) -> Result<PathBuf> {
