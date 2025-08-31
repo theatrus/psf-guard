@@ -859,7 +859,7 @@ pub async fn get_image_preview(
             StatusCode::OK,
             [
                 (CONTENT_TYPE, "image/png"),
-                (CACHE_CONTROL, "max-age=86400"), // Cache for 1 day
+                (CACHE_CONTROL, "max-age=86400"), // TODO: Use configurable cache expiry
             ],
             buffer,
         ));
@@ -1031,7 +1031,7 @@ pub async fn get_image_preview(
 }
 
 // Helper function to find FITS file
-fn find_fits_file(
+pub fn find_fits_file(
     state: &AppState,
     image: &crate::models::AcquiredImage,
     target_name: &str,
@@ -1392,7 +1392,7 @@ pub async fn get_annotated_image(
             StatusCode::OK,
             [
                 (CONTENT_TYPE, "image/png"),
-                (CACHE_CONTROL, "max-age=86400"), // Cache for 1 day
+                (CACHE_CONTROL, "max-age=86400"), // TODO: Use configurable cache expiry
             ],
             buffer,
         ));
@@ -1624,7 +1624,7 @@ pub async fn get_psf_visualization(
             StatusCode::OK,
             [
                 (CONTENT_TYPE, "image/png"),
-                (CACHE_CONTROL, "max-age=86400"), // Cache for 1 day
+                (CACHE_CONTROL, "max-age=86400"), // TODO: Use configurable cache expiry
             ],
             buffer,
         ));

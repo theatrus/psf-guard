@@ -221,12 +221,29 @@ fn main() -> Result<()> {
             cache_dir,
             port,
             host,
+            pregenerate_screen,
+            pregenerate_large,
+            pregenerate_original,
+            pregenerate_annotated,
+            pregenerate_all,
+            cache_expiry,
         } => {
+            // Parse pregeneration configuration
+            use psf_guard::cli::PregenerationConfig;
+            let pregeneration_config = PregenerationConfig::from_server_args(
+                pregenerate_screen,
+                pregenerate_large,
+                pregenerate_original,
+                pregenerate_annotated,
+                pregenerate_all,
+                &cache_expiry,
+            )?;
+
             // Use tokio runtime for async server
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(async {
                 psf_guard::server::run_server(
-                    database, image_dir, static_dir, cache_dir, host, port,
+                    database, image_dir, static_dir, cache_dir, host, port, pregeneration_config,
                 )
                 .await
             })?;

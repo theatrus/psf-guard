@@ -1,4 +1,5 @@
 use crate::directory_tree::DirectoryTree;
+use crate::cli::PregenerationConfig;
 use anyhow::Result;
 use rusqlite::{Connection, OpenFlags};
 use std::collections::HashMap;
@@ -21,6 +22,8 @@ pub struct AppState {
     pub directory_tree_cache: Arc<RwLock<Option<DirectoryTree>>>,
     // Background refresh coordination
     pub refresh_mutex: Arc<TokioMutex<()>>,
+    // Pre-generation configuration
+    pub pregeneration_config: PregenerationConfig,
 }
 
 #[derive(Clone)]
@@ -59,7 +62,7 @@ impl FileCheckCache {
 }
 
 impl AppState {
-    pub fn new(db_path: String, image_dir: String, cache_dir: String) -> Result<Self> {
+    pub fn new(db_path: String, image_dir: String, cache_dir: String, pregeneration_config: PregenerationConfig) -> Result<Self> {
         use std::path::Path;
 
         // Check if database exists
@@ -88,6 +91,7 @@ impl AppState {
             file_check_cache: Arc::new(RwLock::new(FileCheckCache::new())),
             directory_tree_cache: Arc::new(RwLock::new(None)),
             refresh_mutex: Arc::new(TokioMutex::new(())),
+            pregeneration_config,
         })
     }
 
@@ -224,6 +228,7 @@ impl Clone for AppState {
             file_check_cache: self.file_check_cache.clone(),
             directory_tree_cache: self.directory_tree_cache.clone(),
             refresh_mutex: self.refresh_mutex.clone(),
+            pregeneration_config: self.pregeneration_config.clone(),
         }
     }
 }
