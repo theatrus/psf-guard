@@ -106,7 +106,6 @@ export default function MainView() {
 
   const handleSelectRightImage = () => {
     // TODO: Implement image selection modal/dropdown
-    console.log('Image selection not yet implemented');
   };
 
 

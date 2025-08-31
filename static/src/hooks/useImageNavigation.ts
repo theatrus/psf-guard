@@ -172,7 +172,6 @@ export function useImageNavigation(currentImageId?: number) {
   }, [canGoPrevious, currentIndex, flatImages, navigateToImageWithContext]);
 
   const goToGrid = useCallback(() => {
-    console.log('ImageNavigation: Navigating back to grid, current scroll:', window.scrollY);
     const params = searchParams.toString();
     navigate(`/grid?${params}`, { replace: true });
   }, [navigate, searchParams]);

@@ -114,10 +114,8 @@ export default function ImageComparisonView({
   // Capture zoom intent before image change
   useEffect(() => {
     const visualScale = rightZoom.getVisualScale();
-    console.log('[Zoom Capture] Right zoom state changed, visual scale:', visualScale);
     if (visualScale > 1.2 || visualScale < 0.8) {
       targetRightZoomRef.current = visualScale;
-      console.log('[Zoom Capture] Stored target zoom for right:', visualScale);
     }
   }, [rightZoom.zoomState.scale, rightZoom]);
   
@@ -140,30 +138,18 @@ export default function ImageComparisonView({
   
   useEffect(() => {
     if (rightImageLoaded) {
-      console.log('[Auto-fit Effect] Right image loaded, targetZoom:', targetRightZoomRef.current);
       if (targetRightZoomRef.current === null) {
-        console.log('[Auto-fit Effect] No target zoom, calling zoomToFit');
         rightZoom.zoomToFit();
-      } else {
-        console.log('[Auto-fit Effect] Preserving zoom, not calling zoomToFit');
       }
     }
   }, [rightImageLoaded, rightZoom]);
   
   // Force switch to original when image loads with high zoom
   useEffect(() => {
-    console.log('[Force Switch Effect] Checking right:', {
-      rightImageLoaded,
-      rightOriginalLoaded,
-      useRightOriginal,
-      targetZoom: targetRightZoomRef.current,
-      useLeftOriginal
-    });
     if (rightImageLoaded && rightOriginalLoaded && !useRightOriginal) {
       // Use stored target zoom instead of current zoom which might be reset
       // OR if left is using original, right should match
       if ((targetRightZoomRef.current && targetRightZoomRef.current > 1.0) || useLeftOriginal) {
-        console.log('[Force Switch Effect] Switching right to original! (left using original:', useLeftOriginal, ')');
         // We have high zoom and original is ready but not being used - switch now
         setUseRightOriginal(true);
         rightImageStateRef.current = 'original';
@@ -275,15 +261,6 @@ export default function ImageComparisonView({
     const visualScale = rightZoom.getVisualScale();
     const state = rightImageStateRef.current;
     
-    console.log('[Preload Effect] Right image check:', {
-      imageId: rightImageId,
-      visualScale,
-      state,
-      targetZoom: targetRightZoomRef.current,
-      rightOriginalLoaded,
-      hasOriginalRef: !!rightOriginalRef.current
-    });
-    
     // Preload when visual zoom > 80%, or immediately if zoom > 100% (preserved from previous image)
     // Also check stored target zoom in case current zoom is reset
     // Most importantly: if left is using original, right should too
@@ -292,10 +269,7 @@ export default function ImageComparisonView({
                          (targetRightZoomRef.current && targetRightZoomRef.current > 0.8 && state === 'large') ||
                          (useLeftOriginal && state === 'large');
     
-    console.log('[Preload Effect] Should preload?', shouldPreload, 'useLeftOriginal:', useLeftOriginal);
-    
     if (shouldPreload && !rightOriginalLoaded && !rightOriginalRef.current) {
-      console.log('[Preload Effect] Starting original preload for right image');
       const originalUrl = showStars 
         ? apiClient.getAnnotatedUrl(rightImageId, 'original')
         : apiClient.getPreviewUrl(rightImageId, { size: 'original' });
@@ -341,7 +315,6 @@ export default function ImageComparisonView({
   // Effect to make right image follow left image's resolution choice
   useEffect(() => {
     if (useLeftOriginal && !useRightOriginal && rightOriginalLoaded && rightImageStateRef.current !== 'switching-to-original') {
-      console.log('[Follow Left Effect] Left is using original, switching right to match');
       rightImageStateRef.current = 'switching-to-original';
       setUseRightOriginal(true);
       setTimeout(() => {
@@ -362,8 +335,6 @@ export default function ImageComparisonView({
   }, [leftImageId, showStars]);
   
   useEffect(() => {
-    console.log('[Reset Effect] Right image changing to:', rightImageId);
-    console.log('[Reset Effect] Current targetRightZoomRef:', targetRightZoomRef.current);
     setRightOriginalLoaded(false);
     rightOriginalRef.current = null;
     setUseRightOriginal(false);
@@ -696,15 +667,6 @@ export default function ImageComparisonView({
                       // Match the left image's size for consistency
                       const shouldUseOriginal = useRightOriginal || useLeftOriginal;
                       const imageSize = shouldUseOriginal ? 'original' : 'large';
-                      console.log('[Image Render] Right image decision:', {
-                        imageId: rightImageId,
-                        useRightOriginal,
-                        useLeftOriginal,
-                        rightOriginalLoaded,
-                        targetZoom: targetRightZoomRef.current,
-                        shouldUseOriginal,
-                        imageSize
-                      });
                       
                       return (
                         <img

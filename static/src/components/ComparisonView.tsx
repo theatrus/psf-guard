@@ -68,7 +68,6 @@ export default function ComparisonView() {
 
   const handleSelectRightImage = () => {
     // TODO: Implement image selection modal/dropdown
-    console.log('Image selection not yet implemented');
   };
 
   if (!leftImageId || !rightImageId) {
