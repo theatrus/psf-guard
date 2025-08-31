@@ -107,18 +107,72 @@ export default function ImageComparisonView({
   }, [rightImageId, showStars, rightZoom]);
 
 
-  // Fit images when they load
+  // Fit images when they load (only if not already zoomed)
   useEffect(() => {
-    if (leftImageLoaded) {
-      leftZoom.zoomToFit();
+    if (leftImageLoaded && leftImageId) {
+      // Only auto-fit if user is at default zoom level (close to 1.0)
+      const visualScale = leftZoom.getVisualScale();
+      if (Math.abs(visualScale - 1.0) < 0.1) {
+        leftZoom.zoomToFit();
+      } else if (visualScale > 1.0) {
+        // High zoom - we need the original image
+        if (!useLeftOriginal && !leftOriginalRef.current) {
+          // Start loading original immediately
+          const originalUrl = showStars 
+            ? apiClient.getAnnotatedUrl(leftImageId, 'original')
+            : apiClient.getPreviewUrl(leftImageId, { size: 'original' });
+          
+          const img = new Image();
+          img.src = originalUrl;
+          leftOriginalRef.current = img;
+          
+          img.onload = () => {
+            // Force a re-render with the original image
+            setLeftOriginalLoaded(true);
+            setUseLeftOriginal(true);
+            leftImageStateRef.current = 'original';
+          };
+        } else if (leftOriginalLoaded && !useLeftOriginal) {
+          // Original is already loaded but not being used - switch now
+          setUseLeftOriginal(true);
+          leftImageStateRef.current = 'original';
+        }
+      }
     }
-  }, [leftImageLoaded, leftZoom]);
+  }, [leftImageLoaded, leftZoom, leftOriginalLoaded, showStars, leftImageId, useLeftOriginal]);
   
   useEffect(() => {
-    if (rightImageLoaded) {
-      rightZoom.zoomToFit();
+    if (rightImageLoaded && rightImageId) {
+      // Only auto-fit if user is at default zoom level (close to 1.0)
+      const visualScale = rightZoom.getVisualScale();
+      if (Math.abs(visualScale - 1.0) < 0.1) {
+        rightZoom.zoomToFit();
+      } else if (visualScale > 1.0) {
+        // High zoom - we need the original image
+        if (!useRightOriginal && !rightOriginalRef.current) {
+          // Start loading original immediately
+          const originalUrl = showStars 
+            ? apiClient.getAnnotatedUrl(rightImageId, 'original')
+            : apiClient.getPreviewUrl(rightImageId, { size: 'original' });
+          
+          const img = new Image();
+          img.src = originalUrl;
+          rightOriginalRef.current = img;
+          
+          img.onload = () => {
+            // Force a re-render with the original image
+            setRightOriginalLoaded(true);
+            setUseRightOriginal(true);
+            rightImageStateRef.current = 'original';
+          };
+        } else if (rightOriginalLoaded && !useRightOriginal) {
+          // Original is already loaded but not being used - switch now
+          setUseRightOriginal(true);
+          rightImageStateRef.current = 'original';
+        }
+      }
     }
-  }, [rightImageLoaded, rightZoom]);
+  }, [rightImageLoaded, rightZoom, rightOriginalLoaded, showStars, rightImageId, useRightOriginal]);
   
   // Load original dimensions from metadata if available
   useEffect(() => {
@@ -142,8 +196,10 @@ export default function ImageComparisonView({
     const visualScale = leftZoom.getVisualScale();
     const state = leftImageStateRef.current;
     
-    // Preload when visual zoom > 80%
-    if (visualScale > 0.8 && !leftOriginalLoaded && state === 'large') {
+    // Preload when visual zoom > 80%, or immediately if zoom > 100% (preserved from previous image)
+    const shouldPreload = (visualScale > 0.8 && state === 'large') || (visualScale > 1.0 && state === 'large');
+    
+    if (shouldPreload && !leftOriginalLoaded && !leftOriginalRef.current) {
       const originalUrl = showStars 
         ? apiClient.getAnnotatedUrl(leftImageId, 'original')
         : apiClient.getPreviewUrl(leftImageId, { size: 'original' });
@@ -154,6 +210,20 @@ export default function ImageComparisonView({
       
       img.onload = () => {
         setLeftOriginalLoaded(true);
+        
+        // If we were waiting for original due to high zoom, switch immediately
+        const currentVisualScale = leftZoom.getVisualScale();
+        const currentState = leftImageStateRef.current;
+        if (currentState === 'large' && currentVisualScale > 1.0) {
+          leftImageStateRef.current = 'switching-to-original';
+          setUseLeftOriginal(true);
+          // Delay state update to allow render
+          setTimeout(() => {
+            if (leftImageStateRef.current === 'switching-to-original') {
+              leftImageStateRef.current = 'original';
+            }
+          }, 300);
+        }
       };
     }
     
@@ -194,8 +264,10 @@ export default function ImageComparisonView({
     const visualScale = rightZoom.getVisualScale();
     const state = rightImageStateRef.current;
     
-    // Preload when visual zoom > 80%
-    if (visualScale > 0.8 && !rightOriginalLoaded && state === 'large') {
+    // Preload when visual zoom > 80%, or immediately if zoom > 100% (preserved from previous image)
+    const shouldPreload = (visualScale > 0.8 && state === 'large') || (visualScale > 1.0 && state === 'large');
+    
+    if (shouldPreload && !rightOriginalLoaded && !rightOriginalRef.current) {
       const originalUrl = showStars 
         ? apiClient.getAnnotatedUrl(rightImageId, 'original')
         : apiClient.getPreviewUrl(rightImageId, { size: 'original' });
@@ -206,6 +278,20 @@ export default function ImageComparisonView({
       
       img.onload = () => {
         setRightOriginalLoaded(true);
+        
+        // If we were waiting for original due to high zoom, switch immediately
+        const currentVisualScale = rightZoom.getVisualScale();
+        const currentState = rightImageStateRef.current;
+        if (currentState === 'large' && currentVisualScale > 1.0) {
+          rightImageStateRef.current = 'switching-to-original';
+          setUseRightOriginal(true);
+          // Delay state update to allow render
+          setTimeout(() => {
+            if (rightImageStateRef.current === 'switching-to-original') {
+              rightImageStateRef.current = 'original';
+            }
+          }, 300);
+        }
       };
     }
     
@@ -433,9 +519,17 @@ export default function ImageComparisonView({
                     // Check if dimensions actually changed
                     const dimensionsChanged = oldWidth > 0 && (Math.abs(newWidth - oldWidth) > 10 || Math.abs(newHeight - oldHeight) > 10);
                     
-                    if (dimensionsChanged && leftImageStateRef.current === 'switching-to-original') {
-                      // Adjust zoom to maintain visual continuity
-                      leftZoom.adjustZoomForNewImage(oldWidth, oldHeight, newWidth, newHeight);
+                    if (dimensionsChanged) {
+                      const currentVisualScale = leftZoom.getVisualScale();
+                      
+                      // Adjust zoom in two cases:
+                      // 1. Switching to original image (preserve visual scale)
+                      // 2. Loading new regular image with preserved zoom from previous image
+                      if (leftImageStateRef.current === 'switching-to-original' || 
+                          (leftImageStateRef.current === 'large' && currentVisualScale > 1.2)) {
+                        // Adjust zoom to maintain visual continuity
+                        leftZoom.adjustZoomForNewImage(oldWidth, oldHeight, newWidth, newHeight);
+                      }
                     }
                     
                     // Update stored dimensions
@@ -577,9 +671,17 @@ export default function ImageComparisonView({
                         // Check if dimensions actually changed
                         const dimensionsChanged = oldWidth > 0 && (Math.abs(newWidth - oldWidth) > 10 || Math.abs(newHeight - oldHeight) > 10);
                         
-                        if (dimensionsChanged && rightImageStateRef.current === 'switching-to-original') {
-                          // Adjust zoom to maintain visual continuity
-                          rightZoom.adjustZoomForNewImage(oldWidth, oldHeight, newWidth, newHeight);
+                        if (dimensionsChanged) {
+                          const currentVisualScale = rightZoom.getVisualScale();
+                          
+                          // Adjust zoom in two cases:
+                          // 1. Switching to original image (preserve visual scale)
+                          // 2. Loading new regular image with preserved zoom from previous image
+                          if (rightImageStateRef.current === 'switching-to-original' || 
+                              (rightImageStateRef.current === 'large' && currentVisualScale > 1.2)) {
+                            // Adjust zoom to maintain visual continuity
+                            rightZoom.adjustZoomForNewImage(oldWidth, oldHeight, newWidth, newHeight);
+                          }
                         }
                         
                         // Update stored dimensions
