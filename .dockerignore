@@ -1,0 +1,48 @@
+# Git files
+.git
+.gitignore
+
+# Build artifacts
+target/
+Dockerfile
+.dockerignore
+
+# Development files
+*.md
+!README.md
+.env
+.env.*
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test data
+test_data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Images (will be mounted at runtime)
+images/
+*.fits
+*.fit
+*.fts
+
+# Node modules (if any)
+node_modules/
+static/node_modules/
+static/dist/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
