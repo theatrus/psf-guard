@@ -73,8 +73,8 @@ export default function FilterControls({ onFilterChange, availableFilters }: Fil
   };
 
   return (
-    <div className="filter-controls">
-      <div className="filter-row">
+    <div className="filter-controls compact">
+      <div className="filter-row compact">
         <div className="filter-input-group">
           <label>Status:</label>
           <select 
@@ -94,28 +94,29 @@ export default function FilterControls({ onFilterChange, availableFilters }: Fil
             value={filters.filterName} 
             onChange={(e) => handleFilterNameChange(e.target.value)}
           >
-            <option value="all">All Filters</option>
+            <option value="all">All</option>
             {availableFilters.map(filter => (
               <option key={filter} value={filter}>{filter}</option>
             ))}
           </select>
         </div>
 
-        <div className="filter-input-group">
-          <label>Start Date:</label>
+        <div className="filter-input-group date-range">
+          <label>Date Range:</label>
           <input 
             type="date" 
+            className="compact-date"
             value={filters.dateRange.start ? filters.dateRange.start.toISOString().split('T')[0] : ''}
             onChange={(e) => handleDateChange('start', e.target.value)}
+            placeholder="Start"
           />
-        </div>
-
-        <div className="filter-input-group">
-          <label>End Date:</label>
+          <span className="date-separator">to</span>
           <input 
             type="date" 
+            className="compact-date"
             value={filters.dateRange.end ? filters.dateRange.end.toISOString().split('T')[0] : ''}
             onChange={(e) => handleDateChange('end', e.target.value)}
+            placeholder="End"
           />
         </div>
 
@@ -129,8 +130,8 @@ export default function FilterControls({ onFilterChange, availableFilters }: Fil
           />
         </div>
 
-        <button className="reset-button" onClick={resetFilters}>
-          Reset Filters
+        <button className="reset-button compact" onClick={resetFilters}>
+          Reset
         </button>
       </div>
     </div>

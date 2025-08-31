@@ -219,7 +219,7 @@
 .app-main {
   flex: 1;
   overflow-y: auto;
-  padding: 2rem;
+  padding: 0 2rem 2rem 2rem; /* Remove top padding, keep sides and bottom */
 }
 
 .empty-state {
@@ -1468,42 +1468,154 @@
 /* Grouped Image Grid */
 .grouped-image-container {
   width: 100%;
+  margin: 0;
+  padding: 0;
 }
 
 .image-controls {
   background: #252525;
-  padding: 1rem 1.5rem;
-  margin-bottom: 1rem;
-  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin: 0;
+  border-radius: 0;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 0.5rem;
 }
 
-/* Filter Controls */
-.filter-controls {
-  width: 100%;
+.image-controls.sticky {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  border-radius: 0;
+  margin: 0;
+  border-bottom: 1px solid #333;
 }
 
-.filter-row {
+/* Combined Controls Layout */
+.controls-row-combined {
   display: flex;
-  gap: 1rem;
   align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
   flex-wrap: wrap;
-  min-height: 40px;
 }
 
-.filter-input-group {
+.controls-section {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.toolbar-section {
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
 
+.stats-section {
+  color: #999;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Compact toolbar styles */
+.toolbar-button.compact {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.compare-button.compact {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+/* Responsive adjustments for compact controls */
+@media (max-width: 1200px) {
+  .controls-row-combined {
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+  
+  .stats-section {
+    flex-basis: 100%;
+    margin-top: 0.5rem;
+  }
+}
+
+@media (max-width: 768px) {
+  .controls-row-combined {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+  
+  .controls-section {
+    justify-content: space-between;
+  }
+  
+  .toolbar-section {
+    justify-content: center;
+  }
+  
+  .size-control.compact input[type="range"] {
+    width: 150px;
+  }
+  
+  .stats-section {
+    text-align: center;
+    font-size: 0.8rem;
+  }
+}
+
+/* Filter Controls */
+.filter-controls {
+  flex: 1;
+  max-width: 100%;
+}
+
+.filter-controls.compact {
+  flex: 1;
+}
+
+.filter-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+  min-height: 36px;
+}
+
+.filter-row.compact {
+  gap: 0.5rem;
+  min-height: 32px;
+}
+
+.filter-input-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.filter-input-group.date-range {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.date-separator {
+  color: #999;
+  font-size: 0.8rem;
+  margin: 0 0.2rem;
+}
+
 .filter-input-group label {
   color: #999;
   font-weight: 500;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   white-space: nowrap;
+  min-width: fit-content;
 }
 
 .filter-input-group select,
@@ -1512,10 +1624,17 @@
   background: #333;
   color: #e0e0e0;
   border: 1px solid #444;
-  padding: 0.4rem 0.8rem;
-  border-radius: 4px;
-  font-size: 0.95rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 3px;
+  font-size: 0.85rem;
   transition: all 0.2s;
+}
+
+.compact-date {
+  width: 120px !important;
+  min-width: 120px !important;
+  padding: 0.25rem 0.4rem !important;
+  font-size: 0.8rem !important;
 }
 
 .filter-input-group select:hover,
@@ -1553,6 +1672,11 @@
   cursor: pointer;
   transition: all 0.2s;
   white-space: nowrap;
+}
+
+.reset-button.compact {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
 }
 
 .reset-button:hover {
@@ -1682,9 +1806,14 @@
   gap: 1rem;
 }
 
+.size-control.compact {
+  gap: 0.5rem;
+}
+
 .size-control label {
   color: #999;
   font-weight: 500;
+  font-size: 0.85rem;
 }
 
 .size-control input[type="range"] {
@@ -1696,6 +1825,11 @@
   border-radius: 3px;
   outline: none;
   cursor: pointer;
+}
+
+.size-control.compact input[type="range"] {
+  width: 200px;
+  height: 4px;
 }
 
 .size-control input[type="range"]::-webkit-slider-thumb {
@@ -1721,12 +1855,31 @@
   color: #61dafb;
   font-weight: 500;
   min-width: 50px;
+  font-size: 0.8rem;
+}
+
+.size-control .size-value {
+  font-size: 0.75rem;
+  min-width: 40px;
 }
 
 .grouping-control {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+}
+
+.grouping-control.compact {
+  gap: 0.5rem;
+}
+
+.grouping-control.compact label {
+  font-size: 0.85rem;
+}
+
+.grouping-control.compact select {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8rem;
 }
 
 .grouping-control label {
@@ -1762,6 +1915,7 @@
   display: flex;
   flex-direction: column;
   gap: 2rem;
+  padding-top: 1rem;
 }
 
 .filter-group {

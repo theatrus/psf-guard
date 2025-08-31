@@ -443,39 +443,43 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   return (
     <>
       <div className="grouped-image-container">
-        <div className="image-controls">
-          <FilterControls 
-            onFilterChange={handleFilterChange}
-            availableFilters={availableFilters}
-          />
-          <div className="control-row">
-            <div className="size-control">
-              <label>Image Size:</label>
-              <input
-                type="range"
-                min="150"
-                max="1200"
-                step="50"
-                value={imageSize}
-                onChange={(e) => setImageSize(Number(e.target.value))}
-              />
-              <span>{imageSize}px {imageSize >= 1000 ? '(Full Width)' : ''}</span>
+        <div className="image-controls sticky">
+          {/* Combined Controls Row */}
+          <div className="controls-row-combined">
+            <FilterControls 
+              onFilterChange={handleFilterChange}
+              availableFilters={availableFilters}
+            />
+            
+            <div className="controls-section">
+              <div className="size-control compact">
+                <label>Size:</label>
+                <input
+                  type="range"
+                  min="150"
+                  max="1200"
+                  step="50"
+                  value={imageSize}
+                  onChange={(e) => setImageSize(Number(e.target.value))}
+                />
+                <span className="size-value">{imageSize}px</span>
+              </div>
+              
+              <div className="grouping-control compact">
+                <label>Group:</label>
+                <select 
+                  value={groupingMode} 
+                  onChange={(e) => setGroupingMode(e.target.value as GroupingMode)}
+                >
+                  <option value="filter">Filter</option>
+                  <option value="date">Date</option>
+                  <option value="both">Both</option>
+                </select>
+              </div>
             </div>
-            <div className="grouping-control">
-              <label>Group by:</label>
-              <select 
-                value={groupingMode} 
-                onChange={(e) => setGroupingMode(e.target.value as GroupingMode)}
-              >
-                <option value="filter">Filter</option>
-                <option value="date">Date</option>
-                <option value="both">Filter & Date</option>
-              </select>
-            </div>
-          </div>
-          
-          {/* Undo/Redo Toolbar */}
-          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+            
+            {/* Undo/Redo Toolbar */}
+            <div className="toolbar-section">
             <UndoRedoToolbar
               canUndo={grading.canUndo}
               canRedo={grading.canRedo}
@@ -488,9 +492,9 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
               getNextRedoAction={grading.getNextRedoAction}
               className="compact"
             />
-            {(lastSelectedImageId || selectedImages.size === 2) && (
-              <button
-                className="toolbar-button compare-button"
+              {(lastSelectedImageId || selectedImages.size === 2) && (
+                <button
+                  className="toolbar-button compare-button compact"
                 onClick={() => {
                   if (selectedImages.size === 2) {
                     // Use the two selected images for comparison
@@ -533,17 +537,18 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                 })()}
                 title={selectedImages.size === 2 ? "Compare selected images (C)" : "Compare images side-by-side (C)"}
               >
-                {selectedImages.size === 2 ? "Compare Selected (C)" : "Compare (C)"}
-              </button>
-            )}
-          </div>
-          
-          <div className="group-stats">
-            Total: {filteredImages.length} of {allImages.length} images in {imageGroups.length} groups
-            {filters.status !== 'all' && ` (${filters.status})`}
-            {filters.filterName !== 'all' && ` (${filters.filterName})`}
-            {filters.searchTerm && ` (searching: ${filters.searchTerm})`}
-            {selectedImages.size > 0 && ` • ${selectedImages.size} selected`}
+                  {selectedImages.size === 2 ? "Compare" : "Compare"}
+                </button>
+              )}
+            </div>
+            
+            <div className="stats-section">
+              {filteredImages.length} of {allImages.length} images • {imageGroups.length} groups
+              {filters.status !== 'all' && ` • ${filters.status}`}
+              {filters.filterName !== 'all' && ` • ${filters.filterName}`}
+              {filters.searchTerm && ` • "${filters.searchTerm}"`}
+              {selectedImages.size > 0 && ` • ${selectedImages.size} selected`}
+            </div>
           </div>
           
           {selectedImages.size > 1 && (
