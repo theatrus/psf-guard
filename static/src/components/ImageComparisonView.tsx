@@ -38,6 +38,8 @@ export default function ImageComparisonView({
   // Track image loading
   const [leftImageLoaded, setLeftImageLoaded] = useState(false);
   const [rightImageLoaded, setRightImageLoaded] = useState(false);
+  const [leftImageError, setLeftImageError] = useState(false);
+  const [rightImageError, setRightImageError] = useState(false);
   
   // Track original image preloading
   const [leftOriginalLoaded, setLeftOriginalLoaded] = useState(false);
@@ -94,11 +96,13 @@ export default function ImageComparisonView({
   // Reset loaded state when images change
   useEffect(() => {
     setLeftImageLoaded(false);
+    setLeftImageError(false);
     leftZoom.resetInitialization();
   }, [leftImageId, showStars, leftZoom]);
   
   useEffect(() => {
     setRightImageLoaded(false);
+    setRightImageError(false);
     rightZoom.resetInitialization();
   }, [rightImageId, showStars, rightZoom]);
 
@@ -381,14 +385,39 @@ export default function ImageComparisonView({
                 onMouseUp={leftZoom.handleMouseUp}
                 onMouseLeave={leftZoom.handleMouseUp}
               >
-                <img
-                  ref={leftZoom.imageRef}
-                  src={showStars 
-                    ? apiClient.getAnnotatedUrl(leftImageId, useLeftOriginal ? 'original' : 'large')
-                    : apiClient.getPreviewUrl(leftImageId, { size: useLeftOriginal ? 'original' : 'large' })
-                  }
-                  alt={`${leftImage.target_name} - ${leftImage.filter_name || 'No filter'}`}
-                  onLoad={(e) => {
+                {leftImageError ? (
+                  <div className="comparison-image-error" style={{
+                    width: '100%',
+                    height: '100%',
+                    minHeight: '400px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: '#1a1a1a',
+                    borderRadius: '8px'
+                  }}>
+                    <div style={{
+                      textAlign: 'center',
+                      color: '#888'
+                    }}>
+                      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ marginBottom: '12px' }}>
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                        <line x1="9" y1="9" x2="15" y2="15" />
+                        <line x1="15" y1="9" x2="9" y2="15" />
+                      </svg>
+                      <p style={{ margin: 0, fontSize: '0.9rem', color: '#666' }}>Image not available</p>
+                    </div>
+                  </div>
+                ) : (
+                  <img
+                    ref={leftZoom.imageRef}
+                    src={showStars 
+                      ? apiClient.getAnnotatedUrl(leftImageId, useLeftOriginal ? 'original' : 'large')
+                      : apiClient.getPreviewUrl(leftImageId, { size: useLeftOriginal ? 'original' : 'large' })
+                    }
+                    alt={`${leftImage.target_name} - ${leftImage.filter_name || 'No filter'}`}
+                    onError={() => setLeftImageError(true)}
+                    onLoad={(e) => {
                     setLeftImageLoaded(true);
                     
                     const img = e.currentTarget;
@@ -416,7 +445,8 @@ export default function ImageComparisonView({
                     cursor: leftZoom.zoomState.scale > 1 ? 'grab' : 'default',
                   }}
                   draggable={false}
-                />
+                  />
+                )}
               </div>
             </div>
 
@@ -499,14 +529,39 @@ export default function ImageComparisonView({
                     onMouseUp={syncZoom ? leftZoom.handleMouseUp : rightZoom.handleMouseUp}
                     onMouseLeave={syncZoom ? leftZoom.handleMouseUp : rightZoom.handleMouseUp}
                   >
-                    <img
-                      ref={rightZoom.imageRef}
-                      src={showStars 
-                        ? apiClient.getAnnotatedUrl(rightImageId!, useRightOriginal ? 'original' : 'large')
-                        : apiClient.getPreviewUrl(rightImageId!, { size: useRightOriginal ? 'original' : 'large' })
-                      }
-                      alt={`${rightImage.target_name} - ${rightImage.filter_name || 'No filter'}`}
-                      onLoad={(e) => {
+                    {rightImageError ? (
+                      <div className="comparison-image-error" style={{
+                        width: '100%',
+                        height: '100%',
+                        minHeight: '400px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        background: '#1a1a1a',
+                        borderRadius: '8px'
+                      }}>
+                        <div style={{
+                          textAlign: 'center',
+                          color: '#888'
+                        }}>
+                          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ marginBottom: '12px' }}>
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                            <line x1="9" y1="9" x2="15" y2="15" />
+                            <line x1="15" y1="9" x2="9" y2="15" />
+                          </svg>
+                          <p style={{ margin: 0, fontSize: '0.9rem', color: '#666' }}>Image not available</p>
+                        </div>
+                      </div>
+                    ) : (
+                      <img
+                        ref={rightZoom.imageRef}
+                        src={showStars 
+                          ? apiClient.getAnnotatedUrl(rightImageId!, useRightOriginal ? 'original' : 'large')
+                          : apiClient.getPreviewUrl(rightImageId!, { size: useRightOriginal ? 'original' : 'large' })
+                        }
+                        alt={`${rightImage.target_name} - ${rightImage.filter_name || 'No filter'}`}
+                        onError={() => setRightImageError(true)}
+                        onLoad={(e) => {
                         setRightImageLoaded(true);
                         
                         const img = e.currentTarget;
@@ -534,7 +589,8 @@ export default function ImageComparisonView({
                         cursor: rightZoom.zoomState.scale > 1 ? 'grab' : 'default',
                       }}
                       draggable={false}
-                    />
+                      />
+                    )}
                   </div>
                 </div>
 

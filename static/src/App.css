@@ -1985,3 +1985,80 @@
     display: none;
   }
 }
+
+/* Image Error Placeholders */
+.image-error-placeholder,
+.image-error-container,
+.detail-image-error,
+.comparison-image-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #1a1a1a;
+  color: #666;
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+}
+
+.image-error-placeholder svg,
+.image-error-container svg,
+.detail-image-error svg,
+.comparison-image-error svg {
+  opacity: 0.5;
+}
+
+.image-error-placeholder .error-icon,
+.image-error-container .error-icon {
+  margin-bottom: 0.5rem;
+}
+
+.image-error-placeholder .error-message,
+.image-error-container .error-message {
+  font-size: 0.9rem;
+  color: #666;
+  margin: 0;
+}
+
+.image-error-placeholder .retry-button,
+.image-error-container .retry-button {
+  margin-top: 0.5rem;
+  padding: 0.25rem 0.75rem;
+  background: #333;
+  color: #aaa;
+  border: 1px solid #444;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s ease;
+}
+
+.image-error-placeholder .retry-button:hover,
+.image-error-container .retry-button:hover {
+  background: #444;
+  color: #ccc;
+  border-color: #555;
+}
+
+/* Loading placeholder for ImageWithFallback */
+.image-loading-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #2a2a2a;
+  min-height: 100px;
+}
+
+/* Ensure error placeholders in image cards maintain aspect ratio */
+.image-card .image-error-placeholder {
+  width: 100%;
+  padding-bottom: 100%;
+  position: relative;
+}
+
+.image-card .image-error-placeholder > div {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}

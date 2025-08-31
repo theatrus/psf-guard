@@ -721,10 +721,20 @@ pub async fn get_image_preview(
     tracing::trace!("🔑 Cache key for image {}: {}", image_id, cache_key);
 
     let cache_manager = CacheManager::new(PathBuf::from(&state.cache_dir));
-    cache_manager
-        .ensure_category_dir("previews")
-        .map_err(|e| AppError::InternalError(format!("Failed to create cache directory: {}", e)))?;
+    if let Err(e) = cache_manager.ensure_category_dir("previews") {
+        tracing::error!(
+            "❌ Failed to create cache directory for image {}: {}",
+            image_id,
+            e
+        );
+        return Err(AppError::InternalError(format!(
+            "Failed to create cache directory: {}",
+            e
+        )));
+    }
     let cache_path = cache_manager.get_cached_path("previews", &cache_key, "png");
+
+    tracing::trace!("📂 Cache path for image {}: {:?}", image_id, cache_path);
 
     // Check if cached version exists
     if cache_manager.is_cached(&cache_path) {
@@ -759,12 +769,46 @@ pub async fn get_image_preview(
     tracing::debug!("💫 Cache MISS for image {} - generating preview", image_id);
 
     // Find the FITS file
-    let fits_path = find_fits_file(&state, &image, &target_name, &file_only)?;
-    tracing::trace!("📁 Found FITS file for image {}: {:?}", image_id, fits_path);
+    let fits_path = match find_fits_file(&state, &image, &target_name, &file_only) {
+        Ok(path) => {
+            tracing::trace!("📁 Found FITS file for image {}: {:?}", image_id, path);
+            path
+        }
+        Err(AppError::NotFound) => {
+            tracing::warn!(
+                "🔍 FITS file not found for image {} (filename: {})",
+                image_id,
+                file_only
+            );
+            return Err(AppError::NotFound);
+        }
+        Err(e) => {
+            tracing::error!(
+                "❌ Error finding FITS file for image {} (filename: {}): {:?}",
+                image_id,
+                file_only,
+                e
+            );
+            return Err(e);
+        }
+    };
 
     // Load FITS file (just to verify it exists and is valid)
-    let _fits = FitsImage::from_file(&fits_path)
-        .map_err(|e| AppError::InternalError(format!("Failed to load FITS: {}", e)))?;
+    let _fits = match FitsImage::from_file(&fits_path) {
+        Ok(fits) => fits,
+        Err(e) => {
+            tracing::error!(
+                "❌ Failed to load FITS file for image {} at path {:?}: {}",
+                image_id,
+                fits_path,
+                e
+            );
+            return Err(AppError::InternalError(format!(
+                "Failed to load FITS: {}",
+                e
+            )));
+        }
+    };
 
     // Determine target size
     let max_dimensions = match size {
@@ -787,21 +831,78 @@ pub async fn get_image_preview(
         max_dimensions
     );
 
-    stretch_to_png_with_resize(
-        &fits_path.to_string_lossy(),
-        Some(cache_path_str.clone()),
-        midtone,
-        shadow,
-        false, // logarithmic
-        false, // invert
-        max_dimensions,
-    )
-    .map_err(|e| AppError::InternalError(format!("Failed to generate preview: {}", e)))?;
+    // Generate the PNG - wrap in spawn_blocking to prevent blocking the async runtime
+    tracing::trace!(
+        "🎨 Starting PNG generation for image {} to cache path: {}",
+        image_id,
+        cache_path_str
+    );
+
+    let fits_path_str = fits_path.to_string_lossy().to_string();
+    let cache_path_str_clone = cache_path_str.clone();
+    let generation_result = tokio::task::spawn_blocking(move || {
+        stretch_to_png_with_resize(
+            &fits_path_str,
+            Some(cache_path_str_clone),
+            midtone,
+            shadow,
+            false, // logarithmic
+            false, // invert
+            max_dimensions,
+        )
+    })
+    .await
+    .map_err(|e| {
+        tracing::error!(
+            "❌ PNG generation task panicked for image {}: {}",
+            image_id,
+            e
+        );
+        AppError::InternalError("PNG generation task failed".to_string())
+    })?;
+
+    match generation_result {
+        Ok(_) => {
+            tracing::trace!("✅ PNG generation completed for image {}", image_id);
+        }
+        Err(e) => {
+            tracing::error!(
+                "❌ Failed to generate PNG preview for image {} from {:?}: {}",
+                image_id,
+                fits_path,
+                e
+            );
+            return Err(AppError::InternalError(format!(
+                "Failed to generate preview: {}",
+                e
+            )));
+        }
+    }
 
     // Read the file back into memory
-    let png_buffer = tokio::fs::read(&cache_path)
-        .await
-        .map_err(|_| AppError::InternalError("Failed to read generated PNG".to_string()))?;
+    let png_buffer = match tokio::fs::read(&cache_path).await {
+        Ok(buffer) => {
+            tracing::trace!(
+                "📖 Read generated PNG for image {} ({} bytes)",
+                image_id,
+                buffer.len()
+            );
+            buffer
+        }
+        Err(e) => {
+            tracing::error!(
+                "❌ Failed to read generated PNG for image {} from cache path {}: {}",
+                image_id,
+                cache_path_str,
+                e
+            );
+            // Try to clean up the potentially corrupted cache file
+            let _ = tokio::fs::remove_file(&cache_path).await;
+            return Err(AppError::InternalError(
+                "Failed to read generated PNG".to_string(),
+            ));
+        }
+    };
 
     tracing::debug!(
         "✅ Generated and cached preview for image {} in {:?} ({} bytes)",

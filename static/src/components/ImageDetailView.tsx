@@ -44,6 +44,7 @@ export default function ImageDetailView({
   const preloadedOriginalRef = useRef<HTMLImageElement | null>(null);
   const [useOriginalImage, setUseOriginalImage] = useState(false);
   const imageDimensionsRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
+  const [imageError, setImageError] = useState(false);
   
   // State machine to prevent feedback loops
   const imageStateRef = useRef<'large' | 'switching-to-original' | 'original'>('large');
@@ -210,6 +211,7 @@ export default function ImageDetailView({
     setUseOriginalImage(false);
     imageDimensionsRef.current = { width: 0, height: 0 };
     imageStateRef.current = 'large';
+    setImageError(false);
   }, [imageId, showStars]);
 
   // Show loading state only on initial load
@@ -273,29 +275,55 @@ export default function ImageDetailView({
               tabIndex={0}
               onKeyDown={zoom.handleKeyDown}
             >
-              <img
-                ref={zoom.imageRef}
-                key={`${imageId}-${showStars ? 'stars' : showPsf ? 'psf' : 'normal'}`}
-                className={isFetching ? 'loading' : ''}
-                src={
-                  showPsf
-                    ? apiClient.getPsfUrl(imageId, { 
-                        num_stars: 9,
-                        psf_type: 'moffat',
-                        sort_by: 'r2',
-                        selection: 'top-n'
-                      })
-                    : showStars 
-                      ? apiClient.getAnnotatedUrl(imageId, useOriginalImage ? 'original' : 'large')
-                      : apiClient.getPreviewUrl(imageId, { size: useOriginalImage ? 'original' : 'large' })
-                }
-                alt={`${image.target_name} - ${image.filter_name || 'No filter'}`}
-                style={{
-                  transform: `translate(${zoom.zoomState.offsetX}px, ${zoom.zoomState.offsetY}px) scale(${zoom.zoomState.scale})`,
-                  cursor: zoom.zoomState.scale > 1 ? 'grab' : 'default',
-                  transformOrigin: '0 0',
-                }}
-                onLoad={(e) => {
+              {imageError ? (
+                <div className="detail-image-error" style={{
+                  width: '100%',
+                  height: '100%',
+                  minHeight: '500px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: '#1a1a1a',
+                  borderRadius: '8px'
+                }}>
+                  <div style={{
+                    textAlign: 'center',
+                    color: '#888'
+                  }}>
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ marginBottom: '16px' }}>
+                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                      <line x1="9" y1="9" x2="15" y2="15" />
+                      <line x1="15" y1="9" x2="9" y2="15" />
+                    </svg>
+                    <h3 style={{ margin: '0 0 8px 0', fontSize: '1.2rem', fontWeight: 'normal' }}>Image not available</h3>
+                    <p style={{ margin: 0, fontSize: '0.9rem', color: '#666' }}>The requested image could not be found on the server</p>
+                  </div>
+                </div>
+              ) : (
+                <img
+                  ref={zoom.imageRef}
+                  key={`${imageId}-${showStars ? 'stars' : showPsf ? 'psf' : 'normal'}`}
+                  className={isFetching ? 'loading' : ''}
+                  src={
+                    showPsf
+                      ? apiClient.getPsfUrl(imageId, { 
+                          num_stars: 9,
+                          psf_type: 'moffat',
+                          sort_by: 'r2',
+                          selection: 'top-n'
+                        })
+                      : showStars 
+                        ? apiClient.getAnnotatedUrl(imageId, useOriginalImage ? 'original' : 'large')
+                        : apiClient.getPreviewUrl(imageId, { size: useOriginalImage ? 'original' : 'large' })
+                  }
+                  alt={`${image.target_name} - ${image.filter_name || 'No filter'}`}
+                  style={{
+                    transform: `translate(${zoom.zoomState.offsetX}px, ${zoom.zoomState.offsetY}px) scale(${zoom.zoomState.scale})`,
+                    cursor: zoom.zoomState.scale > 1 ? 'grab' : 'default',
+                    transformOrigin: '0 0',
+                  }}
+                  onError={() => setImageError(true)}
+                  onLoad={(e) => {
                   // Remove loading class when image loads
                   e.currentTarget.classList.remove('loading');
                   
@@ -323,9 +351,10 @@ export default function ImageDetailView({
                   
                   // Update stored dimensions
                   imageDimensionsRef.current = { width: newWidth, height: newHeight };
-                }}
-                draggable={false}
-              />
+                  }}
+                  draggable={false}
+                />
+              )}
             </div>
           </div>
 

@@ -281,7 +281,6 @@ pub fn get_possible_paths(
             .join(date_str)
             .join("LIGHT")
             .join(filename),
-        
         // Rejected folder variants - LIGHT/rejected/
         // date/target/date/LIGHT/rejected/file.fits
         base.join(date_str)
@@ -296,7 +295,6 @@ pub fn get_possible_paths(
             .join("LIGHT")
             .join("rejected")
             .join(filename),
-        
         // Rejected folder variants - LIGHT_REJECT/
         // date/target/date/LIGHT_REJECT/file.fits
         base.join(date_str)
@@ -309,7 +307,6 @@ pub fn get_possible_paths(
             .join(date_str)
             .join("LIGHT_REJECT")
             .join(filename),
-        
         // Rejected folder variants - LIGHT_reject/ (lowercase)
         // date/target/date/LIGHT_reject/file.fits
         base.join(date_str)
@@ -322,7 +319,6 @@ pub fn get_possible_paths(
             .join(date_str)
             .join("LIGHT_reject")
             .join(filename),
-        
         // Rejected folder variants - reject_light/
         // date/target/date/reject_light/file.fits
         base.join(date_str)
@@ -335,7 +331,6 @@ pub fn get_possible_paths(
             .join(date_str)
             .join("reject_light")
             .join(filename),
-        
         // Rejected folder variants - rejected_light/
         // date/target/date/rejected_light/file.fits
         base.join(date_str)
@@ -348,7 +343,6 @@ pub fn get_possible_paths(
             .join(date_str)
             .join("rejected_light")
             .join(filename),
-        
         // Rejected folder variants - light_reject/
         // date/target/date/light_reject/file.fits
         base.join(date_str)
@@ -361,7 +355,6 @@ pub fn get_possible_paths(
             .join(date_str)
             .join("light_reject")
             .join(filename),
-        
         // Direct under base_dir: LIGHT/file.fits
         base.join("LIGHT").join(filename),
         // Direct under base_dir: target/LIGHT/file.fits
