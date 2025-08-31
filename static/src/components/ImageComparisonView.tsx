@@ -90,8 +90,8 @@ export default function ImageComparisonView({
   useHotkeys('right,k', onNavigateRightNext, [onNavigateRightNext]);
   useHotkeys('left,j', onNavigateRightPrev, [onNavigateRightPrev]);
   
-  // Swap images
-  useHotkeys('w', () => rightImageId && onSwapImages(), [rightImageId, onSwapImages]);
+  // Swap images (prevent swapping identical images)
+  useHotkeys('w', () => rightImageId && leftImageId !== rightImageId && onSwapImages(), [rightImageId, leftImageId, onSwapImages]);
 
   // Reset loaded state when images change
   useEffect(() => {
@@ -352,7 +352,8 @@ export default function ImageComparisonView({
               <button
                 className="swap-button"
                 onClick={onSwapImages}
-                title="Swap left and right images (W)"
+                disabled={leftImageId === rightImageId}
+                title={leftImageId === rightImageId ? "Cannot swap identical images" : "Swap left and right images (W)"}
               >
                 ↔ Swap
               </button>

@@ -1068,10 +1068,17 @@
   gap: 0.5rem;
 }
 
-.swap-button:hover {
+.swap-button:hover:not(:disabled) {
   background: #444;
   border-color: #555;
   color: #61dafb;
+}
+
+.swap-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: #2a2a2a;
+  border-color: #333;
 }
 
 .comparison-content {
@@ -2151,7 +2158,7 @@
 
 /* Ensure image preview in grid maintains aspect ratio for stable layout */
 .image-preview {
-  aspect-ratio: 4/3;
+  aspect-ratio: 3/2;
   min-height: 200px;
   background: #2a2a2a;
   display: flex;

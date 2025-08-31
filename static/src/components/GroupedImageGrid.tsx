@@ -237,6 +237,21 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     }
   }, [selectedImageId]);
 
+  // Initialize lastSelectedImageId from URL state on mount (for returning from detail/comparison views)
+  useEffect(() => {
+    if (!lastSelectedImageId) {
+      // Try to get from selectedImageId (URL groupIndex/imageIndex)
+      if (selectedImageId) {
+        setLastSelectedImageId(selectedImageId);
+      }
+      // Fallback to single selected image
+      else if (selectedImages.size === 1) {
+        const singleSelectedId = Array.from(selectedImages)[0];
+        setLastSelectedImageId(singleSelectedId);
+      }
+    }
+  }, [selectedImageId, selectedImages, lastSelectedImageId]);
+
   // Grading is now handled by the useGrading hook
 
   const navigateImages = useCallback((direction: 'next' | 'prev') => {
@@ -389,12 +404,22 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     if (selectedImages.size === 2) {
       // Use the two selected images for comparison
       const selectedArray = Array.from(selectedImages);
-      navigateToComparison(selectedArray[0], selectedArray[1]);
+      // Prevent comparing same image with itself
+      if (selectedArray[0] !== selectedArray[1]) {
+        navigateToComparison(selectedArray[0], selectedArray[1]);
+      }
     } else if (lastSelectedImageId) {
-      // Use current image + next image for comparison
+      // Use current image + next different image for comparison
       const currentIndex = flatImages.findIndex(item => item.image.id === lastSelectedImageId);
-      if (currentIndex !== -1 && currentIndex < flatImages.length - 1) {
-        navigateToComparison(lastSelectedImageId, flatImages[currentIndex + 1].image.id);
+      if (currentIndex !== -1) {
+        // Find the next image that is different from the current one
+        for (let i = currentIndex + 1; i < flatImages.length; i++) {
+          const nextImageId = flatImages[i].image.id;
+          if (lastSelectedImageId !== nextImageId) {
+            navigateToComparison(lastSelectedImageId, nextImageId);
+            break;
+          }
+        }
       }
     }
   }, [selectedImages, lastSelectedImageId, flatImages, navigateToComparison]);
@@ -470,16 +495,42 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                   if (selectedImages.size === 2) {
                     // Use the two selected images for comparison
                     const selectedArray = Array.from(selectedImages);
-                    navigateToComparison(selectedArray[0], selectedArray[1]);
+                    // Prevent comparing same image with itself
+                    if (selectedArray[0] !== selectedArray[1]) {
+                      navigateToComparison(selectedArray[0], selectedArray[1]);
+                    }
                   } else if (lastSelectedImageId) {
-                    // Use current image + next image for comparison
+                    // Use current image + next different image for comparison
                     const currentIndex = flatImages.findIndex(item => item.image.id === lastSelectedImageId);
-                    if (currentIndex !== -1 && currentIndex < flatImages.length - 1) {
-                      navigateToComparison(lastSelectedImageId, flatImages[currentIndex + 1].image.id);
+                    if (currentIndex !== -1) {
+                      // Find the next image that is different from the current one
+                      for (let i = currentIndex + 1; i < flatImages.length; i++) {
+                        const nextImageId = flatImages[i].image.id;
+                        if (lastSelectedImageId !== nextImageId) {
+                          navigateToComparison(lastSelectedImageId, nextImageId);
+                          break;
+                        }
+                      }
                     }
                   }
                 }}
-                disabled={!lastSelectedImageId && selectedImages.size !== 2}
+                disabled={(() => {
+                  if (selectedImages.size === 2) {
+                    const selectedArray = Array.from(selectedImages);
+                    return selectedArray[0] === selectedArray[1]; // Same image selected twice
+                  }
+                  if (lastSelectedImageId) {
+                    const currentIndex = flatImages.findIndex(item => item.image.id === lastSelectedImageId);
+                    if (currentIndex === -1) return true; // Image not found
+                    
+                    // Check if there's any different image after current position
+                    for (let i = currentIndex + 1; i < flatImages.length; i++) {
+                      if (flatImages[i].image.id !== lastSelectedImageId) return false; // Found different image
+                    }
+                    return true; // No different image found
+                  }
+                  return true; // No valid selection
+                })()}
                 title={selectedImages.size === 2 ? "Compare selected images (C)" : "Compare images side-by-side (C)"}
               >
                 {selectedImages.size === 2 ? "Compare Selected (C)" : "Compare (C)"}

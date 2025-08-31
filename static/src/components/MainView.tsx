@@ -61,36 +61,54 @@ export default function MainView() {
   };
 
   const handleNavigateRightNext = () => {
-    if (!leftImageId || !navigation.canGoNext) return;
+    if (!leftImageId) return;
     
     const currentIndex = navigation.allImages.findIndex(img => img.id === rightImageId);
-    if (currentIndex >= 0 && currentIndex < navigation.allImages.length - 1) {
-      const nextRightImage = navigation.allImages[currentIndex + 1];
-      const params = searchParams.toString();
-      navigate(`/compare/${leftImageId}/${nextRightImage.id}?${params}`, { replace: true });
+    if (currentIndex >= 0) {
+      // Find the next image that is different from the left image
+      for (let i = currentIndex + 1; i < navigation.allImages.length; i++) {
+        const nextRightImage = navigation.allImages[i];
+        if (leftImageId !== nextRightImage.id) {
+          const params = searchParams.toString();
+          navigate(`/compare/${leftImageId}/${nextRightImage.id}?${params}`, { replace: true });
+          return;
+        }
+      }
+      // If we get here, no different image was found after current position
     }
   };
 
   const handleNavigateRightPrev = () => {
-    if (!leftImageId || !navigation.canGoPrevious) return;
+    if (!leftImageId) return;
     
     const currentIndex = navigation.allImages.findIndex(img => img.id === rightImageId);
-    if (currentIndex > 0) {
-      const prevRightImage = navigation.allImages[currentIndex - 1];
-      const params = searchParams.toString();
-      navigate(`/compare/${leftImageId}/${prevRightImage.id}?${params}`, { replace: true });
+    if (currentIndex >= 0) {
+      // Find the previous image that is different from the left image
+      for (let i = currentIndex - 1; i >= 0; i--) {
+        const prevRightImage = navigation.allImages[i];
+        if (leftImageId !== prevRightImage.id) {
+          const params = searchParams.toString();
+          navigate(`/compare/${leftImageId}/${prevRightImage.id}?${params}`, { replace: true });
+          return;
+        }
+      }
+      // If we get here, no different image was found before current position
     }
   };
 
   const handleSwapImages = () => {
-    const params = searchParams.toString();
-    navigate(`/compare/${rightImageId}/${leftImageId}?${params}`, { replace: true });
+    // Prevent swapping if both sides have the same image
+    if (leftImageId !== rightImageId) {
+      const params = searchParams.toString();
+      navigate(`/compare/${rightImageId}/${leftImageId}?${params}`, { replace: true });
+    }
   };
 
   const handleSelectRightImage = () => {
     // TODO: Implement image selection modal/dropdown
     console.log('Image selection not yet implemented');
   };
+
 
   // Create adjacent image IDs for navigation context
   const adjacentImageIds = {
