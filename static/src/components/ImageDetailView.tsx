@@ -39,6 +39,7 @@ export default function ImageDetailView({
 }: ImageDetailViewProps) {
   const [showStars, setShowStars] = useState(false);
   const [showPsf, setShowPsf] = useState(false);
+  const [psfImageLoading, setPsfImageLoading] = useState(false);
   const [imageSize, setImageSize] = useState<'screen' | 'large' | 'original'>('large');
   const [isOriginalLoaded, setIsOriginalLoaded] = useState(false);
   const preloadedOriginalRef = useRef<HTMLImageElement | null>(null);
@@ -81,7 +82,7 @@ export default function ImageDetailView({
   });
 
   // Fetch star detection
-  const { data: starData } = useQuery({
+  const { data: starData, isLoading: starDataLoading } = useQuery({
     queryKey: ['stars', imageId],
     queryFn: () => apiClient.getStarDetection(imageId),
     enabled: showStars,
@@ -104,8 +105,12 @@ export default function ImageDetailView({
     setShowPsf(false); // Turn off PSF when showing stars
   }, [showStars]);
   useHotkeys('p', () => {
-    setShowPsf(s => !s);
+    const newPsfState = !showPsf;
+    setShowPsf(newPsfState);
     setShowStars(false); // Turn off stars when showing PSF
+    if (newPsfState) {
+      setPsfImageLoading(true);
+    }
   }, [showPsf]);
   useHotkeys('z', () => setImageSize(s => s === 'screen' ? 'large' : 'screen'), []);
   useHotkeys('plus,equal', () => zoom.zoomIn(), [zoom.zoomIn]);
@@ -278,6 +283,17 @@ export default function ImageDetailView({
               tabIndex={0}
               onKeyDown={zoom.handleKeyDown}
             >
+              {/* Loading overlay for star detection and PSF views */}
+              {(showStars && starDataLoading) || (showPsf && psfImageLoading) ? (
+                <div className="image-loading-overlay">
+                  <div className="loading-content">
+                    <div className="loading-spinner"></div>
+                    <span className="loading-text">
+                      {showStars && starDataLoading ? 'Loading star detection...' : 'Loading PSF analysis...'}
+                    </span>
+                  </div>
+                </div>
+              ) : null}
               {imageError ? (
                 <div className="detail-image-error" style={{
                   width: '100%',
@@ -329,6 +345,11 @@ export default function ImageDetailView({
                   onLoad={(e) => {
                   // Remove loading class when image loads
                   e.currentTarget.classList.remove('loading');
+                  
+                  // Clear PSF loading state when PSF image loads
+                  if (showPsf) {
+                    setPsfImageLoading(false);
+                  }
                   
                   const img = e.currentTarget;
                   const newWidth = img.naturalWidth;
