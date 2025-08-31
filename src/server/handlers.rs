@@ -1150,45 +1150,52 @@ pub async fn get_image_stars(
 
     // Move expensive operations to spawn_blocking
     let fits_path_str = fits_path.to_string_lossy().to_string();
-    let (stars, detected_count, average_hfr, average_fwhm) = tokio::task::spawn_blocking(move || {
-        // Load FITS file
-        let fits = FitsImage::from_file(std::path::Path::new(&fits_path_str))?;
+    let (stars, detected_count, average_hfr, average_fwhm) =
+        tokio::task::spawn_blocking(move || {
+            // Load FITS file
+            let fits = FitsImage::from_file(std::path::Path::new(&fits_path_str))?;
 
-        // Run star detection
-        let params = HocusFocusParams {
-            psf_type: PSFType::Moffat4,
-            ..Default::default()
-        };
+            // Run star detection
+            let params = HocusFocusParams {
+                psf_type: PSFType::Moffat4,
+                ..Default::default()
+            };
 
-        let detection_result = detect_stars_hocus_focus(&fits.data, fits.width, fits.height, &params);
+            let detection_result =
+                detect_stars_hocus_focus(&fits.data, fits.width, fits.height, &params);
 
-        // Convert to API response format
-        let stars: Vec<StarInfo> = detection_result
-            .stars
-            .iter()
-            .map(|star| {
-                let eccentricity = if let Some(psf) = &star.psf_model {
-                    psf.eccentricity
-                } else {
-                    0.0
-                };
+            // Convert to API response format
+            let stars: Vec<StarInfo> = detection_result
+                .stars
+                .iter()
+                .map(|star| {
+                    let eccentricity = if let Some(psf) = &star.psf_model {
+                        psf.eccentricity
+                    } else {
+                        0.0
+                    };
 
-                StarInfo {
-                    x: star.position.0,
-                    y: star.position.1,
-                    hfr: star.hfr,
-                    fwhm: star.fwhm,
-                    brightness: star.brightness,
-                    eccentricity,
-                }
-            })
-            .collect();
+                    StarInfo {
+                        x: star.position.0,
+                        y: star.position.1,
+                        hfr: star.hfr,
+                        fwhm: star.fwhm,
+                        brightness: star.brightness,
+                        eccentricity,
+                    }
+                })
+                .collect();
 
-        Ok::<(Vec<StarInfo>, usize, f64, f64), anyhow::Error>((stars, detection_result.stars.len(), detection_result.average_hfr, detection_result.average_fwhm))
-    })
-    .await
-    .map_err(|e| AppError::InternalError(format!("Star detection task panicked: {}", e)))?
-    .map_err(|e| AppError::InternalError(format!("Failed to detect stars: {}", e)))?;
+            Ok::<(Vec<StarInfo>, usize, f64, f64), anyhow::Error>((
+                stars,
+                detection_result.stars.len(),
+                detection_result.average_hfr,
+                detection_result.average_fwhm,
+            ))
+        })
+        .await
+        .map_err(|e| AppError::InternalError(format!("Star detection task panicked: {}", e)))?
+        .map_err(|e| AppError::InternalError(format!("Failed to detect stars: {}", e)))?;
 
     let response = StarDetectionResponse {
         detected_stars: detected_count,
@@ -1383,7 +1390,9 @@ pub async fn get_annotated_image(
         Ok::<image::RgbImage, anyhow::Error>(final_image)
     })
     .await
-    .map_err(|e| AppError::InternalError(format!("Annotated image generation task panicked: {}", e)))?
+    .map_err(|e| {
+        AppError::InternalError(format!("Annotated image generation task panicked: {}", e))
+    })?
     .map_err(|e| AppError::InternalError(format!("Failed to generate annotated image: {}", e)))?;
 
     // Save to cache
@@ -1538,21 +1547,16 @@ pub async fn get_psf_visualization(
             .map_err(|e| anyhow::anyhow!("Failed to load FITS: {}", e))?;
 
         // Create PSF multi visualization using the common function
-        let rgba_image = create_psf_multi_image(
-            &fits,
-            num_stars,
-            psf_type,
-            &sort_by,
-            grid_cols,
-            &selection,
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to create PSF visualization: {}", e))?;
+        let rgba_image =
+            create_psf_multi_image(&fits, num_stars, psf_type, &sort_by, grid_cols, &selection)
+                .map_err(|e| anyhow::anyhow!("Failed to create PSF visualization: {}", e))?;
 
         // Save to cache
         let cache_file = std::fs::File::create(&cache_path_clone)
             .map_err(|e| anyhow::anyhow!("Failed to create cache file: {}", e))?;
         let writer = std::io::BufWriter::new(cache_file);
-        let encoder = PngEncoder::new_with_quality(writer, CompressionType::Fast, FilterType::NoFilter);
+        let encoder =
+            PngEncoder::new_with_quality(writer, CompressionType::Fast, FilterType::NoFilter);
 
         encoder
             .write_image(
