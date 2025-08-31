@@ -1145,45 +1145,55 @@ pub async fn get_image_stars(
         return Ok(Json(ApiResponse::success(response)));
     }
 
-    // Find and load the FITS file
+    // Find FITS file path first (this is fast)
     let fits_path = find_fits_file(&state, &image, &target_name, &file_only)?;
-    let fits = FitsImage::from_file(&fits_path)
-        .map_err(|e| AppError::InternalError(format!("Failed to load FITS: {}", e)))?;
 
-    // Run star detection
-    let params = HocusFocusParams {
-        psf_type: PSFType::Moffat4,
-        ..Default::default()
-    };
+    // Move expensive operations to spawn_blocking
+    let fits_path_str = fits_path.to_string_lossy().to_string();
+    let (stars, detected_count, average_hfr, average_fwhm) = tokio::task::spawn_blocking(move || {
+        // Load FITS file
+        let fits = FitsImage::from_file(std::path::Path::new(&fits_path_str))?;
 
-    let detection_result = detect_stars_hocus_focus(&fits.data, fits.width, fits.height, &params);
+        // Run star detection
+        let params = HocusFocusParams {
+            psf_type: PSFType::Moffat4,
+            ..Default::default()
+        };
 
-    // Convert to API response format
-    let stars: Vec<StarInfo> = detection_result
-        .stars
-        .iter()
-        .map(|star| {
-            let eccentricity = if let Some(psf) = &star.psf_model {
-                psf.eccentricity
-            } else {
-                0.0
-            };
+        let detection_result = detect_stars_hocus_focus(&fits.data, fits.width, fits.height, &params);
 
-            StarInfo {
-                x: star.position.0,
-                y: star.position.1,
-                hfr: star.hfr,
-                fwhm: star.fwhm,
-                brightness: star.brightness,
-                eccentricity,
-            }
-        })
-        .collect();
+        // Convert to API response format
+        let stars: Vec<StarInfo> = detection_result
+            .stars
+            .iter()
+            .map(|star| {
+                let eccentricity = if let Some(psf) = &star.psf_model {
+                    psf.eccentricity
+                } else {
+                    0.0
+                };
+
+                StarInfo {
+                    x: star.position.0,
+                    y: star.position.1,
+                    hfr: star.hfr,
+                    fwhm: star.fwhm,
+                    brightness: star.brightness,
+                    eccentricity,
+                }
+            })
+            .collect();
+
+        Ok::<(Vec<StarInfo>, usize, f64, f64), anyhow::Error>((stars, detection_result.stars.len(), detection_result.average_hfr, detection_result.average_fwhm))
+    })
+    .await
+    .map_err(|e| AppError::InternalError(format!("Star detection task panicked: {}", e)))?
+    .map_err(|e| AppError::InternalError(format!("Failed to detect stars: {}", e)))?;
 
     let response = StarDetectionResponse {
-        detected_stars: detection_result.stars.len(),
-        average_hfr: detection_result.average_hfr,
-        average_fwhm: detection_result.average_fwhm,
+        detected_stars: detected_count,
+        average_hfr,
+        average_fwhm,
         stars,
     };
 
@@ -1287,82 +1297,94 @@ pub async fn get_annotated_image(
         ));
     }
 
-    // Find and load the FITS file
+    // Find FITS file path first (this is fast)
     let fits_path = find_fits_file(&state, &image, &target_name, &file_only)?;
-    let fits = FitsImage::from_file(&fits_path)
-        .map_err(|e| AppError::InternalError(format!("Failed to load FITS: {}", e)))?;
 
-    // Create annotated image using the common function
-    let rgb_image = create_annotated_image(
-        &fits,
-        100,                // max_stars
-        0.2,                // midtone_factor
-        -2.8,               // shadow_clipping
-        Rgb([255, 255, 0]), // yellow color
-    )
-    .map_err(|e| AppError::InternalError(format!("Failed to create annotated image: {}", e)))?;
+    // Move expensive operations to spawn_blocking
+    let fits_path_str = fits_path.to_string_lossy().to_string();
+    let size_str = size.to_string();
+    let final_image = tokio::task::spawn_blocking(move || {
+        // Load FITS file
+        let fits = FitsImage::from_file(std::path::Path::new(&fits_path_str))
+            .map_err(|e| anyhow::anyhow!("Failed to load FITS: {}", e))?;
 
-    // Resize if needed based on size parameter
-    let final_image = match size {
-        "large" => {
-            // Check if we need to resize for "large"
-            if fits.width > 2000 || fits.height > 2000 {
-                let aspect_ratio = fits.width as f32 / fits.height as f32;
-                let (new_width, new_height) = if fits.width > fits.height {
-                    (2000, (2000.0 / aspect_ratio) as u32)
+        // Create annotated image using the common function
+        let rgb_image = create_annotated_image(
+            &fits,
+            100,                // max_stars
+            0.2,                // midtone_factor
+            -2.8,               // shadow_clipping
+            Rgb([255, 255, 0]), // yellow color
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to create annotated image: {}", e))?;
+
+        // Resize if needed based on size parameter
+        let final_image = match size_str.as_str() {
+            "large" => {
+                // Check if we need to resize for "large"
+                if fits.width > 2000 || fits.height > 2000 {
+                    let aspect_ratio = fits.width as f32 / fits.height as f32;
+                    let (new_width, new_height) = if fits.width > fits.height {
+                        (2000, (2000.0 / aspect_ratio) as u32)
+                    } else {
+                        ((2000.0 * aspect_ratio) as u32, 2000)
+                    };
+                    image::imageops::resize(
+                        &rgb_image,
+                        new_width,
+                        new_height,
+                        image::imageops::FilterType::Lanczos3,
+                    )
                 } else {
-                    ((2000.0 * aspect_ratio) as u32, 2000)
-                };
-                image::imageops::resize(
-                    &rgb_image,
-                    new_width,
-                    new_height,
-                    image::imageops::FilterType::Lanczos3,
-                )
-            } else {
-                rgb_image
+                    rgb_image
+                }
             }
-        }
-        "screen" => {
-            // Resize for screen viewing
-            if fits.width > 1200 || fits.height > 1200 {
-                let aspect_ratio = fits.width as f32 / fits.height as f32;
-                let (new_width, new_height) = if fits.width > fits.height {
-                    (1200, (1200.0 / aspect_ratio) as u32)
+            "screen" => {
+                // Resize for screen viewing
+                if fits.width > 1200 || fits.height > 1200 {
+                    let aspect_ratio = fits.width as f32 / fits.height as f32;
+                    let (new_width, new_height) = if fits.width > fits.height {
+                        (1200, (1200.0 / aspect_ratio) as u32)
+                    } else {
+                        ((1200.0 * aspect_ratio) as u32, 1200)
+                    };
+                    image::imageops::resize(
+                        &rgb_image,
+                        new_width,
+                        new_height,
+                        image::imageops::FilterType::Lanczos3,
+                    )
                 } else {
-                    ((1200.0 * aspect_ratio) as u32, 1200)
-                };
-                image::imageops::resize(
-                    &rgb_image,
-                    new_width,
-                    new_height,
-                    image::imageops::FilterType::Lanczos3,
-                )
-            } else {
-                rgb_image
+                    rgb_image
+                }
             }
-        }
-        "original" => rgb_image, // No resize for original
-        _ => {
-            // Default to screen size for unknown values
-            if fits.width > 1200 || fits.height > 1200 {
-                let aspect_ratio = fits.width as f32 / fits.height as f32;
-                let (new_width, new_height) = if fits.width > fits.height {
-                    (1200, (1200.0 / aspect_ratio) as u32)
+            "original" => rgb_image, // No resize for original
+            _ => {
+                // Default to screen size for unknown values
+                if fits.width > 1200 || fits.height > 1200 {
+                    let aspect_ratio = fits.width as f32 / fits.height as f32;
+                    let (new_width, new_height) = if fits.width > fits.height {
+                        (1200, (1200.0 / aspect_ratio) as u32)
+                    } else {
+                        ((1200.0 * aspect_ratio) as u32, 1200)
+                    };
+                    image::imageops::resize(
+                        &rgb_image,
+                        new_width,
+                        new_height,
+                        image::imageops::FilterType::Lanczos3,
+                    )
                 } else {
-                    ((1200.0 * aspect_ratio) as u32, 1200)
-                };
-                image::imageops::resize(
-                    &rgb_image,
-                    new_width,
-                    new_height,
-                    image::imageops::FilterType::Lanczos3,
-                )
-            } else {
-                rgb_image
+                    rgb_image
+                }
             }
-        }
-    };
+        };
+
+        Ok::<image::RgbImage, anyhow::Error>(final_image)
+    })
+    .await
+    .map_err(|e| AppError::InternalError(format!("Annotated image generation task panicked: {}", e)))?
+    .map_err(|e| AppError::InternalError(format!("Failed to generate annotated image: {}", e)))?;
 
     // Save to cache
     let cache_file = std::fs::File::create(&cache_path)
@@ -1455,9 +1477,10 @@ pub async fn get_psf_visualization(
 
     // Parse parameters
     let num_stars = options.num_stars.unwrap_or(9);
-    let psf_type_str = options.psf_type.as_deref().unwrap_or("moffat");
-    let sort_by = options.sort_by.as_deref().unwrap_or("r2");
-    let selection = options.selection.as_deref().unwrap_or("top-n");
+    let psf_type_str = options.psf_type.as_deref().unwrap_or("moffat").to_string();
+    let sort_by = options.sort_by.as_deref().unwrap_or("r2").to_string();
+    let selection = options.selection.as_deref().unwrap_or("top-n").to_string();
+    let grid_cols = options.grid_cols;
 
     let psf_type: PSFType = psf_type_str.parse().unwrap_or(PSFType::Moffat4);
 
@@ -1473,7 +1496,7 @@ pub async fn get_psf_visualization(
         psf_type_str,
         sort_by,
         selection,
-        options.grid_cols.unwrap_or(0)
+        grid_cols.unwrap_or(0)
     );
     let cache_manager = CacheManager::new(PathBuf::from(&state.cache_dir));
     cache_manager
@@ -1503,36 +1526,48 @@ pub async fn get_psf_visualization(
         ));
     }
 
-    // Find and load the FITS file
+    // Find FITS file path first (this is fast)
     let fits_path = find_fits_file(&state, &image, &target_name, &file_only)?;
-    let fits = FitsImage::from_file(&fits_path)
-        .map_err(|e| AppError::InternalError(format!("Failed to load FITS: {}", e)))?;
 
-    // Create PSF multi visualization using the common function
-    let rgba_image = create_psf_multi_image(
-        &fits,
-        num_stars,
-        psf_type,
-        sort_by,
-        options.grid_cols,
-        selection,
-    )
-    .map_err(|e| AppError::InternalError(format!("Failed to create PSF visualization: {}", e)))?;
+    // Move expensive operations to spawn_blocking
+    let fits_path_str = fits_path.to_string_lossy().to_string();
+    let cache_path_clone = cache_path.clone();
+    tokio::task::spawn_blocking(move || {
+        // Load FITS file
+        let fits = FitsImage::from_file(std::path::Path::new(&fits_path_str))
+            .map_err(|e| anyhow::anyhow!("Failed to load FITS: {}", e))?;
 
-    // Save to cache
-    let cache_file = std::fs::File::create(&cache_path)
-        .map_err(|e| AppError::InternalError(format!("Failed to create cache file: {}", e)))?;
-    let writer = std::io::BufWriter::new(cache_file);
-    let encoder = PngEncoder::new_with_quality(writer, CompressionType::Fast, FilterType::NoFilter);
-
-    encoder
-        .write_image(
-            &rgba_image,
-            rgba_image.width(),
-            rgba_image.height(),
-            ColorType::Rgba8.into(),
+        // Create PSF multi visualization using the common function
+        let rgba_image = create_psf_multi_image(
+            &fits,
+            num_stars,
+            psf_type,
+            &sort_by,
+            grid_cols,
+            &selection,
         )
-        .map_err(|e| AppError::InternalError(format!("Failed to encode PNG: {}", e)))?;
+        .map_err(|e| anyhow::anyhow!("Failed to create PSF visualization: {}", e))?;
+
+        // Save to cache
+        let cache_file = std::fs::File::create(&cache_path_clone)
+            .map_err(|e| anyhow::anyhow!("Failed to create cache file: {}", e))?;
+        let writer = std::io::BufWriter::new(cache_file);
+        let encoder = PngEncoder::new_with_quality(writer, CompressionType::Fast, FilterType::NoFilter);
+
+        encoder
+            .write_image(
+                &rgba_image,
+                rgba_image.width(),
+                rgba_image.height(),
+                ColorType::Rgba8.into(),
+            )
+            .map_err(|e| anyhow::anyhow!("Failed to encode PNG: {}", e))?;
+
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .map_err(|e| AppError::InternalError(format!("PSF visualization task panicked: {}", e)))?
+    .map_err(|e| AppError::InternalError(format!("Failed to generate PSF visualization: {}", e)))?;
 
     // Read the cached file
     let png_buffer = tokio::fs::read(&cache_path)
