@@ -1,9 +1,7 @@
 import { createHashRouter, RouterProvider, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from '../App';
-import GridView from '../components/GridView';
-import DetailView from '../components/DetailView';
-import ComparisonView from '../components/ComparisonView';
+import MainView from '../components/MainView';
 
 // Create React Query client
 const queryClient = new QueryClient({
@@ -27,15 +25,15 @@ const router = createHashRouter([
       },
       {
         path: "grid",
-        element: <GridView />
+        element: <MainView />
       },
       {
         path: "detail/:imageId",
-        element: <DetailView />
+        element: <MainView />
       },
       {
         path: "compare/:leftImageId/:rightImageId",
-        element: <ComparisonView />
+        element: <MainView />
       }
     ]
   }

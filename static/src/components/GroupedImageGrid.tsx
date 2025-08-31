@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useHotkeys } from 'react-hotkeys-hook';
@@ -55,9 +55,6 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   // Initialize grading system with undo/redo
   const grading = useGrading();
   const [lastSelectedImageId, setLastSelectedImageId] = useState<number | null>(null);
-  const gridRef = useRef<HTMLDivElement>(null);
-  const hasScrolledToSelectionRef = useRef<boolean>(false);
-  const lastSelectedImageIdRef = useRef<number | null>(null);
 
   // Navigation helpers
   const [searchParams] = useSearchParams();
@@ -237,60 +234,6 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   useEffect(() => {
     if (selectedImageId) {
       setLastSelectedImageId(selectedImageId);
-    }
-  }, [selectedImageId]);
-
-  // Scroll to selected image when returning from detail view (only once per selection)
-  useEffect(() => {
-    // Only scroll if:
-    // 1. We have a selected image
-    // 2. Images are loaded and groups are rendered
-    // 3. We haven't scrolled to this image yet
-    // 4. The selected image has changed (new selection)
-    const shouldScroll = selectedImageId && 
-                        imageGroups.length > 0 && 
-                        !isLoading &&
-                        !hasScrolledToSelectionRef.current &&
-                        selectedImageId !== lastSelectedImageIdRef.current;
-
-    if (shouldScroll) {
-      // Wait for DOM to render the groups and images
-      const timer = setTimeout(() => {
-        if (gridRef.current) {
-          const imageElement = gridRef.current.querySelector(`[data-image-id="${selectedImageId}"]`) as HTMLElement;
-          if (imageElement) {
-            // Mark that we've scrolled to prevent multiple scrolls
-            hasScrolledToSelectionRef.current = true;
-            lastSelectedImageIdRef.current = selectedImageId;
-            
-            // Add scroll target class for animation
-            imageElement.classList.add('scroll-target');
-            
-            // Scroll to the image with smooth animation
-            imageElement.scrollIntoView({
-              behavior: 'smooth',
-              block: 'center',
-              inline: 'nearest'
-            });
-            
-            // Remove the animation class after animation completes
-            setTimeout(() => {
-              imageElement.classList.remove('scroll-target');
-            }, 1000);
-          }
-        }
-      }, 200); // Slightly longer delay to ensure groups are expanded
-      
-      return () => clearTimeout(timer);
-    }
-  }, [selectedImageId, imageGroups.length, isLoading]);
-
-  // Reset scroll flag when we navigate away (for next time we return)
-  useEffect(() => {
-    // Reset the scroll flag when we don't have a selection (likely navigated away)
-    if (!selectedImageId) {
-      hasScrolledToSelectionRef.current = false;
-      lastSelectedImageIdRef.current = null;
     }
   }, [selectedImageId]);
 
@@ -594,7 +537,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
           <StatsDashboard images={filteredImages} />
         )}
 
-        <div className="image-groups" ref={gridRef}>
+        <div className="image-groups">
           {imageGroups.map((group, groupIndex) => {
             const isExpanded = expandedGroups.has(group.filterName);
             const stats = {

@@ -183,7 +183,7 @@ export function useGridState() {
     const newImages = typeof images === 'function' ? images(selectedImages) : images;
     updateParams({ selected: Array.from(newImages) });
   }, [updateParams, selectedImages]);
-  
+
   return {
     selectedGroupIndex,
     selectedImageIndex,

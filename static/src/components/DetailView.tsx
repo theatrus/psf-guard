@@ -7,6 +7,8 @@ export default function DetailView() {
   const { imageId } = useParams<{ imageId: string }>();
   const imageIdNum = imageId ? parseInt(imageId, 10) : undefined;
   
+  console.log('DetailView: Mounted with imageId:', imageIdNum, 'scroll position:', window.scrollY);
+  
   const navigation = useImageNavigation(imageIdNum);
   const grading = useGrading();
 
