@@ -156,7 +156,8 @@ export default function ImageComparisonView({
       rightImageLoaded,
       rightOriginalLoaded,
       useRightOriginal,
-      targetZoom: targetRightZoomRef.current
+      targetZoom: targetRightZoomRef.current,
+      useLeftOriginal
     });
     if (rightImageLoaded && rightOriginalLoaded && !useRightOriginal) {
       // Use stored target zoom instead of current zoom which might be reset
@@ -168,7 +169,7 @@ export default function ImageComparisonView({
         rightImageStateRef.current = 'original';
       }
     }
-  }, [rightImageLoaded, rightOriginalLoaded, useRightOriginal]);
+  }, [rightImageLoaded, rightOriginalLoaded, useRightOriginal, useLeftOriginal]);
   
   useEffect(() => {
     if (leftImageLoaded && leftOriginalLoaded && !useLeftOriginal) {
@@ -306,10 +307,10 @@ export default function ImageComparisonView({
       img.onload = () => {
         setRightOriginalLoaded(true);
         
-        // If we were waiting for original due to high zoom, switch immediately
+        // If we were waiting for original due to high zoom OR left is using original, switch immediately
         const currentVisualScale = rightZoom.getVisualScale();
         const currentState = rightImageStateRef.current;
-        if (currentState === 'large' && currentVisualScale > 1.0) {
+        if (currentState === 'large' && (currentVisualScale > 1.0 || useLeftOriginal)) {
           rightImageStateRef.current = 'switching-to-original';
           setUseRightOriginal(true);
           // Delay state update to allow render
@@ -322,8 +323,8 @@ export default function ImageComparisonView({
       };
     }
     
-    // State machine transitions based on visual scale - only switch to original, never back
-    if (state === 'large' && visualScale > 1.0 && rightOriginalLoaded) {
+    // State machine transitions based on visual scale OR left image state
+    if (state === 'large' && ((visualScale > 1.0 && rightOriginalLoaded) || (useLeftOriginal && rightOriginalLoaded))) {
       // Switch to original
       rightImageStateRef.current = 'switching-to-original';
       setUseRightOriginal(true);
@@ -335,8 +336,22 @@ export default function ImageComparisonView({
       }, 300);
     }
     // Never switch back from original to large
-  }, [rightZoom, rightImageId, showStars, rightImage, rightOriginalLoaded]);
+  }, [rightZoom, rightImageId, showStars, rightImage, rightOriginalLoaded, useLeftOriginal]);
   
+  // Effect to make right image follow left image's resolution choice
+  useEffect(() => {
+    if (useLeftOriginal && !useRightOriginal && rightOriginalLoaded && rightImageStateRef.current !== 'switching-to-original') {
+      console.log('[Follow Left Effect] Left is using original, switching right to match');
+      rightImageStateRef.current = 'switching-to-original';
+      setUseRightOriginal(true);
+      setTimeout(() => {
+        if (rightImageStateRef.current === 'switching-to-original') {
+          rightImageStateRef.current = 'original';
+        }
+      }, 300);
+    }
+  }, [useLeftOriginal, useRightOriginal, rightOriginalLoaded]);
+
   // Reset preload state when images change
   useEffect(() => {
     setLeftOriginalLoaded(false);
