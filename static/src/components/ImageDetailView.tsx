@@ -110,15 +110,46 @@ export default function ImageDetailView({
   useHotkeys('1', () => zoom.zoomTo100(), [zoom.zoomTo100]);
   useHotkeys('f', () => zoom.zoomToFit(), [zoom.zoomToFit]);
 
-  // Reset zoom when image changes
+  // Track zoom state to detect user interactions
+  const previousZoomState = useRef(zoom.zoomState);
+  const lastUserZoomRef = useRef<number>(0);
+  const lastImageIdRef = useRef<number>(imageId);
+  const USER_ZOOM_COOLDOWN = 2000; // 2 seconds
+  
+  // Track user zoom interactions by monitoring zoom state changes
   useEffect(() => {
-    // Longer delay to ensure the image is fully loaded and rendered
-    const timer = setTimeout(() => {
-      zoom.zoomToFit();
-    }, 300);
+    const currentZoom = zoom.zoomState;
+    const prevZoom = previousZoomState.current;
     
-    return () => clearTimeout(timer);
-  }, [imageId, showStars, showPsf, imageSize, zoom]);
+    // Check if zoom changed and it wasn't from an image change
+    const zoomChanged = currentZoom.scale !== prevZoom.scale || 
+                       currentZoom.offsetX !== prevZoom.offsetX || 
+                       currentZoom.offsetY !== prevZoom.offsetY;
+    
+    const imageChanged = imageId !== lastImageIdRef.current;
+    
+    // If zoom changed but image didn't change, it was a user interaction
+    if (zoomChanged && !imageChanged) {
+      lastUserZoomRef.current = Date.now();
+    }
+    
+    previousZoomState.current = currentZoom;
+    lastImageIdRef.current = imageId;
+  }, [zoom.zoomState, imageId]);
+
+  // Reset zoom only when image ID changes and user hasn't zoomed recently
+  useEffect(() => {
+    const timeSinceUserZoom = Date.now() - lastUserZoomRef.current;
+    
+    // Only auto-fit if user hasn't zoomed recently
+    if (timeSinceUserZoom > USER_ZOOM_COOLDOWN) {
+      const timer = setTimeout(() => {
+        zoom.zoomToFit();
+      }, 300);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [imageId, zoom.zoomToFit]); // eslint-disable-line react-hooks/exhaustive-deps
   
   // Load original dimensions from metadata if available
   useEffect(() => {
