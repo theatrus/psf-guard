@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo } from 'react';
 import { GradingStatus } from '../api/types';
 
 export interface FilterOptions {
@@ -14,28 +14,36 @@ export interface FilterOptions {
 interface FilterControlsProps {
   onFilterChange: (filters: FilterOptions) => void;
   availableFilters: string[];
+  currentFilters: {
+    status: string;
+    filterName: string;
+    dateRange: {
+      start: string | null;
+      end: string | null;
+    };
+    searchTerm: string;
+  };
 }
 
-export default function FilterControls({ onFilterChange, availableFilters }: FilterControlsProps) {
-  const [filters, setFilters] = useState<FilterOptions>({
-    status: 'all',
-    filterName: 'all',
+export default function FilterControls({ onFilterChange, availableFilters, currentFilters }: FilterControlsProps) {
+  // Convert URL state (strings) to component state (Date objects)
+  const filters = useMemo(() => ({
+    status: currentFilters.status as GradingStatus | 'all',
+    filterName: currentFilters.filterName,
     dateRange: {
-      start: null,
-      end: null,
+      start: currentFilters.dateRange.start ? new Date(currentFilters.dateRange.start) : null,
+      end: currentFilters.dateRange.end ? new Date(currentFilters.dateRange.end) : null,
     },
-    searchTerm: '',
-  });
+    searchTerm: currentFilters.searchTerm,
+  }), [currentFilters]);
 
   const handleStatusChange = (status: GradingStatus | 'all') => {
     const newFilters = { ...filters, status };
-    setFilters(newFilters);
     onFilterChange(newFilters);
   };
 
   const handleFilterNameChange = (filterName: string) => {
     const newFilters = { ...filters, filterName };
-    setFilters(newFilters);
     onFilterChange(newFilters);
   };
 
@@ -48,13 +56,11 @@ export default function FilterControls({ onFilterChange, availableFilters }: Fil
         [field]: date,
       },
     };
-    setFilters(newFilters);
     onFilterChange(newFilters);
   };
 
   const handleSearchChange = (searchTerm: string) => {
     const newFilters = { ...filters, searchTerm };
-    setFilters(newFilters);
     onFilterChange(newFilters);
   };
 
@@ -68,7 +74,6 @@ export default function FilterControls({ onFilterChange, availableFilters }: Fil
       },
       searchTerm: '',
     };
-    setFilters(defaultFilters);
     onFilterChange(defaultFilters);
   };
 

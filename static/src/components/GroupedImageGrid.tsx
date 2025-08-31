@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useHotkeys } from 'react-hotkeys-hook';
@@ -194,26 +194,36 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     return sorted;
   }, [filteredImages, groupingMode]);
 
-  // Initialize expanded groups when imageGroups change
+  // Initialize expanded groups ONLY on very first load (no URL params, never initialized before)
+  const hasInitialized = useRef(false);
+  const initialLoad = useRef(true);
   useEffect(() => {
-    if (expandedGroups.size === 0 && imageGroups.length > 0) {
+    // Only auto-expand on the very first page load when there's no URL state and no previous user action
+    if (!hasInitialized.current && initialLoad.current && expandedGroups.size === 0 && imageGroups.length > 0) {
       setExpandedGroups(new Set(imageGroups.map(g => g.filterName)));
+      hasInitialized.current = true;
     }
-  }, [imageGroups, expandedGroups.size]);
+    initialLoad.current = false;
+  }, [imageGroups.length, expandedGroups.size, setExpandedGroups]);
 
-  // Reset expanded groups when grouping mode changes
+  // Reset expanded groups only when grouping mode actually changes
+  const prevGroupingMode = useRef(groupingMode);
   useEffect(() => {
-    // Expand all groups when grouping mode changes
-    if (imageGroups.length > 0) {
-      setExpandedGroups(new Set(imageGroups.map(g => g.filterName)));
+    if (prevGroupingMode.current !== groupingMode) {
+      // Expand all groups when grouping mode changes
+      if (imageGroups.length > 0) {
+        setExpandedGroups(new Set(imageGroups.map(g => g.filterName)));
+      }
+      prevGroupingMode.current = groupingMode;
     }
-  }, [groupingMode, imageGroups]);
+  }, [groupingMode, imageGroups.length, setExpandedGroups]); // Depend on length, not content
 
   // Flatten images for navigation
   const flatImages = useMemo(() => {
     const result: { image: Image; groupIndex: number; indexInGroup: number }[] = [];
     imageGroups.forEach((group, groupIndex) => {
-      if (expandedGroups.has(group.filterName) || expandedGroups.size === 0) {
+      // Only include images from expanded groups
+      if (expandedGroups.has(group.filterName)) {
         group.images.forEach((image, indexInGroup) => {
           result.push({ image, groupIndex, indexInGroup });
         });
@@ -357,6 +367,21 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     }
   }, [selectedImages, grading]);
 
+  // Clear date filters when project/target changes to avoid "no results" scenarios
+  useEffect(() => {
+    // Only clear dates if they exist, to avoid infinite loops
+    if (filters.dateRange.start || filters.dateRange.end) {
+      updateFilters({
+        dateStart: '',
+        dateEnd: '',
+      });
+    }
+  }, [projectId, targetId]); // Only trigger when project/target changes
+
+  // Smart date suggestion: Show info if no images are visible due to date filtering
+  const hasDateFilters = filters.dateRange.start || filters.dateRange.end;
+  const shouldShowDateHint = hasDateFilters && filteredImages.length === 0 && allImages.length > 0;
+
   // Clear selection when actual filter values change (not when other URL params change)
   useEffect(() => {
     setSelectedImages(new Set());
@@ -449,6 +474,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
             <FilterControls 
               onFilterChange={handleFilterChange}
               availableFilters={availableFilters}
+              currentFilters={filters}
             />
             
             <div className="controls-section">
@@ -659,7 +685,30 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
           })}
           
           {imageGroups.length === 0 && (
-            <div className="empty-state">No images found</div>
+            <div className="empty-state">
+              {shouldShowDateHint ? (
+                <div>
+                  <p>No images found in the selected date range.</p>
+                  <p>Try clearing the date filters or selecting a broader range.</p>
+                  <button 
+                    onClick={() => updateFilters({ dateStart: '', dateEnd: '' })}
+                    style={{ 
+                      marginTop: '0.5rem', 
+                      padding: '0.5rem 1rem', 
+                      backgroundColor: '#61dafb', 
+                      color: '#000',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Clear Date Filters
+                  </button>
+                </div>
+              ) : (
+                "No images found"
+              )}
+            </div>
           )}
         </div>
       </div>
