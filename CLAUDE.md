@@ -205,6 +205,11 @@ Replaced recursive file finding with an in-memory directory tree cache for bette
   - 5-minute cache TTL reduces filesystem operations
   - Automatic background cache building on server startup
   - O(1) file lookups for image preview/access
+  - **Integrated cache refresh**: Directory tree cache automatically refreshed when:
+    - Server starts up
+    - Project cache refresh is triggered (API or expiration)
+    - Target cache refresh is triggered (API or expiration)
+    - Manual directory cache refresh endpoint called
   - Cache rebuilds only when needed or manually triggered
 
 ### Development Workflow

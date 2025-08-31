@@ -37,9 +37,9 @@ pub async fn refresh_file_cache(
 ) -> Result<Json<ApiResponse<FileCheckResponse>>, AppError> {
     let start_time = std::time::Instant::now();
 
-    tracing::info!("🔄 Starting file cache refresh");
+    tracing::info!("🔄 Starting file cache refresh (includes directory tree cache)");
 
-    // Refresh projects (this will do its own atomic cache update)
+    // Refresh projects (this will also refresh the directory tree cache first)
     refresh_project_cache(&state).await?;
 
     // Get stats
@@ -165,6 +165,14 @@ pub async fn refresh_project_cache(state: &Arc<AppState>) -> Result<(), AppError
     let start_time = std::time::Instant::now();
     tracing::debug!("🔄 Refreshing project cache");
 
+    // First, refresh the directory tree cache to ensure file lookups are up-to-date
+    if let Err(e) = state.rebuild_directory_tree() {
+        tracing::warn!("⚠️ Directory tree cache refresh failed during project cache refresh: {}", e);
+        // Continue with project cache refresh even if directory tree refresh fails
+    } else {
+        tracing::debug!("✅ Directory tree cache refreshed");
+    }
+
     // Get all projects and their sample images in one database operation to minimize lock time
     let projects_with_sample_images = {
         let conn = state.db();
@@ -271,38 +279,6 @@ async fn check_project_files_from_samples(
     Ok(false)
 }
 
-// Legacy function kept for compatibility with target cache refresh
-async fn check_project_has_files(state: &Arc<AppState>, project_id: i32) -> Result<bool, AppError> {
-    let images_to_check = {
-        let conn = state.db();
-        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
-        let db = Database::new(&conn);
-
-        db.query_images(None, None, None, None)
-            .map_err(|_| AppError::DatabaseError)?
-            .into_iter()
-            .filter(|(img, _, _)| img.project_id == project_id)
-            .take(5) // Check up to 5 images
-            .collect::<Vec<_>>()
-    };
-
-    for (image, _, target_name) in images_to_check {
-        if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&image.metadata) {
-            if let Some(filename) = metadata["FileName"].as_str() {
-                let file_only = filename
-                    .split(&['\\', '/'][..])
-                    .next_back()
-                    .unwrap_or(filename);
-                if find_fits_file(state, &image, &target_name, file_only).is_ok() {
-                    return Ok(true);
-                }
-            }
-        }
-    }
-
-    Ok(false)
-}
-
 pub async fn list_targets(
     State(state): State<Arc<AppState>>,
     Path(project_id): Path<i32>,
@@ -375,6 +351,25 @@ pub async fn list_targets(
 async fn refresh_target_cache(state: &Arc<AppState>, project_id: i32) -> Result<(), AppError> {
     let start_time = std::time::Instant::now();
     tracing::debug!("🔄 Refreshing target cache for project {}", project_id);
+
+    // Check if directory tree cache needs refreshing before file lookups
+    {
+        let cache = state.directory_tree_cache.read().unwrap();
+        let needs_refresh = match cache.as_ref() {
+            Some(tree) => tree.is_older_than(std::time::Duration::from_secs(300)), // 5 minutes
+            None => true, // No cache exists
+        };
+        
+        if needs_refresh {
+            drop(cache); // Release read lock before rebuilding
+            if let Err(e) = state.rebuild_directory_tree() {
+                tracing::warn!("⚠️ Directory tree cache refresh failed during target cache refresh: {}", e);
+                // Continue with target cache refresh even if directory tree refresh fails
+            } else {
+                tracing::debug!("✅ Directory tree cache refreshed for target cache");
+            }
+        }
+    }
 
     let targets_to_check = {
         let conn = state.db();

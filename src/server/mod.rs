@@ -67,20 +67,7 @@ pub async fn run_server(
     tokio::spawn(async move {
         tracing::info!("🔄 Starting background cache refresh...");
         
-        // Build directory tree cache first (this is fast and needed for file finding)
-        if let Err(e) = state_clone.rebuild_directory_tree() {
-            tracing::warn!("⚠️ Directory tree cache build failed: {:?}", e);
-        } else {
-            if let Some(stats) = state_clone.get_directory_tree_stats() {
-                tracing::info!(
-                    "✅ Directory tree cache built - {} files, {} directories",
-                    stats.total_files,
-                    stats.total_directories
-                );
-            }
-        }
-        
-        // Then refresh project file existence cache
+        // Refresh project cache (this will also build directory tree cache first)
         if let Err(e) = handlers::refresh_project_cache(&state_clone).await {
             tracing::warn!("⚠️ Project cache refresh failed: {:?}", e);
             tracing::info!("📝 Cache will be refreshed on first request");
