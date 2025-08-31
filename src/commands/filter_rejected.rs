@@ -209,7 +209,10 @@ fn process_file_movement(
                     if verbose || matching_paths.len() > 1 {
                         println!("  Found via directory tree cache: {}", found_path.display());
                         if matching_paths.len() > 1 {
-                            println!("  (Found {} total matches, using first existing one)", matching_paths.len());
+                            println!(
+                                "  (Found {} total matches, using first existing one)",
+                                matching_paths.len()
+                            );
                         }
                     }
                     found_path.clone()
@@ -218,11 +221,23 @@ fn process_file_movement(
                     if verbose {
                         println!("  All cached paths are stale for: {}", file_only);
                     }
-                    return handle_file_not_found(image, &file_only, statistical_rejections, verbose, &possible_paths);
+                    return handle_file_not_found(
+                        image,
+                        &file_only,
+                        statistical_rejections,
+                        verbose,
+                        &possible_paths,
+                    );
                 }
             } else {
                 // File not found in directory tree cache
-                return handle_file_not_found(image, &file_only, statistical_rejections, verbose, &possible_paths);
+                return handle_file_not_found(
+                    image,
+                    &file_only,
+                    statistical_rejections,
+                    verbose,
+                    &possible_paths,
+                );
             }
         }
     };

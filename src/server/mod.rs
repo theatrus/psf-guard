@@ -66,7 +66,7 @@ pub async fn run_server(
     let state_clone = Arc::clone(&state);
     tokio::spawn(async move {
         tracing::info!("🔄 Starting background cache refresh...");
-        
+
         // Refresh project cache (this will also build directory tree cache first)
         if let Err(e) = handlers::refresh_project_cache(&state_clone).await {
             tracing::warn!("⚠️ Project cache refresh failed: {:?}", e);
@@ -90,7 +90,10 @@ pub async fn run_server(
     let api_routes = Router::new()
         .route("/info", get(handlers::get_server_info))
         .route("/refresh-cache", put(handlers::refresh_file_cache))
-        .route("/refresh-directory-cache", put(handlers::refresh_directory_tree_cache))
+        .route(
+            "/refresh-directory-cache",
+            put(handlers::refresh_directory_tree_cache),
+        )
         .route("/projects", get(handlers::list_projects))
         .route(
             "/projects/{project_id}/targets",

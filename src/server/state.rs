@@ -106,7 +106,8 @@ impl AppState {
             let cache = self.directory_tree_cache.read().unwrap();
             if let Some(ref tree) = *cache {
                 // Check if cache is still valid (not too old)
-                if !tree.is_older_than(Duration::from_secs(300)) { // 5 minute cache
+                if !tree.is_older_than(Duration::from_secs(300)) {
+                    // 5 minute cache
                     return Ok(Arc::new(tree.clone()));
                 }
             }
@@ -121,7 +122,7 @@ impl AppState {
         tracing::info!("🌳 Building directory tree cache for: {}", self.image_dir);
         let tree = DirectoryTree::build(&self.image_dir_path)?;
         let stats = tree.stats();
-        
+
         tracing::info!(
             "✅ Directory tree built: {} files, {} directories (age: {})",
             stats.total_files,

@@ -54,7 +54,11 @@ fn read_single_fits(path: &Path, verbose: bool, format: &str) -> Result<()> {
 fn read_fits_directory(dir: &Path, verbose: bool, format: &str) -> Result<()> {
     // Build directory tree cache and get FITS files
     let directory_tree = DirectoryTree::build(dir)?;
-    let fits_files: Vec<PathBuf> = directory_tree.get_fits_files().into_iter().cloned().collect();
+    let fits_files: Vec<PathBuf> = directory_tree
+        .get_fits_files()
+        .into_iter()
+        .cloned()
+        .collect();
 
     if fits_files.is_empty() {
         match format.to_lowercase().as_str() {
@@ -353,8 +357,6 @@ pub fn format_fits_metadata(metadata: &FitsMetadata, verbose: bool) -> String {
 
     output
 }
-
-
 
 #[derive(serde::Serialize)]
 struct SimplifiedFitsMetadata {

@@ -77,11 +77,10 @@ pub async fn refresh_directory_tree_cache(
     tracing::info!("🌳 Starting directory tree cache refresh");
 
     // Force rebuild the directory tree cache
-    let directory_tree = state.rebuild_directory_tree()
-        .map_err(|e| {
-            tracing::error!("Failed to rebuild directory tree cache: {}", e);
-            AppError::InternalError(format!("Cache rebuild failed: {}", e))
-        })?;
+    let directory_tree = state.rebuild_directory_tree().map_err(|e| {
+        tracing::error!("Failed to rebuild directory tree cache: {}", e);
+        AppError::InternalError(format!("Cache rebuild failed: {}", e))
+    })?;
 
     let build_time_ms = start_time.elapsed().as_millis();
     let stats = directory_tree.stats();
@@ -167,7 +166,10 @@ pub async fn refresh_project_cache(state: &Arc<AppState>) -> Result<(), AppError
 
     // First, refresh the directory tree cache to ensure file lookups are up-to-date
     if let Err(e) = state.rebuild_directory_tree() {
-        tracing::warn!("⚠️ Directory tree cache refresh failed during project cache refresh: {}", e);
+        tracing::warn!(
+            "⚠️ Directory tree cache refresh failed during project cache refresh: {}",
+            e
+        );
         // Continue with project cache refresh even if directory tree refresh fails
     } else {
         tracing::debug!("✅ Directory tree cache refreshed");
@@ -359,11 +361,14 @@ async fn refresh_target_cache(state: &Arc<AppState>, project_id: i32) -> Result<
             Some(tree) => tree.is_older_than(std::time::Duration::from_secs(300)), // 5 minutes
             None => true, // No cache exists
         };
-        
+
         if needs_refresh {
             drop(cache); // Release read lock before rebuilding
             if let Err(e) = state.rebuild_directory_tree() {
-                tracing::warn!("⚠️ Directory tree cache refresh failed during target cache refresh: {}", e);
+                tracing::warn!(
+                    "⚠️ Directory tree cache refresh failed during target cache refresh: {}",
+                    e
+                );
                 // Continue with target cache refresh even if directory tree refresh fails
             } else {
                 tracing::debug!("✅ Directory tree cache refreshed for target cache");
@@ -1019,11 +1024,10 @@ fn find_fits_file(
 
     // Try directory tree cache lookup as fallback
     let search_start = std::time::Instant::now();
-    let directory_tree = state.get_directory_tree()
-        .map_err(|e| {
-            tracing::error!("Failed to get directory tree cache: {}", e);
-            AppError::InternalError("Directory cache error".to_string())
-        })?;
+    let directory_tree = state.get_directory_tree().map_err(|e| {
+        tracing::error!("Failed to get directory tree cache: {}", e);
+        AppError::InternalError("Directory cache error".to_string())
+    })?;
 
     if let Some(matching_paths) = directory_tree.find_file(filename) {
         // Find the first path that actually exists (in case of stale cache)

@@ -378,7 +378,11 @@ fn analyze_fits_directory(
 ) -> Result<()> {
     // Build directory tree cache and get FITS files
     let directory_tree = DirectoryTree::build(dir_path)?;
-    let fits_files: Vec<PathBuf> = directory_tree.get_fits_files().into_iter().cloned().collect();
+    let fits_files: Vec<PathBuf> = directory_tree
+        .get_fits_files()
+        .into_iter()
+        .cloned()
+        .collect();
 
     if fits_files.is_empty() {
         println!("No FITS files found in directory: {}", dir_path.display());
