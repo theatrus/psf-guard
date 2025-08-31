@@ -18,7 +18,7 @@ pub struct Target {
     pub project_id: i32,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcquiredImage {
     pub id: i32,
     pub project_id: i32,

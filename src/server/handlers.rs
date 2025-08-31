@@ -211,9 +211,23 @@ pub async fn refresh_project_cache(state: &Arc<AppState>) -> Result<(), AppError
                 .push((image, target_name));
         }
 
-        // Limit to 5 samples per project
+        // Take better distributed samples per project (up to 10 samples, spread across the dataset)
         for samples in project_images.values_mut() {
-            samples.truncate(5);
+            if samples.len() > 10 {
+                // Take samples from different parts of the dataset
+                let total = samples.len();
+                let mut selected = Vec::new();
+                
+                // Take samples at regular intervals across the entire dataset
+                for i in 0..10 {
+                    let index = (i * total) / 10;
+                    if index < samples.len() {
+                        selected.push(samples[index].clone());
+                    }
+                }
+                
+                *samples = selected;
+            }
         }
 
         (projects, project_images)
@@ -228,9 +242,9 @@ pub async fn refresh_project_cache(state: &Arc<AppState>) -> Result<(), AppError
     let mut cache_updates = HashMap::new();
     let mut projects_with_files = 0;
 
-    for project in projects {
+    for project in &projects {
         let has_files = if let Some(images) = project_images.get(&project.id) {
-            tracing::trace!(
+            tracing::debug!(
                 "🔎 Checking project '{}' (ID: {}) with {} sample images",
                 project.name,
                 project.id,
@@ -238,7 +252,7 @@ pub async fn refresh_project_cache(state: &Arc<AppState>) -> Result<(), AppError
             );
             check_project_files_from_samples(state, images).await?
         } else {
-            tracing::trace!(
+            tracing::debug!(
                 "🔎 Project '{}' (ID: {}) has no images",
                 project.name,
                 project.id
@@ -246,11 +260,20 @@ pub async fn refresh_project_cache(state: &Arc<AppState>) -> Result<(), AppError
             false
         };
 
+        tracing::debug!("📊 Project '{}' (ID: {}): has_files = {}", project.name, project.id, has_files);
+
         if has_files {
             projects_with_files += 1;
         }
 
         cache_updates.insert(project.id, has_files);
+    }
+
+    // Log which projects have files for debugging before updating cache
+    for (project_id, has_files) in &cache_updates {
+        if let Some(project) = projects.iter().find(|p| p.id == *project_id) {
+            tracing::debug!("📊 Project '{}' (ID: {}): has_files = {}", project.name, project.id, has_files);
+        }
     }
 
     // Only acquire write lock for the final atomic update
@@ -261,7 +284,7 @@ pub async fn refresh_project_cache(state: &Arc<AppState>) -> Result<(), AppError
     }
 
     let duration = start_time.elapsed();
-    tracing::debug!(
+    tracing::info!(
         "✅ Project cache refresh completed in {:?} - {}/{} projects have files",
         duration,
         projects_with_files,
@@ -276,20 +299,59 @@ async fn check_project_files_from_samples(
     state: &Arc<AppState>,
     images: &[(crate::models::AcquiredImage, String)],
 ) -> Result<bool, AppError> {
-    for (image, target_name) in images {
-        if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&image.metadata) {
-            if let Some(filename) = metadata["FileName"].as_str() {
-                let file_only = filename
-                    .split(&['\\', '/'][..])
-                    .next_back()
-                    .unwrap_or(filename);
-                if find_fits_file(state, image, target_name, file_only).is_ok() {
-                    return Ok(true);
+    tracing::debug!("🔍 Checking project files from {} sample images", images.len());
+    
+    let mut found_files = 0;
+    let mut total_checks = 0;
+    let mut sample_errors = Vec::new();
+    
+    for (idx, (image, target_name)) in images.iter().enumerate() {
+        tracing::debug!("  🖼️  Sample {} - Image ID: {}, Target: {}", idx + 1, image.id, target_name);
+        
+        match serde_json::from_str::<serde_json::Value>(&image.metadata) {
+            Ok(metadata) => {
+                if let Some(filename) = metadata["FileName"].as_str() {
+                    let file_only = filename
+                        .split(&['\\', '/'][..])
+                        .next_back()
+                        .unwrap_or(filename);
+                        
+                    tracing::debug!("    📄 Filename from metadata: {} -> {}", filename, file_only);
+                    total_checks += 1;
+                        
+                    match find_fits_file(state, image, target_name, file_only) {
+                        Ok(path) => {
+                            tracing::debug!("    ✅ Found file: {:?}", path);
+                            found_files += 1;
+                        }
+                        Err(e) => {
+                            tracing::debug!("    ❌ File not found: {:?}", e);
+                        }
+                    }
+                } else {
+                    tracing::debug!("    ❌ No FileName in metadata");
+                    sample_errors.push(format!("Image {} missing FileName", image.id));
                 }
+            }
+            Err(e) => {
+                tracing::debug!("    ❌ Failed to parse metadata JSON: {}", e);
+                sample_errors.push(format!("Image {} metadata parse error", image.id));
             }
         }
     }
-    Ok(false)
+    
+    let has_files = found_files > 0;
+    tracing::debug!(
+        "📊 Project check result: {}/{} files found, {} sample errors, has_files = {}",
+        found_files,
+        total_checks,
+        sample_errors.len(),
+        has_files
+    );
+    
+    // If we found at least one file, the project has files
+    // Only return false if we found zero files out of valid samples
+    Ok(has_files)
 }
 
 pub async fn list_targets(
@@ -985,10 +1047,11 @@ fn find_fits_file(
     use crate::commands::filter_rejected::get_possible_paths;
 
     tracing::debug!(
-        "🔍 find_fits_file called for image_id={}, filename={}, target={}",
+        "🔍 find_fits_file called for image_id={}, filename={}, target={}, base_dir={}",
         image.id,
         filename,
-        target_name
+        target_name,
+        state.image_dir
     );
 
     // Extract date from acquired_date
@@ -1005,7 +1068,7 @@ fn find_fits_file(
         })?;
 
     let date_str = acquired_date.format("%Y-%m-%d").to_string();
-    tracing::trace!("📅 Date string for image {}: {}", image.id, date_str);
+    tracing::debug!("📅 Date string for image {}: {}", image.id, date_str);
 
     // Try to find the file in different possible locations
     let possible_paths = get_possible_paths(&state.image_dir, &date_str, target_name, filename);
@@ -1017,8 +1080,20 @@ fn find_fits_file(
         state.image_dir
     );
 
+    // First, let's verify the base directory exists
+    let base_path = std::path::Path::new(&state.image_dir);
+    if !base_path.exists() {
+        tracing::error!(
+            "❌ Base directory does not exist: {}",
+            state.image_dir
+        );
+        return Err(AppError::BadRequest(format!("Base directory does not exist: {}", state.image_dir)));
+    }
+
+    tracing::debug!("✅ Base directory exists: {}", state.image_dir);
+
     for (idx, path) in possible_paths.iter().enumerate() {
-        tracing::trace!("  📁 Path {}: {:?}", idx + 1, path);
+        tracing::debug!("  📁 Path {}: {:?} (exists: {})", idx + 1, path, path.exists());
         if path.exists() {
             tracing::info!("✅ Found file at path {}: {:?}", idx + 1, path);
             return Ok(path.clone());
@@ -1037,7 +1112,23 @@ fn find_fits_file(
         AppError::InternalError("Directory cache error".to_string())
     })?;
 
+    tracing::debug!(
+        "🌳 Directory tree cache has {} total files, {} unique filenames",
+        directory_tree.stats().total_files,
+        directory_tree.stats().unique_filenames
+    );
+
     if let Some(matching_paths) = directory_tree.find_file(filename) {
+        tracing::debug!(
+            "🔍 Found {} matches in directory tree cache for {}",
+            matching_paths.len(),
+            filename
+        );
+        
+        for (idx, cached_path) in matching_paths.iter().enumerate() {
+            tracing::debug!("  📁 Cache match {}: {:?} (exists: {})", idx + 1, cached_path, cached_path.exists());
+        }
+        
         // Find the first path that actually exists (in case of stale cache)
         if let Some(found_path) = matching_paths.iter().find(|p| p.exists()) {
             tracing::info!(
@@ -1045,13 +1136,6 @@ fn find_fits_file(
                 search_start.elapsed(),
                 found_path
             );
-            if matching_paths.len() > 1 {
-                tracing::debug!(
-                    "🔍 Found {} total matches for {} (using first existing one)",
-                    matching_paths.len(),
-                    filename
-                );
-            }
             return Ok(found_path.clone());
         } else {
             tracing::warn!(
@@ -1060,6 +1144,11 @@ fn find_fits_file(
                 matching_paths.len()
             );
         }
+    } else {
+        tracing::debug!(
+            "🔍 No matches in directory tree cache for filename: {}",
+            filename
+        );
     }
 
     tracing::warn!(
