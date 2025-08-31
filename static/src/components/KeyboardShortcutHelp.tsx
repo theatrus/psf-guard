@@ -18,7 +18,7 @@ export default function KeyboardShortcutHelp({ onClose }: KeyboardShortcutHelpPr
     ]},
     { category: 'Grading', items: [
       { key: 'A', description: 'Accept image (or batch if multiple selected)' },
-      { key: 'R', description: 'Reject image (or batch if multiple selected)' },
+      { key: 'X', description: 'Reject image (or batch if multiple selected)' },
       { key: 'U', description: 'Unmark image (or batch if multiple selected)' },
     ]},
     { category: 'View Options', items: [

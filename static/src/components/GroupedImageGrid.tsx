@@ -398,7 +398,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
       gradeImage('accepted');
     }
   }, [gradeImage, gradeBatch, selectedImages.size]);
-  useHotkeys('r', () => {
+  useHotkeys('x', () => {
     if (selectedImages.size > 1) {
       gradeBatch('rejected');
     } else {

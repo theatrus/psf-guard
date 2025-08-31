@@ -97,7 +97,7 @@ export default function ImageDetailView({
     onPrevious(); // J/Left goes to older image (lower index in oldest-first sort)
   }, { enableOnFormTags: true }, [onPrevious]);
   useHotkeys('a', () => onGrade('accepted'), [onGrade]);
-  useHotkeys('r', () => onGrade('rejected'), [onGrade]);
+  useHotkeys('x', () => onGrade('rejected'), [onGrade]);
   useHotkeys('u', () => onGrade('pending'), [onGrade]);
   useHotkeys('s', () => {
     setShowStars(s => !s);
@@ -468,7 +468,7 @@ export default function ImageDetailView({
                 className="action-button reject" 
                 onClick={() => onGrade('rejected')}
               >
-                Reject (R)
+                Reject (X)
               </button>
               <button 
                 className="action-button pending" 
@@ -499,7 +499,7 @@ export default function ImageDetailView({
                 <span>K/→ Next</span>
                 <span>J/← Prev</span>
                 <span>A Accept</span>
-                <span>R Reject</span>
+                <span>X Reject</span>
                 <span>U Pending</span>
                 <span>S Stars {showStars ? '✓' : ''}</span>
                 <span>P PSF {showPsf ? '✓' : ''}</span>

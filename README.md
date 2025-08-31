@@ -81,7 +81,7 @@ psf-guard filter-rejected db.sqlite /images --project "M31"
 | Key | Action | Key | Action |
 |-----|--------|-----|--------|
 | K/→ | Next image | A | Accept |
-| J/← | Previous | R | Reject |
+| J/← | Previous | X | Reject |
 | C | Compare view | U | Unmark |
 | S | Toggle stars | +/- | Zoom |
 | P | Toggle PSF | F | Fit screen |
