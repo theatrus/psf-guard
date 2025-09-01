@@ -2,22 +2,18 @@
 
 ## Project Overview
 
-PSF Guard is a Rust CLI utility for analyzing N.I.N.A. Target Scheduler databases and managing astronomical image files. It includes a complete implementation of N.I.N.A.'s star detection algorithm, PSF fitting capabilities, and a React-based web interface for image grading.
+PSF Guard is a Rust CLI utility for analyzing N.I.N.A. Target Scheduler databases and managing astronomical image files. Features N.I.N.A. star detection algorithm, PSF fitting, and React web interface.
 
 ## Quick Start
 
 ```bash
-# Development setup
+# Development
 cargo fmt && cargo clippy && cargo test
-cargo check --features opencv
 
-# Run server (single directory)
-cargo run -- server db.sqlite images/
+# Run server (supports multiple directories)
+cargo run -- server db.sqlite images1/ images2/
 
-# Run server (multiple directories with priority order)
-cargo run -- server db.sqlite images1/ images2/ images3/
-
-# Build for production (includes embedded frontend)
+# Build for production
 cargo build --release
 ```
 
@@ -25,164 +21,100 @@ cargo build --release
 
 ### Core Components
 - **CLI**: Command-pattern with clap-derive
-- **Database**: SQLite via rusqlite with parameterized queries
-- **Star Detection**: N.I.N.A. algorithm port + HocusFocus detector
+- **Database**: SQLite via rusqlite
+- **Star Detection**: N.I.N.A. algorithm + HocusFocus detector
 - **Web Server**: Axum + embedded React frontend
-- **File Cache**: Directory tree with O(1) lookups
+- **Cache System**: Directory tree + file cache with 5-minute TTL
 
-### Key Algorithms
-
-#### Star Detection Pipeline
-1. Load FITS → Calculate statistics → Apply MTF stretch
-2. Convert to 8-bit → Noise reduction → Resize for processing
-3. Edge detection (Canny/NoBlur) → SIS threshold → Binary dilation
-4. Blob detection → Circle analysis → Calculate HFR on original data
-
-#### Statistical Grading
-- Groups images by (target_id, filter_name)
-- Z-score for normal distributions
-- MAD for skewed distributions  
-- Cloud detection with rolling baseline
-- Sequence analysis for temporal patterns
-
-## Recent Updates
-
-### Multi-Directory Support (2025-08-31)
-Added support for scanning multiple image directories with first-hit preference:
-- CLI now accepts multiple directory arguments: `server db.sqlite dir1/ dir2/ dir3/`
-- Directory tree cache scans all directories in priority order
-- File lookup uses first-hit preference - files in earlier directories take precedence
-- Maintains backward compatibility with single directory usage
-- All directories validated at startup, cached together for O(1) lookups
-
-### Image Comparison Zoom Fix (2025-08-31)
-Fixed issue where zoomed images in comparison view would reset when switching images:
-- Right image now always matches left image's resolution choice (original vs large)
-- Removed zoom-based decision making for right image
-- Added dedicated effect to sync resolution states
-- Maintains zoom continuity when switching images at high zoom levels
-
-### Directory Tree Caching (2025-08-31)
-- Replaced recursive file finding with in-memory cache
-- Single scan at startup, O(1) filename lookups
-- 5-minute TTL with automatic refresh
-- Integrated with project/target cache refresh
-
-### Web UI Enhancements (2025-08-30)
-- Smart dynamic image loading (large → original, one-way)
-- Visual scale always represents actual size (100% = original)
-- Non-blocking server startup with background cache refresh
-- Comprehensive cache key improvements to prevent collisions
+### Cache System (Current)
+- **File Cache**: Database-based existence checking, auto-refreshed every 5 minutes
+- **Directory Tree**: In-memory filename→path mapping, auto-refreshed every 5 minutes
+- **Singleton Refresh**: Non-blocking with real-time progress tracking via SSE
+- **Manual Refresh**: Button (file cache) + Shift+click (both caches)
+- **Multi-Directory**: Scans multiple directories with first-hit preference
 
 ## Database Schema
 
-Key tables and fields:
 ```sql
 project (1:many) → target (1:many) → acquiredimage
 
 acquiredimage:
 - gradingStatus: 0=Pending, 1=Accepted, 2=Rejected
-- metadata: JSON with FileName and imaging parameters
-- rejectreason: Human-readable rejection reason
+- metadata: JSON with FileName
 ```
 
-Column naming is inconsistent - use exact names:
-- `Id`, `projectId`, `targetId` (not snake_case)
-- `acquireddate`, `filtername` (not camelCase)
+**Column naming**: Use exact case - `Id`, `projectId`, `acquireddate`, `filtername`
 
 ## Web Server
 
 ### API Endpoints
 ```
 GET  /api/projects
-GET  /api/projects/{id}/targets
 GET  /api/images?project_id=X&target_id=Y
 PUT  /api/images/{id}/grade
 GET  /api/images/{id}/preview?size=screen|large|original
-GET  /api/images/{id}/annotated
-GET  /api/images/{id}/psf
-GET  /api/images/{id}/stars
+POST /api/cache/refresh (file cache)
+POST /api/cache/refresh-directory (directory cache)
+GET  /api/cache/status (SSE progress stream)
 ```
 
 ### Frontend Architecture
 - React 18 + TypeScript + Vite
 - TanStack Query for server state
-- Custom hooks: useImageZoom, useGrading
-- Smart image loading with state machine
+- Hash router with URL state management
 - Embedded in binary for single-file deployment
 
-### Key Features
-- File existence checking with visual indicators
+### Navigation Fix (2025-09-01)
+Fixed overview→grid navigation by building URLs directly:
+- `navigate('/grid?project=5')` instead of state coordination
+- Eliminates race conditions and timing issues
+- Works for projects, targets, and "all projects"
+
+## Key Features
+
+### Web UI
+- Smart image loading (preview → full resolution)
 - Batch operations with multi-selection
-- Undo/redo system (Ctrl+Z/Y)
-- Side-by-side comparison with independent zoom
-- Keyboard shortcuts throughout
+- Undo/redo system (Ctrl+Z/Y)  
+- Side-by-side comparison with zoom sync
+- Real-time cache refresh with progress tracking
 
-## Star Detection Implementation
-
-### N.I.N.A. Algorithm
-Key discoveries from porting the C# code:
-1. **MTF Stretching**: Applied before detection, original data for HFR
-2. **MAD Calculation**: Histogram-based, not simple sorting
-3. **Banker's Rounding**: .NET's "round half to even" strategy
-4. **Edge Detection**: Normal uses blur, High/Highest uses NoBlur
-
-### OpenCV Integration
-- Optional via `--features opencv`
-- Automatic fallback to pure Rust
-- Enhances edge detection and morphology
-- Better contour analysis
-
-## PSF Fitting
-
-- Gaussian and Moffat (β=4.0) models
-- Levenberg-Marquardt optimization
-- Sub-pixel bilinear interpolation
-- R² and RMSE metrics
-- FWHM and eccentricity calculations
-
-## Performance Optimizations
-
-- Directory tree caching eliminates recursive searches
-- Image preview caching with comprehensive keys
-- Non-blocking server startup
-- Lazy loading and virtualization in frontend
-- Batch database operations
+### Cache Progress UI (2025-09-01)
+- Smart path truncation showing distinctive parts
+- Pulsating progress indicator with integrated timer
+- Fixed dimensions to prevent layout shifts
+- Hover tooltips for full paths
 
 ## Development Workflow
 
-### Essential Commands
 ```bash
-# Before committing
+# Essential commands
 cargo fmt && cargo clippy && cargo test
-
-# OpenCV setup (macOS)
-brew install opencv
-export DYLD_FALLBACK_LIBRARY_PATH="$(xcode-select --print-path)/Toolchains/XcodeDefault.xctoolchain/usr/lib/"
 
 # Run with logging
 RUST_LOG=debug cargo run -- server db.sqlite images/
 
-# Frontend development
+# Frontend development  
 cd static && npm run dev
+
+# OpenCV setup (macOS)
+brew install opencv
+export DYLD_FALLBACK_LIBRARY_PATH="$(xcode-select --print-path)/Toolchains/XcodeDefault.xctoolchain/usr/lib/"
 ```
 
-### Logging
-- `RUST_LOG=error|warn|info|debug|trace`
-- Emoji prefixes for visual categorization
-- Structured timing and metrics
-- Clean output without module paths
+### Recent Fixes
+- **Navigation**: Direct URL building eliminates timing issues
+- **Cache Progress**: Real-time directory scanning with smart path display
+- **Multi-Directory**: Priority-based file lookup with comprehensive caching
 
-## Known Issues
+## Key Implementation Details
 
-1. **Path Separators**: Mixed Windows/Unix paths may cause issues
-2. **Large Metadata**: Very large JSON could cause memory issues
-3. **Timezone Handling**: Dates stored as Unix timestamps
+### Star Detection
+- N.I.N.A. algorithm port with MTF stretching
+- Optional OpenCV integration (`--features opencv`)
+- PSF fitting: Gaussian/Moffat models
 
-## Future Improvements
-
-1. **Parallel Processing**: File operations
-2. **Progress Bars**: Long operations
-3. **Machine Learning**: Train on accepted/rejected images
-4. **Real-time Monitoring**: Watch mode for live sessions
-5. **Configuration File**: .psfguardrc support
+### Performance
+- O(1) file lookups via directory tree cache
+- Non-blocking server startup with background refresh
+- Comprehensive cache key strategy prevents collisions
