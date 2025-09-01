@@ -5,6 +5,13 @@
 
 A Rust utility for astronomical image analysis and grading, with N.I.N.A. Target Scheduler integration.
 
+## Screenshots
+
+| Overview Dashboard | Image Grid | Side-by-Side Comparison |
+|:--:|:--:|:--:|
+| ![Overview](docs/overview.png) | ![Grid](docs/image_grid.png) | ![Compare](docs/compare.png) |
+| Complete project statistics and progress tracking | Grid view with filtering and batch operations | Synchronized zoom and detailed image comparison |
+
 ## Features
 
 - **N.I.N.A. Integration**: Query and analyze Target Scheduler SQLite databases
@@ -16,7 +23,7 @@ A Rust utility for astronomical image analysis and grading, with N.I.N.A. Target
 
 ## Quick Start
 
-### Docker (Recommended)
+### Docker (Recommended for Linux)
 
 ```bash
 # Pull and run
@@ -28,6 +35,30 @@ docker run -d -p 3000:3000 \
   -v /path/to/psf-guard.toml:/data/config.toml:ro \
   ghcr.io/theatrus/psf-guard:latest \
   server --config /data/config.toml
+```
+
+### Pre-built Binaries
+
+**Note**: Native binaries require system libraries (SQLite, image processing libraries) that are not included. Docker is recommended for Linux deployments.
+
+Download the latest release for your platform:
+
+| Platform | Download | Notes |
+|----------|----------|-------|
+| **Linux x64** | [`psf-guard-linux-x64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-linux-x64) | Requires system libraries - use Docker instead |
+| **macOS x64** | [`psf-guard-macos-x64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-macos-x64) | May require system libraries |
+| **Windows x64** | [`psf-guard-windows-x64.exe`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-windows-x64.exe) | Static binary |
+
+```bash
+# Linux/macOS - make executable and run
+chmod +x psf-guard-*
+./psf-guard-linux-x64 server --config psf-guard.toml
+
+# Windows
+psf-guard-windows-x64.exe server --config psf-guard.toml
+
+# Or with direct arguments
+./psf-guard-linux-x64 server database.sqlite /path/to/images/
 ```
 
 ### Build from Source
@@ -122,12 +153,30 @@ Run with: `docker-compose up -d`
 
 ## Web Interface
 
+### Dashboard Overview
+The main dashboard provides a comprehensive view of your imaging projects:
+- **Statistics Cards**: Projects, targets, images, and completion percentage
+- **Progress Visualization**: Color-coded grading progress bars
+- **File Status**: Real-time file discovery and cache status
+- **Filter Summary**: Date ranges and filter usage statistics
+
+### Image Grid View
+- **Smart Filtering**: Filter by project, target, status, and date range
+- **Batch Operations**: Multi-select with Shift+Click, Ctrl+Click
+- **Real-time Status**: Accept/reject/unmark with immediate visual feedback
+- **Quick Navigation**: Keyboard shortcuts for efficient workflow
+- **Metadata Display**: HFR, star counts, and acquisition details
+
+### Comparison Mode
+- **Side-by-Side**: Compare images with synchronized zoom and pan
+- **Independent Controls**: Each image can be manipulated separately
+- **Quick Actions**: Accept, reject, or unmark both images simultaneously
+- **Navigation**: Easy switching between image pairs
+
 ### Key Features
 - **Smart Loading**: Fast preview → full resolution on zoom
-- **Comparison View**: Side-by-side with independent zoom/pan  
-- **Batch Operations**: Multi-select with Shift+Click, Ctrl+Click
-- **Undo/Redo**: Full history with Ctrl+Z/Ctrl+Y
 - **Cache Progress**: Real-time directory scanning with progress indicators
+- **Undo/Redo**: Full history with Ctrl+Z/Ctrl+Y
 
 ### Keyboard Shortcuts
 
