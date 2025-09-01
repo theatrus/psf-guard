@@ -168,6 +168,7 @@ pub async fn get_cache_refresh_progress(
                 directories_total: progress.directories_total,
                 directories_processed: progress.directories_processed,
                 current_directory_name: progress.current_directory_name.clone(),
+                files_scanned: progress.files_scanned,
                 projects_total: progress.projects_total,
                 projects_processed: progress.projects_processed,
                 current_project_name: progress.current_project_name.clone(),
@@ -187,6 +188,7 @@ pub async fn get_cache_refresh_progress(
                 directories_total: 0,
                 directories_processed: 0,
                 current_directory_name: None,
+                files_scanned: 0,
                 projects_total: 0,
                 projects_processed: 0,
                 current_project_name: None,
@@ -204,38 +206,38 @@ pub async fn get_cache_refresh_progress(
 pub async fn refresh_directory_tree_cache(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<DirectoryTreeResponse>>, AppError> {
-    let start_time = std::time::Instant::now();
+    tracing::info!("🌳 Directory tree cache refresh requested via singleton system");
 
-    tracing::info!("🌳 Starting directory tree cache refresh");
+    // Force directory tree refresh via singleton system (non-blocking)
+    let refresh_status = state.force_directory_tree_refresh();
+    
+    match refresh_status {
+        crate::server::state::RefreshStatus::InProgressWait 
+        | crate::server::state::RefreshStatus::InProgressServeStale => {
+            tracing::info!("🔄 Directory tree refresh started via singleton system");
+        }
+        crate::server::state::RefreshStatus::NeedsRefresh => {
+            tracing::info!("🔄 Directory tree refresh was needed and started");
+        }
+        crate::server::state::RefreshStatus::NotNeeded => {
+            // This shouldn't happen since we cleared the cache, but handle it
+            tracing::info!("🌳 Directory tree refresh not needed (unexpected)");
+        }
+    }
 
-    // Force rebuild the directory tree cache
-    let directory_tree = state.rebuild_directory_tree().map_err(|e| {
-        tracing::error!("Failed to rebuild directory tree cache: {}", e);
-        AppError::InternalError(format!("Cache rebuild failed: {}", e))
-    })?;
-
-    let build_time_ms = start_time.elapsed().as_millis();
-    let stats = directory_tree.stats();
-
+    // Return immediate response with basic info since this is now non-blocking
+    // The actual directory tree will be built in the background with progress tracking
     let response = DirectoryTreeResponse {
-        total_files: stats.total_files,
-        unique_filenames: stats.unique_filenames,
-        total_directories: stats.total_directories,
-        age_seconds: stats.age.as_secs(),
-        build_time_ms,
-        root_directory: stats
-            .roots
-            .iter()
-            .map(|r| r.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", "),
+        total_files: 0, // Will be updated when refresh completes
+        unique_filenames: 0,
+        total_directories: 0,
+        age_seconds: 0,
+        build_time_ms: 0, // Non-blocking, so no build time to report
+        root_directory: state.image_dirs.join(", "),
     };
 
     tracing::info!(
-        "✅ Directory tree cache refresh completed in {}ms - {} files, {} directories",
-        build_time_ms,
-        stats.total_files,
-        stats.total_directories
+        "✅ Directory tree cache refresh initiated (non-blocking) - check progress via /api/cache-progress"
     );
 
     Ok(Json(ApiResponse::success(response)))

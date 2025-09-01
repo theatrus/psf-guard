@@ -25,13 +25,13 @@ impl DirectoryTree {
 
     /// Build a complete directory tree in memory from multiple root directories
     pub fn build_multiple(roots: &[&Path]) -> Result<Self> {
-        Self::build_multiple_with_progress(roots, &mut |_, _| {})
+        Self::build_multiple_with_progress(roots, &mut |_, _, _| {})
     }
 
     /// Build a complete directory tree in memory from multiple root directories with progress callback
     pub fn build_multiple_with_progress<F>(roots: &[&Path], progress_callback: &mut F) -> Result<Self> 
     where
-        F: FnMut(usize, &str), // (directory_index, directory_name)
+        F: FnMut(usize, usize, &str), // (directories_processed, files_processed, current_directory)
     {
         if roots.is_empty() {
             return Err(anyhow::anyhow!(
@@ -52,17 +52,15 @@ impl DirectoryTree {
         let mut total_dirs = 0;
 
         // Process directories in order to maintain priority for first-hit preference
-        for (index, root) in roots.iter().enumerate() {
-            let root_name = root.to_string_lossy().to_string();
-            progress_callback(index, &root_name);
-            
-            tracing::debug!("📁 Scanning directory {}/{}: {:?}", index + 1, roots.len(), root);
-            Self::scan_directory(
+        for root in roots {
+            tracing::debug!("📁 Scanning directory tree: {:?}", root);
+            Self::scan_directory_with_progress(
                 root,
                 &mut file_map,
                 &mut dir_map,
                 &mut total_files,
                 &mut total_dirs,
+                progress_callback,
             )?;
         }
 
@@ -83,14 +81,41 @@ impl DirectoryTree {
         })
     }
 
-    /// Recursively scan a directory and populate the maps
-    fn scan_directory(
+    /// Recursively scan a directory and populate the maps with progress tracking
+    fn scan_directory_with_progress<F>(
         dir: &Path,
         file_map: &mut HashMap<String, Vec<PathBuf>>,
         dir_map: &mut HashMap<PathBuf, Vec<PathBuf>>,
         total_files: &mut usize,
         total_dirs: &mut usize,
-    ) -> Result<()> {
+        progress_callback: &mut F,
+    ) -> Result<()> 
+    where
+        F: FnMut(usize, usize, &str), // (directories_processed, files_processed, current_directory)
+    {
+        // Use the existing scan logic with progress tracking
+        Self::scan_directory_internal(
+            dir, 
+            file_map, 
+            dir_map, 
+            total_files, 
+            total_dirs,
+            progress_callback,
+        )
+    }
+
+    /// Recursively scan a directory and populate the maps (internal implementation)
+    fn scan_directory_internal<F>(
+        dir: &Path,
+        file_map: &mut HashMap<String, Vec<PathBuf>>,
+        dir_map: &mut HashMap<PathBuf, Vec<PathBuf>>,
+        total_files: &mut usize,
+        total_dirs: &mut usize,
+        progress_callback: &mut F,
+    ) -> Result<()> 
+    where
+        F: FnMut(usize, usize, &str),
+    {
         // Skip certain directories to avoid unwanted areas
         if let Some(dir_name) = dir.file_name() {
             let name = dir_name.to_string_lossy();
@@ -114,6 +139,10 @@ impl DirectoryTree {
         let mut dir_contents = Vec::new();
         *total_dirs += 1;
 
+        // Report progress for the current directory being processed
+        let dir_name = dir.to_string_lossy();
+        progress_callback(*total_dirs, *total_files, &dir_name);
+
         for entry in entries {
             let entry = match entry {
                 Ok(entry) => entry,
@@ -127,8 +156,8 @@ impl DirectoryTree {
             dir_contents.push(path.clone());
 
             if path.is_dir() {
-                // Recurse into subdirectories
-                Self::scan_directory(&path, file_map, dir_map, total_files, total_dirs)?;
+                // Recurse into subdirectories with progress tracking
+                Self::scan_directory_internal(&path, file_map, dir_map, total_files, total_dirs, progress_callback)?;
             } else {
                 // Add file to filename map
                 if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
@@ -143,6 +172,17 @@ impl DirectoryTree {
 
         dir_map.insert(dir.to_path_buf(), dir_contents);
         Ok(())
+    }
+
+    /// Recursively scan a directory and populate the maps (backward compatibility version)
+    fn scan_directory(
+        dir: &Path,
+        file_map: &mut HashMap<String, Vec<PathBuf>>,
+        dir_map: &mut HashMap<PathBuf, Vec<PathBuf>>,
+        total_files: &mut usize,
+        total_dirs: &mut usize,
+    ) -> Result<()> {
+        Self::scan_directory_internal(dir, file_map, dir_map, total_files, total_dirs, &mut |_, _, _| {})
     }
 
     /// Find all paths for a given filename

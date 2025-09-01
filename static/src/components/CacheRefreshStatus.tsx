@@ -10,6 +10,7 @@ interface CacheRefreshProgress {
   directories_total: number;
   directories_processed: number;
   current_directory_name: string | null;
+  files_scanned: number;
   projects_total: number;
   projects_processed: number;
   current_project_name: string | null;
@@ -47,6 +48,7 @@ export default function CacheRefreshStatus({ className = '' }: CacheRefreshStatu
   const [isVisible, setIsVisible] = useState(false);
   const [animationPhase, setAnimationPhase] = useState<'fade-in' | 'visible' | 'fade-out'>('fade-in');
   const [wasRefreshing, setWasRefreshing] = useState(false);
+  const [recentDirectories, setRecentDirectories] = useState<string[]>([]);
   
   // Poll for cache refresh status
   const { data: progress } = useQuery({
@@ -55,6 +57,24 @@ export default function CacheRefreshStatus({ className = '' }: CacheRefreshStatu
     refetchInterval: 1000, // Poll every second
     refetchIntervalInBackground: true,
   });
+
+  // Track recent directories for smart truncation
+  useEffect(() => {
+    if (progress?.current_directory_name && progress?.is_refreshing) {
+      setRecentDirectories(prev => {
+        const newDirs = [...prev];
+        // Add new directory if it's different from the last one
+        if (newDirs.length === 0 || newDirs[newDirs.length - 1] !== progress.current_directory_name) {
+          newDirs.push(progress.current_directory_name!);
+          // Keep only last 15 directories for analysis
+          if (newDirs.length > 15) {
+            newDirs.shift();
+          }
+        }
+        return newDirs;
+      });
+    }
+  }, [progress?.current_directory_name, progress?.is_refreshing]);
 
   // Detect refresh completion and invalidate caches
   useEffect(() => {
@@ -74,6 +94,8 @@ export default function CacheRefreshStatus({ className = '' }: CacheRefreshStatu
       queryClient.invalidateQueries({ queryKey: ['images'] });
       
       setWasRefreshing(false);
+      // Clear directory history when refresh completes
+      setRecentDirectories([]);
     } else if (progress?.is_refreshing) {
       setWasRefreshing(true);
     }
@@ -107,11 +129,119 @@ export default function CacheRefreshStatus({ className = '' }: CacheRefreshStatu
     return `${minutes}m ${remainingSeconds}s`;
   };
 
+  const smartTruncatePath = (path: string, recentPaths: string[], maxLength: number = 35): string => {
+    if (path.length <= maxLength) {
+      return path;
+    }
+    
+    // Handle both Unix and Windows paths
+    const separator = path.includes('\\') ? '\\' : '/';
+    const parts = path.split(separator).filter(Boolean);
+    
+    if (parts.length <= 2) {
+      return path.length > maxLength ? path.substring(0, maxLength - 3) + '...' : path;
+    }
+    
+    // Find the most distinctive part based on recent directories
+    const mostDistinctivePart = findMostDistinctivePart(path, recentPaths);
+    
+    if (mostDistinctivePart) {
+      // Try to show the distinctive part in context
+      const distinctiveIndex = parts.findIndex(part => part === mostDistinctivePart);
+      
+      if (distinctiveIndex !== -1) {
+        const first = parts[0];
+        const last = parts[parts.length - 1];
+        const distinctive = parts[distinctiveIndex];
+        
+        // If distinctive part is first or last, use simple truncation
+        if (distinctiveIndex === 0 || distinctiveIndex === parts.length - 1) {
+          return simpleMiddleTruncate(path);
+        }
+        
+        // Try to show: first/.../distinctive/.../last
+        const ellipsis = '...';
+        const template = `${first}${separator}${ellipsis}${separator}${distinctive}${separator}${ellipsis}${separator}${last}`;
+        
+        if (template.length <= maxLength) {
+          return template;
+        }
+        
+        // Try: .../distinctive/.../last
+        const shorterTemplate = `${ellipsis}${separator}${distinctive}${separator}${ellipsis}${separator}${last}`;
+        if (shorterTemplate.length <= maxLength) {
+          return shorterTemplate;
+        }
+        
+        // Fall back to showing just the distinctive part with context
+        const contextTemplate = `${ellipsis}${separator}${distinctive}${separator}${ellipsis}`;
+        if (contextTemplate.length <= maxLength) {
+          return contextTemplate;
+        }
+      }
+    }
+    
+    // Fall back to simple middle truncation
+    return simpleMiddleTruncate(path);
+  };
+
+  const simpleMiddleTruncate = (path: string): string => {
+    const separator = path.includes('\\') ? '\\' : '/';
+    const parts = path.split(separator).filter(Boolean);
+    const first = parts[0];
+    const last = parts[parts.length - 1];
+    const ellipsis = '...';
+    
+    return `${first}${separator}${ellipsis}${separator}${last}`;
+  };
+
+  const findMostDistinctivePart = (currentPath: string, recentPaths: string[]): string | null => {
+    if (recentPaths.length < 2) return null;
+    
+    const separator = currentPath.includes('\\') ? '\\' : '/';
+    const currentParts = currentPath.split(separator).filter(Boolean);
+    
+    // Analyze parts frequency in recent paths
+    const partFrequency = new Map<string, number>();
+    const allRecentParts = new Set<string>();
+    
+    recentPaths.forEach(path => {
+      const parts = path.split(separator).filter(Boolean);
+      parts.forEach(part => allRecentParts.add(part));
+    });
+    
+    currentParts.forEach(part => {
+      let count = 0;
+      recentPaths.forEach(path => {
+        if (path.includes(part)) count++;
+      });
+      partFrequency.set(part, count);
+    });
+    
+    // Find part that appears least frequently (most distinctive)
+    let minFreq = Infinity;
+    let mostDistinctive: string | null = null;
+    
+    currentParts.forEach(part => {
+      const freq = partFrequency.get(part) || 0;
+      // Prefer longer, more specific parts when frequency is equal
+      if (freq < minFreq || (freq === minFreq && part.length > (mostDistinctive?.length || 0))) {
+        minFreq = freq;
+        mostDistinctive = part;
+      }
+    });
+    
+    return mostDistinctive;
+  };
+
   const getProgressDetails = (): string => {
-    if (progress.stage === 'initializing_directory_tree' && progress.directories_total > 0) {
-      const dirName = progress.current_directory_name ? 
-        ` (${progress.current_directory_name.split('/').pop()})` : '';
-      return `${progress.directories_processed}/${progress.directories_total} directories${dirName}`;
+    if (progress.stage === 'initializing_directory_tree') {
+      // Show directories processed and files scanned during directory walking
+      const dirInfo = progress.directories_processed > 0 ? `${progress.directories_processed} dirs` : '';
+      const fileInfo = progress.files_scanned > 0 ? `${progress.files_scanned} files` : '';
+      
+      const countsInfo = [dirInfo, fileInfo].filter(Boolean).join(', ');
+      return countsInfo;
     }
     if (progress.stage === 'processing_projects' && progress.projects_total > 0) {
       return `${progress.projects_processed}/${progress.projects_total} projects`;
@@ -122,10 +252,16 @@ export default function CacheRefreshStatus({ className = '' }: CacheRefreshStatu
     if (progress.current_project_name) {
       return progress.current_project_name;
     }
-    if (progress.current_directory_name && progress.stage === 'initializing_directory_tree') {
-      return progress.current_directory_name.split('/').pop() || '';
-    }
     return '';
+  };
+
+  const getCurrentDirectoryDisplay = (): { truncated: string; full: string } | null => {
+    if (progress.stage === 'initializing_directory_tree' && progress.current_directory_name) {
+      const fullPath = progress.current_directory_name;
+      const truncatedPath = smartTruncatePath(fullPath, recentDirectories, 30);
+      return { truncated: truncatedPath, full: fullPath };
+    }
+    return null;
   };
 
   const getFileStats = (): string => {
@@ -163,6 +299,20 @@ export default function CacheRefreshStatus({ className = '' }: CacheRefreshStatu
         
         <div className="cache-status-details">
           {getProgressDetails()}
+          {(() => {
+            const dirDisplay = getCurrentDirectoryDisplay();
+            if (dirDisplay) {
+              return (
+                <div 
+                  className="current-directory"
+                  title={dirDisplay.full}
+                >
+                  {dirDisplay.truncated}
+                </div>
+              );
+            }
+            return null;
+          })()}
           {getFileStats()}
           {progress.elapsed_seconds && (
             <span className="cache-elapsed-time">

@@ -6,11 +6,11 @@ export default function ProjectTargetSelector() {
   const { projectId: selectedProjectId, targetId: selectedTargetId, setProjectId, setTargetId } = useProjectTarget();
   const queryClient = useQueryClient();
 
-  // Refresh cache mutation
+  // Refresh file cache mutation
   const refreshCacheMutation = useMutation({
     mutationFn: apiClient.refreshFileCache,
     onSuccess: () => {
-      console.log('🔄 Manual cache refresh completed, invalidating queries...');
+      console.log('🔄 Manual file cache refresh completed, invalidating queries...');
       
       // Invalidate all queries that depend on file existence data
       queryClient.invalidateQueries({ queryKey: ['projects'] });
@@ -24,7 +24,51 @@ export default function ProjectTargetSelector() {
       queryClient.invalidateQueries({ queryKey: ['images'] });
     },
     onError: (error) => {
-      console.error('Cache refresh failed:', error);
+      console.error('File cache refresh failed:', error);
+    },
+  });
+
+  // Refresh directory cache mutation
+  const refreshDirectoryCacheMutation = useMutation({
+    mutationFn: apiClient.refreshDirectoryCache,
+    onSuccess: () => {
+      console.log('🌳 Directory cache refresh completed, invalidating queries...');
+      
+      // Invalidate all queries since directory structure affects everything
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['targets'] });
+      queryClient.invalidateQueries({ queryKey: ['all-images'] });
+      queryClient.invalidateQueries({ queryKey: ['projects-overview'] });
+      queryClient.invalidateQueries({ queryKey: ['targets-overview'] });
+      queryClient.invalidateQueries({ queryKey: ['overall-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['images'] });
+    },
+    onError: (error) => {
+      console.error('Directory cache refresh failed:', error);
+    },
+  });
+
+  // Combined refresh for shift-click
+  const refreshBothCachesMutation = useMutation({
+    mutationFn: async () => {
+      // Refresh directory cache first, then file cache
+      await apiClient.refreshDirectoryCache();
+      await apiClient.refreshFileCache();
+    },
+    onSuccess: () => {
+      console.log('🔄 Combined cache refresh completed, invalidating queries...');
+      
+      // Invalidate all queries
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['targets'] });
+      queryClient.invalidateQueries({ queryKey: ['all-images'] });
+      queryClient.invalidateQueries({ queryKey: ['projects-overview'] });
+      queryClient.invalidateQueries({ queryKey: ['targets-overview'] });
+      queryClient.invalidateQueries({ queryKey: ['overall-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['images'] });
+    },
+    onError: (error) => {
+      console.error('Combined cache refresh failed:', error);
     },
   });
 
@@ -112,11 +156,25 @@ export default function ProjectTargetSelector() {
 
       <button
         className="refresh-button compact"
-        onClick={() => refreshCacheMutation.mutate()}
-        disabled={refreshCacheMutation.isPending}
-        title={refreshCacheMutation.isPending ? 'Refreshing file cache...' : 'Refresh file cache'}
+        onClick={(e) => {
+          if (e.shiftKey) {
+            refreshBothCachesMutation.mutate();
+          } else {
+            refreshCacheMutation.mutate();
+          }
+        }}
+        disabled={refreshCacheMutation.isPending || refreshDirectoryCacheMutation.isPending || refreshBothCachesMutation.isPending}
+        title={
+          refreshBothCachesMutation.isPending 
+            ? 'Refreshing directory and file caches...'
+            : refreshDirectoryCacheMutation.isPending
+            ? 'Refreshing directory cache...'
+            : refreshCacheMutation.isPending
+            ? 'Refreshing file cache...'
+            : 'Refresh file cache (Shift+Click for directory + file cache)'
+        }
       >
-        {refreshCacheMutation.isPending ? '⟳' : '↻'}
+        {(refreshCacheMutation.isPending || refreshDirectoryCacheMutation.isPending || refreshBothCachesMutation.isPending) ? '⟳' : '↻'}
       </button>
     </div>
   );

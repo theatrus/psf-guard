@@ -10,6 +10,7 @@ import type {
   PreviewOptions,
   ServerInfo,
   FileCheckResponse,
+  DirectoryTreeResponse,
   ProjectOverview,
   TargetOverview,
   OverallStats,
@@ -43,6 +44,13 @@ export const apiClient = {
   refreshFileCache: async (): Promise<FileCheckResponse> => {
     const { data } = await api.put<ApiResponse<FileCheckResponse>>('/refresh-cache');
     if (!data.data) throw new Error('Failed to refresh cache');
+    return data.data;
+  },
+
+  // Refresh directory cache
+  refreshDirectoryCache: async (): Promise<DirectoryTreeResponse> => {
+    const { data } = await api.put<ApiResponse<DirectoryTreeResponse>>('/refresh-directory-cache');
+    if (!data.data) throw new Error('Failed to refresh directory cache');
     return data.data;
   },
 

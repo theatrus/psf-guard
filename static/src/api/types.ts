@@ -89,6 +89,15 @@ export interface FileCheckResponse {
   check_time_ms: number;
 }
 
+export interface DirectoryTreeResponse {
+  total_files: number;
+  unique_filenames: number;
+  total_directories: number;
+  age_seconds: number;
+  build_time_ms: number;
+  root_directory: string;
+}
+
 export const GradingStatus = {
   Pending: 0,
   Accepted: 1,

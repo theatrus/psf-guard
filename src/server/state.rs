@@ -56,6 +56,7 @@ pub struct RefreshProgress {
     pub directories_total: usize,
     pub directories_processed: usize,
     pub current_directory_name: Option<String>,
+    pub files_scanned: usize, // Files discovered during directory scanning
     pub projects_total: usize,
     pub projects_processed: usize,
     pub current_project_name: Option<String>,
@@ -84,6 +85,7 @@ impl Default for RefreshProgress {
             directories_total: 0,
             directories_processed: 0,
             current_directory_name: None,
+            files_scanned: 0,
             projects_total: 0,
             projects_processed: 0,
             current_project_name: None,
@@ -158,6 +160,10 @@ impl RefreshProgress {
         self.stage = RefreshStage::Completed;
         self.current_project_name = None;
         self.current_directory_name = None;
+    }
+
+    pub fn update_files_scanned(&mut self, files_scanned: usize) {
+        self.files_scanned = files_scanned;
     }
 
     pub fn get_progress_percentage(&self) -> f32 {
@@ -342,13 +348,13 @@ impl AppState {
         }
 
         // Need to rebuild cache
-        self.rebuild_directory_tree()
+        self.rebuild_directory_tree_internal()
     }
 
-    /// Force rebuild of the directory tree cache
-    pub fn rebuild_directory_tree(&self) -> Result<Arc<DirectoryTree>> {
-        tracing::info!(
-            "🌳 Building directory tree cache for {} directories",
+    /// Internal method to rebuild directory tree cache (synchronous for compatibility)
+    fn rebuild_directory_tree_internal(&self) -> Result<Arc<DirectoryTree>> {
+        tracing::debug!(
+            "🌳 Building directory tree cache for {} directories (sync)",
             self.image_dirs.len()
         );
         let roots: Vec<&std::path::Path> =
@@ -356,7 +362,7 @@ impl AppState {
         let tree = DirectoryTree::build_multiple(&roots)?;
         let stats = tree.stats();
 
-        tracing::info!(
+        tracing::debug!(
             "✅ Directory tree built: {} files, {} directories across {} roots (age: {})",
             stats.total_files,
             stats.total_directories,
@@ -393,7 +399,7 @@ impl AppState {
         }
 
         // Cache is stale or empty, rebuild it
-        self.rebuild_directory_tree()
+        self.rebuild_directory_tree_internal()
     }
 
     /// Clear the directory tree cache (force rebuild on next access)
@@ -651,13 +657,6 @@ impl AppState {
         }
     }
 
-    /// Public API method for forcing cache refresh (used by API endpoint)
-    pub async fn refresh_cache_unified(
-        &self,
-    ) -> Result<(usize, usize, usize, u128), anyhow::Error> {
-        // For API calls, we want to wait for completion, so we call the internal method directly
-        self.refresh_cache_unified_internal().await
-    }
 
     /// Check if project has files using directory tree cache with detailed counts
     async fn check_project_files_with_details(&self, project_id: i32) -> Result<(bool, usize, usize), anyhow::Error> {
@@ -772,6 +771,25 @@ impl AppState {
         }
     }
 
+    /// Force directory tree cache refresh via singleton system (non-blocking)
+    pub fn force_directory_tree_refresh(&self) -> RefreshStatus {
+        // Clear both directory tree cache and file cache to force complete refresh
+        {
+            let mut dir_cache = self.directory_tree_cache.write().unwrap();
+            *dir_cache = None;
+            tracing::info!("🗑️  Directory tree cache cleared, forcing refresh");
+        }
+        
+        {
+            let mut file_cache = self.file_check_cache.write().unwrap();
+            file_cache.clear();
+            tracing::info!("🗑️  File cache cleared, forcing complete refresh");
+        }
+        
+        // Start refresh via singleton system
+        self.ensure_cache_available()
+    }
+
     /// Refresh directory tree cache with progress tracking during unified cache refresh
     async fn refresh_directory_tree_with_progress(&self) -> Result<Arc<DirectoryTree>> {
         // Check if we have a valid cache first
@@ -793,18 +811,18 @@ impl AppState {
         );
 
         // Create a channel for progress updates
-        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<(usize, String)>();
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<(usize, usize, String)>();
         let file_check_cache = Arc::clone(&self.file_check_cache);
         
         // Spawn progress update task
         let progress_task = tokio::spawn(async move {
-            while let Some((index, directory_name)) = progress_rx.recv().await {
+            while let Some((dirs_processed, files_processed, current_directory)) = progress_rx.recv().await {
                 let mut cache = file_check_cache.write().unwrap();
-                cache.refresh_progress.process_directory(&directory_name);
-                if index > 0 {
-                    // Complete the previous directory (index is 0-based)
-                    cache.refresh_progress.complete_directory();
-                }
+                cache.refresh_progress.process_directory(&current_directory);
+                
+                // Update the progress with actual counts from directory walking
+                cache.refresh_progress.directories_processed = dirs_processed;
+                cache.refresh_progress.update_files_scanned(files_processed);
             }
         });
 
@@ -813,8 +831,8 @@ impl AppState {
         let tree_result = tokio::task::spawn_blocking(move || {
             let roots: Vec<&std::path::Path> = image_dir_paths.iter().map(|p| p.as_path()).collect();
             
-            let mut progress_callback = |index: usize, directory_name: &str| {
-                let _ = progress_tx.send((index, directory_name.to_string()));
+            let mut progress_callback = |dirs_processed: usize, files_processed: usize, current_directory: &str| {
+                let _ = progress_tx.send((dirs_processed, files_processed, current_directory.to_string()));
             };
             
             crate::directory_tree::DirectoryTree::build_multiple_with_progress(&roots, &mut progress_callback)

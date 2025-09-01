@@ -130,6 +130,30 @@
   text-overflow: ellipsis;
   max-width: 150px;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.current-directory {
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+  background: rgba(97, 218, 251, 0.1);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  cursor: help;
+  border: 1px solid rgba(97, 218, 251, 0.2);
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+.current-directory:hover {
+  background: rgba(97, 218, 251, 0.2);
+  border-color: rgba(97, 218, 251, 0.4);
+  transform: scale(1.02);
 }
 
 .cache-elapsed-time {
@@ -149,6 +173,11 @@
   
   .cache-status-details {
     max-width: 100px;
+  }
+  
+  .current-directory {
+    max-width: 120px;
+    font-size: 0.7rem;
   }
   
   .loading-spinner {

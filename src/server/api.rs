@@ -254,6 +254,7 @@ pub struct CacheRefreshProgressResponse {
     pub directories_total: usize,
     pub directories_processed: usize,
     pub current_directory_name: Option<String>,
+    pub files_scanned: usize,
     pub projects_total: usize,
     pub projects_processed: usize,
     pub current_project_name: Option<String>,
