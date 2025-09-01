@@ -126,7 +126,7 @@ export default function CacheRefreshStatus({ className = '' }: CacheRefreshStatu
     if (seconds < 60) return `${Math.round(seconds)}s`;
     const minutes = Math.floor(seconds / 60);
     const remainingSeconds = Math.round(seconds % 60);
-    return `${minutes}m ${remainingSeconds}s`;
+    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
   };
 
   const smartTruncatePath = (path: string, recentPaths: string[], maxLength: number = 35): string => {
@@ -278,7 +278,14 @@ export default function CacheRefreshStatus({ className = '' }: CacheRefreshStatu
     <div className={`cache-refresh-status ${animationPhase} ${className}`}>
       <div className="cache-status-content">
         {progress.stage !== 'completed' && (
-          <div className="loading-spinner" />
+          <div className="progress-indicator">
+            <div className="pulsating-bar" />
+            {progress.elapsed_seconds && (
+              <span className="progress-time">
+                {formatElapsedTime(progress.elapsed_seconds)}
+              </span>
+            )}
+          </div>
         )}
         
         <div className="cache-status-main">
@@ -321,11 +328,6 @@ export default function CacheRefreshStatus({ className = '' }: CacheRefreshStatu
                   </div>
                   <div className="progress-stats-row">
                     {getFileStats()}
-                    {progress.elapsed_seconds && (
-                      <span className="cache-elapsed-time">
-                        ({formatElapsedTime(progress.elapsed_seconds)})
-                      </span>
-                    )}
                   </div>
                 </>
               );
@@ -335,11 +337,6 @@ export default function CacheRefreshStatus({ className = '' }: CacheRefreshStatu
                 <div className="progress-info-row">
                   {getProgressDetails()}
                   {getFileStats()}
-                  {progress.elapsed_seconds && (
-                    <span className="cache-elapsed-time">
-                      ({formatElapsedTime(progress.elapsed_seconds)})
-                    </span>
-                  )}
                 </div>
               );
             }

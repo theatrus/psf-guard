@@ -2,16 +2,17 @@
   background: rgba(97, 218, 251, 0.1);
   border: 1px solid rgba(97, 218, 251, 0.3);
   border-radius: 8px;
-  padding: 6px 12px;
+  padding: 4px 8px;
   margin: 0 12px;
   font-size: 0.85rem;
   color: #61dafb;
   backdrop-filter: blur(4px);
-  transition: all 0.3s ease;
-  min-width: 200px;
-  max-width: 600px;
-  max-height: 48px;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  width: 320px;
+  height: 32px;
   overflow: hidden;
+  box-sizing: border-box;
+  flex-shrink: 0;
 }
 
 .cache-refresh-status.fade-in {
@@ -47,31 +48,73 @@
 .cache-status-content {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   font-weight: 500;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
 }
 
-.loading-spinner {
-  width: 16px;
+.progress-indicator {
+  position: relative;
+  width: 24px;
   height: 16px;
-  border: 2px solid rgba(97, 218, 251, 0.3);
-  border-top: 2px solid #61dafb;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(97, 218, 251, 0.1);
+  border-radius: 3px;
+  border: 1px solid rgba(97, 218, 251, 0.3);
+  overflow: hidden;
 }
 
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+.pulsating-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, 
+    rgba(97, 218, 251, 0.2) 0%, 
+    rgba(97, 218, 251, 0.6) 50%, 
+    rgba(97, 218, 251, 0.2) 100%);
+  animation: pulse-sweep 2s ease-in-out infinite;
+}
+
+.progress-time {
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: rgba(97, 218, 251, 0.95);
+  z-index: 1;
+  text-align: center;
+  white-space: nowrap;
+  line-height: 1;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+@keyframes pulse-sweep {
+  0% { 
+    opacity: 0.4;
+    transform: scaleX(0.8);
+  }
+  50% { 
+    opacity: 1;
+    transform: scaleX(1);
+  }
+  100% { 
+    opacity: 0.4;
+    transform: scaleX(0.8);
+  }
 }
 
 .cache-status-main {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   flex: 1;
-  min-width: 0; /* Allow text to truncate */
+  min-width: 0;
+  overflow: hidden;
 }
 
 .cache-status-label {
@@ -79,6 +122,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1.2;
 }
 
 .cache-progress-bar {
@@ -127,13 +171,15 @@
 .cache-status-details {
   font-size: 0.75rem;
   color: rgba(97, 218, 251, 0.8);
-  max-width: 350px;
-  flex-shrink: 0;
+  flex: 1;
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 1px;
-  max-height: 32px;
+  height: 100%;
+  max-height: 24px;
   overflow: hidden;
+  min-height: 0;
 }
 
 .directory-progress-row {
@@ -200,18 +246,16 @@
 /* Responsive adjustments */
 @media (max-width: 768px) {
   .cache-refresh-status {
-    min-width: 150px;
-    max-width: 200px;
-    padding: 4px 6px;
+    width: 240px;
+    padding: 3px 6px;
     margin: 0 6px;
     font-size: 0.75rem;
-    max-height: 40px;
+    height: 28px;
   }
   
   .cache-status-details {
-    max-width: 100px;
     font-size: 0.7rem;
-    max-height: 28px;
+    max-height: 20px;
   }
   
   .current-directory {
@@ -229,9 +273,13 @@
     font-size: 0.65rem;
   }
   
-  .loading-spinner {
-    width: 14px;
+  .progress-indicator {
+    width: 20px;
     height: 14px;
+  }
+  
+  .progress-time {
+    font-size: 0.5rem;
   }
 }
 
@@ -245,6 +293,18 @@
   .cache-progress-fill {
     background: #61dafb;
   }
+  
+  .progress-indicator {
+    border: 2px solid #61dafb;
+    background: rgba(97, 218, 251, 0.2);
+  }
+  
+  .pulsating-bar {
+    background: linear-gradient(90deg, 
+      rgba(97, 218, 251, 0.4) 0%, 
+      #61dafb 50%, 
+      rgba(97, 218, 251, 0.4) 100%);
+  }
 }
 
 /* Reduced motion */
@@ -254,10 +314,10 @@
     transition: none;
   }
   
-  .loading-spinner {
+  .pulsating-bar {
     animation: none;
-    border: 2px solid #61dafb;
-    border-top: 2px solid transparent;
+    opacity: 0.6;
+    transform: none;
   }
   
   .cache-progress-fill::after {
