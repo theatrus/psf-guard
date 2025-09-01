@@ -1,5 +1,5 @@
-use crate::directory_tree::DirectoryTree;
 use crate::cli::PregenerationConfig;
+use crate::directory_tree::DirectoryTree;
 use anyhow::Result;
 use rusqlite::{Connection, OpenFlags};
 use std::collections::HashMap;
@@ -10,9 +10,9 @@ use tokio::sync::Mutex as TokioMutex;
 
 pub struct AppState {
     pub database_path: String,
-    pub image_dir: String,
+    pub image_dirs: Vec<String>,
     pub cache_dir: String,
-    image_dir_path: PathBuf,
+    image_dir_paths: Vec<PathBuf>,
     cache_dir_path: PathBuf,
     // We'll use a connection pool or create connections as needed
     db_connection: Arc<Mutex<Connection>>,
@@ -62,7 +62,12 @@ impl FileCheckCache {
 }
 
 impl AppState {
-    pub fn new(db_path: String, image_dir: String, cache_dir: String, pregeneration_config: PregenerationConfig) -> Result<Self> {
+    pub fn new(
+        db_path: String,
+        image_dirs: Vec<String>,
+        cache_dir: String,
+        pregeneration_config: PregenerationConfig,
+    ) -> Result<Self> {
         use std::path::Path;
 
         // Check if database exists
@@ -70,9 +75,20 @@ impl AppState {
             return Err(anyhow::anyhow!("Database file not found: {}", db_path));
         }
 
-        // Check if image directory exists
-        if !Path::new(&image_dir).exists() {
-            return Err(anyhow::anyhow!("Image directory not found: {}", image_dir));
+        // Check if image directories exist
+        let mut image_dir_paths = Vec::new();
+        for dir in &image_dirs {
+            let path = Path::new(dir);
+            if !path.exists() {
+                return Err(anyhow::anyhow!("Image directory not found: {}", dir));
+            }
+            image_dir_paths.push(PathBuf::from(dir));
+        }
+
+        if image_dirs.is_empty() {
+            return Err(anyhow::anyhow!(
+                "At least one image directory must be specified"
+            ));
         }
 
         // Open database connection
@@ -83,9 +99,9 @@ impl AppState {
 
         Ok(Self {
             database_path: db_path.clone(),
-            image_dir: image_dir.clone(),
+            image_dirs: image_dirs.clone(),
             cache_dir: cache_dir.clone(),
-            image_dir_path: PathBuf::from(image_dir),
+            image_dir_paths,
             cache_dir_path: PathBuf::from(cache_dir),
             db_connection: Arc::new(Mutex::new(conn)),
             file_check_cache: Arc::new(RwLock::new(FileCheckCache::new())),
@@ -104,7 +120,9 @@ impl AppState {
     }
 
     pub fn get_image_path(&self, relative_path: &str) -> PathBuf {
-        self.image_dir_path.join(relative_path)
+        // Return path for the first directory for compatibility
+        // File lookup should use the directory tree cache for multi-directory support
+        self.image_dir_paths[0].join(relative_path)
     }
 
     /// Get or build the directory tree cache
@@ -127,14 +145,20 @@ impl AppState {
 
     /// Force rebuild of the directory tree cache
     pub fn rebuild_directory_tree(&self) -> Result<Arc<DirectoryTree>> {
-        tracing::info!("🌳 Building directory tree cache for: {}", self.image_dir);
-        let tree = DirectoryTree::build(&self.image_dir_path)?;
+        tracing::info!(
+            "🌳 Building directory tree cache for {} directories",
+            self.image_dirs.len()
+        );
+        let roots: Vec<&std::path::Path> =
+            self.image_dir_paths.iter().map(|p| p.as_path()).collect();
+        let tree = DirectoryTree::build_multiple(&roots)?;
         let stats = tree.stats();
 
         tracing::info!(
-            "✅ Directory tree built: {} files, {} directories (age: {})",
+            "✅ Directory tree built: {} files, {} directories across {} roots (age: {})",
             stats.total_files,
             stats.total_directories,
+            stats.roots.len(),
             stats.format_age()
         );
 
@@ -220,9 +244,9 @@ impl Clone for AppState {
     fn clone(&self) -> Self {
         Self {
             database_path: self.database_path.clone(),
-            image_dir: self.image_dir.clone(),
+            image_dirs: self.image_dirs.clone(),
             cache_dir: self.cache_dir.clone(),
-            image_dir_path: self.image_dir_path.clone(),
+            image_dir_paths: self.image_dir_paths.clone(),
             cache_dir_path: self.cache_dir_path.clone(),
             db_connection: self.db_connection.clone(),
             file_check_cache: self.file_check_cache.clone(),

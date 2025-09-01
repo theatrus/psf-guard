@@ -203,23 +203,16 @@ fn process_file_movement(
         Some(path) => path,
         None => {
             // Try directory tree lookup as a fallback
-            if let Some(matching_paths) = directory_tree.find_file(&file_only) {
-                // Find the first path that actually exists (in case of stale cache)
-                if let Some(found_path) = matching_paths.iter().find(|p| p.exists()) {
-                    if verbose || matching_paths.len() > 1 {
-                        println!("  Found via directory tree cache: {}", found_path.display());
-                        if matching_paths.len() > 1 {
-                            println!(
-                                "  (Found {} total matches, using first existing one)",
-                                matching_paths.len()
-                            );
-                        }
-                    }
-                    found_path.clone()
-                } else {
-                    // All cached paths are stale (files were moved/deleted)
+            if let Some(first_path) = directory_tree.find_file_first(&file_only) {
+                if first_path.exists() {
                     if verbose {
-                        println!("  All cached paths are stale for: {}", file_only);
+                        println!("  Found via directory tree cache: {}", first_path.display());
+                    }
+                    first_path.clone()
+                } else {
+                    // First cached path is stale (file was moved/deleted)
+                    if verbose {
+                        println!("  First cached path is stale for: {}", file_only);
                     }
                     return handle_file_not_found(
                         image,

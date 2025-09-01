@@ -330,8 +330,8 @@ pub enum Commands {
         /// Database file to use
         database: String,
 
-        /// Base directory containing the image files
-        image_dir: String,
+        /// Base directories containing the image files (can specify multiple)
+        image_dirs: Vec<String>,
 
         /// Directory to serve static files from (for React app, optional - uses embedded files if not provided)
         #[arg(long)]
@@ -466,7 +466,12 @@ impl PregenerationConfig {
         let (screen, large, original, annotated) = if pregenerate_all {
             (true, true, true, true)
         } else {
-            (pregenerate_screen, pregenerate_large, pregenerate_original, pregenerate_annotated)
+            (
+                pregenerate_screen,
+                pregenerate_large,
+                pregenerate_original,
+                pregenerate_annotated,
+            )
         };
 
         Ok(Self {
@@ -486,10 +491,18 @@ impl PregenerationConfig {
     /// Get list of enabled formats for logging
     pub fn enabled_formats(&self) -> Vec<&'static str> {
         let mut formats = Vec::new();
-        if self.screen_enabled { formats.push("screen"); }
-        if self.large_enabled { formats.push("large"); }
-        if self.original_enabled { formats.push("original"); }
-        if self.annotated_enabled { formats.push("annotated"); }
+        if self.screen_enabled {
+            formats.push("screen");
+        }
+        if self.large_enabled {
+            formats.push("large");
+        }
+        if self.original_enabled {
+            formats.push("original");
+        }
+        if self.annotated_enabled {
+            formats.push("annotated");
+        }
         formats
     }
 }

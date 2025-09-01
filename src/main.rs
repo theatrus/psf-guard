@@ -216,7 +216,7 @@ fn main() -> Result<()> {
         }
         Commands::Server {
             database,
-            image_dir,
+            image_dirs,
             static_dir,
             cache_dir,
             port,
@@ -243,7 +243,13 @@ fn main() -> Result<()> {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(async {
                 psf_guard::server::run_server(
-                    database, image_dir, static_dir, cache_dir, host, port, pregeneration_config,
+                    database,
+                    image_dirs,
+                    static_dir,
+                    cache_dir,
+                    host,
+                    port,
+                    pregeneration_config,
                 )
                 .await
             })?;

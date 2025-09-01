@@ -11,8 +11,11 @@ PSF Guard is a Rust CLI utility for analyzing N.I.N.A. Target Scheduler database
 cargo fmt && cargo clippy && cargo test
 cargo check --features opencv
 
-# Run server
+# Run server (single directory)
 cargo run -- server db.sqlite images/
+
+# Run server (multiple directories with priority order)
+cargo run -- server db.sqlite images1/ images2/ images3/
 
 # Build for production (includes embedded frontend)
 cargo build --release
@@ -43,6 +46,14 @@ cargo build --release
 - Sequence analysis for temporal patterns
 
 ## Recent Updates
+
+### Multi-Directory Support (2025-08-31)
+Added support for scanning multiple image directories with first-hit preference:
+- CLI now accepts multiple directory arguments: `server db.sqlite dir1/ dir2/ dir3/`
+- Directory tree cache scans all directories in priority order
+- File lookup uses first-hit preference - files in earlier directories take precedence
+- Maintains backward compatibility with single directory usage
+- All directories validated at startup, cached together for O(1) lookups
 
 ### Image Comparison Zoom Fix (2025-08-31)
 Fixed issue where zoomed images in comparison view would reset when switching images:

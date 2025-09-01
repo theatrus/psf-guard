@@ -7,20 +7,35 @@ use std::time::{Duration, SystemTime};
 /// Represents a cached directory tree with file lookups
 #[derive(Debug, Clone)]
 pub struct DirectoryTree {
-    /// Map from filename to all possible full paths
+    /// Map from filename to all possible full paths (ordered by directory priority)
     file_map: HashMap<String, Vec<PathBuf>>,
     /// Map from directory path to its contents (for faster directory-specific lookups)
     dir_map: HashMap<PathBuf, Vec<PathBuf>>,
     /// When this tree was built
     created_at: SystemTime,
-    /// Root directory that was scanned
-    root: PathBuf,
+    /// Root directories that were scanned (in priority order)
+    roots: Vec<PathBuf>,
 }
 
 impl DirectoryTree {
     /// Build a complete directory tree in memory from the given root
     pub fn build(root: &Path) -> Result<Self> {
-        tracing::info!("🌳 Building directory tree cache for: {:?}", root);
+        Self::build_multiple(&[root])
+    }
+
+    /// Build a complete directory tree in memory from multiple root directories
+    pub fn build_multiple(roots: &[&Path]) -> Result<Self> {
+        if roots.is_empty() {
+            return Err(anyhow::anyhow!(
+                "At least one root directory must be provided"
+            ));
+        }
+
+        tracing::info!(
+            "🌳 Building directory tree cache for {} directories: {:?}",
+            roots.len(),
+            roots
+        );
         let start_time = std::time::Instant::now();
 
         let mut file_map: HashMap<String, Vec<PathBuf>> = HashMap::new();
@@ -28,27 +43,32 @@ impl DirectoryTree {
         let mut total_files = 0;
         let mut total_dirs = 0;
 
-        Self::scan_directory(
-            root,
-            &mut file_map,
-            &mut dir_map,
-            &mut total_files,
-            &mut total_dirs,
-        )?;
+        // Process directories in order to maintain priority for first-hit preference
+        for root in roots {
+            tracing::debug!("📁 Scanning directory: {:?}", root);
+            Self::scan_directory(
+                root,
+                &mut file_map,
+                &mut dir_map,
+                &mut total_files,
+                &mut total_dirs,
+            )?;
+        }
 
         let elapsed = start_time.elapsed();
         tracing::info!(
-            "🌳 Directory tree built in {:.2}s: {} files, {} directories",
+            "🌳 Directory tree built in {:.2}s: {} files, {} directories across {} roots",
             elapsed.as_secs_f64(),
             total_files,
-            total_dirs
+            total_dirs,
+            roots.len()
         );
 
         Ok(DirectoryTree {
             file_map,
             dir_map,
             created_at: SystemTime::now(),
-            root: root.to_path_buf(),
+            roots: roots.iter().map(|p| p.to_path_buf()).collect(),
         })
     }
 
@@ -119,6 +139,11 @@ impl DirectoryTree {
         self.file_map.get(filename)
     }
 
+    /// Find the first (highest priority) path for a given filename
+    pub fn find_file_first(&self, filename: &str) -> Option<&PathBuf> {
+        self.file_map.get(filename).and_then(|paths| paths.first())
+    }
+
     /// Find files matching a pattern in the filename
     pub fn find_files_matching<F>(&self, predicate: F) -> Vec<&PathBuf>
     where
@@ -165,7 +190,7 @@ impl DirectoryTree {
             unique_filenames: self.file_map.len(),
             total_directories: self.dir_map.len(),
             age: self.created_at.elapsed().unwrap_or(Duration::from_secs(0)),
-            root: self.root.clone(),
+            roots: self.roots.clone(),
         }
     }
 
@@ -182,7 +207,7 @@ pub struct DirectoryTreeStats {
     pub unique_filenames: usize,
     pub total_directories: usize,
     pub age: Duration,
-    pub root: PathBuf,
+    pub roots: Vec<PathBuf>,
 }
 
 impl DirectoryTreeStats {

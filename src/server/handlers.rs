@@ -24,7 +24,7 @@ pub async fn get_server_info(
 ) -> Result<Json<ApiResponse<ServerInfo>>, AppError> {
     let info = ServerInfo {
         database_path: state.database_path.clone(),
-        image_directory: state.image_dir.clone(),
+        image_directory: state.image_dirs.join(", "),
         cache_directory: state.cache_dir.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
     };
@@ -91,7 +91,12 @@ pub async fn refresh_directory_tree_cache(
         total_directories: stats.total_directories,
         age_seconds: stats.age.as_secs(),
         build_time_ms,
-        root_directory: stats.root.display().to_string(),
+        root_directory: stats
+            .roots
+            .iter()
+            .map(|r| r.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
     };
 
     tracing::info!(
@@ -306,7 +311,7 @@ async fn check_project_files_via_cache(
                 total_valid_files += 1;
 
                 // Check if this filename exists in the directory tree cache
-                if let Some(_matching_paths) = directory_tree.find_file(filename) {
+                if directory_tree.find_file_first(filename).is_some() {
                     cache_hits += 1;
                     found_files += 1;
 
@@ -1040,11 +1045,11 @@ pub fn find_fits_file(
     use crate::commands::filter_rejected::get_possible_paths;
 
     tracing::debug!(
-        "🔍 find_fits_file called for image_id={}, filename={}, target={}, base_dir={}",
+        "🔍 find_fits_file called for image_id={}, filename={}, target={}, base_dirs={:?}",
         image.id,
         filename,
         target_name,
-        state.image_dir
+        state.image_dirs
     );
 
     // Extract date from acquired_date
@@ -1063,29 +1068,26 @@ pub fn find_fits_file(
     let date_str = acquired_date.format("%Y-%m-%d").to_string();
     tracing::debug!("📅 Date string for image {}: {}", image.id, date_str);
 
-    // Try to find the file in different possible locations
-    let possible_paths = get_possible_paths(&state.image_dir, &date_str, target_name, filename);
-
-    tracing::debug!(
-        "🔎 Checking {} possible paths for image {} in base_dir: {}",
-        possible_paths.len(),
-        image.id,
-        state.image_dir
-    );
-
-    // First, let's verify the base directory exists
-    let base_path = std::path::Path::new(&state.image_dir);
-    if !base_path.exists() {
-        tracing::error!("❌ Base directory does not exist: {}", state.image_dir);
-        return Err(AppError::BadRequest(format!(
-            "Base directory does not exist: {}",
-            state.image_dir
-        )));
+    // Try to find the file in different possible locations across all directories
+    let mut all_possible_paths = Vec::new();
+    for base_dir in &state.image_dirs {
+        let paths = get_possible_paths(base_dir, &date_str, target_name, filename);
+        all_possible_paths.extend(paths);
     }
 
-    tracing::debug!("✅ Base directory exists: {}", state.image_dir);
+    tracing::debug!(
+        "🔎 Checking {} possible paths for image {} across {} directories",
+        all_possible_paths.len(),
+        image.id,
+        state.image_dirs.len()
+    );
 
-    for (idx, path) in possible_paths.iter().enumerate() {
+    // Verify all base directories exist (they were checked during startup)
+    for base_dir in &state.image_dirs {
+        tracing::debug!("✅ Base directory exists: {}", base_dir);
+    }
+
+    for (idx, path) in all_possible_paths.iter().enumerate() {
         tracing::debug!(
             "  📁 Path {}: {:?} (exists: {})",
             idx + 1,
@@ -1116,35 +1118,24 @@ pub fn find_fits_file(
         directory_tree.stats().unique_filenames
     );
 
-    if let Some(matching_paths) = directory_tree.find_file(filename) {
+    if let Some(first_path) = directory_tree.find_file_first(filename) {
         tracing::debug!(
-            "🔍 Found {} matches in directory tree cache for {}",
-            matching_paths.len(),
+            "🔍 Found first match in directory tree cache for {}",
             filename
         );
 
-        for (idx, cached_path) in matching_paths.iter().enumerate() {
-            tracing::debug!(
-                "  📁 Cache match {}: {:?} (exists: {})",
-                idx + 1,
-                cached_path,
-                cached_path.exists()
-            );
-        }
-
-        // Find the first path that actually exists (in case of stale cache)
-        if let Some(found_path) = matching_paths.iter().find(|p| p.exists()) {
+        if first_path.exists() {
             tracing::info!(
                 "✅ Found file via directory tree cache in {:?}: {:?}",
                 search_start.elapsed(),
-                found_path
+                first_path
             );
-            return Ok(found_path.clone());
+            return Ok(first_path.clone());
         } else {
             tracing::warn!(
-                "❌ All cached paths are stale for {} (found {} stale paths)",
+                "❌ First cached path is stale for {}: {:?}",
                 filename,
-                matching_paths.len()
+                first_path
             );
         }
     } else {
