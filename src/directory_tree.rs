@@ -29,7 +29,10 @@ impl DirectoryTree {
     }
 
     /// Build a complete directory tree in memory from multiple root directories with progress callback
-    pub fn build_multiple_with_progress<F>(roots: &[&Path], progress_callback: &mut F) -> Result<Self> 
+    pub fn build_multiple_with_progress<F>(
+        roots: &[&Path],
+        progress_callback: &mut F,
+    ) -> Result<Self>
     where
         F: FnMut(usize, usize, &str), // (directories_processed, files_processed, current_directory)
     {
@@ -89,16 +92,16 @@ impl DirectoryTree {
         total_files: &mut usize,
         total_dirs: &mut usize,
         progress_callback: &mut F,
-    ) -> Result<()> 
+    ) -> Result<()>
     where
         F: FnMut(usize, usize, &str), // (directories_processed, files_processed, current_directory)
     {
         // Use the existing scan logic with progress tracking
         Self::scan_directory_internal(
-            dir, 
-            file_map, 
-            dir_map, 
-            total_files, 
+            dir,
+            file_map,
+            dir_map,
+            total_files,
             total_dirs,
             progress_callback,
         )
@@ -112,7 +115,7 @@ impl DirectoryTree {
         total_files: &mut usize,
         total_dirs: &mut usize,
         progress_callback: &mut F,
-    ) -> Result<()> 
+    ) -> Result<()>
     where
         F: FnMut(usize, usize, &str),
     {
@@ -157,7 +160,14 @@ impl DirectoryTree {
 
             if path.is_dir() {
                 // Recurse into subdirectories with progress tracking
-                Self::scan_directory_internal(&path, file_map, dir_map, total_files, total_dirs, progress_callback)?;
+                Self::scan_directory_internal(
+                    &path,
+                    file_map,
+                    dir_map,
+                    total_files,
+                    total_dirs,
+                    progress_callback,
+                )?;
             } else {
                 // Add file to filename map
                 if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
@@ -173,7 +183,6 @@ impl DirectoryTree {
         dir_map.insert(dir.to_path_buf(), dir_contents);
         Ok(())
     }
-
 
     /// Find all paths for a given filename
     pub fn find_file(&self, filename: &str) -> Option<&Vec<PathBuf>> {

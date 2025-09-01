@@ -456,7 +456,6 @@ fn handle_file_not_found(
     Ok(false)
 }
 
-
 fn get_reject_path(source_path: &Path) -> Result<PathBuf> {
     let path_str = source_path.to_string_lossy();
 

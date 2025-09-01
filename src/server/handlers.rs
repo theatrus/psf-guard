@@ -64,13 +64,13 @@ pub async fn refresh_file_cache(
 
     // Check current refresh status
     let refresh_status = state.ensure_cache_available();
-    
+
     match refresh_status {
-        crate::server::state::RefreshStatus::InProgressWait 
+        crate::server::state::RefreshStatus::InProgressWait
         | crate::server::state::RefreshStatus::InProgressServeStale => {
             // A refresh is already in progress - wait for it to complete
             tracing::info!("🔄 Cache refresh already in progress, waiting for completion...");
-            
+
             // Wait for the current refresh to complete by polling
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -83,7 +83,7 @@ pub async fn refresh_file_cache(
         crate::server::state::RefreshStatus::NeedsRefresh => {
             // A refresh was needed and should have been started by ensure_cache_available
             tracing::info!("🔄 New cache refresh started, waiting for completion...");
-            
+
             // Wait for completion
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -96,16 +96,20 @@ pub async fn refresh_file_cache(
         crate::server::state::RefreshStatus::NotNeeded => {
             // Cache is fresh, but user requested refresh - force a new one
             tracing::info!("🔄 Cache is fresh but forced refresh requested");
-            
+
             // Force a refresh by clearing cache and then starting refresh
             {
                 let mut cache = state.file_check_cache.write().unwrap();
                 cache.clear();
             }
-            
+
             // Now start refresh
             let refresh_status = state.ensure_cache_available();
-            if matches!(refresh_status, crate::server::state::RefreshStatus::InProgressWait | crate::server::state::RefreshStatus::InProgressServeStale) {
+            if matches!(
+                refresh_status,
+                crate::server::state::RefreshStatus::InProgressWait
+                    | crate::server::state::RefreshStatus::InProgressServeStale
+            ) {
                 // Wait for completion
                 loop {
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -120,8 +124,16 @@ pub async fn refresh_file_cache(
 
     // Get final statistics after refresh completion
     let cache = state.file_check_cache.read().unwrap();
-    let projects_with_files = cache.projects_with_files.values().filter(|&&has_files| has_files).count();
-    let targets_with_files = cache.targets_with_files.values().filter(|&&has_files| has_files).count();
+    let projects_with_files = cache
+        .projects_with_files
+        .values()
+        .filter(|&&has_files| has_files)
+        .count();
+    let targets_with_files = cache
+        .targets_with_files
+        .values()
+        .filter(|&&has_files| has_files)
+        .count();
     let total_checked = cache.projects_with_files.len() + cache.targets_with_files.len();
     let total_found = projects_with_files + targets_with_files;
     let total_missing = total_checked - total_found;
@@ -147,12 +159,14 @@ pub async fn get_cache_refresh_progress(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<CacheRefreshProgressResponse>>, AppError> {
     let progress_info = state.get_cache_refresh_progress();
-    
+
     let response = match progress_info {
         Some(progress) => {
             let stage_name = match progress.stage {
                 crate::server::state::RefreshStage::Idle => "idle",
-                crate::server::state::RefreshStage::InitializingDirectoryTree => "initializing_directory_tree",
+                crate::server::state::RefreshStage::InitializingDirectoryTree => {
+                    "initializing_directory_tree"
+                }
                 crate::server::state::RefreshStage::LoadingProjects => "loading_projects",
                 crate::server::state::RefreshStage::ProcessingProjects => "processing_projects",
                 crate::server::state::RefreshStage::ProcessingTargets => "processing_targets",
@@ -210,9 +224,9 @@ pub async fn refresh_directory_tree_cache(
 
     // Force directory tree refresh via singleton system (non-blocking)
     let refresh_status = state.force_directory_tree_refresh();
-    
+
     match refresh_status {
-        crate::server::state::RefreshStatus::InProgressWait 
+        crate::server::state::RefreshStatus::InProgressWait
         | crate::server::state::RefreshStatus::InProgressServeStale => {
             tracing::info!("🔄 Directory tree refresh started via singleton system");
         }
