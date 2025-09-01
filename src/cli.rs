@@ -327,23 +327,27 @@ pub enum Commands {
 
     /// Start the web server for API access and static file serving
     Server {
-        /// Database file to use
-        database: String,
+        /// Path to TOML configuration file
+        #[arg(short, long)]
+        config: Option<String>,
 
-        /// Base directories containing the image files (can specify multiple)
+        /// Database file to use (overrides config file)
+        database: Option<String>,
+
+        /// Base directories containing the image files (can specify multiple, overrides config file)
         image_dirs: Vec<String>,
 
         /// Directory to serve static files from (for React app, optional - uses embedded files if not provided)
         #[arg(long)]
         static_dir: Option<String>,
 
-        /// Cache directory for processed images
-        #[arg(long, default_value = "./cache")]
-        cache_dir: String,
+        /// Cache directory for processed images (overrides config file)
+        #[arg(long)]
+        cache_dir: Option<String>,
 
-        /// Port to listen on
-        #[arg(short, long, default_value = "3000")]
-        port: u16,
+        /// Port to listen on (overrides config file)
+        #[arg(short, long)]
+        port: Option<u16>,
 
         /// Host to bind to
         #[arg(long, default_value = "127.0.0.1")]
@@ -448,6 +452,18 @@ pub struct PregenerationConfig {
     pub cache_expiry: Duration,
 }
 
+impl Default for PregenerationConfig {
+    fn default() -> Self {
+        Self {
+            screen_enabled: false,
+            large_enabled: false,
+            original_enabled: false,
+            annotated_enabled: false,
+            cache_expiry: Duration::from_secs(86400 * 365), // 1 year default
+        }
+    }
+}
+
 impl PregenerationConfig {
     /// Create configuration from server command arguments
     pub fn from_server_args(
@@ -481,6 +497,21 @@ impl PregenerationConfig {
             annotated_enabled: annotated,
             cache_expiry,
         })
+    }
+
+    /// Create from config module's PregenerationConfig
+    pub fn from_config(config: Option<&crate::config::PregenerationConfig>) -> Self {
+        if let Some(cfg) = config {
+            Self {
+                screen_enabled: cfg.enabled.unwrap_or(false) && cfg.screen.unwrap_or(true),
+                large_enabled: cfg.enabled.unwrap_or(false) && cfg.large.unwrap_or(false),
+                original_enabled: false,  // Not supported in config yet
+                annotated_enabled: false, // Not supported in config yet
+                cache_expiry: Duration::from_secs(86400 * 365), // 1 year default
+            }
+        } else {
+            Self::default()
+        }
     }
 
     /// Check if any pre-generation is enabled

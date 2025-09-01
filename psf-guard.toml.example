@@ -1,0 +1,55 @@
+# PSF Guard Configuration File
+# 
+# This is an example configuration file for PSF Guard.
+# Copy this file to psf-guard.toml and customize it for your setup.
+# Command line arguments will override values in this config file.
+
+[server]
+# Port to bind to (default: 3000)
+port = 3000
+
+# Host to bind to (default: "0.0.0.0")  
+host = "0.0.0.0"
+
+# Enable CORS (default: true)
+cors = true
+
+[database]
+# Path to the SQLite database file (required)
+# Windows N.I.N.A. location: %LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite
+path = "schedulerdb.sqlite"
+
+[images]
+# List of image directories to scan (in priority order)
+# The first directory where a file is found will be used
+directories = [
+    "/path/to/primary/images",
+    "/path/to/backup/images",
+    "/path/to/archive/images"
+]
+
+[cache]
+# Cache directory path (default: "./cache")
+directory = "./cache"
+
+# File cache TTL (default: "5m")
+# Supports: 1s, 30s, 5m, 1h, 2h30m, 1d, etc.
+file_ttl = "5m"
+
+# Directory tree cache TTL (default: "5m")
+# Supports: 1s, 30s, 5m, 1h, 2h30m, 1d, etc.
+directory_ttl = "5m"
+
+# Optional pregeneration configuration for background image processing
+[pregeneration]
+# Enable background pregeneration of images (default: false)
+enabled = false
+
+# Generate screen-sized previews (1200px max) when enabled (default: true)
+screen = true
+
+# Generate large previews (2000px max) when enabled (default: false) 
+large = false
+
+# Number of worker threads for pregeneration (default: number of CPU cores)
+# workers = 4

@@ -25,8 +25,9 @@ docker pull ghcr.io/theatrus/psf-guard:latest
 docker run -d -p 3000:3000 \
   -v /path/to/database.sqlite:/data/database.sqlite:ro \
   -v /path/to/images:/images:ro \
+  -v /path/to/psf-guard.toml:/data/config.toml:ro \
   ghcr.io/theatrus/psf-guard:latest \
-  server /data/database.sqlite /images
+  server --config /data/config.toml
 ```
 
 ### Build from Source
@@ -36,8 +37,12 @@ git clone https://github.com/theatrus/psf-guard.git
 cd psf-guard
 cargo build --release
 
-# Run server
+# Run server (traditional CLI args)
 ./target/release/psf-guard server schedulerdb.sqlite /path/to/images/
+
+# Or using config file
+./target/release/psf-guard server --config psf-guard.toml
+
 # Open http://localhost:3000
 ```
 
@@ -47,6 +52,46 @@ cargo build --release
 # Scan multiple directories in priority order (first-hit wins)
 psf-guard server db.sqlite /primary/images/ /backup/images/ /archive/images/
 ```
+
+## Configuration File
+
+PSF Guard supports TOML configuration files for easier management:
+
+```bash
+# Create from example
+cp psf-guard.toml.example psf-guard.toml
+# Edit with your settings
+nano psf-guard.toml
+
+# Use config file
+psf-guard server --config psf-guard.toml
+```
+
+### Configuration Options
+
+```toml
+[server]
+port = 3000
+host = "0.0.0.0"
+
+[database]  
+path = "schedulerdb.sqlite"
+
+[images]
+directories = ["/path/to/images1", "/path/to/images2"]
+
+[cache]
+directory = "./cache"  
+file_ttl = "5m"        # Human readable: 30s, 5m, 1h, 2h30m, 1d
+directory_ttl = "5m"
+
+[pregeneration]  # Optional
+enabled = true
+screen = true   # Generate 1200px previews
+large = false   # Generate 2000px previews
+```
+
+Command line arguments override config file settings.
 
 ## Docker Compose
 
@@ -59,9 +104,10 @@ services:
     image: ghcr.io/theatrus/psf-guard:latest
     ports: ["3000:3000"]
     volumes:
+      - /path/to/psf-guard.toml:/data/config.toml:ro
       - /path/to/schedulerdb.sqlite:/data/database.sqlite:ro  
       - /path/to/images:/images:ro
-    command: server /data/database.sqlite /images
+    command: server --config /data/config.toml
     restart: unless-stopped
 ```
 
@@ -98,8 +144,11 @@ Run with: `docker-compose up -d`
 ### Core Commands
 
 ```bash
-# Web server
+# Web server (CLI args)
 psf-guard server <database> <image-dirs...> [--port 3000]
+
+# Web server (config file)
+psf-guard server --config psf-guard.toml [--port 8080]  # CLI overrides config
 
 # Move rejected images  
 psf-guard filter-rejected <database> <image-dir> [--dry-run] [--project NAME]

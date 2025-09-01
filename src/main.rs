@@ -215,12 +215,13 @@ fn main() -> Result<()> {
             benchmark_psf(&fits_path, runs, verbose)?;
         }
         Commands::Server {
+            config,
             database,
             image_dirs,
             static_dir,
             cache_dir,
             port,
-            host,
+            host: _host,
             pregenerate_screen,
             pregenerate_large,
             pregenerate_original,
@@ -228,27 +229,76 @@ fn main() -> Result<()> {
             pregenerate_all,
             cache_expiry,
         } => {
-            // Parse pregeneration configuration
+            use psf_guard::config::Config;
+
+            // Load configuration from file or use defaults
+            let mut app_config = if let Some(config_path) = config {
+                Config::from_file(&config_path)
+                    .with_context(|| format!("Failed to load config file: {}", config_path))?
+            } else {
+                Config::default()
+            };
+
+            // Override config with command line arguments
+            let database_path = if database.is_some() || image_dirs.is_empty() {
+                database
+            } else {
+                // If no database specified and we have image_dirs from CLI, use the default
+                Some(app_config.database.path.clone())
+            };
+
+            let image_directories = if !image_dirs.is_empty() {
+                Some(image_dirs)
+            } else {
+                None
+            };
+
+            app_config.merge_with_cli(database_path, image_directories, port, cache_dir);
+
+            // Validate configuration
+            app_config
+                .validate()
+                .context("Configuration validation failed")?;
+
+            // Create pregeneration configuration
             use psf_guard::cli::PregenerationConfig;
-            let pregeneration_config = PregenerationConfig::from_server_args(
-                pregenerate_screen,
-                pregenerate_large,
-                pregenerate_original,
-                pregenerate_annotated,
-                pregenerate_all,
-                &cache_expiry,
-            )?;
+            let pregeneration_config = if pregenerate_all
+                || pregenerate_screen
+                || pregenerate_large
+                || pregenerate_original
+                || pregenerate_annotated
+            {
+                // CLI flags take precedence
+                PregenerationConfig::from_server_args(
+                    pregenerate_screen,
+                    pregenerate_large,
+                    pregenerate_original,
+                    pregenerate_annotated,
+                    pregenerate_all,
+                    &cache_expiry,
+                )?
+            } else {
+                // Use config file settings
+                PregenerationConfig::from_config(app_config.get_pregeneration())
+            };
+
+            // Clone values before use to avoid borrow checker issues
+            let database_path = app_config.database.path.clone();
+            let image_directories = app_config.images.directories.clone();
+            let cache_directory = app_config.get_cache_directory();
+            let server_host = app_config.get_host();
+            let server_port = app_config.get_port();
 
             // Use tokio runtime for async server
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(async {
                 psf_guard::server::run_server(
-                    database,
-                    image_dirs,
+                    database_path,
+                    image_directories,
                     static_dir,
-                    cache_dir,
-                    host,
-                    port,
+                    cache_directory,
+                    server_host,
+                    server_port,
                     pregeneration_config,
                 )
                 .await

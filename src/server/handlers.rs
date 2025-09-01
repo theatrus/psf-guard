@@ -1570,15 +1570,15 @@ pub async fn get_projects_overview(
             .map_err(|_| AppError::DatabaseError)?;
 
         // Get desired values for this project
-        let desired_stats = db
-            .get_project_desired_stats(project.id)
-            .unwrap_or(ProjectDesiredStats {
-                total_desired: 0,
-                total_acquired: 0,
-                total_accepted: 0,
-                rejected_count: 0,
-                filters_used: vec![],
-            });
+        let desired_stats =
+            db.get_project_desired_stats(project.id)
+                .unwrap_or(ProjectDesiredStats {
+                    total_desired: 0,
+                    total_acquired: 0,
+                    total_accepted: 0,
+                    rejected_count: 0,
+                    filters_used: vec![],
+                });
 
         let target_count = db
             .get_target_count_for_project(project.id)
@@ -1655,8 +1655,7 @@ pub async fn get_targets_overview(
 
     let mut response = Vec::new();
 
-    for target_data in targets_data
-    {
+    for target_data in targets_data {
         // Get date range and filters for this target
         let (earliest, latest, filters) = {
             let mut stmt = conn.prepare(
@@ -1664,7 +1663,9 @@ pub async fn get_targets_overview(
             ).map_err(|_| AppError::DatabaseError)?;
 
             let (earliest, latest): (Option<i64>, Option<i64>) = stmt
-                .query_row([target_data.target.id], |row| Ok((row.get(0)?, row.get(1)?)))
+                .query_row([target_data.target.id], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
                 .map_err(|_| AppError::DatabaseError)?;
 
             let mut filter_stmt = conn.prepare(
@@ -1689,7 +1690,11 @@ pub async fn get_targets_overview(
         };
 
         // Get basic file statistics (simplified for performance)
-        let files_found = if file_existence_map.get(&target_data.target.id).copied().unwrap_or(false) {
+        let files_found = if file_existence_map
+            .get(&target_data.target.id)
+            .copied()
+            .unwrap_or(false)
+        {
             target_data.total_images // Optimistic assumption: if we think target has files, assume all files exist
         } else {
             0
@@ -1711,7 +1716,10 @@ pub async fn get_targets_overview(
             total_desired: target_data.total_desired,
             files_found,
             files_missing,
-            has_files: file_existence_map.get(&target_data.target.id).copied().unwrap_or(false),
+            has_files: file_existence_map
+                .get(&target_data.target.id)
+                .copied()
+                .unwrap_or(false),
             date_range: DateRange {
                 earliest,
                 latest,
@@ -1739,11 +1747,13 @@ pub async fn get_overall_stats(
         .map_err(|_| AppError::DatabaseError)?;
 
     // Get overall desired statistics
-    let desired_stats = db.get_overall_desired_statistics().unwrap_or(OverallDesiredStats {
-        total_desired: 0,
-        total_acquired: 0,
-        total_accepted: 0,
-    });
+    let desired_stats = db
+        .get_overall_desired_statistics()
+        .unwrap_or(OverallDesiredStats {
+            total_desired: 0,
+            total_acquired: 0,
+            total_accepted: 0,
+        });
 
     let span_days = match (stats.earliest_date, stats.latest_date) {
         (Some(start), Some(end)) => {
@@ -1754,7 +1764,11 @@ pub async fn get_overall_stats(
     };
 
     // Calculate overall file statistics (simplified for performance)
-    let total_files_found = if stats.active_projects > 0 { stats.total_images } else { 0 }; // Optimistic: assume all files exist for active projects
+    let total_files_found = if stats.active_projects > 0 {
+        stats.total_images
+    } else {
+        0
+    }; // Optimistic: assume all files exist for active projects
     let total_files_missing = stats.total_images - total_files_found;
 
     // For now, we'll return empty recent activity - this could be enhanced later

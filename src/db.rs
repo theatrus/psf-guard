@@ -1,6 +1,6 @@
 use crate::models::{
-    AcquiredImage, GradingStatus, OverallDesiredStats, OverallStats, Project, 
-    ProjectDesiredStats, ProjectOverviewStats, Target, TargetWithStats, TargetWithDesiredStats,
+    AcquiredImage, GradingStatus, OverallDesiredStats, OverallStats, Project, ProjectDesiredStats,
+    ProjectOverviewStats, Target, TargetWithDesiredStats, TargetWithStats,
 };
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
@@ -430,10 +430,7 @@ impl<'a> Database<'a> {
     }
 
     // Overview and statistics methods
-    pub fn get_project_overview_stats(
-        &self,
-        project_id: i32,
-    ) -> Result<ProjectOverviewStats> {
+    pub fn get_project_overview_stats(&self, project_id: i32) -> Result<ProjectOverviewStats> {
         let mut stmt = self.conn.prepare(
             "SELECT 
                 COUNT(*) as total_images,
@@ -485,9 +482,7 @@ impl<'a> Database<'a> {
         Ok(count)
     }
 
-    pub fn get_overall_statistics(
-        &self,
-    ) -> Result<OverallStats> {
+    pub fn get_overall_statistics(&self) -> Result<OverallStats> {
         // Get overall image statistics
         let mut stmt = self.conn.prepare(
             "SELECT 
@@ -550,14 +545,12 @@ impl<'a> Database<'a> {
             unique_filters: filters,
             earliest_date: earliest,
             latest_date: latest,
-            files_found: 0, // Will be set by caller if needed
+            files_found: 0,   // Will be set by caller if needed
             files_missing: 0, // Will be set by caller if needed
         })
     }
 
-    pub fn get_all_targets_with_project_info(
-        &self,
-    ) -> Result<Vec<TargetWithStats>> {
+    pub fn get_all_targets_with_project_info(&self) -> Result<Vec<TargetWithStats>> {
         let mut stmt = self.conn.prepare(
             "SELECT t.Id, t.name, t.active, t.ra, t.dec, t.projectId, p.name,
                     COUNT(ai.Id) as image_count,
@@ -597,10 +590,7 @@ impl<'a> Database<'a> {
     }
 
     // Desired values queries from exposureplan table
-    pub fn get_project_desired_stats(
-        &self,
-        project_id: i32,
-    ) -> Result<ProjectDesiredStats> {
+    pub fn get_project_desired_stats(&self, project_id: i32) -> Result<ProjectDesiredStats> {
         let mut stmt = self.conn.prepare(
             "SELECT 
                 SUM(ep.desired) as total_desired,
@@ -667,9 +657,7 @@ impl<'a> Database<'a> {
         Ok(rows)
     }
 
-    pub fn get_all_targets_with_desired_stats(
-        &self,
-    ) -> Result<Vec<TargetWithDesiredStats>> {
+    pub fn get_all_targets_with_desired_stats(&self) -> Result<Vec<TargetWithDesiredStats>> {
         let mut stmt = self.conn.prepare(
             "SELECT t.Id, t.name, t.active, t.ra, t.dec, t.projectid, p.name,
                     COUNT(DISTINCT ai.Id) as image_count,

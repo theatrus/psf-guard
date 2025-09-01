@@ -1,6 +1,7 @@
 pub mod accord_imaging;
 pub mod cli;
 pub mod commands;
+pub mod config;
 pub mod db;
 pub mod debug;
 pub mod directory_tree;
