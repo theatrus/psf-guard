@@ -1,15 +1,12 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { apiClient } from '../api/client';
-import { useProjectTarget } from '../hooks/useUrlState';
 import type { ProjectOverview, TargetOverview, DateRange } from '../api/types';
 import './Overview.css';
 
 export default function Overview() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const { setProjectId, setTargetId } = useProjectTarget();
   const [expandedProjects, setExpandedProjects] = useState<Set<number>>(new Set());
 
   // Fetch overview data
@@ -69,25 +66,17 @@ export default function Overview() {
 
   // Navigation handlers
   const handleSelectProject = (project: ProjectOverview) => {
-    console.log('Overview: Setting project ID to', project.id);
-    setProjectId(project.id); // This already clears target selection internally
-    
-    // Wait for state update, then navigate while preserving search params
-    setTimeout(() => {
-      console.log('Overview: Current searchParams:', searchParams.toString());
-      navigate('/grid?' + searchParams.toString());
-    }, 100);
+    // Navigate with explicit search params instead of relying on state updates
+    navigate(`/grid?project=${project.id}`);
   };
 
   const handleSelectTarget = (target: TargetOverview) => {
-    setProjectId(target.project_id);
-    setTargetId(target.id);
-    navigate('/grid');
+    // Navigate with explicit search params instead of relying on state updates
+    navigate(`/grid?project=${target.project_id}&target=${target.id}`);
   };
 
   const handleViewAllProjects = () => {
-    setProjectId(null); // null = all projects
-    setTargetId(null);
+    // Navigate to grid with no search params (all projects)
     navigate('/grid');
   };
 
