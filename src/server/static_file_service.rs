@@ -122,7 +122,7 @@ async fn serve_file(file_path: &PathBuf) -> Result<Response<Body>, std::io::Erro
     let mut response = Response::builder()
         .status(StatusCode::OK)
         .body(Body::from(contents))
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "Failed to build response"))?;
+        .map_err(|_| std::io::Error::other("Failed to build response"))?;
 
     *response.headers_mut() = headers;
 

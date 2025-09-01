@@ -240,7 +240,7 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
 
                 // Pre-generate each enabled format
                 if state.pregeneration_config.screen_enabled {
-                    match pregenerate_preview(&state, *image_id, &file_only, &target_name, "screen")
+                    match pregenerate_preview(&state, *image_id, file_only, target_name, "screen")
                         .await
                     {
                         Ok(generated) => {
@@ -263,7 +263,7 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
                 }
 
                 if state.pregeneration_config.large_enabled {
-                    match pregenerate_preview(&state, *image_id, &file_only, &target_name, "large")
+                    match pregenerate_preview(&state, *image_id, file_only, target_name, "large")
                         .await
                     {
                         Ok(generated) => {
@@ -289,8 +289,8 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
                     match pregenerate_preview(
                         &state,
                         *image_id,
-                        &file_only,
-                        &target_name,
+                        file_only,
+                        target_name,
                         "original",
                     )
                     .await
@@ -315,7 +315,7 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
                 }
 
                 if state.pregeneration_config.annotated_enabled {
-                    match pregenerate_annotated(&state, *image_id, &file_only, &target_name).await {
+                    match pregenerate_annotated(&state, *image_id, file_only, target_name).await {
                         Ok(generated) => {
                             _formats_processed += 1;
                             if generated {
