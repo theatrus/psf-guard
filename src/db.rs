@@ -641,10 +641,7 @@ impl<'a> Database<'a> {
         Ok(result)
     }
 
-    pub fn get_target_desired_stats(
-        &self,
-        target_id: i32,
-    ) -> Result<Vec<(String, i32, i32, i32)>> {
+    pub fn get_target_desired_stats(&self, target_id: i32) -> Result<Vec<(String, i32, i32, i32)>> {
         let mut stmt = self.conn.prepare(
             "SELECT 
                 et.filtername,

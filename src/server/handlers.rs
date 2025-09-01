@@ -60,31 +60,23 @@ pub async fn get_server_info(
 pub async fn refresh_file_cache(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<FileCheckResponse>>, AppError> {
-    let start_time = std::time::Instant::now();
+    tracing::info!("🔄 Starting unified file cache refresh");
 
-    tracing::info!("🔄 Starting file cache refresh (includes directory tree cache)");
-
-    // Refresh projects (this will also refresh the directory tree cache first)
-    refresh_project_cache(&state).await?;
-
-    // Get stats
-    let (images_checked, files_found, files_missing) = {
-        let cache = state.file_check_cache.read().unwrap();
-        let total_projects = cache.projects_with_files.len();
-        let found = cache.projects_with_files.values().filter(|&&v| v).count();
-        let missing = total_projects - found;
-        (total_projects, found, missing)
-    };
+    // Use the unified cache refresh operation
+    let (images_checked, files_found, files_missing, duration_ms) = state
+        .refresh_cache_unified()
+        .await
+        .map_err(|e| AppError::InternalError(format!("Cache refresh failed: {:?}", e)))?;
 
     let response = FileCheckResponse {
         images_checked,
         files_found,
         files_missing,
-        check_time_ms: start_time.elapsed().as_millis(),
+        check_time_ms: duration_ms,
     };
 
     tracing::info!(
-        "✅ File cache refresh completed in {}ms - {} projects checked, {} with files, {} missing",
+        "✅ Unified file cache refresh completed in {}ms - {} items checked, {} with files, {} missing",
         response.check_time_ms,
         images_checked,
         files_found,
@@ -139,34 +131,24 @@ pub async fn list_projects(
 ) -> Result<Json<ApiResponse<Vec<ProjectResponse>>>, AppError> {
     tracing::debug!("📋 Listing projects");
 
-    // Check if cache is expired or empty
-    let (needs_refresh, has_stale_data) = {
-        let cache = state.file_check_cache.read().unwrap();
-        let expired = cache.is_expired();
-        let empty = cache.projects_with_files.is_empty();
+    // Ensure cache is available (start refresh if needed)
+    let refresh_status = state.ensure_cache_available();
 
-        if expired {
-            tracing::debug!("⏰ Project cache expired");
-        } else if empty {
-            tracing::debug!("📭 Project cache empty");
+    match refresh_status {
+        crate::server::state::RefreshStatus::InProgressWait => {
+            // No initial data available, return loading status
+            tracing::debug!("🔄 Cache empty, returning loading status");
+            return Ok(Json(crate::server::api::ApiResponse::loading()));
         }
-
-        let needs_refresh = expired || empty;
-        let has_stale_data = !empty; // We have stale data if cache is not empty
-
-        (needs_refresh, has_stale_data)
-    };
-
-    // If cache is expired but we have stale data, serve stale and refresh in background
-    if needs_refresh {
-        if has_stale_data {
-            // Serve stale cache immediately, refresh in background
-            tracing::debug!("🔄 Serving stale cache, refreshing in background");
-            state.spawn_background_refresh();
-        } else {
-            // Cache is empty, we must refresh synchronously
-            tracing::debug!("🔄 Cache empty, refreshing synchronously");
-            refresh_project_cache(&state).await?;
+        crate::server::state::RefreshStatus::InProgressServeStale => {
+            tracing::debug!("🔄 Serving stale data while refresh in progress");
+        }
+        crate::server::state::RefreshStatus::NotNeeded => {
+            tracing::debug!("✅ Cache is fresh");
+        }
+        crate::server::state::RefreshStatus::NeedsRefresh => {
+            // This shouldn't happen since ensure_cache_available should have started refresh
+            tracing::warn!("⚠️ Unexpected NeedsRefresh status after ensure_cache_available");
         }
     }
 
@@ -198,210 +180,13 @@ pub async fn list_projects(
 
     tracing::debug!("📋 Returning {} projects", response.len());
 
-    Ok(Json(ApiResponse::success(response)))
-}
-
-pub async fn refresh_project_cache(state: &Arc<AppState>) -> Result<(), AppError> {
-    let start_time = std::time::Instant::now();
-    tracing::debug!("🔄 Refreshing project cache");
-
-    // First, refresh the directory tree cache to ensure file lookups are up-to-date
-    if let Err(e) = state.refresh_directory_tree_if_needed() {
-        tracing::warn!(
-            "⚠️ Directory tree cache refresh failed during project cache refresh: {}",
-            e
-        );
-        // Continue with project cache refresh even if directory tree refresh fails
-    } else {
-        tracing::debug!("✅ Directory tree cache ready for project cache refresh");
-    }
-
-    // Get all projects - we'll check files using the directory tree cache instead of sampling
-    let projects = {
-        let conn = state.db();
-        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
-        let db = Database::new(&conn);
-
-        db.get_projects_with_images()
-            .map_err(|_| AppError::DatabaseError)?
+    // Get current status for response
+    let api_status = {
+        let cache = state.file_check_cache.read().unwrap();
+        crate::server::api::ApiRefreshStatus::from(cache.get_refresh_status())
     };
 
-    let project_count = projects.len();
-
-    tracing::debug!("🔍 Checking {} projects for file existence", project_count);
-
-    // Perform all expensive filesystem operations WITHOUT holding any locks
-    let mut cache_updates = HashMap::new();
-    let mut projects_with_files = 0;
-
-    for project in &projects {
-        tracing::debug!(
-            "🔎 Checking project '{}' (ID: {}) using directory tree cache",
-            project.name,
-            project.id
-        );
-
-        let has_files = check_project_files_via_cache(state, project.id).await?;
-
-        tracing::debug!(
-            "📊 Project '{}' (ID: {}): has_files = {}",
-            project.name,
-            project.id,
-            has_files
-        );
-
-        if has_files {
-            projects_with_files += 1;
-        }
-
-        cache_updates.insert(project.id, has_files);
-    }
-
-    // Log which projects have files for debugging before updating cache
-    for (project_id, has_files) in &cache_updates {
-        if let Some(project) = projects.iter().find(|p| p.id == *project_id) {
-            tracing::debug!(
-                "📊 Project '{}' (ID: {}): has_files = {}",
-                project.name,
-                project.id,
-                has_files
-            );
-        }
-    }
-
-    // Only acquire write lock for the final atomic update
-    {
-        let mut cache = state.file_check_cache.write().unwrap();
-        cache.projects_with_files = cache_updates;
-        cache.last_updated = std::time::Instant::now();
-    }
-
-    let duration = start_time.elapsed();
-    tracing::info!(
-        "✅ Project cache refresh completed in {:?} - {}/{} projects have files",
-        duration,
-        projects_with_files,
-        project_count
-    );
-
-    Ok(())
-}
-
-// Efficient function that checks ALL files for a project using the directory tree cache
-async fn check_project_files_via_cache(
-    state: &Arc<AppState>,
-    project_id: i32,
-) -> Result<bool, AppError> {
-    let (has_files, _, _) = check_project_files_detailed(state, project_id).await?;
-    Ok(has_files)
-}
-
-async fn check_project_files_detailed(
-    state: &Arc<AppState>,
-    project_id: i32,
-) -> Result<(bool, i32, i32), AppError> { // (has_files, files_found, files_missing)
-    // Get the directory tree cache
-    let directory_tree = state.get_directory_tree().map_err(|e| {
-        tracing::error!("Failed to get directory tree cache: {}", e);
-        AppError::InternalError("Directory cache error".to_string())
-    })?;
-
-    // Get all images for this project from database
-    let all_images = {
-        let conn = state.db();
-        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
-        let db = Database::new(&conn);
-
-        db.get_images_by_project_id(project_id)
-            .map_err(|_| AppError::DatabaseError)?
-    };
-
-    if all_images.is_empty() {
-        tracing::debug!("  📭 Project {} has no images in database", project_id);
-        return Ok((false, 0, 0));
-    }
-
-    tracing::debug!(
-        "  🔍 Checking {} images for project {}",
-        all_images.len(),
-        project_id
-    );
-
-    let mut found_files = 0;
-    let mut total_valid_files = 0;
-    let mut cache_hits = 0;
-
-    // Check each image using the directory tree cache
-    for (image, _project_name, _target_name) in &all_images {
-        if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&image.metadata) {
-            if let Some(filename_path) = metadata["FileName"].as_str() {
-                // Extract just the filename from the full path
-                let filename = filename_path
-                    .split(&['\\', '/'][..])
-                    .next_back()
-                    .unwrap_or(filename_path);
-
-                total_valid_files += 1;
-
-                // Check if this filename exists in the directory tree cache
-                if directory_tree.find_file_first(filename).is_some() {
-                    cache_hits += 1;
-                    found_files += 1;
-
-                    tracing::trace!("    ✅ Cache hit for: {}", filename);
-
-                    // Early exit optimization: if we found any files, we know the project has files
-                    if found_files >= 1 {
-                        tracing::debug!(
-                            "  🚀 Early exit: Found {} files ({}% cache hit rate), project has files",
-                            found_files,
-                            (cache_hits * 100) / total_valid_files
-                        );
-                        return Ok((true, found_files, total_valid_files - found_files));
-                    }
-                } else {
-                    tracing::trace!("    ❌ Cache miss for: {}", filename);
-                }
-            }
-        }
-    }
-
-    let hit_rate = if total_valid_files > 0 {
-        (cache_hits * 100) / total_valid_files
-    } else {
-        0
-    };
-
-    // OPTIMISTIC FALLBACK: If we have a very low cache hit rate, assume files exist
-    let has_files = if found_files > 0 {
-        // We found at least one file, definitely has files
-        true
-    } else if total_valid_files > 0 && hit_rate == 0 {
-        // We have images in DB but 0% cache hit rate - likely a path/cache issue
-        // Be optimistic and assume files exist (they may have been moved/renamed)
-        tracing::warn!(
-            "  🤔 Project {} has {} images in DB but 0% cache hit rate. Assuming files exist (may be moved).",
-            project_id,
-            total_valid_files
-        );
-        true
-    } else {
-        // No files found and reasonable cache hit rate (or no valid files)
-        false
-    };
-
-    tracing::debug!(
-        "  📊 Project {} check result: {}/{} files found ({}% cache hit rate), has_files = {} (optimistic: {})",
-        project_id,
-        found_files,
-        total_valid_files,
-        hit_rate,
-        has_files,
-        found_files == 0 && total_valid_files > 0 && has_files
-    );
-
-    let files_missing = total_valid_files - found_files;
-    Ok((has_files, found_files, files_missing))
+    Ok(Json(ApiResponse::success_with_status(response, api_status)))
 }
 
 pub async fn list_targets(
@@ -410,34 +195,24 @@ pub async fn list_targets(
 ) -> Result<Json<ApiResponse<Vec<TargetResponse>>>, AppError> {
     tracing::debug!("🎯 Listing targets for project {}", project_id);
 
-    // Check if cache is expired or empty
-    let (needs_refresh, has_stale_data) = {
-        let cache = state.file_check_cache.read().unwrap();
-        let expired = cache.is_expired();
-        let empty = cache.targets_with_files.is_empty();
+    // Ensure cache is available (start refresh if needed)
+    let refresh_status = state.ensure_cache_available();
 
-        if expired {
-            tracing::debug!("⏰ Target cache expired for project {}", project_id);
-        } else if empty {
-            tracing::debug!("📭 Target cache empty for project {}", project_id);
+    match refresh_status {
+        crate::server::state::RefreshStatus::InProgressWait => {
+            // No initial data available, return loading status
+            tracing::debug!("🔄 Target cache empty, returning loading status");
+            return Ok(Json(crate::server::api::ApiResponse::loading()));
         }
-
-        let needs_refresh = expired || empty;
-        let has_stale_data = !empty; // We have stale data if cache is not empty
-
-        (needs_refresh, has_stale_data)
-    };
-
-    // If cache is expired but we have stale data, serve stale and refresh in background
-    if needs_refresh {
-        if has_stale_data {
-            // Serve stale cache immediately, refresh in background
-            tracing::debug!("🔄 Serving stale target cache, refreshing in background");
-            state.spawn_background_refresh();
-        } else {
-            // Cache is empty, we must refresh synchronously
-            tracing::debug!("🔄 Target cache empty, refreshing synchronously");
-            refresh_target_cache(&state, project_id).await?;
+        crate::server::state::RefreshStatus::InProgressServeStale => {
+            tracing::debug!("🔄 Serving stale target data while refresh in progress");
+        }
+        crate::server::state::RefreshStatus::NotNeeded => {
+            tracing::debug!("✅ Target cache is fresh");
+        }
+        crate::server::state::RefreshStatus::NeedsRefresh => {
+            // This shouldn't happen since ensure_cache_available should have started refresh
+            tracing::warn!("⚠️ Unexpected NeedsRefresh status after ensure_cache_available");
         }
     }
 
@@ -478,199 +253,13 @@ pub async fn list_targets(
         project_id
     );
 
-    Ok(Json(ApiResponse::success(response)))
-}
-
-async fn refresh_target_cache(state: &Arc<AppState>, project_id: i32) -> Result<(), AppError> {
-    let start_time = std::time::Instant::now();
-    tracing::debug!("🔄 Refreshing target cache for project {}", project_id);
-
-    // Ensure directory tree cache is available before file lookups
-    if let Err(e) = state.refresh_directory_tree_if_needed() {
-        tracing::warn!(
-            "⚠️ Directory tree cache refresh failed during target cache refresh: {}",
-            e
-        );
-        // Continue with target cache refresh even if directory tree refresh fails
-    } else {
-        tracing::debug!("✅ Directory tree cache ready for target cache refresh");
-    }
-
-    let targets_to_check = {
-        let conn = state.db();
-        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
-        let db = Database::new(&conn);
-        db.get_targets_with_images(project_id)
-            .map_err(|_| AppError::DatabaseError)?
+    // Get current status for response
+    let api_status = {
+        let cache = state.file_check_cache.read().unwrap();
+        crate::server::api::ApiRefreshStatus::from(cache.get_refresh_status())
     };
 
-    let target_count = targets_to_check.len();
-    tracing::debug!(
-        "🔍 Checking {} targets in project {}",
-        target_count,
-        project_id
-    );
-
-    // Perform all expensive filesystem operations WITHOUT holding any locks
-    let mut cache_updates = HashMap::new();
-    let mut targets_with_files = 0;
-
-    for (target, _, _, _) in targets_to_check {
-        tracing::trace!("🔎 Checking target '{}' (ID: {})", target.name, target.id);
-        let has_files = check_target_has_files(state, target.id).await?;
-
-        if has_files {
-            targets_with_files += 1;
-        }
-
-        cache_updates.insert(target.id, has_files);
-    }
-
-    // Only acquire write lock for the final atomic update
-    {
-        let mut cache = state.file_check_cache.write().unwrap();
-        // Merge updates into existing cache
-        for (tid, has_files) in cache_updates {
-            cache.targets_with_files.insert(tid, has_files);
-        }
-        cache.last_updated = std::time::Instant::now();
-    }
-
-    let duration = start_time.elapsed();
-    tracing::debug!(
-        "✅ Target cache refresh completed for project {} in {:?} - {}/{} targets have files",
-        project_id,
-        duration,
-        targets_with_files,
-        target_count
-    );
-
-    Ok(())
-}
-
-async fn check_target_has_files(state: &Arc<AppState>, target_id: i32) -> Result<bool, AppError> {
-    let (has_files, _, _) = check_target_files_detailed(state, target_id).await?;
-    Ok(has_files)
-}
-
-async fn check_target_files_detailed(
-    state: &Arc<AppState>,
-    target_id: i32,
-) -> Result<(bool, i32, i32), AppError> { // (has_files, files_found, files_missing)
-    // Get the directory tree cache
-    let directory_tree = state.get_directory_tree().map_err(|e| {
-        tracing::error!("Failed to get directory tree cache: {}", e);
-        AppError::InternalError("Directory cache error".to_string())
-    })?;
-
-    // Get all images for this target from database
-    let all_images = {
-        let conn = state.db();
-        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
-        let db = Database::new(&conn);
-
-        db.query_images(None, None, None, None)
-            .map_err(|_| AppError::DatabaseError)?
-            .into_iter()
-            .filter(|(img, _, _)| img.target_id == target_id)
-            .collect::<Vec<_>>()
-    };
-
-    if all_images.is_empty() {
-        tracing::debug!("  📭 Target {} has no images in database", target_id);
-        return Ok((false, 0, 0));
-    }
-
-    tracing::debug!(
-        "  🔍 Checking {} images for target {}",
-        all_images.len(),
-        target_id
-    );
-
-    let mut found_files = 0;
-    let mut total_valid_files = 0;
-    let mut cache_hits = 0;
-    let mut sample_filenames = Vec::new();
-
-    // Check each image using the directory tree cache (optimistic approach)
-    for (image, _project_name, _target_name) in &all_images {
-        if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&image.metadata) {
-            if let Some(filename_path) = metadata["FileName"].as_str() {
-                // Extract just the filename from the full path
-                let filename = filename_path
-                    .split(&['\\', '/'][..])
-                    .next_back()
-                    .unwrap_or(filename_path);
-
-                total_valid_files += 1;
-                
-                // Keep track of some filenames for debugging
-                if sample_filenames.len() < 3 {
-                    sample_filenames.push(filename.to_string());
-                }
-
-                // Check if this filename exists in the directory tree cache
-                if directory_tree.find_file_first(filename).is_some() {
-                    cache_hits += 1;
-                    found_files += 1;
-
-                    tracing::trace!("    ✅ Cache hit for: {}", filename);
-
-                    // Early exit optimization: if we found ANY files, we know the target has files
-                    if found_files >= 1 {
-                        tracing::debug!(
-                            "  🚀 Early exit: Found {} files ({}% cache hit rate), target has files",
-                            found_files,
-                            (cache_hits * 100) / total_valid_files
-                        );
-                        return Ok((true, found_files, total_valid_files - found_files));
-                    }
-                } else {
-                    tracing::trace!("    ❌ Cache miss for: {}", filename);
-                }
-            }
-        }
-    }
-
-    let hit_rate = if total_valid_files > 0 {
-        (cache_hits * 100) / total_valid_files
-    } else {
-        0
-    };
-
-    // OPTIMISTIC FALLBACK: If we have a very low cache hit rate, it might be a cache/path issue
-    // In this case, assume files exist rather than marking as "no files"
-    // This handles cases where files were intentionally moved or path separators differ
-    let has_files = if found_files > 0 {
-        // We found at least one file, definitely has files
-        true
-    } else if total_valid_files > 0 && hit_rate == 0 {
-        // We have images in DB but 0% cache hit rate - likely a path/cache issue
-        // Be optimistic and assume files exist (they may have been moved/renamed)
-        tracing::warn!(
-            "  🤔 Target {} has {} images in DB but 0% cache hit rate. Assuming files exist (may be moved). Sample files: {:?}",
-            target_id,
-            total_valid_files, 
-            sample_filenames
-        );
-        true
-    } else {
-        // No files found and reasonable cache hit rate (or no valid files)
-        false
-    };
-
-    tracing::debug!(
-        "  📊 Target {} check result: {}/{} files found ({}% cache hit rate), has_files = {} (optimistic: {})",
-        target_id,
-        found_files,
-        total_valid_files,
-        hit_rate,
-        has_files,
-        found_files == 0 && total_valid_files > 0 && has_files
-    );
-
-    let files_missing = total_valid_files - found_files;
-    Ok((has_files, found_files, files_missing))
+    Ok(Json(ApiResponse::success_with_status(response, api_status)))
 }
 
 pub async fn get_images(
@@ -1859,10 +1448,14 @@ pub async fn get_projects_overview(
             .map_err(|_| AppError::DatabaseError)?;
 
         // Get basic file statistics (simplified for performance)
-        let files_found = if file_existence_map.get(&project.id).copied().unwrap_or(false) { 
+        let files_found = if file_existence_map
+            .get(&project.id)
+            .copied()
+            .unwrap_or(false)
+        {
             total_images // Optimistic assumption: if we think project has files, assume all files exist
-        } else { 
-            0 
+        } else {
+            0
         };
         let files_missing = total_images - files_found;
 
@@ -1967,10 +1560,10 @@ pub async fn get_targets_overview(
         };
 
         // Get basic file statistics (simplified for performance)
-        let files_found = if file_existence_map.get(&target.id).copied().unwrap_or(false) { 
+        let files_found = if file_existence_map.get(&target.id).copied().unwrap_or(false) {
             image_count // Optimistic assumption: if we think target has files, assume all files exist
-        } else { 
-            0 
+        } else {
+            0
         };
         let files_missing = image_count - files_found;
 

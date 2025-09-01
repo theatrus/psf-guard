@@ -51,6 +51,7 @@ export interface ApiResponse<T> {
   success: boolean;
   data?: T;
   error?: string;
+  status?: 'ready' | 'loading' | 'refreshing';
 }
 
 export interface ImageQuery {

@@ -80,29 +80,21 @@ pub async fn run_server(
         }
     };
 
-    // Start background cache refresh (non-blocking)
-    let state_clone = Arc::clone(&state);
-    tokio::spawn(async move {
-        tracing::info!("🔄 Starting background cache refresh...");
-
-        // Refresh project cache (this will also build directory tree cache first)
-        if let Err(e) = handlers::refresh_project_cache(&state_clone).await {
-            tracing::warn!("⚠️ Project cache refresh failed: {:?}", e);
-            tracing::info!("📝 Cache will be refreshed on first request");
-        } else {
-            let (projects_checked, projects_with_files) = {
-                let cache = state_clone.file_check_cache.read().unwrap();
-                let total = cache.projects_with_files.len();
-                let found = cache.projects_with_files.values().filter(|&&v| v).count();
-                (total, found)
-            };
-            tracing::info!(
-                "✅ Background cache refresh completed - {}/{} projects have files",
-                projects_with_files,
-                projects_checked
-            );
+    // Start background cache refresh at server startup
+    // This ensures the singleton refresh is started immediately
+    let startup_status = state.ensure_cache_available();
+    match startup_status {
+        crate::server::state::RefreshStatus::InProgressWait
+        | crate::server::state::RefreshStatus::InProgressServeStale => {
+            tracing::info!("🔄 Cache refresh started at server startup");
         }
-    });
+        crate::server::state::RefreshStatus::NotNeeded => {
+            tracing::info!("✅ Cache is already available at startup");
+        }
+        crate::server::state::RefreshStatus::NeedsRefresh => {
+            tracing::warn!("⚠️ Cache refresh needed but not started - this shouldn't happen");
+        }
+    }
 
     // Start background image pre-generation if enabled
     if state.pregeneration_config.is_enabled() {

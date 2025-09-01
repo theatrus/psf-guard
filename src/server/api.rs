@@ -1,10 +1,33 @@
+use crate::server::state::RefreshStatus;
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub enum ApiRefreshStatus {
+    #[serde(rename = "ready")]
+    Ready,
+    #[serde(rename = "loading")]
+    Loading,
+    #[serde(rename = "refreshing")]
+    Refreshing,
+}
+
+impl From<RefreshStatus> for ApiRefreshStatus {
+    fn from(status: RefreshStatus) -> Self {
+        match status {
+            RefreshStatus::NotNeeded => ApiRefreshStatus::Ready,
+            RefreshStatus::InProgressServeStale => ApiRefreshStatus::Refreshing,
+            RefreshStatus::InProgressWait => ApiRefreshStatus::Loading,
+            RefreshStatus::NeedsRefresh => ApiRefreshStatus::Loading,
+        }
+    }
+}
 
 #[derive(Debug, Serialize)]
 pub struct ApiResponse<T> {
     pub success: bool,
     pub data: Option<T>,
     pub error: Option<String>,
+    pub status: Option<ApiRefreshStatus>,
 }
 
 impl<T> ApiResponse<T> {
@@ -13,6 +36,25 @@ impl<T> ApiResponse<T> {
             success: true,
             data: Some(data),
             error: None,
+            status: Some(ApiRefreshStatus::Ready),
+        }
+    }
+
+    pub fn success_with_status(data: T, status: ApiRefreshStatus) -> Self {
+        Self {
+            success: true,
+            data: Some(data),
+            error: None,
+            status: Some(status),
+        }
+    }
+
+    pub fn loading() -> Self {
+        Self {
+            success: true,
+            data: None,
+            error: None,
+            status: Some(ApiRefreshStatus::Loading),
         }
     }
 
@@ -21,6 +63,7 @@ impl<T> ApiResponse<T> {
             success: false,
             data: None,
             error: Some(message),
+            status: None,
         }
     }
 }
