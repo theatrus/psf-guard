@@ -235,14 +235,6 @@ export default function CacheRefreshStatus({ className = '' }: CacheRefreshStatu
   };
 
   const getProgressDetails = (): string => {
-    if (progress.stage === 'initializing_directory_tree') {
-      // Show directories processed and files scanned during directory walking
-      const dirInfo = progress.directories_processed > 0 ? `${progress.directories_processed} dirs` : '';
-      const fileInfo = progress.files_scanned > 0 ? `${progress.files_scanned} files` : '';
-      
-      const countsInfo = [dirInfo, fileInfo].filter(Boolean).join(', ');
-      return countsInfo;
-    }
     if (progress.stage === 'processing_projects' && progress.projects_total > 0) {
       return `${progress.projects_processed}/${progress.projects_total} projects`;
     }
@@ -255,11 +247,22 @@ export default function CacheRefreshStatus({ className = '' }: CacheRefreshStatu
     return '';
   };
 
-  const getCurrentDirectoryDisplay = (): { truncated: string; full: string } | null => {
+  const getDirectoryProgress = (): { display: string; full: string; counts: string } | null => {
     if (progress.stage === 'initializing_directory_tree' && progress.current_directory_name) {
       const fullPath = progress.current_directory_name;
-      const truncatedPath = smartTruncatePath(fullPath, recentDirectories, 30);
-      return { truncated: truncatedPath, full: fullPath };
+      const truncatedPath = smartTruncatePath(fullPath, recentDirectories, 45);
+      
+      // Combine directory counts into compact format
+      const parts = [];
+      if (progress.directories_processed > 0) parts.push(`${progress.directories_processed}d`);
+      if (progress.files_scanned > 0) parts.push(`${progress.files_scanned}f`);
+      const counts = parts.join('/');
+      
+      return { 
+        display: truncatedPath, 
+        full: fullPath,
+        counts 
+      };
     }
     return null;
   };
@@ -298,27 +301,49 @@ export default function CacheRefreshStatus({ className = '' }: CacheRefreshStatu
         </div>
         
         <div className="cache-status-details">
-          {getProgressDetails()}
           {(() => {
-            const dirDisplay = getCurrentDirectoryDisplay();
-            if (dirDisplay) {
+            const dirProgress = getDirectoryProgress();
+            if (dirProgress) {
               return (
-                <div 
-                  className="current-directory"
-                  title={dirDisplay.full}
-                >
-                  {dirDisplay.truncated}
+                <>
+                  <div className="directory-progress-row">
+                    <div 
+                      className="current-directory"
+                      title={dirProgress.full}
+                    >
+                      {dirProgress.display}
+                    </div>
+                    {dirProgress.counts && (
+                      <span className="directory-counts">
+                        {dirProgress.counts}
+                      </span>
+                    )}
+                  </div>
+                  <div className="progress-stats-row">
+                    {getFileStats()}
+                    {progress.elapsed_seconds && (
+                      <span className="cache-elapsed-time">
+                        ({formatElapsedTime(progress.elapsed_seconds)})
+                      </span>
+                    )}
+                  </div>
+                </>
+              );
+            } else {
+              // Non-directory stages
+              return (
+                <div className="progress-info-row">
+                  {getProgressDetails()}
+                  {getFileStats()}
+                  {progress.elapsed_seconds && (
+                    <span className="cache-elapsed-time">
+                      ({formatElapsedTime(progress.elapsed_seconds)})
+                    </span>
+                  )}
                 </div>
               );
             }
-            return null;
           })()}
-          {getFileStats()}
-          {progress.elapsed_seconds && (
-            <span className="cache-elapsed-time">
-              ({formatElapsedTime(progress.elapsed_seconds)})
-            </span>
-          )}
         </div>
       </div>
     </div>

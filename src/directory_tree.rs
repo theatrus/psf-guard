@@ -174,16 +174,6 @@ impl DirectoryTree {
         Ok(())
     }
 
-    /// Recursively scan a directory and populate the maps (backward compatibility version)
-    fn scan_directory(
-        dir: &Path,
-        file_map: &mut HashMap<String, Vec<PathBuf>>,
-        dir_map: &mut HashMap<PathBuf, Vec<PathBuf>>,
-        total_files: &mut usize,
-        total_dirs: &mut usize,
-    ) -> Result<()> {
-        Self::scan_directory_internal(dir, file_map, dir_map, total_files, total_dirs, &mut |_, _, _| {})
-    }
 
     /// Find all paths for a given filename
     pub fn find_file(&self, filename: &str) -> Option<&Vec<PathBuf>> {

@@ -2,14 +2,16 @@
   background: rgba(97, 218, 251, 0.1);
   border: 1px solid rgba(97, 218, 251, 0.3);
   border-radius: 8px;
-  padding: 8px 12px;
+  padding: 6px 12px;
   margin: 0 12px;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   color: #61dafb;
   backdrop-filter: blur(4px);
   transition: all 0.3s ease;
   min-width: 200px;
-  max-width: 400px;
+  max-width: 600px;
+  max-height: 48px;
+  overflow: hidden;
 }
 
 .cache-refresh-status.fade-in {
@@ -123,16 +125,45 @@
 }
 
 .cache-status-details {
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   color: rgba(97, 218, 251, 0.8);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 150px;
+  max-width: 350px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
+  max-height: 32px;
+  overflow: hidden;
+}
+
+.directory-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.progress-stats-row,
+.progress-info-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.7rem;
+  color: rgba(97, 218, 251, 0.6);
+}
+
+.directory-counts {
+  background: rgba(97, 218, 251, 0.15);
+  color: rgba(97, 218, 251, 0.9);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.65rem;
+  font-weight: 500;
+  border: 1px solid rgba(97, 218, 251, 0.25);
+  flex-shrink: 0;
 }
 
 .current-directory {
@@ -147,7 +178,10 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 200px;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.3;
+  color: rgba(97, 218, 251, 0.95);
 }
 
 .current-directory:hover {
@@ -159,6 +193,8 @@
 .cache-elapsed-time {
   font-style: italic;
   opacity: 0.7;
+  font-size: 0.7rem;
+  line-height: 1.2;
 }
 
 /* Responsive adjustments */
@@ -166,18 +202,31 @@
   .cache-refresh-status {
     min-width: 150px;
     max-width: 200px;
-    padding: 6px 8px;
+    padding: 4px 6px;
     margin: 0 6px;
-    font-size: 0.8rem;
+    font-size: 0.75rem;
+    max-height: 40px;
   }
   
   .cache-status-details {
     max-width: 100px;
+    font-size: 0.7rem;
+    max-height: 28px;
   }
   
   .current-directory {
-    max-width: 120px;
-    font-size: 0.7rem;
+    font-size: 0.65rem;
+    padding: 1px 3px;
+  }
+  
+  .directory-counts {
+    font-size: 0.6rem;
+    padding: 0px 3px;
+  }
+  
+  .progress-stats-row,
+  .progress-info-row {
+    font-size: 0.65rem;
   }
   
   .loading-spinner {
