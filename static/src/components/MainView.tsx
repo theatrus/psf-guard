@@ -117,6 +117,7 @@ export default function MainView() {
       [navigation.allImages[navigation.currentIndex - 1]?.id].filter(Boolean) : [],
   };
 
+  console.log('MainView render - projectId:', projectId, 'URL:', window.location.href);
   
   // Show empty state only when user hasn't made any project selection
   // null = "All Projects", number = specific project, both are valid

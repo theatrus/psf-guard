@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { apiClient } from '../api/client';
 import { useProjectTarget } from '../hooks/useUrlState';
 import type { ProjectOverview, TargetOverview, DateRange } from '../api/types';
@@ -8,6 +8,7 @@ import './Overview.css';
 
 export default function Overview() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { setProjectId, setTargetId } = useProjectTarget();
   const [expandedProjects, setExpandedProjects] = useState<Set<number>>(new Set());
 
@@ -71,10 +72,10 @@ export default function Overview() {
     console.log('Overview: Setting project ID to', project.id);
     setProjectId(project.id); // This already clears target selection internally
     
-    // Wait for state update, then navigate
+    // Wait for state update, then navigate while preserving search params
     setTimeout(() => {
-      console.log('Overview: Navigating to grid with current URL:', window.location.href);
-      navigate('/grid');
+      console.log('Overview: Current searchParams:', searchParams.toString());
+      navigate('/grid?' + searchParams.toString());
     }, 100);
   };
 
