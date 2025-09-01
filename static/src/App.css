@@ -1766,6 +1766,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+
 }
 
 /* Compact toolbar styles */
@@ -1788,7 +1789,9 @@
   
   .stats-section {
     flex-basis: 100%;
-    margin-top: 0.5rem;
+    margin: 0;
+    max-height: 1.5rem;
+    min-height: 1.5rem;
   }
 }
 
@@ -1805,6 +1808,14 @@
   
   .toolbar-section {
     justify-content: center;
+  }
+  
+  .stats-section {
+    font-size: 0.8rem;
+    max-height: 1.3rem;
+    min-height: 1.3rem;
+    margin: 0;
+    padding: 0;
   }
   
   .size-control.compact input[type="range"] {

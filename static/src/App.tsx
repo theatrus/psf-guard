@@ -33,7 +33,7 @@ function App() {
         </div>
         
         <div className="header-center">
-          <ProjectTargetSelector />
+          {!isOnOverview && <ProjectTargetSelector />}
         </div>
         
         <div className="header-right">
@@ -47,9 +47,11 @@ function App() {
               Images
             </button>
           )}
-          <button onClick={() => setShowStats(!showStats)} className="header-button">
-            {showStats ? 'Hide Stats' : 'Stats'}
-          </button>
+          {!isOnOverview && (
+            <button onClick={() => setShowStats(!showStats)} className="header-button">
+              {showStats ? 'Hide Stats' : 'Stats'}
+            </button>
+          )}
           <button onClick={() => setShowHelp(true)} className="header-button">
             Help
           </button>

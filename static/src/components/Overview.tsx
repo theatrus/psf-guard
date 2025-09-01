@@ -61,9 +61,9 @@ export default function Overview() {
     };
   };
 
-  const getRequestedProgress = (accepted: number, requested: number) => {
-    if (requested === 0) return 0;
-    return Math.round((accepted / requested) * 100);
+  const getDesiredProgress = (accepted: number, desired: number) => {
+    if (desired === 0) return 0;
+    return Math.round((accepted / desired) * 100);
   };
 
   // Navigation handlers
@@ -125,12 +125,17 @@ export default function Overview() {
             <div className="stat-card">
               <h3>Images</h3>
               <div className="stat-main">{overallStats.total_images.toLocaleString()}</div>
-              <div className="stat-sub">{overallStats.accepted_images} accepted of {overallStats.total_requested} requested</div>
+              <div className="stat-sub">{overallStats.accepted_images} accepted of {overallStats.total_desired} desired</div>
             </div>
             <div className="stat-card">
               <h3>Completion</h3>
-              <div className="stat-main">{getRequestedProgress(overallStats.accepted_images, overallStats.total_requested)}%</div>
-              <div className="stat-sub">{overallStats.accepted_images} / {overallStats.total_requested}</div>
+              <div className="stat-main">{getDesiredProgress(overallStats.accepted_images, overallStats.total_desired)}%</div>
+              <div className="stat-sub">{overallStats.accepted_images} / {overallStats.total_desired}</div>
+            </div>
+            <div className="stat-card">
+              <h3>Files</h3>
+              <div className="stat-main">{overallStats.files_found.toLocaleString()}</div>
+              <div className="stat-sub">{overallStats.files_missing > 0 ? `${overallStats.files_missing} missing` : 'All found'}</div>
             </div>
             <div className="stat-card">
               <h3>Filters</h3>
@@ -247,9 +252,9 @@ export default function Overview() {
                   <div className="project-stats">
                     <div className="stat-row">
                       <span>{project.total_images} images</span>
-                      <span>{project.accepted_images} / {project.total_requested} requested</span>
+                      <span>{project.accepted_images} / {project.total_desired} desired</span>
                       <span className="completion-badge">
-                        {getRequestedProgress(project.accepted_images, project.total_requested)}% complete
+                        {getDesiredProgress(project.accepted_images, project.total_desired)}% complete
                       </span>
                     </div>
                     <div className="stat-row">
@@ -257,15 +262,21 @@ export default function Overview() {
                       <span>{project.rejected_images} rejected</span>
                       <span>{project.pending_images} pending</span>
                     </div>
+                    <div className="stat-row">
+                      <span>{project.files_found} files found</span>
+                      {project.files_missing > 0 && (
+                        <span className="files-missing">{project.files_missing} missing</span>
+                      )}
+                    </div>
                   </div>
                   
-                  {/* Requested Progress Bar */}
-                  <div className="project-requested-progress">
-                    <div className="progress-label">Request Progress:</div>
-                    <div className="requested-progress-bar">
+                  {/* Desired Progress Bar */}
+                  <div className="project-desired-progress">
+                    <div className="progress-label">Desired Progress:</div>
+                    <div className="desired-progress-bar">
                       <div 
-                        className="requested-progress-fill"
-                        style={{ width: `${getRequestedProgress(project.accepted_images, project.total_requested)}%` }}
+                        className="desired-progress-fill"
+                        style={{ width: `${getDesiredProgress(project.accepted_images, project.total_desired)}%` }}
                       />
                     </div>
                   </div>
@@ -338,15 +349,21 @@ export default function Overview() {
                             <div className="target-stats">
                               <div className="target-stat-row">
                                 <span>{target.image_count} images</span>
-                                <span>{target.accepted_count} / {target.total_requested} requested</span>
+                                <span>{target.accepted_count} / {target.total_desired} desired</span>
                                 <span className="completion-badge">
-                                  {getRequestedProgress(target.accepted_count, target.total_requested)}% complete
+                                  {getDesiredProgress(target.accepted_count, target.total_desired)}% complete
                                 </span>
                               </div>
                               <div className="target-stat-row">
                                 <span>{target.accepted_count} accepted</span>
                                 <span>{target.rejected_count} rejected</span>
                                 <span>{target.pending_count} pending</span>
+                              </div>
+                              <div className="target-stat-row">
+                                <span>{target.files_found} files found</span>
+                                {target.files_missing > 0 && (
+                                  <span className="files-missing">{target.files_missing} missing</span>
+                                )}
                               </div>
                             </div>
                             

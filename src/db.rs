@@ -597,14 +597,14 @@ impl<'a> Database<'a> {
         Ok(targets)
     }
 
-    // Requested values queries from exposureplan table
-    pub fn get_project_requested_stats(
+    // Desired values queries from exposureplan table
+    pub fn get_project_desired_stats(
         &self,
         project_id: i32,
     ) -> Result<(i32, i32, i32, i32, Vec<String>)> {
         let mut stmt = self.conn.prepare(
             "SELECT 
-                SUM(ep.desired) as total_requested,
+                SUM(ep.desired) as total_desired,
                 SUM(ep.acquired) as total_acquired,
                 SUM(ep.accepted) as total_accepted,
                 COUNT(DISTINCT et.filtername) as unique_filters,
@@ -616,7 +616,7 @@ impl<'a> Database<'a> {
         )?;
 
         let result = stmt.query_row([project_id], |row| {
-            let total_requested: i32 = row.get::<_, Option<i32>>(0)?.unwrap_or(0);
+            let total_desired: i32 = row.get::<_, Option<i32>>(0)?.unwrap_or(0);
             let total_acquired: i32 = row.get::<_, Option<i32>>(1)?.unwrap_or(0);
             let total_accepted: i32 = row.get::<_, Option<i32>>(2)?.unwrap_or(0);
             let unique_filters: i32 = row.get(3)?;
@@ -630,7 +630,7 @@ impl<'a> Database<'a> {
                 .collect();
 
             Ok((
-                total_requested,
+                total_desired,
                 total_acquired,
                 total_accepted,
                 unique_filters,
@@ -641,14 +641,14 @@ impl<'a> Database<'a> {
         Ok(result)
     }
 
-    pub fn get_target_requested_stats(
+    pub fn get_target_desired_stats(
         &self,
         target_id: i32,
     ) -> Result<Vec<(String, i32, i32, i32)>> {
         let mut stmt = self.conn.prepare(
             "SELECT 
                 et.filtername,
-                ep.desired as requested,
+                ep.desired as desired,
                 ep.acquired as acquired,
                 ep.accepted as accepted
              FROM exposureplan ep
@@ -661,7 +661,7 @@ impl<'a> Database<'a> {
             .query_map([target_id], |row| {
                 Ok((
                     row.get::<_, String>(0)?, // filtername
-                    row.get::<_, i32>(1)?,    // requested
+                    row.get::<_, i32>(1)?,    // desired
                     row.get::<_, i32>(2)?,    // acquired
                     row.get::<_, i32>(3)?,    // accepted
                 ))
@@ -671,7 +671,7 @@ impl<'a> Database<'a> {
         Ok(rows)
     }
 
-    pub fn get_all_targets_with_requested_stats(
+    pub fn get_all_targets_with_desired_stats(
         &self,
     ) -> Result<Vec<(Target, String, i32, i32, i32, i32, i32)>> {
         let mut stmt = self.conn.prepare(
@@ -680,7 +680,7 @@ impl<'a> Database<'a> {
                     SUM(CASE WHEN ai.gradingStatus = 1 THEN 1 ELSE 0 END) as accepted_count,
                     SUM(CASE WHEN ai.gradingStatus = 2 THEN 1 ELSE 0 END) as rejected_count,
                     SUM(CASE WHEN ai.gradingStatus = 0 THEN 1 ELSE 0 END) as pending_count,
-                    COALESCE((SELECT SUM(ep2.desired) FROM exposureplan ep2 WHERE ep2.targetid = t.Id), 0) as total_requested
+                    COALESCE((SELECT SUM(ep2.desired) FROM exposureplan ep2 WHERE ep2.targetid = t.Id), 0) as total_desired
              FROM target t
              INNER JOIN project p ON t.projectId = p.Id
              LEFT JOIN acquiredimage ai ON t.Id = ai.targetId
@@ -706,7 +706,7 @@ impl<'a> Database<'a> {
                     row.get::<_, i32>(8)?,    // accepted_count
                     row.get::<_, i32>(9)?,    // rejected_count
                     row.get::<_, i32>(10)?,   // pending_count
-                    row.get::<_, i32>(11)?,   // total_requested
+                    row.get::<_, i32>(11)?,   // total_desired
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -714,10 +714,10 @@ impl<'a> Database<'a> {
         Ok(targets)
     }
 
-    pub fn get_overall_requested_statistics(&self) -> Result<(i32, i32, i32)> {
+    pub fn get_overall_desired_statistics(&self) -> Result<(i32, i32, i32)> {
         let mut stmt = self.conn.prepare(
             "SELECT 
-                COALESCE(SUM(ep.desired), 0) as total_requested,
+                COALESCE(SUM(ep.desired), 0) as total_desired,
                 COALESCE(SUM(ep.acquired), 0) as total_acquired,
                 COALESCE(SUM(ep.accepted), 0) as total_accepted
              FROM exposureplan ep",

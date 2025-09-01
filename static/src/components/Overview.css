@@ -35,7 +35,7 @@
 }
 
 /* Statistics Section */
-.stats-section {
+.overview .stats-section {
   background: var(--color-bg-secondary);
   border-radius: 12px;
   padding: 30px;
@@ -43,20 +43,20 @@
   border: 1px solid var(--color-border-primary);
 }
 
-.stats-section h2 {
+.overview .stats-section h2 {
   margin: 0 0 20px 0;
   color: var(--color-primary);
   font-size: 1.8em;
 }
 
-.stats-grid {
+.overview .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
   gap: 20px;
   margin-bottom: 30px;
 }
 
-.stat-card {
+.overview .stat-card {
   background: var(--color-bg-surface);
   border-radius: 8px;
   padding: 20px;
@@ -65,26 +65,26 @@
   transition: all 0.2s ease;
 }
 
-.stat-card:hover {
+.overview .stat-card:hover {
   border-color: var(--color-border-tertiary);
   background: var(--color-bg-elevated);
 }
 
-.stat-card h3 {
+.overview .stat-card h3 {
   margin: 0 0 10px 0;
   color: var(--color-text-secondary);
   font-size: 1.1em;
   font-weight: 600;
 }
 
-.stat-main {
+.overview .stat-main {
   font-size: 2.2em;
   font-weight: bold;
   color: var(--color-primary);
   margin-bottom: 5px;
 }
 
-.stat-sub {
+.overview .stat-sub {
   color: var(--color-text-muted);
   font-size: 0.9em;
 }
@@ -99,7 +99,7 @@
   color: var(--color-text-primary);
 }
 
-.progress-bar {
+.overview .progress-bar {
   display: flex;
   height: 20px;
   background: var(--color-bg-tertiary);
@@ -109,31 +109,31 @@
   border: 1px solid var(--color-border-secondary);
 }
 
-.progress-accepted {
+.overview .progress-accepted {
   background: var(--color-success);
   transition: width 0.3s ease;
 }
 
-.progress-rejected {
+.overview .progress-rejected {
   background: var(--color-error);
   transition: width 0.3s ease;
 }
 
-.progress-pending {
+.overview .progress-pending {
   background: var(--color-warning);
   transition: width 0.3s ease;
 }
 
-.progress-legend {
+.overview .progress-legend {
   display: flex;
   gap: 20px;
   font-size: 0.9em;
   flex-wrap: wrap;
 }
 
-.legend-accepted { color: var(--color-success); }
-.legend-rejected { color: var(--color-error); }
-.legend-pending { color: var(--color-warning); }
+.overview .legend-accepted { color: var(--color-success); }
+.overview .legend-rejected { color: var(--color-error); }
+.overview .legend-pending { color: var(--color-warning); }
 
 /* Quick Actions */
 .quick-actions {
@@ -141,7 +141,7 @@
   text-align: center;
 }
 
-.action-button {
+.overview .action-button {
   background: var(--color-primary);
   color: var(--color-text-dark);
   border: 1px solid var(--color-primary);
@@ -153,25 +153,25 @@
   font-weight: 500;
 }
 
-.action-button:hover {
+.overview .action-button:hover {
   background: var(--color-primary-alpha-80);
   border-color: var(--color-primary-alpha-80);
   transform: translateY(-1px);
 }
 
-.action-button.primary {
+.overview .action-button.primary {
   background: var(--color-success);
   border-color: var(--color-success);
   color: white;
 }
 
-.action-button.primary:hover {
+.overview .action-button.primary:hover {
   background: var(--color-success-hover);
   border-color: var(--color-success-hover);
 }
 
 /* Content Grid - Single column for projects with nested targets */
-.content-grid {
+.overview .content-grid {
   display: block;
 }
 
@@ -322,7 +322,7 @@
   margin-bottom: 12px;
 }
 
-.stat-row {
+.overview .stat-row {
   display: flex;
   gap: 15px;
   font-size: 0.85em;
@@ -330,16 +330,16 @@
   flex-wrap: wrap;
 }
 
-.stat-row span {
+.overview .stat-row span {
   color: var(--color-text-lighter);
 }
 
-.stat-row .active {
+.overview .stat-row .active {
   color: var(--color-success);
   font-weight: 500;
 }
 
-.stat-row .inactive {
+.overview .stat-row .inactive {
   color: var(--color-error);
   font-weight: 500;
 }
@@ -356,19 +356,19 @@
   color: var(--color-text-light);
 }
 
-/* Requested Progress Bar */
-.project-requested-progress {
+/* Desired Progress Bar */
+.project-desired-progress {
   margin-bottom: 8px;
 }
 
-.progress-label {
+.overview .progress-label {
   font-size: 0.75em;
   color: var(--color-text-muted);
   margin-bottom: 4px;
   font-weight: 500;
 }
 
-.requested-progress-bar {
+.desired-progress-bar {
   height: 8px;
   background: var(--color-bg-tertiary);
   border-radius: 4px;
@@ -376,7 +376,7 @@
   border: 1px solid var(--color-border-secondary);
 }
 
-.requested-progress-fill {
+.desired-progress-fill {
   height: 100%;
   background: linear-gradient(90deg, var(--color-primary), var(--color-success));
   transition: width 0.3s ease;
@@ -468,13 +468,19 @@
   border-color: var(--color-warning);
 }
 
+/* Missing files indicator */
+.files-missing {
+  color: var(--color-error) !important;
+  font-weight: 600;
+}
+
 /* Responsive Design */
 @media (max-width: 1200px) {
   .overview {
     padding: 15px;
   }
   
-  .stats-grid {
+  .overview .stats-grid {
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   }
 }
@@ -493,12 +499,12 @@
     padding: 15px;
   }
   
-  .progress-legend {
+  .overview .progress-legend {
     flex-direction: column;
     gap: 8px;
   }
   
-  .stat-row {
+  .overview .stat-row {
     flex-wrap: wrap;
   }
 }
@@ -508,7 +514,7 @@
     padding: 10px;
   }
   
-  .stats-grid {
+  .overview .stats-grid {
     grid-template-columns: 1fr;
   }
 }

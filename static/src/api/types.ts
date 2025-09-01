@@ -114,7 +114,9 @@ export interface ProjectOverview {
   accepted_images: number;
   rejected_images: number;
   pending_images: number;
-  total_requested: number;
+  total_desired: number;
+  files_found: number;
+  files_missing: number;
   date_range: DateRange;
   filters_used: string[];
 }
@@ -131,7 +133,9 @@ export interface TargetOverview {
   accepted_count: number;
   rejected_count: number;
   pending_count: number;
-  total_requested: number;
+  total_desired: number;
+  files_found: number;
+  files_missing: number;
   has_files: boolean;
   date_range: DateRange;
   filters_used: string[];
@@ -147,7 +151,9 @@ export interface OverallStats {
   accepted_images: number;
   rejected_images: number;
   pending_images: number;
-  total_requested: number;
+  total_desired: number;
+  files_found: number;
+  files_missing: number;
   unique_filters: string[];
   date_range: DateRange;
   recent_activity: RecentActivity[];

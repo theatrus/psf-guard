@@ -45,7 +45,9 @@ pub struct ProjectOverviewResponse {
     pub accepted_images: i32,
     pub rejected_images: i32,
     pub pending_images: i32,
-    pub total_requested: i32,
+    pub total_desired: i32,
+    pub files_found: i32,
+    pub files_missing: i32,
     pub date_range: DateRange,
     pub filters_used: Vec<String>,
 }
@@ -76,7 +78,9 @@ pub struct TargetOverviewResponse {
     pub accepted_count: i32,
     pub rejected_count: i32,
     pub pending_count: i32,
-    pub total_requested: i32,
+    pub total_desired: i32,
+    pub files_found: i32,
+    pub files_missing: i32,
     pub has_files: bool,
     pub date_range: DateRange,
     pub filters_used: Vec<String>,
@@ -100,7 +104,9 @@ pub struct OverallStatsResponse {
     pub accepted_images: i32,
     pub rejected_images: i32,
     pub pending_images: i32,
-    pub total_requested: i32,
+    pub total_desired: i32,
+    pub files_found: i32,
+    pub files_missing: i32,
     pub unique_filters: Vec<String>,
     pub date_range: DateRange,
     pub recent_activity: Vec<RecentActivity>,
@@ -199,8 +205,30 @@ pub struct DirectoryTreeResponse {
 #[derive(Debug, Serialize)]
 pub struct TargetFilterStats {
     pub filter_name: String,
-    pub requested: i32,
+    pub desired: i32,
     pub acquired: i32,
     pub accepted: i32,
-    pub completion_percentage: f64, // accepted / requested * 100
+    pub completion_percentage: f64, // accepted / desired * 100
+}
+
+#[derive(Debug, Serialize)]
+pub struct MissingFileInfo {
+    pub filename: String,
+    pub image_id: i32,
+    pub project_name: String,
+    pub target_name: String,
+    pub filter_name: Option<String>,
+    pub acquired_date: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileStatusResponse {
+    pub project_id: i32,
+    pub project_name: String,
+    pub total_images: usize,
+    pub files_found: usize,
+    pub files_missing: usize,
+    pub missing_files: Vec<MissingFileInfo>,
+    pub cache_hit_rate: u32,
+    pub optimistic_assumption: bool, // true if we assumed files exist due to low hit rate
 }
