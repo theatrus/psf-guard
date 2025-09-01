@@ -676,17 +676,16 @@ impl<'a> Database<'a> {
     ) -> Result<Vec<(Target, String, i32, i32, i32, i32, i32)>> {
         let mut stmt = self.conn.prepare(
             "SELECT t.Id, t.name, t.active, t.ra, t.dec, t.projectid, p.name,
-                    COUNT(ai.Id) as image_count,
+                    COUNT(DISTINCT ai.Id) as image_count,
                     SUM(CASE WHEN ai.gradingStatus = 1 THEN 1 ELSE 0 END) as accepted_count,
                     SUM(CASE WHEN ai.gradingStatus = 2 THEN 1 ELSE 0 END) as rejected_count,
                     SUM(CASE WHEN ai.gradingStatus = 0 THEN 1 ELSE 0 END) as pending_count,
-                    COALESCE(SUM(ep.desired), 0) as total_requested
+                    COALESCE((SELECT SUM(ep2.desired) FROM exposureplan ep2 WHERE ep2.targetid = t.Id), 0) as total_requested
              FROM target t
              INNER JOIN project p ON t.projectId = p.Id
              LEFT JOIN acquiredimage ai ON t.Id = ai.targetId
-             LEFT JOIN exposureplan ep ON t.Id = ep.targetid
              GROUP BY t.Id, t.name, t.active, t.ra, t.dec, t.projectId, p.name
-             HAVING COUNT(ai.Id) > 0 OR SUM(ep.desired) > 0
+             HAVING COUNT(DISTINCT ai.Id) > 0 OR (SELECT SUM(ep2.desired) FROM exposureplan ep2 WHERE ep2.targetid = t.Id) > 0
              ORDER BY p.name, t.name",
         )?;
 
