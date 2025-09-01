@@ -121,6 +121,9 @@ pub async fn run_server(
             put(handlers::refresh_directory_tree_cache),
         )
         .route("/projects", get(handlers::list_projects))
+        .route("/projects/overview", get(handlers::get_projects_overview))
+        .route("/targets/overview", get(handlers::get_targets_overview))
+        .route("/stats/overall", get(handlers::get_overall_stats))
         .route(
             "/projects/{project_id}/targets",
             get(handlers::list_targets),

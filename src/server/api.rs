@@ -34,6 +34,23 @@ pub struct ProjectResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ProjectOverviewResponse {
+    pub id: i32,
+    pub profile_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub has_files: bool,
+    pub target_count: i32,
+    pub total_images: i32,
+    pub accepted_images: i32,
+    pub rejected_images: i32,
+    pub pending_images: i32,
+    pub total_requested: i32,
+    pub date_range: DateRange,
+    pub filters_used: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct TargetResponse {
     pub id: i32,
     pub name: String,
@@ -44,6 +61,56 @@ pub struct TargetResponse {
     pub accepted_count: i32,
     pub rejected_count: i32,
     pub has_files: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TargetOverviewResponse {
+    pub id: i32,
+    pub name: String,
+    pub ra: Option<f64>,
+    pub dec: Option<f64>,
+    pub active: bool,
+    pub project_id: i32,
+    pub project_name: String,
+    pub image_count: i32,
+    pub accepted_count: i32,
+    pub rejected_count: i32,
+    pub pending_count: i32,
+    pub total_requested: i32,
+    pub has_files: bool,
+    pub date_range: DateRange,
+    pub filters_used: Vec<String>,
+    pub coordinates_display: Option<String>, // Human-readable RA/Dec
+}
+
+#[derive(Debug, Serialize)]
+pub struct DateRange {
+    pub earliest: Option<i64>,
+    pub latest: Option<i64>,
+    pub span_days: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OverallStatsResponse {
+    pub total_projects: i32,
+    pub active_projects: i32, // Projects with images
+    pub total_targets: i32,
+    pub active_targets: i32, // Targets with images
+    pub total_images: i32,
+    pub accepted_images: i32,
+    pub rejected_images: i32,
+    pub pending_images: i32,
+    pub total_requested: i32,
+    pub unique_filters: Vec<String>,
+    pub date_range: DateRange,
+    pub recent_activity: Vec<RecentActivity>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RecentActivity {
+    pub date: i64,
+    pub images_added: i32,
+    pub images_graded: i32,
 }
 
 #[derive(Debug, Serialize)]
@@ -127,4 +194,13 @@ pub struct DirectoryTreeResponse {
     pub age_seconds: u64,
     pub build_time_ms: u128,
     pub root_directory: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TargetFilterStats {
+    pub filter_name: String,
+    pub requested: i32,
+    pub acquired: i32,
+    pub accepted: i32,
+    pub completion_percentage: f64, // accepted / requested * 100
 }

@@ -19,6 +19,31 @@ use crate::models::GradingStatus;
 use crate::server::api::*;
 use crate::server::state::AppState;
 
+// Helper function to format RA/Dec coordinates
+fn format_coordinates(ra: Option<f64>, dec: Option<f64>) -> Option<String> {
+    match (ra, dec) {
+        (Some(ra_deg), Some(dec_deg)) => {
+            // Convert decimal degrees to hours/degrees, minutes, seconds
+            let ra_hours = ra_deg / 15.0; // RA is in hours
+            let ra_h = ra_hours.floor();
+            let ra_m = ((ra_hours - ra_h) * 60.0).floor();
+            let ra_s = ((ra_hours - ra_h) * 60.0 - ra_m) * 60.0;
+
+            let dec_sign = if dec_deg >= 0.0 { "+" } else { "-" };
+            let dec_abs = dec_deg.abs();
+            let dec_d = dec_abs.floor();
+            let dec_m = ((dec_abs - dec_d) * 60.0).floor();
+            let dec_s = ((dec_abs - dec_d) * 60.0 - dec_m) * 60.0;
+
+            Some(format!(
+                "RA {:02.0}h {:02.0}m {:04.1}s, Dec {}{:02.0}° {:02.0}' {:04.1}\"",
+                ra_h, ra_m, ra_s, dec_sign, dec_d, dec_m, dec_s
+            ))
+        }
+        _ => None,
+    }
+}
+
 pub async fn get_server_info(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<ServerInfo>>, AppError> {
@@ -1672,6 +1697,231 @@ pub async fn get_psf_visualization(
         ],
         png_buffer,
     ))
+}
+
+// Overview API endpoints
+pub async fn get_projects_overview(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<Vec<ProjectOverviewResponse>>>, AppError> {
+    tracing::debug!("📋 Getting projects overview");
+
+    let conn = state.db();
+    let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+    let db = Database::new(&conn);
+
+    // Get all projects with images
+    let projects = db
+        .get_projects_with_images()
+        .map_err(|_| AppError::DatabaseError)?;
+
+    // Get file existence map
+    let file_existence_map: std::collections::HashMap<i32, bool> = {
+        let cache = state.file_check_cache.read().unwrap();
+        cache.projects_with_files.clone()
+    };
+
+    let mut response = Vec::new();
+
+    for project in projects {
+        // Get detailed stats for this project
+        let (total_images, accepted, rejected, pending, filters, earliest, latest) = db
+            .get_project_overview_stats(project.id)
+            .map_err(|_| AppError::DatabaseError)?;
+
+        // Get requested values for this project
+        let (total_requested, _acquired, _accepted_from_plan, _filters_count, _filters_list) = db
+            .get_project_requested_stats(project.id)
+            .unwrap_or((0, 0, 0, 0, vec![]));
+
+        let target_count = db
+            .get_target_count_for_project(project.id)
+            .map_err(|_| AppError::DatabaseError)?;
+
+        let span_days = match (earliest, latest) {
+            (Some(start), Some(end)) => {
+                let days = (end - start) / 86400; // seconds to days
+                Some(days as i32)
+            }
+            _ => None,
+        };
+
+        response.push(ProjectOverviewResponse {
+            id: project.id,
+            profile_id: project.profile_id,
+            name: project.name,
+            description: project.description,
+            has_files: file_existence_map
+                .get(&project.id)
+                .copied()
+                .unwrap_or(false),
+            target_count,
+            total_images,
+            accepted_images: accepted,
+            rejected_images: rejected,
+            pending_images: pending,
+            total_requested,
+            date_range: DateRange {
+                earliest,
+                latest,
+                span_days,
+            },
+            filters_used: filters,
+        });
+    }
+
+    Ok(Json(ApiResponse::success(response)))
+}
+
+pub async fn get_targets_overview(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<Vec<TargetOverviewResponse>>>, AppError> {
+    tracing::debug!("🎯 Getting targets overview");
+
+    let conn = state.db();
+    let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+    let db = Database::new(&conn);
+
+    // Get all targets with project info and stats including requested values
+    let targets_data = db
+        .get_all_targets_with_requested_stats()
+        .map_err(|_| AppError::DatabaseError)?;
+
+    // Get file existence map
+    let file_existence_map: std::collections::HashMap<i32, bool> = {
+        let cache = state.file_check_cache.read().unwrap();
+        cache.targets_with_files.clone()
+    };
+
+    let mut response = Vec::new();
+
+    for (
+        target,
+        project_name,
+        image_count,
+        accepted_count,
+        rejected_count,
+        pending_count,
+        total_requested,
+    ) in targets_data
+    {
+        // Get date range and filters for this target
+        let (earliest, latest, filters) = {
+            let mut stmt = conn.prepare(
+                "SELECT MIN(acquireddate), MAX(acquireddate) FROM acquiredimage WHERE targetId = ?",
+            ).map_err(|_| AppError::DatabaseError)?;
+
+            let (earliest, latest): (Option<i64>, Option<i64>) = stmt
+                .query_row([target.id], |row| Ok((row.get(0)?, row.get(1)?)))
+                .map_err(|_| AppError::DatabaseError)?;
+
+            let mut filter_stmt = conn.prepare(
+                "SELECT DISTINCT filtername FROM acquiredimage WHERE targetId = ? AND filtername IS NOT NULL ORDER BY filtername",
+            ).map_err(|_| AppError::DatabaseError)?;
+
+            let filters: Vec<String> = filter_stmt
+                .query_map([target.id], |row| row.get(0))
+                .map_err(|_| AppError::DatabaseError)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| AppError::DatabaseError)?;
+
+            (earliest, latest, filters)
+        };
+
+        let span_days = match (earliest, latest) {
+            (Some(start), Some(end)) => {
+                let days = (end - start) / 86400;
+                Some(days as i32)
+            }
+            _ => None,
+        };
+
+        response.push(TargetOverviewResponse {
+            id: target.id,
+            name: target.name.clone(),
+            ra: target.ra,
+            dec: target.dec,
+            active: target.active,
+            project_id: target.project_id,
+            project_name,
+            image_count,
+            accepted_count,
+            rejected_count,
+            pending_count,
+            total_requested,
+            has_files: file_existence_map.get(&target.id).copied().unwrap_or(false),
+            date_range: DateRange {
+                earliest,
+                latest,
+                span_days,
+            },
+            filters_used: filters,
+            coordinates_display: format_coordinates(target.ra, target.dec),
+        });
+    }
+
+    Ok(Json(ApiResponse::success(response)))
+}
+
+pub async fn get_overall_stats(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<OverallStatsResponse>>, AppError> {
+    tracing::debug!("📊 Getting overall statistics");
+
+    let conn = state.db();
+    let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+    let db = Database::new(&conn);
+
+    let (
+        total_projects,
+        active_projects,
+        total_targets,
+        active_targets,
+        total_images,
+        accepted_images,
+        rejected_images,
+        pending_images,
+        unique_filters,
+        earliest,
+        latest,
+    ) = db
+        .get_overall_statistics()
+        .map_err(|_| AppError::DatabaseError)?;
+
+    // Get overall requested statistics
+    let (total_requested, _acquired_from_plan, _accepted_from_plan) =
+        db.get_overall_requested_statistics().unwrap_or((0, 0, 0));
+
+    let span_days = match (earliest, latest) {
+        (Some(start), Some(end)) => {
+            let days = (end - start) / 86400;
+            Some(days as i32)
+        }
+        _ => None,
+    };
+
+    // For now, we'll return empty recent activity - this could be enhanced later
+    let recent_activity = Vec::new();
+
+    let response = OverallStatsResponse {
+        total_projects,
+        active_projects,
+        total_targets,
+        active_targets,
+        total_images,
+        accepted_images,
+        rejected_images,
+        pending_images,
+        total_requested,
+        unique_filters,
+        date_range: DateRange {
+            earliest,
+            latest,
+            span_days,
+        },
+        recent_activity,
+    };
+
+    Ok(Json(ApiResponse::success(response)))
 }
 
 // Error handling
