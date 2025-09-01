@@ -1,4 +1,7 @@
-use crate::models::{AcquiredImage, GradingStatus, Project, Target};
+use crate::models::{
+    AcquiredImage, GradingStatus, OverallDesiredStats, OverallStats, Project, 
+    ProjectDesiredStats, ProjectOverviewStats, Target, TargetWithStats, TargetWithDesiredStats,
+};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 
@@ -430,7 +433,7 @@ impl<'a> Database<'a> {
     pub fn get_project_overview_stats(
         &self,
         project_id: i32,
-    ) -> Result<(i32, i32, i32, i32, Vec<String>, Option<i64>, Option<i64>)> {
+    ) -> Result<ProjectOverviewStats> {
         let mut stmt = self.conn.prepare(
             "SELECT 
                 COUNT(*) as total_images,
@@ -463,9 +466,15 @@ impl<'a> Database<'a> {
             .query_map([project_id], |row| row.get(0))?
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok((
-            total, accepted, rejected, pending, filters, earliest, latest,
-        ))
+        Ok(ProjectOverviewStats {
+            total_images: total,
+            accepted_images: accepted,
+            rejected_images: rejected,
+            pending_images: pending,
+            filters_used: filters,
+            earliest_date: earliest,
+            latest_date: latest,
+        })
     }
 
     pub fn get_target_count_for_project(&self, project_id: i32) -> Result<i32> {
@@ -478,19 +487,7 @@ impl<'a> Database<'a> {
 
     pub fn get_overall_statistics(
         &self,
-    ) -> Result<(
-        i32,
-        i32,
-        i32,
-        i32,
-        i32,
-        i32,
-        i32,
-        i32,
-        Vec<String>,
-        Option<i64>,
-        Option<i64>,
-    )> {
+    ) -> Result<OverallStats> {
         // Get overall image statistics
         let mut stmt = self.conn.prepare(
             "SELECT 
@@ -541,24 +538,26 @@ impl<'a> Database<'a> {
             .query_map([], |row| row.get(0))?
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok((
-            total_projects,
-            active_projects,
-            total_targets,
-            active_targets,
+        Ok(OverallStats {
             total_images,
-            accepted,
-            rejected,
-            pending,
-            filters,
-            earliest,
-            latest,
-        ))
+            accepted_images: accepted,
+            rejected_images: rejected,
+            pending_images: pending,
+            active_projects,
+            total_projects,
+            active_targets,
+            total_targets,
+            unique_filters: filters,
+            earliest_date: earliest,
+            latest_date: latest,
+            files_found: 0, // Will be set by caller if needed
+            files_missing: 0, // Will be set by caller if needed
+        })
     }
 
     pub fn get_all_targets_with_project_info(
         &self,
-    ) -> Result<Vec<(Target, String, i32, i32, i32, i32)>> {
+    ) -> Result<Vec<TargetWithStats>> {
         let mut stmt = self.conn.prepare(
             "SELECT t.Id, t.name, t.active, t.ra, t.dec, t.projectId, p.name,
                     COUNT(ai.Id) as image_count,
@@ -583,14 +582,14 @@ impl<'a> Database<'a> {
                     dec: row.get(4)?,
                     project_id: row.get(5)?,
                 };
-                Ok((
+                Ok(TargetWithStats {
                     target,
-                    row.get::<_, String>(6)?, // project_name
-                    row.get::<_, i32>(7)?,    // image_count
-                    row.get::<_, i32>(8)?,    // accepted_count
-                    row.get::<_, i32>(9)?,    // rejected_count
-                    row.get::<_, i32>(10)?,   // pending_count
-                ))
+                    project_name: row.get::<_, String>(6)?,
+                    total_images: row.get::<_, i32>(7)?,
+                    accepted_images: row.get::<_, i32>(8)?,
+                    rejected_images: row.get::<_, i32>(9)?,
+                    pending_images: row.get::<_, i32>(10)?,
+                })
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -601,7 +600,7 @@ impl<'a> Database<'a> {
     pub fn get_project_desired_stats(
         &self,
         project_id: i32,
-    ) -> Result<(i32, i32, i32, i32, Vec<String>)> {
+    ) -> Result<ProjectDesiredStats> {
         let mut stmt = self.conn.prepare(
             "SELECT 
                 SUM(ep.desired) as total_desired,
@@ -619,7 +618,7 @@ impl<'a> Database<'a> {
             let total_desired: i32 = row.get::<_, Option<i32>>(0)?.unwrap_or(0);
             let total_acquired: i32 = row.get::<_, Option<i32>>(1)?.unwrap_or(0);
             let total_accepted: i32 = row.get::<_, Option<i32>>(2)?.unwrap_or(0);
-            let unique_filters: i32 = row.get(3)?;
+            let _unique_filters: i32 = row.get(3)?;
             let filter_list: Option<String> = row.get(4)?;
 
             let filters = filter_list
@@ -629,13 +628,13 @@ impl<'a> Database<'a> {
                 .map(|s| s.to_string())
                 .collect();
 
-            Ok((
+            Ok(ProjectDesiredStats {
                 total_desired,
                 total_acquired,
                 total_accepted,
-                unique_filters,
-                filters,
-            ))
+                rejected_count: 0, // Not available in this query
+                filters_used: filters,
+            })
         })?;
 
         Ok(result)
@@ -670,7 +669,7 @@ impl<'a> Database<'a> {
 
     pub fn get_all_targets_with_desired_stats(
         &self,
-    ) -> Result<Vec<(Target, String, i32, i32, i32, i32, i32)>> {
+    ) -> Result<Vec<TargetWithDesiredStats>> {
         let mut stmt = self.conn.prepare(
             "SELECT t.Id, t.name, t.active, t.ra, t.dec, t.projectid, p.name,
                     COUNT(DISTINCT ai.Id) as image_count,
@@ -696,22 +695,22 @@ impl<'a> Database<'a> {
                     dec: row.get(4)?,
                     project_id: row.get(5)?,
                 };
-                Ok((
+                Ok(TargetWithDesiredStats {
                     target,
-                    row.get::<_, String>(6)?, // project_name
-                    row.get::<_, i32>(7)?,    // image_count
-                    row.get::<_, i32>(8)?,    // accepted_count
-                    row.get::<_, i32>(9)?,    // rejected_count
-                    row.get::<_, i32>(10)?,   // pending_count
-                    row.get::<_, i32>(11)?,   // total_desired
-                ))
+                    project_name: row.get::<_, String>(6)?,
+                    total_images: row.get::<_, i32>(7)?,
+                    accepted_images: row.get::<_, i32>(8)?,
+                    rejected_images: row.get::<_, i32>(9)?,
+                    pending_images: row.get::<_, i32>(10)?,
+                    total_desired: row.get::<_, i32>(11)?,
+                })
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(targets)
     }
 
-    pub fn get_overall_desired_statistics(&self) -> Result<(i32, i32, i32)> {
+    pub fn get_overall_desired_statistics(&self) -> Result<OverallDesiredStats> {
         let mut stmt = self.conn.prepare(
             "SELECT 
                 COALESCE(SUM(ep.desired), 0) as total_desired,
@@ -721,11 +720,11 @@ impl<'a> Database<'a> {
         )?;
 
         let result = stmt.query_row([], |row| {
-            Ok((
-                row.get::<_, i32>(0)?,
-                row.get::<_, i32>(1)?,
-                row.get::<_, i32>(2)?,
-            ))
+            Ok(OverallDesiredStats {
+                total_desired: row.get::<_, i32>(0)?,
+                total_acquired: row.get::<_, i32>(1)?,
+                total_accepted: row.get::<_, i32>(2)?,
+            })
         })?;
 
         Ok(result)

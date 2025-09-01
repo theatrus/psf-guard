@@ -15,7 +15,7 @@ use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 
 use crate::db::Database;
-use crate::models::GradingStatus;
+use crate::models::{GradingStatus, OverallDesiredStats, ProjectDesiredStats};
 use crate::server::api::*;
 use crate::server::state::AppState;
 
@@ -1565,14 +1565,20 @@ pub async fn get_projects_overview(
 
     for project in projects {
         // Get detailed stats for this project
-        let (total_images, accepted, rejected, pending, filters, earliest, latest) = db
+        let stats = db
             .get_project_overview_stats(project.id)
             .map_err(|_| AppError::DatabaseError)?;
 
         // Get desired values for this project
-        let (total_desired, _acquired, _accepted_from_plan, _filters_count, _filters_list) = db
+        let desired_stats = db
             .get_project_desired_stats(project.id)
-            .unwrap_or((0, 0, 0, 0, vec![]));
+            .unwrap_or(ProjectDesiredStats {
+                total_desired: 0,
+                total_acquired: 0,
+                total_accepted: 0,
+                rejected_count: 0,
+                filters_used: vec![],
+            });
 
         let target_count = db
             .get_target_count_for_project(project.id)
@@ -1584,13 +1590,13 @@ pub async fn get_projects_overview(
             .copied()
             .unwrap_or(false)
         {
-            total_images // Optimistic assumption: if we think project has files, assume all files exist
+            stats.total_images // Optimistic assumption: if we think project has files, assume all files exist
         } else {
             0
         };
-        let files_missing = total_images - files_found;
+        let files_missing = stats.total_images - files_found;
 
-        let span_days = match (earliest, latest) {
+        let span_days = match (stats.earliest_date, stats.latest_date) {
             (Some(start), Some(end)) => {
                 let days = (end - start) / 86400; // seconds to days
                 Some(days as i32)
@@ -1608,19 +1614,19 @@ pub async fn get_projects_overview(
                 .copied()
                 .unwrap_or(false),
             target_count,
-            total_images,
-            accepted_images: accepted,
-            rejected_images: rejected,
-            pending_images: pending,
-            total_desired,
+            total_images: stats.total_images,
+            accepted_images: stats.accepted_images,
+            rejected_images: stats.rejected_images,
+            pending_images: stats.pending_images,
+            total_desired: desired_stats.total_desired,
             files_found,
             files_missing,
             date_range: DateRange {
-                earliest,
-                latest,
+                earliest: stats.earliest_date,
+                latest: stats.latest_date,
                 span_days,
             },
-            filters_used: filters,
+            filters_used: stats.filters_used,
         });
     }
 
@@ -1649,15 +1655,7 @@ pub async fn get_targets_overview(
 
     let mut response = Vec::new();
 
-    for (
-        target,
-        project_name,
-        image_count,
-        accepted_count,
-        rejected_count,
-        pending_count,
-        total_desired,
-    ) in targets_data
+    for target_data in targets_data
     {
         // Get date range and filters for this target
         let (earliest, latest, filters) = {
@@ -1666,7 +1664,7 @@ pub async fn get_targets_overview(
             ).map_err(|_| AppError::DatabaseError)?;
 
             let (earliest, latest): (Option<i64>, Option<i64>) = stmt
-                .query_row([target.id], |row| Ok((row.get(0)?, row.get(1)?)))
+                .query_row([target_data.target.id], |row| Ok((row.get(0)?, row.get(1)?)))
                 .map_err(|_| AppError::DatabaseError)?;
 
             let mut filter_stmt = conn.prepare(
@@ -1674,7 +1672,7 @@ pub async fn get_targets_overview(
             ).map_err(|_| AppError::DatabaseError)?;
 
             let filters: Vec<String> = filter_stmt
-                .query_map([target.id], |row| row.get(0))
+                .query_map([target_data.target.id], |row| row.get(0))
                 .map_err(|_| AppError::DatabaseError)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|_| AppError::DatabaseError)?;
@@ -1691,36 +1689,36 @@ pub async fn get_targets_overview(
         };
 
         // Get basic file statistics (simplified for performance)
-        let files_found = if file_existence_map.get(&target.id).copied().unwrap_or(false) {
-            image_count // Optimistic assumption: if we think target has files, assume all files exist
+        let files_found = if file_existence_map.get(&target_data.target.id).copied().unwrap_or(false) {
+            target_data.total_images // Optimistic assumption: if we think target has files, assume all files exist
         } else {
             0
         };
-        let files_missing = image_count - files_found;
+        let files_missing = target_data.total_images - files_found;
 
         response.push(TargetOverviewResponse {
-            id: target.id,
-            name: target.name.clone(),
-            ra: target.ra,
-            dec: target.dec,
-            active: target.active,
-            project_id: target.project_id,
-            project_name,
-            image_count,
-            accepted_count,
-            rejected_count,
-            pending_count,
-            total_desired,
+            id: target_data.target.id,
+            name: target_data.target.name.clone(),
+            ra: target_data.target.ra,
+            dec: target_data.target.dec,
+            active: target_data.target.active,
+            project_id: target_data.target.project_id,
+            project_name: target_data.project_name,
+            image_count: target_data.total_images,
+            accepted_count: target_data.accepted_images,
+            rejected_count: target_data.rejected_images,
+            pending_count: target_data.pending_images,
+            total_desired: target_data.total_desired,
             files_found,
             files_missing,
-            has_files: file_existence_map.get(&target.id).copied().unwrap_or(false),
+            has_files: file_existence_map.get(&target_data.target.id).copied().unwrap_or(false),
             date_range: DateRange {
                 earliest,
                 latest,
                 span_days,
             },
             filters_used: filters,
-            coordinates_display: format_coordinates(target.ra, target.dec),
+            coordinates_display: format_coordinates(target_data.target.ra, target_data.target.dec),
         });
     }
 
@@ -1736,27 +1734,18 @@ pub async fn get_overall_stats(
     let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
     let db = Database::new(&conn);
 
-    let (
-        total_projects,
-        active_projects,
-        total_targets,
-        active_targets,
-        total_images,
-        accepted_images,
-        rejected_images,
-        pending_images,
-        unique_filters,
-        earliest,
-        latest,
-    ) = db
+    let stats = db
         .get_overall_statistics()
         .map_err(|_| AppError::DatabaseError)?;
 
     // Get overall desired statistics
-    let (total_desired, _acquired_from_plan, _accepted_from_plan) =
-        db.get_overall_desired_statistics().unwrap_or((0, 0, 0));
+    let desired_stats = db.get_overall_desired_statistics().unwrap_or(OverallDesiredStats {
+        total_desired: 0,
+        total_acquired: 0,
+        total_accepted: 0,
+    });
 
-    let span_days = match (earliest, latest) {
+    let span_days = match (stats.earliest_date, stats.latest_date) {
         (Some(start), Some(end)) => {
             let days = (end - start) / 86400;
             Some(days as i32)
@@ -1765,28 +1754,28 @@ pub async fn get_overall_stats(
     };
 
     // Calculate overall file statistics (simplified for performance)
-    let total_files_found = if active_projects > 0 { total_images } else { 0 }; // Optimistic: assume all files exist for active projects
-    let total_files_missing = total_images - total_files_found;
+    let total_files_found = if stats.active_projects > 0 { stats.total_images } else { 0 }; // Optimistic: assume all files exist for active projects
+    let total_files_missing = stats.total_images - total_files_found;
 
     // For now, we'll return empty recent activity - this could be enhanced later
     let recent_activity = Vec::new();
 
     let response = OverallStatsResponse {
-        total_projects,
-        active_projects,
-        total_targets,
-        active_targets,
-        total_images,
-        accepted_images,
-        rejected_images,
-        pending_images,
-        total_desired,
+        total_projects: stats.total_projects,
+        active_projects: stats.active_projects,
+        total_targets: stats.total_targets,
+        active_targets: stats.active_targets,
+        total_images: stats.total_images,
+        accepted_images: stats.accepted_images,
+        rejected_images: stats.rejected_images,
+        pending_images: stats.pending_images,
+        total_desired: desired_stats.total_desired,
         files_found: total_files_found,
         files_missing: total_files_missing,
-        unique_filters,
+        unique_filters: stats.unique_filters,
         date_range: DateRange {
-            earliest,
-            latest,
+            earliest: stats.earliest_date,
+            latest: stats.latest_date,
             span_days,
         },
         recent_activity,

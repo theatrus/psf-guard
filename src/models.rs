@@ -38,6 +38,77 @@ pub enum GradingStatus {
     Rejected = 2,
 }
 
+/// Project overview statistics
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProjectOverviewStats {
+    pub total_images: i32,
+    pub accepted_images: i32,
+    pub rejected_images: i32,
+    pub pending_images: i32,
+    pub filters_used: Vec<String>,
+    pub earliest_date: Option<i64>,
+    pub latest_date: Option<i64>,
+}
+
+/// Overall system statistics
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OverallStats {
+    pub total_images: i32,
+    pub accepted_images: i32,
+    pub rejected_images: i32,
+    pub pending_images: i32,
+    pub active_projects: i32,
+    pub total_projects: i32,
+    pub active_targets: i32,
+    pub total_targets: i32,
+    pub unique_filters: Vec<String>,
+    pub earliest_date: Option<i64>,
+    pub latest_date: Option<i64>,
+    pub files_found: i32,
+    pub files_missing: i32,
+}
+
+/// Project desired statistics
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProjectDesiredStats {
+    pub total_desired: i32,
+    pub total_acquired: i32,
+    pub total_accepted: i32,
+    pub rejected_count: i32,
+    pub filters_used: Vec<String>,
+}
+
+/// Overall desired statistics
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OverallDesiredStats {
+    pub total_desired: i32,
+    pub total_acquired: i32,
+    pub total_accepted: i32,
+}
+
+/// Target with statistics
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TargetWithStats {
+    pub target: Target,
+    pub project_name: String,
+    pub total_images: i32,
+    pub accepted_images: i32,
+    pub rejected_images: i32,
+    pub pending_images: i32,
+}
+
+/// Target with statistics and desired counts
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TargetWithDesiredStats {
+    pub target: Target,
+    pub project_name: String,
+    pub total_images: i32,
+    pub accepted_images: i32,
+    pub rejected_images: i32,
+    pub pending_images: i32,
+    pub total_desired: i32,
+}
+
 impl GradingStatus {
     pub fn from_i32(value: i32) -> &'static str {
         match value {

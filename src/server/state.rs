@@ -498,8 +498,8 @@ impl AppState {
         let mut projects_with_files = 0;
         let mut targets_with_files = 0;
         let mut total_targets = 0;
-        let mut total_files_found = 0;
-        let mut total_files_missing = 0;
+        let mut _total_files_found = 0;
+        let mut _total_files_missing = 0;
 
         // Process all projects and their targets in one pass
         for project in &projects {
@@ -522,8 +522,8 @@ impl AppState {
             if project_has_files {
                 projects_with_files += 1;
             }
-            total_files_found += project_files_found;
-            total_files_missing += project_files_missing;
+            _total_files_found += project_files_found;
+            _total_files_missing += project_files_missing;
             project_cache_updates.insert(project.id, project_has_files);
 
             // Get and check all targets for this project
