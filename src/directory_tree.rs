@@ -25,6 +25,14 @@ impl DirectoryTree {
 
     /// Build a complete directory tree in memory from multiple root directories
     pub fn build_multiple(roots: &[&Path]) -> Result<Self> {
+        Self::build_multiple_with_progress(roots, &mut |_, _| {})
+    }
+
+    /// Build a complete directory tree in memory from multiple root directories with progress callback
+    pub fn build_multiple_with_progress<F>(roots: &[&Path], progress_callback: &mut F) -> Result<Self> 
+    where
+        F: FnMut(usize, &str), // (directory_index, directory_name)
+    {
         if roots.is_empty() {
             return Err(anyhow::anyhow!(
                 "At least one root directory must be provided"
@@ -44,8 +52,11 @@ impl DirectoryTree {
         let mut total_dirs = 0;
 
         // Process directories in order to maintain priority for first-hit preference
-        for root in roots {
-            tracing::debug!("📁 Scanning directory: {:?}", root);
+        for (index, root) in roots.iter().enumerate() {
+            let root_name = root.to_string_lossy().to_string();
+            progress_callback(index, &root_name);
+            
+            tracing::debug!("📁 Scanning directory {}/{}: {:?}", index + 1, roots.len(), root);
             Self::scan_directory(
                 root,
                 &mut file_map,

@@ -246,6 +246,24 @@ pub struct DirectoryTreeResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct CacheRefreshProgressResponse {
+    pub is_refreshing: bool,
+    pub stage: String,
+    pub progress_percentage: f32,
+    pub elapsed_seconds: Option<u64>,
+    pub directories_total: usize,
+    pub directories_processed: usize,
+    pub current_directory_name: Option<String>,
+    pub projects_total: usize,
+    pub projects_processed: usize,
+    pub current_project_name: Option<String>,
+    pub targets_total: usize,
+    pub targets_processed: usize,
+    pub files_found: usize,
+    pub files_missing: usize,
+}
+
+#[derive(Debug, Serialize)]
 pub struct TargetFilterStats {
     pub filter_name: String,
     pub desired: i32,

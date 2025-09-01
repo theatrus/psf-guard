@@ -46,6 +46,153 @@ pub struct FileCheckCache {
     pub cache_duration: Duration,
     pub refresh_in_progress: bool,
     pub has_initial_data: bool,
+    pub refresh_progress: RefreshProgress,
+}
+
+#[derive(Clone, Debug)]
+pub struct RefreshProgress {
+    pub stage: RefreshStage,
+    pub start_time: Option<Instant>,
+    pub directories_total: usize,
+    pub directories_processed: usize,
+    pub current_directory_name: Option<String>,
+    pub projects_total: usize,
+    pub projects_processed: usize,
+    pub current_project_name: Option<String>,
+    pub targets_total: usize,
+    pub targets_processed: usize,
+    pub files_found: usize,
+    pub files_missing: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum RefreshStage {
+    Idle,
+    InitializingDirectoryTree,
+    LoadingProjects,
+    ProcessingProjects,
+    ProcessingTargets,
+    UpdatingCache,
+    Completed,
+}
+
+impl Default for RefreshProgress {
+    fn default() -> Self {
+        Self {
+            stage: RefreshStage::Idle,
+            start_time: None,
+            directories_total: 0,
+            directories_processed: 0,
+            current_directory_name: None,
+            projects_total: 0,
+            projects_processed: 0,
+            current_project_name: None,
+            targets_total: 0,
+            targets_processed: 0,
+            files_found: 0,
+            files_missing: 0,
+        }
+    }
+}
+
+impl RefreshProgress {
+    pub fn start_refresh(&mut self) {
+        *self = Self {
+            stage: RefreshStage::InitializingDirectoryTree,
+            start_time: Some(Instant::now()),
+            ..Default::default()
+        };
+    }
+
+    pub fn set_stage(&mut self, stage: RefreshStage) {
+        self.stage = stage;
+    }
+
+    pub fn set_directories_info(&mut self, total: usize) {
+        self.directories_total = total;
+        self.directories_processed = 0;
+    }
+
+    pub fn process_directory(&mut self, directory_name: &str) {
+        self.current_directory_name = Some(directory_name.to_string());
+    }
+
+    pub fn complete_directory(&mut self) {
+        self.directories_processed += 1;
+    }
+
+    pub fn set_projects_info(&mut self, total: usize) {
+        self.projects_total = total;
+        self.projects_processed = 0;
+        self.stage = RefreshStage::ProcessingProjects;
+    }
+
+    pub fn process_project(&mut self, project_name: &str) {
+        self.current_project_name = Some(project_name.to_string());
+    }
+
+    pub fn complete_project(&mut self, has_files: bool, files_found: usize, files_missing: usize) {
+        self.projects_processed += 1;
+        if has_files {
+            self.files_found += files_found;
+            self.files_missing += files_missing;
+        }
+    }
+
+    pub fn set_targets_info(&mut self, additional_targets: usize) {
+        self.targets_total += additional_targets;
+        if self.stage != RefreshStage::ProcessingTargets {
+            self.stage = RefreshStage::ProcessingTargets;
+        }
+    }
+
+    pub fn complete_target(&mut self, has_files: bool, files_found: usize, files_missing: usize) {
+        self.targets_processed += 1;
+        if has_files {
+            self.files_found += files_found;
+            self.files_missing += files_missing;
+        }
+    }
+
+    pub fn complete_refresh(&mut self) {
+        self.stage = RefreshStage::Completed;
+        self.current_project_name = None;
+        self.current_directory_name = None;
+    }
+
+    pub fn get_progress_percentage(&self) -> f32 {
+        match self.stage {
+            RefreshStage::Idle => 0.0,
+            RefreshStage::InitializingDirectoryTree => {
+                if self.directories_total > 0 {
+                    2.0 + (self.directories_processed as f32 / self.directories_total as f32) * 8.0
+                } else {
+                    5.0
+                }
+            }
+            RefreshStage::LoadingProjects => 10.0,
+            RefreshStage::ProcessingProjects => {
+                if self.projects_total > 0 {
+                    15.0 + (self.projects_processed as f32 / self.projects_total as f32) * 50.0
+                } else {
+                    15.0
+                }
+            }
+            RefreshStage::ProcessingTargets => {
+                if self.targets_total > 0 {
+                    65.0 + (self.targets_processed as f32 / self.targets_total as f32) * 25.0
+                } else {
+                    65.0
+                }
+            }
+            RefreshStage::UpdatingCache => 95.0,
+            RefreshStage::Completed => 100.0,
+        }
+    }
+
+    pub fn get_elapsed_time(&self) -> Option<Duration> {
+        self.start_time.map(|start| start.elapsed())
+    }
 }
 
 impl Default for FileCheckCache {
@@ -63,6 +210,7 @@ impl FileCheckCache {
             cache_duration: Duration::from_secs(60), // 1 minute cache
             refresh_in_progress: false,
             has_initial_data: false,
+            refresh_progress: RefreshProgress::default(),
         }
     }
 
@@ -76,16 +224,19 @@ impl FileCheckCache {
         self.last_updated = Instant::now();
         self.refresh_in_progress = false;
         self.has_initial_data = false;
+        self.refresh_progress = RefreshProgress::default();
     }
 
     pub fn mark_refresh_started(&mut self) {
         self.refresh_in_progress = true;
+        self.refresh_progress.start_refresh();
     }
 
     pub fn mark_refresh_completed(&mut self) {
         self.refresh_in_progress = false;
         self.has_initial_data = true;
         self.last_updated = Instant::now();
+        self.refresh_progress.complete_refresh();
     }
 
     pub fn should_serve_stale(&self) -> bool {
@@ -284,14 +435,28 @@ impl AppState {
         let start_time = std::time::Instant::now();
         tracing::info!("🔄 Starting unified cache refresh");
 
+        // Update progress: Initializing directory tree
+        {
+            let mut cache = self.file_check_cache.write().unwrap();
+            cache.refresh_progress.set_stage(RefreshStage::InitializingDirectoryTree);
+            cache.refresh_progress.set_directories_info(self.image_dir_paths.len());
+        }
+
         // First, refresh the directory tree cache to ensure file lookups are up-to-date
-        if let Err(e) = self.refresh_directory_tree_if_needed() {
+        // We'll track progress during this operation
+        if let Err(e) = self.refresh_directory_tree_with_progress().await {
             tracing::warn!(
                 "⚠️ Directory tree cache refresh failed during refresh: {}",
                 e
             );
         } else {
             tracing::debug!("✅ Directory tree cache ready for unified cache refresh");
+        }
+
+        // Update progress: Loading projects
+        {
+            let mut cache = self.file_check_cache.write().unwrap();
+            cache.refresh_progress.set_stage(RefreshStage::LoadingProjects);
         }
 
         // Get all projects with images for full refresh
@@ -305,6 +470,12 @@ impl AppState {
                 .map_err(|e| anyhow::anyhow!("Failed to get projects: {}", e))?
         };
 
+        // Update progress with project count
+        {
+            let mut cache = self.file_check_cache.write().unwrap();
+            cache.refresh_progress.set_projects_info(projects.len());
+        }
+
         tracing::debug!(
             "🔍 Checking {} projects and their targets for file existence",
             projects.len()
@@ -315,21 +486,32 @@ impl AppState {
         let mut projects_with_files = 0;
         let mut targets_with_files = 0;
         let mut total_targets = 0;
+        let mut total_files_found = 0;
+        let mut total_files_missing = 0;
 
         // Process all projects and their targets in one pass
         for project in &projects {
+            // Update progress for current project
+            {
+                let mut cache = self.file_check_cache.write().unwrap();
+                cache.refresh_progress.process_project(&project.name);
+            }
+
             tracing::debug!(
                 "🔎 Processing project '{}' (ID: {})",
                 project.name,
                 project.id
             );
 
-            // Check project files
-            let project_has_files = self.check_project_files_via_cache(project.id).await?;
+            // Check project files with detailed counts
+            let (project_has_files, project_files_found, project_files_missing) = 
+                self.check_project_files_with_details(project.id).await?;
 
             if project_has_files {
                 projects_with_files += 1;
             }
+            total_files_found += project_files_found;
+            total_files_missing += project_files_missing;
             project_cache_updates.insert(project.id, project_has_files);
 
             // Get and check all targets for this project
@@ -344,15 +526,40 @@ impl AppState {
                 })?
             };
 
+            // Update targets count in progress
+            {
+                let mut cache = self.file_check_cache.write().unwrap();
+                cache.refresh_progress.set_targets_info(project_targets.len());
+            }
+
             total_targets += project_targets.len();
             for (target, _, _, _) in project_targets {
-                let target_has_files = self.check_target_has_files(target.id).await?;
+                let (target_has_files, target_files_found, target_files_missing) = 
+                    self.check_target_files_with_details(target.id).await?;
 
                 if target_has_files {
                     targets_with_files += 1;
                 }
                 target_cache_updates.insert(target.id, target_has_files);
+
+                // Update target progress
+                {
+                    let mut cache = self.file_check_cache.write().unwrap();
+                    cache.refresh_progress.complete_target(target_has_files, target_files_found, target_files_missing);
+                }
             }
+
+            // Complete project progress
+            {
+                let mut cache = self.file_check_cache.write().unwrap();
+                cache.refresh_progress.complete_project(project_has_files, project_files_found, project_files_missing);
+            }
+        }
+
+        // Update progress: Updating cache
+        {
+            let mut cache = self.file_check_cache.write().unwrap();
+            cache.refresh_progress.set_stage(RefreshStage::UpdatingCache);
         }
 
         // Atomic update of both caches - hold lock for minimal time
@@ -452,8 +659,8 @@ impl AppState {
         self.refresh_cache_unified_internal().await
     }
 
-    /// Check if project has files using directory tree cache
-    async fn check_project_files_via_cache(&self, project_id: i32) -> Result<bool, anyhow::Error> {
+    /// Check if project has files using directory tree cache with detailed counts
+    async fn check_project_files_with_details(&self, project_id: i32) -> Result<(bool, usize, usize), anyhow::Error> {
         use crate::db::Database;
 
         let directory_tree = self.get_directory_tree().map_err(|e| {
@@ -472,10 +679,14 @@ impl AppState {
         };
 
         if all_images.is_empty() {
-            return Ok(false);
+            return Ok((false, 0, 0));
         }
 
-        // Check if any files exist
+        let mut files_found = 0;
+        let mut files_missing = 0;
+        let mut has_any_files = false;
+
+        // Check all files and count found/missing
         for (image, _project_name, _target_name) in &all_images {
             if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&image.metadata) {
                 if let Some(filename_path) = metadata["FileName"].as_str() {
@@ -485,17 +696,20 @@ impl AppState {
                         .unwrap_or(filename_path);
 
                     if directory_tree.find_file_first(filename).is_some() {
-                        return Ok(true); // Early exit - found at least one file
+                        files_found += 1;
+                        has_any_files = true;
+                    } else {
+                        files_missing += 1;
                     }
                 }
             }
         }
 
-        Ok(false)
+        Ok((has_any_files, files_found, files_missing))
     }
 
-    /// Check if target has files using directory tree cache
-    async fn check_target_has_files(&self, target_id: i32) -> Result<bool, anyhow::Error> {
+    /// Check if target has files using directory tree cache with detailed counts
+    async fn check_target_files_with_details(&self, target_id: i32) -> Result<(bool, usize, usize), anyhow::Error> {
         use crate::db::Database;
 
         let directory_tree = self.get_directory_tree().map_err(|e| {
@@ -519,10 +733,14 @@ impl AppState {
         };
 
         if all_images.is_empty() {
-            return Ok(false);
+            return Ok((false, 0, 0));
         }
 
-        // Check if any files exist
+        let mut files_found = 0;
+        let mut files_missing = 0;
+        let mut has_any_files = false;
+
+        // Check all files and count found/missing
         for (image, _project_name, _target_name) in &all_images {
             if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&image.metadata) {
                 if let Some(filename_path) = metadata["FileName"].as_str() {
@@ -532,13 +750,101 @@ impl AppState {
                         .unwrap_or(filename_path);
 
                     if directory_tree.find_file_first(filename).is_some() {
-                        return Ok(true); // Early exit - found at least one file
+                        files_found += 1;
+                        has_any_files = true;
+                    } else {
+                        files_missing += 1;
                     }
                 }
             }
         }
 
-        Ok(false)
+        Ok((has_any_files, files_found, files_missing))
+    }
+
+    /// Get current cache refresh progress (returns None if not refreshing)
+    pub fn get_cache_refresh_progress(&self) -> Option<RefreshProgress> {
+        let cache = self.file_check_cache.read().unwrap();
+        if cache.refresh_in_progress {
+            Some(cache.refresh_progress.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Refresh directory tree cache with progress tracking during unified cache refresh
+    async fn refresh_directory_tree_with_progress(&self) -> Result<Arc<DirectoryTree>> {
+        // Check if we have a valid cache first
+        {
+            let cache = self.directory_tree_cache.read().unwrap();
+            if let Some(ref tree) = *cache {
+                // Check if cache is still valid (not too old)
+                if !tree.is_older_than(Duration::from_secs(300)) {
+                    // Cache is fresh, no need to rebuild
+                    tracing::debug!("🌳 Directory tree cache is fresh, skipping rebuild");
+                    return Ok(Arc::new(tree.clone()));
+                }
+            }
+        }
+
+        tracing::info!(
+            "🌳 Building directory tree cache for {} directories with progress tracking",
+            self.image_dir_paths.len()
+        );
+
+        // Create a channel for progress updates
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<(usize, String)>();
+        let file_check_cache = Arc::clone(&self.file_check_cache);
+        
+        // Spawn progress update task
+        let progress_task = tokio::spawn(async move {
+            while let Some((index, directory_name)) = progress_rx.recv().await {
+                let mut cache = file_check_cache.write().unwrap();
+                cache.refresh_progress.process_directory(&directory_name);
+                if index > 0 {
+                    // Complete the previous directory (index is 0-based)
+                    cache.refresh_progress.complete_directory();
+                }
+            }
+        });
+
+        // Build directory tree in blocking task with progress
+        let image_dir_paths = self.image_dir_paths.clone();
+        let tree_result = tokio::task::spawn_blocking(move || {
+            let roots: Vec<&std::path::Path> = image_dir_paths.iter().map(|p| p.as_path()).collect();
+            
+            let mut progress_callback = |index: usize, directory_name: &str| {
+                let _ = progress_tx.send((index, directory_name.to_string()));
+            };
+            
+            crate::directory_tree::DirectoryTree::build_multiple_with_progress(&roots, &mut progress_callback)
+        }).await??;
+
+        // Complete the last directory
+        {
+            let mut cache = self.file_check_cache.write().unwrap();
+            cache.refresh_progress.complete_directory();
+        }
+
+        // Wait for progress task to finish
+        progress_task.abort();
+
+        let stats = tree_result.stats();
+        tracing::info!(
+            "✅ Directory tree built with progress tracking: {} files, {} directories across {} roots (age: {})",
+            stats.total_files,
+            stats.total_directories,
+            stats.roots.len(),
+            stats.format_age()
+        );
+
+        // Store in cache
+        {
+            let mut cache = self.directory_tree_cache.write().unwrap();
+            *cache = Some(tree_result.clone());
+        }
+
+        Ok(Arc::new(tree_result))
     }
 }
 

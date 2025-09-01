@@ -4,6 +4,7 @@ import { useHotkeys } from 'react-hotkeys-hook';
 import ProjectTargetSelector from './components/ProjectTargetSelector';
 import KeyboardShortcutHelp from './components/KeyboardShortcutHelp';
 import ServerInfoPanel from './components/ServerInfoPanel';
+import CacheRefreshStatus from './components/CacheRefreshStatus';
 import { useGridState } from './hooks/useUrlState';
 import './App.css';
 
@@ -33,6 +34,7 @@ function App() {
         </div>
         
         <div className="header-center">
+          <CacheRefreshStatus />
           {!isOnOverview && <ProjectTargetSelector />}
         </div>
         

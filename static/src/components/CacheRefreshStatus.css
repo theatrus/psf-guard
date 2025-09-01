@@ -1,0 +1,202 @@
+.cache-refresh-status {
+  background: rgba(97, 218, 251, 0.1);
+  border: 1px solid rgba(97, 218, 251, 0.3);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 0 12px;
+  font-size: 0.9rem;
+  color: #61dafb;
+  backdrop-filter: blur(4px);
+  transition: all 0.3s ease;
+  min-width: 200px;
+  max-width: 400px;
+}
+
+.cache-refresh-status.fade-in {
+  opacity: 0;
+  transform: translateY(-10px) scale(0.95);
+  animation: slideIn 0.3s ease forwards;
+}
+
+.cache-refresh-status.visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.cache-refresh-status.fade-out {
+  opacity: 1;
+  animation: slideOut 0.3s ease forwards;
+}
+
+@keyframes slideIn {
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes slideOut {
+  to {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.95);
+  }
+}
+
+.cache-status-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+
+.loading-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(97, 218, 251, 0.3);
+  border-top: 2px solid #61dafb;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.cache-status-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0; /* Allow text to truncate */
+}
+
+.cache-status-label {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cache-progress-bar {
+  position: relative;
+  height: 4px;
+  background: rgba(97, 218, 251, 0.2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.cache-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #61dafb, #4fa8d8);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.cache-progress-fill::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+  animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+  0% { left: -100%; }
+  100% { left: 100%; }
+}
+
+.cache-progress-text {
+  position: absolute;
+  top: -18px;
+  right: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #61dafb;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.cache-status-details {
+  font-size: 0.8rem;
+  color: rgba(97, 218, 251, 0.8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 150px;
+  flex-shrink: 0;
+}
+
+.cache-elapsed-time {
+  font-style: italic;
+  opacity: 0.7;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .cache-refresh-status {
+    min-width: 150px;
+    max-width: 200px;
+    padding: 6px 8px;
+    margin: 0 6px;
+    font-size: 0.8rem;
+  }
+  
+  .cache-status-details {
+    max-width: 100px;
+  }
+  
+  .loading-spinner {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+/* High contrast mode */
+@media (prefers-contrast: high) {
+  .cache-refresh-status {
+    background: rgba(97, 218, 251, 0.2);
+    border: 2px solid #61dafb;
+  }
+  
+  .cache-progress-fill {
+    background: #61dafb;
+  }
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .cache-refresh-status,
+  .cache-progress-fill {
+    transition: none;
+  }
+  
+  .loading-spinner {
+    animation: none;
+    border: 2px solid #61dafb;
+    border-top: 2px solid transparent;
+  }
+  
+  .cache-progress-fill::after {
+    display: none;
+  }
+  
+  @keyframes slideIn {
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  
+  @keyframes slideOut {
+    to {
+      opacity: 0;
+      transform: none;
+    }
+  }
+}

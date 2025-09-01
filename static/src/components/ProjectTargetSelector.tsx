@@ -10,9 +10,18 @@ export default function ProjectTargetSelector() {
   const refreshCacheMutation = useMutation({
     mutationFn: apiClient.refreshFileCache,
     onSuccess: () => {
-      // Invalidate and refetch projects and targets
+      console.log('🔄 Manual cache refresh completed, invalidating queries...');
+      
+      // Invalidate all queries that depend on file existence data
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       queryClient.invalidateQueries({ queryKey: ['targets'] });
+      queryClient.invalidateQueries({ queryKey: ['all-images'] });
+      queryClient.invalidateQueries({ queryKey: ['projects-overview'] });
+      queryClient.invalidateQueries({ queryKey: ['targets-overview'] });
+      queryClient.invalidateQueries({ queryKey: ['overall-stats'] });
+      
+      // Also invalidate any image queries
+      queryClient.invalidateQueries({ queryKey: ['images'] });
     },
     onError: (error) => {
       console.error('Cache refresh failed:', error);

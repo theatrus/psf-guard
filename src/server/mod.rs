@@ -108,6 +108,7 @@ pub async fn run_server(
     let api_routes = Router::new()
         .route("/info", get(handlers::get_server_info))
         .route("/refresh-cache", put(handlers::refresh_file_cache))
+        .route("/cache-progress", get(handlers::get_cache_refresh_progress))
         .route(
             "/refresh-directory-cache",
             put(handlers::refresh_directory_tree_cache),

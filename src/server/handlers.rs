@@ -60,28 +60,143 @@ pub async fn get_server_info(
 pub async fn refresh_file_cache(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<FileCheckResponse>>, AppError> {
-    tracing::info!("🔄 Starting unified file cache refresh");
+    tracing::info!("🔄 Manual cache refresh requested");
 
-    // Use the unified cache refresh operation
-    let (images_checked, files_found, files_missing, duration_ms) = state
-        .refresh_cache_unified()
-        .await
-        .map_err(|e| AppError::InternalError(format!("Cache refresh failed: {:?}", e)))?;
+    // Check current refresh status
+    let refresh_status = state.ensure_cache_available();
+    
+    match refresh_status {
+        crate::server::state::RefreshStatus::InProgressWait 
+        | crate::server::state::RefreshStatus::InProgressServeStale => {
+            // A refresh is already in progress - wait for it to complete
+            tracing::info!("🔄 Cache refresh already in progress, waiting for completion...");
+            
+            // Wait for the current refresh to complete by polling
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                let cache = state.file_check_cache.read().unwrap();
+                if !cache.refresh_in_progress {
+                    break;
+                }
+            }
+        }
+        crate::server::state::RefreshStatus::NeedsRefresh => {
+            // A refresh was needed and should have been started by ensure_cache_available
+            tracing::info!("🔄 New cache refresh started, waiting for completion...");
+            
+            // Wait for completion
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                let cache = state.file_check_cache.read().unwrap();
+                if !cache.refresh_in_progress {
+                    break;
+                }
+            }
+        }
+        crate::server::state::RefreshStatus::NotNeeded => {
+            // Cache is fresh, but user requested refresh - force a new one
+            tracing::info!("🔄 Cache is fresh but forced refresh requested");
+            
+            // Force a refresh by clearing cache and then starting refresh
+            {
+                let mut cache = state.file_check_cache.write().unwrap();
+                cache.clear();
+            }
+            
+            // Now start refresh
+            let refresh_status = state.ensure_cache_available();
+            if matches!(refresh_status, crate::server::state::RefreshStatus::InProgressWait | crate::server::state::RefreshStatus::InProgressServeStale) {
+                // Wait for completion
+                loop {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    let cache = state.file_check_cache.read().unwrap();
+                    if !cache.refresh_in_progress {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Get final statistics after refresh completion
+    let cache = state.file_check_cache.read().unwrap();
+    let projects_with_files = cache.projects_with_files.values().filter(|&&has_files| has_files).count();
+    let targets_with_files = cache.targets_with_files.values().filter(|&&has_files| has_files).count();
+    let total_checked = cache.projects_with_files.len() + cache.targets_with_files.len();
+    let total_found = projects_with_files + targets_with_files;
+    let total_missing = total_checked - total_found;
 
     let response = FileCheckResponse {
-        images_checked,
-        files_found,
-        files_missing,
-        check_time_ms: duration_ms,
+        images_checked: total_checked,
+        files_found: total_found,
+        files_missing: total_missing,
+        check_time_ms: 0, // We don't track the wait time here
     };
 
     tracing::info!(
-        "✅ Unified file cache refresh completed in {}ms - {} items checked, {} with files, {} missing",
-        response.check_time_ms,
-        images_checked,
-        files_found,
-        files_missing
+        "✅ Cache refresh completed - {} items checked, {} with files, {} missing",
+        total_checked,
+        total_found,
+        total_missing
     );
+
+    Ok(Json(ApiResponse::success(response)))
+}
+
+pub async fn get_cache_refresh_progress(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<CacheRefreshProgressResponse>>, AppError> {
+    let progress_info = state.get_cache_refresh_progress();
+    
+    let response = match progress_info {
+        Some(progress) => {
+            let stage_name = match progress.stage {
+                crate::server::state::RefreshStage::Idle => "idle",
+                crate::server::state::RefreshStage::InitializingDirectoryTree => "initializing_directory_tree",
+                crate::server::state::RefreshStage::LoadingProjects => "loading_projects",
+                crate::server::state::RefreshStage::ProcessingProjects => "processing_projects",
+                crate::server::state::RefreshStage::ProcessingTargets => "processing_targets",
+                crate::server::state::RefreshStage::UpdatingCache => "updating_cache",
+                crate::server::state::RefreshStage::Completed => "completed",
+            };
+
+            CacheRefreshProgressResponse {
+                is_refreshing: true,
+                stage: stage_name.to_string(),
+                progress_percentage: progress.get_progress_percentage(),
+                elapsed_seconds: progress.get_elapsed_time().map(|d| d.as_secs()),
+                directories_total: progress.directories_total,
+                directories_processed: progress.directories_processed,
+                current_directory_name: progress.current_directory_name.clone(),
+                projects_total: progress.projects_total,
+                projects_processed: progress.projects_processed,
+                current_project_name: progress.current_project_name.clone(),
+                targets_total: progress.targets_total,
+                targets_processed: progress.targets_processed,
+                files_found: progress.files_found,
+                files_missing: progress.files_missing,
+            }
+        }
+        None => {
+            // No refresh in progress
+            CacheRefreshProgressResponse {
+                is_refreshing: false,
+                stage: "idle".to_string(),
+                progress_percentage: 0.0,
+                elapsed_seconds: None,
+                directories_total: 0,
+                directories_processed: 0,
+                current_directory_name: None,
+                projects_total: 0,
+                projects_processed: 0,
+                current_project_name: None,
+                targets_total: 0,
+                targets_processed: 0,
+                files_found: 0,
+                files_missing: 0,
+            }
+        }
+    };
 
     Ok(Json(ApiResponse::success(response)))
 }
