@@ -117,6 +117,9 @@ export default function MainView() {
       [navigation.allImages[navigation.currentIndex - 1]?.id].filter(Boolean) : [],
   };
 
+  
+  // Show empty state only when user hasn't made any project selection
+  // null = "All Projects", number = specific project, both are valid
   if (projectId === undefined) {
     return (
       <div className="empty-state">

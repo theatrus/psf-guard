@@ -68,9 +68,14 @@ export default function Overview() {
 
   // Navigation handlers
   const handleSelectProject = (project: ProjectOverview) => {
-    setProjectId(project.id);
-    setTargetId(null); // Clear target selection
-    navigate('/grid');
+    console.log('Overview: Setting project ID to', project.id);
+    setProjectId(project.id); // This already clears target selection internally
+    
+    // Wait for state update, then navigate
+    setTimeout(() => {
+      console.log('Overview: Navigating to grid with current URL:', window.location.href);
+      navigate('/grid');
+    }, 100);
   };
 
   const handleSelectTarget = (target: TargetOverview) => {
