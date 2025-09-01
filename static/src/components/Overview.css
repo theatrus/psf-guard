@@ -1,0 +1,514 @@
+.overview {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 20px;
+  font-family: inherit;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  min-height: 100vh;
+}
+
+.overview-loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 200px;
+  font-size: 1.2em;
+  color: var(--color-text-muted);
+}
+
+.overview-header {
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.overview-header h1 {
+  font-size: 2.5em;
+  margin: 0 0 10px 0;
+  color: var(--color-primary);
+}
+
+.overview-header p {
+  font-size: 1.1em;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+/* Statistics Section */
+.stats-section {
+  background: var(--color-bg-secondary);
+  border-radius: 12px;
+  padding: 30px;
+  margin-bottom: 30px;
+  border: 1px solid var(--color-border-primary);
+}
+
+.stats-section h2 {
+  margin: 0 0 20px 0;
+  color: var(--color-primary);
+  font-size: 1.8em;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+.stat-card {
+  background: var(--color-bg-surface);
+  border-radius: 8px;
+  padding: 20px;
+  border: 1px solid var(--color-border-secondary);
+  text-align: center;
+  transition: all 0.2s ease;
+}
+
+.stat-card:hover {
+  border-color: var(--color-border-tertiary);
+  background: var(--color-bg-elevated);
+}
+
+.stat-card h3 {
+  margin: 0 0 10px 0;
+  color: var(--color-text-secondary);
+  font-size: 1.1em;
+  font-weight: 600;
+}
+
+.stat-main {
+  font-size: 2.2em;
+  font-weight: bold;
+  color: var(--color-primary);
+  margin-bottom: 5px;
+}
+
+.stat-sub {
+  color: var(--color-text-muted);
+  font-size: 0.9em;
+}
+
+/* Progress Bar */
+.overall-progress {
+  margin-top: 20px;
+}
+
+.overall-progress h4 {
+  margin: 0 0 15px 0;
+  color: var(--color-text-primary);
+}
+
+.progress-bar {
+  display: flex;
+  height: 20px;
+  background: var(--color-bg-tertiary);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 10px;
+  border: 1px solid var(--color-border-secondary);
+}
+
+.progress-accepted {
+  background: var(--color-success);
+  transition: width 0.3s ease;
+}
+
+.progress-rejected {
+  background: var(--color-error);
+  transition: width 0.3s ease;
+}
+
+.progress-pending {
+  background: var(--color-warning);
+  transition: width 0.3s ease;
+}
+
+.progress-legend {
+  display: flex;
+  gap: 20px;
+  font-size: 0.9em;
+  flex-wrap: wrap;
+}
+
+.legend-accepted { color: var(--color-success); }
+.legend-rejected { color: var(--color-error); }
+.legend-pending { color: var(--color-warning); }
+
+/* Quick Actions */
+.quick-actions {
+  margin-top: 20px;
+  text-align: center;
+}
+
+.action-button {
+  background: var(--color-primary);
+  color: var(--color-text-dark);
+  border: 1px solid var(--color-primary);
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: 1.1em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-weight: 500;
+}
+
+.action-button:hover {
+  background: var(--color-primary-alpha-80);
+  border-color: var(--color-primary-alpha-80);
+  transform: translateY(-1px);
+}
+
+.action-button.primary {
+  background: var(--color-success);
+  border-color: var(--color-success);
+  color: white;
+}
+
+.action-button.primary:hover {
+  background: var(--color-success-hover);
+  border-color: var(--color-success-hover);
+}
+
+/* Content Grid - Single column for projects with nested targets */
+.content-grid {
+  display: block;
+}
+
+/* Projects Section */
+.projects-section {
+  background: var(--color-bg-secondary);
+  border-radius: 12px;
+  padding: 25px;
+  border: 1px solid var(--color-border-primary);
+}
+
+.projects-section h2 {
+  margin: 0 0 20px 0;
+  color: var(--color-primary);
+  font-size: 1.5em;
+}
+
+/* Item Lists - Remove scrolling for projects */
+.projects-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.project-card {
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  padding: 20px;
+  background: var(--color-bg-surface);
+  transition: all 0.2s ease;
+}
+
+.project-card:hover {
+  border-color: var(--color-border-tertiary);
+  background: var(--color-bg-elevated);
+}
+
+.project-card.no-files {
+  opacity: 0.6;
+  background: var(--color-bg-hover);
+}
+
+.project-card.no-files:hover {
+  background: var(--color-bg-hover);
+}
+
+.project-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+  cursor: pointer;
+}
+
+.project-header h3 {
+  margin: 0;
+  color: var(--color-primary);
+  font-size: 1.2em;
+  font-weight: 600;
+}
+
+.no-files-badge {
+  background: var(--color-error);
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75em;
+  font-weight: bold;
+}
+
+.expand-toggle {
+  color: var(--color-text-muted);
+  font-size: 1.2em;
+  margin-left: 10px;
+  transition: transform 0.2s ease;
+}
+
+.expand-toggle.expanded {
+  transform: rotate(90deg);
+}
+
+.project-description {
+  margin: 0 0 15px 0;
+  color: var(--color-text-secondary);
+  font-size: 0.9em;
+  font-style: italic;
+}
+
+/* Nested Targets */
+.targets-nested {
+  margin-top: 15px;
+  padding-left: 20px;
+  border-left: 3px solid var(--color-border-secondary);
+}
+
+.targets-nested.collapsed {
+  display: none;
+}
+
+.target-card {
+  border: 1px solid var(--color-border-tertiary);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 10px;
+  background: var(--color-bg-hover);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.target-card:hover {
+  border-color: var(--color-border-quaternary);
+  background: var(--color-bg-elevated);
+  transform: translateX(5px);
+}
+
+.target-card.no-files {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.target-card.no-files:hover {
+  transform: none;
+}
+
+.target-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.target-header h4 {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: 1em;
+  font-weight: 500;
+}
+
+.target-coordinates {
+  margin: 0 0 8px 0;
+  color: var(--color-text-muted);
+  font-size: 0.8em;
+  font-family: monospace;
+}
+
+.project-stats,
+.target-stats {
+  margin-bottom: 12px;
+}
+
+.stat-row {
+  display: flex;
+  gap: 15px;
+  font-size: 0.85em;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.stat-row span {
+  color: var(--color-text-lighter);
+}
+
+.stat-row .active {
+  color: var(--color-success);
+  font-weight: 500;
+}
+
+.stat-row .inactive {
+  color: var(--color-error);
+  font-weight: 500;
+}
+
+.target-stat-row {
+  display: flex;
+  gap: 12px;
+  font-size: 0.8em;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.target-stat-row span {
+  color: var(--color-text-light);
+}
+
+/* Requested Progress Bar */
+.project-requested-progress {
+  margin-bottom: 8px;
+}
+
+.progress-label {
+  font-size: 0.75em;
+  color: var(--color-text-muted);
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+
+.requested-progress-bar {
+  height: 8px;
+  background: var(--color-bg-tertiary);
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--color-border-secondary);
+}
+
+.requested-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-primary), var(--color-success));
+  transition: width 0.3s ease;
+  border-radius: 3px;
+}
+
+/* Mini Progress Bars */
+.project-mini-progress,
+.target-mini-progress {
+  display: flex;
+  height: 6px;
+  background: var(--color-bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 10px;
+  border: 1px solid var(--color-border-secondary);
+  margin-top: 4px;
+}
+
+.target-mini-progress {
+  height: 4px;
+  margin-bottom: 8px;
+}
+
+.mini-progress-accepted {
+  background: var(--color-success);
+  transition: width 0.3s ease;
+}
+
+.mini-progress-rejected {
+  background: var(--color-error);
+  transition: width 0.3s ease;
+}
+
+.mini-progress-pending {
+  background: var(--color-warning);
+  transition: width 0.3s ease;
+}
+
+.project-meta,
+.target-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8em;
+  color: var(--color-text-hint);
+}
+
+.target-meta {
+  font-size: 0.75em;
+}
+
+.project-meta span,
+.target-meta span {
+  word-break: break-word;
+}
+
+/* Target count indicator */
+.target-count {
+  background: var(--color-primary-alpha-20);
+  color: var(--color-primary);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75em;
+  font-weight: 500;
+  margin-left: 10px;
+}
+
+/* Completion badge */
+.completion-badge {
+  background: var(--color-success-alpha-20);
+  color: var(--color-success);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.7em;
+  font-weight: 600;
+  border: 1px solid var(--color-success);
+}
+
+/* Completion badge variants based on percentage */
+.completion-badge[data-completion="100"] {
+  background: var(--color-success);
+  color: white;
+}
+
+.completion-badge[data-completion="0"] {
+  background: var(--color-warning-alpha-20);
+  color: var(--color-warning);
+  border-color: var(--color-warning);
+}
+
+/* Responsive Design */
+@media (max-width: 1200px) {
+  .overview {
+    padding: 15px;
+  }
+  
+  .stats-grid {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .overview-header h1 {
+    font-size: 2em;
+  }
+  
+  .stats-section {
+    padding: 20px;
+  }
+  
+  .projects-section,
+  .targets-section {
+    padding: 15px;
+  }
+  
+  .progress-legend {
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  .stat-row {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 480px) {
+  .overview {
+    padding: 10px;
+  }
+  
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -95,3 +95,66 @@ export const GradingStatus = {
 } as const;
 
 export type GradingStatus = typeof GradingStatus[keyof typeof GradingStatus];
+
+// Overview types
+export interface DateRange {
+  earliest?: number;
+  latest?: number;
+  span_days?: number;
+}
+
+export interface ProjectOverview {
+  id: number;
+  profile_id: string;
+  name: string;
+  description?: string;
+  has_files: boolean;
+  target_count: number;
+  total_images: number;
+  accepted_images: number;
+  rejected_images: number;
+  pending_images: number;
+  total_requested: number;
+  date_range: DateRange;
+  filters_used: string[];
+}
+
+export interface TargetOverview {
+  id: number;
+  name: string;
+  ra?: number;
+  dec?: number;
+  active: boolean;
+  project_id: number;
+  project_name: string;
+  image_count: number;
+  accepted_count: number;
+  rejected_count: number;
+  pending_count: number;
+  total_requested: number;
+  has_files: boolean;
+  date_range: DateRange;
+  filters_used: string[];
+  coordinates_display?: string;
+}
+
+export interface OverallStats {
+  total_projects: number;
+  active_projects: number;
+  total_targets: number;
+  active_targets: number;
+  total_images: number;
+  accepted_images: number;
+  rejected_images: number;
+  pending_images: number;
+  total_requested: number;
+  unique_filters: string[];
+  date_range: DateRange;
+  recent_activity: RecentActivity[];
+}
+
+export interface RecentActivity {
+  date: number;
+  images_added: number;
+  images_graded: number;
+}

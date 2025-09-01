@@ -10,6 +10,9 @@ import type {
   PreviewOptions,
   ServerInfo,
   FileCheckResponse,
+  ProjectOverview,
+  TargetOverview,
+  OverallStats,
 } from './types';
 
 const api = axios.create({
@@ -118,5 +121,22 @@ export const apiClient = {
     
     const queryString = params.toString();
     return `/api/images/${imageId}/psf${queryString ? `?${queryString}` : ''}`;
+  },
+
+  // Overview endpoints
+  getProjectsOverview: async (): Promise<ProjectOverview[]> => {
+    const { data } = await api.get<ApiResponse<ProjectOverview[]>>('/projects/overview');
+    return data.data || [];
+  },
+
+  getTargetsOverview: async (): Promise<TargetOverview[]> => {
+    const { data } = await api.get<ApiResponse<TargetOverview[]>>('/targets/overview');
+    return data.data || [];
+  },
+
+  getOverallStats: async (): Promise<OverallStats> => {
+    const { data } = await api.get<ApiResponse<OverallStats>>('/stats/overall');
+    if (!data.data) throw new Error('Failed to get overall stats');
+    return data.data;
   },
 };

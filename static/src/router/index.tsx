@@ -1,7 +1,8 @@
-import { createHashRouter, RouterProvider, Navigate } from 'react-router-dom';
+import { createHashRouter, RouterProvider } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from '../App';
 import MainView from '../components/MainView';
+import Overview from '../components/Overview';
 
 // Create React Query client
 const queryClient = new QueryClient({
@@ -21,7 +22,11 @@ const router = createHashRouter([
     children: [
       {
         index: true,
-        element: <Navigate to="/grid" replace />
+        element: <Overview />
+      },
+      {
+        path: "overview",
+        element: <Overview />
       },
       {
         path: "grid",
