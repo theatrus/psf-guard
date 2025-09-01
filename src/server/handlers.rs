@@ -1642,7 +1642,7 @@ pub async fn get_psf_visualization(
             .map_err(|e| anyhow::anyhow!("Failed to create cache file: {}", e))?;
         let writer = std::io::BufWriter::new(cache_file);
         let encoder =
-            PngEncoder::new_with_quality(writer, CompressionType::Fast, FilterType::NoFilter);
+            PngEncoder::new_with_quality(writer, CompressionType::Best, FilterType::Adaptive);
 
         encoder
             .write_image(

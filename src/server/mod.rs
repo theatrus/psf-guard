@@ -286,14 +286,8 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
                 }
 
                 if state.pregeneration_config.original_enabled {
-                    match pregenerate_preview(
-                        &state,
-                        *image_id,
-                        file_only,
-                        target_name,
-                        "original",
-                    )
-                    .await
+                    match pregenerate_preview(&state, *image_id, file_only, target_name, "original")
+                        .await
                     {
                         Ok(generated) => {
                             _formats_processed += 1;
