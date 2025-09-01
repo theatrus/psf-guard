@@ -1,5 +1,6 @@
 import { useSearchParams } from 'react-router-dom';
 import { useCallback, useMemo } from 'react';
+import { type GroupingMode, DEFAULT_SINGLE_PROJECT_MODE } from '../types/grouping';
 
 /**
  * Hook for managing URL search parameters as state
@@ -148,7 +149,7 @@ export function useGridState() {
   
   const selectedGroupIndex = useMemo(() => getNumberParam('groupIndex') || 0, [getNumberParam]);
   const selectedImageIndex = useMemo(() => getNumberParam('imageIndex') || 0, [getNumberParam]);
-  const groupingMode = useMemo(() => (getParam('grouping') as 'filter' | 'date' | 'both') || 'filter', [getParam]);
+  const groupingMode = useMemo(() => (getParam('grouping') as GroupingMode) || DEFAULT_SINGLE_PROJECT_MODE, [getParam]);
   const imageSize = useMemo(() => getNumberParam('size') || 300, [getNumberParam]);
   const showStats = useMemo(() => getBooleanParam('stats'), [getBooleanParam]);
   const expandedGroups = useMemo(() => new Set(getArrayParam('expanded')), [getArrayParam]);
@@ -162,7 +163,7 @@ export function useGridState() {
     updateParams({ imageIndex: index });
   }, [updateParams]);
   
-  const setGroupingMode = useCallback((mode: 'filter' | 'date' | 'both') => {
+  const setGroupingMode = useCallback((mode: GroupingMode) => {
     updateParams({ grouping: mode });
   }, [updateParams]);
   

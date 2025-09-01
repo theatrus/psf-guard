@@ -37,7 +37,15 @@ export default function ProjectTargetSelector() {
   });
 
   const handleProjectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const projectId = e.target.value ? Number(e.target.value) : null;
+    const value = e.target.value;
+    let projectId: number | null = null;
+    
+    if (value === 'all') {
+      projectId = null; // null means all projects
+    } else if (value) {
+      projectId = Number(value);
+    }
+    
     setProjectId(projectId);
   };
 
@@ -53,11 +61,12 @@ export default function ProjectTargetSelector() {
         <select
           id="project-select"
           className="compact-select"
-          value={selectedProjectId || ''}
+          value={selectedProjectId === null ? 'all' : selectedProjectId || ''}
           onChange={handleProjectChange}
           disabled={projectsLoading}
         >
           <option value="">Select project</option>
+          <option value="all">- All Projects -</option>
           {projects.map(project => (
             <option 
               key={project.id} 
@@ -77,10 +86,10 @@ export default function ProjectTargetSelector() {
           className="compact-select"
           value={selectedTargetId || ''}
           onChange={handleTargetChange}
-          disabled={!selectedProjectId || targetsLoading}
+          disabled={selectedProjectId === null || !selectedProjectId || targetsLoading}
         >
-          <option value="">All targets</option>
-          {targets.map(target => (
+          <option value="">{selectedProjectId === null ? 'All projects selected' : 'All targets'}</option>
+          {selectedProjectId !== null && targets.map(target => (
             <option 
               key={target.id} 
               value={target.id}

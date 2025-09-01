@@ -117,7 +117,7 @@ export default function MainView() {
       [navigation.allImages[navigation.currentIndex - 1]?.id].filter(Boolean) : [],
   };
 
-  if (!projectId) {
+  if (projectId === undefined) {
     return (
       <div className="empty-state">
         Select a project to begin grading images

@@ -12,8 +12,16 @@ import LazyImageCard from './LazyImageCard';
 import FilterControls, { type FilterOptions } from './FilterControls';
 import StatsDashboard from './StatsDashboard';
 import UndoRedoToolbar from './UndoRedoToolbar';
-
-type GroupingMode = 'filter' | 'date' | 'both';
+import { 
+  type GroupingMode, 
+  SINGLE_PROJECT_MODES,
+  MULTI_PROJECT_MODES,
+  DEFAULT_SINGLE_PROJECT_MODE,
+  DEFAULT_MULTI_PROJECT_MODE,
+  GROUPING_MODE_LABELS,
+  getNextSingleProjectMode,
+  getNextMultiProjectMode 
+} from '../types/grouping';
 
 interface GroupedImageGridProps {
   useLazyImages?: boolean;
@@ -78,11 +86,11 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const { data: allImages = [], isLoading } = useQuery({
     queryKey: ['all-images', projectId, targetId],
     queryFn: () => apiClient.getImages({
-      project_id: projectId!,
+      project_id: projectId || undefined, // null becomes undefined for API
       target_id: targetId || undefined,
       limit: 10000, // Get all images
     }),
-    enabled: !!projectId,
+    enabled: projectId !== undefined, // Enable for both specific projects and null (all projects)
     refetchInterval: 30000, // Refresh every 30 seconds
     refetchIntervalInBackground: true,
   });
@@ -136,6 +144,9 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     return Array.from(filterSet).sort();
   }, [allImages]);
 
+  // Determine if we're in multi-project mode
+  const isMultiProjectMode = projectId === null;
+  
   // Group images based on selected mode
   const imageGroups = useMemo(() => {
     const groups = new Map<string, Image[]>();
@@ -143,25 +154,42 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     filteredImages.forEach(image => {
       let groupKey: string;
       
-      if (groupingMode === 'filter') {
-        groupKey = image.filter_name || 'No Filter';
-      } else if (groupingMode === 'date') {
-        // Group by date (YYYY-MM-DD)
+      // Helper functions for building group keys
+      const getProjectPart = () => image.project_name || 'Unknown Project';
+      const getFilterPart = () => image.filter_name || 'No Filter';
+      const getDatePart = () => {
         if (image.acquired_date) {
           const date = new Date(image.acquired_date * 1000);
-          groupKey = date.toISOString().split('T')[0];
-        } else {
-          groupKey = 'Unknown Date';
+          return date.toISOString().split('T')[0];
         }
-      } else { // 'both'
-        // Group by both filter and date
-        const filterName = image.filter_name || 'No Filter';
-        let dateStr = 'Unknown Date';
-        if (image.acquired_date) {
-          const date = new Date(image.acquired_date * 1000);
-          dateStr = date.toISOString().split('T')[0];
-        }
-        groupKey = `${filterName} - ${dateStr}`;
+        return 'Unknown Date';
+      };
+      
+      // Build group key based on mode
+      switch (groupingMode) {
+        case 'filter':
+          groupKey = getFilterPart();
+          break;
+        case 'date':
+          groupKey = getDatePart();
+          break;
+        case 'both':
+          groupKey = `${getFilterPart()} - ${getDatePart()}`;
+          break;
+        case 'project':
+          groupKey = getProjectPart();
+          break;
+        case 'project+filter':
+          groupKey = `${getProjectPart()} - ${getFilterPart()}`;
+          break;
+        case 'project+date':
+          groupKey = `${getProjectPart()} - ${getDatePart()}`;
+          break;
+        case 'project+date+filter':
+          groupKey = `${getProjectPart()} - ${getDatePart()} - ${getFilterPart()}`;
+          break;
+        default:
+          groupKey = getFilterPart();
       }
       
       if (!groups.has(groupKey)) {
@@ -182,12 +210,12 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
         })
       }));
     
-    // Sort groups
-    if (groupingMode === 'date') {
-      // Sort by date descending (newest first)
+    // Sort groups based on mode
+    if (groupingMode === 'date' || groupingMode.includes('date')) {
+      // Sort by group name descending for date-based grouping (newest first)
       sorted.sort((a, b) => b.filterName.localeCompare(a.filterName));
     } else {
-      // Sort alphabetically
+      // Sort alphabetically for other modes
       sorted.sort((a, b) => a.filterName.localeCompare(b.filterName));
     }
     
@@ -367,6 +395,27 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     }
   }, [selectedImages, grading]);
 
+  // Switch to appropriate grouping mode when changing between single/multi-project
+  const prevProjectId = useRef(projectId);
+  useEffect(() => {
+    if (prevProjectId.current !== projectId) {
+      const wasMultiProject = prevProjectId.current === null;
+      const isNowMultiProject = projectId === null;
+      
+      if (wasMultiProject !== isNowMultiProject) {
+        // Switching between single and multi-project modes
+        if (isNowMultiProject) {
+          // Switched to multi-project, set appropriate default grouping
+          setGroupingMode(DEFAULT_MULTI_PROJECT_MODE);
+        } else {
+          // Switched to single project, set appropriate default grouping
+          setGroupingMode(DEFAULT_SINGLE_PROJECT_MODE);
+        }
+      }
+      prevProjectId.current = projectId;
+    }
+  }, [projectId, setGroupingMode]);
+  
   // Clear date filters when project/target changes to avoid "no results" scenarios
   useEffect(() => {
     // Only clear dates if they exist, to avoid infinite loops
@@ -451,15 +500,13 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   
   // Grouping mode shortcuts
   useHotkeys('g', () => {
-    // Cycle through grouping modes
-    if (groupingMode === 'filter') {
-      setGroupingMode('date');
-    } else if (groupingMode === 'date') {
-      setGroupingMode('both');
+    // Cycle through grouping modes based on mode (single project vs multi-project)
+    if (isMultiProjectMode) {
+      setGroupingMode(getNextMultiProjectMode(groupingMode));
     } else {
-      setGroupingMode('filter');
+      setGroupingMode(getNextSingleProjectMode(groupingMode));
     }
-  }, [groupingMode, setGroupingMode]);
+  }, [groupingMode, isMultiProjectMode, setGroupingMode]);
 
   if (isLoading) {
     return <div className="loading">Loading images...</div>;
@@ -497,9 +544,18 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                   value={groupingMode} 
                   onChange={(e) => setGroupingMode(e.target.value as GroupingMode)}
                 >
-                  <option value="filter">Filter</option>
-                  <option value="date">Date</option>
-                  <option value="both">Both</option>
+                  {isMultiProjectMode 
+                    ? MULTI_PROJECT_MODES.map(mode => (
+                        <option key={mode} value={mode}>
+                          {GROUPING_MODE_LABELS[mode]}
+                        </option>
+                      ))
+                    : SINGLE_PROJECT_MODES.map(mode => (
+                        <option key={mode} value={mode}>
+                          {GROUPING_MODE_LABELS[mode]}
+                        </option>
+                      ))
+                  }
                 </select>
               </div>
             </div>
