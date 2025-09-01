@@ -13,10 +13,7 @@ use axum::{
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower::ServiceBuilder;
-use tower_http::{
-    cors::CorsLayer,
-    trace::TraceLayer,
-};
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::server::embedded_static::serve_embedded_file;
 use crate::server::static_file_service::StaticFileService;

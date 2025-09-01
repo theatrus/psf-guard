@@ -21,7 +21,11 @@ pub async fn serve_embedded_file(uri: Uri) -> impl IntoResponse {
         let mut headers = HeaderMap::new();
 
         // Log the detected MIME type for debugging
-        tracing::trace!("Serving embedded file '{}' with MIME type: {}", path, mime_type);
+        tracing::trace!(
+            "Serving embedded file '{}' with MIME type: {}",
+            path,
+            mime_type
+        );
 
         // Set content type
         headers.insert(
@@ -49,16 +53,13 @@ pub async fn serve_embedded_file(uri: Uri) -> impl IntoResponse {
 
         let body = Body::from(file.contents());
         let mut response_builder = Response::builder().status(StatusCode::OK);
-        
+
         // Add each header to the response builder
         for (key, value) in headers.iter() {
             response_builder = response_builder.header(key, value);
         }
-        
-        response_builder
-            .body(body)
-            .unwrap()
-            .into_response()
+
+        response_builder.body(body).unwrap().into_response()
     } else {
         // For SPA, fall back to index.html for non-API routes
         if !path.starts_with("api/") {
@@ -100,14 +101,33 @@ mod tests {
             "index.html should exist in embedded static files"
         );
     }
-    
+
     #[test]
     fn test_mime_type_detection() {
         // Test MIME type detection for common file types
-        assert_eq!(from_path("test.js").first_or_octet_stream().to_string(), "text/javascript");
-        assert_eq!(from_path("test.css").first_or_octet_stream().to_string(), "text/css");
-        assert_eq!(from_path("test.html").first_or_octet_stream().to_string(), "text/html");
-        assert_eq!(from_path("assets/index-Be-oaiRe.css").first_or_octet_stream().to_string(), "text/css");
-        assert_eq!(from_path("assets/index-DvXiWCNI.js").first_or_octet_stream().to_string(), "text/javascript");
+        assert_eq!(
+            from_path("test.js").first_or_octet_stream().to_string(),
+            "text/javascript"
+        );
+        assert_eq!(
+            from_path("test.css").first_or_octet_stream().to_string(),
+            "text/css"
+        );
+        assert_eq!(
+            from_path("test.html").first_or_octet_stream().to_string(),
+            "text/html"
+        );
+        assert_eq!(
+            from_path("assets/index-Be-oaiRe.css")
+                .first_or_octet_stream()
+                .to_string(),
+            "text/css"
+        );
+        assert_eq!(
+            from_path("assets/index-DvXiWCNI.js")
+                .first_or_octet_stream()
+                .to_string(),
+            "text/javascript"
+        );
     }
 }
