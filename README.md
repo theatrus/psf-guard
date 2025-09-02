@@ -14,13 +14,36 @@ A Rust utility for astronomical image analysis and grading, with N.I.N.A. Target
 
 ## Features
 
-- **N.I.N.A. Integration**: Query and analyze Target Scheduler SQLite databases
-- **Star Detection**: N.I.N.A. algorithm port + HocusFocus detector with PSF fitting
-- **Web Interface**: React-based UI for visual image grading with zoom/pan
+- **N.I.N.A. Integration**: Query and analyze Target Scheduler SQLite databases.
+  Note that Target Scheduler is required, using standard NINA file paths doesn't
+  work (yet), as we find images based on the database, and not based on the file
+  structure.
+- **Star Detection**: N.I.N.A. algorithm port + HocusFocus detector with PSF
+  fitting for analysis.
+- **Web Interface**: React-based UI for visual image grading with zoom/pan, and
+  comparisons, with auto-stretched images. Updates to grading are written to the
+  target scheduler DB to allow Target Scheduler to capture more images if
+  required.
 - **CLI tools**: Regrading, batch operations, fits processing, batch image moving.
-- **Statistical Analysis**: Advanced outlier detection using HFR, star count, and cloud detection
+- **Statistical Analysis**: Advanced outlier detection using HFR, star count,
+  and (primitive) cloud detection in the batch modes.
 - **FITS Processing**: Convert to PNG, annotate stars, visualize PSF residuals
 - **Multi-Directory Support**: Scan multiple image directories with priority ordering
+
+## Known Limits
+
+- Current, we only support **monochrome** images. Debayering a color image is
+  not implemented and weird things may happen if you use color camera FITS
+  files. Please reach out to psf-guard@theatr.us if you want to contribute some
+  color FITS files for testing :)
+- Some directory paths are presuming this N.I.N.A pattern:
+  `%DATEMINUS12%/%TARGETNAME%/%DATEMINUS12%/LIGHT/standardfilename.fits`, with
+  or without the leading date. Other paths may not be reliably detected, but I'm
+  happy to support more paths and patterns in the future.
+- `psf-guard` may eat your NINA Target Scheduler DB. Make a backup.
+- The `filter-rejected` workflow may eat your FITS files. I use it, but there
+  are lots of subtleties which may lead to bad results. Make a backup. Other
+  commands do not touch FITS files, but still, make a backup.
 
 ## Quick Start with Web Grader
 
@@ -40,7 +63,7 @@ docker run -d -p 3000:3000 \
 
 Open your browser to http://localhost:3000/
 
-### Pre-built Binaries
+### Pre-built Binaries for Windows, macOS, Linux
 
 Download the latest release for your platform:
 
@@ -74,6 +97,11 @@ policy when running psf-guard. You should always make a backup of the database
 in case something eats it.
 
 ### Build from Source
+
+You'll need to make sure to include several build tools depending on platform.
+The best luck is probably from reading the .github/ CI files for package install
+instructions. The OpenCV dependency is large and annoying. Its even more large
+and annoying on Windows.
 
 ```bash
 git clone https://github.com/theatrus/psf-guard.git
