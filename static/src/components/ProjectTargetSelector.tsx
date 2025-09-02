@@ -126,7 +126,7 @@ export default function ProjectTargetSelector() {
               value={project.id}
               disabled={!project.has_files}
             >
-              {project.name} {!project.has_files && '(no files)'}
+              {project.display_name} {!project.has_files && '(no files)'}
             </option>
           ))}
         </select>

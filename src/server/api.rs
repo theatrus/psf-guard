@@ -71,7 +71,10 @@ impl<T> ApiResponse<T> {
 #[derive(Debug, Serialize)]
 pub struct ProjectResponse {
     pub id: i32,
+    pub profile_id: String,
+    pub profile_name: String,
     pub name: String,
+    pub display_name: String, // "Profile -> Project" or just "Project"
     pub description: Option<String>,
     pub has_files: bool,
 }
@@ -80,7 +83,9 @@ pub struct ProjectResponse {
 pub struct ProjectOverviewResponse {
     pub id: i32,
     pub profile_id: String,
+    pub profile_name: String,
     pub name: String,
+    pub display_name: String, // "Profile -> Project" or just "Project" 
     pub description: Option<String>,
     pub has_files: bool,
     pub target_count: i32,
@@ -167,6 +172,7 @@ pub struct ImageResponse {
     pub id: i32,
     pub project_id: i32,
     pub project_name: String,
+    pub project_display_name: String,
     pub target_id: i32,
     pub target_name: String,
     pub acquired_date: Option<i64>,

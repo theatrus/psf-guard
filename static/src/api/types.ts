@@ -1,6 +1,9 @@
 export interface Project {
   id: number;
+  profile_id: string;
+  profile_name: string;
   name: string;
+  display_name: string;
   description: string | null;
   has_files: boolean;
 }
@@ -21,6 +24,7 @@ export interface Image {
   id: number;
   project_id: number;
   project_name: string;
+  project_display_name: string;
   target_id: number;
   target_name: string;
   acquired_date: number | null;
@@ -116,7 +120,9 @@ export interface DateRange {
 export interface ProjectOverview {
   id: number;
   profile_id: string;
+  profile_name: string;
   name: string;
+  display_name: string;
   description?: string;
   has_files: boolean;
   target_count: number;

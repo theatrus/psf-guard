@@ -1,11 +1,23 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct Profile {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Project {
     pub id: i32,
     pub profile_id: String,
     pub name: String,
     pub description: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProjectWithProfile {
+    pub project: Project,
+    pub profile_name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

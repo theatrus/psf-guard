@@ -1,6 +1,6 @@
 use crate::models::{
-    AcquiredImage, GradingStatus, OverallDesiredStats, OverallStats, Project, ProjectDesiredStats,
-    ProjectOverviewStats, Target, TargetWithDesiredStats, TargetWithStats,
+    AcquiredImage, GradingStatus, OverallDesiredStats, OverallStats, Profile, Project, ProjectDesiredStats,
+    ProjectOverviewStats, ProjectWithProfile, Target, TargetWithDesiredStats, TargetWithStats,
 };
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
@@ -13,6 +13,33 @@ pub struct Database<'a> {
 impl<'a> Database<'a> {
     pub fn new(conn: &'a Connection) -> Self {
         Database { conn }
+    }
+
+    // Profile queries
+    pub fn get_all_profiles(&self) -> Result<Vec<Profile>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT profileId FROM project WHERE profileId IS NOT NULL ORDER BY profileId"
+        )?;
+
+        let profiles = stmt
+            .query_map([], |row| {
+                let profile_id: String = row.get(0)?;
+                Ok(Profile {
+                    id: profile_id.clone(),
+                    name: profile_id, // Use ID as name since we don't have a separate profile table
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(profiles)
+    }
+
+    pub fn get_profile_count(&self) -> Result<i32> {
+        let mut stmt = self.conn.prepare(
+            "SELECT COUNT(DISTINCT profileId) FROM project WHERE profileId IS NOT NULL"
+        )?;
+        let count = stmt.query_row([], |row| row.get::<_, i32>(0))?;
+        Ok(count)
     }
 
     // Project queries
@@ -52,6 +79,57 @@ impl<'a> Database<'a> {
                     profile_id: row.get(1)?,
                     name: row.get(2)?,
                     description: row.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(projects)
+    }
+
+    pub fn get_projects_with_profile_info(&self) -> Result<Vec<ProjectWithProfile>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT Id, profileId, name, description 
+             FROM project 
+             ORDER BY profileId, name"
+        )?;
+
+        let projects = stmt
+            .query_map([], |row| {
+                let project = Project {
+                    id: row.get(0)?,
+                    profile_id: row.get(1)?,
+                    name: row.get(2)?,
+                    description: row.get(3)?,
+                };
+                Ok(ProjectWithProfile {
+                    profile_name: project.profile_id.clone(), // Use profile_id as name
+                    project,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(projects)
+    }
+
+    pub fn get_projects_with_images_and_profile_info(&self) -> Result<Vec<ProjectWithProfile>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT p.Id, p.profileId, p.name, p.description 
+             FROM project p
+             INNER JOIN acquiredimage ai ON p.Id = ai.projectId
+             ORDER BY p.profileId, p.name"
+        )?;
+
+        let projects = stmt
+            .query_map([], |row| {
+                let project = Project {
+                    id: row.get(0)?,
+                    profile_id: row.get(1)?,
+                    name: row.get(2)?,
+                    description: row.get(3)?,
+                };
+                Ok(ProjectWithProfile {
+                    profile_name: project.profile_id.clone(), // Use profile_id as name
+                    project,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

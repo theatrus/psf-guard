@@ -229,7 +229,7 @@ export default function Overview() {
                 <div key={project.id} className={`project-card ${!project.has_files ? 'no-files' : ''}`}>
                   <div className="project-header" onClick={() => toggleProject(project.id)}>
                     <div style={{ display: 'flex', alignItems: 'center' }}>
-                      <h3>{project.name}</h3>
+                      <h3>{project.display_name}</h3>
                       {projectTargets.length > 0 && (
                         <span className="target-count">{projectTargets.length} targets</span>
                       )}

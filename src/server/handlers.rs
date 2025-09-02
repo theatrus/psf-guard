@@ -289,23 +289,41 @@ pub async fn list_projects(
         cache.projects_with_files.clone()
     };
 
-    // Get ALL projects from database (not just those with files)
-    let projects = {
+    // Get ALL projects with profile info from database (not just those with files)
+    let (projects, profile_count) = {
         let conn = state.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
 
-        db.get_projects_with_images()
-            .map_err(|_| AppError::DatabaseError)?
+        let projects = db.get_projects_with_images_and_profile_info()
+            .map_err(|_| AppError::DatabaseError)?;
+        let profile_count = db.get_profile_count()
+            .map_err(|_| AppError::DatabaseError)?;
+        
+        (projects, profile_count)
     };
+
+    let show_profile = profile_count > 1;
 
     let response: Vec<ProjectResponse> = projects
         .into_iter()
-        .map(|p| ProjectResponse {
-            id: p.id,
-            name: p.name,
-            description: p.description,
-            has_files: file_existence_map.get(&p.id).copied().unwrap_or(false),
+        .map(|project_with_profile| {
+            let project = &project_with_profile.project;
+            let display_name = if show_profile {
+                format!("{} → {}", project_with_profile.profile_name, project.name)
+            } else {
+                project.name.clone()
+            };
+
+            ProjectResponse {
+                id: project.id,
+                profile_id: project.profile_id.clone(),
+                profile_name: project_with_profile.profile_name.clone(),
+                name: project.name.clone(),
+                display_name,
+                description: project.description.clone(),
+                has_files: file_existence_map.get(&project.id).copied().unwrap_or(false),
+            }
         })
         .collect();
 
@@ -400,6 +418,12 @@ pub async fn get_images(
     let conn = state.db();
     let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
     let db = Database::new(&conn);
+    
+    // Get profile count to determine display format
+    let profile_count = db
+        .get_profile_count()
+        .map_err(|_| AppError::DatabaseError)?;
+    let show_profile = profile_count > 1;
 
     // Convert status string to GradingStatus enum
     let status_filter = params.status.as_ref().and_then(|s| match s.as_str() {
@@ -434,10 +458,18 @@ pub async fn get_images(
             let metadata: serde_json::Value = serde_json::from_str(&img.metadata)
                 .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
+            // Create display name - we need the profile_id to do this properly
+            let project_display_name = if show_profile && img.profile_id.is_some() {
+                format!("{} → {}", img.profile_id.as_ref().unwrap(), proj_name)
+            } else {
+                proj_name.clone()
+            };
+
             ImageResponse {
                 id: img.id,
                 project_id: img.project_id,
                 project_name: proj_name,
+                project_display_name,
                 target_id: img.target_id,
                 target_name,
                 acquired_date: img.acquired_date,
@@ -461,10 +493,16 @@ pub async fn get_image(
     use crate::image_analysis::FitsImage;
 
     // Get image data from database first (before any async operations)
-    let (image, proj_name, target_name, mut metadata) = {
+    let (image, proj_name, target_name, mut metadata, show_profile) = {
         let conn = state.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
+        
+        // Get profile count to determine display format
+        let profile_count = db
+            .get_profile_count()
+            .map_err(|_| AppError::DatabaseError)?;
+        let show_profile = profile_count > 1;
 
         let images = db
             .get_images_by_ids(&[image_id])
@@ -485,7 +523,7 @@ pub async fn get_image(
         let metadata: serde_json::Value = serde_json::from_str(&image.metadata)
             .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
-        (image, proj_name, target_name, metadata)
+        (image, proj_name, target_name, metadata, show_profile)
     }; // Database connection is dropped here
 
     // Now we can do async operations
@@ -573,10 +611,18 @@ pub async fn get_image(
         }
     }
 
+    // Create display name
+    let project_display_name = if show_profile && image.profile_id.is_some() {
+        format!("{} → {}", image.profile_id.as_ref().unwrap(), proj_name)
+    } else {
+        proj_name.clone()
+    };
+
     let response = ImageResponse {
         id: image.id,
         project_id: image.project_id,
         project_name: proj_name,
+        project_display_name,
         target_id: image.target_id,
         target_name,
         acquired_date: image.acquired_date,
@@ -1550,9 +1596,14 @@ pub async fn get_projects_overview(
     let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
     let db = Database::new(&conn);
 
-    // Get all projects with images
+    // Get all projects with images and profile info
     let projects = db
-        .get_projects_with_images()
+        .get_projects_with_images_and_profile_info()
+        .map_err(|_| AppError::DatabaseError)?;
+    
+    // Get profile count to determine display format
+    let profile_count = db
+        .get_profile_count()
         .map_err(|_| AppError::DatabaseError)?;
 
     // Get file existence map
@@ -1562,8 +1613,10 @@ pub async fn get_projects_overview(
     };
 
     let mut response = Vec::new();
+    let show_profile = profile_count > 1;
 
-    for project in projects {
+    for project_with_profile in projects {
+        let project = &project_with_profile.project;
         // Get detailed stats for this project
         let stats = db
             .get_project_overview_stats(project.id)
@@ -1604,11 +1657,19 @@ pub async fn get_projects_overview(
             _ => None,
         };
 
+        let display_name = if show_profile {
+            format!("{} → {}", project_with_profile.profile_name, project.name)
+        } else {
+            project.name.clone()
+        };
+
         response.push(ProjectOverviewResponse {
             id: project.id,
-            profile_id: project.profile_id,
-            name: project.name,
-            description: project.description,
+            profile_id: project.profile_id.clone(),
+            profile_name: project_with_profile.profile_name.clone(),
+            name: project.name.clone(),
+            display_name,
+            description: project.description.clone(),
             has_files: file_existence_map
                 .get(&project.id)
                 .copied()

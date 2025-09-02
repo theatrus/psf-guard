@@ -155,7 +155,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
       let groupKey: string;
       
       // Helper functions for building group keys
-      const getProjectPart = () => image.project_name || 'Unknown Project';
+      const getProjectPart = () => image.project_display_name || 'Unknown Project';
       const getFilterPart = () => image.filter_name || 'No Filter';
       const getDatePart = () => {
         if (image.acquired_date) {
