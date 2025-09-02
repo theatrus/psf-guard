@@ -393,12 +393,38 @@ async fn pregenerate_preview(
 ) -> Result<bool> {
     use crate::server::cache::CacheManager;
 
-    // Create cache key similar to the one used in handlers
+    // Get image data from database first (needed for cache key)
+    let image_data = {
+        use crate::db::Database;
+
+        let conn = state.db();
+        let conn = conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Database lock error"))?;
+        let db = Database::new(&conn);
+
+        let images = db
+            .get_images_by_ids(&[image_id])
+            .map_err(|_| anyhow::anyhow!("Database query error"))?;
+
+        images
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Image not found: {}", image_id))?
+    };
+
+    // Create cache key matching the on-demand format for consistency
     let cache_key = format!(
-        "{}_preview_{}_{}",
+        "{}_{}_{}_{}_{}_{}_{}_{}_{}",
         image_id,
+        image_data.project_id,
+        image_data.target_id,
+        image_data.acquired_date.unwrap_or(0),
         file_only.replace(&['.', ' ', '-'][..], "_"),
-        size
+        size,
+        "stretch", // Pre-generation always uses stretch mode
+        2000,      // midtone 0.2 * 10000
+        -28000     // shadow -2.8 * 10000
     );
 
     let cache_manager = CacheManager::new(std::path::PathBuf::from(&state.cache_dir));
@@ -422,28 +448,8 @@ async fn pregenerate_preview(
 
     tracing::debug!("🎨 Pre-generating {} preview for image {}", size, image_id);
 
-    // Get image data from database
-    let image = {
-        use crate::db::Database;
-
-        let conn = state.db();
-        let conn = conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Database lock error"))?;
-        let db = Database::new(&conn);
-
-        let images = db
-            .get_images_by_ids(&[image_id])
-            .map_err(|_| anyhow::anyhow!("Database query error"))?;
-
-        images
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("Image not found: {}", image_id))?
-    };
-
     // Find FITS file using existing function
-    let fits_path = handlers::find_fits_file(state, &image, target_name, file_only)
+    let fits_path = handlers::find_fits_file(state, &image_data, target_name, file_only)
         .map_err(|_| anyhow::anyhow!("FITS file not found for image {}", image_id))?;
 
     // Determine target dimensions
@@ -489,11 +495,38 @@ async fn pregenerate_annotated(
     use image::codecs::png::{CompressionType, FilterType, PngEncoder};
     use image::{ColorType, ImageEncoder, Rgb};
 
-    // Create cache key
+    // Get image data from database first (needed for cache key)
+    let image_data = {
+        use crate::db::Database;
+
+        let conn = state.db();
+        let conn = conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Database lock error"))?;
+        let db = Database::new(&conn);
+
+        let images = db
+            .get_images_by_ids(&[image_id])
+            .map_err(|_| anyhow::anyhow!("Database query error"))?;
+
+        images
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Image not found: {}", image_id))?
+    };
+
+    // Create cache key matching the on-demand annotated format for consistency
+    let size = "screen"; // Pre-generation uses screen size for annotated images
+    let max_stars = 1000; // Pre-generation uses default max_stars
     let cache_key = format!(
-        "annotated_{}_{}",
+        "annotated_{}_{}_{}_{}_{}_{}_{}",
         image_id,
-        file_only.replace(&['.', ' ', '-'][..], "_")
+        image_data.project_id,
+        image_data.target_id,
+        image_data.acquired_date.unwrap_or(0),
+        file_only.replace(&['.', ' ', '-'][..], "_"),
+        size,
+        max_stars
     );
 
     let cache_manager = CacheManager::new(std::path::PathBuf::from(&state.cache_dir));
@@ -516,42 +549,22 @@ async fn pregenerate_annotated(
 
     tracing::debug!("🎨 Pre-generating annotated image for image {}", image_id);
 
-    // Get image data from database
-    let image = {
-        use crate::db::Database;
-
-        let conn = state.db();
-        let conn = conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Database lock error"))?;
-        let db = Database::new(&conn);
-
-        let images = db
-            .get_images_by_ids(&[image_id])
-            .map_err(|_| anyhow::anyhow!("Database query error"))?;
-
-        images
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("Image not found: {}", image_id))?
-    };
-
     // Find FITS file
-    let fits_path = handlers::find_fits_file(state, &image, target_name, file_only)
+    let fits_path = handlers::find_fits_file(state, &image_data, target_name, file_only)
         .map_err(|_| anyhow::anyhow!("FITS file not found for image {}", image_id))?;
 
     // Generate annotated image
     let fits_path_str = fits_path.to_string_lossy().to_string();
     let cache_path_clone = cache_path.clone();
 
-    tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || -> Result<()> {
         // Load FITS file
         let fits = FitsImage::from_file(std::path::Path::new(&fits_path_str))?;
 
         // Create annotated image
         let rgb_image = create_annotated_image(
             &fits,
-            1000,               // max_stars
+            max_stars,          // Use the same max_stars as cache key
             0.2,                // midtone_factor
             -2.8,               // shadow_clipping
             Rgb([255, 255, 0]), // yellow color
