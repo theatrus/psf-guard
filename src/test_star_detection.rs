@@ -73,12 +73,12 @@ mod tests {
     impl SyntheticImage {
         /// Create a new synthetic image with background noise
         fn new(width: usize, height: usize, background: u16, noise_level: u16) -> Self {
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             let mut data = vec![0u16; width * height];
 
             // Fill with background + noise
             for pixel in data.iter_mut() {
-                let noise = (rng.gen::<f64>() - 0.5) * noise_level as f64;
+                let noise = (rng.random::<f64>() - 0.5) * noise_level as f64;
                 *pixel = (background as f64 + noise).clamp(0.0, 65535.0) as u16;
             }
 
@@ -260,14 +260,14 @@ mod tests {
         let mut image = SyntheticImage::new(1024, 768, 300, 50);
 
         // Create a realistic star field
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let num_stars = 20;
 
         for _ in 0..num_stars {
-            let x = rng.gen_range(50.0..974.0);
-            let y = rng.gen_range(50.0..718.0);
-            let fwhm = rng.gen_range(3.0..6.0);
-            let brightness = rng.gen_range(5000..30000); // Higher brightness for better detection
+            let x = rng.random_range(50.0..974.0);
+            let y = rng.random_range(50.0..718.0);
+            let fwhm = rng.random_range(3.0..6.0);
+            let brightness = rng.random_range(5000..30000); // Higher brightness for better detection
 
             image.add_gaussian_star(x, y, fwhm, brightness);
         }
