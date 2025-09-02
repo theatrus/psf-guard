@@ -32,7 +32,7 @@ bumpalo = { version = "3.16", features = ["collections"] }
 image = "0.25"
 imageproc = "0.25"
 rand = "0.9"
-nalgebra = "0.32"
+nalgebra = "0.34"
 # OpenCV integration for advanced computer vision
 opencv = { version = "0.95", optional = true }
 # Web server dependencies
