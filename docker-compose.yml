@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  psf-guard:
+    image: ghcr.io/theatrus/psf-guard:latest
+    container_name: psf-guard
+    ports:
+      - "3000:3000"
+    volumes:
+      # Update these paths to match your system
+      # Windows example:
+      # - C:\Users\YourName\AppData\Local\NINA\SchedulerPlugin\schedulerdb.sqlite:/data/database.sqlite:ro
+      # Linux/Mac example:
+      - ./schedulerdb.sqlite:/data/database.sqlite:ro
+      - ./images:/images:ro
+    command: server /data/database.sqlite /images
+    restart: unless-stopped
+    environment:
+      - RUST_LOG=info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/projects"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Optional: Set resource limits
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '2'
+    #       memory: 2G
+    #     reservations:
+    #       cpus: '0.5'
+    #       memory: 512M
+
+# Optional: Add a network if you want to connect with other services
+# networks:
+#   default:
+#     name: astronomy-net
+#     external: true

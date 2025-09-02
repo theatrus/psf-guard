@@ -1,7 +1,7 @@
 use anyhow::Result;
 
-mod star_selection;
-mod text_render;
+pub mod star_selection;
+pub mod text_render;
 mod visualize_psf_multi;
 
 pub use self::visualize_psf_multi::visualize_psf_multi;

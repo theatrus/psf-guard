@@ -3,514 +3,308 @@
 [![CI](https://github.com/theatrus/psf-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/theatrus/psf-guard/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-A Rust utility for analyzing N.I.N.A. (Nighttime Imaging 'N' Astronomy) Target Scheduler plugin databases and managing astronomical image files. The database integration features are specifically designed for users of the [N.I.N.A. Target Scheduler plugin](https://tcdev.dk/nina-ts/). Many features (like FITS analysis and star detection) can be used independently without the Target Scheduler.
+A Rust utility for astronomical image analysis and grading, with N.I.N.A. Target Scheduler integration.
 
-## Documentation
+## Screenshots
 
-- [Statistical Grading Guide](STATISTICAL_GRADING.md) - Detailed documentation on statistical analysis features
-- [Development Notes](CLAUDE.md) - Technical implementation details for developers
+| Overview Dashboard | Image Grid | Side-by-Side Comparison |
+|:--:|:--:|:--:|
+| ![Overview](docs/overview.png) | ![Grid](docs/image_grid.png) | ![Compare](docs/compare.png) |
+| Complete project statistics and progress tracking | Grid view with filtering and batch operations | Synchronized zoom and detailed image comparison |
 
-## Overview
+## Features
 
-PSF Guard provides tools to:
-- **Target Scheduler Integration**: Query and analyze image grading results from N.I.N.A. Target Scheduler plugin SQLite databases
-- **Project Management**: List projects and targets with their imaging statistics  
-- **File Organization**: Filter and organize rejected image files based on database grading status
-- **FITS Analysis**: Read and display metadata from FITS astronomical image files (works independently)
-- **Star Detection**: Multiple star detection algorithms (NINA and HocusFocus) with comparison
-- **PSF Fitting**: Gaussian and Moffat PSF fitting for accurate FWHM measurements
-- **Image Visualization**: Convert FITS to PNG with MTF stretching and star annotations
-- **Statistical Grading**: Advanced outlier detection using HFR, star count, and cloud detection algorithms
-- **Multiple Formats**: Support for JSON, CSV, and table output formats
-- **Directory Support**: Handle multiple directory structures for image organization
+- **N.I.N.A. Integration**: Query and analyze Target Scheduler SQLite databases.
+  Note that Target Scheduler is required, using standard NINA file paths doesn't
+  work (yet), as we find images based on the database, and not based on the file
+  structure.
+- **Star Detection**: N.I.N.A. algorithm port + HocusFocus detector with PSF
+  fitting for analysis.
+- **Web Interface**: React-based UI for visual image grading with zoom/pan, and
+  comparisons, with auto-stretched images. Updates to grading are written to the
+  target scheduler DB to allow Target Scheduler to capture more images if
+  required.
+- **CLI tools**: Regrading, batch operations, fits processing, batch image moving.
+- **Statistical Analysis**: Advanced outlier detection using HFR, star count,
+  and (primitive) cloud detection in the batch modes.
+- **FITS Processing**: Convert to PNG, annotate stars, visualize PSF residuals
+- **Multi-Directory Support**: Scan multiple image directories with priority ordering
 
-### Target Scheduler Database Location
+## Known Limits
 
-If you're using the N.I.N.A. Target Scheduler plugin, the SQLite database file (`schedulerdb.sqlite`) is typically located at:
+- Current, we only support **monochrome** images. Debayering a color image is
+  not implemented and weird things may happen if you use color camera FITS
+  files. Please reach out to psf-guard@theatr.us if you want to contribute some
+  color FITS files for testing :)
+- Some directory paths are presuming this N.I.N.A pattern:
+  `%DATEMINUS12%/%TARGETNAME%/%DATEMINUS12%/LIGHT/standardfilename.fits`, with
+  or without the leading date. Other paths may not be reliably detected, but I'm
+  happy to support more paths and patterns in the future.
+- `psf-guard` may eat your NINA Target Scheduler DB. Make a backup.
+- The `filter-rejected` workflow may eat your FITS files. I use it, but there
+  are lots of subtleties which may lead to bad results. Make a backup. Other
+  commands do not touch FITS files, but still, make a backup.
 
-**Windows:**
+## Quick Start with Web Grader
+
+### Docker (Recommended for Linux)
+
+```bash
+# Pull and run
+docker pull ghcr.io/theatrus/psf-guard:latest
+
+docker run -d -p 3000:3000 \
+  -v /path/to/database.sqlite:/data/database.sqlite:ro \
+  -v /path/to/images:/images:ro \
+  -v /path/to/psf-guard.toml:/data/config.toml:ro \
+  ghcr.io/theatrus/psf-guard:latest \
+  server --config /data/config.toml
 ```
-%LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite
+
+Open your browser to http://localhost:3000/
+
+### Pre-built Binaries for Windows, macOS, Linux
+
+Download the latest release for your platform:
+
+| Platform | Download | Notes |
+|----------|----------|-------|
+| **Linux x64** | [`psf-guard-linux-x64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-linux-x64) | Requires system libraries - use Docker instead |
+| **macOS x64** | [`psf-guard-macos-x64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-macos-x64) | May require system libraries |
+| **Windows x64** | [`psf-guard-windows-x64.exe`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-windows-x64.exe) | Static binary |
+
+**Note**: Native binaries for macOS and Linux require system libraries (SQLite,
+image processing libraries) that are not included. Docker is recommended for
+Linux deployments to ease the install pain. For macOS, you'll need Homebrew to
+install OpenCV.
+
+
+```bash
+# Linux/macOS - make executable and run
+chmod +x psf-guard-*
+./psf-guard-linux-x64 server --config psf-guard.toml
+
+# Windows
+copy "%LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite" schedulerdb-backup.sqlite
+psf-guard-linux-x64 server "%LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite"
+ C:\where_images_are
 ```
-(Usually: `C:\Users\[YourUsername]\AppData\Local\NINA\SchedulerPlugin\schedulerdb.sqlite`)
 
-You can copy this database file to your working directory or reference it directly in the commands.
+Open your browser to http://localhost:3000/
 
-## Key Features
+Note for Windows: This makes a local copy of the schedulerdb as an insurance
+policy when running psf-guard. You should always make a backup of the database
+in case something eats it.
 
-### Star Detection
-PSF Guard includes two advanced star detection algorithms:
+### Build from Source
 
-1. **NINA Star Detection**: Faithful Rust implementation of N.I.N.A.'s star detection
-   - MTF (Midtone Transfer Function) stretching
-   - Multiple sensitivity levels (normal, high, highest)
-   - Accurate HFR calculations matching N.I.N.A.'s results
+You'll need to make sure to include several build tools depending on platform.
+The best luck is probably from reading the .github/ CI files for package install
+instructions. The OpenCV dependency is large and annoying. Its even more large
+and annoying on Windows.
 
-2. **HocusFocus Detection**: Enhanced algorithm with PSF fitting
-   - Optional Gaussian and Moffat PSF fitting
-   - Sub-pixel accuracy with bilinear interpolation
-   - Automatic OpenCV acceleration with fallback to pure Rust
-
-### PSF Fitting
-Advanced Point Spread Function analysis:
-- Gaussian and Moffat (beta=4.0) models
-- Levenberg-Marquardt optimization
-- Goodness-of-fit metrics (R², RMSE)
-- FWHM and eccentricity calculations
-
-### Visualization Tools
-- **FITS to PNG conversion** with customizable MTF stretching
-- **Star annotation overlays** with HFR-based sizing
-- **PSF residual visualization** showing observed vs fitted data
-- **Multi-star grid displays** with various selection strategies
-
-## Installation
-
-### Prerequisites
-- Rust 1.89.0 (see rust-toolchain.toml)
-- SQLite3
-- Optional: OpenCV 4.x for enhanced star detection (see [CLAUDE.md](CLAUDE.md) for setup)
-
-### Building from Source
 ```bash
 git clone https://github.com/theatrus/psf-guard.git
 cd psf-guard
 cargo build --release
+
+# Run server (traditional CLI args)
+./target/release/psf-guard server schedulerdb.sqlite /path/to/images/
+
+# Or using config file
+./target/release/psf-guard server --config psf-guard.toml
+
+# Open http://localhost:3000
 ```
 
-The compiled binary will be available at `target/release/psf-guard`.
+### Multi-Directory Usage
 
-## Usage
-
-PSF Guard can be used with or without a Target Scheduler database:
-- **With database**: Access grading results, project/target information, and sync file operations
-- **Without database**: FITS analysis, star detection, PSF fitting, and image visualization work independently
-
-### Basic Commands (Target Scheduler Integration)
-
-#### List all projects
 ```bash
-psf-guard list-projects
+# Scan multiple directories in priority order (first-hit wins)
+psf-guard server db.sqlite /primary/images/ /backup/images/ /archive/images/
 ```
 
-#### List targets for a specific project
+## Configuration File
+
+PSF Guard supports TOML configuration files for easier management:
+
 ```bash
-psf-guard list-targets "Project Name"
+# Create from example
+cp psf-guard.toml.example psf-guard.toml
+# Edit with your settings
+nano psf-guard.toml
+
+# Use config file
+psf-guard server --config psf-guard.toml
 ```
 
-#### Dump grading results
-```bash
-# Show all images
-psf-guard dump-grading
+### Configuration Options
 
-# Filter by status (pending, accepted, rejected)
-psf-guard dump-grading --status rejected
+```toml
+[server]
+port = 3000
+host = "0.0.0.0"
 
-# Filter by project
-psf-guard dump-grading --project "Cygnus Wall"
+[database]  
+path = "schedulerdb.sqlite"
 
-# Filter by target
-psf-guard dump-grading --target "North American"
+[images]
+directories = ["/path/to/images1", "/path/to/images2"]
 
-# Output formats (table, json, csv)
-psf-guard dump-grading --format json
+[cache]
+directory = "./cache"  
+file_ttl = "5m"        # Human readable: 30s, 5m, 1h, 2h30m, 1d
+directory_ttl = "5m"
+
+[pregeneration]  # Optional
+enabled = true
+screen = true   # Generate 1200px previews
+large = false   # Generate 2000px previews
 ```
 
-### Standalone Features (No Database Required)
+Command line arguments override config file settings.
 
-These commands work with FITS files directly and don't require a Target Scheduler database:
+## Database Location
 
-#### Read FITS File Metadata
+**Windows N.I.N.A.:**
+```
+%LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite
+```
 
-Display metadata from FITS astronomical image files:
+## Web Interface
+
+### Dashboard Overview
+The main dashboard provides a comprehensive view of your imaging projects:
+- **Statistics Cards**: Projects, targets, images, and completion percentage
+- **Progress Visualization**: Color-coded grading progress bars
+- **File Status**: Real-time file discovery and cache status
+- **Filter Summary**: Date ranges and filter usage statistics
+
+### Image Grid View
+- **Smart Filtering**: Filter by project, target, status, and date range
+- **Batch Operations**: Multi-select with Shift+Click, Ctrl+Click
+- **Real-time Status**: Accept/reject/unmark with immediate visual feedback
+- **Quick Navigation**: Keyboard shortcuts for efficient workflow
+- **Metadata Display**: HFR, star counts, and acquisition details
+
+### Comparison Mode
+- **Side-by-Side**: Compare images with synchronized zoom and pan
+- **Independent Controls**: Each image can be manipulated separately
+- **Quick Actions**: Accept, reject, or unmark both images simultaneously
+- **Navigation**: Easy switching between image pairs
+
+### Key Features
+- **Smart Loading**: Fast preview → full resolution on zoom
+- **Cache Progress**: Real-time directory scanning with progress indicators
+- **Undo/Redo**: Full history with Ctrl+Z/Ctrl+Y
+
+### Keyboard Shortcuts
+
+| Key | Action | Key | Action |
+|-----|--------|-----|--------|
+| K/→ | Next image | A | Accept |
+| J/← | Previous | X | Reject |  
+| C | Compare | U | Unmark |
+| S | Stars overlay | +/- | Zoom |
+| Ctrl+Z | Undo | Ctrl+Y | Redo |
+
+## CLI Commands
+
+### Core Commands
 
 ```bash
-# Read a single FITS file
+# Web server (CLI args)
+psf-guard server <database> <image-dirs...> [--port 3000]
+
+# Web server (config file)
+psf-guard server --config psf-guard.toml [--port 8080]  # CLI overrides config
+
+# Move rejected images  
+psf-guard filter-rejected <database> <image-dir> [--dry-run] [--project NAME]
+
+# Star detection analysis
+psf-guard analyze-fits image.fits [--compare-all] [--detector nina|hocusfocus]
+
+# Create annotated images
+psf-guard annotate-stars image.fits [--max-stars 50] [--color red|yellow]
+```
+
+### Database Queries
+
+```bash
+# List projects and targets
+psf-guard list-projects -d database.sqlite
+psf-guard list-targets "Project Name" -d database.sqlite
+
+# Export grading data
+psf-guard dump-grading -d database.sqlite [--project NAME]
+```
+
+### FITS Processing
+
+```bash
+# Convert with MTF stretch
+psf-guard stretch-to-png image.fits output.png
+
+# PSF analysis grid
+psf-guard visualize-psf-multi image.fits [--num-stars 25]
+
+# Metadata display
 psf-guard read-fits image.fits
-
-# Read all FITS files in a directory (recursive)
-psf-guard read-fits /path/to/fits/directory
-
-# Show all header keywords (verbose mode)
-psf-guard read-fits --verbose image.fits
-
-# Output formats (table, json, csv)
-psf-guard read-fits --format json image.fits
-psf-guard read-fits --format csv /path/to/fits/directory
 ```
 
-#### Analyze FITS with Star Detection
+## Statistical Grading
 
-Compare star detection algorithms and analyze image quality:
+Advanced outlier detection beyond database status:
+
+- **HFR Analysis**: Focus quality per target/filter
+- **Star Count**: Abnormal detection counts  
+- **Cloud Detection**: Sequence analysis for weather
+- **Distribution Analysis**: MAD for skewed data
+
+Enable with `--enable-statistical` flag.
+
+## REST API
 
 ```bash
-# Basic analysis with HocusFocus detector
-psf-guard analyze-fits image.fits
+# List images with filters
+curl "localhost:3000/api/images?project_id=2&status=pending"
 
-# Compare all detection algorithms
-psf-guard analyze-fits image.fits --compare-all
+# Update grading
+curl -X PUT localhost:3000/api/images/123/grade \
+  -H "Content-Type: application/json" \
+  -d '{"status": "accepted"}'
 
-# Use NINA detector with high sensitivity
-psf-guard analyze-fits image.fits --detector nina --sensitivity high
-
-# Add PSF fitting for more accurate measurements
-psf-guard analyze-fits image.fits --detector hocusfocus --psf-type moffat
+# Get processed images
+curl "localhost:3000/api/images/123/preview?size=large" -o preview.png
+curl "localhost:3000/api/images/123/annotated" -o stars.png
 ```
 
-#### Convert FITS to PNG
+## Cache System
 
-Create stretched PNG images from FITS files:
+- **Auto-refresh**: Both file and directory caches refresh every 5 minutes
+- **Manual refresh**: UI button for file cache, Shift+click for both
+- **Real-time progress**: Live updates during directory scanning
+- **Multi-directory**: Scans all directories with first-hit preference
+
+## Development
 
 ```bash
-# Basic conversion with default MTF stretch
-psf-guard stretch-to-png image.fits
+# Setup
+cargo fmt && cargo clippy && cargo test
 
-# Custom stretch parameters
-psf-guard stretch-to-png image.fits -o output.png --midtone 0.3 --shadow 0.002
+# Run with logging
+RUST_LOG=debug cargo run -- server db.sqlite images/
 
-# Logarithmic stretch with inversion
-psf-guard stretch-to-png image.fits --logarithmic --invert
+# Frontend development
+cd static && npm run dev
+
+# OpenCV (optional, enhanced star detection)
+brew install opencv  # macOS
 ```
 
-#### Annotate Stars
-
-Create PNG images with detected stars marked:
-
-```bash
-# Basic star annotation
-psf-guard annotate-stars image.fits
-
-# Annotate top 100 stars with yellow circles
-psf-guard annotate-stars image.fits --max-stars 100 --color yellow
-
-# Use NINA detector with verbose output
-psf-guard annotate-stars image.fits --detector nina --verbose
-```
-
-#### Visualize PSF Fitting
-
-Generate detailed PSF analysis visualizations:
-
-```bash
-# Visualize PSF for multiple stars
-psf-guard visualize-psf-multi image.fits --num-stars 25
-
-# Show corner stars (9-point grid)
-psf-guard visualize-psf-multi image.fits --selection corners
-
-# Analyze stars from different image regions
-psf-guard visualize-psf-multi image.fits --selection regions --num-stars 20
-```
-
-### Filter Rejected Files (Requires Database)
-
-The `filter-rejected` command moves rejected image files to a `LIGHT_REJECT` directory based on database grading status.
-
-**IMPORTANT: Always use `--dry-run` first to preview what will be moved!**
-
-```bash
-# Dry run (recommended first step)
-psf-guard filter-rejected schedulerdb.sqlite /path/to/images --dry-run
-
-# Filter by project
-psf-guard filter-rejected schedulerdb.sqlite /path/to/images --dry-run --project "Double Dragon"
-
-# Actually move files (use with caution!)
-psf-guard filter-rejected schedulerdb.sqlite /path/to/images --project "Double Dragon"
-```
-
-### Supported Directory Structures
-
-The utility automatically detects and handles two common directory structures:
-
-1. **Standard Structure**: `date/target_name/date/LIGHT/filename.fits`
-   ```
-   files/
-   └── 2025-08-25/
-       └── Sh2 157/
-           └── 2025-08-25/
-               ├── LIGHT/
-               │   └── image.fits
-               └── LIGHT_REJECT/  (created by utility)
-                   └── image.fits
-   ```
-
-2. **Alternate Structure**: `target_name/date/LIGHT/filename.fits`
-   ```
-   files2/
-   └── Bubble Nebula/
-       └── 2025-08-17/
-           ├── LIGHT/
-           │   └── image.fits
-           └── LIGHT_REJECT/  (created by utility)
-               └── image.fits
-   ```
-
-The utility also handles files already in `LIGHT/rejected/` subdirectories and moves them to the appropriate `LIGHT_REJECT/` directory.
-
-### Statistical Grading
-
-Beyond the database grading status, PSF Guard can perform statistical analysis to identify additional outliers:
-
-- **HFR Analysis**: Detects images with Half Flux Radius (focus quality) significantly different from the target's distribution
-- **Star Count Analysis**: Identifies images with abnormal star detection counts per target
-- **Distribution Analysis**: Uses Median Absolute Deviation (MAD) for skewed distributions where median differs significantly from mean
-- **Cloud Detection**: Monitors sequences for sudden rises in HFR or drops in star count that indicate clouds, then waits for stable baseline before accepting images again
-
-Statistical grading analyzes all images per target and filter combination to establish baselines, then identifies outliers that may have been missed by the initial grading process. The analysis is target-specific to account for different imaging conditions across the sky.
-
-For detailed information about statistical grading features, algorithms, and best practices, see [STATISTICAL_GRADING.md](STATISTICAL_GRADING.md).
-
-## Database Schema
-
-The utility expects a SQLite database with the following key tables:
-- `project`: Contains project information
-- `target`: Contains observation targets
-- `acquiredimage`: Contains image metadata and grading status
-
-Grading status values:
-- 0 = Pending
-- 1 = Accepted
-- 2 = Rejected
-
-## Command Reference
-
-### Global Options
-- `-d, --database <DATABASE>`: Target Scheduler database file (default: schedulerdb.sqlite)
-  - Only used by commands that require database access: `list-projects`, `list-targets`, `dump-grading`, `show-images`, `update-grade`
-  - Standalone FITS analysis commands do not use this option
-
-### Commands
-
-#### dump-grading
-Dump grading results for all images
-
-Options:
-- `-s, --status <STATUS>`: Filter by grading status (pending, accepted, rejected)
-- `-p, --project <PROJECT>`: Filter by project name (partial match)
-- `-t, --target <TARGET>`: Filter by target name (partial match)
-- `-f, --format <FORMAT>`: Output format (table, json, csv) [default: table]
-
-#### list-projects
-List all projects in the database
-
-#### list-targets
-List all targets for a specific project
-
-Arguments:
-- `<PROJECT>`: Project ID or name
-
-#### filter-rejected
-Filter rejected files and move them to LIGHT_REJECT folders
-
-Arguments:
-- `<DATABASE>`: Database file to use
-- `<BASE_DIR>`: Base directory containing the image files
-
-Options:
-- `--dry-run`: Perform a dry run (show what would be moved without actually moving)
-- `-p, --project <PROJECT>`: Filter by project name
-- `-t, --target <TARGET>`: Filter by target name
-- `--enable-statistical`: Enable statistical analysis for additional rejections
-- `--stat-hfr`: Enable HFR outlier detection
-- `--hfr-stddev <STDDEV>`: Standard deviations for HFR outlier detection (default: 2.0)
-- `--stat-stars`: Enable star count outlier detection  
-- `--star-stddev <STDDEV>`: Standard deviations for star count outlier detection (default: 2.0)
-- `--stat-distribution`: Enable distribution analysis (median/mean shift detection)
-- `--median-shift-threshold <THRESHOLD>`: Percentage threshold for median shift from mean (default: 0.1)
-- `--stat-clouds`: Enable cloud detection (sudden rises in HFR or drops in star count)
-- `--cloud-threshold <THRESHOLD>`: Percentage threshold for cloud detection (default: 0.2 = 20% change)
-- `--cloud-baseline-count <COUNT>`: Number of images needed to establish baseline after cloud event (default: 5)
-
-#### read-fits
-Read and display metadata from FITS files
-
-Arguments:
-- `<PATH>`: Path to FITS file or directory containing FITS files
-
-Options:
-- `-v, --verbose`: Show verbose output with all headers
-- `-f, --format <FORMAT>`: Output format (table, json, csv) [default: table]
-
-#### analyze-fits
-Analyze FITS file with star detection and comparison
-
-Arguments:
-- `<PATH>`: Path to FITS file or directory
-
-Options:
-- `-p, --project <PROJECT>`: Filter by project name
-- `-t, --target <TARGET>`: Filter by target name
-- `-f, --format <FORMAT>`: Output format (table, json, csv) [default: table]
-- `--detector <DETECTOR>`: Star detector to use (nina, hocusfocus) [default: hocusfocus]
-- `--sensitivity <SENSITIVITY>`: Detection sensitivity (normal, high, highest) [default: normal]
-- `--apply-stretch`: Apply MTF stretch before detection
-- `--compare-all`: Compare all detector configurations
-- `--psf-type <TYPE>`: PSF model (none, gaussian, moffat) [default: none]
-- `-v, --verbose`: Show verbose output
-
-#### stretch-to-png
-Convert FITS file to PNG with stretching
-
-Arguments:
-- `<FITS_PATH>`: Path to FITS file
-
-Options:
-- `-o, --output <OUTPUT>`: Output PNG file path
-- `--midtone <FACTOR>`: Midtone transfer function factor [default: 0.5]
-- `--shadow <CLIPPING>`: Shadow clipping value [default: 0.001]
-- `--logarithmic`: Use logarithmic stretch instead of MTF
-- `--invert`: Invert the image (white stars on black background)
-
-#### annotate-stars
-Create annotated PNG image showing detected stars
-
-Arguments:
-- `<FITS_PATH>`: Path to FITS file
-
-Options:
-- `-o, --output <OUTPUT>`: Output PNG file path
-- `--max-stars <N>`: Maximum number of stars to annotate [default: 50]
-- `--detector <DETECTOR>`: Star detector (nina, hocusfocus) [default: hocusfocus]
-- `--sensitivity <SENSITIVITY>`: Detection sensitivity [default: normal]
-- `--midtone <FACTOR>`: Midtone factor for stretching [default: 0.5]
-- `--shadow <CLIPPING>`: Shadow clipping [default: 0.001]
-- `--color <COLOR>`: Annotation color (red, green, blue, yellow, cyan, magenta, white) [default: red]
-- `--psf-type <TYPE>`: PSF model for HocusFocus [default: none]
-- `-v, --verbose`: Show verbose output
-
-#### visualize-psf
-Visualize PSF fitting residuals for a single star
-
-Arguments:
-- `<FITS_PATH>`: Path to FITS file
-
-Options:
-- `-o, --output <OUTPUT>`: Output PNG file path
-- `--star-index <INDEX>`: Index of star to visualize
-- `--psf-type <TYPE>`: PSF model (gaussian, moffat) [default: moffat]
-- `--max-stars <N>`: Number of stars to show [default: 1]
-- `--selection <MODE>`: Selection mode (top, regions, quality, corners) [default: top]
-- `--sort-by <METRIC>`: Sort metric (hfr, r2, brightness) [default: r2]
-- `-v, --verbose`: Show verbose output
-
-#### visualize-psf-multi
-Visualize PSF fitting residuals for multiple stars in a grid
-
-Arguments:
-- `<FITS_PATH>`: Path to FITS file
-
-Options:
-- `-o, --output <OUTPUT>`: Output PNG file path
-- `--num-stars <N>`: Number of stars to visualize [default: 9]
-- `--psf-type <TYPE>`: PSF model (gaussian, moffat) [default: moffat]
-- `--sort-by <METRIC>`: Sort metric (hfr, r2, brightness) [default: r2]
-- `--grid-cols <N>`: Number of grid columns (0 for auto) [default: 0]
-- `--selection <MODE>`: Selection mode (top, regions, quality, corners) [default: top]
-- `-v, --verbose`: Show verbose output
-
-#### benchmark-psf
-Benchmark PSF fitting performance
-
-Arguments:
-- `<FITS_PATH>`: Path to FITS file
-
-Options:
-- `--runs <N>`: Number of benchmark runs [default: 3]
-- `-v, --verbose`: Show detailed analysis
-
-#### regrade
-Regrade images in the database based on statistical analysis
-
-Arguments:
-- `<DATABASE>`: Database file to use
-
-Options:
-- `--dry-run`: Perform a dry run (show what would be changed without actually updating)
-- `-p, --project <PROJECT>`: Filter by project name
-- `-t, --target <TARGET>`: Filter by target name
-- `--days <DAYS>`: Number of days to look back (default: 90)
-- `--reset <MODE>`: Reset mode: none, automatic, or all (default: none)
-  - `none`: Do not reset any existing grades
-  - `automatic`: Reset only automatically graded images (preserves manual grades)
-  - `all`: Reset all images to pending status
-- Statistical analysis options (same as filter-rejected command)
-
-## Examples
-
-```bash
-# Check what rejected files exist for a project
-psf-guard dump-grading --status rejected --project "Double Dragon" --format csv > rejected_files.csv
-
-# Preview file moves for a specific project
-psf-guard filter-rejected mydb.sqlite ./images --dry-run --project "Cygnus Wall"
-
-# Move all rejected files for a target
-psf-guard filter-rejected mydb.sqlite ./images --target "LDN 1228"
-
-# Get JSON output for integration with other tools
-psf-guard dump-grading --status accepted --format json | jq '.[] | select(.filter_name == "HA")'
-
-# Use statistical grading to find outliers beyond database rejections
-psf-guard filter-rejected mydb.sqlite ./images --dry-run --enable-statistical --stat-hfr --stat-stars
-
-# Fine-tune statistical thresholds
-psf-guard filter-rejected mydb.sqlite ./images --dry-run --enable-statistical --stat-hfr --hfr-stddev 1.5 --stat-distribution --median-shift-threshold 0.15
-
-# Enable cloud detection with custom thresholds
-psf-guard filter-rejected mydb.sqlite ./images --dry-run --enable-statistical --stat-clouds --cloud-threshold 0.15 --cloud-baseline-count 3
-
-# Regrade images in database (last 30 days)
-psf-guard regrade mydb.sqlite --dry-run --days 30 --enable-statistical --stat-hfr --stat-stars
-
-# Reset automatic grades and reapply statistical analysis
-psf-guard regrade mydb.sqlite --dry-run --reset automatic --enable-statistical --stat-hfr --stat-stars --stat-clouds
-
-# Reset all grades for a specific target
-psf-guard regrade mydb.sqlite --dry-run --reset all --target "M31" --days 7
-
-# Analyze FITS file metadata
-psf-guard read-fits "image.fits"
-
-# Check all FITS files in a directory
-psf-guard read-fits "/path/to/fits/files/"
-
-# Show all header keywords for debugging
-psf-guard read-fits --verbose "image.fits"
-
-# Export FITS metadata to JSON or CSV for analysis
-psf-guard read-fits --format json "/path/to/fits/files/" > metadata.json
-psf-guard read-fits --format csv "/path/to/fits/files/" > metadata.csv
-
-# Analyze FITS file with star detection
-psf-guard analyze-fits "image.fits"
-
-# Compare all star detectors
-psf-guard analyze-fits "image.fits" --compare-all
-
-# Use specific detector with PSF fitting
-psf-guard analyze-fits "image.fits" --detector hocusfocus --psf-type moffat
-
-# Convert FITS to PNG with custom stretch
-psf-guard stretch-to-png "image.fits" --midtone 0.3 --shadow 0.002
-
-# Create annotated star map
-psf-guard annotate-stars "image.fits" --max-stars 100 --color yellow
-
-# Visualize PSF residuals for multiple stars
-psf-guard visualize-psf-multi "image.fits" --num-stars 25 --psf-type gaussian
-
-# Show corner stars (9-point grid)
-psf-guard visualize-psf-multi "image.fits" --selection corners
-
-# Benchmark PSF fitting performance
-psf-guard benchmark-psf "image.fits" --runs 10 --verbose
-```
+See [CLAUDE.md](CLAUDE.md) for architecture details.
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+Apache License 2.0 - See [LICENSE](LICENSE)

@@ -1,8 +1,8 @@
+use crate::directory_tree::DirectoryTree;
 use anyhow::Result;
 use fitrs::Fits;
 use serde_json;
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 pub fn read_fits(path: &str, verbose: bool, format: &str) -> Result<()> {
@@ -52,10 +52,13 @@ fn read_single_fits(path: &Path, verbose: bool, format: &str) -> Result<()> {
 }
 
 fn read_fits_directory(dir: &Path, verbose: bool, format: &str) -> Result<()> {
-    let mut fits_files = Vec::new();
-
-    // Recursively find all FITS files
-    find_fits_files(dir, &mut fits_files)?;
+    // Build directory tree cache and get FITS files
+    let directory_tree = DirectoryTree::build(dir)?;
+    let fits_files: Vec<PathBuf> = directory_tree
+        .get_fits_files()
+        .into_iter()
+        .cloned()
+        .collect();
 
     if fits_files.is_empty() {
         match format.to_lowercase().as_str() {
@@ -353,34 +356,6 @@ pub fn format_fits_metadata(metadata: &FitsMetadata, verbose: bool) -> String {
     }
 
     output
-}
-
-fn find_fits_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
-    let entries = fs::read_dir(dir)?;
-
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.is_dir() {
-            // Recurse into subdirectories
-            find_fits_files(&path, files)?;
-        } else if is_fits_file(&path) {
-            files.push(path);
-        }
-    }
-
-    Ok(())
-}
-
-fn is_fits_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| {
-            let ext_lower = ext.to_lowercase();
-            ext_lower == "fits" || ext_lower == "fit" || ext_lower == "fts"
-        })
-        .unwrap_or(false)
 }
 
 #[derive(serde::Serialize)]

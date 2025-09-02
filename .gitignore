@@ -44,3 +44,12 @@ test_output/
 # Temporary directories
 /tmp/
 /temp/
+
+# Build output
+/dist/
+/cache/
+
+# Frontend
+/static/node_modules/
+/static/dist/
+/static/.vite/

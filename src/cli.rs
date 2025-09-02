@@ -1,4 +1,6 @@
+use anyhow::Context;
 use clap::{Parser, Subcommand};
+use std::time::Duration;
 
 #[derive(Parser)]
 #[command(name = "psf-guard")]
@@ -322,6 +324,59 @@ pub enum Commands {
         #[arg(long, short)]
         verbose: bool,
     },
+
+    /// Start the web server for API access and static file serving
+    Server {
+        /// Path to TOML configuration file
+        #[arg(short, long)]
+        config: Option<String>,
+
+        /// Database file to use (overrides config file)
+        database: Option<String>,
+
+        /// Base directories containing the image files (can specify multiple, overrides config file)
+        image_dirs: Vec<String>,
+
+        /// Directory to serve static files from (for React app, optional - uses embedded files if not provided)
+        #[arg(long)]
+        static_dir: Option<String>,
+
+        /// Cache directory for processed images (overrides config file)
+        #[arg(long)]
+        cache_dir: Option<String>,
+
+        /// Port to listen on (overrides config file)
+        #[arg(short, long)]
+        port: Option<u16>,
+
+        /// Host to bind to
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+
+        /// Enable background pre-generation of screen-sized preview images
+        #[arg(long)]
+        pregenerate_screen: bool,
+
+        /// Enable background pre-generation of large preview images (2000px max)
+        #[arg(long)]
+        pregenerate_large: bool,
+
+        /// Enable background pre-generation of original-sized preview images
+        #[arg(long)]
+        pregenerate_original: bool,
+
+        /// Enable background pre-generation of star-annotated images
+        #[arg(long)]
+        pregenerate_annotated: bool,
+
+        /// Enable all image pre-generation types (equivalent to all --pregenerate-* flags)
+        #[arg(long)]
+        pregenerate_all: bool,
+
+        /// Cache expiration time for pre-generated images (default: 1y)
+        #[arg(long, default_value = "1y")]
+        cache_expiry: String,
+    },
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -384,6 +439,102 @@ impl StatisticalOptions {
         } else {
             None
         }
+    }
+}
+
+/// Configuration for background image pre-generation
+#[derive(Debug, Clone)]
+pub struct PregenerationConfig {
+    pub screen_enabled: bool,
+    pub large_enabled: bool,
+    pub original_enabled: bool,
+    pub annotated_enabled: bool,
+    pub cache_expiry: Duration,
+}
+
+impl Default for PregenerationConfig {
+    fn default() -> Self {
+        Self {
+            screen_enabled: false,
+            large_enabled: false,
+            original_enabled: false,
+            annotated_enabled: false,
+            cache_expiry: Duration::from_secs(86400 * 365), // 1 year default
+        }
+    }
+}
+
+impl PregenerationConfig {
+    /// Create configuration from server command arguments
+    pub fn from_server_args(
+        pregenerate_screen: bool,
+        pregenerate_large: bool,
+        pregenerate_original: bool,
+        pregenerate_annotated: bool,
+        pregenerate_all: bool,
+        cache_expiry_str: &str,
+    ) -> anyhow::Result<Self> {
+        // Parse cache expiry using humantime
+        let cache_expiry = humantime::parse_duration(cache_expiry_str)
+            .with_context(|| format!("Invalid cache expiry format '{}'", cache_expiry_str))?;
+
+        // If pregenerate_all is true, enable all types
+        let (screen, large, original, annotated) = if pregenerate_all {
+            (true, true, true, true)
+        } else {
+            (
+                pregenerate_screen,
+                pregenerate_large,
+                pregenerate_original,
+                pregenerate_annotated,
+            )
+        };
+
+        Ok(Self {
+            screen_enabled: screen,
+            large_enabled: large,
+            original_enabled: original,
+            annotated_enabled: annotated,
+            cache_expiry,
+        })
+    }
+
+    /// Create from config module's PregenerationConfig
+    pub fn from_config(config: Option<&crate::config::PregenerationConfig>) -> Self {
+        if let Some(cfg) = config {
+            Self {
+                screen_enabled: cfg.enabled.unwrap_or(false) && cfg.screen.unwrap_or(true),
+                large_enabled: cfg.enabled.unwrap_or(false) && cfg.large.unwrap_or(false),
+                original_enabled: false,  // Not supported in config yet
+                annotated_enabled: false, // Not supported in config yet
+                cache_expiry: Duration::from_secs(86400 * 365), // 1 year default
+            }
+        } else {
+            Self::default()
+        }
+    }
+
+    /// Check if any pre-generation is enabled
+    pub fn is_enabled(&self) -> bool {
+        self.screen_enabled || self.large_enabled || self.original_enabled || self.annotated_enabled
+    }
+
+    /// Get list of enabled formats for logging
+    pub fn enabled_formats(&self) -> Vec<&'static str> {
+        let mut formats = Vec::new();
+        if self.screen_enabled {
+            formats.push("screen");
+        }
+        if self.large_enabled {
+            formats.push("large");
+        }
+        if self.original_enabled {
+            formats.push("original");
+        }
+        if self.annotated_enabled {
+            formats.push("annotated");
+        }
+        formats
     }
 }
 

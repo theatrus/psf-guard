@@ -1,8 +1,10 @@
 pub mod accord_imaging;
 pub mod cli;
 pub mod commands;
+pub mod config;
 pub mod db;
 pub mod debug;
+pub mod directory_tree;
 pub mod grading;
 pub mod hocus_focus_star_detection;
 pub mod image_analysis;
@@ -16,6 +18,7 @@ pub mod opencv_morphology;
 pub mod opencv_utils;
 pub mod opencv_wavelets;
 pub mod psf_fitting;
+pub mod server;
 pub mod utils;
 
 #[cfg(test)]

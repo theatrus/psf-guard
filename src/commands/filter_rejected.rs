@@ -1,4 +1,5 @@
 use crate::db::Database;
+use crate::directory_tree::DirectoryTree;
 use crate::grading;
 use crate::models::{AcquiredImage, GradingStatus};
 use anyhow::Result;
@@ -80,6 +81,18 @@ pub fn filter_rejected_files(
         println!();
     }
 
+    // Build directory tree cache once at the start
+    println!("Building directory tree cache...");
+    let directory_tree = DirectoryTree::build(Path::new(base_dir))?;
+    let tree_stats = directory_tree.stats();
+    println!(
+        "✅ Directory tree cached: {} files, {} directories ({})",
+        tree_stats.total_files,
+        tree_stats.total_directories,
+        tree_stats.format_age()
+    );
+    println!();
+
     let mut moved_count = 0;
     let mut not_found_count = 0;
     let mut error_count = 0;
@@ -112,6 +125,7 @@ pub fn filter_rejected_files(
             dry_run,
             &statistical_rejections,
             verbose,
+            &directory_tree,
         ) {
             Ok(true) => moved_count += 1,
             Ok(false) => not_found_count += 1,
@@ -143,6 +157,7 @@ fn process_file_movement(
     dry_run: bool,
     statistical_rejections: &HashMap<i32, grading::StatisticalRejection>,
     verbose: bool,
+    directory_tree: &DirectoryTree,
 ) -> Result<bool> {
     let metadata = serde_json::from_str::<serde_json::Value>(&image.metadata)?;
 
@@ -187,40 +202,35 @@ fn process_file_movement(
     let source_path = match source_path {
         Some(path) => path,
         None => {
-            // Try recursive search as a fallback
-            let recursive_path = find_file_recursive(base_dir, &file_only)?;
-
-            match recursive_path {
-                Some(path) => {
-                    println!("  Found via recursive search: {}", path.display());
-                    path
-                }
-                None => {
-                    let rejection_reason =
-                        if let Some(stat_rejection) = statistical_rejections.get(&image.id) {
-                            format!("{} - {}", stat_rejection.reason, stat_rejection.details)
-                        } else {
-                            image
-                                .reject_reason
-                                .clone()
-                                .unwrap_or_else(|| "No reason".to_string())
-                        };
-
-                    println!(
-                        "  {:6} NOT FOUND: {} ({})",
-                        image.id, file_only, rejection_reason
-                    );
-
-                    // In verbose mode, show what paths were tried
+            // Try directory tree lookup as a fallback
+            if let Some(first_path) = directory_tree.find_file_first(&file_only) {
+                if first_path.exists() {
                     if verbose {
-                        println!("         Searched paths:");
-                        for path in &possible_paths {
-                            println!("           - {}", path.display());
-                        }
+                        println!("  Found via directory tree cache: {}", first_path.display());
                     }
-
-                    return Ok(false);
+                    first_path.clone()
+                } else {
+                    // First cached path is stale (file was moved/deleted)
+                    if verbose {
+                        println!("  First cached path is stale for: {}", file_only);
+                    }
+                    return handle_file_not_found(
+                        image,
+                        &file_only,
+                        statistical_rejections,
+                        verbose,
+                        &possible_paths,
+                    );
                 }
+            } else {
+                // File not found in directory tree cache
+                return handle_file_not_found(
+                    image,
+                    &file_only,
+                    statistical_rejections,
+                    verbose,
+                    &possible_paths,
+                );
             }
         }
     };
@@ -258,7 +268,7 @@ fn process_file_movement(
     Ok(true)
 }
 
-fn get_possible_paths(
+pub fn get_possible_paths(
     base_dir: &str,
     date_str: &str,
     target_name: &str,
@@ -269,68 +279,181 @@ fn get_possible_paths(
     // Clean target name for directory matching
     let clean_target = target_name.trim();
 
-    vec![
-        // date/target/date/LIGHT/file.fits
-        base.join(date_str)
-            .join(clean_target)
-            .join(date_str)
-            .join("LIGHT")
-            .join(filename),
-        // target/date/LIGHT/file.fits
-        base.join(clean_target)
-            .join(date_str)
-            .join("LIGHT")
-            .join(filename),
-        // date/target/date/LIGHT/rejected/file.fits
-        base.join(date_str)
-            .join(clean_target)
-            .join(date_str)
-            .join("LIGHT")
-            .join("rejected")
-            .join(filename),
-        // target/date/LIGHT/rejected/file.fits
-        base.join(clean_target)
-            .join(date_str)
-            .join("LIGHT")
-            .join("rejected")
-            .join(filename),
+    // Generate date variations to handle timezone/session date mismatches
+    let mut date_variations = vec![date_str.to_string()];
+
+    // Add date - 1 day (common case: DB has UTC date, directory uses local date)
+    if let Ok(parsed_date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+        if let Some(prev_date) = parsed_date.pred_opt() {
+            date_variations.push(prev_date.format("%Y-%m-%d").to_string());
+        }
+        // Also add date + 1 day just in case
+        if let Some(next_date) = parsed_date.succ_opt() {
+            date_variations.push(next_date.format("%Y-%m-%d").to_string());
+        }
+    }
+
+    let mut paths = Vec::new();
+
+    // Generate all path combinations for each date variation
+    for date_variant in &date_variations {
+        // Standard structure: target/date/LIGHT/file.fits
+        paths.push(
+            base.join(clean_target)
+                .join(date_variant)
+                .join("LIGHT")
+                .join(filename),
+        );
+
+        // Alternative structure: date/target/date/LIGHT/file.fits
+        paths.push(
+            base.join(date_variant)
+                .join(clean_target)
+                .join(date_variant)
+                .join("LIGHT")
+                .join(filename),
+        );
+
+        // Rejected folder variants - LIGHT/rejected/
+        paths.push(
+            base.join(clean_target)
+                .join(date_variant)
+                .join("LIGHT")
+                .join("rejected")
+                .join(filename),
+        );
+
+        paths.push(
+            base.join(date_variant)
+                .join(clean_target)
+                .join(date_variant)
+                .join("LIGHT")
+                .join("rejected")
+                .join(filename),
+        );
+
+        // Rejected folder variants - LIGHT_REJECT/
+        paths.push(
+            base.join(clean_target)
+                .join(date_variant)
+                .join("LIGHT_REJECT")
+                .join(filename),
+        );
+
+        paths.push(
+            base.join(date_variant)
+                .join(clean_target)
+                .join(date_variant)
+                .join("LIGHT_REJECT")
+                .join(filename),
+        );
+
+        // Rejected folder variants - LIGHT_reject/ (lowercase)
+        paths.push(
+            base.join(clean_target)
+                .join(date_variant)
+                .join("LIGHT_reject")
+                .join(filename),
+        );
+
+        paths.push(
+            base.join(date_variant)
+                .join(clean_target)
+                .join(date_variant)
+                .join("LIGHT_reject")
+                .join(filename),
+        );
+
+        // Rejected folder variants - reject_light/
+        paths.push(
+            base.join(clean_target)
+                .join(date_variant)
+                .join("reject_light")
+                .join(filename),
+        );
+
+        paths.push(
+            base.join(date_variant)
+                .join(clean_target)
+                .join(date_variant)
+                .join("reject_light")
+                .join(filename),
+        );
+
+        // Rejected folder variants - rejected_light/
+        paths.push(
+            base.join(clean_target)
+                .join(date_variant)
+                .join("rejected_light")
+                .join(filename),
+        );
+
+        paths.push(
+            base.join(date_variant)
+                .join(clean_target)
+                .join(date_variant)
+                .join("rejected_light")
+                .join(filename),
+        );
+
+        // Rejected folder variants - light_reject/
+        paths.push(
+            base.join(clean_target)
+                .join(date_variant)
+                .join("light_reject")
+                .join(filename),
+        );
+
+        paths.push(
+            base.join(date_variant)
+                .join(clean_target)
+                .join(date_variant)
+                .join("light_reject")
+                .join(filename),
+        );
+    }
+
+    // Add non-date-specific paths at the end
+    paths.extend(vec![
         // Direct under base_dir: LIGHT/file.fits
         base.join("LIGHT").join(filename),
         // Direct under base_dir: target/LIGHT/file.fits
         base.join(clean_target).join("LIGHT").join(filename),
-        // Without date: target/LIGHT/file.fits
-        base.join(clean_target).join("LIGHT").join(filename),
-    ]
+    ]);
+
+    paths
 }
 
-fn find_file_recursive(base_dir: &str, filename: &str) -> Result<Option<PathBuf>> {
-    fn search_dir(dir: &Path, filename: &str) -> Result<Option<PathBuf>> {
-        // Skip certain directories to avoid infinite loops or unwanted areas
-        if let Some(dir_name) = dir.file_name() {
-            let name = dir_name.to_string_lossy();
-            if name == "LIGHT_REJECT" || name == "DARK" || name == "FLAT" || name == "BIAS" {
-                return Ok(None);
-            }
+fn handle_file_not_found(
+    image: &AcquiredImage,
+    file_only: &str,
+    statistical_rejections: &HashMap<i32, grading::StatisticalRejection>,
+    verbose: bool,
+    possible_paths: &[PathBuf],
+) -> Result<bool> {
+    let rejection_reason = if let Some(stat_rejection) = statistical_rejections.get(&image.id) {
+        format!("{} - {}", stat_rejection.reason, stat_rejection.details)
+    } else {
+        image
+            .reject_reason
+            .clone()
+            .unwrap_or_else(|| "No reason".to_string())
+    };
+
+    println!(
+        "  {:6} NOT FOUND: {} ({})",
+        image.id, file_only, rejection_reason
+    );
+
+    // In verbose mode, show what paths were tried
+    if verbose {
+        println!("         Searched paths:");
+        for path in possible_paths {
+            println!("           - {}", path.display());
         }
-
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.is_dir() {
-                if let Some(found) = search_dir(&path, filename)? {
-                    return Ok(Some(found));
-                }
-            } else if path.file_name().and_then(|n| n.to_str()) == Some(filename) {
-                // Found the file!
-                return Ok(Some(path));
-            }
-        }
-
-        Ok(None)
     }
 
-    search_dir(Path::new(base_dir), filename)
+    Ok(false)
 }
 
 fn get_reject_path(source_path: &Path) -> Result<PathBuf> {

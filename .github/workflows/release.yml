@@ -69,7 +69,7 @@ jobs:
         
         # Install OpenCV if not already installed
         if (!(Test-Path "C:\vcpkg\installed\x64-windows\include\opencv2")) {
-          C:\vcpkg\vcpkg install opencv4[contrib,nonfree]:x64-windows opencv4[contrib,nonfree]:x64-windows-static-md
+          C:\vcpkg\vcpkg install opencv4[contrib,nonfree]:x64-windows-static-md
         }
         
         # Set environment variables
@@ -83,6 +83,18 @@ jobs:
       uses: dtolnay/rust-toolchain@master
       with:
         toolchain: 1.89.0
+    
+    - name: Install Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+        cache: 'npm'
+        cache-dependency-path: static/package-lock.json
+    
+    - name: Install npm dependencies
+      run: |
+        cd static
+        npm ci
     
     - name: Build
       run: cargo build --release --locked

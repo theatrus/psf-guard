@@ -1,6 +1,6 @@
 [package]
 name = "psf-guard"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.89.0"
 authors = ["Yann Ramin <github@theatr.us>"]
@@ -22,6 +22,7 @@ clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+toml_edit = { version = "0.22", features = ["serde"] }
 anyhow = "1.0"
 chrono = "0.4"
 regex = "1.11"
@@ -34,6 +35,20 @@ rand = "0.8"
 nalgebra = "0.32"
 # OpenCV integration for advanced computer vision
 opencv = { version = "0.95", optional = true }
+# Web server dependencies
+axum = { version = "0.8", features = ["multipart", "macros"] }
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Embed static files into binary
+include_dir = "0.7"
+mime_guess = "2.0"
+humantime = "2.1"
+
+[dev-dependencies]
+tempfile = "3.0"
 
 [features]
 default = ["opencv"]

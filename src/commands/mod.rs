@@ -1,5 +1,6 @@
 pub mod analyze_fits;
 pub mod annotate_stars;
+pub mod annotate_stars_common;
 pub mod benchmark_psf;
 pub mod dump_grading;
 pub mod filter_rejected;
@@ -11,6 +12,7 @@ pub mod show_images;
 pub mod stretch_to_png;
 pub mod update_grade;
 pub mod visualize_psf;
+pub mod visualize_psf_multi_common;
 
 pub use analyze_fits::analyze_fits_and_compare;
 pub use annotate_stars::annotate_stars;

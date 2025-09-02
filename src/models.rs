@@ -1,11 +1,23 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct Profile {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Project {
     pub id: i32,
     pub profile_id: String,
     pub name: String,
     pub description: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProjectWithProfile {
+    pub project: Project,
+    pub profile_name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -18,7 +30,7 @@ pub struct Target {
     pub project_id: i32,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcquiredImage {
     pub id: i32,
     pub project_id: i32,
@@ -36,6 +48,77 @@ pub enum GradingStatus {
     Pending = 0,
     Accepted = 1,
     Rejected = 2,
+}
+
+/// Project overview statistics
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProjectOverviewStats {
+    pub total_images: i32,
+    pub accepted_images: i32,
+    pub rejected_images: i32,
+    pub pending_images: i32,
+    pub filters_used: Vec<String>,
+    pub earliest_date: Option<i64>,
+    pub latest_date: Option<i64>,
+}
+
+/// Overall system statistics
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OverallStats {
+    pub total_images: i32,
+    pub accepted_images: i32,
+    pub rejected_images: i32,
+    pub pending_images: i32,
+    pub active_projects: i32,
+    pub total_projects: i32,
+    pub active_targets: i32,
+    pub total_targets: i32,
+    pub unique_filters: Vec<String>,
+    pub earliest_date: Option<i64>,
+    pub latest_date: Option<i64>,
+    pub files_found: i32,
+    pub files_missing: i32,
+}
+
+/// Project desired statistics
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProjectDesiredStats {
+    pub total_desired: i32,
+    pub total_acquired: i32,
+    pub total_accepted: i32,
+    pub rejected_count: i32,
+    pub filters_used: Vec<String>,
+}
+
+/// Overall desired statistics
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OverallDesiredStats {
+    pub total_desired: i32,
+    pub total_acquired: i32,
+    pub total_accepted: i32,
+}
+
+/// Target with statistics
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TargetWithStats {
+    pub target: Target,
+    pub project_name: String,
+    pub total_images: i32,
+    pub accepted_images: i32,
+    pub rejected_images: i32,
+    pub pending_images: i32,
+}
+
+/// Target with statistics and desired counts
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TargetWithDesiredStats {
+    pub target: Target,
+    pub project_name: String,
+    pub total_images: i32,
+    pub accepted_images: i32,
+    pub rejected_images: i32,
+    pub pending_images: i32,
+    pub total_desired: i32,
 }
 
 impl GradingStatus {
