@@ -74,7 +74,7 @@ jobs:
 
         # Install OpenCV if not already installed
         if (!(Test-Path "C:\vcpkg\installed\x64-windows\include\opencv2")) {
-          C:\vcpkg\vcpkg install opencv4[contrib,nonfree]:x64-windows opencv4[contrib,nonfree]:x64-windows-static-md
+          C:\vcpkg\vcpkg install opencv4[contrib,nonfree]:x64-windows-static-md
         }
 
         # Set environment variables
@@ -115,11 +115,11 @@ jobs:
     - name: Check formatting
       run: cargo fmt -- --check
 
-    - name: Run clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
-
     - name: Build
       run: cargo build --verbose
+
+    - name: Run clippy
+      run: cargo clippy --all-targets --all-features -- -D warnings
 
     - name: Run tests
       run: cargo test --verbose
