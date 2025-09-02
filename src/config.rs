@@ -320,13 +320,15 @@ mod tests {
 
     #[test]
     fn test_pregeneration_config_access() {
-        let mut config = Config::default();
-        config.pregeneration = Some(PregenerationConfig {
-            enabled: Some(true),
-            screen: Some(false),
-            large: Some(true),
-            workers: Some(4),
-        });
+        let config = Config {
+            pregeneration: Some(PregenerationConfig {
+                enabled: Some(true),
+                screen: Some(false),
+                large: Some(true),
+                workers: Some(4),
+            }),
+            ..Default::default()
+        };
 
         let pregen_config = config.get_pregeneration().unwrap();
         assert_eq!(pregen_config.enabled, Some(true));
