@@ -17,11 +17,12 @@ A Rust utility for astronomical image analysis and grading, with N.I.N.A. Target
 - **N.I.N.A. Integration**: Query and analyze Target Scheduler SQLite databases
 - **Star Detection**: N.I.N.A. algorithm port + HocusFocus detector with PSF fitting
 - **Web Interface**: React-based UI for visual image grading with zoom/pan
+- **CLI tools**: Regrading, batch operations, fits processing, batch image moving.
 - **Statistical Analysis**: Advanced outlier detection using HFR, star count, and cloud detection
 - **FITS Processing**: Convert to PNG, annotate stars, visualize PSF residuals
 - **Multi-Directory Support**: Scan multiple image directories with priority ordering
 
-## Quick Start
+## Quick Start with Web Grader
 
 ### Docker (Recommended for Linux)
 
@@ -37,9 +38,9 @@ docker run -d -p 3000:3000 \
   server --config /data/config.toml
 ```
 
-### Pre-built Binaries
+Open your browser to http://localhost:3000/
 
-**Note**: Native binaries require system libraries (SQLite, image processing libraries) that are not included. Docker is recommended for Linux deployments.
+### Pre-built Binaries
 
 Download the latest release for your platform:
 
@@ -49,17 +50,28 @@ Download the latest release for your platform:
 | **macOS x64** | [`psf-guard-macos-x64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-macos-x64) | May require system libraries |
 | **Windows x64** | [`psf-guard-windows-x64.exe`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-windows-x64.exe) | Static binary |
 
+**Note**: Native binaries for macOS and Linux require system libraries (SQLite,
+image processing libraries) that are not included. Docker is recommended for
+Linux deployments to ease the install pain. For macOS, you'll need Homebrew to
+install OpenCV.
+
+
 ```bash
 # Linux/macOS - make executable and run
 chmod +x psf-guard-*
 ./psf-guard-linux-x64 server --config psf-guard.toml
 
 # Windows
-psf-guard-windows-x64.exe server --config psf-guard.toml
-
-# Or with direct arguments
-./psf-guard-linux-x64 server database.sqlite /path/to/images/
+copy "%LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite" schedulerdb-backup.sqlite
+psf-guard-linux-x64 server "%LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite"
+ C:\where_images_are
 ```
+
+Open your browser to http://localhost:3000/
+
+Note for Windows: This makes a local copy of the schedulerdb as an insurance
+policy when running psf-guard. You should always make a backup of the database
+in case something eats it.
 
 ### Build from Source
 
@@ -123,26 +135,6 @@ large = false   # Generate 2000px previews
 ```
 
 Command line arguments override config file settings.
-
-## Docker Compose
-
-Create `docker-compose.yml`:
-
-```yaml
-version: '3.8'
-services:
-  psf-guard:
-    image: ghcr.io/theatrus/psf-guard:latest
-    ports: ["3000:3000"]
-    volumes:
-      - /path/to/psf-guard.toml:/data/config.toml:ro
-      - /path/to/schedulerdb.sqlite:/data/database.sqlite:ro  
-      - /path/to/images:/images:ro
-    command: server --config /data/config.toml
-    restart: unless-stopped
-```
-
-Run with: `docker-compose up -d`
 
 ## Database Location
 
