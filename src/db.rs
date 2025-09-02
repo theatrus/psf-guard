@@ -1,6 +1,7 @@
 use crate::models::{
-    AcquiredImage, GradingStatus, OverallDesiredStats, OverallStats, Profile, Project, ProjectDesiredStats,
-    ProjectOverviewStats, ProjectWithProfile, Target, TargetWithDesiredStats, TargetWithStats,
+    AcquiredImage, GradingStatus, OverallDesiredStats, OverallStats, Profile, Project,
+    ProjectDesiredStats, ProjectOverviewStats, ProjectWithProfile, Target, TargetWithDesiredStats,
+    TargetWithStats,
 };
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
@@ -18,7 +19,7 @@ impl<'a> Database<'a> {
     // Profile queries
     pub fn get_all_profiles(&self) -> Result<Vec<Profile>> {
         let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT profileId FROM project WHERE profileId IS NOT NULL ORDER BY profileId"
+            "SELECT DISTINCT profileId FROM project WHERE profileId IS NOT NULL ORDER BY profileId",
         )?;
 
         let profiles = stmt
@@ -35,9 +36,9 @@ impl<'a> Database<'a> {
     }
 
     pub fn get_profile_count(&self) -> Result<i32> {
-        let mut stmt = self.conn.prepare(
-            "SELECT COUNT(DISTINCT profileId) FROM project WHERE profileId IS NOT NULL"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT COUNT(DISTINCT profileId) FROM project WHERE profileId IS NOT NULL")?;
         let count = stmt.query_row([], |row| row.get::<_, i32>(0))?;
         Ok(count)
     }
@@ -90,7 +91,7 @@ impl<'a> Database<'a> {
         let mut stmt = self.conn.prepare(
             "SELECT Id, profileId, name, description 
              FROM project 
-             ORDER BY profileId, name"
+             ORDER BY profileId, name",
         )?;
 
         let projects = stmt
@@ -116,7 +117,7 @@ impl<'a> Database<'a> {
             "SELECT DISTINCT p.Id, p.profileId, p.name, p.description 
              FROM project p
              INNER JOIN acquiredimage ai ON p.Id = ai.projectId
-             ORDER BY p.profileId, p.name"
+             ORDER BY p.profileId, p.name",
         )?;
 
         let projects = stmt

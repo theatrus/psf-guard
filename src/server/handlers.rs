@@ -295,11 +295,13 @@ pub async fn list_projects(
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
 
-        let projects = db.get_projects_with_images_and_profile_info()
+        let projects = db
+            .get_projects_with_images_and_profile_info()
             .map_err(|_| AppError::DatabaseError)?;
-        let profile_count = db.get_profile_count()
+        let profile_count = db
+            .get_profile_count()
             .map_err(|_| AppError::DatabaseError)?;
-        
+
         (projects, profile_count)
     };
 
@@ -322,7 +324,10 @@ pub async fn list_projects(
                 name: project.name.clone(),
                 display_name,
                 description: project.description.clone(),
-                has_files: file_existence_map.get(&project.id).copied().unwrap_or(false),
+                has_files: file_existence_map
+                    .get(&project.id)
+                    .copied()
+                    .unwrap_or(false),
             }
         })
         .collect();
@@ -418,7 +423,7 @@ pub async fn get_images(
     let conn = state.db();
     let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
     let db = Database::new(&conn);
-    
+
     // Get profile count to determine display format
     let profile_count = db
         .get_profile_count()
@@ -497,7 +502,7 @@ pub async fn get_image(
         let conn = state.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
-        
+
         // Get profile count to determine display format
         let profile_count = db
             .get_profile_count()
@@ -1600,7 +1605,7 @@ pub async fn get_projects_overview(
     let projects = db
         .get_projects_with_images_and_profile_info()
         .map_err(|_| AppError::DatabaseError)?;
-    
+
     // Get profile count to determine display format
     let profile_count = db
         .get_profile_count()

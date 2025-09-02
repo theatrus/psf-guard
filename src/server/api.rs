@@ -85,7 +85,7 @@ pub struct ProjectOverviewResponse {
     pub profile_id: String,
     pub profile_name: String,
     pub name: String,
-    pub display_name: String, // "Profile -> Project" or just "Project" 
+    pub display_name: String, // "Profile -> Project" or just "Project"
     pub description: Option<String>,
     pub has_files: bool,
     pub target_count: i32,
