@@ -151,10 +151,18 @@ fn build_react_app() {
         "npm"
     };
 
-    // Check if node_modules exists, if not run npm install
+    // Check if we need to run npm install
     let node_modules = static_dir.join("node_modules");
-    if !node_modules.exists() {
-        eprintln!("cargo:warning=node_modules not found, running npm install...");
+    let package_lock = static_dir.join("package-lock.json");
+    let needs_install = !node_modules.exists() || 
+        (package_lock.exists() && is_package_lock_newer(&node_modules, &package_lock));
+    
+    if needs_install {
+        if !node_modules.exists() {
+            eprintln!("cargo:warning=node_modules not found, running npm install...");
+        } else {
+            eprintln!("cargo:warning=package-lock.json is newer than node_modules, running npm install...");
+        }
         let install_output = Command::new(npm_cmd)
             .args(["install"])
             .current_dir(&static_dir)
@@ -223,6 +231,24 @@ fn build_react_app() {
             panic!("Could not execute npm build");
         }
     }
+}
+
+fn is_package_lock_newer(node_modules: &Path, package_lock: &Path) -> bool {
+    use std::fs;
+    
+    // Get the modification time of node_modules
+    let node_modules_time = match fs::metadata(node_modules).and_then(|m| m.modified()) {
+        Ok(time) => time,
+        Err(_) => return true, // If we can't get node_modules time, reinstall
+    };
+    
+    // Get the modification time of package-lock.json
+    let package_lock_time = match fs::metadata(package_lock).and_then(|m| m.modified()) {
+        Ok(time) => time,
+        Err(_) => return false, // If package-lock doesn't exist, don't reinstall
+    };
+    
+    package_lock_time > node_modules_time
 }
 
 fn is_dist_newer_than_sources(static_dir: &Path, dist_dir: &Path) -> bool {
