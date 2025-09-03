@@ -20,10 +20,11 @@ A Rust utility for astronomical image analysis and grading, with N.I.N.A. Target
   structure.
 - **Star Detection**: N.I.N.A. algorithm port + HocusFocus detector with PSF
   fitting for analysis.
-- **Web Interface**: React-based UI for visual image grading with zoom/pan, and
-  comparisons, with auto-stretched images. Updates to grading are written to the
-  target scheduler DB to allow Target Scheduler to capture more images if
-  required.
+- **Desktop App and Web Interface**: React-based UI for visual image grading
+  with zoom/pan, and comparisons, with auto-stretched images. Updates to grading
+  are written to the target scheduler DB to allow Target Scheduler to capture
+  more images if required. Ships as both a server for NAS hosting, and a
+  stand-alone desktop app.
 - **CLI tools**: Regrading, batch operations, fits processing, batch image moving.
 - **Statistical Analysis**: Advanced outlier detection using HFR, star count,
   and (primitive) cloud detection in the batch modes.
@@ -49,7 +50,7 @@ A Rust utility for astronomical image analysis and grading, with N.I.N.A. Target
 
 ### Desktop App (Recommended for Windows/macOS)
 
-**Download PSF Guard Desktop** - Get the native desktop application with built-in browser and settings panel:
+**Download PSF Guard Desktop** - Get the native desktop application:
 
 | Platform | Download | Notes |
 |----------|----------|-------|
