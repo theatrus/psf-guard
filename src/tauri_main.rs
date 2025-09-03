@@ -238,7 +238,7 @@ async fn start_server_for_tauri(
     // Determine database path - try N.I.N.A. first, then fall back to temp database
     let database_path = server_config
         .database_path
-        .or_else(|| get_nina_database_path())
+        .or_else(get_nina_database_path)
         .unwrap_or_else(|| {
             // Use platform-appropriate data directory for database
             let data_dir = dirs::data_dir()
@@ -404,7 +404,7 @@ async fn restart_server(
     {
         let mut shutdown_guard = state.server_shutdown.lock().unwrap();
         if let Some(shutdown_tx) = shutdown_guard.take() {
-            if let Err(_) = shutdown_tx.send(()) {
+            if shutdown_tx.send(()).is_err() {
                 tracing::warn!(
                     "Failed to send graceful shutdown signal, server may have already stopped"
                 );
