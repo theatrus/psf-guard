@@ -8,3 +8,4 @@ set VCPKG_ROOT=C:\vcpkg
 rem set VCPKGRS_DYNAMIC=1
 
 cargo build --release
+cargo tauri build
