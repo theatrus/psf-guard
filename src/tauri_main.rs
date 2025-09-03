@@ -318,17 +318,17 @@ async fn start_server_for_tauri(
     let port = config.get_port();
 
     // Start the server with graceful shutdown
-    crate::server::run_server_with_shutdown(
+    let server_config = crate::server::ServerConfig {
         database_path,
-        image_directories,
-        server_config.static_dir, // Use static dir if provided
-        cache_directory,
+        image_dirs: image_directories,
+        static_dir: server_config.static_dir, // Use static dir if provided
+        cache_dir: cache_directory,
         host,
         port,
-        server_config.pregeneration,
-        shutdown_rx,
-    )
-    .await
+        pregeneration_config: server_config.pregeneration,
+    };
+
+    crate::server::run_server_with_shutdown(server_config, shutdown_rx).await
 }
 
 // Configuration management functions

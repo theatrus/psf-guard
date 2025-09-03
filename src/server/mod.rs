@@ -22,6 +22,17 @@ use crate::cli::PregenerationConfig;
 use crate::server::state::AppState;
 use tokio::sync::oneshot;
 
+#[derive(Debug, Clone)]
+pub struct ServerConfig {
+    pub database_path: String,
+    pub image_dirs: Vec<String>,
+    pub static_dir: Option<String>,
+    pub cache_dir: String,
+    pub host: String,
+    pub port: u16,
+    pub pregeneration_config: PregenerationConfig,
+}
+
 pub async fn run_server(
     database_path: String,
     image_dirs: Vec<String>,
@@ -44,7 +55,7 @@ pub async fn run_server(
         .with_thread_ids(false) // Don't show thread IDs for cleaner output
         .init();
 
-    run_server_internal(
+    let config = ServerConfig {
         database_path,
         image_dirs,
         static_dir,
@@ -52,47 +63,58 @@ pub async fn run_server(
         host,
         port,
         pregeneration_config,
-        None,
-    )
-    .await
+    };
+
+    run_server_internal(config, None).await
+}
+
+pub async fn run_server_with_config(config: ServerConfig) -> anyhow::Result<()> {
+    // Initialize tracing with environment-based filtering (for CLI mode)
+    // Set RUST_LOG=debug for debug logs, RUST_LOG=info for info logs, etc.
+    // Default to info level if no RUST_LOG is set
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::filter::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::filter::EnvFilter::new("info")),
+        )
+        .with_target(false) // Don't show module paths in logs
+        .with_level(true) // Show log levels
+        .with_thread_ids(false) // Don't show thread IDs for cleaner output
+        .init();
+
+    run_server_internal(config, None).await
 }
 
 async fn run_server_internal(
-    database_path: String,
-    image_dirs: Vec<String>,
-    static_dir: Option<String>,
-    cache_dir: String,
-    host: String,
-    port: u16,
-    pregeneration_config: PregenerationConfig,
+    config: ServerConfig,
     shutdown_rx: Option<oneshot::Receiver<()>>,
 ) -> anyhow::Result<()> {
     tracing::info!("🚀 Starting PSF Guard server");
-    tracing::info!("📊 Database: {}", database_path);
-    tracing::info!("📁 Image directories: {}", image_dirs.join(", "));
-    tracing::info!("💾 Cache directory: {}", cache_dir);
+    tracing::info!("📊 Database: {}", config.database_path);
+    tracing::info!("📁 Image directories: {}", config.image_dirs.join(", "));
+    tracing::info!("💾 Cache directory: {}", config.cache_dir);
 
     // Log pregeneration configuration
-    if pregeneration_config.is_enabled() {
-        let enabled_formats = pregeneration_config.enabled_formats();
+    if config.pregeneration_config.is_enabled() {
+        let enabled_formats = config.pregeneration_config.enabled_formats();
         tracing::info!(
             "🎨 Background pre-generation enabled for: {} (cache expiry: {})",
             enabled_formats.join(", "),
-            humantime::format_duration(pregeneration_config.cache_expiry)
+            humantime::format_duration(config.pregeneration_config.cache_expiry)
         );
     } else {
         tracing::info!("🎨 Background pre-generation disabled");
     }
 
     // Create cache directory if it doesn't exist
-    std::fs::create_dir_all(&cache_dir)?;
+    std::fs::create_dir_all(&config.cache_dir)?;
 
     // Create app state
     let state = match AppState::new(
-        database_path.clone(),
-        image_dirs.clone(),
-        cache_dir.clone(),
-        pregeneration_config.clone(),
+        config.database_path.clone(),
+        config.image_dirs.clone(),
+        config.cache_dir.clone(),
+        config.pregeneration_config.clone(),
     ) {
         Ok(state) => {
             tracing::info!("✅ Application state initialized successfully");
@@ -121,7 +143,7 @@ async fn run_server_internal(
     }
 
     // Start background image pre-generation if enabled
-    if state.pregeneration_config.is_enabled() {
+    if config.pregeneration_config.is_enabled() {
         let state_clone = Arc::clone(&state);
         tokio::spawn(async move {
             background_pregeneration_task(state_clone).await;
@@ -167,7 +189,7 @@ async fn run_server_internal(
         .with_state(state);
 
     // Create main app with either embedded or filesystem static serving
-    let app = if let Some(static_dir_path) = &static_dir {
+    let app = if let Some(static_dir_path) = &config.static_dir {
         // Use filesystem static serving (for development) with proper MIME types
         let static_path = PathBuf::from(static_dir_path);
         let static_service = StaticFileService::new(static_path);
@@ -197,9 +219,9 @@ async fn run_server_internal(
     };
 
     // Create listener
-    let listener = tokio::net::TcpListener::bind(format!("{}:{}", host, port)).await?;
+    let listener = tokio::net::TcpListener::bind(format!("{}:{}", config.host, config.port)).await?;
 
-    tracing::info!("🌐 Server listening on http://{}:{}", host, port);
+    tracing::info!("🌐 Server listening on http://{}:{}", config.host, config.port);
     tracing::info!(
         "🔧 Environment: RUST_LOG={}",
         std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string())
@@ -227,27 +249,11 @@ async fn run_server_internal(
 }
 
 pub async fn run_server_with_shutdown(
-    database_path: String,
-    image_dirs: Vec<String>,
-    static_dir: Option<String>,
-    cache_dir: String,
-    host: String,
-    port: u16,
-    pregeneration_config: PregenerationConfig,
+    config: ServerConfig,
     shutdown_rx: oneshot::Receiver<()>,
 ) -> anyhow::Result<()> {
     // Don't initialize tracing here - it should already be initialized by the first server or Tauri app
-    run_server_internal(
-        database_path,
-        image_dirs,
-        static_dir,
-        cache_dir,
-        host,
-        port,
-        pregeneration_config,
-        Some(shutdown_rx),
-    )
-    .await
+    run_server_internal(config, Some(shutdown_rx)).await
 }
 
 async fn background_pregeneration_task(state: Arc<AppState>) {
