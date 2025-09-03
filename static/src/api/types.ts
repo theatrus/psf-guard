@@ -180,3 +180,21 @@ export interface RecentActivity {
   images_added: number;
   images_graded: number;
 }
+
+export interface CacheRefreshProgress {
+  is_refreshing: boolean;
+  stage: string;
+  progress_percentage: number;
+  elapsed_seconds: number | null;
+  directories_total: number;
+  directories_processed: number;
+  current_directory_name: string | null;
+  files_scanned: number;
+  projects_total: number;
+  projects_processed: number;
+  current_project_name: string | null;
+  targets_total: number;
+  targets_processed: number;
+  files_found: number;
+  files_missing: number;
+}

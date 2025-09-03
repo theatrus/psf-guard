@@ -15,6 +15,7 @@ import type {
   ProjectOverview,
   TargetOverview,
   OverallStats,
+  CacheRefreshProgress,
 } from './types';
 
 // Default API instance (used as fallback)
@@ -201,6 +202,14 @@ export const apiClient = {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<OverallStats>>('/stats/overall');
     if (!data.data) throw new Error('Failed to get overall stats');
+    return data.data;
+  },
+
+  // Cache progress
+  getCacheProgress: async (): Promise<CacheRefreshProgress> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<CacheRefreshProgress>>('/cache-progress');
+    if (!data.data) throw new Error('Failed to get cache progress');
     return data.data;
   },
 };

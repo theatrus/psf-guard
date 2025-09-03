@@ -1,24 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { apiClient } from '../api/client';
+import type { CacheRefreshProgress } from '../api/types';
 import './CacheRefreshStatus.css';
-
-interface CacheRefreshProgress {
-  is_refreshing: boolean;
-  stage: string;
-  progress_percentage: number;
-  elapsed_seconds: number | null;
-  directories_total: number;
-  directories_processed: number;
-  current_directory_name: string | null;
-  files_scanned: number;
-  projects_total: number;
-  projects_processed: number;
-  current_project_name: string | null;
-  targets_total: number;
-  targets_processed: number;
-  files_found: number;
-  files_missing: number;
-}
 
 interface CacheRefreshStatusProps {
   className?: string;
@@ -35,12 +19,7 @@ const STAGE_LABELS: Record<string, string> = {
 };
 
 async function fetchCacheProgress(): Promise<CacheRefreshProgress> {
-  const response = await fetch('/api/cache-progress');
-  if (!response.ok) {
-    throw new Error('Failed to fetch cache progress');
-  }
-  const result = await response.json();
-  return result.data;
+  return await apiClient.getCacheProgress();
 }
 
 export default function CacheRefreshStatus({ className = '' }: CacheRefreshStatusProps) {
