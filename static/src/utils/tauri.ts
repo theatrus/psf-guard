@@ -143,6 +143,22 @@ export const tauriConfig = {
     }
   },
 
+  // Restart server with new configuration (faster than full app restart)
+  restartServer: async (): Promise<boolean> => {
+    if (!isTauriApp()) return false;
+    
+    try {
+      // @ts-ignore - Tauri API will be available at runtime
+      const { invoke } = await import('@tauri-apps/api/core');
+      const result = await invoke('restart_server');
+      console.log('Server restart result:', result);
+      return true;
+    } catch (error) {
+      console.error('Failed to restart server:', error);
+      return false;
+    }
+  },
+
   // Check if current configuration is valid
   isConfigurationValid: async (): Promise<boolean> => {
     if (!isTauriApp()) return false;

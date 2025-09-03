@@ -14,7 +14,6 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
   const [isDetectingDatabase, setIsDetectingDatabase] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string>('');
-  const [showRestartPrompt, setShowRestartPrompt] = useState(false);
 
   useEffect(() => {
     // Only show in Tauri mode
@@ -54,7 +53,6 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     if (isOpen) {
       loadCurrentConfiguration();
       setSaveMessage(''); // Clear any previous messages
-      setShowRestartPrompt(false); // Clear restart prompt
     }
   }, [isOpen]);
 
@@ -101,8 +99,28 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
 
       const success = await tauriConfig.saveConfiguration(config);
       if (success) {
-        setSaveMessage('Configuration saved successfully!');
-        setShowRestartPrompt(true);
+        setSaveMessage('Configuration saved! Restarting server...');
+        
+        // Automatically restart the server
+        try {
+          const serverRestartSuccess = await tauriConfig.restartServer();
+          if (serverRestartSuccess) {
+            setSaveMessage('Configuration applied successfully! Reloading interface...');
+            // Give the server a moment to fully start up, then refresh the UI
+            setTimeout(() => {
+              window.location.reload();
+            }, 2000);
+          } else {
+            // Fallback to full application restart
+            setSaveMessage('Applying configuration... (restarting application)');
+            setTimeout(async () => {
+              await tauriConfig.restartApplication();
+            }, 1000);
+          }
+        } catch (restartError) {
+          console.error('Failed to restart server:', restartError);
+          setSaveMessage('Configuration saved but failed to restart - please restart manually');
+        }
       } else {
         setSaveMessage('Failed to save configuration');
       }
@@ -114,15 +132,6 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     }
   };
 
-  const handleRestart = async () => {
-    try {
-      await tauriConfig.restartApplication();
-      // Application will restart, so this code may not execute
-    } catch (error) {
-      console.error('Failed to restart application:', error);
-      setSaveMessage('Failed to restart application');
-    }
-  };
 
   if (!isOpen) {
     return null;
@@ -221,32 +230,18 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
             </div>
           )}
           
-          {showRestartPrompt ? (
-            <div className="restart-prompt">
-              <p>⚠️ Configuration saved! Restart the application to apply changes.</p>
-              <div className="modal-buttons">
-                <button onClick={onClose} className="cancel-button">
-                  Continue Without Restart
-                </button>
-                <button onClick={handleRestart} className="restart-button">
-                  Restart Now
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="modal-buttons">
-              <button onClick={onClose} className="cancel-button" disabled={isSaving}>
-                Cancel
-              </button>
-              <button 
-                onClick={handleSave} 
-                className="save-button"
-                disabled={!databasePath.trim() || isSaving}
-              >
-                {isSaving ? 'Saving...' : 'Save Settings'}
-              </button>
-            </div>
-          )}
+          <div className="modal-buttons">
+            <button onClick={onClose} className="cancel-button" disabled={isSaving}>
+              Cancel
+            </button>
+            <button 
+              onClick={handleSave} 
+              className="save-button"
+              disabled={!databasePath.trim() || isSaving}
+            >
+              {isSaving ? 'Applying Configuration...' : 'Save & Apply Settings'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -20,6 +20,7 @@ use crate::server::static_file_service::StaticFileService;
 
 use crate::cli::PregenerationConfig;
 use crate::server::state::AppState;
+use tokio::sync::oneshot;
 
 pub async fn run_server(
     database_path: String,
@@ -30,7 +31,7 @@ pub async fn run_server(
     port: u16,
     pregeneration_config: PregenerationConfig,
 ) -> anyhow::Result<()> {
-    // Initialize tracing with environment-based filtering
+    // Initialize tracing with environment-based filtering (for CLI mode)
     // Set RUST_LOG=debug for debug logs, RUST_LOG=info for info logs, etc.
     // Default to info level if no RUST_LOG is set
     tracing_subscriber::fmt()
@@ -42,6 +43,20 @@ pub async fn run_server(
         .with_level(true) // Show log levels
         .with_thread_ids(false) // Don't show thread IDs for cleaner output
         .init();
+
+    run_server_internal(database_path, image_dirs, static_dir, cache_dir, host, port, pregeneration_config, None).await
+}
+
+async fn run_server_internal(
+    database_path: String,
+    image_dirs: Vec<String>,
+    static_dir: Option<String>,
+    cache_dir: String,
+    host: String,
+    port: u16,
+    pregeneration_config: PregenerationConfig,
+    shutdown_rx: Option<oneshot::Receiver<()>>,
+) -> anyhow::Result<()> {
 
     tracing::info!("🚀 Starting PSF Guard server");
     tracing::info!("📊 Database: {}", database_path);
@@ -182,11 +197,38 @@ pub async fn run_server(
     );
     tracing::info!("🎯 Ready to serve requests!");
 
-    // Run server
-    axum::serve(listener, app).await?;
+    // Run server with optional graceful shutdown
+    match shutdown_rx {
+        Some(shutdown_rx) => {
+            tracing::info!("🚀 Server started with graceful shutdown support");
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    shutdown_rx.await.ok();
+                    tracing::info!("🛑 Graceful shutdown signal received");
+                })
+                .await?;
+        }
+        None => {
+            axum::serve(listener, app).await?;
+        }
+    }
 
-    tracing::info!("🛑 Server shutdown");
+    tracing::info!("🛑 Server shutdown completed");
     Ok(())
+}
+
+pub async fn run_server_with_shutdown(
+    database_path: String,
+    image_dirs: Vec<String>,
+    static_dir: Option<String>,
+    cache_dir: String,
+    host: String,
+    port: u16,
+    pregeneration_config: PregenerationConfig,
+    shutdown_rx: oneshot::Receiver<()>,
+) -> anyhow::Result<()> {
+    // Don't initialize tracing here - it should already be initialized by the first server or Tauri app
+    run_server_internal(database_path, image_dirs, static_dir, cache_dir, host, port, pregeneration_config, Some(shutdown_rx)).await
 }
 
 async fn background_pregeneration_task(state: Arc<AppState>) {

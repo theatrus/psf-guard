@@ -2,6 +2,8 @@ use anyhow::Context;
 use crate::cli::PregenerationConfig;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+use tokio::sync::oneshot;
+use tracing_subscriber;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TauriConfig {
@@ -20,8 +22,9 @@ impl Default for TauriConfig {
 
 #[derive(Clone)]
 struct ServerState {
-    url: String,
+    url: Arc<Mutex<String>>,
     config: Arc<Mutex<TauriConfig>>,
+    server_shutdown: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +39,17 @@ struct TauriServerConfig {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn main() {
+    // Initialize tracing once for the entire Tauri application
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::filter::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::filter::EnvFilter::new("info")),
+        )
+        .with_target(false) // Don't show module paths in logs
+        .with_level(true) // Show log levels
+        .with_thread_ids(false) // Don't show thread IDs for cleaner output
+        .init();
+
     // Load or create initial configuration
     let initial_config = load_configuration().unwrap_or_default();
     
@@ -62,9 +76,12 @@ pub fn main() {
     
     println!("Starting PSF Guard server on {}", server_url);
     
+    // Create shutdown channel for the server
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    
     // Start the server in background
     rt.spawn(async move {
-        if let Err(e) = start_server_for_tauri(server_port, server_config).await {
+        if let Err(e) = start_server_for_tauri(server_port, server_config, shutdown_rx).await {
             eprintln!("Server error: {}", e);
         }
     });
@@ -73,8 +90,9 @@ pub fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(ServerState { 
-            url: server_url,
+            url: Arc::new(Mutex::new(server_url)),
             config: Arc::new(Mutex::new(initial_config)),
+            server_shutdown: Arc::new(Mutex::new(Some(shutdown_tx))),
         })
         .invoke_handler(tauri::generate_handler![
             get_server_url,
@@ -84,6 +102,7 @@ pub fn main() {
             save_configuration,
             get_current_configuration,
             restart_application,
+            restart_server,
             is_configuration_valid
         ])
         .run(tauri::generate_context!())
@@ -92,7 +111,8 @@ pub fn main() {
 
 #[tauri::command]
 fn get_server_url(state: tauri::State<ServerState>) -> String {
-    state.url.clone()
+    let url_guard = state.url.lock().unwrap();
+    url_guard.clone()
 }
 
 #[tauri::command]
@@ -200,7 +220,7 @@ fn find_free_port() -> anyhow::Result<u16> {
     Ok(port)
 }
 
-async fn start_server_for_tauri(port: u16, server_config: TauriServerConfig) -> anyhow::Result<()> {
+async fn start_server_for_tauri(port: u16, server_config: TauriServerConfig, shutdown_rx: oneshot::Receiver<()>) -> anyhow::Result<()> {
     use crate::config::Config;
     
     // Create default configuration for Tauri mode
@@ -286,8 +306,8 @@ async fn start_server_for_tauri(port: u16, server_config: TauriServerConfig) -> 
     let host = "127.0.0.1".to_string();
     let port = config.get_port();
     
-    // Start the server
-    crate::server::run_server(
+    // Start the server with graceful shutdown
+    crate::server::run_server_with_shutdown(
         database_path,
         image_directories,
         server_config.static_dir, // Use static dir if provided
@@ -295,6 +315,7 @@ async fn start_server_for_tauri(port: u16, server_config: TauriServerConfig) -> 
         host,
         port,
         server_config.pregeneration,
+        shutdown_rx,
     ).await
 }
 
@@ -355,6 +376,76 @@ fn save_configuration(
 async fn restart_application(app: tauri::AppHandle) -> Result<(), String> {
     // Restart the entire Tauri application to apply new configuration
     app.restart();
+}
+
+#[tauri::command]
+async fn restart_server(_app: tauri::AppHandle, state: tauri::State<'_, ServerState>) -> Result<String, String> {
+    tracing::info!("🔄 Server restart requested");
+    
+    // Get current configuration
+    let config = {
+        let config_guard = state.config.lock().unwrap();
+        config_guard.clone()
+    };
+    
+    // Try to shut down the current server gracefully
+    {
+        let mut shutdown_guard = state.server_shutdown.lock().unwrap();
+        if let Some(shutdown_tx) = shutdown_guard.take() {
+            if let Err(_) = shutdown_tx.send(()) {
+                tracing::warn!("Failed to send graceful shutdown signal, server may have already stopped");
+            } else {
+                tracing::info!("📡 Graceful shutdown signal sent to server");
+            }
+        } else {
+            tracing::warn!("No shutdown sender available - server may have already stopped");
+        }
+    }
+    
+    // Give the server a moment to shut down gracefully
+    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+    
+    // Start a new server with the updated configuration
+    let server_config = TauriServerConfig {
+        config_file: None,
+        database_path: config.database_path.clone(),
+        image_dirs: if config.image_directories.is_empty() {
+            None
+        } else {
+            Some(config.image_directories.clone())
+        },
+        static_dir: None,
+        cache_dir: None,
+        pregeneration: PregenerationConfig::default(),
+    };
+    
+    // Find a new free port
+    let server_port = find_free_port().map_err(|e| format!("Could not find free port: {}", e))?;
+    let server_url = format!("http://localhost:{}", server_port);
+    
+    // Create new shutdown channel
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    
+    // Update the server state with new URL and shutdown sender
+    {
+        let mut url_guard = state.url.lock().unwrap();
+        *url_guard = server_url.clone();
+    }
+    {
+        let mut shutdown_guard = state.server_shutdown.lock().unwrap();
+        *shutdown_guard = Some(shutdown_tx);
+    }
+    
+    tracing::info!("🚀 Starting new server on {}", server_url);
+    
+    // Start the new server
+    tokio::spawn(async move {
+        if let Err(e) = start_server_for_tauri(server_port, server_config, shutdown_rx).await {
+            eprintln!("Server restart error: {}", e);
+        }
+    });
+    
+    Ok(format!("Server restarted successfully on {}", server_url))
 }
 
 #[tauri::command]
