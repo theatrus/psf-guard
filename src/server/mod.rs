@@ -44,7 +44,17 @@ pub async fn run_server(
         .with_thread_ids(false) // Don't show thread IDs for cleaner output
         .init();
 
-    run_server_internal(database_path, image_dirs, static_dir, cache_dir, host, port, pregeneration_config, None).await
+    run_server_internal(
+        database_path,
+        image_dirs,
+        static_dir,
+        cache_dir,
+        host,
+        port,
+        pregeneration_config,
+        None,
+    )
+    .await
 }
 
 async fn run_server_internal(
@@ -57,7 +67,6 @@ async fn run_server_internal(
     pregeneration_config: PregenerationConfig,
     shutdown_rx: Option<oneshot::Receiver<()>>,
 ) -> anyhow::Result<()> {
-
     tracing::info!("🚀 Starting PSF Guard server");
     tracing::info!("📊 Database: {}", database_path);
     tracing::info!("📁 Image directories: {}", image_dirs.join(", "));
@@ -228,7 +237,17 @@ pub async fn run_server_with_shutdown(
     shutdown_rx: oneshot::Receiver<()>,
 ) -> anyhow::Result<()> {
     // Don't initialize tracing here - it should already be initialized by the first server or Tauri app
-    run_server_internal(database_path, image_dirs, static_dir, cache_dir, host, port, pregeneration_config, Some(shutdown_rx)).await
+    run_server_internal(
+        database_path,
+        image_dirs,
+        static_dir,
+        cache_dir,
+        host,
+        port,
+        pregeneration_config,
+        Some(shutdown_rx),
+    )
+    .await
 }
 
 async fn background_pregeneration_task(state: Arc<AppState>) {

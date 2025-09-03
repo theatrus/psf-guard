@@ -1,5 +1,5 @@
-use anyhow::Context;
 use crate::cli::PregenerationConfig;
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
@@ -52,7 +52,7 @@ pub fn main() {
 
     // Load or create initial configuration
     let initial_config = load_configuration().unwrap_or_default();
-    
+
     // Use configuration for server setup
     let server_config = TauriServerConfig {
         config_file: None,
@@ -66,30 +66,30 @@ pub fn main() {
         cache_dir: None,
         pregeneration: PregenerationConfig::default(),
     };
-    
+
     // Create tokio runtime for the server
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    
+
     // Find a free port and start the server
     let server_port = find_free_port().expect("Could not find free port");
     let server_url = format!("http://localhost:{}", server_port);
-    
+
     println!("Starting PSF Guard server on {}", server_url);
-    
+
     // Create shutdown channel for the server
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    
+
     // Start the server in background
     rt.spawn(async move {
         if let Err(e) = start_server_for_tauri(server_port, server_config, shutdown_rx).await {
             eprintln!("Server error: {}", e);
         }
     });
-    
+
     // Start Tauri app with the server URL and config state
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(ServerState { 
+        .manage(ServerState {
             url: Arc::new(Mutex::new(server_url)),
             config: Arc::new(Mutex::new(initial_config)),
             server_shutdown: Arc::new(Mutex::new(Some(shutdown_tx))),
@@ -117,15 +117,15 @@ fn get_server_url(state: tauri::State<ServerState>) -> String {
 
 #[tauri::command]
 async fn pick_database_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    use tauri_plugin_dialog::DialogExt;
     use std::sync::{Arc, Mutex};
+    use tauri_plugin_dialog::DialogExt;
     use tokio::sync::Notify;
-    
+
     let result = Arc::new(Mutex::new(None));
     let notify = Arc::new(Notify::new());
     let result_clone = result.clone();
     let notify_clone = notify.clone();
-    
+
     app.dialog()
         .file()
         .add_filter("SQLite Database", &["sqlite", "db"])
@@ -135,7 +135,7 @@ async fn pick_database_file(app: tauri::AppHandle) -> Result<Option<String>, Str
             *result_clone.lock().unwrap() = file_path.map(|p| p.to_string());
             notify_clone.notify_one();
         });
-        
+
     notify.notified().await;
     let path = result.lock().unwrap().clone();
     Ok(path)
@@ -143,15 +143,15 @@ async fn pick_database_file(app: tauri::AppHandle) -> Result<Option<String>, Str
 
 #[tauri::command]
 async fn pick_image_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    use tauri_plugin_dialog::DialogExt;
     use std::sync::{Arc, Mutex};
+    use tauri_plugin_dialog::DialogExt;
     use tokio::sync::Notify;
-    
+
     let result = Arc::new(Mutex::new(None));
     let notify = Arc::new(Notify::new());
     let result_clone = result.clone();
     let notify_clone = notify.clone();
-    
+
     app.dialog()
         .file()
         .set_title("Select Image Directory")
@@ -159,7 +159,7 @@ async fn pick_image_directory(app: tauri::AppHandle) -> Result<Option<String>, S
             *result_clone.lock().unwrap() = folder_path.map(|p| p.to_string());
             notify_clone.notify_one();
         });
-        
+
     notify.notified().await;
     let path = result.lock().unwrap().clone();
     Ok(path)
@@ -175,18 +175,18 @@ fn get_nina_database_path() -> Option<String> {
     {
         // N.I.N.A. default database location on Windows
         use std::env;
-        
+
         if let Ok(localappdata) = env::var("LOCALAPPDATA") {
             let nina_path = std::path::PathBuf::from(localappdata)
                 .join("NINA")
                 .join("Database")
                 .join("NINA.sqlite");
-                
+
             if nina_path.exists() {
                 return Some(nina_path.to_string_lossy().to_string());
             }
         }
-        
+
         // Alternative path
         if let Ok(userprofile) = env::var("USERPROFILE") {
             let nina_path = std::path::PathBuf::from(userprofile)
@@ -195,34 +195,38 @@ fn get_nina_database_path() -> Option<String> {
                 .join("NINA")
                 .join("Database")
                 .join("NINA.sqlite");
-                
+
             if nina_path.exists() {
                 return Some(nina_path.to_string_lossy().to_string());
             }
         }
     }
-    
+
     #[cfg(not(target_os = "windows"))]
     {
         // For non-Windows platforms, we don't have a default N.I.N.A. path
         // Users will need to use the file picker
     }
-    
+
     None
 }
 
 fn find_free_port() -> anyhow::Result<u16> {
-    use std::net::{TcpListener, SocketAddr};
-    
+    use std::net::{SocketAddr, TcpListener};
+
     let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))?;
     let port = listener.local_addr()?.port();
     drop(listener);
     Ok(port)
 }
 
-async fn start_server_for_tauri(port: u16, server_config: TauriServerConfig, shutdown_rx: oneshot::Receiver<()>) -> anyhow::Result<()> {
+async fn start_server_for_tauri(
+    port: u16,
+    server_config: TauriServerConfig,
+    shutdown_rx: oneshot::Receiver<()>,
+) -> anyhow::Result<()> {
     use crate::config::Config;
-    
+
     // Create default configuration for Tauri mode
     let mut config = if let Some(config_file) = server_config.config_file {
         Config::from_file(&config_file)
@@ -230,9 +234,10 @@ async fn start_server_for_tauri(port: u16, server_config: TauriServerConfig, shu
     } else {
         Config::default()
     };
-    
+
     // Determine database path - try N.I.N.A. first, then fall back to temp database
-    let database_path = server_config.database_path
+    let database_path = server_config
+        .database_path
         .or_else(|| get_nina_database_path())
         .unwrap_or_else(|| {
             // Use platform-appropriate data directory for database
@@ -241,7 +246,7 @@ async fn start_server_for_tauri(port: u16, server_config: TauriServerConfig, shu
                 .join("psf-guard");
             data_dir.join("temp.db").to_string_lossy().to_string()
         });
-    
+
     // Determine cache directory - use platform-appropriate cache directory
     let cache_dir = server_config.cache_dir.unwrap_or_else(|| {
         let cache_dir = dirs::cache_dir()
@@ -252,7 +257,7 @@ async fn start_server_for_tauri(port: u16, server_config: TauriServerConfig, shu
             .join("psf-guard");
         cache_dir.to_string_lossy().to_string()
     });
-    
+
     // Create directories if they don't exist
     if let Some(parent) = std::path::Path::new(&database_path).parent() {
         std::fs::create_dir_all(parent)?;
@@ -260,18 +265,21 @@ async fn start_server_for_tauri(port: u16, server_config: TauriServerConfig, shu
     }
     std::fs::create_dir_all(&cache_dir)?;
     println!("Created cache directory: {}", cache_dir);
-    
+
     // Create a minimal SQLite database if it doesn't exist
     if !std::path::Path::new(&database_path).exists() {
         println!("Creating temporary database at: {}", database_path);
         use rusqlite::Connection;
         let conn = Connection::open(&database_path)?;
         // Create minimal schema to allow the server to start
-        conn.execute("CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY, name TEXT)", [])?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY, name TEXT)",
+            [],
+        )?;
         conn.execute("CREATE TABLE IF NOT EXISTS targets (id INTEGER PRIMARY KEY, projectId INTEGER, name TEXT)", [])?;
         conn.execute("CREATE TABLE IF NOT EXISTS acquiredimage (id INTEGER PRIMARY KEY, projectId INTEGER, targetId INTEGER, metadata TEXT)", [])?;
     }
-    
+
     // Override config with server configuration
     config.merge_with_cli(
         Some(database_path.clone()),
@@ -279,18 +287,21 @@ async fn start_server_for_tauri(port: u16, server_config: TauriServerConfig, shu
         Some(port),
         Some(cache_dir.clone()),
     );
-    
+
     config.validate()?;
-    
+
     // Log the paths being used
     println!("Using database: {}", database_path);
     println!("Using cache directory: {}", cache_dir);
     if !config.images.directories.is_empty() {
-        println!("Image directories: {}", config.images.directories.join(", "));
+        println!(
+            "Image directories: {}",
+            config.images.directories.join(", ")
+        );
     } else {
         println!("No image directories configured - you can add them via the UI");
     }
-    
+
     // Log system directory information for transparency
     if let Some(cache_base) = dirs::cache_dir() {
         println!("System cache directory: {}", cache_base.display());
@@ -298,14 +309,14 @@ async fn start_server_for_tauri(port: u16, server_config: TauriServerConfig, shu
     if let Some(config_base) = dirs::config_dir() {
         println!("System config directory: {}", config_base.display());
     }
-    
+
     // Clone values before move to avoid borrow checker issues
     let database_path = config.database.path.clone();
     let image_directories = config.images.directories.clone();
     let cache_directory = config.get_cache_directory();
     let host = "127.0.0.1".to_string();
     let port = config.get_port();
-    
+
     // Start the server with graceful shutdown
     crate::server::run_server_with_shutdown(
         database_path,
@@ -316,7 +327,8 @@ async fn start_server_for_tauri(port: u16, server_config: TauriServerConfig, shu
         port,
         server_config.pregeneration,
         shutdown_rx,
-    ).await
+    )
+    .await
 }
 
 // Configuration management functions
@@ -324,14 +336,14 @@ fn get_config_path() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
     let config_dir = dirs::config_dir()
         .ok_or("Could not determine config directory")?
         .join("psf-guard");
-    
+
     std::fs::create_dir_all(&config_dir)?;
     Ok(config_dir.join("config.json"))
 }
 
 fn load_configuration() -> Result<TauriConfig, Box<dyn std::error::Error>> {
     let config_path = get_config_path()?;
-    
+
     if config_path.exists() {
         let config_str = std::fs::read_to_string(config_path)?;
         let config: TauriConfig = serde_json::from_str(&config_str)?;
@@ -356,19 +368,16 @@ fn get_current_configuration(state: tauri::State<ServerState>) -> Result<TauriCo
 }
 
 #[tauri::command]
-fn save_configuration(
-    state: tauri::State<ServerState>,
-    config: TauriConfig,
-) -> Result<(), String> {
+fn save_configuration(state: tauri::State<ServerState>, config: TauriConfig) -> Result<(), String> {
     // Update in-memory config
     {
         let mut current_config = state.config.lock().map_err(|e| e.to_string())?;
         *current_config = config.clone();
     }
-    
+
     // Save to file
     save_configuration_to_file(&config).map_err(|e| e.to_string())?;
-    
+
     Ok(())
 }
 
@@ -379,21 +388,26 @@ async fn restart_application(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn restart_server(_app: tauri::AppHandle, state: tauri::State<'_, ServerState>) -> Result<String, String> {
+async fn restart_server(
+    _app: tauri::AppHandle,
+    state: tauri::State<'_, ServerState>,
+) -> Result<String, String> {
     tracing::info!("🔄 Server restart requested");
-    
+
     // Get current configuration
     let config = {
         let config_guard = state.config.lock().unwrap();
         config_guard.clone()
     };
-    
+
     // Try to shut down the current server gracefully
     {
         let mut shutdown_guard = state.server_shutdown.lock().unwrap();
         if let Some(shutdown_tx) = shutdown_guard.take() {
             if let Err(_) = shutdown_tx.send(()) {
-                tracing::warn!("Failed to send graceful shutdown signal, server may have already stopped");
+                tracing::warn!(
+                    "Failed to send graceful shutdown signal, server may have already stopped"
+                );
             } else {
                 tracing::info!("📡 Graceful shutdown signal sent to server");
             }
@@ -401,10 +415,10 @@ async fn restart_server(_app: tauri::AppHandle, state: tauri::State<'_, ServerSt
             tracing::warn!("No shutdown sender available - server may have already stopped");
         }
     }
-    
+
     // Give the server a moment to shut down gracefully
     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-    
+
     // Start a new server with the updated configuration
     let server_config = TauriServerConfig {
         config_file: None,
@@ -418,14 +432,14 @@ async fn restart_server(_app: tauri::AppHandle, state: tauri::State<'_, ServerSt
         cache_dir: None,
         pregeneration: PregenerationConfig::default(),
     };
-    
+
     // Find a new free port
     let server_port = find_free_port().map_err(|e| format!("Could not find free port: {}", e))?;
     let server_url = format!("http://localhost:{}", server_port);
-    
+
     // Create new shutdown channel
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    
+
     // Update the server state with new URL and shutdown sender
     {
         let mut url_guard = state.url.lock().unwrap();
@@ -435,29 +449,29 @@ async fn restart_server(_app: tauri::AppHandle, state: tauri::State<'_, ServerSt
         let mut shutdown_guard = state.server_shutdown.lock().unwrap();
         *shutdown_guard = Some(shutdown_tx);
     }
-    
+
     tracing::info!("🚀 Starting new server on {}", server_url);
-    
+
     // Start the new server
     tokio::spawn(async move {
         if let Err(e) = start_server_for_tauri(server_port, server_config, shutdown_rx).await {
             eprintln!("Server restart error: {}", e);
         }
     });
-    
+
     Ok(format!("Server restarted successfully on {}", server_url))
 }
 
 #[tauri::command]
 fn is_configuration_valid(state: tauri::State<ServerState>) -> Result<bool, String> {
     let config = state.config.lock().map_err(|e| e.to_string())?;
-    
+
     // Check if database path is set and file exists
     if let Some(db_path) = &config.database_path {
         if !db_path.trim().is_empty() && std::path::Path::new(db_path).exists() {
             return Ok(true);
         }
     }
-    
+
     Ok(false)
 }

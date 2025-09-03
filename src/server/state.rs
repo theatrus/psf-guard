@@ -900,7 +900,6 @@ impl AppState {
 
         Ok(Arc::new(tree_result))
     }
-
 }
 
 impl Clone for AppState {

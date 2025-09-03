@@ -5,7 +5,7 @@ use std::env;
 fn main() {
     // Check if any arguments are passed (excluding the binary name)
     let args: Vec<String> = env::args().collect();
-    
+
     if args.len() > 1 {
         // Arguments provided - run CLI mode
         if let Err(e) = psf_guard::cli_main::main() {
