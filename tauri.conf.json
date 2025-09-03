@@ -23,7 +23,10 @@
     ],
     "longDescription": "PSF Guard: Astronomical image analysis and quality assessment tool for N.I.N.A. and FITS files",
     "macOS": {
-      "minimumSystemVersion": "10.13"
+      "minimumSystemVersion": "10.13",
+      "hardenedRuntime": true,
+      "entitlements": "./Entitlements.plist",
+      "signingIdentity": "441406E5BD6181EAB2253AACAF9A591AA7D11D9C"
     },
     "resources": [],
     "shortDescription": "Astronomical image analysis tool",
