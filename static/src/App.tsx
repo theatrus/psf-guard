@@ -5,7 +5,9 @@ import ProjectTargetSelector from './components/ProjectTargetSelector';
 import KeyboardShortcutHelp from './components/KeyboardShortcutHelp';
 import ServerInfoPanel from './components/ServerInfoPanel';
 import CacheRefreshStatus from './components/CacheRefreshStatus';
+import TauriSettings from './components/TauriSettings';
 import { useGridState } from './hooks/useUrlState';
+import { isTauriApp } from './utils/tauri';
 import './App.css';
 
 function App() {
@@ -13,6 +15,7 @@ function App() {
   const location = useLocation();
   const { showStats, setShowStats } = useGridState();
   const [showHelp, setShowHelp] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   // Keyboard shortcut for help
   useHotkeys('?', () => setShowHelp(true), []);
@@ -54,6 +57,11 @@ function App() {
               {showStats ? 'Hide Stats' : 'Stats'}
             </button>
           )}
+          {isTauriApp() && (
+            <button onClick={() => setShowSettings(true)} className="header-button">
+              Settings
+            </button>
+          )}
           <button onClick={() => setShowHelp(true)} className="header-button">
             Help
           </button>
@@ -67,6 +75,13 @@ function App() {
 
       {showHelp && (
         <KeyboardShortcutHelp onClose={() => setShowHelp(false)} />
+      )}
+      
+      {showSettings && (
+        <TauriSettings 
+          isOpen={showSettings} 
+          onClose={() => setShowSettings(false)} 
+        />
       )}
     </div>
   );

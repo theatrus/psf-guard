@@ -13,6 +13,11 @@ fn main() {
         detect_opencv_version();
     }
 
+    // Run tauri-build when building with Tauri feature enabled
+    if env::var("CARGO_FEATURE_TAURI").is_ok() {
+        tauri_build::build()
+    }
+
     // Build and embed the React app
     build_react_app();
 }
