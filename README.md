@@ -47,7 +47,35 @@ A Rust utility for astronomical image analysis and grading, with N.I.N.A. Target
 
 ## Quick Start with Web Grader
 
-### Docker (Recommended for Linux)
+### Desktop App (Recommended for Windows/macOS)
+
+**Download PSF Guard Desktop** - Get the native desktop application with built-in browser and settings panel:
+
+| Platform | Download | Notes |
+|----------|----------|-------|
+| **Windows x64** | [`.msi installer`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard_0.3.0_x64_en-US.msi) | Native Windows installer |
+| **Windows x64** | [`.exe installer`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard_0.3.0_x64-setup.exe) | NSIS installer |
+| **macOS x64** | [`.dmg`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard_0.3.0_x64.dmg) | Drag-and-drop installer |
+| **Linux x64** | [`.deb package`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard_0.3.0_amd64.deb) | Ubuntu/Debian package |
+| **Linux x64** | [`.AppImage`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard_0.3.0_amd64.AppImage) | Portable application |
+
+**Features:**
+- ✅ **No setup required** - Downloads include all dependencies
+- ✅ **Built-in settings panel** - Configure database and image directories via GUI
+- ✅ **Auto-detection** - Automatically finds N.I.N.A. database location
+- ✅ **Native performance** - Direct file system access, no browser required
+- ✅ **System integration** - Native file dialogs and system notifications
+
+**Installation:**
+1. Download the appropriate installer for your platform
+2. Install following standard platform conventions
+3. Launch PSF Guard from your applications menu
+4. Configure your database and image directories in the settings panel
+5. Start analyzing your images!
+
+The desktop app automatically handles server startup and provides a seamless experience with the same powerful web interface.
+
+### Docker (Recommended for Linux Servers)
 
 ```bash
 # Pull and run
