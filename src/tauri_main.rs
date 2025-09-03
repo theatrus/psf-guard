@@ -1,9 +1,27 @@
 use anyhow::Context;
 use crate::cli::PregenerationConfig;
+use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TauriConfig {
+    pub database_path: Option<String>,
+    pub image_directories: Vec<String>,
+}
+
+impl Default for TauriConfig {
+    fn default() -> Self {
+        Self {
+            database_path: get_nina_database_path(),
+            image_directories: Vec::new(),
+        }
+    }
+}
 
 #[derive(Clone)]
 struct ServerState {
     url: String,
+    config: Arc<Mutex<TauriConfig>>,
 }
 
 #[derive(Debug, Clone)]
@@ -18,11 +36,18 @@ struct TauriServerConfig {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn main() {
-    // Use default configuration for Tauri mode - no CLI parsing
+    // Load or create initial configuration
+    let initial_config = load_configuration().unwrap_or_default();
+    
+    // Use configuration for server setup
     let server_config = TauriServerConfig {
         config_file: None,
-        database_path: None, // Will be determined by get_nina_database_path() or user selection
-        image_dirs: None,
+        database_path: initial_config.database_path.clone(),
+        image_dirs: if initial_config.image_directories.is_empty() {
+            None
+        } else {
+            Some(initial_config.image_directories.clone())
+        },
         static_dir: None,
         cache_dir: None,
         pregeneration: PregenerationConfig::default(),
@@ -44,15 +69,21 @@ pub fn main() {
         }
     });
     
-    // Start Tauri app with the server URL
+    // Start Tauri app with the server URL and config state
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(ServerState { url: server_url })
+        .manage(ServerState { 
+            url: server_url,
+            config: Arc::new(Mutex::new(initial_config)),
+        })
         .invoke_handler(tauri::generate_handler![
             get_server_url,
             pick_database_file,
             pick_image_directory,
-            get_default_nina_database_path
+            get_default_nina_database_path,
+            save_configuration,
+            get_current_configuration,
+            restart_application
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -183,27 +214,31 @@ async fn start_server_for_tauri(port: u16, server_config: TauriServerConfig) -> 
     let database_path = server_config.database_path
         .or_else(|| get_nina_database_path())
         .unwrap_or_else(|| {
-            let home_dir = std::env::var("HOME")
-                .or_else(|_| std::env::var("USERPROFILE"))
-                .unwrap_or_else(|_| "/tmp".to_string());
-            let app_dir = std::path::PathBuf::from(home_dir).join(".psf-guard");
-            app_dir.join("temp.db").to_string_lossy().to_string()
+            // Use platform-appropriate data directory for database
+            let data_dir = dirs::data_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+                .join("psf-guard");
+            data_dir.join("temp.db").to_string_lossy().to_string()
         });
     
-    // Determine cache directory
+    // Determine cache directory - use platform-appropriate cache directory
     let cache_dir = server_config.cache_dir.unwrap_or_else(|| {
-        let home_dir = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_else(|_| "/tmp".to_string());
-        let app_dir = std::path::PathBuf::from(home_dir).join(".psf-guard");
-        app_dir.join("cache").to_string_lossy().to_string()
+        let cache_dir = dirs::cache_dir()
+            .unwrap_or_else(|| {
+                // Fallback to temp directory if cache dir can't be determined
+                std::env::temp_dir().join("psf-guard-cache")
+            })
+            .join("psf-guard");
+        cache_dir.to_string_lossy().to_string()
     });
     
     // Create directories if they don't exist
     if let Some(parent) = std::path::Path::new(&database_path).parent() {
         std::fs::create_dir_all(parent)?;
+        println!("Created data directory: {}", parent.display());
     }
     std::fs::create_dir_all(&cache_dir)?;
+    println!("Created cache directory: {}", cache_dir);
     
     // Create a minimal SQLite database if it doesn't exist
     if !std::path::Path::new(&database_path).exists() {
@@ -235,6 +270,14 @@ async fn start_server_for_tauri(port: u16, server_config: TauriServerConfig) -> 
         println!("No image directories configured - you can add them via the UI");
     }
     
+    // Log system directory information for transparency
+    if let Some(cache_base) = dirs::cache_dir() {
+        println!("System cache directory: {}", cache_base.display());
+    }
+    if let Some(config_base) = dirs::config_dir() {
+        println!("System config directory: {}", config_base.display());
+    }
+    
     // Clone values before move to avoid borrow checker issues
     let database_path = config.database.path.clone();
     let image_directories = config.images.directories.clone();
@@ -252,4 +295,63 @@ async fn start_server_for_tauri(port: u16, server_config: TauriServerConfig) -> 
         port,
         server_config.pregeneration,
     ).await
+}
+
+// Configuration management functions
+fn get_config_path() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    let config_dir = dirs::config_dir()
+        .ok_or("Could not determine config directory")?
+        .join("psf-guard");
+    
+    std::fs::create_dir_all(&config_dir)?;
+    Ok(config_dir.join("config.json"))
+}
+
+fn load_configuration() -> Result<TauriConfig, Box<dyn std::error::Error>> {
+    let config_path = get_config_path()?;
+    
+    if config_path.exists() {
+        let config_str = std::fs::read_to_string(config_path)?;
+        let config: TauriConfig = serde_json::from_str(&config_str)?;
+        Ok(config)
+    } else {
+        Ok(TauriConfig::default())
+    }
+}
+
+fn save_configuration_to_file(config: &TauriConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let config_path = get_config_path()?;
+    let config_str = serde_json::to_string_pretty(config)?;
+    std::fs::write(config_path, config_str)?;
+    Ok(())
+}
+
+// Tauri command implementations
+#[tauri::command]
+fn get_current_configuration(state: tauri::State<ServerState>) -> Result<TauriConfig, String> {
+    let config = state.config.lock().map_err(|e| e.to_string())?;
+    Ok(config.clone())
+}
+
+#[tauri::command]
+fn save_configuration(
+    state: tauri::State<ServerState>,
+    config: TauriConfig,
+) -> Result<(), String> {
+    // Update in-memory config
+    {
+        let mut current_config = state.config.lock().map_err(|e| e.to_string())?;
+        *current_config = config.clone();
+    }
+    
+    // Save to file
+    save_configuration_to_file(&config).map_err(|e| e.to_string())?;
+    
+    Ok(())
+}
+
+#[tauri::command]
+async fn restart_application(app: tauri::AppHandle) -> Result<(), String> {
+    // Restart the entire Tauri application to apply new configuration
+    app.restart();
 }

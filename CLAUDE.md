@@ -121,9 +121,29 @@ brew install opencv
 export DYLD_FALLBACK_LIBRARY_PATH="$(xcode-select --print-path)/Toolchains/XcodeDefault.xctoolchain/usr/lib/"
 ```
 
-### Tauri Development Notes
+### Tauri Desktop Configuration
+- **Settings Panel**: Configure database and image directories via native file dialogs
+- **System Directory Structure**: Uses platform-appropriate directories for all data:
+  - **Configuration**: 
+    - macOS: `~/Library/Application Support/psf-guard/config.json`
+    - Windows: `%APPDATA%\psf-guard\config.json`
+    - Linux: `~/.config/psf-guard/config.json`
+  - **Cache**: 
+    - macOS: `~/Library/Caches/psf-guard/`
+    - Windows: `%LOCALAPPDATA%\psf-guard\cache\`
+    - Linux: `~/.cache/psf-guard/`
+  - **Temp Database** (when no N.I.N.A. database found):
+    - macOS: `~/Library/Application Support/psf-guard/temp.db`
+    - Windows: `%APPDATA%\psf-guard\temp.db`
+    - Linux: `~/.local/share/psf-guard/temp.db`
+- **Configuration Updates**: Settings saved immediately, with user-friendly restart prompt to apply changes
+- **Automatic Loading**: Configuration loaded on application startup
+- **Directory Management**: All directories are automatically created as needed
+
+### Development Notes
 - **Important**: Remove `static/dist/` contents if Tauri detection fails - cached production assets may be served instead of dev server
 - File picker commands are async to prevent UI freezing
+- Application restart applies configuration changes cleanly without data loss
 
 ### Recent Fixes
 - **Navigation**: Direct URL building eliminates timing issues

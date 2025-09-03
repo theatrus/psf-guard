@@ -46,6 +46,12 @@ export const initializeApiBaseUrl = async (): Promise<string> => {
   return serverUrl ? `${serverUrl}/api` : '/api';
 };
 
+// Configuration interface matching Rust struct
+export interface TauriConfig {
+  database_path?: string | null;
+  image_directories: string[];
+}
+
 // Tauri-specific file system functions
 export const tauriFileSystem = {
   // Pick database file using Tauri command
@@ -87,6 +93,53 @@ export const tauriFileSystem = {
     } catch (error) {
       console.error('Failed to get default N.I.N.A. path:', error);
       return null;
+    }
+  }
+};
+
+// Configuration management functions
+export const tauriConfig = {
+  // Get current configuration
+  getCurrentConfiguration: async (): Promise<TauriConfig | null> => {
+    if (!isTauriApp()) return null;
+    
+    try {
+      // @ts-ignore - Tauri API will be available at runtime
+      const { invoke } = await import('@tauri-apps/api/core');
+      return await invoke('get_current_configuration');
+    } catch (error) {
+      console.error('Failed to get current configuration:', error);
+      return null;
+    }
+  },
+
+  // Save configuration
+  saveConfiguration: async (config: TauriConfig): Promise<boolean> => {
+    if (!isTauriApp()) return false;
+    
+    try {
+      // @ts-ignore - Tauri API will be available at runtime
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('save_configuration', { config });
+      return true;
+    } catch (error) {
+      console.error('Failed to save configuration:', error);
+      return false;
+    }
+  },
+
+  // Restart application to apply new configuration
+  restartApplication: async (): Promise<boolean> => {
+    if (!isTauriApp()) return false;
+    
+    try {
+      // @ts-ignore - Tauri API will be available at runtime
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('restart_application');
+      return true;
+    } catch (error) {
+      console.error('Failed to restart application:', error);
+      return false;
     }
   }
 };

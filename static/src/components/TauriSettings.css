@@ -232,12 +232,35 @@
 }
 
 .modal-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
   padding: 20px;
   border-top: 1px solid #eee;
   background-color: #f8f9fa;
+}
+
+.save-message {
+  padding: 10px;
+  border-radius: 4px;
+  margin-bottom: 12px;
+  font-size: 14px;
+  text-align: center;
+}
+
+.save-message.success {
+  background-color: #d4edda;
+  border: 1px solid #c3e6cb;
+  color: #155724;
+}
+
+.save-message.error {
+  background-color: #f8d7da;
+  border: 1px solid #f5c6cb;
+  color: #721c24;
+}
+
+.modal-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
 }
 
 .cancel-button {
@@ -272,4 +295,33 @@
   background-color: #6c757d;
   cursor: not-allowed;
   opacity: 0.6;
+}
+
+.restart-prompt {
+  text-align: center;
+}
+
+.restart-prompt p {
+  margin: 0 0 16px 0;
+  font-size: 14px;
+  color: #856404;
+  background-color: #fff3cd;
+  border: 1px solid #ffeaa7;
+  border-radius: 4px;
+  padding: 12px;
+}
+
+.restart-button {
+  padding: 10px 20px;
+  background-color: #28a745;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.restart-button:hover {
+  background-color: #218838;
 }

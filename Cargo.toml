@@ -47,6 +47,7 @@ mime_guess = "2.0"
 humantime = "2.1"
 tauri = { version = "2.8.5", features = ["custom-protocol"], optional = true }
 tauri-plugin-dialog = { version = "2.0.0", optional = true }
+dirs = { version = "5.0", optional = true }
 
 [dev-dependencies]
 tempfile = "3.0"
@@ -54,7 +55,7 @@ tempfile = "3.0"
 [features]
 default = ["opencv"]
 opencv = ["dep:opencv"]
-tauri = ["dep:tauri", "dep:tauri-plugin-dialog"]
+tauri = ["dep:tauri", "dep:tauri-plugin-dialog", "dep:dirs"]
 
 [profile.release]
 # Enable maximum optimizations for performance

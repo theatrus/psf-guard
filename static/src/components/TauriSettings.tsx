@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { isTauriApp, tauriFileSystem } from '../utils/tauri';
+import { isTauriApp, tauriFileSystem, tauriConfig } from '../utils/tauri';
+import type { TauriConfig } from '../utils/tauri';
 import './TauriSettings.css';
 
 interface TauriSettingsProps {
@@ -11,28 +12,49 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
   const [databasePath, setDatabasePath] = useState<string>('');
   const [imageDirs, setImageDirs] = useState<string[]>([]);
   const [isDetectingDatabase, setIsDetectingDatabase] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<string>('');
+  const [showRestartPrompt, setShowRestartPrompt] = useState(false);
 
   useEffect(() => {
     // Only show in Tauri mode
     if (!isTauriApp()) return;
 
-    // Try to get default N.I.N.A. database path
-    const detectDefaultDatabase = async () => {
+    const loadCurrentConfiguration = async () => {
       setIsDetectingDatabase(true);
       try {
-        const defaultPath = await tauriFileSystem.getDefaultNinaPath();
-        if (defaultPath) {
-          setDatabasePath(defaultPath);
+        // Load existing configuration
+        const currentConfig = await tauriConfig.getCurrentConfiguration();
+        if (currentConfig) {
+          setDatabasePath(currentConfig.database_path || '');
+          setImageDirs(currentConfig.image_directories || []);
+        } else {
+          // Fall back to detecting default database path
+          const defaultPath = await tauriFileSystem.getDefaultNinaPath();
+          if (defaultPath) {
+            setDatabasePath(defaultPath);
+          }
         }
       } catch (error) {
-        console.error('Failed to detect default database path:', error);
+        console.error('Failed to load configuration:', error);
+        // Try to get default N.I.N.A. database path as fallback
+        try {
+          const defaultPath = await tauriFileSystem.getDefaultNinaPath();
+          if (defaultPath) {
+            setDatabasePath(defaultPath);
+          }
+        } catch (err) {
+          console.error('Failed to detect default database path:', err);
+        }
       } finally {
         setIsDetectingDatabase(false);
       }
     };
 
     if (isOpen) {
-      detectDefaultDatabase();
+      loadCurrentConfiguration();
+      setSaveMessage(''); // Clear any previous messages
+      setShowRestartPrompt(false); // Clear restart prompt
     }
   }, [isOpen]);
 
@@ -62,10 +84,44 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setImageDirs(imageDirs.filter((_, i) => i !== index));
   };
 
-  const handleSave = () => {
-    // For now, just close the modal
-    // In a full implementation, this would restart the server with new paths
-    onClose();
+  const handleSave = async () => {
+    if (!databasePath.trim()) {
+      setSaveMessage('Please select a database file');
+      return;
+    }
+
+    setIsSaving(true);
+    setSaveMessage('');
+
+    try {
+      const config: TauriConfig = {
+        database_path: databasePath.trim(),
+        image_directories: imageDirs,
+      };
+
+      const success = await tauriConfig.saveConfiguration(config);
+      if (success) {
+        setSaveMessage('Configuration saved successfully!');
+        setShowRestartPrompt(true);
+      } else {
+        setSaveMessage('Failed to save configuration');
+      }
+    } catch (error) {
+      console.error('Error saving configuration:', error);
+      setSaveMessage('Error saving configuration');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleRestart = async () => {
+    try {
+      await tauriConfig.restartApplication();
+      // Application will restart, so this code may not execute
+    } catch (error) {
+      console.error('Failed to restart application:', error);
+      setSaveMessage('Failed to restart application');
+    }
   };
 
   if (!isOpen) {
@@ -159,16 +215,38 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
         </div>
         
         <div className="modal-footer">
-          <button onClick={onClose} className="cancel-button">
-            Cancel
-          </button>
-          <button 
-            onClick={handleSave} 
-            className="save-button"
-            disabled={!databasePath.trim()}
-          >
-            Save Settings
-          </button>
+          {saveMessage && (
+            <div className={`save-message ${saveMessage.includes('Error') || saveMessage.includes('Failed') ? 'error' : 'success'}`}>
+              {saveMessage}
+            </div>
+          )}
+          
+          {showRestartPrompt ? (
+            <div className="restart-prompt">
+              <p>⚠️ Configuration saved! Restart the application to apply changes.</p>
+              <div className="modal-buttons">
+                <button onClick={onClose} className="cancel-button">
+                  Continue Without Restart
+                </button>
+                <button onClick={handleRestart} className="restart-button">
+                  Restart Now
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="modal-buttons">
+              <button onClick={onClose} className="cancel-button" disabled={isSaving}>
+                Cancel
+              </button>
+              <button 
+                onClick={handleSave} 
+                className="save-button"
+                disabled={!databasePath.trim() || isSaving}
+              >
+                {isSaving ? 'Saving...' : 'Save Settings'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
