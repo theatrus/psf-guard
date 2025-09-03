@@ -1,5 +1,5 @@
 /* Tauri Settings Modal */
-.modal-overlay {
+.tauri-settings .modal-overlay {
   position: fixed;
   top: 0;
   left: 0;
@@ -12,7 +12,7 @@
   z-index: 1000;
 }
 
-.modal-content {
+.tauri-settings .modal-content {
   background: var(--color-bg-secondary);
   border-radius: 8px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
@@ -23,7 +23,7 @@
   overflow-y: auto;
 }
 
-.modal-header {
+.tauri-settings .modal-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -31,13 +31,13 @@
   border-bottom: 1px solid var(--color-border-primary);
 }
 
-.modal-header h2 {
+.tauri-settings .modal-header h2 {
   margin: 0;
   color: var(--color-primary);
   font-size: 24px;
 }
 
-.close-button {
+.tauri-settings .close-button {
   background: none;
   border: none;
   font-size: 28px;
@@ -53,16 +53,16 @@
   transition: all 0.2s;
 }
 
-.close-button:hover {
+.tauri-settings .close-button:hover {
   background: var(--color-bg-tertiary);
   color: var(--color-text-primary);
 }
 
-.modal-body {
+.tauri-settings .modal-body {
   padding: 20px;
 }
 
-.welcome-message {
+.tauri-settings .welcome-message {
   background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-alpha-70) 100%);
   color: var(--color-text-primary);
   padding: 20px;
@@ -70,44 +70,44 @@
   margin-bottom: 24px;
 }
 
-.welcome-message h3 {
+.tauri-settings .welcome-message h3 {
   margin: 0 0 12px 0;
   font-size: 20px;
 }
 
-.welcome-message p {
+.tauri-settings .welcome-message p {
   margin: 0 0 12px 0;
   line-height: 1.5;
 }
 
-.welcome-message ul {
+.tauri-settings .welcome-message ul {
   margin: 0;
   padding-left: 20px;
 }
 
-.welcome-message li {
+.tauri-settings .welcome-message li {
   margin-bottom: 8px;
   line-height: 1.4;
 }
 
-.settings-section {
+.tauri-settings .settings-section {
   margin-bottom: 32px;
 }
 
-.settings-section h3 {
+.tauri-settings .settings-section h3 {
   margin: 0 0 16px 0;
   color: var(--color-text-primary);
   font-size: 18px;
   font-weight: 600;
 }
 
-.settings-section p {
+.tauri-settings .settings-section p {
   margin: 0 0 16px 0;
   color: var(--color-text-secondary);
   line-height: 1.5;
 }
 
-.detecting-database {
+.tauri-settings .detecting-database {
   padding: 12px;
   background-color: var(--color-primary-alpha-10);
   border: 1px solid var(--color-primary-alpha-30);
@@ -119,20 +119,20 @@
   gap: 8px;
 }
 
-.database-config label {
+.tauri-settings .database-config label {
   display: block;
   margin-bottom: 8px;
   font-weight: 500;
   color: var(--color-text-primary);
 }
 
-.file-input-group {
+.tauri-settings .file-input-group {
   display: flex;
   gap: 8px;
   margin-bottom: 8px;
 }
 
-.file-path-input {
+.tauri-settings .file-path-input {
   flex: 1;
   padding: 8px 12px;
   border: 1px solid var(--color-border-secondary);
@@ -142,13 +142,13 @@
   color: var(--color-text-primary);
 }
 
-.file-path-input:focus {
+.tauri-settings .file-path-input:focus {
   outline: none;
   border-color: var(--color-primary);
   box-shadow: 0 0 0 2px var(--color-primary-alpha-30);
 }
 
-.browse-button {
+.tauri-settings .browse-button {
   padding: 8px 16px;
   background-color: var(--color-bg-button);
   color: var(--color-text-primary);
@@ -159,11 +159,11 @@
   white-space: nowrap;
 }
 
-.browse-button:hover {
+.tauri-settings .browse-button:hover {
   background-color: var(--color-bg-hover);
 }
 
-.path-info {
+.tauri-settings .path-info {
   font-size: 12px;
   color: var(--color-text-muted);
   padding: 8px;
@@ -172,7 +172,7 @@
   word-break: break-all;
 }
 
-.add-directory-button {
+.tauri-settings .add-directory-button {
   padding: 10px 16px;
   background-color: var(--color-success);
   color: var(--color-text-primary);
@@ -183,17 +183,17 @@
   margin-bottom: 16px;
 }
 
-.add-directory-button:hover {
+.tauri-settings .add-directory-button:hover {
   background-color: var(--color-success-hover);
 }
 
-.image-directories {
+.tauri-settings .image-directories {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.image-directory-item {
+.tauri-settings .image-directory-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -203,13 +203,13 @@
   border: 1px solid var(--color-border-secondary);
 }
 
-.image-directory-item span {
+.tauri-settings .image-directory-item span {
   font-size: 14px;
   color: var(--color-text-primary);
   word-break: break-all;
 }
 
-.remove-button {
+.tauri-settings .remove-button {
   background: none;
   border: none;
   color: var(--color-error);
@@ -221,12 +221,12 @@
   flex-shrink: 0;
 }
 
-.remove-button:hover {
+.tauri-settings .remove-button:hover {
   background-color: var(--color-error);
   color: var(--color-text-primary);
 }
 
-.no-directories {
+.tauri-settings .no-directories {
   padding: 16px;
   background-color: var(--color-bg-tertiary);
   border-radius: 4px;
@@ -235,13 +235,13 @@
   text-align: center;
 }
 
-.modal-footer {
+.tauri-settings .modal-footer {
   padding: 20px;
   border-top: 1px solid var(--color-border-secondary);
   background-color: var(--color-bg-tertiary);
 }
 
-.save-message {
+.tauri-settings .save-message {
   padding: 10px;
   border-radius: 4px;
   margin-bottom: 12px;
@@ -249,25 +249,25 @@
   text-align: center;
 }
 
-.save-message.success {
+.tauri-settings .save-message.success {
   background-color: var(--color-success-alpha-20);
   border: 1px solid var(--color-border-success);
   color: var(--color-success);
 }
 
-.save-message.error {
+.tauri-settings .save-message.error {
   background-color: var(--color-error-alpha-20);
   border: 1px solid var(--color-border-error);
   color: var(--color-error);
 }
 
-.modal-buttons {
+.tauri-settings .modal-buttons {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
 }
 
-.cancel-button {
+.tauri-settings .cancel-button {
   padding: 10px 20px;
   background-color: var(--color-bg-button);
   color: var(--color-text-primary);
@@ -277,11 +277,11 @@
   font-size: 14px;
 }
 
-.cancel-button:hover {
+.tauri-settings .cancel-button:hover {
   background-color: var(--color-bg-hover);
 }
 
-.save-button {
+.tauri-settings .save-button {
   padding: 10px 20px;
   background-color: var(--color-primary);
   color: var(--color-text-primary);
@@ -291,21 +291,21 @@
   font-size: 14px;
 }
 
-.save-button:hover:not(:disabled) {
+.tauri-settings .save-button:hover:not(:disabled) {
   background-color: var(--color-primary-alpha-80);
 }
 
-.save-button:disabled {
+.tauri-settings .save-button:disabled {
   background-color: var(--color-bg-button);
   cursor: not-allowed;
   opacity: 0.6;
 }
 
-.restart-prompt {
+.tauri-settings .restart-prompt {
   text-align: center;
 }
 
-.restart-prompt p {
+.tauri-settings .restart-prompt p {
   margin: 0 0 16px 0;
   font-size: 14px;
   color: var(--color-warning);
@@ -315,7 +315,7 @@
   padding: 12px;
 }
 
-.restart-button {
+.tauri-settings .restart-button {
   padding: 10px 20px;
   background-color: var(--color-success);
   color: var(--color-text-primary);
@@ -326,6 +326,6 @@
   font-weight: 500;
 }
 
-.restart-button:hover {
+.tauri-settings .restart-button:hover {
   background-color: var(--color-success-hover);
 }
