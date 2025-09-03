@@ -248,7 +248,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: target
-        key: ${{ runner.os }}-cargo-build-target-tauri-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ runner.os }}-cargo-build-target-tauri-${{ hashFiles('**/Cargo.lock', '**/tauri.conf.json') }}
 
     - name: Install npm dependencies and build frontend
       run: |
@@ -284,6 +284,10 @@ jobs:
           target/release/bundle/msi/*.msi
           target/release/bundle/nsis/*.exe
           target/release/psf-guard.exe
+
+    - name: Remove bundle so we don't cache it
+      run: rm -rf target/release/bundle
+      shell: bash
 
     - name: Upload Tauri artifacts (macOS)
       if: matrix.os == 'macos-latest'

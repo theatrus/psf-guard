@@ -25,10 +25,10 @@ jobs:
           - os: macos-latest
             artifact_name: psf-guard
             asset_name: psf-guard-macos-x64
-    
+
     steps:
     - uses: actions/checkout@v5
-    
+
     - name: Install system dependencies (Ubuntu)
       if: matrix.os == 'ubuntu-22.04'
       run: |
@@ -39,12 +39,12 @@ jobs:
           libappindicator3-dev \
           librsvg2-dev \
           patchelf
-    
+
     - name: Install OpenCV dependencies (macOS)
       if: matrix.os == 'macos-latest'
       run: |
         brew install opencv
-        
+
         # Set up libclang path for macOS to avoid dyld errors
         # Try both XCode and Command Line Tools paths
         if [ -d "$(xcode-select --print-path)/Toolchains/XcodeDefault.xctoolchain/usr/lib/" ]; then
@@ -52,7 +52,7 @@ jobs:
         else
           echo "DYLD_FALLBACK_LIBRARY_PATH=$(xcode-select --print-path)/usr/lib/" >> $GITHUB_ENV
         fi
-    
+
     - name: Cache vcpkg (Windows)
       if: matrix.os == 'windows-latest'
       id: vcpkg-cache
@@ -60,7 +60,7 @@ jobs:
       with:
         path: C:\vcpkg
         key: ${{ runner.os }}-vcpkg-opencv4-v2
-    
+
     - name: Install OpenCV dependencies (Windows)
       if: matrix.os == 'windows-latest'
       run: |
@@ -69,66 +69,66 @@ jobs:
           git clone https://github.com/Microsoft/vcpkg.git C:\vcpkg
           C:\vcpkg\bootstrap-vcpkg.bat
         }
-        
+
         C:\vcpkg\vcpkg integrate install
-        
+
         # Install OpenCV if not already installed
         if (!(Test-Path "C:\vcpkg\installed\x64-windows\include\opencv2")) {
           C:\vcpkg\vcpkg install opencv4[contrib,nonfree]:x64-windows-static-md
         }
-        
+
         # Set environment variables
         echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
         echo "OpenCV_DIR=C:\vcpkg\installed\x64-windows-static-md" >> $env:GITHUB_ENV
         echo "OPENCV_DISABLE_PROBES=pkg_config,cmake,vcpkg_cmake" >> $env:GITHUB_ENV
         echo "OPENCV_LINK_DIRS=C:\vcpkg\installed\x64-windows-static-md\lib" >> $env:GITHUB_ENV
       shell: pwsh
-    
+
     - name: Install Rust
       uses: dtolnay/rust-toolchain@master
       with:
         toolchain: 1.89.0
-    
+
     - name: Install Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '24'
         cache: 'npm'
         cache-dependency-path: static/package-lock.json
-    
+
     - name: Install npm dependencies and build frontend
       run: |
         cd static
         npm ci
         npm run build
-    
+
     - name: Install Tauri CLI
       run: cargo install tauri-cli --version "^2.0" --locked
-    
+
     - name: Build CLI binary
       run: cargo build --release --locked
-    
+
     - name: Build Tauri desktop app
       run: cargo tauri build --verbose
-    
+
     - name: Prepare release assets
       shell: bash
       run: |
         mkdir -p release-assets
-        
+
         # Copy CLI binary
         if [ "${{ matrix.os }}" = "windows-latest" ]; then
           cp target/release/${{ matrix.artifact_name }} release-assets/${{ matrix.asset_name }}
         else
           cp target/release/${{ matrix.artifact_name }} release-assets/${{ matrix.asset_name }}
         fi
-        
+
         # Copy Tauri bundles based on platform
         case "${{ matrix.os }}" in
           ubuntu-22.04)
             # Copy .deb packages
             find target/release/bundle/deb -name "*.deb" -exec cp {} release-assets/ \; 2>/dev/null || echo "No .deb files found"
-            # Copy AppImages  
+            # Copy AppImages
             find target/release/bundle/appimage -name "*.AppImage" -exec cp {} release-assets/ \; 2>/dev/null || echo "No .AppImage files found"
             ;;
           windows-latest)
@@ -154,11 +154,11 @@ jobs:
             fi
             ;;
         esac
-        
+
         echo "Release assets prepared:"
         ls -la release-assets/
-    
-    - name: Upload release assets  
+
+    - name: Upload release assets
       uses: softprops/action-gh-release@v1
       with:
         files: release-assets/*
@@ -168,27 +168,27 @@ jobs:
         name: PSF Guard ${{ github.ref_name }}
         body: |
           ## PSF Guard ${{ github.ref_name }}
-          
+
           ### Desktop Applications 🖥️
           - **Linux**: `.deb` package and `.AppImage` for easy installation
           - **Windows**: `.msi` installer and NSIS installer
           - **macOS**: `.dmg` installer and `.app` bundle (zipped)
-          
-          ### Command Line Interface 🖥️  
+
+          ### Command Line Interface 🖥️
           - **Linux**: `psf-guard-linux-x64` - standalone CLI binary
           - **Windows**: `psf-guard-windows-x64.exe` - standalone CLI binary
           - **macOS**: `psf-guard-macos-x64` - standalone CLI binary
-          
+
           ### Features
           - 🖥️ **Smart Binary**: Single binary that automatically switches between GUI and CLI modes
-          - 📊 **N.I.N.A. Integration**: Direct support for N.I.N.A. scheduler databases  
+          - 📊 **N.I.N.A. Integration**: Direct support for N.I.N.A. scheduler databases
           - 🌟 **Star Detection**: Advanced PSF fitting and analysis
           - 📁 **File Management**: Comprehensive FITS file organization
           - 🔄 **Cache System**: Intelligent file caching with real-time progress
-          
-          **Desktop GUI**: Run without arguments to launch the desktop interface  
+
+          **Desktop GUI**: Run without arguments to launch the desktop interface
           **CLI Mode**: Run with `--help` or any arguments for command-line interface
-          
+
           Download the appropriate version for your platform and get started!
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
