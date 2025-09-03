@@ -136,9 +136,11 @@ export DYLD_FALLBACK_LIBRARY_PATH="$(xcode-select --print-path)/Toolchains/Xcode
     - macOS: `~/Library/Application Support/psf-guard/temp.db`
     - Windows: `%APPDATA%\psf-guard\temp.db`
     - Linux: `~/.local/share/psf-guard/temp.db`
-- **Configuration Updates**: Settings saved immediately, with user-friendly restart prompt to apply changes
-- **Automatic Loading**: Configuration loaded on application startup
+- **Smart Settings Modal**: Only appears on first launch or when configuration is invalid/missing
+- **Configuration Updates**: Settings saved immediately, with user-friendly restart prompt to apply changes  
+- **Automatic Loading**: Configuration loaded and validated on application startup
 - **Directory Management**: All directories are automatically created as needed
+- **Database Validation**: Checks that configured database file actually exists before considering config valid
 
 ### Development Notes
 - **Important**: Remove `static/dist/` contents if Tauri detection fails - cached production assets may be served instead of dev server

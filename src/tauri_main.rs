@@ -83,7 +83,8 @@ pub fn main() {
             get_default_nina_database_path,
             save_configuration,
             get_current_configuration,
-            restart_application
+            restart_application,
+            is_configuration_valid
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -354,4 +355,18 @@ fn save_configuration(
 async fn restart_application(app: tauri::AppHandle) -> Result<(), String> {
     // Restart the entire Tauri application to apply new configuration
     app.restart();
+}
+
+#[tauri::command]
+fn is_configuration_valid(state: tauri::State<ServerState>) -> Result<bool, String> {
+    let config = state.config.lock().map_err(|e| e.to_string())?;
+    
+    // Check if database path is set and file exists
+    if let Some(db_path) = &config.database_path {
+        if !db_path.trim().is_empty() && std::path::Path::new(db_path).exists() {
+            return Ok(true);
+        }
+    }
+    
+    Ok(false)
 }

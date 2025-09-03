@@ -141,5 +141,19 @@ export const tauriConfig = {
       console.error('Failed to restart application:', error);
       return false;
     }
+  },
+
+  // Check if current configuration is valid
+  isConfigurationValid: async (): Promise<boolean> => {
+    if (!isTauriApp()) return false;
+    
+    try {
+      // @ts-ignore - Tauri API will be available at runtime
+      const { invoke } = await import('@tauri-apps/api/core');
+      return await invoke('is_configuration_valid');
+    } catch (error) {
+      console.error('Failed to check configuration validity:', error);
+      return false;
+    }
   }
 };

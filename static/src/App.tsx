@@ -7,7 +7,7 @@ import ServerInfoPanel from './components/ServerInfoPanel';
 import CacheRefreshStatus from './components/CacheRefreshStatus';
 import TauriSettings from './components/TauriSettings';
 import { useGridState } from './hooks/useUrlState';
-import { isTauriApp } from './utils/tauri';
+import { isTauriApp, tauriConfig } from './utils/tauri';
 import './App.css';
 
 function App() {
@@ -17,26 +17,36 @@ function App() {
   const [showHelp, setShowHelp] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
-  // Auto-show settings in Tauri mode on first start
+  // Auto-show settings in Tauri mode only when configuration is needed
   useEffect(() => {
-    const checkTauri = () => {
+    const checkConfigurationNeeds = async () => {
       console.log('App mounted, checking if Tauri app:', isTauriApp());
-      console.log('Window.__TAURI__ exists:', typeof window !== 'undefined' && '__TAURI__' in window);
       
       if (isTauriApp()) {
-        console.log('Tauri detected, showing settings modal');
-        // Show settings modal automatically when app starts
-        setShowSettings(true);
+        try {
+          // Use the backend validation to check if configuration is complete and valid
+          const isValid = await tauriConfig.isConfigurationValid();
+          
+          if (!isValid) {
+            console.log('Tauri detected with invalid/incomplete configuration, showing settings modal');
+            setShowSettings(true);
+          } else {
+            console.log('Tauri detected with valid configuration, not showing settings modal');
+          }
+        } catch (error) {
+          console.error('Failed to check configuration validity, showing settings modal:', error);
+          setShowSettings(true);
+        }
       } else {
         console.log('Not a Tauri app, skipping auto-settings');
       }
     };
 
     // Check immediately
-    checkTauri();
+    checkConfigurationNeeds();
     
     // Also check after a delay in case Tauri globals load later
-    setTimeout(checkTauri, 1000);
+    setTimeout(checkConfigurationNeeds, 1000);
   }, []);
 
   // Keyboard shortcut for help
