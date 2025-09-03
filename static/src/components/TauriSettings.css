@@ -9,26 +9,26 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: 9999;
 }
 
 .tauri-settings .modal-content {
-  background: var(--color-bg-secondary);
-  border-radius: 8px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-  border: 1px solid var(--color-border-secondary);
-  max-width: 600px;
-  width: 90%;
-  max-height: 80vh;
+  background: var(--color-bg-primary);
+  border: none;
+  width: 100%;
+  height: 100%;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .tauri-settings .modal-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 20px;
+  padding: 24px 32px;
   border-bottom: 1px solid var(--color-border-primary);
+  flex-shrink: 0;
 }
 
 .tauri-settings .modal-header h2 {
@@ -59,20 +59,28 @@
 }
 
 .tauri-settings .modal-body {
-  padding: 20px;
+  padding: 32px;
+  flex: 1;
+  overflow-y: auto;
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
 }
 
 .tauri-settings .welcome-message {
-  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-alpha-70) 100%);
+  background: linear-gradient(135deg, var(--color-bg-elevated) 0%, var(--color-bg-quaternary) 100%);
+  border: 1px solid var(--color-border-secondary);
   color: var(--color-text-primary);
   padding: 20px;
   border-radius: 8px;
   margin-bottom: 24px;
+  position: relative;
 }
 
 .tauri-settings .welcome-message h3 {
   margin: 0 0 12px 0;
   font-size: 20px;
+  color: var(--color-primary);
 }
 
 .tauri-settings .welcome-message p {
@@ -236,9 +244,10 @@
 }
 
 .tauri-settings .modal-footer {
-  padding: 20px;
+  padding: 24px 32px;
   border-top: 1px solid var(--color-border-secondary);
-  background-color: var(--color-bg-tertiary);
+  background-color: var(--color-bg-secondary);
+  flex-shrink: 0;
 }
 
 .tauri-settings .save-message {
