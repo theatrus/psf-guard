@@ -10,21 +10,37 @@ PSF Guard is a Rust CLI utility for analyzing N.I.N.A. Target Scheduler database
 # Development
 cargo fmt && cargo clippy && cargo test
 
-# Run server (supports multiple directories)
+# CLI mode - Run server (supports multiple directories)
 cargo run -- server db.sqlite images1/ images2/
 
+# GUI mode - Launch desktop app (with tauri feature)
+cargo run --features tauri
+
+# Tauri desktop development
+cargo tauri dev
+
 # Build for production
-cargo build --release
+cargo build --release                    # CLI only
+cargo build --release --features tauri   # GUI capable
 ```
 
 ## Architecture
 
 ### Core Components
-- **CLI**: Command-pattern with clap-derive
+- **CLI**: Command-pattern with clap-derive (`src/cli_main.rs`)
+- **Tauri Desktop**: Desktop app with server integration (`src/tauri_main.rs`)
 - **Database**: SQLite via rusqlite
 - **Star Detection**: N.I.N.A. algorithm + HocusFocus detector
 - **Web Server**: Axum + embedded React frontend
 - **Cache System**: Directory tree + file cache with 5-minute TTL
+
+### Smart Binary Mode Selection
+- **Single binary** `psf-guard` with intelligent mode detection
+- **GUI mode**: When tauri feature is enabled and no arguments passed → Desktop app launches
+- **CLI mode**: When arguments are provided OR tauri feature is disabled → Command-line interface
+- `src/main.rs`: Smart dispatcher that checks for arguments to determine mode
+- `src/cli_main.rs`: Traditional command-line interface implementation
+- `src/tauri_main.rs`: Tauri desktop application implementation
 
 ### Cache System (Current)
 - **File Cache**: Database-based existence checking, auto-refreshed every 5 minutes

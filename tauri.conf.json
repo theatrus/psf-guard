@@ -5,7 +5,7 @@
   "identifier": "com.theatrus.psf-guard",
   "build": {
     "beforeDevCommand": "cd static && npm run dev",
-    "beforeBuildCommand": "cd static && npm run build",
+    "beforeBuildCommand": "cd static && npm run build", 
     "devUrl": "http://localhost:5173",
     "frontendDist": "./static/dist",
     "features": ["tauri", "opencv"]

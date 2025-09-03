@@ -76,7 +76,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content tauri-settings" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>PSF Guard Settings {isTauriApp() ? '(Desktop)' : '(Web)'}</h2>
+          <h2>PSF Guard Settings</h2>
           <button className="close-button" onClick={onClose}>×</button>
         </div>
         

@@ -21,6 +21,11 @@ pub mod psf_fitting;
 pub mod server;
 pub mod utils;
 
+// Main entry points
+pub mod cli_main;
+#[cfg(feature = "tauri")]
+pub mod tauri_main;
+
 #[cfg(test)]
 mod test_star_detection;
 

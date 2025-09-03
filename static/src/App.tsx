@@ -51,10 +51,10 @@ function App() {
         <div className="header-left">
           <h1 
             onClick={() => navigate('/')}
-            style={{ cursor: 'pointer', color: isTauriApp() ? 'green' : 'blue' }}
+            style={{ cursor: 'pointer' }}
             title="Go to Overview"
           >
-            PSF Guard {isTauriApp() ? '🖥️ DESKTOP' : '🌐 WEB'}
+            PSF Guard
           </h1>
         </div>
         
@@ -80,7 +80,7 @@ function App() {
             </button>
           )}
           <button onClick={() => setShowSettings(true)} className="header-button">
-            Settings {isTauriApp() ? '(Tauri)' : '(Web)'}
+            Settings
           </button>
           <button onClick={() => setShowHelp(true)} className="header-button">
             Help
