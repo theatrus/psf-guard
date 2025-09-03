@@ -35,14 +35,6 @@
       "timestampUrl": ""
     }
   },
-  "plugins": {
-    "dialog": {
-      "open": true
-    },
-    "fs": {
-      "scope": ["**"]
-    }
-  },
   "app": {
     "windows": [
       {

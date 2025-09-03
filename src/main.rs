@@ -1,8 +1,13 @@
+#[cfg(not(feature = "tauri"))]
 use anyhow::{Context, Result};
+#[cfg(not(feature = "tauri"))]
 use clap::Parser;
+#[cfg(not(feature = "tauri"))]
 use rusqlite::Connection;
 
-use psf_guard::cli::{Cli, Commands, PregenerationConfig};
+#[cfg(not(feature = "tauri"))]
+use psf_guard::cli::{Cli, Commands};
+#[cfg(not(feature = "tauri"))]
 use psf_guard::commands::{
     analyze_fits_and_compare, annotate_stars, benchmark_psf, dump_grading_results,
     filter_rejected_files, list_projects, list_targets, read_fits, regrade_images, show_images,
@@ -10,59 +15,23 @@ use psf_guard::commands::{
 };
 
 #[cfg(feature = "tauri")]
-use tauri::Manager;
+use psf_guard::cli::PregenerationConfig;
+#[cfg(feature = "tauri")]
+use anyhow::Context;
 
 // For Tauri builds, spawn Axum server and connect frontend to it
 #[cfg(feature = "tauri")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 fn main() {
-    // Parse command line arguments even in Tauri mode
-    let cli = Cli::parse();
-    
-    // Extract server arguments if Server command is provided
-    let server_config = match cli.command {
-        Commands::Server { 
-            config,
-            database,
-            image_dirs,
-            static_dir,
-            cache_dir,
-            port,
-            host: _,
-            pregenerate_screen,
-            pregenerate_large,
-            pregenerate_original,
-            pregenerate_annotated,
-            pregenerate_all,
-            cache_expiry,
-        } => TauriServerConfig {
-            config_file: config,
-            database_path: database.or_else(|| Some(cli.database.clone())),
-            image_dirs: if image_dirs.is_empty() { None } else { Some(image_dirs) },
-            static_dir,
-            cache_dir,
-            port,
-            pregeneration: PregenerationConfig::from_server_args(
-                pregenerate_screen,
-                pregenerate_large,
-                pregenerate_original,
-                pregenerate_annotated,
-                pregenerate_all,
-                &cache_expiry,
-            ).unwrap_or_default(),
-        },
-        _ => {
-            // Default configuration when not using Server command
-            TauriServerConfig {
-                config_file: None,
-                database_path: Some(cli.database),
-                image_dirs: None,
-                static_dir: None,
-                cache_dir: None,
-                port: None,
-                pregeneration: PregenerationConfig::default(),
-            }
-        }
+    // Use default configuration for Tauri mode - no CLI parsing
+    let server_config = TauriServerConfig {
+        config_file: None,
+        database_path: None, // Will be determined by get_nina_database_path() or user selection
+        image_dirs: None,
+        static_dir: None,
+        cache_dir: None,
+        port: None,
+        pregeneration: PregenerationConfig::default(),
     };
     
     // Create tokio runtime for the server
@@ -121,36 +90,54 @@ fn get_server_url(state: tauri::State<ServerState>) -> String {
 
 #[cfg(feature = "tauri")]
 #[tauri::command]
-fn pick_database_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
+async fn pick_database_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::Notify;
     
-    let file_path = app.dialog()
+    let result = Arc::new(Mutex::new(None));
+    let notify = Arc::new(Notify::new());
+    let result_clone = result.clone();
+    let notify_clone = notify.clone();
+    
+    app.dialog()
         .file()
         .add_filter("SQLite Database", &["sqlite", "db"])
         .add_filter("All Files", &["*"])
         .set_title("Select N.I.N.A. Database File")
-        .blocking_pick_file();
+        .pick_file(move |file_path| {
+            *result_clone.lock().unwrap() = file_path.map(|p| p.to_string());
+            notify_clone.notify_one();
+        });
         
-    match file_path {
-        Some(path) => Ok(Some(path.to_string())),
-        None => Ok(None),
-    }
+    notify.notified().await;
+    let path = result.lock().unwrap().clone();
+    Ok(path)
 }
 
 #[cfg(feature = "tauri")]
 #[tauri::command]
-fn pick_image_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {
+async fn pick_image_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::Notify;
     
-    let folder_path = app.dialog()
+    let result = Arc::new(Mutex::new(None));
+    let notify = Arc::new(Notify::new());
+    let result_clone = result.clone();
+    let notify_clone = notify.clone();
+    
+    app.dialog()
         .file()
         .set_title("Select Image Directory")
-        .blocking_pick_folder();
+        .pick_folder(move |folder_path| {
+            *result_clone.lock().unwrap() = folder_path.map(|p| p.to_string());
+            notify_clone.notify_one();
+        });
         
-    match folder_path {
-        Some(path) => Ok(Some(path.to_string())),
-        None => Ok(None),
-    }
+    notify.notified().await;
+    let path = result.lock().unwrap().clone();
+    Ok(path)
 }
 
 #[cfg(feature = "tauri")]
@@ -223,7 +210,7 @@ async fn start_server_for_tauri(port: u16, server_config: TauriServerConfig) -> 
         Config::default()
     };
     
-    // Determine database path with priority: CLI args > N.I.N.A. default (Windows) > app data dir
+    // Determine database path - try N.I.N.A. first, then fall back to temp database
     let database_path = server_config.database_path
         .or_else(|| get_nina_database_path())
         .unwrap_or_else(|| {
@@ -231,7 +218,7 @@ async fn start_server_for_tauri(port: u16, server_config: TauriServerConfig) -> 
                 .or_else(|_| std::env::var("USERPROFILE"))
                 .unwrap_or_else(|_| "/tmp".to_string());
             let app_dir = std::path::PathBuf::from(home_dir).join(".psf-guard");
-            app_dir.join("psf-guard.db").to_string_lossy().to_string()
+            app_dir.join("temp.db").to_string_lossy().to_string()
         });
     
     // Determine cache directory
@@ -248,6 +235,17 @@ async fn start_server_for_tauri(port: u16, server_config: TauriServerConfig) -> 
         std::fs::create_dir_all(parent)?;
     }
     std::fs::create_dir_all(&cache_dir)?;
+    
+    // Create a minimal SQLite database if it doesn't exist
+    if !std::path::Path::new(&database_path).exists() {
+        println!("Creating temporary database at: {}", database_path);
+        use rusqlite::Connection;
+        let conn = Connection::open(&database_path)?;
+        // Create minimal schema to allow the server to start
+        conn.execute("CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY, name TEXT)", [])?;
+        conn.execute("CREATE TABLE IF NOT EXISTS targets (id INTEGER PRIMARY KEY, projectId INTEGER, name TEXT)", [])?;
+        conn.execute("CREATE TABLE IF NOT EXISTS acquiredimage (id INTEGER PRIMARY KEY, projectId INTEGER, targetId INTEGER, metadata TEXT)", [])?;
+    }
     
     // Override config with server configuration
     config.merge_with_cli(

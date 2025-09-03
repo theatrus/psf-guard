@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useHotkeys } from 'react-hotkeys-hook';
 import ProjectTargetSelector from './components/ProjectTargetSelector';
@@ -17,6 +17,28 @@ function App() {
   const [showHelp, setShowHelp] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
+  // Auto-show settings in Tauri mode on first start
+  useEffect(() => {
+    const checkTauri = () => {
+      console.log('App mounted, checking if Tauri app:', isTauriApp());
+      console.log('Window.__TAURI__ exists:', typeof window !== 'undefined' && '__TAURI__' in window);
+      
+      if (isTauriApp()) {
+        console.log('Tauri detected, showing settings modal');
+        // Show settings modal automatically when app starts
+        setShowSettings(true);
+      } else {
+        console.log('Not a Tauri app, skipping auto-settings');
+      }
+    };
+
+    // Check immediately
+    checkTauri();
+    
+    // Also check after a delay in case Tauri globals load later
+    setTimeout(checkTauri, 1000);
+  }, []);
+
   // Keyboard shortcut for help
   useHotkeys('?', () => setShowHelp(true), []);
   
@@ -29,10 +51,10 @@ function App() {
         <div className="header-left">
           <h1 
             onClick={() => navigate('/')}
-            style={{ cursor: 'pointer' }}
+            style={{ cursor: 'pointer', color: isTauriApp() ? 'green' : 'blue' }}
             title="Go to Overview"
           >
-            PSF Guard
+            PSF Guard {isTauriApp() ? '🖥️ DESKTOP' : '🌐 WEB'}
           </h1>
         </div>
         
@@ -57,11 +79,9 @@ function App() {
               {showStats ? 'Hide Stats' : 'Stats'}
             </button>
           )}
-          {isTauriApp() && (
-            <button onClick={() => setShowSettings(true)} className="header-button">
-              Settings
-            </button>
-          )}
+          <button onClick={() => setShowSettings(true)} className="header-button">
+            Settings {isTauriApp() ? '(Tauri)' : '(Web)'}
+          </button>
           <button onClick={() => setShowHelp(true)} className="header-button">
             Help
           </button>

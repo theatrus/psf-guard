@@ -68,7 +68,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     onClose();
   };
 
-  if (!isTauriApp() || !isOpen) {
+  if (!isOpen) {
     return null;
   }
 
@@ -76,11 +76,20 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content tauri-settings" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>PSF Guard Settings</h2>
+          <h2>PSF Guard Settings {isTauriApp() ? '(Desktop)' : '(Web)'}</h2>
           <button className="close-button" onClick={onClose}>×</button>
         </div>
         
         <div className="modal-body">
+          <div className="welcome-message">
+            <h3>🚀 Welcome to PSF Guard Desktop!</h3>
+            <p>To get started, please configure your database and image directories:</p>
+            <ul>
+              <li><strong>Database</strong>: Your N.I.N.A. scheduler database file</li>
+              <li><strong>Image Directories</strong>: Folders containing your FITS image files</li>
+            </ul>
+          </div>
+
           <div className="settings-section">
             <h3>Database Configuration</h3>
             
@@ -104,9 +113,13 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                   Browse...
                 </button>
               </div>
-              {databasePath && (
+              {databasePath ? (
                 <div className="path-info">
-                  📁 {databasePath}
+                  ✅ {databasePath}
+                </div>
+              ) : (
+                <div className="path-info" style={{color: '#666'}}>
+                  💡 Click "Browse..." to select your N.I.N.A. database file (usually ends in .sqlite)
                 </div>
               )}
             </div>

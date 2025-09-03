@@ -94,6 +94,9 @@ cargo fmt && cargo clippy && cargo test
 # Run with logging
 RUST_LOG=debug cargo run -- server db.sqlite images/
 
+# Tauri desktop development
+cargo tauri dev
+
 # Frontend development  
 cd static && npm run dev
 
@@ -101,6 +104,10 @@ cd static && npm run dev
 brew install opencv
 export DYLD_FALLBACK_LIBRARY_PATH="$(xcode-select --print-path)/Toolchains/XcodeDefault.xctoolchain/usr/lib/"
 ```
+
+### Tauri Development Notes
+- **Important**: Remove `static/dist/` contents if Tauri detection fails - cached production assets may be served instead of dev server
+- File picker commands are async to prevent UI freezing
 
 ### Recent Fixes
 - **Navigation**: Direct URL building eliminates timing issues

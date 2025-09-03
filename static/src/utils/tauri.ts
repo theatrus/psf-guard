@@ -1,8 +1,25 @@
-// Utility functions for Tauri integration
+// Utility functions for Tauri integration (updated with enhanced detection)
 
 // Check if we're running in Tauri
 export const isTauriApp = (): boolean => {
-  return typeof window !== 'undefined' && '__TAURI__' in window;
+  if (typeof window === 'undefined') return false;
+  
+  // Check for various Tauri globals that might be available
+  const hasTauri = '__TAURI__' in window;
+  const hasTauriApi = '__TAURI_INTERNALS__' in window;
+  const hasInvoke = 'invoke' in window;
+  
+  // In development mode, check if we're running in a webview with specific characteristics
+  const isWebview = window.navigator.userAgent.includes('Tauri') || 
+                   window.location.protocol === 'tauri:' ||
+                   window.location.hostname === 'tauri.localhost';
+  
+  // For dev mode, assume Tauri if we're on localhost with Vite's typical ports
+  const isViteDevMode = window.location.hostname === 'localhost' && 
+                       (window.location.port === '5173' || window.location.port === '5174');
+
+  // Check if we're in a Tauri context (production or development)
+  return hasTauri || hasTauriApi || hasInvoke || isWebview || isViteDevMode;
 };
 
 // Get the server URL when running in Tauri mode

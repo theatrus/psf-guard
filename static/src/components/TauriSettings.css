@@ -60,6 +60,34 @@
   padding: 20px;
 }
 
+.welcome-message {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 20px;
+  border-radius: 8px;
+  margin-bottom: 24px;
+}
+
+.welcome-message h3 {
+  margin: 0 0 12px 0;
+  font-size: 20px;
+}
+
+.welcome-message p {
+  margin: 0 0 12px 0;
+  line-height: 1.5;
+}
+
+.welcome-message ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.welcome-message li {
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
 .settings-section {
   margin-bottom: 32px;
 }
