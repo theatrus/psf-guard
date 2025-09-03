@@ -29,11 +29,16 @@ jobs:
     steps:
     - uses: actions/checkout@v5
     
-    - name: Install OpenCV dependencies (Ubuntu)
+    - name: Install system dependencies (Ubuntu)
       if: matrix.os == 'ubuntu-22.04'
       run: |
         sudo apt-get update
-        sudo apt-get install -y libopencv-dev clang libclang-dev
+        sudo apt-get install -y \
+          libopencv-dev clang libclang-dev \
+          libwebkit2gtk-4.1-dev \
+          libappindicator3-dev \
+          librsvg2-dev \
+          patchelf
     
     - name: Install OpenCV dependencies (macOS)
       if: matrix.os == 'macos-latest'
@@ -91,19 +96,99 @@ jobs:
         cache: 'npm'
         cache-dependency-path: static/package-lock.json
     
-    - name: Install npm dependencies
+    - name: Install npm dependencies and build frontend
       run: |
         cd static
         npm ci
+        npm run build
     
-    - name: Build
+    - name: Install Tauri CLI
+      run: cargo install tauri-cli --version "^2.0" --locked
+    
+    - name: Build CLI binary
       run: cargo build --release --locked
     
-    - name: Upload binaries to release
-      uses: svenstaro/upload-release-action@v2
+    - name: Build Tauri desktop app
+      run: cargo tauri build --verbose
+    
+    - name: Prepare release assets
+      shell: bash
+      run: |
+        mkdir -p release-assets
+        
+        # Copy CLI binary
+        if [ "${{ matrix.os }}" = "windows-latest" ]; then
+          cp target/release/${{ matrix.artifact_name }} release-assets/${{ matrix.asset_name }}
+        else
+          cp target/release/${{ matrix.artifact_name }} release-assets/${{ matrix.asset_name }}
+        fi
+        
+        # Copy Tauri bundles based on platform
+        case "${{ matrix.os }}" in
+          ubuntu-22.04)
+            # Copy .deb packages
+            find target/release/bundle/deb -name "*.deb" -exec cp {} release-assets/ \; 2>/dev/null || echo "No .deb files found"
+            # Copy AppImages  
+            find target/release/bundle/appimage -name "*.AppImage" -exec cp {} release-assets/ \; 2>/dev/null || echo "No .AppImage files found"
+            ;;
+          windows-latest)
+            # Copy .msi installers
+            find target/release/bundle/msi -name "*.msi" -exec cp {} release-assets/ \; 2>/dev/null || echo "No .msi files found"
+            # Copy NSIS installers
+            find target/release/bundle/nsis -name "*.exe" | while read -r file; do
+              cp "$file" release-assets/$(basename "$file" .exe)-installer.exe 2>/dev/null || echo "No NSIS .exe files found"
+            done
+            ;;
+          macos-latest)
+            # Copy .dmg installers
+            find target/release/bundle/dmg -name "*.dmg" -exec cp {} release-assets/ \; 2>/dev/null || echo "No .dmg files found"
+            # Create zip of .app bundles
+            if [ -d "target/release/bundle/macos" ]; then
+              cd target/release/bundle/macos
+              for app in *.app; do
+                if [ -d "$app" ]; then
+                  zip -r "../../../../release-assets/${app%.app}-macos.zip" "$app" 2>/dev/null || echo "Failed to zip $app"
+                fi
+              done
+              cd ../../../../
+            fi
+            ;;
+        esac
+        
+        echo "Release assets prepared:"
+        ls -la release-assets/
+    
+    - name: Upload release assets  
+      uses: softprops/action-gh-release@v1
       with:
-        repo_token: ${{ secrets.GITHUB_TOKEN }}
-        file: target/release/${{ matrix.artifact_name }}
-        asset_name: ${{ matrix.asset_name }}
-        tag: ${{ github.ref }}
-        overwrite: true
+        files: release-assets/*
+        draft: false
+        prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+        generate_release_notes: true
+        name: PSF Guard ${{ github.ref_name }}
+        body: |
+          ## PSF Guard ${{ github.ref_name }}
+          
+          ### Desktop Applications 🖥️
+          - **Linux**: `.deb` package and `.AppImage` for easy installation
+          - **Windows**: `.msi` installer and NSIS installer
+          - **macOS**: `.dmg` installer and `.app` bundle (zipped)
+          
+          ### Command Line Interface 🖥️  
+          - **Linux**: `psf-guard-linux-x64` - standalone CLI binary
+          - **Windows**: `psf-guard-windows-x64.exe` - standalone CLI binary
+          - **macOS**: `psf-guard-macos-x64` - standalone CLI binary
+          
+          ### Features
+          - 🖥️ **Smart Binary**: Single binary that automatically switches between GUI and CLI modes
+          - 📊 **N.I.N.A. Integration**: Direct support for N.I.N.A. scheduler databases  
+          - 🌟 **Star Detection**: Advanced PSF fitting and analysis
+          - 📁 **File Management**: Comprehensive FITS file organization
+          - 🔄 **Cache System**: Intelligent file caching with real-time progress
+          
+          **Desktop GUI**: Run without arguments to launch the desktop interface  
+          **CLI Mode**: Run with `--help` or any arguments for command-line interface
+          
+          Download the appropriate version for your platform and get started!
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

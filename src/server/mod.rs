@@ -219,9 +219,14 @@ async fn run_server_internal(
     };
 
     // Create listener
-    let listener = tokio::net::TcpListener::bind(format!("{}:{}", config.host, config.port)).await?;
+    let listener =
+        tokio::net::TcpListener::bind(format!("{}:{}", config.host, config.port)).await?;
 
-    tracing::info!("🌐 Server listening on http://{}:{}", config.host, config.port);
+    tracing::info!(
+        "🌐 Server listening on http://{}:{}",
+        config.host,
+        config.port
+    );
     tracing::info!(
         "🔧 Environment: RUST_LOG={}",
         std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string())
