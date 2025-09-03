@@ -1,15 +1,16 @@
 /* Tauri Settings Modal */
 .tauri-settings .modal-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: var(--color-overlay-dark);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 9999;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  background: var(--color-bg-primary);
+  z-index: 99999;
 }
 
 .tauri-settings .modal-content {
@@ -20,13 +21,18 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  position: absolute;
+  top: 0;
+  left: 0;
+  margin: 0;
+  padding: 0;
 }
 
 .tauri-settings .modal-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 24px 32px;
+  padding: 1.5rem 3rem;
   border-bottom: 1px solid var(--color-border-primary);
   flex-shrink: 0;
 }
@@ -59,12 +65,13 @@
 }
 
 .tauri-settings .modal-body {
-  padding: 32px;
+  padding: 3rem;
   flex: 1;
   overflow-y: auto;
-  max-width: 1200px;
+  max-width: 1400px;
   margin: 0 auto;
   width: 100%;
+  box-sizing: border-box;
 }
 
 .tauri-settings .welcome-message {
@@ -244,7 +251,7 @@
 }
 
 .tauri-settings .modal-footer {
-  padding: 24px 32px;
+  padding: 1.5rem 3rem;
   border-top: 1px solid var(--color-border-secondary);
   background-color: var(--color-bg-secondary);
   flex-shrink: 0;
@@ -292,20 +299,22 @@
 
 .tauri-settings .save-button {
   padding: 10px 20px;
-  background-color: var(--color-primary);
-  color: var(--color-text-primary);
+  background-color: var(--color-success);
+  color: white;
   border: none;
   border-radius: 4px;
   cursor: pointer;
   font-size: 14px;
+  font-weight: 500;
 }
 
 .tauri-settings .save-button:hover:not(:disabled) {
-  background-color: var(--color-primary-alpha-80);
+  background-color: var(--color-success-hover);
 }
 
 .tauri-settings .save-button:disabled {
   background-color: var(--color-bg-button);
+  color: var(--color-text-disabled);
   cursor: not-allowed;
   opacity: 0.6;
 }
