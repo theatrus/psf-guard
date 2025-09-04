@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.0",
+  "productName": "PSF Guard",
+  "version": "0.3.0",
+  "identifier": "com.theatrus.psf-guard",
+  "build": {
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "./static/dist",
+    "features": ["tauri", "opencv"]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Photography",
+    "copyright": "Apache-2.0",
+    "externalBin": [],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png", 
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "longDescription": "PSF Guard: Astronomical image analysis and quality assessment tool for N.I.N.A. and FITS files",
+    "macOS": {
+      "minimumSystemVersion": "10.13",
+      "hardenedRuntime": true,
+      "entitlements": "./Entitlements.plist",
+      "signingIdentity": "441406E5BD6181EAB2253AACAF9A591AA7D11D9C"
+    },
+    "resources": [],
+    "shortDescription": "Astronomical image analysis tool",
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": ""
+    }
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "PSF Guard",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}

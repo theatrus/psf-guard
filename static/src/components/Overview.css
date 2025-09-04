@@ -6,6 +6,9 @@
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
   min-height: 100vh;
+  width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 
 .overview-loading {
@@ -63,6 +66,9 @@
   border: 1px solid var(--color-border-secondary);
   text-align: center;
   transition: all 0.2s ease;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .overview .stat-card:hover {
@@ -474,6 +480,40 @@
   font-weight: 600;
 }
 
+/* Footer */
+.overview-footer {
+  margin-top: 40px;
+  padding: 20px 0;
+  border-top: 1px solid var(--color-border-secondary);
+}
+
+.footer-content {
+  text-align: center;
+}
+
+.footer-content p {
+  margin: 5px 0;
+  color: var(--color-text-muted);
+  font-size: 0.9em;
+}
+
+.github-link {
+  color: var(--color-primary);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.2s ease;
+}
+
+.github-link:hover {
+  color: var(--color-primary-alpha-80);
+  text-decoration: underline;
+}
+
+.license-info {
+  color: var(--color-text-hint);
+  font-size: 0.85em !important;
+}
+
 /* Responsive Design */
 @media (max-width: 1200px) {
   .overview {
@@ -490,8 +530,14 @@
     font-size: 2em;
   }
   
-  .stats-section {
-    padding: 20px;
+  .overview .stats-section {
+    padding: 15px;
+    margin-bottom: 20px;
+  }
+  
+  .overview .stats-section h2 {
+    font-size: 1.5em;
+    margin-bottom: 15px;
   }
   
   .projects-section,
@@ -507,6 +553,60 @@
   .overview .stat-row {
     flex-wrap: wrap;
   }
+  
+  /* Improve stats grid for medium-small screens */
+  .overview .stats-grid {
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 15px;
+    margin-bottom: 20px;
+  }
+  
+  .overview .stat-card {
+    padding: 15px;
+    min-height: auto;
+  }
+  
+  .overview .stat-main {
+    font-size: 1.8em;
+  }
+}
+
+@media (max-width: 600px) {
+  .overview .stats-section {
+    padding: 12px;
+    margin-bottom: 15px;
+  }
+  
+  .overview .stats-section h2 {
+    font-size: 1.3em;
+    margin-bottom: 12px;
+  }
+  
+  .overview .stats-grid {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin-bottom: 15px;
+  }
+  
+  .overview .stat-card {
+    padding: 12px;
+    min-height: auto;
+  }
+  
+  .overview .stat-card h3 {
+    font-size: 1em;
+    margin-bottom: 8px;
+  }
+  
+  .overview .stat-main {
+    font-size: 1.6em;
+    margin-bottom: 4px;
+  }
+  
+  .overview .stat-sub {
+    font-size: 0.8em;
+    line-height: 1.2;
+  }
 }
 
 @media (max-width: 480px) {
@@ -514,7 +614,67 @@
     padding: 10px;
   }
   
+  .overview .stats-section {
+    padding: 10px;
+    margin-bottom: 15px;
+  }
+  
+  .overview .stats-section h2 {
+    font-size: 1.2em;
+    margin-bottom: 10px;
+  }
+  
+  .overview .stats-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  
+  .overview .stat-card {
+    padding: 8px;
+    min-height: auto;
+  }
+  
+  .overview .stat-card h3 {
+    font-size: 0.85em;
+    margin-bottom: 6px;
+  }
+  
+  .overview .stat-main {
+    font-size: 1.3em;
+    margin-bottom: 3px;
+  }
+  
+  .overview .stat-sub {
+    font-size: 0.75em;
+    line-height: 1.1;
+  }
+}
+
+@media (max-width: 360px) {
+  .overview .stats-section {
+    padding: 8px;
+  }
+  
   .overview .stats-grid {
     grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  
+  .overview .stat-card {
+    padding: 10px;
+    min-height: auto;
+  }
+  
+  .overview .stat-card h3 {
+    font-size: 0.9em;
+  }
+  
+  .overview .stat-main {
+    font-size: 1.4em;
+  }
+  
+  .overview .stat-sub {
+    font-size: 0.8em;
   }
 }

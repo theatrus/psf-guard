@@ -33,11 +33,16 @@ jobs:
         node -v
         npm -v
 
-    - name: Install OpenCV dependencies (Ubuntu)
+    - name: Install system dependencies (Ubuntu)
       if: matrix.os == 'ubuntu-22.04'
       run: |
         sudo apt-get update
-        sudo apt-get install -y libopencv-dev clang libclang-dev
+        sudo apt-get install -y \
+          libopencv-dev clang libclang-dev \
+          libwebkit2gtk-4.1-dev \
+          libappindicator3-dev \
+          librsvg2-dev \
+          patchelf
 
     - name: Install OpenCV dependencies (macOS)
       if: matrix.os == 'macos-latest'
@@ -79,9 +84,9 @@ jobs:
 
         # Set environment variables
         echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
-        echo "OpenCV_DIR=C:\vcpkg\installed\x64-windows" >> $env:GITHUB_ENV
+        echo "OpenCV_DIR=C:\vcpkg\installed\x64-windows-static-md" >> $env:GITHUB_ENV
         echo "OPENCV_DISABLE_PROBES=pkg_config,cmake,vcpkg_cmake" >> $env:GITHUB_ENV
-        echo "OPENCV_LINK_DIRS=C:\vcpkg\installed\x64-windows\lib" >> $env:GITHUB_ENV
+        echo "OPENCV_LINK_DIRS=C:\vcpkg\installed\x64-windows-static-md\lib" >> $env:GITHUB_ENV
       shell: pwsh
 
     - name: Install Rust
@@ -107,10 +112,11 @@ jobs:
         path: target
         key: ${{ runner.os }}-cargo-build-target-opencv-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Install npm dependencies
+    - name: Install npm dependencies and build frontend
       run: |
         cd static
         npm ci
+        npm run build
 
     - name: Check formatting
       run: cargo fmt -- --check
@@ -126,6 +132,7 @@ jobs:
 
     - name: Build release binary
       run: cargo build --verbose --release
+
 
     - name: Upload artifact (Linux)
       if: matrix.os == 'ubuntu-22.04'
@@ -147,3 +154,200 @@ jobs:
       with:
         name: psf-guard-macos-x64
         path: target/release/psf-guard
+
+  test-tauri:
+    name: Test Tauri Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, macos-latest]
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+        cache: 'npm'
+        cache-dependency-path: static/package-lock.json
+
+    - name: Install system dependencies (Ubuntu)
+      if: matrix.os == 'ubuntu-22.04'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libopencv-dev clang libclang-dev \
+          libwebkit2gtk-4.1-dev \
+          libappindicator3-dev \
+          librsvg2-dev \
+          patchelf
+        echo "OPENCV_LINK_LIBS=static=opencv_core,static=opencv_imgproc,static=opencv_imgcodecs,static=opencv_ximgproc" >> $GITHUB_ENV
+
+
+    - name: Import Apple Developer Certificate (macOS)
+      if: matrix.os == 'macos-latest'
+      env:
+        APPLE_CERTIFICATE: ${{ secrets.APPLE_BUILD_CERTIFICATE }}
+        APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_BUILD_CERTIFICATE_PASSWORD }}
+        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        APPLE_API_KEY_PRIVATE: ${{ secrets.APPLE_API_KEY_PRIVATE }}
+      run: |
+        echo $APPLE_CERTIFICATE | base64 --decode > certificate.p12
+        security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+        security default-keychain -s build.keychain
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+        security set-keychain-settings -t 3600 -u build.keychain
+        security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+        security find-identity -v -p codesigning build.keychain
+
+        echo $APPLE_API_KEY_PRIVATE | base64 --decode > AuthKey_$APPLE_API_KEY.p8
+    - name: Verify Certificate (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        CERT_INFO=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID")
+        CERT_ID=$(echo "$CERT_INFO" | awk -F'"' '{print $2}')
+        echo "CERT_ID=$CERT_ID" >> $GITHUB_ENV
+        echo "Certificate imported."
+    - name: Install system dependencies (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        brew install opencv
+
+        # Set up libclang path for macOS to avoid dyld errors
+        if [ -d "$(xcode-select --print-path)/Toolchains/XcodeDefault.xctoolchain/usr/lib/" ]; then
+          echo "DYLD_FALLBACK_LIBRARY_PATH=$(xcode-select --print-path)/Toolchains/XcodeDefault.xctoolchain/usr/lib/" >> $GITHUB_ENV
+        else
+          echo "DYLD_FALLBACK_LIBRARY_PATH=$(xcode-select --print-path)/usr/lib/" >> $GITHUB_ENV
+        fi
+        echo "OPENCV_LINK_LIBS=static=opencv_core,static=opencv_imgproc,static=opencv_imgcodecs,static=opencv_ximgproc" >> $GITHUB_ENV
+
+
+    - name: Cache vcpkg (Windows)
+      if: matrix.os == 'windows-latest'
+      id: vcpkg-cache
+      uses: actions/cache@v4
+      with:
+        path: C:\vcpkg
+        key: ${{ runner.os }}-vcpkg-opencv4-v2
+
+    - name: Install system dependencies (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        # Install vcpkg if not cached
+        if (!(Test-Path "C:\vcpkg")) {
+          git clone https://github.com/Microsoft/vcpkg.git C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat
+        }
+
+        C:\vcpkg\vcpkg integrate install
+
+        # Install OpenCV if not already installed
+        if (!(Test-Path "C:\vcpkg\installed\x64-windows\include\opencv2")) {
+          C:\vcpkg\vcpkg install opencv4[contrib,nonfree]:x64-windows-static-md
+        }
+
+        # Set environment variables
+        echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+        echo "OpenCV_DIR=C:\vcpkg\installed\x64-windows" >> $env:GITHUB_ENV
+        echo "OPENCV_DISABLE_PROBES=pkg_config,cmake,vcpkg_cmake" >> $env:GITHUB_ENV
+        echo "OPENCV_LINK_DIRS=C:\vcpkg\installed\x64-windows\lib" >> $env:GITHUB_ENV
+
+      shell: pwsh
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: 1.89.0
+
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/registry
+        key: ${{ runner.os }}-cargo-registry-tauri-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo bin
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/bin
+        key: ${{ runner.os }}-cargo-bin-tauri-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo index
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/git
+        key: ${{ runner.os }}-cargo-index-tauri-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo build
+      uses: actions/cache@v4
+      with:
+        path: target
+        key: ${{ runner.os }}-cargo-build-target-tauri-${{ hashFiles('**/Cargo.lock', '**/tauri.conf.json') }}
+
+    - name: Install npm dependencies and build frontend
+      run: |
+        cd static
+        npm ci
+        npm run build
+
+    - name: Install Tauri CLI
+      run: cargo install tauri-cli --version "^2.0" --locked
+      continue-on-error: true
+
+    - name: Test Tauri compilation
+      run: cargo build --features tauri --verbose
+
+    - name: Build Tauri desktop app
+      if: matrix.os != 'macos-latest'
+      env:
+        APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        APPLE_API_KEY_PATH: AuthKey_${{ secrets.APPLE_API_KEY }}.p8
+      run: |
+        cargo tauri build --verbose
+
+    - name: Build Tauri desktop app (macOS)
+      if: matrix.os == 'macos-latest'
+      env:
+        APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        APPLE_API_KEY_PATH: AuthKey_${{ secrets.APPLE_API_KEY }}.p8
+      run: |
+        bash scripts/package-macos.sh
+
+    - name: Upload Tauri artifacts (Ubuntu)
+      if: matrix.os == 'ubuntu-22.04'
+      uses: actions/upload-artifact@v4
+      with:
+        name: psf-guard-tauri-linux-x64
+        path: |
+          target/release/bundle/deb/*.deb
+          target/release/bundle/appimage/*.AppImage
+          target/release/psf-guard
+
+    - name: Upload Tauri artifacts (Windows)
+      if: matrix.os == 'windows-latest'
+      uses: actions/upload-artifact@v4
+      with:
+        name: psf-guard-tauri-windows-x64
+        path: |
+          target/release/bundle/msi/*.msi
+          target/release/bundle/nsis/*.exe
+          target/release/psf-guard.exe
+    - name: Upload Tauri artifacts (macOS)
+      if: matrix.os == 'macos-latest'
+      uses: actions/upload-artifact@v4
+      with:
+        name: psf-guard-tauri-macos-x64
+        path: |
+          target/release/bundle/dmg/*.dmg
+          target/release/bundle/macos/*.app
+          target/release/psf-guard
+
+    - name: Remove bundle so we don't cache it
+      run: rm -rf target/release/bundle
+      shell: bash

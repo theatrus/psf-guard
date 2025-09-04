@@ -20,10 +20,11 @@ A Rust utility for astronomical image analysis and grading, with N.I.N.A. Target
   structure.
 - **Star Detection**: N.I.N.A. algorithm port + HocusFocus detector with PSF
   fitting for analysis.
-- **Web Interface**: React-based UI for visual image grading with zoom/pan, and
-  comparisons, with auto-stretched images. Updates to grading are written to the
-  target scheduler DB to allow Target Scheduler to capture more images if
-  required.
+- **Desktop App and Web Interface**: React-based UI for visual image grading
+  with zoom/pan, and comparisons, with auto-stretched images. Updates to grading
+  are written to the target scheduler DB to allow Target Scheduler to capture
+  more images if required. Ships as both a server for NAS hosting, and a
+  stand-alone desktop app.
 - **CLI tools**: Regrading, batch operations, fits processing, batch image moving.
 - **Statistical Analysis**: Advanced outlier detection using HFR, star count,
   and (primitive) cloud detection in the batch modes.
@@ -47,7 +48,26 @@ A Rust utility for astronomical image analysis and grading, with N.I.N.A. Target
 
 ## Quick Start with Web Grader
 
-### Docker (Recommended for Linux)
+### Desktop App (Recommended for Windows/macOS)
+
+**Download PSF Guard Desktop** - Get the native desktop application:
+
+| Platform | Download | Notes |
+|----------|----------|-------|
+| **Windows x64** | [`.msi installer`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard_0.3.0_x64_en-US.msi) | Native Windows installer |
+| **Windows x64** | [`.exe installer`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard_0.3.0_x64-setup.exe) | NSIS installer |
+| **macOS x64** | [`.dmg`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard_0.3.0_x64.dmg) | Drag-and-drop installer |
+| **Linux x64** | [`.deb package`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard_0.3.0_amd64.deb) | Ubuntu/Debian package |
+| **Linux x64** | [`.AppImage`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard_0.3.0_amd64.AppImage) | Portable application |
+
+**Installation:**
+1. Download the appropriate installer for your platform
+2. Install following standard platform conventions
+3. Launch PSF Guard from your applications menu
+4. Configure your database and image directories in the settings panel
+5. Start analyzing your images!
+
+### Docker (Recommended for Linux Servers)
 
 ```bash
 # Pull and run
@@ -63,7 +83,7 @@ docker run -d -p 3000:3000 \
 
 Open your browser to http://localhost:3000/
 
-### Pre-built Binaries for Windows, macOS, Linux
+### Pre-built CLI/Server Binaries for Windows, macOS, Linux
 
 Download the latest release for your platform:
 

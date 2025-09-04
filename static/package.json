@@ -8,11 +8,14 @@
     "build": "tsc -b && vite build",
     "build:prod": "npm run build && cp -r dist/* ../dist/static/",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "tauri:dev": "cd .. && cargo tauri dev",
+    "tauri:build": "cd .. && cargo tauri build"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.85.5",
     "@types/react-router-dom": "^5.3.3",
+    "@tauri-apps/api": "^2.8",
     "axios": "^1.11.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",

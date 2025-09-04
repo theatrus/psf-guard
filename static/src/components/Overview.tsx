@@ -98,8 +98,6 @@ export default function Overview() {
   return (
     <div className="overview">
       <div className="overview-header">
-        <h1>PSF Guard Overview</h1>
-        <p>Astronomical image grading system</p>
       </div>
 
       {/* Overall Statistics */}
@@ -392,6 +390,26 @@ export default function Overview() {
               );
             })}
           </div>
+        </div>
+      </div>
+
+      {/* Footer with GitHub and License Info */}
+      <div className="overview-footer">
+        <div className="footer-content">
+          <p>
+            PSF Guard is open source software available on{' '}
+            <a 
+              href="https://github.com/theatrus/psf-guard" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="github-link"
+            >
+              GitHub
+            </a>
+          </p>
+          <p className="license-info">
+            Licensed under the Apache License 2.0
+          </p>
         </div>
       </div>
     </div>

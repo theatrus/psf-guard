@@ -25,21 +25,57 @@ jobs:
           - os: macos-latest
             artifact_name: psf-guard
             asset_name: psf-guard-macos-x64
-    
+
     steps:
     - uses: actions/checkout@v5
-    
-    - name: Install OpenCV dependencies (Ubuntu)
+
+    - name: Install system dependencies (Ubuntu)
       if: matrix.os == 'ubuntu-22.04'
       run: |
         sudo apt-get update
-        sudo apt-get install -y libopencv-dev clang libclang-dev
-    
+        sudo apt-get install -y \
+          libopencv-dev clang libclang-dev \
+          libwebkit2gtk-4.1-dev \
+          libappindicator3-dev \
+          librsvg2-dev \
+          patchelf
+
+        echo "OPENCV_LINK_LIBS=static=opencv_core,static=opencv_imgproc,static=opencv_imgcodecs,static=opencv_ximgproc" >> $GITHUB_ENV
+
+
+    - name: Import Apple Developer Certificate (macOS)
+      if: matrix.os == 'macos-latest'
+      env:
+        APPLE_CERTIFICATE: ${{ secrets.APPLE_BUILD_CERTIFICATE }}
+        APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_BUILD_CERTIFICATE_PASSWORD }}
+        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        APPLE_API_KEY_PRIVATE: ${{ secrets.APPLE_API_KEY_PRIVATE }}
+      run: |
+        echo $APPLE_CERTIFICATE | base64 --decode > certificate.p12
+        security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+        security default-keychain -s build.keychain
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+        security set-keychain-settings -t 3600 -u build.keychain
+        security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+        security find-identity -v -p codesigning build.keychain
+
+        echo $APPLE_API_KEY_PRIVATE | base64 --decode > AuthKey_$APPLE_API_KEY.p8
+    - name: Verify Certificate (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        CERT_INFO=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID")
+        CERT_ID=$(echo "$CERT_INFO" | awk -F'"' '{print $2}')
+        echo "CERT_ID=$CERT_ID" >> $GITHUB_ENV
+        echo "Certificate imported."
+
     - name: Install OpenCV dependencies (macOS)
       if: matrix.os == 'macos-latest'
       run: |
         brew install opencv
-        
+
         # Set up libclang path for macOS to avoid dyld errors
         # Try both XCode and Command Line Tools paths
         if [ -d "$(xcode-select --print-path)/Toolchains/XcodeDefault.xctoolchain/usr/lib/" ]; then
@@ -47,7 +83,10 @@ jobs:
         else
           echo "DYLD_FALLBACK_LIBRARY_PATH=$(xcode-select --print-path)/usr/lib/" >> $GITHUB_ENV
         fi
-    
+
+        echo "OPENCV_LINK_LIBS=static=opencv_core,static=opencv_imgproc,static=opencv_imgcodecs,static=opencv_ximgproc" >> $GITHUB_ENV
+
+
     - name: Cache vcpkg (Windows)
       if: matrix.os == 'windows-latest'
       id: vcpkg-cache
@@ -55,7 +94,7 @@ jobs:
       with:
         path: C:\vcpkg
         key: ${{ runner.os }}-vcpkg-opencv4-v2
-    
+
     - name: Install OpenCV dependencies (Windows)
       if: matrix.os == 'windows-latest'
       run: |
@@ -64,46 +103,143 @@ jobs:
           git clone https://github.com/Microsoft/vcpkg.git C:\vcpkg
           C:\vcpkg\bootstrap-vcpkg.bat
         }
-        
+
         C:\vcpkg\vcpkg integrate install
-        
+
         # Install OpenCV if not already installed
         if (!(Test-Path "C:\vcpkg\installed\x64-windows\include\opencv2")) {
           C:\vcpkg\vcpkg install opencv4[contrib,nonfree]:x64-windows-static-md
         }
-        
+
         # Set environment variables
         echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
-        echo "OpenCV_DIR=C:\vcpkg\installed\x64-windows" >> $env:GITHUB_ENV
+        echo "OpenCV_DIR=C:\vcpkg\installed\x64-windows-static-md" >> $env:GITHUB_ENV
         echo "OPENCV_DISABLE_PROBES=pkg_config,cmake,vcpkg_cmake" >> $env:GITHUB_ENV
-        echo "OPENCV_LINK_DIRS=C:\vcpkg\installed\x64-windows\lib" >> $env:GITHUB_ENV
+        echo "OPENCV_LINK_DIRS=C:\vcpkg\installed\x64-windows-static-md\lib" >> $env:GITHUB_ENV
+
       shell: pwsh
-    
+
     - name: Install Rust
       uses: dtolnay/rust-toolchain@master
       with:
         toolchain: 1.89.0
-    
+
     - name: Install Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '24'
         cache: 'npm'
         cache-dependency-path: static/package-lock.json
-    
-    - name: Install npm dependencies
+
+    - name: Install npm dependencies and build frontend
       run: |
         cd static
         npm ci
-    
-    - name: Build
+        npm run build
+
+    - name: Install Tauri CLI
+      run: cargo install tauri-cli --version "^2.0" --locked
+      continue-on-error: true
+
+    - name: Build CLI binary
       run: cargo build --release --locked
-    
-    - name: Upload binaries to release
-      uses: svenstaro/upload-release-action@v2
+
+    - name: Build Tauri desktop app
+      if: matrix.os != 'macos-latest'
+      env:
+        APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        APPLE_API_KEY_PATH: AuthKey_${{ secrets.APPLE_API_KEY }}.p8
+      run: |
+        cargo tauri build --verbose
+
+    - name: Build Tauri desktop app (macOS)
+      if: matrix.os == 'macos-latest'
+      env:
+        APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        APPLE_API_KEY_PATH: AuthKey_${{ secrets.APPLE_API_KEY }}.p8
+      run: |
+        bash scripts/package-macos.sh
+
+    - name: Prepare release assets
+      shell: bash
+      run: |
+        mkdir -p release-assets
+
+        # Copy CLI binary
+        if [ "${{ matrix.os }}" = "windows-latest" ]; then
+          cp target/release/${{ matrix.artifact_name }} release-assets/${{ matrix.asset_name }}
+        else
+          cp target/release/${{ matrix.artifact_name }} release-assets/${{ matrix.asset_name }}
+        fi
+
+        # Copy Tauri bundles based on platform
+        case "${{ matrix.os }}" in
+          ubuntu-22.04)
+            # Copy .deb packages
+            find target/release/bundle/deb -name "*.deb" -exec cp {} release-assets/ \; 2>/dev/null || echo "No .deb files found"
+            # Copy AppImages
+            find target/release/bundle/appimage -name "*.AppImage" -exec cp {} release-assets/ \; 2>/dev/null || echo "No .AppImage files found"
+            ;;
+          windows-latest)
+            # Copy .msi installers
+            find target/release/bundle/msi -name "*.msi" -exec cp {} release-assets/ \; 2>/dev/null || echo "No .msi files found"
+            # Copy NSIS installers
+            find target/release/bundle/nsis -name "*.exe" | while read -r file; do
+              cp "$file" release-assets/$(basename "$file" .exe)-installer.exe 2>/dev/null || echo "No NSIS .exe files found"
+            done
+            ;;
+          macos-latest)
+            # Copy .dmg installers
+            find target/release/bundle/dmg -name "*.dmg" -exec cp {} release-assets/ \; 2>/dev/null || echo "No .dmg files found"
+            # Create zip of .app bundles
+            if [ -d "target/release/bundle/macos" ]; then
+              cd target/release/bundle/macos
+              for app in *.app; do
+                if [ -d "$app" ]; then
+                  zip -r "../../../../release-assets/${app%.app}-macos.zip" "$app" 2>/dev/null || echo "Failed to zip $app"
+                fi
+              done
+              cd ../../../../
+            fi
+            ;;
+        esac
+
+        echo "Release assets prepared:"
+        ls -la release-assets/
+
+    - name: Upload release assets
+      uses: softprops/action-gh-release@v1
       with:
-        repo_token: ${{ secrets.GITHUB_TOKEN }}
-        file: target/release/${{ matrix.artifact_name }}
-        asset_name: ${{ matrix.asset_name }}
-        tag: ${{ github.ref }}
-        overwrite: true
+        files: release-assets/*
+        draft: false
+        prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+        generate_release_notes: true
+        name: PSF Guard ${{ github.ref_name }}
+        body: |
+          ## PSF Guard ${{ github.ref_name }}
+
+          ### Desktop Applications 🖥️
+          - **Linux**: `.deb` package and `.AppImage` for easy installation
+          - **Windows**: `.msi` installer and NSIS installer
+          - **macOS**: `.dmg` installer and `.app` bundle (zipped)
+
+          ### Command Line Interface 🖥️
+          - **Linux**: `psf-guard-linux-x64` - standalone CLI binary
+          - **Windows**: `psf-guard-windows-x64.exe` - standalone CLI binary
+          - **macOS**: `psf-guard-macos-x64` - standalone CLI binary
+
+          ### Features
+          - 🖥️ **Smart Binary**: Single binary that automatically switches between GUI and CLI modes
+          - 📊 **N.I.N.A. Integration**: Direct support for N.I.N.A. scheduler databases
+          - 🌟 **Star Detection**: Advanced PSF fitting and analysis
+          - 📁 **File Management**: Comprehensive FITS file organization
+          - 🔄 **Cache System**: Intelligent file caching with real-time progress
+
+          **Desktop GUI**: Run without arguments to launch the desktop interface
+          **CLI Mode**: Run with `--help` or any arguments for command-line interface
+
+          Download the appropriate version for your platform and get started!
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
