@@ -183,6 +183,8 @@ jobs:
           libappindicator3-dev \
           librsvg2-dev \
           patchelf
+        echo "OPENCV_LINK_LIBS=static=opencv_core,static=opencv_imgproc,static=opencv_imgcodecs,static=opencv_ximgproc" >> $GITHUB_ENV
+
 
     - name: Import Apple Developer Certificate (macOS)
       if: matrix.os == 'macos-latest'
@@ -222,6 +224,8 @@ jobs:
         else
           echo "DYLD_FALLBACK_LIBRARY_PATH=$(xcode-select --print-path)/usr/lib/" >> $GITHUB_ENV
         fi
+        echo "OPENCV_LINK_LIBS=static=opencv_core,static=opencv_imgproc,static=opencv_imgcodecs,static=opencv_ximgproc" >> $GITHUB_ENV
+
 
     - name: Cache vcpkg (Windows)
       if: matrix.os == 'windows-latest'
@@ -252,6 +256,8 @@ jobs:
         echo "OpenCV_DIR=C:\vcpkg\installed\x64-windows" >> $env:GITHUB_ENV
         echo "OPENCV_DISABLE_PROBES=pkg_config,cmake,vcpkg_cmake" >> $env:GITHUB_ENV
         echo "OPENCV_LINK_DIRS=C:\vcpkg\installed\x64-windows\lib" >> $env:GITHUB_ENV
+        echo "OPENCV_LINK_LIBS=static=opencv_core,static=opencv_imgproc,static=opencv_imgcodecs,static=opencv_ximgproc" >> $env:GITHUB_ENV
+
       shell: pwsh
 
     - name: Install Rust

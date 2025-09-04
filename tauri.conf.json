@@ -6,7 +6,8 @@
   "build": {
     "devUrl": "http://localhost:5173",
     "frontendDist": "./static/dist",
-    "features": ["tauri", "opencv"]
+    "features": ["tauri", "opencv"],
+    "beforeBundleCommand": "bash -c 'echo hello'"
   },
   "bundle": {
     "active": true,

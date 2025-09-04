@@ -11,5 +11,7 @@ fi
 
 echo "Using DYLD_FALLBACK_LIBRARY_PATH: $DYLD_FALLBACK_LIBRARY_PATH"
 
+export OPENCV_LINK_LIBS="static=opencv_core,static=opencv_imgproc,static=opencv_imgcodecs,static=opencv_ximgproc"
+
 # Run the build with all arguments passed through
 cargo "$@"
