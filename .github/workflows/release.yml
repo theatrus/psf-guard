@@ -116,7 +116,6 @@ jobs:
         echo "OpenCV_DIR=C:\vcpkg\installed\x64-windows-static-md" >> $env:GITHUB_ENV
         echo "OPENCV_DISABLE_PROBES=pkg_config,cmake,vcpkg_cmake" >> $env:GITHUB_ENV
         echo "OPENCV_LINK_DIRS=C:\vcpkg\installed\x64-windows-static-md\lib" >> $env:GITHUB_ENV
-        echo "OPENCV_LINK_LIBS=static=opencv_core,static=opencv_imgproc,static=opencv_imgcodecs,static=opencv_ximgproc" >> $env:GITHUB_ENV
 
       shell: pwsh
 
