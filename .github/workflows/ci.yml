@@ -192,7 +192,7 @@ jobs:
         KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-        APPLE_API_KEY_PRIVAT: ${{ secrets.APPLE_API_KEY_PRIVATE }}
+        APPLE_API_KEY_PRIVATE: ${{ secrets.APPLE_API_KEY_PRIVATE }}
       run: |
         echo $APPLE_CERTIFICATE | base64 --decode > certificate.p12
         security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
@@ -203,8 +203,7 @@ jobs:
         security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
         security find-identity -v -p codesigning build.keychain
 
-        mkdir $HOME/.applekeys
-        echo $APPLE_API_KEY_PRIVATE > $HOME/.applekeys/AuthKey_$APPLE_API_KEY.p8
+        echo $APPLE_API_KEY_PRIVATE | base64 --decode > AuthKey_$APPLE_API_KEY.p8
     - name: Verify Certificate (macOS)
       if: matrix.os == 'macos-latest'
       run: |
@@ -296,13 +295,14 @@ jobs:
     - name: Test Tauri compilation
       run: cargo build --features tauri --verbose
 
-    - name: Test Tauri build process
+    - name: Build Tauri desktop app
       env:
         APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        APPLE_API_KEY_PATH: AuthKey_${{ secrets.APPLE_API_KEY }}.p8
       run: |
-        export APPLE_API_KEY_PATH=$(find ~/.applekeys/ -name "*.p8" | head -n 1)
         cargo tauri build --verbose
+
     - name: Upload Tauri artifacts (Ubuntu)
       if: matrix.os == 'ubuntu-22.04'
       uses: actions/upload-artifact@v4
