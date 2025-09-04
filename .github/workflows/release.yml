@@ -145,12 +145,22 @@ jobs:
       run: cargo build --release --locked
 
     - name: Build Tauri desktop app
+      if: matrix.os != 'macos-latest'
       env:
         APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-        APPLE_API_KEY_PATH: .applekeys/AuthKey_${{ secrets.APPLE_API_KEY }}.p8
+        APPLE_API_KEY_PATH: AuthKey_${{ secrets.APPLE_API_KEY }}.p8
       run: |
         cargo tauri build --verbose
+
+    - name: Build Tauri desktop app (macOS)
+      if: matrix.os == 'macos-latest'
+      env:
+        APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        APPLE_API_KEY_PATH: AuthKey_${{ secrets.APPLE_API_KEY }}.p8
+      run: |
+        bash scripts/package-macos.sh
 
     - name: Prepare release assets
       shell: bash
