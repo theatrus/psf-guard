@@ -142,7 +142,9 @@ jobs:
       env:
         APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-      run: APPLE_API_KEY_PATH=$HOME/.applekeys/AuthKey_$(APPLE_KEY_ID).p8 cargo tauri build --verbose
+      run: |
+        export APPLE_API_KEY_PATH=$(find ~/.applekeys/ -name "*.p8" | head -n 1)
+        cargo tauri build --verbose
 
     - name: Prepare release assets
       shell: bash
