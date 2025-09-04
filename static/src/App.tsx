@@ -16,13 +16,16 @@ function App() {
   const { showStats, setShowStats } = useGridState();
   const [showHelp, setShowHelp] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [isTauri, setIsTauri] = useState(false);
 
-  // Auto-show settings in Tauri mode only when configuration is needed
+  // Check if we're in Tauri mode and handle settings
   useEffect(() => {
-    const checkConfigurationNeeds = async () => {
-      console.log('App mounted, checking if Tauri app:', isTauriApp());
+    const checkTauriAndConfiguration = async () => {
+      const tauriDetected = isTauriApp();
+      console.log('App mounted, checking if Tauri app:', tauriDetected);
+      setIsTauri(tauriDetected);
       
-      if (isTauriApp()) {
+      if (tauriDetected) {
         try {
           // Use the backend validation to check if configuration is complete and valid
           const isValid = await tauriConfig.isConfigurationValid();
@@ -43,10 +46,10 @@ function App() {
     };
 
     // Check immediately
-    checkConfigurationNeeds();
+    checkTauriAndConfiguration();
     
     // Also check after a delay in case Tauri globals load later
-    setTimeout(checkConfigurationNeeds, 1000);
+    setTimeout(checkTauriAndConfiguration, 1000);
   }, []);
 
   // Keyboard shortcut for help
@@ -89,9 +92,11 @@ function App() {
               {showStats ? 'Hide Stats' : 'Stats'}
             </button>
           )}
-          <button onClick={() => setShowSettings(true)} className="header-button">
-            Settings
-          </button>
+          {isTauri && (
+            <button onClick={() => setShowSettings(true)} className="header-button">
+              Settings
+            </button>
+          )}
           <button onClick={() => setShowHelp(true)} className="header-button">
             Help
           </button>
@@ -107,7 +112,7 @@ function App() {
         <KeyboardShortcutHelp onClose={() => setShowHelp(false)} />
       )}
       
-      {showSettings && (
+      {showSettings && isTauri && (
         <TauriSettings 
           isOpen={showSettings} 
           onClose={() => setShowSettings(false)} 

@@ -13,13 +13,10 @@ export const isTauriApp = (): boolean => {
   const isWebview = window.navigator.userAgent.includes('Tauri') || 
                    window.location.protocol === 'tauri:' ||
                    window.location.hostname === 'tauri.localhost';
-  
-  // For dev mode, assume Tauri if we're on localhost with Vite's typical ports
-  const isViteDevMode = window.location.hostname === 'localhost' && 
-                       (window.location.port === '5173' || window.location.port === '5174');
 
   // Check if we're in a Tauri context (production or development)
-  return hasTauri || hasTauriApi || hasInvoke || isWebview || isViteDevMode;
+  // Only trust the presence of actual Tauri APIs, not URL patterns
+  return hasTauri || hasTauriApi || hasInvoke || isWebview;
 };
 
 // Get the server URL when running in Tauri mode
