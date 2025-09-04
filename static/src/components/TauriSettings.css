@@ -1,5 +1,5 @@
 /* Tauri Settings Modal */
-.tauri-settings .modal-overlay {
+.tauri-settings.modal-overlay {
   position: fixed;
   top: 0 !important;
   left: 0 !important;
@@ -10,7 +10,7 @@
   margin: 0;
   padding: 0;
   background: var(--color-bg-primary);
-  z-index: 99999;
+  z-index: 100000;
 }
 
 .tauri-settings .modal-content {
