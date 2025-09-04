@@ -299,7 +299,13 @@ jobs:
       run: cargo install tauri-cli --version "^2.0" --locked
 
     - name: Test Tauri compilation
+      if: matrix.os != 'macos-latest'
       run: cargo build --features tauri --verbose
+
+
+    - name: Test Tauri compilation (macOS)
+      if: matrix.os == 'macos-latest'
+      run: bash scripts/package-macos.sh
 
     - name: Build Tauri desktop app
       env:
