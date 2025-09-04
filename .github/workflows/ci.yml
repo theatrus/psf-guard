@@ -297,6 +297,7 @@ jobs:
 
     - name: Install Tauri CLI
       run: cargo install tauri-cli --version "^2.0" --locked
+      continue-on-error: true
 
     - name: Test Tauri compilation
       run: cargo build --features tauri --verbose
