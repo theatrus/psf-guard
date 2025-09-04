@@ -40,6 +40,36 @@ jobs:
           librsvg2-dev \
           patchelf
 
+
+    - name: Import Apple Developer Certificate (macOS)
+      if: matrix.os == 'macos-latest'
+      env:
+        APPLE_CERTIFICATE: ${{ secrets.APPLE_BUILD_CERTIFICATE }}
+        APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_BUILD_CERTIFICATE_PASSWORD }}
+        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        APPLE_API_KEY_PRIVAT: ${{ secrets.APPLE_API_KEY_PRIVATE }}
+      run: |
+        echo $APPLE_CERTIFICATE | base64 --decode > certificate.p12
+        security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+        security default-keychain -s build.keychain
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+        security set-keychain-settings -t 3600 -u build.keychain
+        security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+        security find-identity -v -p codesigning build.keychain
+
+        mkdir $HOME/.applekeys
+        echo $APPLE_API_KEY_PRIVATE | base64 --decode > $HOME/.applekeys/AuthKey_$APPLE_API_KEY.p8
+    - name: Verify Certificate (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        CERT_INFO=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID")
+        CERT_ID=$(echo "$CERT_INFO" | awk -F'"' '{print $2}')
+        echo "CERT_ID=$CERT_ID" >> $GITHUB_ENV
+        echo "Certificate imported."
+
     - name: Install OpenCV dependencies (macOS)
       if: matrix.os == 'macos-latest'
       run: |
@@ -109,6 +139,10 @@ jobs:
       run: cargo build --release --locked
 
     - name: Build Tauri desktop app
+      env:
+        APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        APPLE_API_KEY_PATH: $HOME/.applekeys/AuthKey_${{ secrets.APPLE_API_KEY }}.p8
       run: cargo tauri build --verbose
 
     - name: Prepare release assets
