@@ -204,7 +204,7 @@ jobs:
         security find-identity -v -p codesigning build.keychain
 
         mkdir $HOME/.applekeys
-        echo $APPLE_API_KEY_PRIVATE | base64 --decode > $HOME/.applekeys/AuthKey_$APPLE_API_KEY.p8
+        echo $APPLE_API_KEY_PRIVATE > $HOME/.applekeys/AuthKey_$APPLE_API_KEY.p8
     - name: Verify Certificate (macOS)
       if: matrix.os == 'macos-latest'
       run: |
