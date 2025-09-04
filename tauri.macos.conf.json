@@ -1,6 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2.0.0",
   "build": {
-    "beforeBundleCommand": "cd .. && scripts/macos-opencv-dylibs.sh"
+  },
+  "bundle": {
+    "macOS": {
+      "frameworks": [
+      ]
+    }
   }
 }
