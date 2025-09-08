@@ -210,7 +210,7 @@ jobs:
         ls -la release-assets/
 
     - name: Upload release assets
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         files: release-assets/*
         draft: false
