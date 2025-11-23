@@ -293,7 +293,7 @@ jobs:
       continue-on-error: true
       with:
         path: target
-        key: ${{ runner.os }}-cargo-build-target-tauri-${{ hashFiles('Cargo.lock', 'src-tauri/tauri.conf.json') }}
+        key: ${{ runner.os }}-cargo-build-target-tauri-${{ hashFiles('Cargo.lock', 'tauri.conf.json') }}
 
     - name: Install npm dependencies and build frontend
       run: |
