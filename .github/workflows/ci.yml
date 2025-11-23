@@ -266,27 +266,31 @@ jobs:
 
     - name: Cache cargo registry
       uses: actions/cache@v4
+      continue-on-error: true
       with:
         path: ~/.cargo/registry
-        key: ${{ runner.os }}-cargo-registry-tauri-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ runner.os }}-cargo-registry-tauri-${{ hashFiles('Cargo.lock') }}
 
     - name: Cache cargo bin
       uses: actions/cache@v4
+      continue-on-error: true
       with:
         path: ~/.cargo/bin
-        key: ${{ runner.os }}-cargo-bin-tauri-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ runner.os }}-cargo-bin-tauri-${{ hashFiles('Cargo.lock') }}
 
     - name: Cache cargo index
       uses: actions/cache@v4
+      continue-on-error: true
       with:
         path: ~/.cargo/git
-        key: ${{ runner.os }}-cargo-index-tauri-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ runner.os }}-cargo-index-tauri-${{ hashFiles('Cargo.lock') }}
 
     - name: Cache cargo build
       uses: actions/cache@v4
+      continue-on-error: true
       with:
         path: target
-        key: ${{ runner.os }}-cargo-build-target-tauri-${{ hashFiles('**/Cargo.lock', '**/tauri.conf.json') }}
+        key: ${{ runner.os }}-cargo-build-target-tauri-${{ hashFiles('Cargo.lock', 'src-tauri/tauri.conf.json') }}
 
     - name: Install npm dependencies and build frontend
       run: |
