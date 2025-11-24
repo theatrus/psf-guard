@@ -24,7 +24,7 @@ serde_json = "1.0"
 toml_edit = { version = "0.23", features = ["serde"] }
 anyhow = "1.0"
 chrono = "0.4"
-regex = "1.11"
+regex = "1.12"
 byteorder = "1.5"
 fitrs = "0.5"
 bumpalo = { version = "3.16", features = ["collections"] }
