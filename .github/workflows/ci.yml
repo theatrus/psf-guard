@@ -139,21 +139,21 @@ jobs:
 
     - name: Upload artifact (Linux)
       if: matrix.os == 'ubuntu-22.04'
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       with:
         name: psf-guard-linux-x64
         path: target/release/psf-guard
 
     - name: Upload artifact (Windows)
       if: matrix.os == 'windows-latest'
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       with:
         name: psf-guard-windows-x64
         path: target/release/psf-guard.exe
 
     - name: Upload artifact (macOS)
       if: matrix.os == 'macos-latest'
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       with:
         name: psf-guard-macos-x64
         path: target/release/psf-guard
@@ -328,7 +328,7 @@ jobs:
 
     - name: Upload Tauri artifacts (Ubuntu)
       if: matrix.os == 'ubuntu-22.04'
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       with:
         name: psf-guard-tauri-linux-x64
         path: |
@@ -338,7 +338,7 @@ jobs:
 
     - name: Upload Tauri artifacts (Windows)
       if: matrix.os == 'windows-latest'
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       with:
         name: psf-guard-tauri-windows-x64
         path: |
@@ -347,7 +347,7 @@ jobs:
           target/release/psf-guard.exe
     - name: Upload Tauri artifacts (macOS)
       if: matrix.os == 'macos-latest'
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       with:
         name: psf-guard-tauri-macos-x64
         path: |
