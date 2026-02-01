@@ -90,7 +90,7 @@ jobs:
     - name: Cache vcpkg (Windows)
       if: matrix.os == 'windows-latest'
       id: vcpkg-cache
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: C:\vcpkg
         key: ${{ runner.os }}-vcpkg-opencv4-v2
