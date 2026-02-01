@@ -6,14 +6,56 @@ use crate::models::{
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 
+/// Schema version detection - checks if guid columns exist
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SchemaCapabilities {
+    pub has_acquiredimage_guid: bool,
+    pub has_project_guid: bool,
+    pub has_target_guid: bool,
+}
+
+impl SchemaCapabilities {
+    /// Detect schema capabilities by checking for guid columns
+    pub fn detect(conn: &Connection) -> Self {
+        Self {
+            has_acquiredimage_guid: Self::table_has_column(conn, "acquiredimage", "guid"),
+            has_project_guid: Self::table_has_column(conn, "project", "guid"),
+            has_target_guid: Self::table_has_column(conn, "target", "guid"),
+        }
+    }
+
+    fn table_has_column(conn: &Connection, table: &str, column: &str) -> bool {
+        let query = format!("PRAGMA table_info({})", table);
+        if let Ok(mut stmt) = conn.prepare(&query) {
+            if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(1)) {
+                for col_result in rows {
+                    if let Ok(col_name) = col_result {
+                        if col_name.eq_ignore_ascii_case(column) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+}
+
 /// Database access layer for PSF Guard
 pub struct Database<'a> {
     conn: &'a Connection,
+    schema: SchemaCapabilities,
 }
 
 impl<'a> Database<'a> {
     pub fn new(conn: &'a Connection) -> Self {
-        Database { conn }
+        let schema = SchemaCapabilities::detect(conn);
+        Database { conn, schema }
+    }
+
+    /// Get schema capabilities for this database
+    pub fn schema_capabilities(&self) -> &SchemaCapabilities {
+        &self.schema
     }
 
     // Profile queries
@@ -45,11 +87,13 @@ impl<'a> Database<'a> {
 
     // Project queries
     pub fn get_all_projects(&self) -> Result<Vec<Project>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT Id, profileId, name, description 
-             FROM project 
-             ORDER BY name",
-        )?;
+        let query = if self.schema.has_project_guid {
+            "SELECT Id, profileId, name, description, guid FROM project ORDER BY name"
+        } else {
+            "SELECT Id, profileId, name, description FROM project ORDER BY name"
+        };
+        let mut stmt = self.conn.prepare(query)?;
+        let has_guid = self.schema.has_project_guid;
 
         let projects = stmt
             .query_map([], |row| {
@@ -58,6 +102,7 @@ impl<'a> Database<'a> {
                     profile_id: row.get(1)?,
                     name: row.get(2)?,
                     description: row.get(3)?,
+                    guid: if has_guid { row.get(4)? } else { None },
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -66,12 +111,19 @@ impl<'a> Database<'a> {
     }
 
     pub fn get_projects_with_images(&self) -> Result<Vec<Project>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT p.Id, p.profileId, p.name, p.description 
+        let query = if self.schema.has_project_guid {
+            "SELECT DISTINCT p.Id, p.profileId, p.name, p.description, p.guid
              FROM project p
              INNER JOIN acquiredimage ai ON p.Id = ai.projectId
-             ORDER BY p.name",
-        )?;
+             ORDER BY p.name"
+        } else {
+            "SELECT DISTINCT p.Id, p.profileId, p.name, p.description
+             FROM project p
+             INNER JOIN acquiredimage ai ON p.Id = ai.projectId
+             ORDER BY p.name"
+        };
+        let mut stmt = self.conn.prepare(query)?;
+        let has_guid = self.schema.has_project_guid;
 
         let projects = stmt
             .query_map([], |row| {
@@ -80,6 +132,7 @@ impl<'a> Database<'a> {
                     profile_id: row.get(1)?,
                     name: row.get(2)?,
                     description: row.get(3)?,
+                    guid: if has_guid { row.get(4)? } else { None },
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -88,11 +141,13 @@ impl<'a> Database<'a> {
     }
 
     pub fn get_projects_with_profile_info(&self) -> Result<Vec<ProjectWithProfile>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT Id, profileId, name, description 
-             FROM project 
-             ORDER BY profileId, name",
-        )?;
+        let query = if self.schema.has_project_guid {
+            "SELECT Id, profileId, name, description, guid FROM project ORDER BY profileId, name"
+        } else {
+            "SELECT Id, profileId, name, description FROM project ORDER BY profileId, name"
+        };
+        let mut stmt = self.conn.prepare(query)?;
+        let has_guid = self.schema.has_project_guid;
 
         let projects = stmt
             .query_map([], |row| {
@@ -101,6 +156,7 @@ impl<'a> Database<'a> {
                     profile_id: row.get(1)?,
                     name: row.get(2)?,
                     description: row.get(3)?,
+                    guid: if has_guid { row.get(4)? } else { None },
                 };
                 Ok(ProjectWithProfile {
                     profile_name: project.profile_id.clone(), // Use profile_id as name
@@ -113,12 +169,19 @@ impl<'a> Database<'a> {
     }
 
     pub fn get_projects_with_images_and_profile_info(&self) -> Result<Vec<ProjectWithProfile>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT p.Id, p.profileId, p.name, p.description 
+        let query = if self.schema.has_project_guid {
+            "SELECT DISTINCT p.Id, p.profileId, p.name, p.description, p.guid
              FROM project p
              INNER JOIN acquiredimage ai ON p.Id = ai.projectId
-             ORDER BY p.profileId, p.name",
-        )?;
+             ORDER BY p.profileId, p.name"
+        } else {
+            "SELECT DISTINCT p.Id, p.profileId, p.name, p.description
+             FROM project p
+             INNER JOIN acquiredimage ai ON p.Id = ai.projectId
+             ORDER BY p.profileId, p.name"
+        };
+        let mut stmt = self.conn.prepare(query)?;
+        let has_guid = self.schema.has_project_guid;
 
         let projects = stmt
             .query_map([], |row| {
@@ -127,6 +190,7 @@ impl<'a> Database<'a> {
                     profile_id: row.get(1)?,
                     name: row.get(2)?,
                     description: row.get(3)?,
+                    guid: if has_guid { row.get(4)? } else { None },
                 };
                 Ok(ProjectWithProfile {
                     profile_name: project.profile_id.clone(), // Use profile_id as name
@@ -146,7 +210,17 @@ impl<'a> Database<'a> {
 
     // Target queries
     pub fn get_targets_with_stats(&self, project_id: i32) -> Result<Vec<(Target, i32, i32, i32)>> {
-        let mut stmt = self.conn.prepare(
+        let query = if self.schema.has_target_guid {
+            "SELECT t.Id, t.name, t.active, t.ra, t.dec, t.guid,
+                    COUNT(ai.Id) as image_count,
+                    SUM(CASE WHEN ai.gradingStatus = 1 THEN 1 ELSE 0 END) as accepted_count,
+                    SUM(CASE WHEN ai.gradingStatus = 2 THEN 1 ELSE 0 END) as rejected_count
+             FROM target t
+             LEFT JOIN acquiredimage ai ON t.Id = ai.targetId
+             WHERE t.projectid = ?
+             GROUP BY t.Id, t.name, t.active, t.ra, t.dec, t.guid
+             ORDER BY t.name"
+        } else {
             "SELECT t.Id, t.name, t.active, t.ra, t.dec,
                     COUNT(ai.Id) as image_count,
                     SUM(CASE WHEN ai.gradingStatus = 1 THEN 1 ELSE 0 END) as accepted_count,
@@ -155,11 +229,18 @@ impl<'a> Database<'a> {
              LEFT JOIN acquiredimage ai ON t.Id = ai.targetId
              WHERE t.projectid = ?
              GROUP BY t.Id, t.name, t.active, t.ra, t.dec
-             ORDER BY t.name",
-        )?;
+             ORDER BY t.name"
+        };
+        let mut stmt = self.conn.prepare(query)?;
+        let has_guid = self.schema.has_target_guid;
 
         let targets = stmt
             .query_map([project_id], |row| {
+                let (guid, offset) = if has_guid {
+                    (row.get(5)?, 6)
+                } else {
+                    (None, 5)
+                };
                 Ok((
                     Target {
                         id: row.get(0)?,
@@ -168,10 +249,11 @@ impl<'a> Database<'a> {
                         ra: row.get(3)?,
                         dec: row.get(4)?,
                         project_id,
+                        guid,
                     },
-                    row.get::<_, i32>(5)?, // image_count
-                    row.get::<_, i32>(6)?, // accepted_count
-                    row.get::<_, i32>(7)?, // rejected_count
+                    row.get::<_, i32>(offset)?,     // image_count
+                    row.get::<_, i32>(offset + 1)?, // accepted_count
+                    row.get::<_, i32>(offset + 2)?, // rejected_count
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -180,7 +262,18 @@ impl<'a> Database<'a> {
     }
 
     pub fn get_targets_with_images(&self, project_id: i32) -> Result<Vec<(Target, i32, i32, i32)>> {
-        let mut stmt = self.conn.prepare(
+        let query = if self.schema.has_target_guid {
+            "SELECT t.Id, t.name, t.active, t.ra, t.dec, t.guid,
+                    COUNT(ai.Id) as image_count,
+                    SUM(CASE WHEN ai.gradingStatus = 1 THEN 1 ELSE 0 END) as accepted_count,
+                    SUM(CASE WHEN ai.gradingStatus = 2 THEN 1 ELSE 0 END) as rejected_count
+             FROM target t
+             INNER JOIN acquiredimage ai ON t.Id = ai.targetId
+             WHERE t.projectid = ?
+             GROUP BY t.Id, t.name, t.active, t.ra, t.dec, t.guid
+             HAVING COUNT(ai.Id) > 0
+             ORDER BY t.name"
+        } else {
             "SELECT t.Id, t.name, t.active, t.ra, t.dec,
                     COUNT(ai.Id) as image_count,
                     SUM(CASE WHEN ai.gradingStatus = 1 THEN 1 ELSE 0 END) as accepted_count,
@@ -190,11 +283,18 @@ impl<'a> Database<'a> {
              WHERE t.projectid = ?
              GROUP BY t.Id, t.name, t.active, t.ra, t.dec
              HAVING COUNT(ai.Id) > 0
-             ORDER BY t.name",
-        )?;
+             ORDER BY t.name"
+        };
+        let mut stmt = self.conn.prepare(query)?;
+        let has_guid = self.schema.has_target_guid;
 
         let targets = stmt
             .query_map([project_id], |row| {
+                let (guid, offset) = if has_guid {
+                    (row.get(5)?, 6)
+                } else {
+                    (None, 5)
+                };
                 Ok((
                     Target {
                         id: row.get(0)?,
@@ -203,10 +303,11 @@ impl<'a> Database<'a> {
                         ra: row.get(3)?,
                         dec: row.get(4)?,
                         project_id,
+                        guid,
                     },
-                    row.get::<_, i32>(5)?, // image_count
-                    row.get::<_, i32>(6)?, // accepted_count
-                    row.get::<_, i32>(7)?, // rejected_count
+                    row.get::<_, i32>(offset)?,     // image_count
+                    row.get::<_, i32>(offset + 1)?, // accepted_count
+                    row.get::<_, i32>(offset + 2)?, // rejected_count
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -219,18 +320,34 @@ impl<'a> Database<'a> {
         &self,
         project_id: i32,
     ) -> Result<Vec<(AcquiredImage, String, String)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT ai.Id, ai.projectId, ai.targetId, ai.acquireddate, ai.filtername, 
+        let query = if self.schema.has_acquiredimage_guid {
+            "SELECT ai.Id, ai.projectId, ai.targetId, ai.acquireddate, ai.filtername,
+                    ai.gradingStatus, ai.metadata, ai.rejectreason, ai.profileId, ai.guid,
+                    p.name as project_name, t.name as target_name
+             FROM acquiredimage ai
+             JOIN project p ON ai.projectId = p.Id
+             JOIN target t ON ai.targetId = t.Id
+             WHERE ai.projectId = ?
+             ORDER BY ai.acquireddate DESC"
+        } else {
+            "SELECT ai.Id, ai.projectId, ai.targetId, ai.acquireddate, ai.filtername,
                     ai.gradingStatus, ai.metadata, ai.rejectreason, ai.profileId,
                     p.name as project_name, t.name as target_name
              FROM acquiredimage ai
              JOIN project p ON ai.projectId = p.Id
              JOIN target t ON ai.targetId = t.Id
              WHERE ai.projectId = ?
-             ORDER BY ai.acquireddate DESC",
-        )?;
+             ORDER BY ai.acquireddate DESC"
+        };
+        let mut stmt = self.conn.prepare(query)?;
+        let has_guid = self.schema.has_acquiredimage_guid;
 
         let rows = stmt.query_map([project_id], |row| {
+            let (guid, offset) = if has_guid {
+                (row.get(9)?, 10)
+            } else {
+                (None, 9)
+            };
             let image = AcquiredImage {
                 id: row.get(0)?,
                 project_id: row.get(1)?,
@@ -241,9 +358,10 @@ impl<'a> Database<'a> {
                 metadata: row.get(6)?,
                 reject_reason: row.get(7)?,
                 profile_id: row.get(8).unwrap_or_default(),
+                guid,
             };
-            let project_name: String = row.get(9)?;
-            let target_name: String = row.get(10)?;
+            let project_name: String = row.get(offset)?;
+            let target_name: String = row.get(offset + 1)?;
             Ok((image, project_name, target_name))
         })?;
 
@@ -257,15 +375,25 @@ impl<'a> Database<'a> {
         target_filter: Option<&str>,
         date_cutoff: Option<i64>,
     ) -> Result<Vec<(AcquiredImage, String, String)>> {
-        let mut query = String::from(
-            "SELECT ai.Id, ai.projectId, ai.targetId, ai.acquireddate, ai.filtername, 
+        let has_guid = self.schema.has_acquiredimage_guid;
+        let base_select = if has_guid {
+            "SELECT ai.Id, ai.projectId, ai.targetId, ai.acquireddate, ai.filtername,
+                    ai.gradingStatus, ai.metadata, ai.rejectreason, ai.profileId, ai.guid,
+                    p.name as project_name, t.name as target_name
+             FROM acquiredimage ai
+             JOIN project p ON ai.projectId = p.Id
+             JOIN target t ON ai.targetId = t.Id
+             WHERE 1=1"
+        } else {
+            "SELECT ai.Id, ai.projectId, ai.targetId, ai.acquireddate, ai.filtername,
                     ai.gradingStatus, ai.metadata, ai.rejectreason, ai.profileId,
                     p.name as project_name, t.name as target_name
              FROM acquiredimage ai
              JOIN project p ON ai.projectId = p.Id
              JOIN target t ON ai.targetId = t.Id
-             WHERE 1=1",
-        );
+             WHERE 1=1"
+        };
+        let mut query = String::from(base_select);
 
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
@@ -296,6 +424,11 @@ impl<'a> Database<'a> {
 
         let images = stmt
             .query_map(param_refs.as_slice(), |row| {
+                let (guid, offset) = if has_guid {
+                    (row.get(9)?, 10)
+                } else {
+                    (None, 9)
+                };
                 Ok((
                     AcquiredImage {
                         id: row.get(0)?,
@@ -307,9 +440,10 @@ impl<'a> Database<'a> {
                         metadata: row.get(6)?,
                         reject_reason: row.get(7)?,
                         profile_id: row.get(8)?,
+                        guid,
                     },
-                    row.get::<_, String>(9)?,  // project_name
-                    row.get::<_, String>(10)?, // target_name
+                    row.get::<_, String>(offset)?,     // project_name
+                    row.get::<_, String>(offset + 1)?, // target_name
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -323,13 +457,24 @@ impl<'a> Database<'a> {
         }
 
         let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let query = format!(
-            "SELECT Id, projectId, targetId, acquireddate, filtername, 
-                    gradingStatus, metadata, rejectreason, profileId
-             FROM acquiredimage
-             WHERE Id IN ({})",
-            placeholders
-        );
+        let has_guid = self.schema.has_acquiredimage_guid;
+        let query = if has_guid {
+            format!(
+                "SELECT Id, projectId, targetId, acquireddate, filtername,
+                        gradingStatus, metadata, rejectreason, profileId, guid
+                 FROM acquiredimage
+                 WHERE Id IN ({})",
+                placeholders
+            )
+        } else {
+            format!(
+                "SELECT Id, projectId, targetId, acquireddate, filtername,
+                        gradingStatus, metadata, rejectreason, profileId
+                 FROM acquiredimage
+                 WHERE Id IN ({})",
+                placeholders
+            )
+        };
 
         let mut stmt = self.conn.prepare(&query)?;
         let params: Vec<&dyn rusqlite::ToSql> =
@@ -347,6 +492,7 @@ impl<'a> Database<'a> {
                     metadata: row.get(6)?,
                     reject_reason: row.get(7)?,
                     profile_id: row.get(8)?,
+                    guid: if has_guid { row.get(9)? } else { None },
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -360,12 +506,22 @@ impl<'a> Database<'a> {
         }
 
         let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let query = format!(
-            "SELECT Id, projectId, name, active, ra, dec
-             FROM target
-             WHERE Id IN ({})",
-            placeholders
-        );
+        let has_guid = self.schema.has_target_guid;
+        let query = if has_guid {
+            format!(
+                "SELECT Id, projectId, name, active, ra, dec, guid
+                 FROM target
+                 WHERE Id IN ({})",
+                placeholders
+            )
+        } else {
+            format!(
+                "SELECT Id, projectId, name, active, ra, dec
+                 FROM target
+                 WHERE Id IN ({})",
+                placeholders
+            )
+        };
 
         let mut stmt = self.conn.prepare(&query)?;
         let params: Vec<&dyn rusqlite::ToSql> =
@@ -380,6 +536,7 @@ impl<'a> Database<'a> {
                     active: row.get(3)?,
                     ra: row.get(4)?,
                     dec: row.get(5)?,
+                    guid: if has_guid { row.get(6)? } else { None },
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -630,7 +787,19 @@ impl<'a> Database<'a> {
     }
 
     pub fn get_all_targets_with_project_info(&self) -> Result<Vec<TargetWithStats>> {
-        let mut stmt = self.conn.prepare(
+        let query = if self.schema.has_target_guid {
+            "SELECT t.Id, t.name, t.active, t.ra, t.dec, t.projectId, t.guid, p.name,
+                    COUNT(ai.Id) as image_count,
+                    SUM(CASE WHEN ai.gradingStatus = 1 THEN 1 ELSE 0 END) as accepted_count,
+                    SUM(CASE WHEN ai.gradingStatus = 2 THEN 1 ELSE 0 END) as rejected_count,
+                    SUM(CASE WHEN ai.gradingStatus = 0 THEN 1 ELSE 0 END) as pending_count
+             FROM target t
+             INNER JOIN project p ON t.projectId = p.Id
+             LEFT JOIN acquiredimage ai ON t.Id = ai.targetId
+             GROUP BY t.Id, t.name, t.active, t.ra, t.dec, t.projectId, t.guid, p.name
+             HAVING COUNT(ai.Id) > 0
+             ORDER BY p.name, t.name"
+        } else {
             "SELECT t.Id, t.name, t.active, t.ra, t.dec, t.projectId, p.name,
                     COUNT(ai.Id) as image_count,
                     SUM(CASE WHEN ai.gradingStatus = 1 THEN 1 ELSE 0 END) as accepted_count,
@@ -641,11 +810,18 @@ impl<'a> Database<'a> {
              LEFT JOIN acquiredimage ai ON t.Id = ai.targetId
              GROUP BY t.Id, t.name, t.active, t.ra, t.dec, t.projectId, p.name
              HAVING COUNT(ai.Id) > 0
-             ORDER BY p.name, t.name",
-        )?;
+             ORDER BY p.name, t.name"
+        };
+        let mut stmt = self.conn.prepare(query)?;
+        let has_guid = self.schema.has_target_guid;
 
         let targets = stmt
             .query_map([], |row| {
+                let (guid, offset) = if has_guid {
+                    (row.get(6)?, 7)
+                } else {
+                    (None, 6)
+                };
                 let target = Target {
                     id: row.get(0)?,
                     name: row.get(1)?,
@@ -653,14 +829,15 @@ impl<'a> Database<'a> {
                     ra: row.get(3)?,
                     dec: row.get(4)?,
                     project_id: row.get(5)?,
+                    guid,
                 };
                 Ok(TargetWithStats {
                     target,
-                    project_name: row.get::<_, String>(6)?,
-                    total_images: row.get::<_, i32>(7)?,
-                    accepted_images: row.get::<_, i32>(8)?,
-                    rejected_images: row.get::<_, i32>(9)?,
-                    pending_images: row.get::<_, i32>(10)?,
+                    project_name: row.get::<_, String>(offset)?,
+                    total_images: row.get::<_, i32>(offset + 1)?,
+                    accepted_images: row.get::<_, i32>(offset + 2)?,
+                    rejected_images: row.get::<_, i32>(offset + 3)?,
+                    pending_images: row.get::<_, i32>(offset + 4)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -737,7 +914,20 @@ impl<'a> Database<'a> {
     }
 
     pub fn get_all_targets_with_desired_stats(&self) -> Result<Vec<TargetWithDesiredStats>> {
-        let mut stmt = self.conn.prepare(
+        let query = if self.schema.has_target_guid {
+            "SELECT t.Id, t.name, t.active, t.ra, t.dec, t.projectid, t.guid, p.name,
+                    COUNT(DISTINCT ai.Id) as image_count,
+                    SUM(CASE WHEN ai.gradingStatus = 1 THEN 1 ELSE 0 END) as accepted_count,
+                    SUM(CASE WHEN ai.gradingStatus = 2 THEN 1 ELSE 0 END) as rejected_count,
+                    SUM(CASE WHEN ai.gradingStatus = 0 THEN 1 ELSE 0 END) as pending_count,
+                    COALESCE((SELECT SUM(ep2.desired) FROM exposureplan ep2 WHERE ep2.targetid = t.Id), 0) as total_desired
+             FROM target t
+             INNER JOIN project p ON t.projectId = p.Id
+             LEFT JOIN acquiredimage ai ON t.Id = ai.targetId
+             GROUP BY t.Id, t.name, t.active, t.ra, t.dec, t.projectId, t.guid, p.name
+             HAVING COUNT(DISTINCT ai.Id) > 0 OR (SELECT SUM(ep2.desired) FROM exposureplan ep2 WHERE ep2.targetid = t.Id) > 0
+             ORDER BY p.name, t.name"
+        } else {
             "SELECT t.Id, t.name, t.active, t.ra, t.dec, t.projectid, p.name,
                     COUNT(DISTINCT ai.Id) as image_count,
                     SUM(CASE WHEN ai.gradingStatus = 1 THEN 1 ELSE 0 END) as accepted_count,
@@ -749,11 +939,18 @@ impl<'a> Database<'a> {
              LEFT JOIN acquiredimage ai ON t.Id = ai.targetId
              GROUP BY t.Id, t.name, t.active, t.ra, t.dec, t.projectId, p.name
              HAVING COUNT(DISTINCT ai.Id) > 0 OR (SELECT SUM(ep2.desired) FROM exposureplan ep2 WHERE ep2.targetid = t.Id) > 0
-             ORDER BY p.name, t.name",
-        )?;
+             ORDER BY p.name, t.name"
+        };
+        let mut stmt = self.conn.prepare(query)?;
+        let has_guid = self.schema.has_target_guid;
 
         let targets = stmt
             .query_map([], |row| {
+                let (guid, offset) = if has_guid {
+                    (row.get(6)?, 7)
+                } else {
+                    (None, 6)
+                };
                 let target = Target {
                     id: row.get(0)?,
                     name: row.get(1)?,
@@ -761,15 +958,16 @@ impl<'a> Database<'a> {
                     ra: row.get(3)?,
                     dec: row.get(4)?,
                     project_id: row.get(5)?,
+                    guid,
                 };
                 Ok(TargetWithDesiredStats {
                     target,
-                    project_name: row.get::<_, String>(6)?,
-                    total_images: row.get::<_, i32>(7)?,
-                    accepted_images: row.get::<_, i32>(8)?,
-                    rejected_images: row.get::<_, i32>(9)?,
-                    pending_images: row.get::<_, i32>(10)?,
-                    total_desired: row.get::<_, i32>(11)?,
+                    project_name: row.get::<_, String>(offset)?,
+                    total_images: row.get::<_, i32>(offset + 1)?,
+                    accepted_images: row.get::<_, i32>(offset + 2)?,
+                    rejected_images: row.get::<_, i32>(offset + 3)?,
+                    pending_images: row.get::<_, i32>(offset + 4)?,
+                    total_desired: row.get::<_, i32>(offset + 5)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -795,5 +993,120 @@ impl<'a> Database<'a> {
         })?;
 
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_schema_capabilities_default() {
+        let caps = SchemaCapabilities::default();
+        assert!(!caps.has_acquiredimage_guid);
+        assert!(!caps.has_project_guid);
+        assert!(!caps.has_target_guid);
+    }
+
+    #[test]
+    fn test_schema_detection_old_schema() {
+        // Test with the old schema database (no guid columns)
+        let db_path = std::path::Path::new("schedulerdb.sqlite");
+        if !db_path.exists() {
+            eprintln!("Skipping test: schedulerdb.sqlite not found");
+            return;
+        }
+
+        let conn = Connection::open(db_path).expect("Failed to open old schema database");
+        let caps = SchemaCapabilities::detect(&conn);
+
+        assert!(
+            !caps.has_acquiredimage_guid,
+            "Old schema should not have acquiredimage.guid"
+        );
+        assert!(
+            !caps.has_project_guid,
+            "Old schema should not have project.guid"
+        );
+        assert!(
+            !caps.has_target_guid,
+            "Old schema should not have target.guid"
+        );
+    }
+
+    #[test]
+    fn test_schema_detection_new_schema() {
+        // Test with the new schema database (has guid columns)
+        let db_path = std::path::Path::new("schedulerdb-2.sqlite");
+        if !db_path.exists() {
+            eprintln!("Skipping test: schedulerdb-2.sqlite not found");
+            return;
+        }
+
+        let conn = Connection::open(db_path).expect("Failed to open new schema database");
+        let caps = SchemaCapabilities::detect(&conn);
+
+        assert!(
+            caps.has_acquiredimage_guid,
+            "New schema should have acquiredimage.guid"
+        );
+        assert!(caps.has_project_guid, "New schema should have project.guid");
+        assert!(caps.has_target_guid, "New schema should have target.guid");
+    }
+
+    #[test]
+    fn test_database_queries_old_schema() {
+        let db_path = std::path::Path::new("schedulerdb.sqlite");
+        if !db_path.exists() {
+            eprintln!("Skipping test: schedulerdb.sqlite not found");
+            return;
+        }
+
+        let conn = Connection::open(db_path).expect("Failed to open old schema database");
+        let db = Database::new(&conn);
+
+        // Verify schema detection
+        assert!(!db.schema_capabilities().has_acquiredimage_guid);
+
+        // Test basic queries work
+        let projects = db.get_all_projects().expect("Failed to get projects");
+        assert!(!projects.is_empty(), "Should have projects");
+        for project in &projects {
+            assert!(
+                project.guid.is_none(),
+                "Old schema projects should have no guid"
+            );
+        }
+
+        let stats = db.get_overall_statistics().expect("Failed to get stats");
+        assert!(stats.total_images > 0, "Should have images");
+    }
+
+    #[test]
+    fn test_database_queries_new_schema() {
+        let db_path = std::path::Path::new("schedulerdb-2.sqlite");
+        if !db_path.exists() {
+            eprintln!("Skipping test: schedulerdb-2.sqlite not found");
+            return;
+        }
+
+        let conn = Connection::open(db_path).expect("Failed to open new schema database");
+        let db = Database::new(&conn);
+
+        // Verify schema detection
+        assert!(db.schema_capabilities().has_acquiredimage_guid);
+
+        // Test basic queries work
+        let projects = db.get_all_projects().expect("Failed to get projects");
+        assert!(!projects.is_empty(), "Should have projects");
+
+        let stats = db.get_overall_statistics().expect("Failed to get stats");
+        assert!(stats.total_images > 0, "Should have images");
+
+        // Test image queries include guid
+        let targets = db
+            .get_all_targets_with_project_info()
+            .expect("Failed to get targets");
+        assert!(!targets.is_empty(), "Should have targets with images");
     }
 }
