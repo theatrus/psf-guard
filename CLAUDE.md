@@ -118,7 +118,10 @@ cd static && npm run dev
 
 # OpenCV setup (macOS)
 brew install opencv
-export DYLD_FALLBACK_LIBRARY_PATH="$(xcode-select --print-path)/Toolchains/XcodeDefault.xctoolchain/usr/lib/"
+# For Command Line Tools:
+export DYLD_FALLBACK_LIBRARY_PATH="/Library/Developer/CommandLineTools/usr/lib"
+# For Xcode.app:
+# export DYLD_FALLBACK_LIBRARY_PATH="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib"
 ```
 
 ### Tauri Desktop Configuration
