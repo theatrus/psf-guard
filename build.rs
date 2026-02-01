@@ -87,8 +87,7 @@ fn detect_opencv_version() {
         let minor = parts[1].parse::<u32>().unwrap_or(0);
 
         // AlgorithmHint was added in OpenCV 4.11+ (not present in 4.10)
-        // We're being conservative and only enabling for 4.12+ where we know it exists
-        if major > 4 || (major == 4 && minor >= 12) {
+        if major > 4 || (major == 4 && minor >= 11) {
             println!("cargo:rustc-cfg=opencv_has_algorithm_hint");
             eprintln!(
                 "cargo:warning=OpenCV {} detected, enabling algorithm_hint feature",
