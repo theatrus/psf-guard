@@ -12,6 +12,8 @@ pub struct Project {
     pub profile_id: String,
     pub name: String,
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -28,6 +30,8 @@ pub struct Target {
     pub ra: Option<f64>,
     pub dec: Option<f64>,
     pub project_id: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +45,8 @@ pub struct AcquiredImage {
     pub metadata: String,
     pub reject_reason: Option<String>,
     pub profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -160,6 +166,7 @@ mod tests {
             profile_id: "test-profile".to_string(),
             name: "Test Project".to_string(),
             description: Some("A test project".to_string()),
+            guid: Some("test-guid-123".to_string()),
         };
 
         let json = serde_json::to_string(&project).unwrap();
@@ -167,10 +174,12 @@ mod tests {
         assert!(json.contains("\"profile_id\":\"test-profile\""));
         assert!(json.contains("\"name\":\"Test Project\""));
         assert!(json.contains("\"description\":\"A test project\""));
+        assert!(json.contains("\"guid\":\"test-guid-123\""));
 
         let deserialized: Project = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.id, project.id);
         assert_eq!(deserialized.name, project.name);
+        assert_eq!(deserialized.guid, project.guid);
     }
 
     #[test]
@@ -178,6 +187,21 @@ mod tests {
         let json = r#"{"id":1,"profile_id":"test","name":"Test","description":null}"#;
         let project: Project = serde_json::from_str(json).unwrap();
         assert_eq!(project.description, None);
+        assert_eq!(project.guid, None);
+    }
+
+    #[test]
+    fn test_project_guid_not_serialized_when_none() {
+        let project = Project {
+            id: 1,
+            profile_id: "test".to_string(),
+            name: "Test".to_string(),
+            description: None,
+            guid: None,
+        };
+
+        let json = serde_json::to_string(&project).unwrap();
+        assert!(!json.contains("guid"));
     }
 
     #[test]
@@ -192,6 +216,7 @@ mod tests {
             metadata: r#"{"test": "data"}"#.to_string(),
             reject_reason: Some("Too cloudy".to_string()),
             profile_id: Some("profile-123".to_string()),
+            guid: Some("image-guid-456".to_string()),
         };
 
         let json = serde_json::to_string(&image).unwrap();
@@ -206,5 +231,44 @@ mod tests {
         assert_eq!(deserialized.metadata, image.metadata);
         assert_eq!(deserialized.reject_reason, image.reject_reason);
         assert_eq!(deserialized.profile_id, image.profile_id);
+        assert_eq!(deserialized.guid, image.guid);
+    }
+
+    #[test]
+    fn test_acquired_image_without_guid() {
+        let image = AcquiredImage {
+            id: 123,
+            project_id: 1,
+            target_id: 2,
+            acquired_date: Some(1693526400),
+            filter_name: "Ha".to_string(),
+            grading_status: 1,
+            metadata: r#"{}"#.to_string(),
+            reject_reason: None,
+            profile_id: None,
+            guid: None,
+        };
+
+        let json = serde_json::to_string(&image).unwrap();
+        assert!(!json.contains("guid"));
+    }
+
+    #[test]
+    fn test_target_with_guid() {
+        let target = Target {
+            id: 1,
+            name: "M42".to_string(),
+            active: true,
+            ra: Some(83.8221),
+            dec: Some(-5.3911),
+            project_id: 1,
+            guid: Some("target-guid-789".to_string()),
+        };
+
+        let json = serde_json::to_string(&target).unwrap();
+        assert!(json.contains("\"guid\":\"target-guid-789\""));
+
+        let deserialized: Target = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.guid, target.guid);
     }
 }
