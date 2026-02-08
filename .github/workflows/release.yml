@@ -119,10 +119,16 @@ jobs:
 
       shell: pwsh
 
+    - name: Read Rust toolchain
+      id: rust-toolchain
+      run: echo "channel=$(grep 'channel' rust-toolchain.toml | sed 's/.*= *\"\(.*\)\"/\1/')" >> $GITHUB_OUTPUT
+      shell: bash
+
     - name: Install Rust
       uses: dtolnay/rust-toolchain@master
       with:
-        toolchain-file: rust-toolchain.toml
+        toolchain: ${{ steps.rust-toolchain.outputs.channel }}
+        components: rustfmt, clippy
 
     - name: Install Node.js
       uses: actions/setup-node@v6

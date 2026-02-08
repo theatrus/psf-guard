@@ -18,10 +18,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       
+      - name: Read Rust toolchain
+        id: rust-toolchain
+        run: echo "channel=$(grep 'channel' rust-toolchain.toml | sed 's/.*= *\"\(.*\)\"/\1/')" >> $GITHUB_OUTPUT
+        shell: bash
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain-file: rust-toolchain.toml
+          toolchain: ${{ steps.rust-toolchain.outputs.channel }}
       
       - name: Install cargo-audit
         run: cargo install cargo-audit
