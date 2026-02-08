@@ -8,9 +8,10 @@ interface ImageCardProps {
   isSelected: boolean;
   onClick: (event: React.MouseEvent) => void;
   onDoubleClick: () => void;
+  qualityScore?: number;
 }
 
-export default function ImageCard({ image, isSelected, onClick, onDoubleClick }: ImageCardProps) {
+export default function ImageCard({ image, isSelected, onClick, onDoubleClick, qualityScore }: ImageCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const [imageError, setImageError] = useState(false);
@@ -110,6 +111,15 @@ export default function ImageCard({ image, isSelected, onClick, onDoubleClick }:
             alt={`${image.target_name} - ${image.filter_name || 'No filter'}`}
             loading="lazy"
             onError={() => setImageError(true)}
+          />
+        )}
+        {qualityScore !== undefined && (
+          <div
+            className="quality-dot"
+            style={{
+              backgroundColor: qualityScore >= 0.7 ? 'var(--color-success)' : qualityScore >= 0.5 ? 'var(--color-warning)' : 'var(--color-error)',
+            }}
+            title={`Quality: ${(qualityScore * 100).toFixed(0)}%`}
           />
         )}
       </div>

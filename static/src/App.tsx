@@ -57,6 +57,7 @@ function App() {
   
   const isOnOverview = location.pathname === '/' || location.pathname === '/overview';
   const isOnGrid = location.pathname === '/grid';
+  const isOnSequence = location.pathname === '/sequence';
 
   return (
     <div className="app">
@@ -85,6 +86,11 @@ function App() {
           {!isOnGrid && (
             <button onClick={() => navigate('/grid')} className="header-button">
               Images
+            </button>
+          )}
+          {!isOnSequence && (
+            <button onClick={() => navigate('/sequence')} className="header-button">
+              Sequence
             </button>
           )}
           {!isOnOverview && (
