@@ -1864,6 +1864,242 @@ pub async fn get_overall_stats(
     Ok(Json(ApiResponse::success(response)))
 }
 
+// Sequence analysis handlers
+
+#[axum::debug_handler]
+pub async fn analyze_sequence(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<crate::server::api::SequenceAnalysisQuery>,
+) -> Result<Json<ApiResponse<crate::server::api::SequenceAnalysisResponse>>, AppError> {
+    use crate::sequence_analysis::{
+        extract_metrics_from_metadata, QualityWeights, SequenceAnalyzer, SequenceAnalyzerConfig,
+    };
+
+    let target_id = params.target_id;
+    let filter_name = params.filter_name.clone();
+    let session_gap = params.session_gap_minutes;
+    let weight_star_count = params.weight_star_count;
+    let weight_hfr = params.weight_hfr;
+    let weight_eccentricity = params.weight_eccentricity;
+    let weight_snr = params.weight_snr;
+    let weight_background = params.weight_background;
+
+    // Fetch images from database
+    let (images_data, target_name) = {
+        let conn = state.db();
+        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+        let db = Database::new(&conn);
+
+        // Get target name
+        let targets = db
+            .get_targets_by_ids(&[target_id])
+            .map_err(|_| AppError::DatabaseError)?;
+        let target = targets
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::BadRequest(format!("Target {} not found", target_id)))?;
+        let target_name = target.name.clone();
+
+        // Query images for this target
+        let all_images = db
+            .query_images(None, None, None, None)
+            .map_err(|_| AppError::DatabaseError)?;
+
+        let filtered: Vec<_> = all_images
+            .into_iter()
+            .filter(|(img, _, _)| {
+                img.target_id == target_id
+                    && filter_name.as_ref().is_none_or(|f| img.filter_name == *f)
+            })
+            .collect();
+
+        (filtered, target_name)
+    };
+
+    if images_data.is_empty() {
+        return Ok(Json(ApiResponse::success(
+            crate::server::api::SequenceAnalysisResponse { sequences: vec![] },
+        )));
+    }
+
+    // Extract metrics and group by filter
+    let target_name_clone = target_name.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let mut config = SequenceAnalyzerConfig::default();
+        if let Some(gap) = session_gap {
+            config.session_gap_minutes = gap;
+        }
+        // Apply weight overrides from query params if any are provided
+        if weight_star_count.is_some()
+            || weight_hfr.is_some()
+            || weight_eccentricity.is_some()
+            || weight_snr.is_some()
+            || weight_background.is_some()
+        {
+            config.quality_weights = QualityWeights {
+                star_count: weight_star_count.unwrap_or(config.quality_weights.star_count),
+                hfr: weight_hfr.unwrap_or(config.quality_weights.hfr),
+                eccentricity: weight_eccentricity.unwrap_or(config.quality_weights.eccentricity),
+                snr: weight_snr.unwrap_or(config.quality_weights.snr),
+                background: weight_background.unwrap_or(config.quality_weights.background),
+            };
+        }
+
+        let analyzer = SequenceAnalyzer::new(config);
+
+        // Group by filter_name and analyze each group
+        let mut by_filter: std::collections::HashMap<String, Vec<_>> =
+            std::collections::HashMap::new();
+        for (img, _proj, _target) in &images_data {
+            let metrics = extract_metrics_from_metadata(img.id, &img.metadata, img.acquired_date);
+            by_filter
+                .entry(img.filter_name.clone())
+                .or_default()
+                .push(metrics);
+        }
+
+        let mut all_sequences = Vec::new();
+        for (filter, metrics) in by_filter {
+            let scored = analyzer.analyze(&metrics, target_id, &target_name_clone, &filter);
+            all_sequences.extend(scored);
+        }
+
+        all_sequences
+    })
+    .await
+    .map_err(|e| AppError::InternalError(format!("Analysis task failed: {}", e)))?;
+
+    let sequences = result
+        .into_iter()
+        .map(|seq| crate::server::api::ScoredSequenceResponse {
+            target_id: seq.target_id,
+            target_name: seq.target_name,
+            filter_name: seq.filter_name,
+            session_start: seq.session_start,
+            session_end: seq.session_end,
+            image_count: seq.image_count,
+            reference_values: seq.reference_values,
+            images: seq.images,
+            summary: seq.summary,
+        })
+        .collect();
+
+    Ok(Json(ApiResponse::success(
+        crate::server::api::SequenceAnalysisResponse { sequences },
+    )))
+}
+
+#[axum::debug_handler]
+pub async fn get_image_quality(
+    State(state): State<Arc<AppState>>,
+    Path(image_id): Path<i32>,
+) -> Result<Json<ApiResponse<crate::server::api::ImageQualityContextResponse>>, AppError> {
+    use crate::sequence_analysis::{
+        extract_metrics_from_metadata, SequenceAnalyzer, SequenceAnalyzerConfig,
+    };
+
+    // Get the target image and its context from database
+    let (target_image, all_filter_images, target_name) = {
+        let conn = state.db();
+        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+        let db = Database::new(&conn);
+
+        let images = db
+            .get_images_by_ids(&[image_id])
+            .map_err(|_| AppError::DatabaseError)?;
+        let target_image = images.into_iter().next().ok_or(AppError::NotFound)?;
+
+        // Get target name
+        let targets = db
+            .get_targets_by_ids(&[target_image.target_id])
+            .map_err(|_| AppError::DatabaseError)?;
+        let target = targets.into_iter().next().ok_or(AppError::NotFound)?;
+        let target_name = target.name.clone();
+
+        // Get all images for the same target + filter
+        let all_images = db
+            .query_images(None, None, None, None)
+            .map_err(|_| AppError::DatabaseError)?;
+
+        let filter_images: Vec<_> = all_images
+            .into_iter()
+            .filter(|(img, _, _)| {
+                img.target_id == target_image.target_id
+                    && img.filter_name == target_image.filter_name
+            })
+            .collect();
+
+        (target_image, filter_images, target_name)
+    };
+
+    if all_filter_images.is_empty() {
+        return Ok(Json(ApiResponse::success(
+            crate::server::api::ImageQualityContextResponse {
+                image_id,
+                quality: None,
+                sequence_target_id: None,
+                sequence_filter_name: None,
+                sequence_image_count: None,
+                reference_values: None,
+            },
+        )));
+    }
+
+    let filter_name = target_image.filter_name.clone();
+    let filter_name_for_task = filter_name.clone();
+    let seq_target_id = target_image.target_id;
+    let target_name_clone = target_name.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let config = SequenceAnalyzerConfig::default();
+        let analyzer = SequenceAnalyzer::new(config);
+
+        let metrics: Vec<_> = all_filter_images
+            .iter()
+            .map(|(img, _, _)| {
+                extract_metrics_from_metadata(img.id, &img.metadata, img.acquired_date)
+            })
+            .collect();
+
+        analyzer.analyze(
+            &metrics,
+            seq_target_id,
+            &target_name_clone,
+            &filter_name_for_task,
+        )
+    })
+    .await
+    .map_err(|e| AppError::InternalError(format!("Analysis task failed: {}", e)))?;
+
+    // Find our image in the results
+    for seq in &result {
+        if let Some(quality) = seq.images.iter().find(|r| r.image_id == image_id) {
+            return Ok(Json(ApiResponse::success(
+                crate::server::api::ImageQualityContextResponse {
+                    image_id,
+                    quality: Some(quality.clone()),
+                    sequence_target_id: Some(seq.target_id),
+                    sequence_filter_name: Some(seq.filter_name.clone()),
+                    sequence_image_count: Some(seq.image_count),
+                    reference_values: Some(seq.reference_values.clone()),
+                },
+            )));
+        }
+    }
+
+    // Image was not in any scored sequence (too short, etc.)
+    Ok(Json(ApiResponse::success(
+        crate::server::api::ImageQualityContextResponse {
+            image_id,
+            quality: None,
+            sequence_target_id: Some(seq_target_id),
+            sequence_filter_name: Some(filter_name),
+            sequence_image_count: None,
+            reference_values: None,
+        },
+    )))
+}
+
 // Error handling
 #[derive(Debug)]
 pub enum AppError {
