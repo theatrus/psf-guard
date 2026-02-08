@@ -1417,8 +1417,8 @@ mod tests {
         let score_partial = sum_partial / weight_partial;
 
         // Both should produce a score between 0.0 and 1.0
-        assert!(score_all >= 0.0 && score_all <= 1.0);
-        assert!(score_partial >= 0.0 && score_partial <= 1.0);
+        assert!((0.0..=1.0).contains(&score_all));
+        assert!((0.0..=1.0).contains(&score_partial));
         // Weight redistribution means remaining weights are scaled up proportionally
         assert!(
             (weight_partial - 0.65).abs() < 1e-10,
