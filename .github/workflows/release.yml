@@ -41,7 +41,7 @@ jobs:
           libpng-dev \
           patchelf
 
-        echo "OPENCV_LINK_LIBS=static=opencv_core,static=opencv_imgproc,static=opencv_imgcodecs,static=opencv_ximgproc,png" >> $GITHUB_ENV
+        echo "OPENCV_LINK_LIBS=static=opencv_core,static=opencv_imgproc,static=opencv_imgcodecs,static=opencv_ximgproc,png,jpeg,tiff,z" >> $GITHUB_ENV
 
 
     - name: Import Apple Developer Certificate (macOS)
@@ -85,7 +85,7 @@ jobs:
           echo "DYLD_FALLBACK_LIBRARY_PATH=$(xcode-select --print-path)/usr/lib/" >> $GITHUB_ENV
         fi
 
-        echo "OPENCV_LINK_LIBS=static=opencv_core,static=opencv_imgproc,static=opencv_imgcodecs,static=opencv_ximgproc,png" >> $GITHUB_ENV
+        echo "OPENCV_LINK_LIBS=static=opencv_core,static=opencv_imgproc,static=opencv_imgcodecs,static=opencv_ximgproc,png,jpeg,tiff,z" >> $GITHUB_ENV
 
 
     - name: Cache vcpkg (Windows)
