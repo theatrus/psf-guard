@@ -121,6 +121,11 @@ jobs:
         npm ci
         npm run build
 
+    - name: Run frontend tests
+      run: |
+        cd static
+        npx vitest run
+
     - name: Check formatting
       run: cargo fmt -- --check
 
