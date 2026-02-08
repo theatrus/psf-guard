@@ -112,10 +112,7 @@ fn create_test_app(conn: Connection) -> Router {
     let state = Arc::new(AppState::new_for_test(conn));
 
     Router::new()
-        .route(
-            "/api/analysis/sequence",
-            get(handlers::analyze_sequence),
-        )
+        .route("/api/analysis/sequence", get(handlers::analyze_sequence))
         .route(
             "/api/analysis/image/{image_id}",
             get(handlers::get_image_quality),
@@ -125,12 +122,7 @@ fn create_test_app(conn: Connection) -> Router {
 
 async fn get_json(app: Router, uri: &str) -> (StatusCode, Value) {
     let response = app
-        .oneshot(
-            Request::builder()
-                .uri(uri)
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
         .await
         .unwrap();
 
@@ -149,15 +141,27 @@ fn load_normal_sequence(conn: &Connection) {
     insert_target(conn, 1, 1, "M42");
 
     let base_ts: i64 = 1705352400; // 2024-01-15T22:00:00Z
-    let stars = [320.0, 335.0, 310.0, 345.0, 300.0, 330.0, 315.0, 340.0, 325.0, 350.0];
+    let stars = [
+        320.0, 335.0, 310.0, 345.0, 300.0, 330.0, 315.0, 340.0, 325.0, 350.0,
+    ];
     let hfrs = [2.4, 2.3, 2.5, 2.35, 2.6, 2.45, 2.55, 2.3, 2.4, 2.7];
-    let bgs = [1200.0, 1210.0, 1195.0, 1205.0, 1215.0, 1200.0, 1190.0, 1208.0, 1202.0, 1198.0];
+    let bgs = [
+        1200.0, 1210.0, 1195.0, 1205.0, 1215.0, 1200.0, 1190.0, 1208.0, 1202.0, 1198.0,
+    ];
 
     for i in 0..10 {
         let ts = base_ts + i as i64 * 300;
         // Some images have SNR and eccentricity, some don't (tests missing metrics)
-        let snr = if i < 7 { Some(45.0 + (i as f64 - 3.0) * 1.5) } else { None };
-        let ecc = if i < 8 { Some(0.35 + (i as f64 - 4.0) * 0.01) } else { None };
+        let snr = if i < 7 {
+            Some(45.0 + (i as f64 - 3.0) * 1.5)
+        } else {
+            None
+        };
+        let ecc = if i < 8 {
+            Some(0.35 + (i as f64 - 4.0) * 0.01)
+        } else {
+            None
+        };
         let meta = build_metadata(stars[i], hfrs[i], Some(bgs[i]), snr, ecc);
         insert_image(conn, (i + 1) as i32, 1, 1, ts, "L", &meta);
     }
@@ -211,14 +215,26 @@ fn load_session_gap(conn: &Connection) {
     // Session 1: 5 images
     for i in 0i32..5 {
         let ts = base_ts1 + i as i64 * 300;
-        let meta = build_metadata(280.0 + i as f64 * 5.0, 2.6, Some(1100.0), Some(40.0), Some(0.30));
+        let meta = build_metadata(
+            280.0 + i as f64 * 5.0,
+            2.6,
+            Some(1100.0),
+            Some(40.0),
+            Some(0.30),
+        );
         insert_image(conn, 200 + i + 1, 2, 2, ts, "L", &meta);
     }
 
     // Session 2: 5 images
     for i in 0i32..5 {
         let ts = base_ts2 + i as i64 * 300;
-        let meta = build_metadata(290.0 + i as f64 * 3.0, 2.55, Some(1120.0), Some(42.0), Some(0.32));
+        let meta = build_metadata(
+            290.0 + i as f64 * 3.0,
+            2.55,
+            Some(1120.0),
+            Some(42.0),
+            Some(0.32),
+        );
         insert_image(conn, 210 + i + 1, 2, 2, ts, "L", &meta);
     }
 }
@@ -231,7 +247,13 @@ fn load_short_sequence(conn: &Connection) {
     let base_ts: i64 = 1705352400;
     for i in 0i32..2 {
         let ts = base_ts + i as i64 * 300;
-        let meta = build_metadata(250.0 + i as f64 * 10.0, 2.8, Some(1300.0), Some(38.0), Some(0.40));
+        let meta = build_metadata(
+            250.0 + i as f64 * 10.0,
+            2.8,
+            Some(1300.0),
+            Some(38.0),
+            Some(0.40),
+        );
         insert_image(conn, 300 + i + 1, 3, 3, ts, "L", &meta);
     }
 }
@@ -276,7 +298,11 @@ async fn test_analyze_sequence_normal() {
     assert_eq!(json["success"], true);
 
     let sequences = json["data"]["sequences"].as_array().unwrap();
-    assert_eq!(sequences.len(), 1, "Should have exactly 1 sequence (single session)");
+    assert_eq!(
+        sequences.len(),
+        1,
+        "Should have exactly 1 sequence (single session)"
+    );
 
     let seq = &sequences[0];
     assert_eq!(seq["target_id"], 1);
@@ -288,7 +314,10 @@ async fn test_analyze_sequence_normal() {
 
     // Reference values should be populated
     let refs = &seq["reference_values"];
-    assert!(refs["best_star_count"].is_number(), "best_star_count should be populated");
+    assert!(
+        refs["best_star_count"].is_number(),
+        "best_star_count should be populated"
+    );
     assert!(refs["best_hfr"].is_number(), "best_hfr should be populated");
 
     // All quality scores should be between 0.0 and 1.0
@@ -310,7 +339,10 @@ async fn test_analyze_sequence_normal() {
         + summary["fair_count"].as_u64().unwrap()
         + summary["poor_count"].as_u64().unwrap()
         + summary["bad_count"].as_u64().unwrap();
-    assert_eq!(total_summary, 10, "Summary counts should sum to image_count");
+    assert_eq!(
+        total_summary, 10,
+        "Summary counts should sum to image_count"
+    );
 }
 
 /// Test 2: Cloud detection through the full API path
@@ -352,10 +384,13 @@ async fn test_analyze_sequence_cloud_detection() {
     );
 
     // At least one image should be classified as likely_clouds
-    let has_cloud_category = images.iter().any(|img| {
-        img["category"].as_str() == Some("likely_clouds")
-    });
-    assert!(has_cloud_category, "At least one image should have category 'likely_clouds'");
+    let has_cloud_category = images
+        .iter()
+        .any(|img| img["category"].as_str() == Some("likely_clouds"));
+    assert!(
+        has_cloud_category,
+        "At least one image should have category 'likely_clouds'"
+    );
 
     // Summary should detect cloud events
     let summary = &seq["summary"];
@@ -365,7 +400,11 @@ async fn test_analyze_sequence_cloud_detection() {
     );
 
     // Good frames should score above 0.5
-    assert!(good_score > 0.5, "Good frames should score above 0.5, got {}", good_score);
+    assert!(
+        good_score > 0.5,
+        "Good frames should score above 0.5, got {}",
+        good_score
+    );
 }
 
 /// Test 3: Session splitting with 2+ hour gap
@@ -452,7 +491,11 @@ async fn test_analyze_sequence_missing_metrics() {
 
     let (status, json) = get_json(app, "/api/analysis/sequence?target_id=4").await;
 
-    assert_eq!(status, StatusCode::OK, "Should not error with missing metrics");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "Should not error with missing metrics"
+    );
     assert_eq!(json["success"], true);
 
     let sequences = json["data"]["sequences"].as_array().unwrap();
@@ -471,7 +514,10 @@ async fn test_analyze_sequence_missing_metrics() {
             "star_count should be a number since DetectedStars was provided"
         );
         // hfr, eccentricity, snr, background should be null (not provided)
-        assert!(nm["hfr"].is_null(), "hfr should be null when not provided in metadata");
+        assert!(
+            nm["hfr"].is_null(),
+            "hfr should be null when not provided in metadata"
+        );
         assert!(
             nm["eccentricity"].is_null(),
             "eccentricity should be null when not provided"
@@ -508,7 +554,10 @@ async fn test_analyze_sequence_empty_target() {
     assert_eq!(json["success"], true);
 
     let sequences = json["data"]["sequences"].as_array().unwrap();
-    assert!(sequences.is_empty(), "Should return empty sequences array for target with no images");
+    assert!(
+        sequences.is_empty(),
+        "Should return empty sequences array for target with no images"
+    );
 }
 
 /// Test 7: Nonexistent target returns 400 Bad Request
@@ -651,7 +700,11 @@ async fn test_analyze_sequence_custom_session_gap() {
     create_test_schema(&conn2);
     load_session_gap(&conn2);
     let app2 = create_test_app(conn2);
-    let (status, json) = get_json(app2, "/api/analysis/sequence?target_id=2&session_gap_minutes=5").await;
+    let (status, json) = get_json(
+        app2,
+        "/api/analysis/sequence?target_id=2&session_gap_minutes=5",
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -689,10 +742,16 @@ async fn test_json_contract_structure() {
     assert!(seq.get("target_id").is_some(), "Missing 'target_id'");
     assert!(seq.get("target_name").is_some(), "Missing 'target_name'");
     assert!(seq.get("filter_name").is_some(), "Missing 'filter_name'");
-    assert!(seq.get("session_start").is_some(), "Missing 'session_start'");
+    assert!(
+        seq.get("session_start").is_some(),
+        "Missing 'session_start'"
+    );
     assert!(seq.get("session_end").is_some(), "Missing 'session_end'");
     assert!(seq.get("image_count").is_some(), "Missing 'image_count'");
-    assert!(seq.get("reference_values").is_some(), "Missing 'reference_values'");
+    assert!(
+        seq.get("reference_values").is_some(),
+        "Missing 'reference_values'"
+    );
     assert!(seq.get("images").is_some(), "Missing 'images'");
     assert!(seq.get("summary").is_some(), "Missing 'summary'");
 
@@ -706,11 +765,7 @@ async fn test_json_contract_structure() {
         "normalized_metrics",
         "details",
     ] {
-        assert!(
-            img.get(*key).is_some(),
-            "Missing '{}' in images[0]",
-            key
-        );
+        assert!(img.get(*key).is_some(), "Missing '{}' in images[0]", key);
     }
 
     // Verify normalized_metrics keys
@@ -735,11 +790,7 @@ async fn test_json_contract_structure() {
         "focus_drift_detected",
         "tracking_issues_detected",
     ] {
-        assert!(
-            summary.get(*key).is_some(),
-            "Missing '{}' in summary",
-            key
-        );
+        assert!(summary.get(*key).is_some(), "Missing '{}' in summary", key);
     }
 
     // Verify reference_values keys
@@ -765,7 +816,9 @@ async fn test_json_contract_structure() {
     let app2 = create_test_app(conn2);
     let (_, cloud_json) = get_json(app2, "/api/analysis/sequence?target_id=1&filter_name=Ha").await;
 
-    let cloud_images = cloud_json["data"]["sequences"][0]["images"].as_array().unwrap();
+    let cloud_images = cloud_json["data"]["sequences"][0]["images"]
+        .as_array()
+        .unwrap();
     let categories: Vec<&str> = cloud_images
         .iter()
         .filter_map(|img| img["category"].as_str())
@@ -801,7 +854,10 @@ async fn test_api_response_wrapper_structure() {
     // Successful response values
     assert_eq!(json["success"], true);
     assert_eq!(json["status"], "ready");
-    assert!(json["data"].is_object(), "data should be an object for success");
+    assert!(
+        json["data"].is_object(),
+        "data should be an object for success"
+    );
     assert!(json["error"].is_null(), "error should be null for success");
 
     // Test error response
