@@ -1,0 +1,176 @@
+{
+  "success": true,
+  "data": {
+    "sequences": [
+      {
+        "target_id": 1,
+        "target_name": "M42",
+        "filter_name": "L",
+        "session_start": 1705352400,
+        "session_end": 1705355100,
+        "image_count": 10,
+        "reference_values": {
+          "best_star_count": 1.0,
+          "best_hfr": 1.0,
+          "best_eccentricity": 1.0,
+          "best_snr": 0.95,
+          "best_background": 0.98
+        },
+        "images": [
+          {
+            "image_id": 1,
+            "quality_score": 0.82,
+            "temporal_anomaly_score": 0.05,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.80,
+              "hfr": 0.85,
+              "eccentricity": 0.78,
+              "snr": 0.82,
+              "background": 0.90
+            },
+            "details": null
+          },
+          {
+            "image_id": 2,
+            "quality_score": 0.88,
+            "temporal_anomaly_score": 0.02,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.90,
+              "hfr": 0.90,
+              "eccentricity": 0.82,
+              "snr": 0.85,
+              "background": 0.88
+            },
+            "details": null
+          },
+          {
+            "image_id": 3,
+            "quality_score": 0.75,
+            "temporal_anomaly_score": 0.08,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.72,
+              "hfr": 0.78,
+              "eccentricity": 0.74,
+              "snr": 0.78,
+              "background": 0.92
+            },
+            "details": null
+          },
+          {
+            "image_id": 4,
+            "quality_score": 0.91,
+            "temporal_anomaly_score": 0.01,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.95,
+              "hfr": 0.92,
+              "eccentricity": 0.88,
+              "snr": 0.90,
+              "background": 0.86
+            },
+            "details": null
+          },
+          {
+            "image_id": 5,
+            "quality_score": 0.70,
+            "temporal_anomaly_score": 0.10,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.65,
+              "hfr": 0.72,
+              "eccentricity": 0.70,
+              "snr": 0.74,
+              "background": 0.94
+            },
+            "details": null
+          },
+          {
+            "image_id": 6,
+            "quality_score": 0.85,
+            "temporal_anomaly_score": 0.03,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.85,
+              "hfr": 0.88,
+              "eccentricity": 0.80,
+              "snr": 0.84,
+              "background": 0.89
+            },
+            "details": null
+          },
+          {
+            "image_id": 7,
+            "quality_score": 0.77,
+            "temporal_anomaly_score": 0.06,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.75,
+              "hfr": 0.76,
+              "eccentricity": 0.76,
+              "snr": 0.80,
+              "background": 0.91
+            },
+            "details": null
+          },
+          {
+            "image_id": 8,
+            "quality_score": 0.90,
+            "temporal_anomaly_score": 0.01,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.92,
+              "hfr": 0.93,
+              "eccentricity": 0.86,
+              "snr": 0.88,
+              "background": 0.87
+            },
+            "details": null
+          },
+          {
+            "image_id": 9,
+            "quality_score": 0.83,
+            "temporal_anomaly_score": 0.04,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.82,
+              "hfr": 0.85,
+              "eccentricity": 0.80,
+              "snr": 0.83,
+              "background": 0.90
+            },
+            "details": null
+          },
+          {
+            "image_id": 10,
+            "quality_score": 0.72,
+            "temporal_anomaly_score": 0.09,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.70,
+              "hfr": 0.68,
+              "eccentricity": 0.72,
+              "snr": null,
+              "background": 0.93
+            },
+            "details": "Slightly elevated HFR"
+          }
+        ],
+        "summary": {
+          "excellent_count": 3,
+          "good_count": 4,
+          "fair_count": 3,
+          "poor_count": 0,
+          "bad_count": 0,
+          "cloud_events_detected": 0,
+          "focus_drift_detected": false,
+          "tracking_issues_detected": false
+        }
+      }
+    ]
+  },
+  "error": null,
+  "status": "ready"
+}

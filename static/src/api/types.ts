@@ -231,15 +231,15 @@ export interface ImageQualityResult {
   image_id: number;
   quality_score: number;
   temporal_anomaly_score: number;
-  category?: string;
+  category: string | null;
   normalized_metrics: {
-    star_count?: number;
-    hfr?: number;
-    eccentricity?: number;
-    snr?: number;
-    background?: number;
+    star_count: number | null;
+    hfr: number | null;
+    eccentricity: number | null;
+    snr: number | null;
+    background: number | null;
   };
-  details?: string;
+  details: string | null;
 }
 
 export interface SequenceSummary {

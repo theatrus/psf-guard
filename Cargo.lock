@@ -3513,6 +3513,7 @@ dependencies = [
  "clap",
  "dirs",
  "fitrs",
+ "http-body-util",
  "humantime",
  "image",
  "imageproc",
