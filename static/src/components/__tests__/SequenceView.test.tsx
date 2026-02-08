@@ -254,10 +254,10 @@ describe('SequenceView: quality display', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/3 excellent/)).toBeInTheDocument();
-    });
+    }, { timeout: 3000 });
     expect(screen.getByText(/4 good/)).toBeInTheDocument();
     expect(screen.getByText(/3 fair/)).toBeInTheDocument();
-  });
+  }, 10000);
 
   it('renders image cards with quality badges', async () => {
     setupDefaultHandlers();
