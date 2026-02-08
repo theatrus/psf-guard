@@ -38,6 +38,7 @@ jobs:
           libwebkit2gtk-4.1-dev \
           libappindicator3-dev \
           librsvg2-dev \
+          libpng-dev \
           patchelf
 
         echo "OPENCV_LINK_LIBS=static=opencv_core,static=opencv_imgproc,static=opencv_imgcodecs,static=opencv_ximgproc" >> $GITHUB_ENV
