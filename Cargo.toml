@@ -27,9 +27,9 @@ chrono = "0.4"
 regex = "1.12"
 byteorder = "1.5"
 fitrs = "0.5"
-bumpalo = { version = "3.16", features = ["collections"] }
+bumpalo = { version = "3.19", features = ["collections"] }
 image = "0.25"
-imageproc = "0.25"
+imageproc = "0.26"
 rand = "0.9"
 nalgebra = "0.34"
 # OpenCV integration for advanced computer vision
