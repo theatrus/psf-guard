@@ -18,7 +18,7 @@ path = "src/lib.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.38", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml_edit = { version = "0.23", features = ["serde"] }
