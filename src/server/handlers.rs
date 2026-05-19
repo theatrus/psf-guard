@@ -76,6 +76,159 @@ pub async fn list_databases(
     Ok(Json(ApiResponse::success(summaries)))
 }
 
+fn require_registry_path(state: &AppState) -> Result<std::path::PathBuf, AppError> {
+    state.registry_path.read().unwrap().clone().ok_or_else(|| {
+        AppError::BadRequest(
+            "database registry persistence is not configured for this server".into(),
+        )
+    })
+}
+
+fn summary_of(ctx: &crate::server::database_context::DatabaseContext) -> DatabaseSummary {
+    DatabaseSummary {
+        id: ctx.id.clone(),
+        name: ctx.name.clone(),
+        database_path: ctx.database_path.clone(),
+        image_directories: ctx.image_dirs.clone(),
+    }
+}
+
+/// `POST /api/databases` — register a new database. Validates that the file
+/// opens, persists the registry, and inserts the new `DatabaseContext` into
+/// the in-memory map.
+pub async fn add_database_route(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<AddDatabaseRequest>,
+) -> Result<Json<ApiResponse<DatabaseSummary>>, AppError> {
+    use crate::db_registry::DbRegistry;
+    use crate::server::database_context::DatabaseContext;
+
+    let registry_path = require_registry_path(&state)?;
+    let mut reg = DbRegistry::load_or_init(&registry_path)
+        .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
+
+    let entry = reg
+        .add(req.name, req.db_path, req.image_dirs, req.slug)
+        .map_err(|e| AppError::BadRequest(e.to_string()))?
+        .clone();
+
+    // Open the connection now so persisting bad config can't outlive a failure.
+    let ctx = Arc::new(
+        DatabaseContext::new(
+            entry.id.clone(),
+            entry.name.clone(),
+            entry.db_path.clone(),
+            entry.image_dirs.clone(),
+            state.cache_dir_root.clone(),
+        )
+        .map_err(|e| AppError::BadRequest(format!("opening database: {}", e)))?,
+    );
+
+    reg.save(&registry_path)
+        .map_err(|e| AppError::InternalError(format!("persisting registry: {}", e)))?;
+
+    state
+        .databases
+        .write()
+        .unwrap()
+        .insert(entry.id.clone(), ctx.clone());
+
+    // Kick a background refresh for the newly-registered DB so file/dir caches
+    // populate without the user having to refresh manually.
+    let _ = ctx.ensure_cache_available();
+
+    Ok(Json(ApiResponse::success(summary_of(&ctx))))
+}
+
+/// `PUT /api/databases/{db_id}` — update name / slug / db_path / image_dirs.
+/// Reopens the connection if `db_path` or `image_dirs` change. Slug rename is
+/// allowed; the cache directory move is queued for B5.
+pub async fn update_database_route(
+    State(state): State<Arc<AppState>>,
+    Path(db_id): Path<String>,
+    Json(req): Json<UpdateDatabaseRequest>,
+) -> Result<Json<ApiResponse<DatabaseSummary>>, AppError> {
+    use crate::db_registry::DbRegistry;
+    use crate::server::database_context::DatabaseContext;
+
+    let registry_path = require_registry_path(&state)?;
+    let mut reg = DbRegistry::load_or_init(&registry_path)
+        .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
+
+    if reg.find(&db_id).is_none() {
+        return Err(AppError::NotFound);
+    }
+
+    reg.update(
+        &db_id,
+        req.name.clone(),
+        req.slug.clone(),
+        req.db_path.clone(),
+        req.image_dirs.clone(),
+    )
+    .map_err(|e| AppError::BadRequest(e.to_string()))?;
+
+    // Pull the entry back out (post-rename) so we can rebuild the context.
+    let new_id = req.slug.clone().unwrap_or_else(|| db_id.clone());
+    let entry = reg
+        .find(&new_id)
+        .ok_or(AppError::InternalError(
+            "registry update lost the entry".into(),
+        ))?
+        .clone();
+
+    let new_ctx = Arc::new(
+        DatabaseContext::new(
+            entry.id.clone(),
+            entry.name.clone(),
+            entry.db_path.clone(),
+            entry.image_dirs.clone(),
+            state.cache_dir_root.clone(),
+        )
+        .map_err(|e| AppError::BadRequest(format!("opening database: {}", e)))?,
+    );
+
+    reg.save(&registry_path)
+        .map_err(|e| AppError::InternalError(format!("persisting registry: {}", e)))?;
+
+    {
+        let mut map = state.databases.write().unwrap();
+        // If slug changed, remove the old entry.
+        if new_id != db_id {
+            map.remove(&db_id);
+        }
+        map.insert(new_id.clone(), new_ctx.clone());
+    }
+
+    let _ = new_ctx.ensure_cache_available();
+
+    Ok(Json(ApiResponse::success(summary_of(&new_ctx))))
+}
+
+/// `DELETE /api/databases/{db_id}` — drop the registered database. Returns
+/// 200 with `{removed: true}` even on first-call (idempotent on the surface).
+pub async fn remove_database_route(
+    State(state): State<Arc<AppState>>,
+    Path(db_id): Path<String>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    use crate::db_registry::DbRegistry;
+
+    let registry_path = require_registry_path(&state)?;
+    let mut reg = DbRegistry::load_or_init(&registry_path)
+        .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
+    let removed_from_registry = reg
+        .remove(&db_id)
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    reg.save(&registry_path)
+        .map_err(|e| AppError::InternalError(format!("persisting registry: {}", e)))?;
+
+    let removed_from_state = state.databases.write().unwrap().remove(&db_id).is_some();
+
+    Ok(Json(ApiResponse::success(serde_json::json!({
+        "removed": removed_from_registry || removed_from_state,
+    }))))
+}
+
 pub async fn refresh_file_cache(
     ctx: DbContext,
 ) -> Result<Json<ApiResponse<FileCheckResponse>>, AppError> {

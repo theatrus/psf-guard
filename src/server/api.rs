@@ -241,6 +241,32 @@ pub struct DatabaseSummary {
     pub image_directories: Vec<String>,
 }
 
+/// Body of `POST /api/databases`.
+#[derive(Debug, Deserialize)]
+pub struct AddDatabaseRequest {
+    pub name: String,
+    pub db_path: String,
+    #[serde(default)]
+    pub image_dirs: Vec<String>,
+    /// Optional user-supplied slug; if omitted, derived from the path.
+    #[serde(default)]
+    pub slug: Option<String>,
+}
+
+/// Body of `PUT /api/databases/{db_id}`. All fields are optional; absent fields
+/// leave the existing value unchanged.
+#[derive(Debug, Deserialize, Default)]
+pub struct UpdateDatabaseRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub slug: Option<String>,
+    #[serde(default)]
+    pub db_path: Option<String>,
+    #[serde(default)]
+    pub image_dirs: Option<Vec<String>>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct FileCheckResponse {
     pub images_checked: usize,

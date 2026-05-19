@@ -63,11 +63,13 @@ pub fn main() {
 
     let server_databases = initial_registry.databases.clone();
     let server_config_for_task = server_config.clone();
+    let registry_path_for_task = registry_path.clone();
     rt.spawn(async move {
         if let Err(e) = start_server_for_tauri(
             server_port,
             server_databases,
             server_config_for_task,
+            registry_path_for_task,
             shutdown_rx,
         )
         .await
@@ -214,6 +216,7 @@ async fn start_server_for_tauri(
     port: u16,
     databases: Vec<DbEntry>,
     server_config: TauriServerConfig,
+    registry_path: PathBuf,
     shutdown_rx: oneshot::Receiver<()>,
 ) -> anyhow::Result<()> {
     use crate::config::Config;
@@ -257,6 +260,7 @@ async fn start_server_for_tauri(
         host,
         port,
         pregeneration_config: server_config.pregeneration,
+        registry_path: Some(registry_path),
     };
 
     crate::server::run_server_with_shutdown(server_config, shutdown_rx).await
@@ -366,9 +370,20 @@ async fn restart_server(
     tracing::info!("🚀 Starting new server on {}", server_url);
 
     let base_clone = base.inner().clone();
+    let registry_path = state
+        .registry_path
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     tokio::spawn(async move {
-        if let Err(e) =
-            start_server_for_tauri(server_port, databases, base_clone, shutdown_rx).await
+        if let Err(e) = start_server_for_tauri(
+            server_port,
+            databases,
+            base_clone,
+            registry_path,
+            shutdown_rx,
+        )
+        .await
         {
             eprintln!("Server restart error: {}", e);
         }

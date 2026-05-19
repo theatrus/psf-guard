@@ -35,8 +35,13 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub pregeneration_config: PregenerationConfig,
+    /// Path of the on-disk registry that mirrors `databases`. When set, the
+    /// CRUD endpoints (`POST/PUT/DELETE /api/databases/...`) persist runtime
+    /// changes here. `None` disables those endpoints.
+    pub registry_path: Option<PathBuf>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_server(
     databases: Vec<crate::db_registry::DbEntry>,
     static_dir: Option<String>,
@@ -44,6 +49,7 @@ pub async fn run_server(
     host: String,
     port: u16,
     pregeneration_config: PregenerationConfig,
+    registry_path: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     // Initialize tracing with environment-based filtering (for CLI mode)
     // Set RUST_LOG=debug for debug logs, RUST_LOG=info for info logs, etc.
@@ -65,6 +71,7 @@ pub async fn run_server(
         host,
         port,
         pregeneration_config,
+        registry_path,
     };
 
     run_server_internal(config, None).await
@@ -126,6 +133,7 @@ async fn run_server_internal(
     ) {
         Ok(state) => {
             tracing::info!("✅ Application state initialized successfully");
+            state.set_registry_path(config.registry_path.clone());
             Arc::new(state)
         }
         Err(e) => {
@@ -206,7 +214,14 @@ async fn run_server_internal(
     // Top-level API: global endpoints + nested per-DB routes.
     let api_routes = Router::new()
         .route("/info", get(handlers::get_server_info))
-        .route("/databases", get(handlers::list_databases))
+        .route(
+            "/databases",
+            get(handlers::list_databases).post(handlers::add_database_route),
+        )
+        .route(
+            "/databases/{db_id}",
+            put(handlers::update_database_route).delete(handlers::remove_database_route),
+        )
         .nest("/db/{db_id}", db_routes)
         .with_state(state);
 

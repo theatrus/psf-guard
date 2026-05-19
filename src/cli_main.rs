@@ -310,6 +310,7 @@ pub fn main() -> Result<()> {
                     server_host,
                     server_port,
                     pregeneration_config,
+                    Some(registry_path),
                 )
                 .await
             })?;

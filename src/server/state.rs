@@ -34,6 +34,10 @@ pub struct AppState {
     /// Root cache directory; per-DB caches live under this. B5 will namespace
     /// per-slug subdirectories beneath this root.
     pub cache_dir_root: String,
+    /// Path to the on-disk database registry that mirrors `databases`. When
+    /// set, the CRUD endpoints (`POST/PUT/DELETE /api/databases/...`) persist
+    /// changes here. `None` disables the CRUD endpoints (e.g. in tests).
+    pub registry_path: RwLock<Option<PathBuf>>,
 }
 
 #[derive(Clone)]
@@ -291,7 +295,14 @@ impl AppState {
             databases: RwLock::new(map),
             pregeneration_config,
             cache_dir_root: cache_dir,
+            registry_path: RwLock::new(None),
         })
+    }
+
+    /// Attach the path of the on-disk registry that mirrors this state.
+    /// Enables the CRUD endpoints to persist runtime changes.
+    pub fn set_registry_path(&self, path: Option<PathBuf>) {
+        *self.registry_path.write().unwrap() = path;
     }
 
     /// Convenience constructor for a single database. Computes a default slug
@@ -346,6 +357,7 @@ impl AppState {
             databases: RwLock::new(databases),
             pregeneration_config: crate::cli::PregenerationConfig::default(),
             cache_dir_root: "/tmp/psf-guard-test".to_string(),
+            registry_path: RwLock::new(None),
         }
     }
 }
