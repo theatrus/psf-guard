@@ -28,8 +28,9 @@ pub struct DatabaseContext {
     pub database_path: String,
     pub image_dirs: Vec<String>,
     pub image_dir_paths: Vec<PathBuf>,
-    /// Cache directory for this database's generated artifacts (previews etc.).
-    /// In B1 this is the shared cache root; B5 will namespace it under `<root>/<slug>`.
+    /// Per-DB cache directory: `<cache_root>/<slug>/`. Created on construction.
+    /// All preview/annotated/PSF artifacts for this database live below here,
+    /// so two DBs with overlapping image IDs do not collide.
     pub cache_dir: String,
     pub cache_dir_path: PathBuf,
     db_connection: Arc<Mutex<Connection>>,
@@ -39,12 +40,14 @@ pub struct DatabaseContext {
 }
 
 impl DatabaseContext {
+    /// `cache_root` is the shared parent directory; this constructor appends
+    /// the slug to produce a per-DB cache subdir and creates it on disk.
     pub fn new(
         id: String,
         name: String,
         db_path: String,
         image_dirs: Vec<String>,
-        cache_dir: String,
+        cache_root: String,
     ) -> Result<Self> {
         use std::path::Path;
 
@@ -67,6 +70,16 @@ impl DatabaseContext {
             ));
         }
 
+        let cache_dir_path = PathBuf::from(&cache_root).join(&id);
+        std::fs::create_dir_all(&cache_dir_path).map_err(|e| {
+            anyhow::anyhow!(
+                "Creating cache directory {}: {}",
+                cache_dir_path.display(),
+                e
+            )
+        })?;
+        let cache_dir = cache_dir_path.to_string_lossy().into_owned();
+
         let conn = Connection::open_with_flags(
             &db_path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -78,8 +91,8 @@ impl DatabaseContext {
             database_path: db_path,
             image_dirs,
             image_dir_paths,
-            cache_dir: cache_dir.clone(),
-            cache_dir_path: PathBuf::from(cache_dir),
+            cache_dir,
+            cache_dir_path,
             db_connection: Arc::new(Mutex::new(conn)),
             file_check_cache: Arc::new(RwLock::new(FileCheckCache::new())),
             directory_tree_cache: Arc::new(RwLock::new(None)),

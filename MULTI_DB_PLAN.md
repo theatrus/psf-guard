@@ -402,7 +402,7 @@ Update inline as work progresses. `[ ]` pending, `[~]` in progress, `[x]` done.
 - [x] **B2** Path-nested per-DB API + `DbContext` extractor; `/api/databases` list endpoint
 - [x] **B3** v2 config + migration; updated Tauri commands; build N contexts at startup
 - [x] **B4** HTTP CRUD for databases (add/edit/remove at runtime)
-- [ ] **B5** Cache directory namespacing under `<cache_root>/<db_id>/`
+- [x] **B5** Cache directory namespacing under `<cache_root>/<db_id>/`
 
 ### Frontend
 - [x] **F1** API client + URL state + merged-overview hooks (call sites updated to pass `dbId`)

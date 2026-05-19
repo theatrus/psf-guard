@@ -177,6 +177,30 @@ pub async fn update_database_route(
         ))?
         .clone();
 
+    // If the slug changed, move the on-disk cache directory so previously
+    // generated previews carry over to the new identity. Failure is non-fatal:
+    // worst case the cache is rebuilt under the new slug.
+    if new_id != db_id {
+        let old_dir = std::path::PathBuf::from(&state.cache_dir_root).join(&db_id);
+        let new_dir = std::path::PathBuf::from(&state.cache_dir_root).join(&new_id);
+        if old_dir.exists() {
+            if let Err(e) = std::fs::rename(&old_dir, &new_dir) {
+                tracing::warn!(
+                    "Failed to rename cache dir {} -> {}: {} (old cache will be orphaned)",
+                    old_dir.display(),
+                    new_dir.display(),
+                    e
+                );
+            } else {
+                tracing::info!(
+                    "Renamed cache dir {} -> {}",
+                    old_dir.display(),
+                    new_dir.display()
+                );
+            }
+        }
+    }
+
     let new_ctx = Arc::new(
         DatabaseContext::new(
             entry.id.clone(),

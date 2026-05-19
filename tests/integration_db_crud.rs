@@ -243,6 +243,70 @@ async fn add_database_with_invalid_slug_is_rejected() {
 }
 
 #[tokio::test]
+async fn cache_dir_is_per_slug_and_follows_rename() {
+    let dir = tempdir().unwrap();
+    let registry_path = dir.path().join("config.json");
+    let cache_root = dir.path().join("cache");
+    std::fs::create_dir_all(&cache_root).unwrap();
+    let db_path = dir.path().join("scratch.sqlite");
+    create_sqlite(&db_path);
+    let image_dir = dir.path().join("imgs");
+    std::fs::create_dir_all(&image_dir).unwrap();
+
+    let state = Arc::new(
+        AppState::from_databases(
+            vec![],
+            cache_root.to_string_lossy().into_owned(),
+            psf_guard::cli::PregenerationConfig::default(),
+        )
+        .unwrap(),
+    );
+    state.set_registry_path(Some(registry_path));
+
+    let (_, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        "/api/databases",
+        Some(serde_json::json!({
+            "name": "First",
+            "db_path": db_path.to_string_lossy(),
+            "image_dirs": [image_dir.to_string_lossy()],
+            "slug": "first-rig",
+        })),
+    )
+    .await;
+    assert_eq!(body["data"]["id"], "first-rig");
+
+    // The per-DB cache subdir should exist.
+    assert!(cache_root.join("first-rig").is_dir());
+
+    // Drop a sentinel file into the cache dir; after rename, it should still
+    // be there under the new slug (preview cache survives slug rename).
+    let sentinel = cache_root.join("first-rig").join("sentinel");
+    std::fs::write(&sentinel, b"hello").unwrap();
+
+    let (status, _) = json_request(
+        build_app(state.clone()),
+        "PUT",
+        "/api/databases/first-rig",
+        Some(serde_json::json!({ "slug": "renamed-rig" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert!(
+        !cache_root.join("first-rig").exists(),
+        "old cache dir should have been moved"
+    );
+    let new_sentinel = cache_root.join("renamed-rig").join("sentinel");
+    assert!(
+        new_sentinel.exists(),
+        "sentinel should have been carried to renamed-rig cache dir"
+    );
+    assert_eq!(std::fs::read(new_sentinel).unwrap(), b"hello");
+}
+
+#[tokio::test]
 async fn crud_is_disabled_when_no_registry_path_configured() {
     let dir = tempdir().unwrap();
     let cache_dir = dir.path().join("cache");
