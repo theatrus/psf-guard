@@ -27,8 +27,9 @@ use tokio::sync::oneshot;
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
-    pub database_path: String,
-    pub image_dirs: Vec<String>,
+    /// Every database the server should load at startup. Empty means the
+    /// server still runs (the UI shows an empty state).
+    pub databases: Vec<crate::db_registry::DbEntry>,
     pub static_dir: Option<String>,
     pub cache_dir: String,
     pub host: String,
@@ -37,8 +38,7 @@ pub struct ServerConfig {
 }
 
 pub async fn run_server(
-    database_path: String,
-    image_dirs: Vec<String>,
+    databases: Vec<crate::db_registry::DbEntry>,
     static_dir: Option<String>,
     cache_dir: String,
     host: String,
@@ -59,8 +59,7 @@ pub async fn run_server(
         .init();
 
     let config = ServerConfig {
-        database_path,
-        image_dirs,
+        databases,
         static_dir,
         cache_dir,
         host,
@@ -93,8 +92,15 @@ async fn run_server_internal(
     shutdown_rx: Option<oneshot::Receiver<()>>,
 ) -> anyhow::Result<()> {
     tracing::info!("🚀 Starting PSF Guard server");
-    tracing::info!("📊 Database: {}", config.database_path);
-    tracing::info!("📁 Image directories: {}", config.image_dirs.join(", "));
+    tracing::info!(
+        "📊 Databases ({}):{}",
+        config.databases.len(),
+        config
+            .databases
+            .iter()
+            .map(|d| format!("\n   - {} ({}): {}", d.name, d.id, d.db_path))
+            .collect::<String>()
+    );
     tracing::info!("💾 Cache directory: {}", config.cache_dir);
 
     // Log pregeneration configuration
@@ -113,9 +119,8 @@ async fn run_server_internal(
     std::fs::create_dir_all(&config.cache_dir)?;
 
     // Create app state
-    let state = match AppState::new(
-        config.database_path.clone(),
-        config.image_dirs.clone(),
+    let state = match AppState::from_databases(
+        config.databases.clone(),
         config.cache_dir.clone(),
         config.pregeneration_config.clone(),
     ) {
@@ -129,19 +134,23 @@ async fn run_server_internal(
         }
     };
 
-    // Start background cache refresh at server startup
-    // This ensures the singleton refresh is started immediately
-    let startup_status = state.ensure_cache_available();
-    match startup_status {
-        crate::server::state::RefreshStatus::InProgressWait
-        | crate::server::state::RefreshStatus::InProgressServeStale => {
-            tracing::info!("🔄 Cache refresh started at server startup");
-        }
-        crate::server::state::RefreshStatus::NotNeeded => {
-            tracing::info!("✅ Cache is already available at startup");
-        }
-        crate::server::state::RefreshStatus::NeedsRefresh => {
-            tracing::warn!("⚠️ Cache refresh needed but not started - this shouldn't happen");
+    // Kick off a background cache refresh for every configured database.
+    for ctx in state.all_databases() {
+        let status = ctx.ensure_cache_available();
+        match status {
+            crate::server::state::RefreshStatus::InProgressWait
+            | crate::server::state::RefreshStatus::InProgressServeStale => {
+                tracing::info!("🔄 Cache refresh started at server startup (db={})", ctx.id);
+            }
+            crate::server::state::RefreshStatus::NotNeeded => {
+                tracing::info!("✅ Cache is already available at startup (db={})", ctx.id);
+            }
+            crate::server::state::RefreshStatus::NeedsRefresh => {
+                tracing::warn!(
+                    "⚠️ Cache refresh needed but not started for db={} - this shouldn't happen",
+                    ctx.id
+                );
+            }
         }
     }
 

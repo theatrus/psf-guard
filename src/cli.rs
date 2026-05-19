@@ -331,10 +331,17 @@ pub enum Commands {
         #[arg(short, long)]
         config: Option<String>,
 
-        /// Database file to use (overrides config file)
+        /// Path to the database registry JSON file (defaults to the platform
+        /// config directory; useful for dev/test isolation).
+        #[arg(long)]
+        registry: Option<String>,
+
+        /// Database file to use. Registered into the registry on first run
+        /// so subsequent starts pick it up automatically.
         database: Option<String>,
 
-        /// Base directories containing the image files (can specify multiple, overrides config file)
+        /// Base directories containing the image files. Used as the new
+        /// database's image directories when registering for the first time.
         image_dirs: Vec<String>,
 
         /// Directory to serve static files from (for React app, optional - uses embedded files if not provided)

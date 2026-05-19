@@ -1,14 +1,13 @@
 use crate::cli::PregenerationConfig;
-use crate::directory_tree::DirectoryTree;
+use crate::db_registry::DbEntry;
 use crate::server::database_context::DatabaseContext;
 use crate::server::slug::compute_default_slug;
 use anyhow::Result;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex as TokioMutex;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RefreshStatus {
@@ -24,30 +23,17 @@ pub enum RefreshStatus {
 
 /// Process-global server state.
 ///
-/// Multi-DB lives in `databases` (keyed by slug). All per-DB operations route
-/// through `DatabaseContext`. The legacy public fields and methods below
-/// (`database_path`, `image_dirs`, `db()`, `file_check_cache`, etc.) are
-/// compatibility shims that delegate to the **single** entry in `databases`.
-/// They're kept until B2 nests handlers under `/api/db/{slug}/...` and takes
-/// a `DbContext` extractor directly.
+/// All per-database work routes through entries in `databases`, keyed by slug.
+/// Handlers reach a specific database via the `DbContext` extractor which
+/// looks up by the `{db_id}` path segment.
 pub struct AppState {
     /// Canonical multi-DB state, keyed by slug.
     pub databases: RwLock<HashMap<String, Arc<DatabaseContext>>>,
     /// Pre-generation configuration (process-global).
     pub pregeneration_config: PregenerationConfig,
-    /// Root cache directory; per-DB caches live under this. In B1 this is
-    /// also where each context writes (no namespacing yet — see B5).
+    /// Root cache directory; per-DB caches live under this. B5 will namespace
+    /// per-slug subdirectories beneath this root.
     pub cache_dir_root: String,
-
-    // ── Compatibility shims (B1) ────────────────────────────────────────────
-    // These mirror fields of the single DatabaseContext so existing handlers
-    // continue to compile without modification. Removed in B2.
-    pub database_path: String,
-    pub image_dirs: Vec<String>,
-    pub cache_dir: String,
-    pub file_check_cache: Arc<RwLock<FileCheckCache>>,
-    pub directory_tree_cache: Arc<RwLock<Option<DirectoryTree>>>,
-    pub refresh_mutex: Arc<TokioMutex<()>>,
 }
 
 #[derive(Clone)]
@@ -282,50 +268,57 @@ impl FileCheckCache {
 }
 
 impl AppState {
+    /// Build state for N configured databases. Each entry opens its own
+    /// SQLite connection; failures bubble up immediately.
+    pub fn from_databases(
+        databases: Vec<DbEntry>,
+        cache_dir: String,
+        pregeneration_config: PregenerationConfig,
+    ) -> Result<Self> {
+        let mut map = HashMap::with_capacity(databases.len());
+        for entry in databases {
+            let ctx = Arc::new(DatabaseContext::new(
+                entry.id.clone(),
+                entry.name,
+                entry.db_path,
+                entry.image_dirs,
+                cache_dir.clone(),
+            )?);
+            map.insert(entry.id, ctx);
+        }
+
+        Ok(Self {
+            databases: RwLock::new(map),
+            pregeneration_config,
+            cache_dir_root: cache_dir,
+        })
+    }
+
+    /// Convenience constructor for a single database. Computes a default slug
+    /// from the path. Used by callers that don't go through `DbRegistry`.
     pub fn new(
         db_path: String,
         image_dirs: Vec<String>,
         cache_dir: String,
         pregeneration_config: PregenerationConfig,
     ) -> Result<Self> {
-        // Build the single DatabaseContext using a default slug from the path.
         let slug = compute_default_slug(&db_path);
-        let display_name = PathBuf::from(&db_path)
+        let name = PathBuf::from(&db_path)
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
+            .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "Database".to_string());
-
-        let ctx = Arc::new(DatabaseContext::new(
-            slug.clone(),
-            display_name,
-            db_path.clone(),
-            image_dirs.clone(),
-            cache_dir.clone(),
-        )?);
-
-        // Compat shim fields point at the same Arcs the context owns, so
-        // mutations through either path are seen by both.
-        let file_check_cache = Arc::clone(&ctx.file_check_cache);
-        let directory_tree_cache = Arc::clone(&ctx.directory_tree_cache);
-        let refresh_mutex = Arc::clone(&ctx.refresh_mutex);
-
-        let mut databases = HashMap::new();
-        databases.insert(slug, ctx);
-
-        Ok(Self {
-            databases: RwLock::new(databases),
-            pregeneration_config,
-            cache_dir_root: cache_dir.clone(),
-            database_path: db_path,
-            image_dirs,
+        Self::from_databases(
+            vec![DbEntry {
+                id: slug,
+                name,
+                db_path,
+                image_dirs,
+            }],
             cache_dir,
-            file_check_cache,
-            directory_tree_cache,
-            refresh_mutex,
-        })
+            pregeneration_config,
+        )
     }
-
-    // ── Multi-DB primitives (used by B2+) ────────────────────────────────────
 
     /// Look up a database by slug.
     pub fn get_database(&self, slug: &str) -> Option<Arc<DatabaseContext>> {
@@ -336,65 +329,6 @@ impl AppState {
     pub fn all_databases(&self) -> Vec<Arc<DatabaseContext>> {
         self.databases.read().unwrap().values().cloned().collect()
     }
-
-    /// Get the (singular) database context. **Panics** if there isn't exactly
-    /// one — only valid during B1, where all handlers still assume single-DB.
-    /// Removed when B2 introduces the path-nested API and `DbContext` extractor.
-    pub fn single_context(&self) -> Arc<DatabaseContext> {
-        let dbs = self.databases.read().unwrap();
-        if dbs.len() != 1 {
-            panic!(
-                "single_context() called with {} databases configured — B2 \
-                 must convert the calling handler to use DbContext",
-                dbs.len()
-            );
-        }
-        dbs.values().next().cloned().unwrap()
-    }
-
-    // ── Compatibility shims (B1) ────────────────────────────────────────────
-    // These delegate to the single DatabaseContext so existing handlers
-    // compile unchanged.
-
-    pub fn db(&self) -> Arc<Mutex<Connection>> {
-        self.single_context().db()
-    }
-
-    pub fn get_cache_path(&self, category: &str, filename: &str) -> PathBuf {
-        self.single_context().get_cache_path(category, filename)
-    }
-
-    pub fn get_image_path(&self, relative_path: &str) -> PathBuf {
-        self.single_context().get_image_path(relative_path)
-    }
-
-    pub fn get_directory_tree(&self) -> Result<Arc<DirectoryTree>> {
-        self.single_context().get_directory_tree()
-    }
-
-    pub fn refresh_directory_tree_if_needed(&self) -> Result<Arc<DirectoryTree>> {
-        self.single_context().refresh_directory_tree_if_needed()
-    }
-
-    pub fn clear_directory_tree_cache(&self) {
-        self.single_context().clear_directory_tree_cache()
-    }
-
-    pub fn get_directory_tree_stats(&self) -> Option<crate::directory_tree::DirectoryTreeStats> {
-        self.single_context().get_directory_tree_stats()
-    }
-
-    pub fn ensure_cache_available(&self) -> RefreshStatus {
-        self.single_context().ensure_cache_available()
-    }
-
-    pub fn force_directory_tree_refresh(&self) -> RefreshStatus {
-        self.single_context().force_directory_tree_refresh()
-    }
-
-    pub fn get_cache_refresh_progress(&self) -> Option<RefreshProgress> {
-        self.single_context().get_cache_refresh_progress()
-    }
 }
 
 impl AppState {
@@ -403,9 +337,6 @@ impl AppState {
     #[doc(hidden)]
     pub fn new_for_test(conn: Connection) -> Self {
         let ctx = Arc::new(DatabaseContext::new_for_test(conn));
-        let file_check_cache = Arc::clone(&ctx.file_check_cache);
-        let directory_tree_cache = Arc::clone(&ctx.directory_tree_cache);
-        let refresh_mutex = Arc::clone(&ctx.refresh_mutex);
         let slug = ctx.id.clone();
 
         let mut databases = HashMap::new();
@@ -415,12 +346,6 @@ impl AppState {
             databases: RwLock::new(databases),
             pregeneration_config: crate::cli::PregenerationConfig::default(),
             cache_dir_root: "/tmp/psf-guard-test".to_string(),
-            database_path: ":memory:".to_string(),
-            image_dirs: vec![],
-            cache_dir: "/tmp/psf-guard-test".to_string(),
-            file_check_cache,
-            directory_tree_cache,
-            refresh_mutex,
         }
     }
 }

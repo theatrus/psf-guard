@@ -43,11 +43,24 @@ export const initializeApiBaseUrl = async (): Promise<string> => {
   return serverUrl ? `${serverUrl}/api` : '/api';
 };
 
-// Configuration interface matching Rust struct
-export interface TauriConfig {
-  database_path?: string | null;
-  image_directories: string[];
+// One configured database entry (mirrors `DbEntry` in the Rust db_registry module).
+export interface DbEntry {
+  id: string;
+  name: string;
+  db_path: string;
+  image_dirs: string[];
 }
+
+// Persisted registry of all configured databases (mirrors `DbRegistry`).
+export interface DbRegistry {
+  schema_version: number;
+  databases: DbEntry[];
+  active_db_id?: string | null;
+}
+
+// Backwards-compat alias; existing call sites referenced `TauriConfig`.
+// Now points at the multi-DB registry shape.
+export type TauriConfig = DbRegistry;
 
 // Tauri-specific file system functions
 export const tauriFileSystem = {
@@ -96,10 +109,10 @@ export const tauriFileSystem = {
 
 // Configuration management functions
 export const tauriConfig = {
-  // Get current configuration
-  getCurrentConfiguration: async (): Promise<TauriConfig | null> => {
+  // Get current configuration (registry of all configured DBs)
+  getCurrentConfiguration: async (): Promise<DbRegistry | null> => {
     if (!isTauriApp()) return null;
-    
+
     try {
       // @ts-ignore - Tauri API will be available at runtime
       const { invoke } = await import('@tauri-apps/api/core');
@@ -110,10 +123,10 @@ export const tauriConfig = {
     }
   },
 
-  // Save configuration
-  saveConfiguration: async (config: TauriConfig): Promise<boolean> => {
+  // Replace the entire registry. Used by the multi-DB settings panel.
+  saveConfiguration: async (config: DbRegistry): Promise<boolean> => {
     if (!isTauriApp()) return false;
-    
+
     try {
       // @ts-ignore - Tauri API will be available at runtime
       const { invoke } = await import('@tauri-apps/api/core');
@@ -121,6 +134,38 @@ export const tauriConfig = {
       return true;
     } catch (error) {
       console.error('Failed to save configuration:', error);
+      return false;
+    }
+  },
+
+  // Add a single database to the registry; the backend persists and returns the entry.
+  addDatabase: async (
+    name: string,
+    dbPath: string,
+    imageDirs: string[]
+  ): Promise<DbEntry | null> => {
+    if (!isTauriApp()) return null;
+
+    try {
+      // @ts-ignore - Tauri API will be available at runtime
+      const { invoke } = await import('@tauri-apps/api/core');
+      return await invoke('add_database', { name, dbPath, imageDirs });
+    } catch (error) {
+      console.error('Failed to add database:', error);
+      return null;
+    }
+  },
+
+  // Remove a database from the registry by slug.
+  removeDatabase: async (dbId: string): Promise<boolean> => {
+    if (!isTauriApp()) return false;
+
+    try {
+      // @ts-ignore - Tauri API will be available at runtime
+      const { invoke } = await import('@tauri-apps/api/core');
+      return await invoke('remove_database', { dbId });
+    } catch (error) {
+      console.error('Failed to remove database:', error);
       return false;
     }
   },

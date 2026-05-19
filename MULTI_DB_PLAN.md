@@ -400,7 +400,7 @@ Update inline as work progresses. `[ ]` pending, `[~]` in progress, `[x]` done.
 ### Backend
 - [x] **B1** Introduce `DatabaseContext`, refactor `AppState` to a map (single entry today)
 - [x] **B2** Path-nested per-DB API + `DbContext` extractor; `/api/databases` list endpoint
-- [ ] **B3** v2 config + migration; updated Tauri commands; build N contexts at startup
+- [x] **B3** v2 config + migration; updated Tauri commands; build N contexts at startup
 - [ ] **B4** HTTP CRUD for databases (add/edit/remove at runtime)
 - [ ] **B5** Cache directory namespacing under `<cache_root>/<db_id>/`
 

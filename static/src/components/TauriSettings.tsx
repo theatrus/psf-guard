@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { isTauriApp, tauriFileSystem, tauriConfig } from '../utils/tauri';
-import type { TauriConfig } from '../utils/tauri';
 import './TauriSettings.css';
 
 interface TauriSettingsProps {
@@ -9,6 +8,9 @@ interface TauriSettingsProps {
 }
 
 export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
+  // Band-aid form for B3: lets the user add ONE database to the registry.
+  // F3 will replace this with the full multi-DB management panel.
+  const [databaseName, setDatabaseName] = useState<string>('');
   const [databasePath, setDatabasePath] = useState<string>('');
   const [imageDirs, setImageDirs] = useState<string[]>([]);
   const [isDetectingDatabase, setIsDetectingDatabase] = useState(false);
@@ -16,19 +18,20 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
   const [saveMessage, setSaveMessage] = useState<string>('');
 
   useEffect(() => {
-    // Only show in Tauri mode
     if (!isTauriApp()) return;
 
     const loadCurrentConfiguration = async () => {
       setIsDetectingDatabase(true);
       try {
-        // Load existing configuration
-        const currentConfig = await tauriConfig.getCurrentConfiguration();
-        if (currentConfig) {
-          setDatabasePath(currentConfig.database_path || '');
-          setImageDirs(currentConfig.image_directories || []);
+        const registry = await tauriConfig.getCurrentConfiguration();
+        if (registry && registry.databases.length > 0) {
+          // Pre-fill from the first configured DB so an edit-in-place feels
+          // sensible (full multi-DB editing comes in F3).
+          const first = registry.databases[0];
+          setDatabaseName(first.name);
+          setDatabasePath(first.db_path);
+          setImageDirs(first.image_dirs);
         } else {
-          // Fall back to detecting default database path
           const defaultPath = await tauriFileSystem.getDefaultNinaPath();
           if (defaultPath) {
             setDatabasePath(defaultPath);
@@ -36,7 +39,6 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
         }
       } catch (error) {
         console.error('Failed to load configuration:', error);
-        // Try to get default N.I.N.A. database path as fallback
         try {
           const defaultPath = await tauriFileSystem.getDefaultNinaPath();
           if (defaultPath) {
@@ -52,7 +54,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
 
     if (isOpen) {
       loadCurrentConfiguration();
-      setSaveMessage(''); // Clear any previous messages
+      setSaveMessage('');
     }
   }, [isOpen]);
 
@@ -92,26 +94,50 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setSaveMessage('');
 
     try {
-      const config: TauriConfig = {
-        database_path: databasePath.trim(),
-        image_directories: imageDirs,
-      };
+      // Look up the current registry. If a DB with this canonical path is
+      // already present, update it (replace name/image_dirs). Otherwise add.
+      const registry = await tauriConfig.getCurrentConfiguration();
+      const existing = registry?.databases.find(
+        (d) => d.db_path === databasePath.trim()
+      );
 
-      const success = await tauriConfig.saveConfiguration(config);
+      const inferredName =
+        databaseName.trim() ||
+        databasePath.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') ||
+        'Database';
+
+      let success = false;
+      if (existing && registry) {
+        // Update in place. Slug stays the same.
+        const updated: typeof registry = {
+          ...registry,
+          databases: registry.databases.map((d) =>
+            d === existing
+              ? { ...d, name: inferredName, image_dirs: imageDirs }
+              : d
+          ),
+        };
+        success = await tauriConfig.saveConfiguration(updated);
+      } else {
+        const added = await tauriConfig.addDatabase(
+          inferredName,
+          databasePath.trim(),
+          imageDirs
+        );
+        success = !!added;
+      }
+
       if (success) {
         setSaveMessage('Configuration saved! Restarting server...');
-        
-        // Automatically restart the server
+
         try {
           const serverRestartSuccess = await tauriConfig.restartServer();
           if (serverRestartSuccess) {
             setSaveMessage('Configuration applied successfully! Reloading interface...');
-            // Give the server a moment to fully start up, then refresh the UI
             setTimeout(() => {
               window.location.reload();
             }, 2000);
           } else {
-            // Fallback to full application restart
             setSaveMessage('Applying configuration... (restarting application)');
             setTimeout(async () => {
               await tauriConfig.restartApplication();
@@ -157,19 +183,30 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
 
           <div className="settings-section">
             <h3>Database Configuration</h3>
-            
+
             {isDetectingDatabase && (
               <div className="detecting-database">
                 🔍 Detecting N.I.N.A. database...
               </div>
             )}
-            
+
+            <div className="database-config">
+              <label>Display name (optional):</label>
+              <input
+                type="text"
+                value={databaseName}
+                onChange={(e) => setDatabaseName(e.target.value)}
+                placeholder="e.g. Imaging Rig (defaults to filename)"
+                className="file-path-input"
+              />
+            </div>
+
             <div className="database-config">
               <label>N.I.N.A. Database File:</label>
               <div className="file-input-group">
-                <input 
-                  type="text" 
-                  value={databasePath} 
+                <input
+                  type="text"
+                  value={databasePath}
                   onChange={(e) => setDatabasePath(e.target.value)}
                   placeholder="Select or enter database path"
                   className="file-path-input"
