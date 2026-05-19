@@ -411,10 +411,10 @@ Update inline as work progresses. `[ ]` pending, `[~]` in progress, `[x]` done.
 - [x] **F4** Per-DB SSE cache progress + aggregated indicator
 
 ### Cross-cutting
-- [ ] Manual smoke test pass against checklist in §9
-- [ ] Update `CLAUDE.md` notes for multi-DB architecture
-- [ ] Update `README.md` user-facing docs
-- [ ] **Document new CLI persistence behavior** in both `README.md` and `CLAUDE.md`: `psf-guard server <db> <dirs>` now registers the DB into the shared config on first run. For ad-hoc/scratch sessions that should not pollute the user's real config, use `psf-guard server --config /tmp/scratch.json <db> <dirs>`. Include a short "Migration from previous behavior" callout for users who relied on the old "one-shot, no config touched" semantics.
+- [ ] Manual smoke test pass against checklist in §9 (user-driven; requires real desktop app run)
+- [x] Update `CLAUDE.md` notes for multi-DB architecture
+- [x] Update `README.md` user-facing docs
+- [x] **Document new CLI persistence behavior** in both `README.md` and `CLAUDE.md`: `psf-guard server <db> <dirs>` now registers the DB into the shared config on first run. For ad-hoc/scratch sessions that should not pollute the user's real config, use `psf-guard server --registry /tmp/scratch.json <db> <dirs>`. README and CLAUDE.md include a short "CLI behavior change" callout for users who relied on the old "one-shot, no config touched" semantics.
 
 ---
 
