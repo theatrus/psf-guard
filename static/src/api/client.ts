@@ -16,6 +16,9 @@ import type {
   TargetOverview,
   OverallStats,
   CacheRefreshProgress,
+  SequenceAnalysisRequest,
+  SequenceAnalysisResponse,
+  ImageQualityResponse,
 } from './types';
 
 // Default API instance (used as fallback)
@@ -210,6 +213,21 @@ export const apiClient = {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<CacheRefreshProgress>>('/cache-progress');
     if (!data.data) throw new Error('Failed to get cache progress');
+    return data.data;
+  },
+
+  // Sequence analysis
+  analyzeSequence: async (request: SequenceAnalysisRequest): Promise<SequenceAnalysisResponse> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<SequenceAnalysisResponse>>('/analysis/sequence', { params: request });
+    if (!data.data) throw new Error('Sequence analysis failed');
+    return data.data;
+  },
+
+  getImageQuality: async (imageId: number): Promise<ImageQualityResponse> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<ImageQualityResponse>>(`/analysis/image/${imageId}`);
+    if (!data.data) throw new Error('Image quality data not found');
     return data.data;
   },
 };

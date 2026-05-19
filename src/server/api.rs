@@ -1,3 +1,4 @@
+use crate::sequence_analysis::{ImageQualityResult, ReferenceValues, SequenceSummary};
 use crate::server::state::RefreshStatus;
 use serde::{Deserialize, Serialize};
 
@@ -299,4 +300,46 @@ pub struct FileStatusResponse {
     pub missing_files: Vec<MissingFileInfo>,
     pub cache_hit_rate: u32,
     pub optimistic_assumption: bool, // true if we assumed files exist due to low hit rate
+}
+
+// Sequence analysis request/response types
+
+#[derive(Debug, Deserialize)]
+pub struct SequenceAnalysisQuery {
+    pub target_id: i32,
+    pub filter_name: Option<String>,
+    pub session_gap_minutes: Option<u64>,
+    pub weight_star_count: Option<f64>,
+    pub weight_hfr: Option<f64>,
+    pub weight_eccentricity: Option<f64>,
+    pub weight_snr: Option<f64>,
+    pub weight_background: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SequenceAnalysisResponse {
+    pub sequences: Vec<ScoredSequenceResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ScoredSequenceResponse {
+    pub target_id: i32,
+    pub target_name: String,
+    pub filter_name: String,
+    pub session_start: Option<i64>,
+    pub session_end: Option<i64>,
+    pub image_count: usize,
+    pub reference_values: ReferenceValues,
+    pub images: Vec<ImageQualityResult>,
+    pub summary: SequenceSummary,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ImageQualityContextResponse {
+    pub image_id: i32,
+    pub quality: Option<ImageQualityResult>,
+    pub sequence_target_id: Option<i32>,
+    pub sequence_filter_name: Option<String>,
+    pub sequence_image_count: Option<usize>,
+    pub reference_values: Option<ReferenceValues>,
 }

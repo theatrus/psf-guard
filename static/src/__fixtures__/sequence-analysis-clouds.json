@@ -1,0 +1,148 @@
+{
+  "success": true,
+  "data": {
+    "sequences": [
+      {
+        "target_id": 1,
+        "target_name": "M42",
+        "filter_name": "Ha",
+        "session_start": 1705356000,
+        "session_end": 1705358100,
+        "image_count": 8,
+        "reference_values": {
+          "best_star_count": 1.0,
+          "best_hfr": 1.0,
+          "best_eccentricity": 1.0,
+          "best_snr": 0.96,
+          "best_background": 0.98
+        },
+        "images": [
+          {
+            "image_id": 101,
+            "quality_score": 0.88,
+            "temporal_anomaly_score": 0.03,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.90,
+              "hfr": 0.88,
+              "eccentricity": 0.85,
+              "snr": 0.92,
+              "background": 0.95
+            },
+            "details": null
+          },
+          {
+            "image_id": 102,
+            "quality_score": 0.85,
+            "temporal_anomaly_score": 0.04,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.86,
+              "hfr": 0.85,
+              "eccentricity": 0.83,
+              "snr": 0.88,
+              "background": 0.93
+            },
+            "details": null
+          },
+          {
+            "image_id": 103,
+            "quality_score": 0.90,
+            "temporal_anomaly_score": 0.02,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.92,
+              "hfr": 0.91,
+              "eccentricity": 0.88,
+              "snr": 0.94,
+              "background": 0.96
+            },
+            "details": null
+          },
+          {
+            "image_id": 104,
+            "quality_score": 0.18,
+            "temporal_anomaly_score": 0.85,
+            "category": "likely_clouds",
+            "normalized_metrics": {
+              "star_count": 0.15,
+              "hfr": 0.20,
+              "eccentricity": 0.45,
+              "snr": 0.12,
+              "background": 0.25
+            },
+            "details": "Star count dropped 70%, background rose 40%"
+          },
+          {
+            "image_id": 105,
+            "quality_score": 0.14,
+            "temporal_anomaly_score": 0.90,
+            "category": "likely_clouds",
+            "normalized_metrics": {
+              "star_count": 0.12,
+              "hfr": 0.15,
+              "eccentricity": 0.40,
+              "snr": 0.10,
+              "background": 0.20
+            },
+            "details": "Severe cloud passage, star count minimal"
+          },
+          {
+            "image_id": 106,
+            "quality_score": 0.82,
+            "temporal_anomaly_score": 0.05,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.84,
+              "hfr": 0.82,
+              "eccentricity": 0.80,
+              "snr": 0.86,
+              "background": 0.90
+            },
+            "details": null
+          },
+          {
+            "image_id": 107,
+            "quality_score": 0.86,
+            "temporal_anomaly_score": 0.03,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.88,
+              "hfr": 0.87,
+              "eccentricity": 0.84,
+              "snr": 0.90,
+              "background": 0.94
+            },
+            "details": null
+          },
+          {
+            "image_id": 108,
+            "quality_score": 0.89,
+            "temporal_anomaly_score": 0.02,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.91,
+              "hfr": 0.90,
+              "eccentricity": 0.87,
+              "snr": 0.93,
+              "background": 0.95
+            },
+            "details": null
+          }
+        ],
+        "summary": {
+          "excellent_count": 2,
+          "good_count": 4,
+          "fair_count": 0,
+          "poor_count": 0,
+          "bad_count": 2,
+          "cloud_events_detected": 1,
+          "focus_drift_detected": false,
+          "tracking_issues_detected": false
+        }
+      }
+    ]
+  },
+  "error": null,
+  "status": "ready"
+}

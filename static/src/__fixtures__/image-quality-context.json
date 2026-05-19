@@ -1,0 +1,32 @@
+{
+  "success": true,
+  "data": {
+    "image_id": 5,
+    "quality": {
+      "image_id": 5,
+      "quality_score": 0.70,
+      "temporal_anomaly_score": 0.10,
+      "category": null,
+      "normalized_metrics": {
+        "star_count": 0.65,
+        "hfr": 0.72,
+        "eccentricity": 0.70,
+        "snr": 0.74,
+        "background": 0.94
+      },
+      "details": "Slightly elevated HFR"
+    },
+    "sequence_target_id": 1,
+    "sequence_filter_name": "L",
+    "sequence_image_count": 10,
+    "reference_values": {
+      "best_star_count": 1.0,
+      "best_hfr": 1.0,
+      "best_eccentricity": 1.0,
+      "best_snr": 0.95,
+      "best_background": 0.98
+    }
+  },
+  "error": null,
+  "status": "ready"
+}

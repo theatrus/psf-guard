@@ -198,3 +198,74 @@ export interface CacheRefreshProgress {
   files_found: number;
   files_missing: number;
 }
+
+// Sequence analysis types
+export interface SequenceAnalysisRequest {
+  target_id: number;
+  filter_name?: string;
+  session_gap_minutes?: number;
+  weight_star_count?: number;
+  weight_hfr?: number;
+  weight_eccentricity?: number;
+  weight_snr?: number;
+  weight_background?: number;
+}
+
+export interface SequenceAnalysisResponse {
+  sequences: ScoredSequence[];
+}
+
+export interface ScoredSequence {
+  target_id: number;
+  target_name: string;
+  filter_name: string;
+  session_start?: number;
+  session_end?: number;
+  image_count: number;
+  reference_values: ReferenceValues;
+  images: ImageQualityResult[];
+  summary: SequenceSummary;
+}
+
+export interface ImageQualityResult {
+  image_id: number;
+  quality_score: number;
+  temporal_anomaly_score: number;
+  category: string | null;
+  normalized_metrics: {
+    star_count: number | null;
+    hfr: number | null;
+    eccentricity: number | null;
+    snr: number | null;
+    background: number | null;
+  };
+  details: string | null;
+}
+
+export interface SequenceSummary {
+  excellent_count: number;
+  good_count: number;
+  fair_count: number;
+  poor_count: number;
+  bad_count: number;
+  cloud_events_detected: number;
+  focus_drift_detected: boolean;
+  tracking_issues_detected: boolean;
+}
+
+export interface ReferenceValues {
+  best_star_count?: number;
+  best_hfr?: number;
+  best_eccentricity?: number;
+  best_snr?: number;
+  best_background?: number;
+}
+
+export interface ImageQualityResponse {
+  image_id: number;
+  quality?: ImageQualityResult;
+  sequence_target_id?: number;
+  sequence_filter_name?: string;
+  sequence_image_count?: number;
+  reference_values?: ReferenceValues;
+}

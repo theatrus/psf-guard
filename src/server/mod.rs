@@ -186,6 +186,11 @@ async fn run_server_internal(
             "/images/{image_id}/grade",
             put(handlers::update_image_grade),
         )
+        .route("/analysis/sequence", get(handlers::analyze_sequence))
+        .route(
+            "/analysis/image/{image_id}",
+            get(handlers::get_image_quality),
+        )
         .with_state(state);
 
     // Create main app with either embedded or filesystem static serving

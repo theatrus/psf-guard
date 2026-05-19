@@ -38,9 +38,8 @@ jobs:
           libwebkit2gtk-4.1-dev \
           libappindicator3-dev \
           librsvg2-dev \
+          libpng-dev \
           patchelf
-
-        echo "OPENCV_LINK_LIBS=static=opencv_core,static=opencv_imgproc,static=opencv_imgcodecs,static=opencv_ximgproc" >> $GITHUB_ENV
 
 
     - name: Import Apple Developer Certificate (macOS)
@@ -84,8 +83,6 @@ jobs:
           echo "DYLD_FALLBACK_LIBRARY_PATH=$(xcode-select --print-path)/usr/lib/" >> $GITHUB_ENV
         fi
 
-        echo "OPENCV_LINK_LIBS=static=opencv_core,static=opencv_imgproc,static=opencv_imgcodecs,static=opencv_ximgproc" >> $GITHUB_ENV
-
 
     - name: Cache vcpkg (Windows)
       if: matrix.os == 'windows-latest'
@@ -119,10 +116,16 @@ jobs:
 
       shell: pwsh
 
+    - name: Read Rust toolchain
+      id: rust-toolchain
+      run: echo "channel=$(grep 'channel' rust-toolchain.toml | sed 's/.*= *\"\(.*\)\"/\1/')" >> $GITHUB_OUTPUT
+      shell: bash
+
     - name: Install Rust
       uses: dtolnay/rust-toolchain@master
       with:
-        toolchain: 1.89.0
+        toolchain: ${{ steps.rust-toolchain.outputs.channel }}
+        components: rustfmt, clippy
 
     - name: Install Node.js
       uses: actions/setup-node@v6

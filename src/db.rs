@@ -28,11 +28,9 @@ impl SchemaCapabilities {
         let query = format!("PRAGMA table_info({})", table);
         if let Ok(mut stmt) = conn.prepare(&query) {
             if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(1)) {
-                for col_result in rows {
-                    if let Ok(col_name) = col_result {
-                        if col_name.eq_ignore_ascii_case(column) {
-                            return true;
-                        }
+                for col_name in rows.flatten() {
+                    if col_name.eq_ignore_ascii_case(column) {
+                        return true;
                     }
                 }
             }

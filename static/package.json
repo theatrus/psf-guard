@@ -8,14 +8,16 @@
     "build": "tsc -b && vite build",
     "build:prod": "npm run build && cp -r dist/* ../dist/static/",
     "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "preview": "vite preview",
     "tauri:dev": "cd .. && cargo tauri dev",
     "tauri:build": "cd .. && cargo tauri build"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.85.5",
-    "@types/react-router-dom": "^5.3.3",
     "@tauri-apps/api": "^2.8",
+    "@types/react-router-dom": "^5.3.3",
     "axios": "^1.12.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
@@ -26,6 +28,9 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.33.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@types/react-window": "^1.8.8",
@@ -34,8 +39,11 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",
     "globals": "^16.3.0",
+    "jsdom": "^28.0.0",
+    "msw": "^2.12.9",
     "typescript": "~5.8.3",
     "typescript-eslint": "^8.39.1",
-    "vite": "^7.2.4"
+    "vite": "^7.2.4",
+    "vitest": "^4.0.18"
   }
 }

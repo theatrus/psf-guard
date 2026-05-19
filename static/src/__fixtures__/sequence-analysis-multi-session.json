@@ -1,0 +1,203 @@
+{
+  "success": true,
+  "data": {
+    "sequences": [
+      {
+        "target_id": 2,
+        "target_name": "NGC7000",
+        "filter_name": "L",
+        "session_start": 1705352400,
+        "session_end": 1705353600,
+        "image_count": 5,
+        "reference_values": {
+          "best_star_count": 1.0,
+          "best_hfr": 0.95,
+          "best_eccentricity": 0.92,
+          "best_snr": 0.90,
+          "best_background": 0.96
+        },
+        "images": [
+          {
+            "image_id": 201,
+            "quality_score": 0.78,
+            "temporal_anomaly_score": 0.06,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.75,
+              "hfr": 0.80,
+              "eccentricity": 0.82,
+              "snr": 0.78,
+              "background": 0.88
+            },
+            "details": null
+          },
+          {
+            "image_id": 202,
+            "quality_score": 0.82,
+            "temporal_anomaly_score": 0.04,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.80,
+              "hfr": 0.84,
+              "eccentricity": 0.85,
+              "snr": 0.81,
+              "background": 0.90
+            },
+            "details": null
+          },
+          {
+            "image_id": 203,
+            "quality_score": 0.86,
+            "temporal_anomaly_score": 0.03,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.85,
+              "hfr": 0.88,
+              "eccentricity": 0.88,
+              "snr": 0.85,
+              "background": 0.92
+            },
+            "details": null
+          },
+          {
+            "image_id": 204,
+            "quality_score": 0.90,
+            "temporal_anomaly_score": 0.01,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.92,
+              "hfr": 0.92,
+              "eccentricity": 0.90,
+              "snr": 0.88,
+              "background": 0.94
+            },
+            "details": null
+          },
+          {
+            "image_id": 205,
+            "quality_score": 0.94,
+            "temporal_anomaly_score": 0.01,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.96,
+              "hfr": 0.95,
+              "eccentricity": 0.92,
+              "snr": 0.90,
+              "background": 0.96
+            },
+            "details": null
+          }
+        ],
+        "summary": {
+          "excellent_count": 2,
+          "good_count": 2,
+          "fair_count": 1,
+          "poor_count": 0,
+          "bad_count": 0,
+          "cloud_events_detected": 0,
+          "focus_drift_detected": false,
+          "tracking_issues_detected": false
+        }
+      },
+      {
+        "target_id": 2,
+        "target_name": "NGC7000",
+        "filter_name": "L",
+        "session_start": 1705361400,
+        "session_end": 1705362600,
+        "image_count": 5,
+        "reference_values": {
+          "best_star_count": 0.98,
+          "best_hfr": 0.96,
+          "best_eccentricity": 0.94,
+          "best_snr": 0.92,
+          "best_background": 0.95
+        },
+        "images": [
+          {
+            "image_id": 211,
+            "quality_score": 0.80,
+            "temporal_anomaly_score": 0.05,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.78,
+              "hfr": 0.82,
+              "eccentricity": 0.84,
+              "snr": 0.80,
+              "background": 0.86
+            },
+            "details": null
+          },
+          {
+            "image_id": 212,
+            "quality_score": 0.84,
+            "temporal_anomaly_score": 0.03,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.83,
+              "hfr": 0.86,
+              "eccentricity": 0.87,
+              "snr": 0.84,
+              "background": 0.88
+            },
+            "details": null
+          },
+          {
+            "image_id": 213,
+            "quality_score": 0.88,
+            "temporal_anomaly_score": 0.02,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.88,
+              "hfr": 0.90,
+              "eccentricity": 0.90,
+              "snr": 0.87,
+              "background": 0.91
+            },
+            "details": null
+          },
+          {
+            "image_id": 214,
+            "quality_score": 0.92,
+            "temporal_anomaly_score": 0.01,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.94,
+              "hfr": 0.94,
+              "eccentricity": 0.93,
+              "snr": 0.90,
+              "background": 0.93
+            },
+            "details": null
+          },
+          {
+            "image_id": 215,
+            "quality_score": 0.95,
+            "temporal_anomaly_score": 0.01,
+            "category": null,
+            "normalized_metrics": {
+              "star_count": 0.98,
+              "hfr": 0.96,
+              "eccentricity": 0.94,
+              "snr": 0.92,
+              "background": 0.95
+            },
+            "details": null
+          }
+        ],
+        "summary": {
+          "excellent_count": 2,
+          "good_count": 2,
+          "fair_count": 1,
+          "poor_count": 0,
+          "bad_count": 0,
+          "cloud_events_detected": 0,
+          "focus_drift_detected": false,
+          "tracking_issues_detected": false
+        }
+      }
+    ]
+  },
+  "error": null,
+  "status": "ready"
+}

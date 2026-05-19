@@ -902,6 +902,26 @@ impl AppState {
     }
 }
 
+impl AppState {
+    /// Create an AppState for integration testing with a pre-opened database connection.
+    /// Skips file system validation (no image dirs or cache dir needed).
+    #[doc(hidden)]
+    pub fn new_for_test(conn: Connection) -> Self {
+        Self {
+            database_path: ":memory:".to_string(),
+            image_dirs: vec![],
+            cache_dir: "/tmp/psf-guard-test".to_string(),
+            image_dir_paths: vec![],
+            cache_dir_path: std::path::PathBuf::from("/tmp/psf-guard-test"),
+            db_connection: Arc::new(Mutex::new(conn)),
+            file_check_cache: Arc::new(RwLock::new(FileCheckCache::new())),
+            directory_tree_cache: Arc::new(RwLock::new(None)),
+            refresh_mutex: Arc::new(TokioMutex::new(())),
+            pregeneration_config: crate::cli::PregenerationConfig::default(),
+        }
+    }
+}
+
 impl Clone for AppState {
     fn clone(&self) -> Self {
         Self {
