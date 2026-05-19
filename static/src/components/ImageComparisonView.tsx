@@ -6,6 +6,7 @@ import { GradingStatus, type Image } from '../api/types';
 import { useImageZoom } from '../hooks/useImageZoom';
 
 interface ImageComparisonViewProps {
+  dbId: string;
   leftImageId: number;
   rightImageId: number | null;
   onClose: () => void;
@@ -18,6 +19,7 @@ interface ImageComparisonViewProps {
 }
 
 export default function ImageComparisonView({
+  dbId,
   leftImageId,
   rightImageId,
   onClose,
@@ -60,14 +62,15 @@ export default function ImageComparisonView({
 
   // Fetch left image
   const { data: leftImage } = useQuery({
-    queryKey: ['image', leftImageId],
-    queryFn: () => apiClient.getImage(leftImageId),
+    queryKey: ['db', dbId, 'image', leftImageId],
+    queryFn: () => apiClient.getImage(dbId, leftImageId),
   });
 
   // Fetch right image (if selected)
   const { data: rightImage, isFetching: isRightImageFetching } = useQuery({
-    queryKey: ['image', rightImageId],
-    queryFn: () => rightImageId ? apiClient.getImage(rightImageId) : Promise.resolve(null),
+    queryKey: ['db', dbId, 'image', rightImageId],
+    queryFn: () =>
+      rightImageId ? apiClient.getImage(dbId, rightImageId) : Promise.resolve(null),
     enabled: !!rightImageId,
     placeholderData: (previousData) => previousData, // Keep showing previous image while loading new one
   });
@@ -198,10 +201,10 @@ export default function ImageComparisonView({
                          (targetLeftZoomRef.current && targetLeftZoomRef.current > 0.8 && state === 'large');
     
     if (shouldPreload && !leftOriginalLoaded && !leftOriginalRef.current) {
-      const originalUrl = showStars 
-        ? apiClient.getAnnotatedUrl(leftImageId, 'original', maxStars)
-        : apiClient.getPreviewUrl(leftImageId, { size: 'original' });
-      
+      const originalUrl = showStars
+        ? apiClient.getAnnotatedUrl(dbId, leftImageId, 'original', maxStars)
+        : apiClient.getPreviewUrl(dbId, leftImageId, { size: 'original' });
+
       const img = new Image();
       img.src = originalUrl;
       leftOriginalRef.current = img;
@@ -271,10 +274,10 @@ export default function ImageComparisonView({
                          (useLeftOriginal && state === 'large');
     
     if (shouldPreload && !rightOriginalLoaded && !rightOriginalRef.current) {
-      const originalUrl = showStars 
-        ? apiClient.getAnnotatedUrl(rightImageId, 'original', maxStars)
-        : apiClient.getPreviewUrl(rightImageId, { size: 'original' });
-      
+      const originalUrl = showStars
+        ? apiClient.getAnnotatedUrl(dbId, rightImageId, 'original', maxStars)
+        : apiClient.getPreviewUrl(dbId, rightImageId, { size: 'original' });
+
       const img = new Image();
       img.src = originalUrl;
       rightOriginalRef.current = img;
@@ -514,9 +517,9 @@ export default function ImageComparisonView({
                 ) : (
                   <img
                     ref={leftZoom.imageRef}
-                    src={showStars 
-                      ? apiClient.getAnnotatedUrl(leftImageId, (useLeftOriginal || (leftOriginalLoaded && targetLeftZoomRef.current && targetLeftZoomRef.current > 1.0)) ? 'original' : 'large', maxStars)
-                      : apiClient.getPreviewUrl(leftImageId, { size: (useLeftOriginal || (leftOriginalLoaded && targetLeftZoomRef.current && targetLeftZoomRef.current > 1.0)) ? 'original' : 'large' })
+                    src={showStars
+                      ? apiClient.getAnnotatedUrl(dbId, leftImageId, (useLeftOriginal || (leftOriginalLoaded && targetLeftZoomRef.current && targetLeftZoomRef.current > 1.0)) ? 'original' : 'large', maxStars)
+                      : apiClient.getPreviewUrl(dbId, leftImageId, { size: (useLeftOriginal || (leftOriginalLoaded && targetLeftZoomRef.current && targetLeftZoomRef.current > 1.0)) ? 'original' : 'large' })
                     }
                     alt={`${leftImage.target_name} - ${leftImage.filter_name || 'No filter'}`}
                     onError={() => setLeftImageError(true)}
@@ -672,9 +675,9 @@ export default function ImageComparisonView({
                       return (
                         <img
                           ref={rightZoom.imageRef}
-                          src={showStars 
-                            ? apiClient.getAnnotatedUrl(rightImageId!, imageSize, maxStars)
-                            : apiClient.getPreviewUrl(rightImageId!, { size: imageSize })
+                          src={showStars
+                            ? apiClient.getAnnotatedUrl(dbId, rightImageId!, imageSize, maxStars)
+                            : apiClient.getPreviewUrl(dbId, rightImageId!, { size: imageSize })
                           }
                         alt={`${rightImage.target_name} - ${rightImage.filter_name || 'No filter'}`}
                         onError={() => setRightImageError(true)}

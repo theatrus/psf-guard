@@ -17,6 +17,8 @@ use tokio::io::AsyncReadExt;
 use crate::db::Database;
 use crate::models::{GradingStatus, OverallDesiredStats, ProjectDesiredStats};
 use crate::server::api::*;
+use crate::server::database_context::DatabaseContext;
+use crate::server::extract::DbContext;
 use crate::server::state::AppState;
 
 // Helper function to format RA/Dec coordinates
@@ -48,22 +50,39 @@ pub async fn get_server_info(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<ServerInfo>>, AppError> {
     let info = ServerInfo {
-        database_path: state.database_path.clone(),
-        image_directory: state.image_dirs.join(", "),
-        cache_directory: state.cache_dir.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        cache_directory: state.cache_dir_root.clone(),
     };
 
     Ok(Json(ApiResponse::success(info)))
 }
 
-pub async fn refresh_file_cache(
+/// List all configured databases. Used by the frontend to populate the DB
+/// switcher and resolve the default `?db=` value.
+pub async fn list_databases(
     State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<Vec<DatabaseSummary>>>, AppError> {
+    let mut summaries: Vec<DatabaseSummary> = state
+        .all_databases()
+        .iter()
+        .map(|ctx| DatabaseSummary {
+            id: ctx.id.clone(),
+            name: ctx.name.clone(),
+            database_path: ctx.database_path.clone(),
+            image_directories: ctx.image_dirs.clone(),
+        })
+        .collect();
+    summaries.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(Json(ApiResponse::success(summaries)))
+}
+
+pub async fn refresh_file_cache(
+    ctx: DbContext,
 ) -> Result<Json<ApiResponse<FileCheckResponse>>, AppError> {
     tracing::info!("🔄 Manual cache refresh requested");
 
     // Check current refresh status
-    let refresh_status = state.ensure_cache_available();
+    let refresh_status = ctx.ensure_cache_available();
 
     match refresh_status {
         crate::server::state::RefreshStatus::InProgressWait
@@ -74,7 +93,7 @@ pub async fn refresh_file_cache(
             // Wait for the current refresh to complete by polling
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                let cache = state.file_check_cache.read().unwrap();
+                let cache = ctx.file_check_cache.read().unwrap();
                 if !cache.refresh_in_progress {
                     break;
                 }
@@ -87,7 +106,7 @@ pub async fn refresh_file_cache(
             // Wait for completion
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                let cache = state.file_check_cache.read().unwrap();
+                let cache = ctx.file_check_cache.read().unwrap();
                 if !cache.refresh_in_progress {
                     break;
                 }
@@ -99,12 +118,12 @@ pub async fn refresh_file_cache(
 
             // Force a refresh by clearing cache and then starting refresh
             {
-                let mut cache = state.file_check_cache.write().unwrap();
+                let mut cache = ctx.file_check_cache.write().unwrap();
                 cache.clear();
             }
 
             // Now start refresh
-            let refresh_status = state.ensure_cache_available();
+            let refresh_status = ctx.ensure_cache_available();
             if matches!(
                 refresh_status,
                 crate::server::state::RefreshStatus::InProgressWait
@@ -113,7 +132,7 @@ pub async fn refresh_file_cache(
                 // Wait for completion
                 loop {
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                    let cache = state.file_check_cache.read().unwrap();
+                    let cache = ctx.file_check_cache.read().unwrap();
                     if !cache.refresh_in_progress {
                         break;
                     }
@@ -123,7 +142,7 @@ pub async fn refresh_file_cache(
     }
 
     // Get final statistics after refresh completion
-    let cache = state.file_check_cache.read().unwrap();
+    let cache = ctx.file_check_cache.read().unwrap();
     let projects_with_files = cache
         .projects_with_files
         .values()
@@ -156,9 +175,9 @@ pub async fn refresh_file_cache(
 }
 
 pub async fn get_cache_refresh_progress(
-    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
 ) -> Result<Json<ApiResponse<CacheRefreshProgressResponse>>, AppError> {
-    let progress_info = state.get_cache_refresh_progress();
+    let progress_info = ctx.get_cache_refresh_progress();
 
     let response = match progress_info {
         Some(progress) => {
@@ -218,12 +237,12 @@ pub async fn get_cache_refresh_progress(
 }
 
 pub async fn refresh_directory_tree_cache(
-    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
 ) -> Result<Json<ApiResponse<DirectoryTreeResponse>>, AppError> {
     tracing::info!("🌳 Directory tree cache refresh requested via singleton system");
 
     // Force directory tree refresh via singleton system (non-blocking)
-    let refresh_status = state.force_directory_tree_refresh();
+    let refresh_status = ctx.force_directory_tree_refresh();
 
     match refresh_status {
         crate::server::state::RefreshStatus::InProgressWait
@@ -247,7 +266,7 @@ pub async fn refresh_directory_tree_cache(
         total_directories: 0,
         age_seconds: 0,
         build_time_ms: 0, // Non-blocking, so no build time to report
-        root_directory: state.image_dirs.join(", "),
+        root_directory: ctx.image_dirs.join(", "),
     };
 
     tracing::info!(
@@ -258,12 +277,12 @@ pub async fn refresh_directory_tree_cache(
 }
 
 pub async fn list_projects(
-    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
 ) -> Result<Json<ApiResponse<Vec<ProjectResponse>>>, AppError> {
     tracing::debug!("📋 Listing projects");
 
     // Ensure cache is available (start refresh if needed)
-    let refresh_status = state.ensure_cache_available();
+    let refresh_status = ctx.ensure_cache_available();
 
     match refresh_status {
         crate::server::state::RefreshStatus::InProgressWait => {
@@ -285,13 +304,13 @@ pub async fn list_projects(
 
     // Get file existence info from cache (may be stale, but that's okay)
     let file_existence_map: HashMap<i32, bool> = {
-        let cache = state.file_check_cache.read().unwrap();
+        let cache = ctx.file_check_cache.read().unwrap();
         cache.projects_with_files.clone()
     };
 
     // Get ALL projects with profile info from database (not just those with files)
     let (projects, profile_count) = {
-        let conn = state.db();
+        let conn = ctx.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
 
@@ -336,7 +355,7 @@ pub async fn list_projects(
 
     // Get current status for response
     let api_status = {
-        let cache = state.file_check_cache.read().unwrap();
+        let cache = ctx.file_check_cache.read().unwrap();
         crate::server::api::ApiRefreshStatus::from(cache.get_refresh_status())
     };
 
@@ -344,13 +363,13 @@ pub async fn list_projects(
 }
 
 pub async fn list_targets(
-    State(state): State<Arc<AppState>>,
-    Path(project_id): Path<i32>,
+    ctx: DbContext,
+    Path((_db_id, project_id)): Path<(String, i32)>,
 ) -> Result<Json<ApiResponse<Vec<TargetResponse>>>, AppError> {
     tracing::debug!("🎯 Listing targets for project {}", project_id);
 
     // Ensure cache is available (start refresh if needed)
-    let refresh_status = state.ensure_cache_available();
+    let refresh_status = ctx.ensure_cache_available();
 
     match refresh_status {
         crate::server::state::RefreshStatus::InProgressWait => {
@@ -372,13 +391,13 @@ pub async fn list_targets(
 
     // Get file existence info from cache (may be stale, but that's okay)
     let file_existence_map: HashMap<i32, bool> = {
-        let cache = state.file_check_cache.read().unwrap();
+        let cache = ctx.file_check_cache.read().unwrap();
         cache.targets_with_files.clone()
     };
 
     // Get ALL targets from database (not just those with files)
     let targets = {
-        let conn = state.db();
+        let conn = ctx.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
 
@@ -409,7 +428,7 @@ pub async fn list_targets(
 
     // Get current status for response
     let api_status = {
-        let cache = state.file_check_cache.read().unwrap();
+        let cache = ctx.file_check_cache.read().unwrap();
         crate::server::api::ApiRefreshStatus::from(cache.get_refresh_status())
     };
 
@@ -417,10 +436,10 @@ pub async fn list_targets(
 }
 
 pub async fn get_images(
-    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
     Query(params): Query<ImageQuery>,
 ) -> Result<Json<ApiResponse<Vec<ImageResponse>>>, AppError> {
-    let conn = state.db();
+    let conn = ctx.db();
     let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
     let db = Database::new(&conn);
 
@@ -490,16 +509,16 @@ pub async fn get_images(
     Ok(Json(ApiResponse::success(response)))
 }
 
-#[axum::debug_handler]
+#[axum::debug_handler(state = Arc<AppState>)]
 pub async fn get_image(
-    State(state): State<Arc<AppState>>,
-    Path(image_id): Path<i32>,
+    ctx: DbContext,
+    Path((_db_id, image_id)): Path<(String, i32)>,
 ) -> Result<Json<ApiResponse<ImageResponse>>, AppError> {
     use crate::image_analysis::FitsImage;
 
     // Get image data from database first (before any async operations)
     let (image, proj_name, target_name, mut metadata, show_profile) = {
-        let conn = state.db();
+        let conn = ctx.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
 
@@ -539,7 +558,7 @@ pub async fn get_image(
         image.target_id,
         image.acquired_date.unwrap_or(0)
     );
-    let stats_cache_path = state.get_cache_path("stats", &stats_cache_filename);
+    let stats_cache_path = ctx.get_cache_path("stats", &stats_cache_filename);
 
     // Ensure cache directory exists
     if let Some(parent) = stats_cache_path.parent() {
@@ -551,7 +570,7 @@ pub async fn get_image(
         filename
             .split(&['\\', '/'][..])
             .next_back()
-            .map(|file_only| find_fits_file(&state, &image, &target_name, file_only))
+            .map(|file_only| find_fits_file(&ctx, &image, &target_name, file_only))
     });
 
     let resolved_fits_path = filesystem_path
@@ -642,11 +661,11 @@ pub async fn get_image(
 }
 
 pub async fn update_image_grade(
-    State(state): State<Arc<AppState>>,
-    Path(image_id): Path<i32>,
+    ctx: DbContext,
+    Path((_db_id, image_id)): Path<(String, i32)>,
     Json(request): Json<UpdateGradeRequest>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
-    let conn = state.db();
+    let conn = ctx.db();
     let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
     let db = Database::new(&conn);
 
@@ -664,10 +683,10 @@ pub async fn update_image_grade(
 }
 
 // Image preview endpoint
-#[axum::debug_handler]
+#[axum::debug_handler(state = Arc<AppState>)]
 pub async fn get_image_preview(
-    State(state): State<Arc<AppState>>,
-    Path(image_id): Path<i32>,
+    ctx: DbContext,
+    Path((_db_id, image_id)): Path<(String, i32)>,
     Query(options): Query<PreviewOptions>,
 ) -> Result<impl IntoResponse, AppError> {
     let start_time = std::time::Instant::now();
@@ -683,7 +702,7 @@ pub async fn get_image_preview(
 
     // Get image metadata from database
     let (image, file_only, target_name) = {
-        let conn = state.db();
+        let conn = ctx.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
 
@@ -741,7 +760,7 @@ pub async fn get_image_preview(
 
     tracing::trace!("🔑 Cache key for image {}: {}", image_id, cache_key);
 
-    let cache_manager = CacheManager::new(PathBuf::from(&state.cache_dir));
+    let cache_manager = CacheManager::new(PathBuf::from(&ctx.cache_dir));
     if let Err(e) = cache_manager.ensure_category_dir("previews") {
         tracing::error!(
             "❌ Failed to create cache directory for image {}: {}",
@@ -793,7 +812,7 @@ pub async fn get_image_preview(
     let find_start = std::time::Instant::now();
 
     // Find the FITS file
-    let fits_path = match find_fits_file(&state, &image, &target_name, &file_only) {
+    let fits_path = match find_fits_file(&ctx, &image, &target_name, &file_only) {
         Ok(path) => {
             tracing::info!(
                 "✅ Found FITS file for image {} in {:?}: {:?}",
@@ -954,7 +973,7 @@ pub async fn get_image_preview(
 
 // Helper function to find FITS file
 pub fn find_fits_file(
-    state: &AppState,
+    ctx: &DatabaseContext,
     image: &crate::models::AcquiredImage,
     target_name: &str,
     filename: &str,
@@ -966,7 +985,7 @@ pub fn find_fits_file(
         image.id,
         filename,
         target_name,
-        state.image_dirs
+        ctx.image_dirs
     );
 
     // Extract date from acquired_date
@@ -987,7 +1006,7 @@ pub fn find_fits_file(
 
     // Try to find the file in different possible locations across all directories
     let mut all_possible_paths = Vec::new();
-    for base_dir in &state.image_dirs {
+    for base_dir in &ctx.image_dirs {
         let paths = get_possible_paths(base_dir, &date_str, target_name, filename);
         all_possible_paths.extend(paths);
     }
@@ -996,11 +1015,11 @@ pub fn find_fits_file(
         "🔎 Checking {} possible paths for image {} across {} directories",
         all_possible_paths.len(),
         image.id,
-        state.image_dirs.len()
+        ctx.image_dirs.len()
     );
 
     // Verify all base directories exist (they were checked during startup)
-    for base_dir in &state.image_dirs {
+    for base_dir in &ctx.image_dirs {
         tracing::debug!("✅ Base directory exists: {}", base_dir);
     }
 
@@ -1024,7 +1043,7 @@ pub fn find_fits_file(
 
     // Try directory tree cache lookup as fallback
     let search_start = std::time::Instant::now();
-    let directory_tree = state.get_directory_tree().map_err(|e| {
+    let directory_tree = ctx.get_directory_tree().map_err(|e| {
         tracing::error!("Failed to get directory tree cache: {}", e);
         AppError::InternalError("Directory cache error".to_string())
     })?;
@@ -1071,10 +1090,10 @@ pub fn find_fits_file(
     Err(AppError::NotFound)
 }
 
-#[axum::debug_handler]
+#[axum::debug_handler(state = Arc<AppState>)]
 pub async fn get_image_stars(
-    State(state): State<Arc<AppState>>,
-    Path(image_id): Path<i32>,
+    ctx: DbContext,
+    Path((_db_id, image_id)): Path<(String, i32)>,
 ) -> Result<Json<ApiResponse<StarDetectionResponse>>, AppError> {
     use crate::hocus_focus_star_detection::{detect_stars_hocus_focus, HocusFocusParams};
     use crate::image_analysis::FitsImage;
@@ -1083,7 +1102,7 @@ pub async fn get_image_stars(
 
     // Get image metadata from database
     let (image, file_only, target_name) = {
-        let conn = state.db();
+        let conn = ctx.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
 
@@ -1126,7 +1145,7 @@ pub async fn get_image_stars(
         image.acquired_date.unwrap_or(0),
         file_only.replace(&['.', ' ', '-'][..], "_")
     );
-    let cache_manager = CacheManager::new(PathBuf::from(&state.cache_dir));
+    let cache_manager = CacheManager::new(PathBuf::from(&ctx.cache_dir));
     cache_manager
         .ensure_category_dir("stars")
         .map_err(|e| AppError::InternalError(format!("Failed to create cache directory: {}", e)))?;
@@ -1146,7 +1165,7 @@ pub async fn get_image_stars(
     }
 
     // Find FITS file path first (this is fast)
-    let fits_path = find_fits_file(&state, &image, &target_name, &file_only)?;
+    let fits_path = find_fits_file(&ctx, &image, &target_name, &file_only)?;
 
     // Move expensive operations to spawn_blocking
     let fits_path_str = fits_path.to_string_lossy().to_string();
@@ -1215,10 +1234,10 @@ pub async fn get_image_stars(
     Ok(Json(ApiResponse::success(response)))
 }
 
-#[axum::debug_handler]
+#[axum::debug_handler(state = Arc<AppState>)]
 pub async fn get_annotated_image(
-    State(state): State<Arc<AppState>>,
-    Path(image_id): Path<i32>,
+    ctx: DbContext,
+    Path((_db_id, image_id)): Path<(String, i32)>,
     Query(options): Query<PreviewOptions>,
 ) -> Result<impl IntoResponse, AppError> {
     use crate::commands::annotate_stars_common::create_annotated_image;
@@ -1229,7 +1248,7 @@ pub async fn get_annotated_image(
 
     // Get image metadata from database
     let (image, file_only, target_name) = {
-        let conn = state.db();
+        let conn = ctx.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
 
@@ -1278,7 +1297,7 @@ pub async fn get_annotated_image(
         size,
         max_stars
     );
-    let cache_manager = CacheManager::new(PathBuf::from(&state.cache_dir));
+    let cache_manager = CacheManager::new(PathBuf::from(&ctx.cache_dir));
     cache_manager
         .ensure_category_dir("annotated")
         .map_err(|e| AppError::InternalError(format!("Failed to create cache directory: {}", e)))?;
@@ -1307,7 +1326,7 @@ pub async fn get_annotated_image(
     }
 
     // Find FITS file path first (this is fast)
-    let fits_path = find_fits_file(&state, &image, &target_name, &file_only)?;
+    let fits_path = find_fits_file(&ctx, &image, &target_name, &file_only)?;
 
     // Move expensive operations to spawn_blocking
     let fits_path_str = fits_path.to_string_lossy().to_string();
@@ -1438,10 +1457,10 @@ pub struct PsfMultiOptions {
     pub selection: Option<String>,
 }
 
-#[axum::debug_handler]
+#[axum::debug_handler(state = Arc<AppState>)]
 pub async fn get_psf_visualization(
-    State(state): State<Arc<AppState>>,
-    Path(image_id): Path<i32>,
+    ctx: DbContext,
+    Path((_db_id, image_id)): Path<(String, i32)>,
     Query(options): Query<PsfMultiOptions>,
 ) -> Result<impl IntoResponse, AppError> {
     use crate::commands::visualize_psf_multi_common::create_psf_multi_image;
@@ -1453,7 +1472,7 @@ pub async fn get_psf_visualization(
 
     // Get image metadata from database
     let (image, file_only, target_name) = {
-        let conn = state.db();
+        let conn = ctx.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
 
@@ -1510,7 +1529,7 @@ pub async fn get_psf_visualization(
         selection,
         grid_cols.unwrap_or(0)
     );
-    let cache_manager = CacheManager::new(PathBuf::from(&state.cache_dir));
+    let cache_manager = CacheManager::new(PathBuf::from(&ctx.cache_dir));
     cache_manager
         .ensure_category_dir("psf_multi")
         .map_err(|e| AppError::InternalError(format!("Failed to create cache directory: {}", e)))?;
@@ -1539,7 +1558,7 @@ pub async fn get_psf_visualization(
     }
 
     // Find FITS file path first (this is fast)
-    let fits_path = find_fits_file(&state, &image, &target_name, &file_only)?;
+    let fits_path = find_fits_file(&ctx, &image, &target_name, &file_only)?;
 
     // Move expensive operations to spawn_blocking
     let fits_path_str = fits_path.to_string_lossy().to_string();
@@ -1593,11 +1612,11 @@ pub async fn get_psf_visualization(
 
 // Overview API endpoints
 pub async fn get_projects_overview(
-    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
 ) -> Result<Json<ApiResponse<Vec<ProjectOverviewResponse>>>, AppError> {
     tracing::debug!("📋 Getting projects overview");
 
-    let conn = state.db();
+    let conn = ctx.db();
     let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
     let db = Database::new(&conn);
 
@@ -1613,7 +1632,7 @@ pub async fn get_projects_overview(
 
     // Get file existence map
     let file_existence_map: std::collections::HashMap<i32, bool> = {
-        let cache = state.file_check_cache.read().unwrap();
+        let cache = ctx.file_check_cache.read().unwrap();
         cache.projects_with_files.clone()
     };
 
@@ -1700,11 +1719,11 @@ pub async fn get_projects_overview(
 }
 
 pub async fn get_targets_overview(
-    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
 ) -> Result<Json<ApiResponse<Vec<TargetOverviewResponse>>>, AppError> {
     tracing::debug!("🎯 Getting targets overview");
 
-    let conn = state.db();
+    let conn = ctx.db();
     let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
     let db = Database::new(&conn);
 
@@ -1715,7 +1734,7 @@ pub async fn get_targets_overview(
 
     // Get file existence map
     let file_existence_map: std::collections::HashMap<i32, bool> = {
-        let cache = state.file_check_cache.read().unwrap();
+        let cache = ctx.file_check_cache.read().unwrap();
         cache.targets_with_files.clone()
     };
 
@@ -1800,11 +1819,11 @@ pub async fn get_targets_overview(
 }
 
 pub async fn get_overall_stats(
-    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
 ) -> Result<Json<ApiResponse<OverallStatsResponse>>, AppError> {
     tracing::debug!("📊 Getting overall statistics");
 
-    let conn = state.db();
+    let conn = ctx.db();
     let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
     let db = Database::new(&conn);
 
@@ -1866,9 +1885,9 @@ pub async fn get_overall_stats(
 
 // Sequence analysis handlers
 
-#[axum::debug_handler]
+#[axum::debug_handler(state = Arc<AppState>)]
 pub async fn analyze_sequence(
-    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
     Query(params): Query<crate::server::api::SequenceAnalysisQuery>,
 ) -> Result<Json<ApiResponse<crate::server::api::SequenceAnalysisResponse>>, AppError> {
     use crate::sequence_analysis::{
@@ -1886,7 +1905,7 @@ pub async fn analyze_sequence(
 
     // Fetch images from database
     let (images_data, target_name) = {
-        let conn = state.db();
+        let conn = ctx.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
 
@@ -1989,10 +2008,10 @@ pub async fn analyze_sequence(
     )))
 }
 
-#[axum::debug_handler]
+#[axum::debug_handler(state = Arc<AppState>)]
 pub async fn get_image_quality(
-    State(state): State<Arc<AppState>>,
-    Path(image_id): Path<i32>,
+    ctx: DbContext,
+    Path((_db_id, image_id)): Path<(String, i32)>,
 ) -> Result<Json<ApiResponse<crate::server::api::ImageQualityContextResponse>>, AppError> {
     use crate::sequence_analysis::{
         extract_metrics_from_metadata, SequenceAnalyzer, SequenceAnalyzerConfig,
@@ -2000,7 +2019,7 @@ pub async fn get_image_quality(
 
     // Get the target image and its context from database
     let (target_image, all_filter_images, target_name) = {
-        let conn = state.db();
+        let conn = ctx.db();
         let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
         let db = Database::new(&conn);
 

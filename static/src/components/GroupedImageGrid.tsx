@@ -6,7 +6,7 @@ import { apiClient } from '../api/client';
 import type { Image } from '../api/types';
 import { GradingStatus } from '../api/types';
 import { useGrading } from '../hooks/useGrading';
-import { useProjectTarget, useGridState, useFilters, useUrlParams } from '../hooks/useUrlState';
+import { useDbProjectTarget, useGridState, useFilters, useUrlParams } from '../hooks/useUrlState';
 import ImageCard from './ImageCard';
 import LazyImageCard from './LazyImageCard';
 import FilterControls, { type FilterOptions } from './FilterControls';
@@ -30,7 +30,7 @@ interface GroupedImageGridProps {
 export default function GroupedImageGrid({ useLazyImages = false }: GroupedImageGridProps) {
   // Get state from URL hooks
   const navigate = useNavigate();
-  const { projectId, targetId } = useProjectTarget();
+  const { dbId, projectId, targetId } = useDbProjectTarget();
   const { updateParams } = useUrlParams();
   const {
     selectedGroupIndex,
@@ -61,7 +61,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   }, [updateFilters]);
 
   // Initialize grading system with undo/redo
-  const grading = useGrading();
+  const grading = useGrading(dbId!);
   const [lastSelectedImageId, setLastSelectedImageId] = useState<number | null>(null);
 
   // Navigation helpers
@@ -84,13 +84,14 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
 
   // Fetch ALL images (no pagination for grouping) with periodic refresh
   const { data: allImages = [], isLoading } = useQuery({
-    queryKey: ['all-images', projectId, targetId],
-    queryFn: () => apiClient.getImages({
-      project_id: projectId || undefined, // null becomes undefined for API
-      target_id: targetId || undefined,
-      limit: 10000, // Get all images
-    }),
-    enabled: projectId !== undefined, // Enable for both specific projects and null (all projects)
+    queryKey: ['db', dbId, 'all-images', projectId, targetId],
+    queryFn: () =>
+      apiClient.getImages(dbId!, {
+        project_id: projectId || undefined, // null becomes undefined for API
+        target_id: targetId || undefined,
+        limit: 10000, // Get all images
+      }),
+    enabled: !!dbId && projectId !== undefined, // Need dbId and a project (or null=all-in-this-db)
     refetchInterval: 30000, // Refresh every 30 seconds
     refetchIntervalInBackground: true,
   });
@@ -722,11 +723,12 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                           }`}
                         >
                           <CardComponent
+                            dbId={dbId!}
                             image={image}
                             isSelected={
-                              selectedImages.has(image.id) || 
-                              (selectedGroupIndex === groupIndex && 
-                               selectedImageIndex === indexInGroup)
+                              selectedImages.has(image.id) ||
+                              (selectedGroupIndex === groupIndex &&
+                                selectedImageIndex === indexInGroup)
                             }
                             onClick={(event) => handleImageSelection(image.id, groupIndex, indexInGroup, event)}
                             onDoubleClick={() => navigateToDetail(image.id)}

@@ -65,31 +65,63 @@ export function useUrlParams() {
 }
 
 /**
- * Hook for managing project and target selection in URL
+ * Hook for reading the (db, project, target) triple from URL state, used by
+ * every scoped view (grid, detail, comparison, sequence). The `dbId` is
+ * required for any of the per-DB API calls; if it's missing, the view should
+ * render an empty/error state rather than fall back to a default.
+ *
+ * `setDbProjectTarget` is the only way to navigate INTO a scoped view from
+ * a list — it sets all three params atomically so the URL is never partially
+ * populated.
  */
-export function useProjectTarget() {
-  const { getNumberParam, updateParams } = useUrlParams();
-  
+export function useDbProjectTarget() {
+  const { getParam, getNumberParam, updateParams } = useUrlParams();
+
+  const dbId = useMemo(() => getParam('db'), [getParam]);
   const projectId = useMemo(() => getNumberParam('project'), [getNumberParam]);
   const targetId = useMemo(() => getNumberParam('target'), [getNumberParam]);
-  
-  const setProjectId = useCallback((id: number | null) => {
-    updateParams({ 
-      project: id,
-      target: null, // Reset target when project changes
-    });
-  }, [updateParams]);
-  
-  const setTargetId = useCallback((id: number | null) => {
-    updateParams({ target: id });
-  }, [updateParams]);
-  
+
+  const setDbProjectTarget = useCallback(
+    (db: string | null, project: number | null, target: number | null) => {
+      updateParams({ db, project, target });
+    },
+    [updateParams]
+  );
+
+  const setProjectId = useCallback(
+    (id: number | null) => {
+      // Reset target when project changes; dbId stays.
+      updateParams({ project: id, target: null });
+    },
+    [updateParams]
+  );
+
+  const setTargetId = useCallback(
+    (id: number | null) => {
+      updateParams({ target: id });
+    },
+    [updateParams]
+  );
+
   return {
+    dbId,
     projectId,
     targetId,
+    setDbProjectTarget,
     setProjectId,
     setTargetId,
   };
+}
+
+/**
+ * Backwards-compatible shim. Same signature as the old `useProjectTarget`
+ * but the `dbId` is now part of URL state too — readable via
+ * `useDbProjectTarget`. Existing call sites that only need project/target
+ * (e.g. selectors) can keep using this.
+ */
+export function useProjectTarget() {
+  const { projectId, targetId, setProjectId, setTargetId } = useDbProjectTarget();
+  return { projectId, targetId, setProjectId, setTargetId };
 }
 
 /**

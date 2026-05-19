@@ -12,11 +12,14 @@ One-off CLI subcommands (`analyze`, batch operations, etc.) remain single-DB —
 
 ### Concrete user-visible outcomes
 - Settings panel lists N configured databases. Each has: a friendly name, a `.sqlite` path, and an ordered list of image directories.
-- The web UI has a database **switcher** (chip in the top nav). Switching changes which DB the project/target/image views read.
-- "All projects" overview is **per-DB** (each DB shows its own list). A future "across DBs" overview is out of scope for v1 (see §10).
+- **No "active database" mode.** The Overview merges projects and targets across all configured databases into one list, visually grouped/sectioned by DB. Users see all their telescope work at once, just labeled with which DB each item lives in.
+- Scoped views (grid, detail, comparison) read `db` from the URL alongside `project`/`target`/`image`. There is no fallback — every scoped link is fully qualified.
 - Cache refresh is per-DB and shows per-DB progress.
-- Grading writes go to the DB the image was opened from. There is no way to accidentally write across DBs.
-- URL state encodes the active DB so links/bookmarks/back-button work.
+- Grading writes go to the DB the image came from. The frontend always has the `db_id` in scope (from URL or the project's row), so writes are unambiguous.
+- URL state encodes the DB so links/bookmarks/back-button work.
+
+### Why merge instead of an active-DB switcher
+Project IDs in N.I.N.A. databases are just `i32` and trivially collide across files. A merged-list UI is **safer** (every navigation carries an explicit `db_id`, no ambiguity) AND **better UX** (no mode-switching cognitive load — users just see their projects). The cost is a small fan-out of API requests on the overview pages, which is fine since results cache.
 
 ### Non-goals (v1)
 - Cross-DB joins, merged project overview, "all projects from all DBs" aggregations.
@@ -242,42 +245,54 @@ Replace single-DB commands:
 
 ## 6. Frontend changes
 
+The frontend never has a notion of a "currently selected database." Lists are merged across DBs; scoped views read `db_id` from URL state. There is no DB switcher in the navigation.
+
 ### 6.1 URL state
-Add `db` to query params; treat it as the outermost qualifier:
-- `/grid?db=<id>&project=5&target=3`
-- `/overview?db=<id>`
+The `db` param appears alongside `project`/`target`/`image` whenever a view is scoped to one database:
+- `/grid?db=imaging-rig&project=5&target=3` — image grid for a specific project's images
+- `/detail?db=imaging-rig&image=42` — single-image detail view
+- `/overview` — **no `db` param**; renders the merged cross-DB overview
 
-`useProjectTarget()` becomes `useDbProjectTarget()` returning `{ dbId, projectId, targetId, setDbId, setProjectId, setTargetId }`. Setting `dbId` resets `projectId` and `targetId` (different DB → different ID space).
+`useProjectTarget()` becomes `useDbProjectTarget()` returning `{ dbId, projectId, targetId, setDbProjectTarget }`. There is no setter for `db` alone — you always set the triple `(dbId, projectId, targetId)` atomically when navigating into a scoped view.
 
-**Resolution rule for missing `db`**: If `?db=` is absent, fall back to `active_db_id` from server config (returned by `/api/info` or `/api/databases`). Then update the URL to include it (so refresh/share works). Never silently let API calls go through with no DB.
+**Missing `?db=` on a scoped view is an error**, not something to fall back from. Show "Database not found, this link may be stale" and a button back to overview. This catches bugs early and protects against accidental cross-DB writes.
 
 ### 6.2 API client
 `static/src/api/client.ts` gains a `dbId` parameter on every per-DB method and embeds it in the path:
 ```ts
-getProjects(dbId) → GET /api/db/{dbId}/projects
-getImages(dbId, { projectId, targetId }) → GET /api/db/{dbId}/images?...
-updateGrade(dbId, imageId, status) → PUT /api/db/{dbId}/images/{imageId}/grade
+getProjects(dbId)                     → GET /api/db/{dbId}/projects
+getProjectsOverview(dbId)             → GET /api/db/{dbId}/projects/overview
+getImages(dbId, { projectId, ... })   → GET /api/db/{dbId}/images?...
+updateGrade(dbId, imageId, status)    → PUT /api/db/{dbId}/images/{imageId}/grade
 ```
 
-React Query keys gain `dbId` as the first segment: `['db', dbId, 'projects']`. This keeps caches per-DB without manual invalidation.
+React Query keys gain `dbId` as the first segment: `['db', dbId, 'projects']`. This keeps caches per-DB without manual invalidation, and makes per-DB cache eviction trivial.
 
-### 6.3 DB switcher UI
-- New nav chip showing active DB name, click for dropdown of all DBs.
-- "Manage databases…" item at the bottom opens the settings panel scrolled to the DB list.
-- Switching: update URL `?db=`, clear `project` + `target` from URL, navigate to that DB's overview page.
+Global methods (no DB scope): `getServerInfo()`, `getDatabases()`. Used by the merged-overview hooks below.
 
-### 6.4 Settings panel (Tauri-only, but reachable from web UI too)
+### 6.3 Merged-overview hooks
+Cross-DB list views are built via hooks that fan out per-DB queries and concatenate the results, stamping each row with its source `db_id` and `db_name`.
+
+- `useAllDatabases()` — returns the list of configured DBs (single React Query keyed on `['databases']`).
+- `useMergedProjectsOverview()` — fetches `getProjectsOverview(db.id)` for every configured DB in parallel (via `useQueries`), returns a flat list of `(ProjectOverview & { db_id, db_name })`. Loading/error states are aggregated.
+- `useMergedTargetsOverview()` — same pattern.
+- `useMergedOverallStats()` — sums totals across the per-DB `OverallStats` results client-side.
+
+Overview component renders sections grouped by `db_name`, with a collapsible header per section. Clicking a project navigates to `/grid?db={db_id}&project={project.id}`.
+
+### 6.4 Settings panel
 Today it's a single-DB form. Rebuild as a list with add/edit/remove rows. Each row:
-- Editable name
+- Editable display name
+- Editable slug (with warning that changing it breaks existing links)
 - DB path with file-picker button
 - Image directory list with add/remove/reorder buttons
 - "Refresh caches" button (per-DB)
 - "Remove" button (with confirm)
 
-"Add database" button at the bottom.
+"Add database" button at the bottom. This is the only place users think about "which DBs do I have" — the rest of the UI just merges them.
 
 ### 6.5 SSE / cache progress
-Each `DatabaseContext` has its own progress. The frontend opens an SSE connection to the active DB's `/api/db/{db_id}/cache-progress`. If user switches DBs, close + reopen against the new ID.
+Each `DatabaseContext` has its own progress. On the overview, an aggregated indicator shows "N of M databases refreshing." Each DB section header can expand to show its individual progress. Tapping a per-DB "Refresh caches" button kicks that DB's refresh; the SSE stream is per-DB.
 
 ---
 
@@ -320,25 +335,29 @@ Each phase ends in a working build (`cargo build --features tauri && cargo test`
 
 ## 8. Frontend implementation phases
 
-### Phase F1: API client + URL state
-- Update `static/src/api/client.ts` to take `dbId` everywhere.
-- Update `useUrlState.ts` → `useDbProjectTarget` (add `db`).
-- Wire `dbId` into every React Query key.
-- Add `GET /api/databases` hook + active-DB context (small Zustand store or React context).
-- Default-DB resolution rule (§6.1).
+### Phase F1: API client + URL state + merged hooks
+- Update `static/src/api/client.ts` so every per-DB method takes `dbId` and routes to `/api/db/{dbId}/...`. Add `getDatabases()` global.
+- Update `useUrlState.ts`: add `useDbProjectTarget` returning `{ dbId, projectId, targetId, setDbProjectTarget }` for navigating into scoped views.
+- Add `useAllDatabases()`, `useMergedProjectsOverview()`, `useMergedTargetsOverview()`, `useMergedOverallStats()`.
+- Update every existing call site to pass `dbId` (sourced from URL for scoped views, from row metadata for list items in the merged hooks).
+- React Query keys: `['db', dbId, ...]` for per-DB queries; `['databases']` for the global list.
 
-### Phase F2: DB switcher chip + reroute
-- Nav chip + dropdown.
-- Switching → URL update + React Query reset for affected keys.
+### Phase F2: Merged Overview component
+- Rewrite Overview to use the merged hooks.
+- Group projects/targets by DB, each in a collapsible section with the DB's display name as the header.
+- Project click → `/grid?db={db_id}&project={project.id}`.
+- Target click → `/grid?db={db_id}&project={project_id}&target={target.id}`.
+- Empty state when no DBs configured: "Add a database in Settings."
 
 ### Phase F3: Settings panel rewrite
 - Multi-row DB list with add/remove/edit.
+- Per-row: name, slug (with rename warning), DB path file picker, image dir list with add/remove/reorder, "Refresh caches" button.
 - File pickers via existing Tauri commands.
-- Per-DB "refresh cache" button.
+- "Add database" button.
 
-### Phase F4: SSE per-DB progress
-- Open `/api/db/{db_id}/cache-progress` for active DB.
-- Reopen on DB switch.
+### Phase F4: Per-DB SSE progress + aggregated indicator
+- Each DB's `/api/db/{db_id}/cache-progress` opens its own SSE.
+- Aggregated indicator in nav showing "N of M databases refreshing." Expand to see per-DB status.
 
 ---
 
@@ -380,16 +399,16 @@ Update inline as work progresses. `[ ]` pending, `[~]` in progress, `[x]` done.
 
 ### Backend
 - [x] **B1** Introduce `DatabaseContext`, refactor `AppState` to a map (single entry today)
-- [ ] **B2** Path-nested per-DB API + `DbContext` extractor; `/api/databases` list endpoint
+- [x] **B2** Path-nested per-DB API + `DbContext` extractor; `/api/databases` list endpoint
 - [ ] **B3** v2 config + migration; updated Tauri commands; build N contexts at startup
 - [ ] **B4** HTTP CRUD for databases (add/edit/remove at runtime)
 - [ ] **B5** Cache directory namespacing under `<cache_root>/<db_id>/`
 
 ### Frontend
-- [ ] **F1** API client + URL state + React Query keys take `dbId`
-- [ ] **F2** DB switcher chip + dropdown
+- [x] **F1** API client + URL state + merged-overview hooks (call sites updated to pass `dbId`)
+- [x] **F2** Merged Overview view (cross-DB list grouped per-DB)
 - [ ] **F3** Settings panel rewritten for multi-DB
-- [ ] **F4** Per-DB SSE cache progress
+- [ ] **F4** Per-DB SSE cache progress + aggregated indicator
 
 ### Cross-cutting
 - [ ] Manual smoke test pass against checklist in §9

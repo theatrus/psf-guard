@@ -8,6 +8,7 @@ import { apiClient } from '../api/client';
  * @param options - Preloading options
  */
 export function useImagePreloader(
+  dbId: string | null,
   currentImageId: number | null,
   nextImageIds: number[],
   options: {
@@ -17,23 +18,23 @@ export function useImagePreloader(
     imageSize?: 'screen' | 'large' | 'original';
   } = {}
 ) {
-  const { 
-    preloadCount = 3, 
+  const {
+    preloadCount = 3,
     includeAnnotated = false,
     includeStarData = false,
-    imageSize = 'large'
+    imageSize = 'large',
   } = options;
 
   useEffect(() => {
-    if (!currentImageId) return;
+    if (!currentImageId || !dbId) return;
 
     // Preload the next N images
     const imagesToPreload = nextImageIds.slice(0, preloadCount);
     const preloadPromises: Promise<void>[] = [];
 
-    imagesToPreload.forEach(imageId => {
+    imagesToPreload.forEach((imageId) => {
       // Preload the regular preview
-      const previewUrl = apiClient.getPreviewUrl(imageId, { size: imageSize });
+      const previewUrl = apiClient.getPreviewUrl(dbId, imageId, { size: imageSize });
       const previewImg = new Image();
       previewImg.src = previewUrl;
       preloadPromises.push(
@@ -45,7 +46,7 @@ export function useImagePreloader(
 
       // Optionally preload annotated version
       if (includeAnnotated) {
-        const annotatedUrl = apiClient.getAnnotatedUrl(imageId);
+        const annotatedUrl = apiClient.getAnnotatedUrl(dbId, imageId);
         const annotatedImg = new Image();
         annotatedImg.src = annotatedUrl;
         preloadPromises.push(
@@ -59,9 +60,9 @@ export function useImagePreloader(
 
     // Optionally preload star detection data
     if (includeStarData) {
-      imagesToPreload.forEach(imageId => {
+      imagesToPreload.forEach((imageId) => {
         // This will trigger the React Query cache
-        apiClient.getStarDetection(imageId).catch(() => {
+        apiClient.getStarDetection(dbId, imageId).catch(() => {
           // Ignore errors for preloading
         });
       });
@@ -70,7 +71,7 @@ export function useImagePreloader(
     return () => {
       // No cleanup needed for image preloading
     };
-  }, [currentImageId, nextImageIds, preloadCount, includeAnnotated, includeStarData, imageSize]);
+  }, [dbId, currentImageId, nextImageIds, preloadCount, includeAnnotated, includeStarData, imageSize]);
 }
 
 /**

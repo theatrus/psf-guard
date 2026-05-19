@@ -8,6 +8,7 @@ import { useImageZoom } from '../hooks/useImageZoom';
 import UndoRedoToolbar from './UndoRedoToolbar';
 
 interface ImageDetailViewProps {
+  dbId: string;
   imageId: number;
   onClose: () => void;
   onNext: () => void;
@@ -29,6 +30,7 @@ interface ImageDetailViewProps {
 }
 
 export default function ImageDetailView({
+  dbId,
   imageId,
   onClose,
   onNext,
@@ -68,7 +70,7 @@ export default function ImageDetailView({
   const nextImageIds = adjacentImageIds ? 
     [...adjacentImageIds.next, ...adjacentImageIds.previous] : [];
   
-  useImagePreloader(imageId, nextImageIds, {
+  useImagePreloader(dbId, imageId, nextImageIds, {
     preloadCount: 2,
     includeAnnotated: showStars,
     includeStarData: showStars,
@@ -77,15 +79,15 @@ export default function ImageDetailView({
 
   // Fetch image details
   const { data: image, isLoading, isFetching } = useQuery({
-    queryKey: ['image', imageId],
-    queryFn: () => apiClient.getImage(imageId),
+    queryKey: ['db', dbId, 'image', imageId],
+    queryFn: () => apiClient.getImage(dbId, imageId),
     placeholderData: (previousData) => previousData, // Keep showing previous image while loading new one
   });
 
   // Fetch star detection
   const { data: starData, isLoading: starDataLoading } = useQuery({
-    queryKey: ['stars', imageId],
-    queryFn: () => apiClient.getStarDetection(imageId),
+    queryKey: ['db', dbId, 'stars', imageId],
+    queryFn: () => apiClient.getStarDetection(dbId, imageId),
     enabled: showStars,
   });
 
@@ -185,9 +187,9 @@ export default function ImageDetailView({
     
     // Preload when visual zoom > 80%
     if (visualScale > 0.8 && !isOriginalLoaded && state === 'large') {
-      const originalUrl = showStars 
-        ? apiClient.getAnnotatedUrl(imageId, 'original', maxStars)
-        : apiClient.getPreviewUrl(imageId, { size: 'original' });
+      const originalUrl = showStars
+        ? apiClient.getAnnotatedUrl(dbId, imageId, 'original', maxStars)
+        : apiClient.getPreviewUrl(dbId, imageId, { size: 'original' });
       
       const img = new Image();
       img.src = originalUrl;
@@ -326,15 +328,15 @@ export default function ImageDetailView({
                   className={isFetching ? 'loading' : ''}
                   src={
                     showPsf
-                      ? apiClient.getPsfUrl(imageId, { 
+                      ? apiClient.getPsfUrl(dbId, imageId, {
                           num_stars: 9,
                           psf_type: 'moffat',
                           sort_by: 'r2',
-                          selection: 'top-n'
+                          selection: 'top-n',
                         })
-                      : showStars 
-                        ? apiClient.getAnnotatedUrl(imageId, useOriginalImage ? 'original' : 'large', maxStars)
-                        : apiClient.getPreviewUrl(imageId, { size: useOriginalImage ? 'original' : 'large' })
+                      : showStars
+                        ? apiClient.getAnnotatedUrl(dbId, imageId, useOriginalImage ? 'original' : 'large', maxStars)
+                        : apiClient.getPreviewUrl(dbId, imageId, { size: useOriginalImage ? 'original' : 'large' })
                   }
                   alt={`${image.target_name} - ${image.filter_name || 'No filter'}`}
                   style={{

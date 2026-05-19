@@ -228,10 +228,17 @@ pub struct PreviewOptions {
 
 #[derive(Debug, Serialize)]
 pub struct ServerInfo {
-    pub database_path: String,
-    pub image_directory: String,
-    pub cache_directory: String,
     pub version: String,
+    pub cache_directory: String,
+}
+
+/// Summary of one configured database, returned by `GET /api/databases`.
+#[derive(Debug, Serialize)]
+pub struct DatabaseSummary {
+    pub id: String,
+    pub name: String,
+    pub database_path: String,
+    pub image_directories: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]

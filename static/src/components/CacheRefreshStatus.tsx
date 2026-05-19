@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { CacheRefreshProgress } from '../api/types';
+import { useDbProjectTarget } from '../hooks/useUrlState';
 import './CacheRefreshStatus.css';
 
 interface CacheRefreshStatusProps {
@@ -18,21 +19,20 @@ const STAGE_LABELS: Record<string, string> = {
   completed: 'Completed'
 };
 
-async function fetchCacheProgress(): Promise<CacheRefreshProgress> {
-  return await apiClient.getCacheProgress();
-}
-
 export default function CacheRefreshStatus({ className = '' }: CacheRefreshStatusProps) {
   const queryClient = useQueryClient();
+  const { dbId } = useDbProjectTarget();
   const [isVisible, setIsVisible] = useState(false);
   const [animationPhase, setAnimationPhase] = useState<'fade-in' | 'visible' | 'fade-out'>('fade-in');
   const [wasRefreshing, setWasRefreshing] = useState(false);
   const [recentDirectories, setRecentDirectories] = useState<string[]>([]);
-  
-  // Poll for cache refresh status
-  const { data: progress } = useQuery({
-    queryKey: ['cache-progress'],
-    queryFn: fetchCacheProgress,
+
+  // Poll for cache refresh status of the active DB.
+  // The merged cross-DB indicator will arrive in F4.
+  const { data: progress } = useQuery<CacheRefreshProgress>({
+    queryKey: ['db', dbId, 'cache-progress'],
+    queryFn: () => apiClient.getCacheProgress(dbId!),
+    enabled: !!dbId,
     refetchInterval: 1000, // Poll every second
     refetchIntervalInBackground: true,
   });
@@ -55,30 +55,21 @@ export default function CacheRefreshStatus({ className = '' }: CacheRefreshStatu
     }
   }, [progress?.current_directory_name, progress?.is_refreshing]);
 
-  // Detect refresh completion and invalidate caches
+  // Detect refresh completion and invalidate caches for this DB
   useEffect(() => {
     if (wasRefreshing && !progress?.is_refreshing) {
-      // Refresh just completed - invalidate all relevant caches
-      console.log('🔄 Cache refresh completed, invalidating queries...');
-      
-      // Invalidate all queries that depend on file existence data
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
-      queryClient.invalidateQueries({ queryKey: ['targets'] });
-      queryClient.invalidateQueries({ queryKey: ['all-images'] });
-      queryClient.invalidateQueries({ queryKey: ['projects-overview'] });
-      queryClient.invalidateQueries({ queryKey: ['targets-overview'] });
-      queryClient.invalidateQueries({ queryKey: ['overall-stats'] });
-      
-      // Also invalidate any image queries
-      queryClient.invalidateQueries({ queryKey: ['images'] });
-      
+      console.log('🔄 Cache refresh completed, invalidating queries for db=%s', dbId);
+      if (dbId) {
+        queryClient.invalidateQueries({ queryKey: ['db', dbId] });
+      }
+
       setWasRefreshing(false);
       // Clear directory history when refresh completes
       setRecentDirectories([]);
     } else if (progress?.is_refreshing) {
       setWasRefreshing(true);
     }
-  }, [progress?.is_refreshing, wasRefreshing, queryClient]);
+  }, [progress?.is_refreshing, wasRefreshing, queryClient, dbId]);
 
   // Show/hide logic based on refresh state
   useEffect(() => {

@@ -2,6 +2,7 @@ pub mod api;
 pub mod cache;
 pub mod database_context;
 pub mod embedded_static;
+pub mod extract;
 pub mod handlers;
 pub mod slug;
 pub mod state;
@@ -152,9 +153,8 @@ async fn run_server_internal(
         });
     }
 
-    // Create API routes
-    let api_routes = Router::new()
-        .route("/info", get(handlers::get_server_info))
+    // Per-DB routes — nested under /api/db/{db_id}/.
+    let db_routes: Router<Arc<AppState>> = Router::new()
         .route("/refresh-cache", put(handlers::refresh_file_cache))
         .route("/cache-progress", get(handlers::get_cache_refresh_progress))
         .route(
@@ -192,7 +192,13 @@ async fn run_server_internal(
         .route(
             "/analysis/image/{image_id}",
             get(handlers::get_image_quality),
-        )
+        );
+
+    // Top-level API: global endpoints + nested per-DB routes.
+    let api_routes = Router::new()
+        .route("/info", get(handlers::get_server_info))
+        .route("/databases", get(handlers::list_databases))
+        .nest("/db/{db_id}", db_routes)
         .with_state(state);
 
     // Create main app with either embedded or filesystem static serving
@@ -285,155 +291,184 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
         // Wait for next scan interval
         interval_timer.tick().await;
 
-        tracing::debug!("🔍 Scanning for images needing pre-generation");
+        // Iterate every configured database; pre-generation is per-DB work.
+        for ctx in state.all_databases() {
+            tracing::debug!(
+                "🔍 Scanning db={} for images needing pre-generation",
+                ctx.id
+            );
 
-        // Get all images from database
-        let images = match get_all_images_for_pregeneration(&state).await {
-            Ok(images) => images,
-            Err(e) => {
-                tracing::error!("❌ Failed to get images for pre-generation: {}", e);
+            let images = match get_all_images_for_pregeneration(&ctx).await {
+                Ok(images) => images,
+                Err(e) => {
+                    tracing::error!(
+                        "❌ Failed to get images for pre-generation (db={}): {}",
+                        ctx.id,
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            if images.is_empty() {
+                tracing::debug!("📭 No images found for pre-generation in db={}", ctx.id);
                 continue;
             }
-        };
 
-        if images.is_empty() {
-            tracing::debug!("📭 No images found for pre-generation");
-            continue;
-        }
+            tracing::info!(
+                "🎯 Found {} images for pre-generation in db={}",
+                images.len(),
+                ctx.id
+            );
 
-        tracing::info!("🎯 Found {} images for pre-generation", images.len());
+            let mut processed_count = 0;
+            let mut generated_count = 0;
+            let mut skipped_count = 0;
+            let mut error_count = 0;
 
-        // Process images in batches with rate limiting
-        let mut processed_count = 0;
-        let mut generated_count = 0;
-        let mut skipped_count = 0;
-        let mut error_count = 0;
+            for batch in images.chunks(batch_size) {
+                for (image_id, file_only, target_name) in batch {
+                    let mut _formats_processed = 0;
 
-        for batch in images.chunks(batch_size) {
-            for (image_id, file_only, target_name) in batch {
-                let mut _formats_processed = 0;
-
-                // Pre-generate each enabled format
-                if state.pregeneration_config.screen_enabled {
-                    match pregenerate_preview(&state, *image_id, file_only, target_name, "screen")
+                    if state.pregeneration_config.screen_enabled {
+                        match pregenerate_preview(
+                            &state,
+                            &ctx,
+                            *image_id,
+                            file_only,
+                            target_name,
+                            "screen",
+                        )
                         .await
-                    {
-                        Ok(generated) => {
-                            _formats_processed += 1;
-                            if generated {
-                                generated_count += 1;
-                            } else {
-                                skipped_count += 1;
+                        {
+                            Ok(generated) => {
+                                _formats_processed += 1;
+                                if generated {
+                                    generated_count += 1;
+                                } else {
+                                    skipped_count += 1;
+                                }
+                            }
+                            Err(e) => {
+                                error_count += 1;
+                                tracing::warn!(
+                                    "⚠️ Failed to pre-generate screen preview for image {} (db={}): {}",
+                                    image_id, ctx.id, e
+                                );
                             }
                         }
-                        Err(e) => {
-                            error_count += 1;
-                            tracing::warn!(
-                                "⚠️ Failed to pre-generate screen preview for image {}: {}",
-                                image_id,
-                                e
-                            );
-                        }
                     }
-                }
 
-                if state.pregeneration_config.large_enabled {
-                    match pregenerate_preview(&state, *image_id, file_only, target_name, "large")
+                    if state.pregeneration_config.large_enabled {
+                        match pregenerate_preview(
+                            &state,
+                            &ctx,
+                            *image_id,
+                            file_only,
+                            target_name,
+                            "large",
+                        )
                         .await
-                    {
-                        Ok(generated) => {
-                            _formats_processed += 1;
-                            if generated {
-                                generated_count += 1;
-                            } else {
-                                skipped_count += 1;
+                        {
+                            Ok(generated) => {
+                                _formats_processed += 1;
+                                if generated {
+                                    generated_count += 1;
+                                } else {
+                                    skipped_count += 1;
+                                }
+                            }
+                            Err(e) => {
+                                error_count += 1;
+                                tracing::warn!(
+                                    "⚠️ Failed to pre-generate large preview for image {} (db={}): {}",
+                                    image_id, ctx.id, e
+                                );
                             }
                         }
-                        Err(e) => {
-                            error_count += 1;
-                            tracing::warn!(
-                                "⚠️ Failed to pre-generate large preview for image {}: {}",
-                                image_id,
-                                e
-                            );
-                        }
                     }
-                }
 
-                if state.pregeneration_config.original_enabled {
-                    match pregenerate_preview(&state, *image_id, file_only, target_name, "original")
+                    if state.pregeneration_config.original_enabled {
+                        match pregenerate_preview(
+                            &state,
+                            &ctx,
+                            *image_id,
+                            file_only,
+                            target_name,
+                            "original",
+                        )
                         .await
-                    {
-                        Ok(generated) => {
-                            _formats_processed += 1;
-                            if generated {
-                                generated_count += 1;
-                            } else {
-                                skipped_count += 1;
+                        {
+                            Ok(generated) => {
+                                _formats_processed += 1;
+                                if generated {
+                                    generated_count += 1;
+                                } else {
+                                    skipped_count += 1;
+                                }
+                            }
+                            Err(e) => {
+                                error_count += 1;
+                                tracing::warn!(
+                                    "⚠️ Failed to pre-generate original preview for image {} (db={}): {}",
+                                    image_id, ctx.id, e
+                                );
                             }
                         }
-                        Err(e) => {
-                            error_count += 1;
-                            tracing::warn!(
-                                "⚠️ Failed to pre-generate original preview for image {}: {}",
-                                image_id,
-                                e
-                            );
-                        }
                     }
-                }
 
-                if state.pregeneration_config.annotated_enabled {
-                    match pregenerate_annotated(&state, *image_id, file_only, target_name).await {
-                        Ok(generated) => {
-                            _formats_processed += 1;
-                            if generated {
-                                generated_count += 1;
-                            } else {
-                                skipped_count += 1;
+                    if state.pregeneration_config.annotated_enabled {
+                        match pregenerate_annotated(&state, &ctx, *image_id, file_only, target_name)
+                            .await
+                        {
+                            Ok(generated) => {
+                                _formats_processed += 1;
+                                if generated {
+                                    generated_count += 1;
+                                } else {
+                                    skipped_count += 1;
+                                }
+                            }
+                            Err(e) => {
+                                error_count += 1;
+                                tracing::warn!(
+                                    "⚠️ Failed to pre-generate annotated image for image {} (db={}): {}",
+                                    image_id, ctx.id, e
+                                );
                             }
                         }
-                        Err(e) => {
-                            error_count += 1;
-                            tracing::warn!(
-                                "⚠️ Failed to pre-generate annotated image for image {}: {}",
-                                image_id,
-                                e
-                            );
-                        }
                     }
+
+                    processed_count += 1;
+                    sleep(rate_limit_delay).await;
                 }
 
-                processed_count += 1;
-
-                // Rate limiting delay
-                sleep(rate_limit_delay).await;
+                tracing::debug!(
+                    "📈 Pre-generation progress for db={}: {}/{} images processed",
+                    ctx.id,
+                    processed_count,
+                    images.len()
+                );
             }
 
-            tracing::debug!(
-                "📈 Pre-generation progress: {}/{} images processed",
-                processed_count,
-                images.len()
-            );
-        }
-
-        if processed_count > 0 {
-            tracing::info!(
-                "✅ Pre-generation cycle complete: {} generated, {} skipped, {} errors ({} images processed)",
-                generated_count, skipped_count, error_count, processed_count
-            );
+            if processed_count > 0 {
+                tracing::info!(
+                    "✅ Pre-generation cycle complete for db={}: {} generated, {} skipped, {} errors ({} images processed)",
+                    ctx.id, generated_count, skipped_count, error_count, processed_count
+                );
+            }
         }
     }
 }
 
 async fn get_all_images_for_pregeneration(
-    state: &Arc<AppState>,
+    ctx: &Arc<crate::server::database_context::DatabaseContext>,
 ) -> Result<Vec<(i32, String, String)>> {
     use crate::db::Database;
 
     // Get all images from database
     let images = {
-        let conn = state.db();
+        let conn = ctx.db();
         let conn = conn
             .lock()
             .map_err(|_| anyhow::anyhow!("Database lock error"))?;
@@ -465,6 +500,7 @@ async fn get_all_images_for_pregeneration(
 
 async fn pregenerate_preview(
     state: &Arc<AppState>,
+    ctx: &Arc<crate::server::database_context::DatabaseContext>,
     image_id: i32,
     file_only: &str,
     target_name: &str,
@@ -476,7 +512,7 @@ async fn pregenerate_preview(
     let image_data = {
         use crate::db::Database;
 
-        let conn = state.db();
+        let conn = ctx.db();
         let conn = conn
             .lock()
             .map_err(|_| anyhow::anyhow!("Database lock error"))?;
@@ -506,7 +542,7 @@ async fn pregenerate_preview(
         -28000     // shadow -2.8 * 10000
     );
 
-    let cache_manager = CacheManager::new(std::path::PathBuf::from(&state.cache_dir));
+    let cache_manager = CacheManager::new(std::path::PathBuf::from(&ctx.cache_dir));
     cache_manager.ensure_category_dir("previews")?;
     let cache_path = cache_manager.get_cached_path("previews", &cache_key, "png");
 
@@ -528,7 +564,7 @@ async fn pregenerate_preview(
     tracing::debug!("🎨 Pre-generating {} preview for image {}", size, image_id);
 
     // Find FITS file using existing function
-    let fits_path = handlers::find_fits_file(state, &image_data, target_name, file_only)
+    let fits_path = handlers::find_fits_file(ctx, &image_data, target_name, file_only)
         .map_err(|_| anyhow::anyhow!("FITS file not found for image {}", image_id))?;
 
     // Determine target dimensions
@@ -564,6 +600,7 @@ async fn pregenerate_preview(
 
 async fn pregenerate_annotated(
     state: &Arc<AppState>,
+    ctx: &Arc<crate::server::database_context::DatabaseContext>,
     image_id: i32,
     file_only: &str,
     target_name: &str,
@@ -578,7 +615,7 @@ async fn pregenerate_annotated(
     let image_data = {
         use crate::db::Database;
 
-        let conn = state.db();
+        let conn = ctx.db();
         let conn = conn
             .lock()
             .map_err(|_| anyhow::anyhow!("Database lock error"))?;
@@ -608,7 +645,7 @@ async fn pregenerate_annotated(
         max_stars
     );
 
-    let cache_manager = CacheManager::new(std::path::PathBuf::from(&state.cache_dir));
+    let cache_manager = CacheManager::new(std::path::PathBuf::from(&ctx.cache_dir));
     cache_manager.ensure_category_dir("annotated")?;
     let cache_path = cache_manager.get_cached_path("annotated", &cache_key, "png");
 
@@ -629,7 +666,7 @@ async fn pregenerate_annotated(
     tracing::debug!("🎨 Pre-generating annotated image for image {}", image_id);
 
     // Find FITS file
-    let fits_path = handlers::find_fits_file(state, &image_data, target_name, file_only)
+    let fits_path = handlers::find_fits_file(ctx, &image_data, target_name, file_only)
         .map_err(|_| anyhow::anyhow!("FITS file not found for image {}", image_id))?;
 
     // Generate annotated image

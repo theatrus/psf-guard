@@ -80,10 +80,16 @@ export interface PreviewOptions {
 }
 
 export interface ServerInfo {
-  database_path: string;
-  image_directory: string;
-  cache_directory: string;
   version: string;
+  cache_directory: string;
+}
+
+/** One configured database, returned by /api/databases. */
+export interface DatabaseSummary {
+  id: string;
+  name: string;
+  database_path: string;
+  image_directories: string[];
 }
 
 export interface FileCheckResponse {

@@ -1,27 +1,28 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
-import { useProjectTarget } from '../hooks/useUrlState';
+import { useDbProjectTarget } from '../hooks/useUrlState';
 
 export default function ProjectTargetSelector() {
-  const { projectId: selectedProjectId, targetId: selectedTargetId, setProjectId, setTargetId } = useProjectTarget();
+  const {
+    dbId,
+    projectId: selectedProjectId,
+    targetId: selectedTargetId,
+    setProjectId,
+    setTargetId,
+  } = useDbProjectTarget();
   const queryClient = useQueryClient();
+
+  const invalidateAllForDb = () => {
+    if (!dbId) return;
+    queryClient.invalidateQueries({ queryKey: ['db', dbId] });
+  };
 
   // Refresh file cache mutation
   const refreshCacheMutation = useMutation({
-    mutationFn: apiClient.refreshFileCache,
+    mutationFn: () => apiClient.refreshFileCache(dbId!),
     onSuccess: () => {
       console.log('🔄 Manual file cache refresh completed, invalidating queries...');
-      
-      // Invalidate all queries that depend on file existence data
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
-      queryClient.invalidateQueries({ queryKey: ['targets'] });
-      queryClient.invalidateQueries({ queryKey: ['all-images'] });
-      queryClient.invalidateQueries({ queryKey: ['projects-overview'] });
-      queryClient.invalidateQueries({ queryKey: ['targets-overview'] });
-      queryClient.invalidateQueries({ queryKey: ['overall-stats'] });
-      
-      // Also invalidate any image queries
-      queryClient.invalidateQueries({ queryKey: ['images'] });
+      invalidateAllForDb();
     },
     onError: (error) => {
       console.error('File cache refresh failed:', error);
@@ -30,18 +31,10 @@ export default function ProjectTargetSelector() {
 
   // Refresh directory cache mutation
   const refreshDirectoryCacheMutation = useMutation({
-    mutationFn: apiClient.refreshDirectoryCache,
+    mutationFn: () => apiClient.refreshDirectoryCache(dbId!),
     onSuccess: () => {
       console.log('🌳 Directory cache refresh completed, invalidating queries...');
-      
-      // Invalidate all queries since directory structure affects everything
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
-      queryClient.invalidateQueries({ queryKey: ['targets'] });
-      queryClient.invalidateQueries({ queryKey: ['all-images'] });
-      queryClient.invalidateQueries({ queryKey: ['projects-overview'] });
-      queryClient.invalidateQueries({ queryKey: ['targets-overview'] });
-      queryClient.invalidateQueries({ queryKey: ['overall-stats'] });
-      queryClient.invalidateQueries({ queryKey: ['images'] });
+      invalidateAllForDb();
     },
     onError: (error) => {
       console.error('Directory cache refresh failed:', error);
@@ -52,20 +45,12 @@ export default function ProjectTargetSelector() {
   const refreshBothCachesMutation = useMutation({
     mutationFn: async () => {
       // Refresh directory cache first, then file cache
-      await apiClient.refreshDirectoryCache();
-      await apiClient.refreshFileCache();
+      await apiClient.refreshDirectoryCache(dbId!);
+      await apiClient.refreshFileCache(dbId!);
     },
     onSuccess: () => {
       console.log('🔄 Combined cache refresh completed, invalidating queries...');
-      
-      // Invalidate all queries
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
-      queryClient.invalidateQueries({ queryKey: ['targets'] });
-      queryClient.invalidateQueries({ queryKey: ['all-images'] });
-      queryClient.invalidateQueries({ queryKey: ['projects-overview'] });
-      queryClient.invalidateQueries({ queryKey: ['targets-overview'] });
-      queryClient.invalidateQueries({ queryKey: ['overall-stats'] });
-      queryClient.invalidateQueries({ queryKey: ['images'] });
+      invalidateAllForDb();
     },
     onError: (error) => {
       console.error('Combined cache refresh failed:', error);
@@ -74,17 +59,18 @@ export default function ProjectTargetSelector() {
 
   // Fetch projects with periodic refresh
   const { data: projects = [], isLoading: projectsLoading } = useQuery({
-    queryKey: ['projects'],
-    queryFn: apiClient.getProjects,
+    queryKey: ['db', dbId, 'projects'],
+    queryFn: () => apiClient.getProjects(dbId!),
+    enabled: !!dbId,
     refetchInterval: 30000, // Refresh every 30 seconds
     refetchIntervalInBackground: true,
   });
 
   // Fetch targets for selected project with periodic refresh
   const { data: targets = [], isLoading: targetsLoading } = useQuery({
-    queryKey: ['targets', selectedProjectId],
-    queryFn: () => apiClient.getTargets(selectedProjectId!),
-    enabled: !!selectedProjectId,
+    queryKey: ['db', dbId, 'targets', selectedProjectId],
+    queryFn: () => apiClient.getTargets(dbId!, selectedProjectId!),
+    enabled: !!dbId && !!selectedProjectId,
     refetchInterval: 30000, // Refresh every 30 seconds
     refetchIntervalInBackground: true,
   });
