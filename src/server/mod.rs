@@ -1,7 +1,9 @@
 pub mod api;
 pub mod cache;
+pub mod database_context;
 pub mod embedded_static;
 pub mod handlers;
+pub mod slug;
 pub mod state;
 pub mod static_file_service;
 

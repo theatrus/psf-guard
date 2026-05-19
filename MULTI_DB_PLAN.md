@@ -379,7 +379,7 @@ Each phase ends in a working build (`cargo build --features tauri && cargo test`
 Update inline as work progresses. `[ ]` pending, `[~]` in progress, `[x]` done.
 
 ### Backend
-- [ ] **B1** Introduce `DatabaseContext`, refactor `AppState` to a map (single entry today)
+- [x] **B1** Introduce `DatabaseContext`, refactor `AppState` to a map (single entry today)
 - [ ] **B2** Path-nested per-DB API + `DbContext` extractor; `/api/databases` list endpoint
 - [ ] **B3** v2 config + migration; updated Tauri commands; build N contexts at startup
 - [ ] **B4** HTTP CRUD for databases (add/edit/remove at runtime)
