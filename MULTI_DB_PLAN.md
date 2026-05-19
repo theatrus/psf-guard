@@ -408,7 +408,7 @@ Update inline as work progresses. `[ ]` pending, `[~]` in progress, `[x]` done.
 - [x] **F1** API client + URL state + merged-overview hooks (call sites updated to pass `dbId`)
 - [x] **F2** Merged Overview view (cross-DB list grouped per-DB)
 - [x] **F3** Settings panel rewritten for multi-DB
-- [ ] **F4** Per-DB SSE cache progress + aggregated indicator
+- [x] **F4** Per-DB SSE cache progress + aggregated indicator
 
 ### Cross-cutting
 - [ ] Manual smoke test pass against checklist in §9

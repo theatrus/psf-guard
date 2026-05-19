@@ -5,6 +5,7 @@ import ProjectTargetSelector from './components/ProjectTargetSelector';
 import KeyboardShortcutHelp from './components/KeyboardShortcutHelp';
 import ServerInfoPanel from './components/ServerInfoPanel';
 import CacheRefreshStatus from './components/CacheRefreshStatus';
+import AggregatedCacheStatus from './components/AggregatedCacheStatus';
 import TauriSettings from './components/TauriSettings';
 import { useGridState } from './hooks/useUrlState';
 import { isTauriApp, tauriConfig } from './utils/tauri';
@@ -73,7 +74,12 @@ function App() {
         </div>
         
         <div className="header-center">
+          {/* CacheRefreshStatus renders for scoped views (?db= in URL);
+              AggregatedCacheStatus renders for unscoped views (e.g. overview).
+              Each is internally a no-op in the other case, so both can be
+              mounted unconditionally. */}
           <CacheRefreshStatus />
+          <AggregatedCacheStatus />
           {!isOnOverview && <ProjectTargetSelector />}
         </div>
         
