@@ -407,7 +407,7 @@ Update inline as work progresses. `[ ]` pending, `[~]` in progress, `[x]` done.
 ### Frontend
 - [x] **F1** API client + URL state + merged-overview hooks (call sites updated to pass `dbId`)
 - [x] **F2** Merged Overview view (cross-DB list grouped per-DB)
-- [ ] **F3** Settings panel rewritten for multi-DB
+- [x] **F3** Settings panel rewritten for multi-DB
 - [ ] **F4** Per-DB SSE cache progress + aggregated indicator
 
 ### Cross-cutting
