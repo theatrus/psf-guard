@@ -30,7 +30,7 @@ fitrs = "0.5"
 bumpalo = { version = "3.20", features = ["collections"] }
 image = "0.25"
 imageproc = "0.26"
-rand = "0.9"
+rand = "0.10"
 nalgebra = "0.34"
 # OpenCV integration for advanced computer vision
 opencv = { version = "0.98", optional = true }
@@ -45,7 +45,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 include_dir = "0.7"
 mime_guess = "2.0"
 humantime = "2.3"
-tauri = { version = "2.10.3", features = ["custom-protocol"], optional = true }
+tauri = { version = "2.11.1", features = ["custom-protocol"], optional = true }
 tauri-plugin-dialog = { version = "2.6.0", optional = true }
 dirs = { version = "6.0", optional = true }
 
