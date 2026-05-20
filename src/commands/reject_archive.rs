@@ -14,9 +14,13 @@
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
+use std::path::{Path, PathBuf};
 
-use crate::db::SchemaCapabilities;
+use crate::commands::filter_rejected::get_possible_paths;
+use crate::db::{Database, SchemaCapabilities};
 use crate::db_registry::RejectArchiveOverrides;
+use crate::directory_tree::DirectoryTree;
+use crate::models::GradingStatus;
 
 /// Compiled-in defaults for the reject-archive feature. Overridden by
 /// per-DB registry fields (`DbEntry.reject_archive`), then by per-invocation
@@ -244,7 +248,7 @@ pub fn find_sidecars(primary: &std::path::Path, exts: &[String]) -> Vec<std::pat
             .and_then(|e| e.to_str())
             .map(|e| e.to_ascii_lowercase());
         let Some(ext_lc) = ext_lc else { continue };
-        if lc_exts.iter().any(|want| *want == ext_lc) {
+        if lc_exts.contains(&ext_lc) {
             out.push(path);
         }
     }
@@ -400,6 +404,443 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArchiveRecord> {
         sidecar_files,
         source_db_slug: row.get("source_db_slug")?,
     })
+}
+
+// ── Orchestration ─────────────────────────────────────────────────────────────
+
+/// Options bag for `move_rejects`. Mirrors the CLI flags + per-DB context
+/// the handler in `cli_main.rs` collects.
+#[derive(Debug, Clone)]
+pub struct MoveRejectsOptions {
+    pub config: RejectArchiveConfig,
+    pub project_filter: Option<String>,
+    pub target_filter: Option<String>,
+    pub dry_run: bool,
+    /// Registry slug for the DB being operated on. Stored in each archive
+    /// row so cross-DB tooling can later identify which rig produced a move.
+    pub source_db_slug: String,
+    /// Verbose: print per-image "tried this path, then that path" trace.
+    pub verbose: bool,
+}
+
+/// Summary counters returned from a `move_rejects` run. The CLI prints them
+/// at the end; tests assert on them directly.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MoveRejectsSummary {
+    pub planned: usize,
+    pub archived: usize,
+    pub already_archived: usize,
+    pub not_found_on_disk: usize,
+    pub errors: usize,
+}
+
+/// Run the move-rejects pipeline. Locates each rejected image on disk under
+/// one of `image_dirs`, computes the archive path, moves the primary plus
+/// any matching sidecars, then records the move both in the
+/// `psf_guard_archive` table and in a per-archive-root JSON manifest.
+///
+/// Returns a summary of what happened. Does not panic on per-image errors —
+/// it counts them in `summary.errors` and moves on, so a batch of 100 with
+/// one bad row still archives the other 99.
+///
+/// The function assumes:
+/// - `ensure_archive_schema(conn)` has already been called (caller does).
+/// - `require_target_scheduler_guid(conn)` has passed (caller does).
+/// - `options.config` is valid (resolved through `resolve_config`).
+pub fn move_rejects(
+    conn: &Connection,
+    image_dirs: &[String],
+    options: &MoveRejectsOptions,
+) -> Result<MoveRejectsSummary> {
+    let db = Database::new(conn);
+
+    let images = db
+        .query_images(
+            Some(GradingStatus::Rejected),
+            options.project_filter.as_deref(),
+            options.target_filter.as_deref(),
+            None,
+        )
+        .context("querying rejected images")?;
+
+    let mut summary = MoveRejectsSummary {
+        planned: images.len(),
+        ..Default::default()
+    };
+
+    // Build a directory tree per image_dir (lazily). Each tree caches the
+    // first-hit basename → absolute-path mapping that powers the fallback
+    // lookup when the date-aware path heuristics miss.
+    let mut trees: Vec<DirectoryTree> = Vec::with_capacity(image_dirs.len());
+    for dir in image_dirs {
+        match DirectoryTree::build_multiple(&[std::path::Path::new(dir)]) {
+            Ok(t) => trees.push(t),
+            Err(e) => {
+                eprintln!(
+                    "⚠️  Could not index image directory {} ({}); continuing without it",
+                    dir, e
+                );
+            }
+        }
+    }
+
+    for (image, _project_name, target_name) in images {
+        let Some(guid) = image.guid.as_deref() else {
+            eprintln!(
+                "⚠️  Skipping image id={} (rejected={}): no guid on row; \
+                 cannot archive without a stable key. Upgrade the TS plugin \
+                 to populate guid, or set the image to pending and re-grade.",
+                image.id,
+                image.reject_reason.as_deref().unwrap_or("")
+            );
+            summary.errors += 1;
+            continue;
+        };
+
+        // Already archived? Skip silently (idempotent re-runs).
+        if let Some(prior) = get_archive_record_by_guid(conn, guid)? {
+            if options.verbose {
+                println!("⏭️  {} already archived at {}", guid, prior.archive_path);
+            }
+            summary.already_archived += 1;
+            continue;
+        }
+
+        // Extract filename from the metadata JSON.
+        let filename = match parse_filename_from_metadata(&image.metadata) {
+            Some(name) => name,
+            None => {
+                eprintln!(
+                    "⚠️  Image id={} (guid={}) has no FileName in metadata; skipping",
+                    image.id, guid
+                );
+                summary.errors += 1;
+                continue;
+            }
+        };
+
+        // Locate on disk. Try each image_dir's get_possible_paths first,
+        // then fall back to the directory tree.
+        let mut located: Option<(String, PathBuf)> = None;
+        let date_str = image
+            .acquired_date
+            .and_then(|d| chrono::DateTime::from_timestamp(d, 0))
+            .map(|dt| dt.format("%Y-%m-%d").to_string())
+            .unwrap_or_default();
+        for (dir_idx, dir) in image_dirs.iter().enumerate() {
+            for candidate in get_possible_paths(dir, &date_str, &target_name, &filename) {
+                if candidate.exists() {
+                    located = Some((dir.clone(), candidate));
+                    break;
+                }
+            }
+            if located.is_none() {
+                if let Some(tree) = trees.get(dir_idx) {
+                    if let Some(path) = tree.find_file_first(&filename) {
+                        if path.exists() {
+                            located = Some((dir.clone(), path.clone()));
+                        }
+                    }
+                }
+            }
+            if located.is_some() {
+                break;
+            }
+        }
+
+        let Some((image_dir, source_path)) = located else {
+            if options.verbose {
+                eprintln!(
+                    "⚠️  Not found on disk: id={} guid={} filename={}",
+                    image.id, guid, filename
+                );
+            }
+            summary.not_found_on_disk += 1;
+            continue;
+        };
+
+        // Compute destination.
+        let archive_path = match archive_path_for(
+            Path::new(&image_dir),
+            &source_path,
+            options.config.depth,
+            &options.config.segment_name,
+        ) {
+            Some(p) => p,
+            None => {
+                eprintln!(
+                    "⚠️  Cannot compute archive path for {}: source not under image_dir {}",
+                    source_path.display(),
+                    image_dir
+                );
+                summary.errors += 1;
+                continue;
+            }
+        };
+
+        let sidecars = find_sidecars(&source_path, &options.config.sidecar_exts);
+
+        // Print plan line whether dry-run or not (always; users want to see
+        // what we did, not just what we will do).
+        let kind = if options.dry_run { "PLAN" } else { "MOVE" };
+        println!(
+            "{}  {} → {}",
+            kind,
+            source_path.display(),
+            archive_path.display()
+        );
+        for sc in &sidecars {
+            println!("       + sidecar {}", sc.display());
+        }
+
+        if options.dry_run {
+            continue;
+        }
+
+        // Execute. Roll back any partial moves for this image if anything
+        // mid-sequence fails.
+        let ctx = MoveContext {
+            guid,
+            image_id: image.id,
+            source_path: &source_path,
+            archive_path: &archive_path,
+            sidecars: &sidecars,
+            config: &options.config,
+            source_db_slug: &options.source_db_slug,
+        };
+        match execute_one_move(conn, &ctx) {
+            Ok(()) => summary.archived += 1,
+            Err(e) => {
+                eprintln!(
+                    "❌ Failed to archive id={} guid={}: {:#}",
+                    image.id, guid, e
+                );
+                summary.errors += 1;
+            }
+        }
+    }
+
+    Ok(summary)
+}
+
+fn parse_filename_from_metadata(metadata_json: &str) -> Option<String> {
+    let v = serde_json::from_str::<serde_json::Value>(metadata_json).ok()?;
+    let raw = v.get("FileName")?.as_str()?;
+    // FileName values can be full paths from NINA; we only want the basename
+    // (matches what `filter_rejected` does today).
+    let basename = raw.split(&['\\', '/'][..]).next_back().unwrap_or(raw);
+    Some(basename.to_string())
+}
+
+/// Per-image move context — kept as a struct rather than positional args so
+/// `execute_one_move` and `append_to_manifest` stay below clippy's
+/// too-many-arguments threshold and the call sites can't get fields mixed up.
+struct MoveContext<'a> {
+    guid: &'a str,
+    image_id: i32,
+    source_path: &'a Path,
+    archive_path: &'a Path,
+    sidecars: &'a [PathBuf],
+    config: &'a RejectArchiveConfig,
+    source_db_slug: &'a str,
+}
+
+fn execute_one_move(conn: &Connection, ctx: &MoveContext<'_>) -> Result<()> {
+    let MoveContext {
+        guid,
+        image_id,
+        source_path,
+        archive_path,
+        sidecars,
+        config,
+        source_db_slug,
+    } = *ctx;
+    let archive_parent = archive_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("archive_path has no parent: {:?}", archive_path))?;
+    std::fs::create_dir_all(archive_parent)
+        .with_context(|| format!("creating archive parent {}", archive_parent.display()))?;
+
+    // Track what we moved so we can undo on later failure.
+    let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
+
+    // Move the primary first.
+    std::fs::rename(source_path, archive_path).with_context(|| {
+        format!(
+            "renaming primary {} → {}",
+            source_path.display(),
+            archive_path.display()
+        )
+    })?;
+    moved.push((source_path.to_path_buf(), archive_path.to_path_buf()));
+
+    // Sidecars next. Each lands beside the primary in the archive dir.
+    let mut sidecar_names: Vec<String> = Vec::with_capacity(sidecars.len());
+    for src in sidecars {
+        let Some(name) = src.file_name() else {
+            // Shouldn't happen (we got these from a read_dir), but bail out.
+            rollback(&moved);
+            return Err(anyhow::anyhow!(
+                "sidecar path has no filename: {}",
+                src.display()
+            ));
+        };
+        let dest = archive_parent.join(name);
+        if let Err(e) = std::fs::rename(src, &dest) {
+            rollback(&moved);
+            return Err(anyhow::Error::new(e).context(format!(
+                "renaming sidecar {} → {}",
+                src.display(),
+                dest.display()
+            )));
+        }
+        sidecar_names.push(name.to_string_lossy().into_owned());
+        moved.push((src.clone(), dest));
+    }
+
+    // Record in the DB. If this insert fails (e.g. constraint violation),
+    // also roll the moves back so the on-disk state matches the DB.
+    let sidecar_json = serde_json::to_string(&sidecar_names).unwrap_or_else(|_| "[]".to_string());
+    let now = chrono::Utc::now().timestamp();
+    if let Err(e) = conn.execute(
+        "INSERT INTO psf_guard_archive
+         (acquired_image_guid, acquired_image_id, moved_at,
+          original_path, archive_path, segment_name, archive_depth,
+          sidecar_files, source_db_slug)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            guid,
+            image_id,
+            now,
+            source_path.to_string_lossy().as_ref(),
+            archive_path.to_string_lossy().as_ref(),
+            &config.segment_name,
+            config.archive_depth_as_i64(),
+            sidecar_json,
+            source_db_slug,
+        ],
+    ) {
+        rollback(&moved);
+        return Err(anyhow::Error::new(e).context("inserting psf_guard_archive row"));
+    }
+
+    // Manifest at the archive root (best-effort; if it fails, we log but
+    // don't roll back — the DB row is the authoritative source).
+    let manifest_ctx = ManifestEntryInput {
+        guid,
+        image_id,
+        moved_at: now,
+        original_path: source_path,
+        archive_path,
+        sidecar_files: &sidecar_names,
+        config,
+    };
+    if let Err(e) = append_to_manifest(archive_parent, &manifest_ctx) {
+        eprintln!(
+            "⚠️  Wrote DB row but could not append manifest at {}: {:#}",
+            archive_parent.display(),
+            e
+        );
+    }
+
+    Ok(())
+}
+
+fn rollback(moved: &[(PathBuf, PathBuf)]) {
+    for (src, dest) in moved.iter().rev() {
+        if let Err(e) = std::fs::rename(dest, src) {
+            eprintln!(
+                "❌ Rollback also failed: could not restore {} ← {}: {}",
+                src.display(),
+                dest.display(),
+                e
+            );
+        }
+    }
+}
+
+impl RejectArchiveConfig {
+    fn archive_depth_as_i64(&self) -> i64 {
+        self.depth as i64
+    }
+}
+
+// ── Manifest helper ──────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Default)]
+struct ManifestFile {
+    #[serde(default = "manifest_version_default")]
+    version: u32,
+    #[serde(default)]
+    moves: Vec<ManifestEntry>,
+}
+
+fn manifest_version_default() -> u32 {
+    1
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct ManifestEntry {
+    guid: String,
+    image_id: i32,
+    moved_at: i64,
+    original_path: String,
+    archive_path: String,
+    sidecar_files: Vec<String>,
+    segment_name: String,
+    archive_depth: u32,
+}
+
+struct ManifestEntryInput<'a> {
+    guid: &'a str,
+    image_id: i32,
+    moved_at: i64,
+    original_path: &'a Path,
+    archive_path: &'a Path,
+    sidecar_files: &'a [String],
+    config: &'a RejectArchiveConfig,
+}
+
+/// Atomically append one entry to the manifest at the archive root. Reads
+/// the existing file (if any), appends, writes to `.tmp`, then renames.
+fn append_to_manifest(archive_root: &Path, entry: &ManifestEntryInput<'_>) -> Result<()> {
+    let ManifestEntryInput {
+        guid,
+        image_id,
+        moved_at,
+        original_path,
+        archive_path,
+        sidecar_files,
+        config,
+    } = *entry;
+
+    let manifest_path = archive_root.join(".psf-guard-manifest.json");
+    let mut manifest: ManifestFile = if manifest_path.exists() {
+        let body = std::fs::read_to_string(&manifest_path)
+            .with_context(|| format!("reading {}", manifest_path.display()))?;
+        serde_json::from_str(&body).unwrap_or_default()
+    } else {
+        ManifestFile {
+            version: 1,
+            moves: Vec::new(),
+        }
+    };
+    manifest.moves.push(ManifestEntry {
+        guid: guid.to_string(),
+        image_id,
+        moved_at,
+        original_path: original_path.to_string_lossy().into_owned(),
+        archive_path: archive_path.to_string_lossy().into_owned(),
+        sidecar_files: sidecar_files.to_vec(),
+        segment_name: config.segment_name.clone(),
+        archive_depth: config.depth,
+    });
+
+    let tmp = manifest_path.with_extension("json.tmp");
+    let body = serde_json::to_string_pretty(&manifest).context("serializing manifest")?;
+    std::fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, &manifest_path).context("renaming manifest tmp into place")?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -747,7 +1188,7 @@ mod tests {
     #[test]
     fn find_sidecars_returns_empty_when_parent_missing() {
         let found = find_sidecars(
-            &std::path::Path::new("/no/such/dir/img.fits"),
+            std::path::Path::new("/no/such/dir/img.fits"),
             &[".xisf".to_string()],
         );
         assert!(found.is_empty());

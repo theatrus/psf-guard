@@ -341,7 +341,7 @@ mergeable commit.
 - [x] **A2** Per-DB `reject_archive` registry field (additive)
 - [x] **A3** `archive_path_for` pure function + tests
 - [x] **A4** `find_sidecars` discovery + tests
-- [ ] **A5** `psf-guard move-rejects` CLI command (multi-DB-aware) with transactional move + DB row + manifest entry
+- [x] **A5** `psf-guard move-rejects` CLI command (multi-DB-aware) with transactional move + DB row + manifest entry
 - [ ] **A6** Deprecation shim for `filter-rejected`
 - [ ] **A7** Integration test against a synthesized NINA-style tempdir
 

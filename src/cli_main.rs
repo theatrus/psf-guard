@@ -33,6 +33,78 @@ pub fn main() -> Result<()> {
                 .with_context(|| format!("Failed to open database: {}", cli.database))?;
             list_targets(&conn, &project)?;
         }
+        Commands::MoveRejects {
+            db,
+            dry_run,
+            reject_segment,
+            reject_depth,
+            sidecar_exts,
+            registry,
+            project,
+            target,
+            verbose,
+        } => {
+            use crate::commands::reject_archive::{
+                ensure_archive_schema, move_rejects, require_target_scheduler_guid, resolve_config,
+                MoveRejectsOptions,
+            };
+            use crate::db_registry::DbRegistry;
+            use std::path::PathBuf;
+
+            let registry_path = match registry {
+                Some(p) => PathBuf::from(p),
+                None => DbRegistry::default_path().context("resolving default registry path")?,
+            };
+            let db_registry = DbRegistry::load_or_init(&registry_path)
+                .with_context(|| format!("loading registry at {}", registry_path.display()))?;
+            let entry = db_registry
+                .find(&db)
+                .ok_or_else(|| anyhow::anyhow!(
+                    "No database with slug '{}' in {} (use `psf-guard server` once to register, or hand-edit the file).",
+                    db,
+                    registry_path.display(),
+                ))?;
+            if entry.image_dirs.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "Database '{}' has no image_dirs configured in the registry; \
+                     archiving needs to know where to search for files.",
+                    db
+                ));
+            }
+
+            let conn = Connection::open(&entry.db_path)
+                .with_context(|| format!("opening database at {}", entry.db_path))?;
+            require_target_scheduler_guid(&conn)?;
+            ensure_archive_schema(&conn)?;
+
+            let resolved = resolve_config(
+                entry.reject_archive.as_ref(),
+                reject_segment.as_deref(),
+                reject_depth,
+                sidecar_exts.as_deref(),
+            )?;
+
+            let options = MoveRejectsOptions {
+                config: resolved,
+                project_filter: project,
+                target_filter: target,
+                dry_run,
+                source_db_slug: entry.id.clone(),
+                verbose,
+            };
+
+            let summary = move_rejects(&conn, &entry.image_dirs, &options)?;
+            println!(
+                "\nReject archive {}: planned={}, archived={}, already_archived={}, not_found={}, errors={}",
+                if dry_run { "(dry-run)" } else { "(live)" },
+                summary.planned,
+                summary.archived,
+                summary.already_archived,
+                summary.not_found_on_disk,
+                summary.errors,
+            );
+        }
+
         Commands::FilterRejected {
             database,
             base_dir,

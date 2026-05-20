@@ -44,6 +44,57 @@ pub enum Commands {
     },
 
     /// Filter rejected files and move them to LIGHT_REJECT folders
+    /// Move rejected files out of the directory tree PixInsight scans.
+    ///
+    /// Walks `gradingStatus = 2` images for the specified database (selected
+    /// from the registry by slug), looks them up on disk under the DB's
+    /// configured image_dirs, and moves each one — plus same-stem sidecars —
+    /// to `<image_dir>/<P>/REJECT/<rest>` by default. Idempotent: re-runs
+    /// skip rows already recorded in the `psf_guard_archive` sibling table.
+    ///
+    /// See REJECT_ARCHIVE_PLAN.md for the full design. Eventually deprecates
+    /// `filter-rejected`.
+    MoveRejects {
+        /// Slug of the database (from the registry) to operate on.
+        #[arg(long)]
+        db: String,
+
+        /// Perform a dry run (print the plan; no files moved, no DB writes)
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Override the archive segment name (default `REJECT`).
+        #[arg(long)]
+        reject_segment: Option<String>,
+
+        /// Override the depth at which the segment is inserted (default 1 —
+        /// just below the project folder).
+        #[arg(long)]
+        reject_depth: Option<u32>,
+
+        /// Override the sidecar extension list (comma-separated, e.g.
+        /// `.xisf,.json,.txt`).
+        #[arg(long, value_delimiter = ',')]
+        sidecar_exts: Option<Vec<String>>,
+
+        /// Path to the database registry JSON file (defaults to the platform
+        /// config directory). Useful for dev/test isolation.
+        #[arg(long)]
+        registry: Option<String>,
+
+        /// Filter by project name (substring match)
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Filter by target name (substring match)
+        #[arg(short, long)]
+        target: Option<String>,
+
+        /// Verbose: print per-image trace including paths that didn't match.
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
     FilterRejected {
         /// Database file to use
         database: String,
