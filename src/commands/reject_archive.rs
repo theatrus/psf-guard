@@ -112,6 +112,87 @@ fn validate_segment_name(s: &str) -> Result<()> {
     Ok(())
 }
 
+/// Compute the archive destination path for a single rejected file.
+///
+/// Returns `None` if `source_path` doesn't lie underneath `image_dir`, in
+/// which case the caller should fall back to a different `image_dir` or
+/// skip the file. Returns `Some(path)` otherwise; the path is purely
+/// computed — no I/O, no parent-directory creation — so this function is
+/// trivial to unit-test.
+///
+/// The rule: walk the source path's segments relative to `image_dir` and
+/// insert `segment_name` after `depth` segments. With `depth = 1` and
+/// `segment_name = "REJECT"` (the defaults):
+///
+/// ```text
+/// image_dir = /Volumes/Astro/Targets
+/// source    = /Volumes/Astro/Targets/M31/2026-04-16/B/LIGHT/img.fits
+///                                    └── depth-1 anchor
+/// archive   = /Volumes/Astro/Targets/M31/REJECT/2026-04-16/B/LIGHT/img.fits
+/// ```
+///
+/// Edge cases:
+/// - File is shallower than `depth` (e.g. depth=1 but the file lives
+///   directly under `image_dir`): falls back to
+///   `<image_dir>/<segment>/<filename>`.
+/// - File is `image_dir` itself (no relative path): returns `None`.
+/// - `depth = 0`: equivalent to the shallow-fallback case for every file.
+///
+/// Validation of `segment_name` happens in `resolve_config`; this function
+/// assumes the caller already passed a valid name. Path separators in
+/// `segment_name` would produce a path that crosses out of `image_dir`,
+/// which is exactly what the validator prevents.
+pub fn archive_path_for(
+    image_dir: &std::path::Path,
+    source_path: &std::path::Path,
+    depth: u32,
+    segment_name: &str,
+) -> Option<std::path::PathBuf> {
+    use std::path::{Component, PathBuf};
+
+    let relative = source_path.strip_prefix(image_dir).ok()?;
+
+    // Only `Normal` segments count for depth math. A relative path stripped
+    // from an absolute prefix typically yields all-Normal components, but
+    // be defensive about `..` / `.` that could appear in pathological
+    // inputs.
+    let segments: Vec<&std::ffi::OsStr> = relative
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(s) => Some(s),
+            _ => None,
+        })
+        .collect();
+
+    if segments.is_empty() {
+        // source_path == image_dir; not a file we can archive.
+        return None;
+    }
+
+    let depth = depth as usize;
+    let mut archive = PathBuf::from(image_dir);
+
+    if depth == 0 || segments.len() <= depth {
+        // Either explicitly "drop into a single REJECT bucket per image_dir"
+        // or the file is too shallow to honor the requested depth — both
+        // collapse to the same shape: <image_dir>/<segment>/<relative>.
+        archive.push(segment_name);
+        for seg in &segments {
+            archive.push(seg);
+        }
+    } else {
+        for seg in &segments[..depth] {
+            archive.push(seg);
+        }
+        archive.push(segment_name);
+        for seg in &segments[depth..] {
+            archive.push(seg);
+        }
+    }
+
+    Some(archive)
+}
+
 fn validate_sidecar_ext(ext: &str) -> Result<()> {
     if !ext.starts_with('.') {
         return Err(anyhow::anyhow!(
@@ -432,6 +513,121 @@ mod tests {
         let bad_exts: Vec<String> = vec!["xisf".into()]; // missing dot
         let err = resolve_config(None, None, None, Some(&bad_exts)).unwrap_err();
         assert!(format!("{err}").contains("sidecar_exts"));
+    }
+
+    fn p(s: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(s)
+    }
+
+    #[test]
+    fn archive_path_for_inserts_at_depth_1_by_default() {
+        let archive = archive_path_for(
+            &p("/Volumes/Astro/Targets"),
+            &p("/Volumes/Astro/Targets/M31/2026-04-16/B/LIGHT/img.fits"),
+            1,
+            "REJECT",
+        )
+        .unwrap();
+        assert_eq!(
+            archive,
+            p("/Volumes/Astro/Targets/M31/REJECT/2026-04-16/B/LIGHT/img.fits")
+        );
+    }
+
+    #[test]
+    fn archive_path_for_handles_depth_2() {
+        let archive = archive_path_for(
+            &p("/data"),
+            &p("/data/M31/2026-04-16/LIGHT/img.fits"),
+            2,
+            "REJECT",
+        )
+        .unwrap();
+        assert_eq!(archive, p("/data/M31/2026-04-16/REJECT/LIGHT/img.fits"));
+    }
+
+    #[test]
+    fn archive_path_for_treats_project_plus_file_as_in_tree() {
+        // segments = ["M31", "img.fits"], depth = 1 → head=[M31], tail=[img.fits].
+        // REJECT lands inside the project, NOT above it — keeps per-project
+        // discoverability ("everything under M31 belongs to M31, including
+        // its rejects").
+        let archive = archive_path_for(&p("/data"), &p("/data/M31/img.fits"), 1, "REJECT").unwrap();
+        assert_eq!(archive, p("/data/M31/REJECT/img.fits"));
+    }
+
+    #[test]
+    fn archive_path_for_falls_back_when_file_is_at_image_dir_root() {
+        // Only one segment under image_dir (just the file); depth=1 needs
+        // depth+1=2 segments → fallback to image_dir/segment/file.
+        let archive = archive_path_for(&p("/data"), &p("/data/img.fits"), 1, "REJECT").unwrap();
+        assert_eq!(archive, p("/data/REJECT/img.fits"));
+    }
+
+    #[test]
+    fn archive_path_for_falls_back_when_depth_exceeds_available_segments() {
+        // Three segments under image_dir; depth=3 needs depth+1=4 → fallback.
+        let archive = archive_path_for(
+            &p("/data"),
+            &p("/data/M31/2026-04-16/img.fits"),
+            3,
+            "REJECT",
+        )
+        .unwrap();
+        assert_eq!(archive, p("/data/REJECT/M31/2026-04-16/img.fits"));
+    }
+
+    #[test]
+    fn archive_path_for_depth_zero_drops_into_single_bucket() {
+        let archive = archive_path_for(
+            &p("/data"),
+            &p("/data/M31/2026-04-16/LIGHT/img.fits"),
+            0,
+            "REJECT",
+        )
+        .unwrap();
+        assert_eq!(archive, p("/data/REJECT/M31/2026-04-16/LIGHT/img.fits"));
+    }
+
+    #[test]
+    fn archive_path_for_returns_none_when_source_outside_image_dir() {
+        let archive = archive_path_for(&p("/data"), &p("/other/M31/img.fits"), 1, "REJECT");
+        assert!(archive.is_none());
+    }
+
+    #[test]
+    fn archive_path_for_returns_none_when_source_is_image_dir_itself() {
+        let archive = archive_path_for(&p("/data"), &p("/data"), 1, "REJECT");
+        assert!(archive.is_none());
+    }
+
+    #[test]
+    fn archive_path_for_honors_custom_segment_name() {
+        let archive = archive_path_for(
+            &p("/data"),
+            &p("/data/M31/2026-04-16/LIGHT/img.fits"),
+            1,
+            "PSF-Guard-Rejects",
+        )
+        .unwrap();
+        assert_eq!(
+            archive,
+            p("/data/M31/PSF-Guard-Rejects/2026-04-16/LIGHT/img.fits")
+        );
+    }
+
+    #[test]
+    fn archive_path_for_handles_relative_paths_when_consistent() {
+        // Both paths relative — practical for tests that work inside a
+        // tempdir without needing absolute paths.
+        let archive = archive_path_for(
+            &p("targets"),
+            &p("targets/M31/2026-04-16/LIGHT/img.fits"),
+            1,
+            "REJECT",
+        )
+        .unwrap();
+        assert_eq!(archive, p("targets/M31/REJECT/2026-04-16/LIGHT/img.fits"));
     }
 
     #[test]
