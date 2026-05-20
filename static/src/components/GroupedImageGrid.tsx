@@ -223,17 +223,22 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     return sorted;
   }, [filteredImages, groupingMode]);
 
-  // Initialize expanded groups ONLY on very first load (no URL params, never initialized before)
-  const hasInitialized = useRef(false);
-  const initialLoad = useRef(true);
+  // Auto-expand all groups the first time image data arrives, but never
+  // re-trigger after the user has interacted (so a deliberate "collapse all"
+  // sticks). The earlier implementation also tracked an `initialLoad` ref
+  // which was reset to false on every effect run — that flipped before any
+  // data had arrived, so this effect never actually fired in production.
+  const hasAutoExpanded = useRef(false);
   useEffect(() => {
-    // Only auto-expand on the very first page load when there's no URL state and no previous user action
-    if (!hasInitialized.current && initialLoad.current && expandedGroups.size === 0 && imageGroups.length > 0) {
-      setExpandedGroups(new Set(imageGroups.map(g => g.filterName)));
-      hasInitialized.current = true;
+    if (hasAutoExpanded.current) return;
+    if (imageGroups.length === 0) return;
+    // Latch first; we've now "seen" data and shouldn't auto-expand again
+    // even if the user later clears expandedGroups.
+    hasAutoExpanded.current = true;
+    if (expandedGroups.size === 0) {
+      setExpandedGroups(new Set(imageGroups.map((g) => g.filterName)));
     }
-    initialLoad.current = false;
-  }, [imageGroups.length, expandedGroups.size, setExpandedGroups]);
+  }, [imageGroups, expandedGroups.size, setExpandedGroups]);
 
   // Reset expanded groups only when grouping mode actually changes
   const prevGroupingMode = useRef(groupingMode);

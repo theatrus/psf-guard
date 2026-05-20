@@ -49,25 +49,18 @@ test('click View Project from overview lands on the grid scoped to that DB', asy
   await expect(page).toHaveURL(/[#?].*db=imaging-rig-e2e/);
   await expect(page).toHaveURL(/[#?].*project=\d+/);
 
-  // The group header for the B filter should render even when collapsed.
-  // (Cards live inside collapsible groups; expand-on-load is racy, so we
-  // assert the more stable signal here. See the direct-deep-link test for
-  // the card-visible assertion.)
-  await expect(page.getByRole('heading', { name: 'B', exact: true })).toBeVisible({
-    timeout: 15_000,
-  });
+  // With auto-expand on first data arrival, the cards mount directly.
+  const firstCard = page.locator('.image-card').first();
+  await expect(firstCard).toBeVisible({ timeout: 15_000 });
 });
 
 test('direct deep link to the grid loads when ?db= matches a configured DB', async ({
   page,
 }) => {
-  // Hash-router URLs: /#/grid?... The fixture has a single B-filter group;
-  // pre-expand it via the `expanded` URL param so .image-card actually
-  // mounts. (The auto-expand effect in GroupedImageGrid is racy with the
-  // initial data load.)
-  await page.goto(
-    `/#/grid?db=${encodeURIComponent(dbId)}&project=1&expanded=B`
-  );
+  // Hash-router URLs: /#/grid?... GroupedImageGrid auto-expands its filter
+  // groups the first time image data arrives, so a deep link with no
+  // `expanded=` param should still show cards.
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
   await expect(page.locator('.image-card').first()).toBeVisible({
     timeout: 15_000,
   });

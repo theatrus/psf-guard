@@ -34,6 +34,9 @@ export default defineConfig({
     actionTimeout: 5_000,
     navigationTimeout: 10_000,
     trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
+    // `video: 'retain-on-failure'` would also help debug interaction races,
+    // but the trace.zip already covers that and videos balloon CI artifacts.
   },
 
   projects: [
