@@ -169,6 +169,70 @@ jobs:
         name: psf-guard-macos-x64
         path: target/release/psf-guard
 
+  e2e:
+    name: Playwright end-to-end (Linux)
+    runs-on: ubuntu-22.04
+    needs: test
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Install OpenCV runtime libs
+      # The binary was built against libopencv-dev on the test job; we need
+      # the matching runtime libraries available on this runner to load it.
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libopencv-dev
+
+    - name: Install Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version: '24'
+        cache: 'npm'
+        cache-dependency-path: static/package-lock.json
+
+    - name: Install frontend deps
+      run: |
+        cd static
+        npm ci
+
+    - name: Cache Playwright browsers
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/ms-playwright
+        key: ${{ runner.os }}-playwright-${{ hashFiles('static/package-lock.json') }}
+
+    - name: Install Playwright Chromium
+      run: |
+        cd static
+        npx playwright install --with-deps chromium
+
+    - name: Download psf-guard binary
+      uses: actions/download-artifact@v6
+      with:
+        name: psf-guard-linux-x64
+        path: ${{ runner.temp }}/psf-guard-bin
+
+    - name: Make binary executable
+      run: chmod +x "${{ runner.temp }}/psf-guard-bin/psf-guard"
+
+    - name: Run Playwright tests
+      env:
+        PSF_GUARD_E2E_BINARY: ${{ runner.temp }}/psf-guard-bin/psf-guard
+        CI: 'true'
+      run: |
+        cd static
+        npx playwright test
+
+    - name: Upload Playwright report on failure
+      if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        name: playwright-report
+        path: |
+          static/playwright-report
+          static/test-results
+        retention-days: 14
+
   test-tauri:
     name: Test Tauri Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

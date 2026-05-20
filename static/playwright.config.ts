@@ -44,11 +44,15 @@ export default defineConfig({
   ],
 
   webServer: {
-    // Build (if needed) and run the CLI server against an isolated registry
-    // and cache directory. --allow-database-management lets the e2e specs
-    // exercise the CRUD UI.
+    // Run the CLI server against an isolated registry and cache directory.
+    // --allow-database-management lets the e2e specs exercise the CRUD UI.
+    //
+    // PSF_GUARD_E2E_BINARY (set in CI) skips the cargo build and points
+    // straight at a prebuilt binary. Locally, leave it unset and we'll
+    // `cargo run --release` from the repo root.
     command:
-      `cd .. && cargo run --release --bin psf-guard -- server ` +
+      `${process.env.PSF_GUARD_E2E_BINARY ?? 'cd .. && cargo run --release --bin psf-guard --'} ` +
+      `server ` +
       `--port ${PORT} ` +
       `--registry ${path.join(TMP_BASE, 'registry.json')} ` +
       `--cache-dir ${path.join(TMP_BASE, 'cache')} ` +
