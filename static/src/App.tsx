@@ -36,13 +36,22 @@ function App() {
         // file present but pointing at a missing DB). In browser mode fall
         // back to the HTTP listing.
         let hasValid = false;
+        let managementAllowed = tauriDetected;
         if (tauriDetected) {
           hasValid = await tauriConfig.isConfigurationValid();
         } else {
-          const dbs = await apiClient.getDatabases();
+          const [dbs, info] = await Promise.all([
+            apiClient.getDatabases(),
+            apiClient.getServerInfo(),
+          ]);
           hasValid = dbs.length > 0;
+          managementAllowed = info.allow_database_management;
         }
-        if (!cancelled && !hasValid) {
+        // Only auto-pop the modal when we can actually do something about it.
+        // If management is disabled and there are no DBs, leave the user on
+        // the overview's empty state where they can read the explanation
+        // without a modal blocking them.
+        if (!cancelled && !hasValid && managementAllowed) {
           console.log('No databases configured — opening settings modal');
           setShowSettings(true);
         }

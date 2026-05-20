@@ -104,6 +104,7 @@ async fn crud_lifecycle_adds_uses_and_removes_a_database() {
         .unwrap(),
     );
     state.set_registry_path(Some(registry_path.clone()));
+    state.set_allow_database_management(true);
 
     // 1) Empty listing.
     let (status, body) =
@@ -222,6 +223,7 @@ async fn add_database_with_invalid_slug_is_rejected() {
         .unwrap(),
     );
     state.set_registry_path(Some(registry_path));
+    state.set_allow_database_management(true);
 
     let (status, _) = json_request(
         build_app(state.clone()),
@@ -262,6 +264,7 @@ async fn cache_dir_is_per_slug_and_follows_rename() {
         .unwrap(),
     );
     state.set_registry_path(Some(registry_path));
+    state.set_allow_database_management(true);
 
     let (_, body) = json_request(
         build_app(state.clone()),
@@ -307,6 +310,71 @@ async fn cache_dir_is_per_slug_and_follows_rename() {
 }
 
 #[tokio::test]
+async fn crud_returns_403_when_management_flag_is_off() {
+    // Registry IS configured (server could persist), but the operator did
+    // not opt into `--allow-database-management`. CRUD must be forbidden so
+    // a reachable client cannot rewrite the user's DB list.
+    let dir = tempdir().unwrap();
+    let registry_path = dir.path().join("config.json");
+    let cache_dir = dir.path().join("cache");
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    let db_path = dir.path().join("scratch.sqlite");
+    create_sqlite(&db_path);
+    let image_dir = dir.path().join("imgs");
+    std::fs::create_dir_all(&image_dir).unwrap();
+
+    let state = Arc::new(
+        AppState::from_databases(
+            vec![],
+            cache_dir.to_string_lossy().into_owned(),
+            psf_guard::cli::PregenerationConfig::default(),
+        )
+        .unwrap(),
+    );
+    state.set_registry_path(Some(registry_path));
+    // Note: set_allow_database_management NOT called → defaults to false.
+
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        "/api/databases",
+        Some(serde_json::json!({
+            "name": "Try",
+            "db_path": db_path.to_string_lossy(),
+            "image_dirs": [image_dir.to_string_lossy()],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("allow-database-management"));
+
+    // PUT and DELETE are also gated.
+    let (status, _) = json_request(
+        build_app(state.clone()),
+        "PUT",
+        "/api/databases/anything",
+        Some(serde_json::json!({"name": "x"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = json_request(
+        build_app(state.clone()),
+        "DELETE",
+        "/api/databases/anything",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Read-only listing still works.
+    let (status, _) = json_request(build_app(state), "GET", "/api/databases", None).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn crud_is_disabled_when_no_registry_path_configured() {
     let dir = tempdir().unwrap();
     let cache_dir = dir.path().join("cache");
@@ -324,7 +392,10 @@ async fn crud_is_disabled_when_no_registry_path_configured() {
         )
         .unwrap(),
     );
-    // Note: state.set_registry_path is NOT called.
+    // Note: state.set_registry_path is NOT called. Also management flag is off.
+    // Both gates need to clear; the order doesn't matter — either failing path
+    // is acceptable.
+    state.set_allow_database_management(true);
 
     let (status, _) = json_request(
         build_app(state),

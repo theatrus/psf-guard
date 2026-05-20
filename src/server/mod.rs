@@ -39,6 +39,9 @@ pub struct ServerConfig {
     /// CRUD endpoints (`POST/PUT/DELETE /api/databases/...`) persist runtime
     /// changes here. `None` disables those endpoints.
     pub registry_path: Option<PathBuf>,
+    /// Allow HTTP clients to mutate the configured database list. Off by
+    /// default for CLI servers; Tauri always enables it.
+    pub allow_database_management: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -50,6 +53,7 @@ pub async fn run_server(
     port: u16,
     pregeneration_config: PregenerationConfig,
     registry_path: Option<PathBuf>,
+    allow_database_management: bool,
 ) -> anyhow::Result<()> {
     // Initialize tracing with environment-based filtering (for CLI mode)
     // Set RUST_LOG=debug for debug logs, RUST_LOG=info for info logs, etc.
@@ -72,6 +76,7 @@ pub async fn run_server(
         port,
         pregeneration_config,
         registry_path,
+        allow_database_management,
     };
 
     run_server_internal(config, None).await
@@ -134,6 +139,18 @@ async fn run_server_internal(
         Ok(state) => {
             tracing::info!("✅ Application state initialized successfully");
             state.set_registry_path(config.registry_path.clone());
+            state.set_allow_database_management(config.allow_database_management);
+            if config.allow_database_management {
+                tracing::warn!(
+                    "⚠️ Database management via HTTP is ENABLED. Anyone who can reach \
+                     this server can add/edit/remove configured databases."
+                );
+            } else {
+                tracing::info!(
+                    "🔒 Database management via HTTP is disabled. Pass \
+                     --allow-database-management to the server command to enable."
+                );
+            }
             Arc::new(state)
         }
         Err(e) => {

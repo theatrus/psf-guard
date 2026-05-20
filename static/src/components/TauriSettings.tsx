@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
 import type { DbEntry, DbRegistry } from '../utils/tauri';
 import { apiClient } from '../api/client';
@@ -29,6 +29,16 @@ interface TauriSettingsProps {
 export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
   const isTauri = isTauriApp();
   const queryClient = useQueryClient();
+  const { data: serverInfo } = useQuery({
+    queryKey: ['serverInfo'],
+    queryFn: apiClient.getServerInfo,
+    staleTime: 5 * 60 * 1000,
+  });
+  // CRUD requires either Tauri (in-process commands always allowed) or the
+  // CLI server having been launched with --allow-database-management. The
+  // gate is enforced server-side; we mirror it here to hide UI that would
+  // just 403.
+  const managementAllowed = isTauri || (serverInfo?.allow_database_management ?? false);
   const [registry, setRegistry] = useState<DbRegistry | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
@@ -64,15 +74,15 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
         };
       }
       setRegistry(reg);
-      // If empty, default to showing the add form so the welcome flow lands
-      // somewhere usable.
-      setShowAddForm(!reg || reg.databases.length === 0);
+      // If empty AND we're allowed to mutate, default to showing the add
+      // form so the welcome flow lands somewhere usable.
+      setShowAddForm((!reg || reg.databases.length === 0) && managementAllowed);
     } catch (err) {
       console.error('Failed to load registry:', err);
     } finally {
       setIsLoading(false);
     }
-  }, [isTauri]);
+  }, [isTauri, managementAllowed]);
 
   useEffect(() => {
     if (!isTauriApp() || !isOpen) return;
@@ -273,10 +283,27 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
         </div>
 
         <div className="modal-body">
-          {!hasDatabases && (
+          {!hasDatabases && managementAllowed && (
             <div className="welcome-message">
-              <h3>🚀 Welcome to PSF Guard Desktop!</h3>
+              <h3>🚀 Welcome to PSF Guard!</h3>
               <p>Configure one or more N.I.N.A. scheduler databases to get started.</p>
+            </div>
+          )}
+
+          {!managementAllowed && (
+            <div className="welcome-message" style={{ borderColor: 'var(--color-border-warning, #c62)' }}>
+              <h3>🔒 Database management is read-only</h3>
+              <p>
+                This server was launched without
+                <code style={{ margin: '0 4px' }}>--allow-database-management</code>,
+                so the configured database list cannot be changed from the
+                browser. Add databases on the command line —
+                <code style={{ margin: '0 4px' }}>
+                  psf-guard server &lt;db&gt; &lt;image-dirs…&gt;
+                </code>
+                — or restart the server with the flag to enable add/edit/remove
+                here.
+              </p>
             </div>
           )}
 
@@ -305,27 +332,29 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                     </div>
                   )}
                 </div>
-                <div className="db-row-actions">
-                  <button
-                    className="browse-button"
-                    onClick={() => startEdit(entry)}
-                    disabled={isApplying}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    className="remove-button"
-                    onClick={() => handleRemove(entry)}
-                    disabled={isApplying}
-                    title="Remove this database"
-                  >
-                    Remove
-                  </button>
-                </div>
+                {managementAllowed && (
+                  <div className="db-row-actions">
+                    <button
+                      className="browse-button"
+                      onClick={() => startEdit(entry)}
+                      disabled={isApplying}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="remove-button"
+                      onClick={() => handleRemove(entry)}
+                      disabled={isApplying}
+                      title="Remove this database"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
 
-            {!showAddForm && (
+            {managementAllowed && !showAddForm && (
               <button
                 className="add-directory-button"
                 onClick={startAdd}
@@ -336,7 +365,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
             )}
           </div>
 
-          {showAddForm && (
+          {managementAllowed && showAddForm && (
             <div className="settings-section">
               <h3>{editingId ? 'Edit Database' : 'Add Database'}</h3>
 

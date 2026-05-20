@@ -383,6 +383,14 @@ pub enum Commands {
         /// Cache expiration time for pre-generated images (default: 1y)
         #[arg(long, default_value = "1y")]
         cache_expiry: String,
+
+        /// Allow HTTP clients to add/edit/remove databases via the
+        /// `/api/databases` endpoints. Off by default because the same UI
+        /// could let any reachable client mutate the user's configured DB list
+        /// and image directories. Enable only when the server is bound to a
+        /// trusted interface (e.g. localhost). Tauri mode always enables it.
+        #[arg(long)]
+        allow_database_management: bool,
     },
 }
 

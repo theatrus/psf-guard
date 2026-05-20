@@ -82,6 +82,8 @@ export interface PreviewOptions {
 export interface ServerInfo {
   version: string;
   cache_directory: string;
+  /** Whether POST/PUT/DELETE /api/databases are accepted on this server. */
+  allow_database_management: boolean;
 }
 
 /** One configured database, returned by /api/databases. */

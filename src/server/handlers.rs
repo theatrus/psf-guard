@@ -52,6 +52,7 @@ pub async fn get_server_info(
     let info = ServerInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         cache_directory: state.cache_dir_root.clone(),
+        allow_database_management: state.database_management_allowed(),
     };
 
     Ok(Json(ApiResponse::success(info)))
@@ -84,6 +85,22 @@ fn require_registry_path(state: &AppState) -> Result<std::path::PathBuf, AppErro
     })
 }
 
+/// Gate for mutating endpoints on `/api/databases`. Returns 403 when the
+/// server was launched without `--allow-database-management`. Anyone reachable
+/// over the network could otherwise re-point or remove the user's configured
+/// databases.
+fn require_database_management_allowed(state: &AppState) -> Result<(), AppError> {
+    if state.database_management_allowed() {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(
+            "database management is disabled on this server. Restart the server \
+             with --allow-database-management to enable runtime add/edit/remove."
+                .into(),
+        ))
+    }
+}
+
 fn summary_of(ctx: &crate::server::database_context::DatabaseContext) -> DatabaseSummary {
     DatabaseSummary {
         id: ctx.id.clone(),
@@ -103,6 +120,7 @@ pub async fn add_database_route(
     use crate::db_registry::DbRegistry;
     use crate::server::database_context::DatabaseContext;
 
+    require_database_management_allowed(&state)?;
     let registry_path = require_registry_path(&state)?;
     let mut reg = DbRegistry::load_or_init(&registry_path)
         .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
@@ -151,6 +169,7 @@ pub async fn update_database_route(
     use crate::db_registry::DbRegistry;
     use crate::server::database_context::DatabaseContext;
 
+    require_database_management_allowed(&state)?;
     let registry_path = require_registry_path(&state)?;
     let mut reg = DbRegistry::load_or_init(&registry_path)
         .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
@@ -237,6 +256,7 @@ pub async fn remove_database_route(
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
     use crate::db_registry::DbRegistry;
 
+    require_database_management_allowed(&state)?;
     let registry_path = require_registry_path(&state)?;
     let mut reg = DbRegistry::load_or_init(&registry_path)
         .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
@@ -2302,6 +2322,7 @@ pub enum AppError {
     NotFound,
     DatabaseError,
     BadRequest(String),
+    Forbidden(String),
     InternalError(String),
     NotImplemented,
 }
@@ -2321,6 +2342,14 @@ impl IntoResponse for AppError {
                 tracing::warn!("❌ Bad request: {}", msg);
                 return (
                     StatusCode::BAD_REQUEST,
+                    Json(ApiResponse::<()>::error(msg.clone())),
+                )
+                    .into_response();
+            }
+            AppError::Forbidden(msg) => {
+                tracing::warn!("🚫 Forbidden: {}", msg);
+                return (
+                    StatusCode::FORBIDDEN,
                     Json(ApiResponse::<()>::error(msg.clone())),
                 )
                     .into_response();

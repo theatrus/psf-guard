@@ -261,6 +261,9 @@ async fn start_server_for_tauri(
         port,
         pregeneration_config: server_config.pregeneration,
         registry_path: Some(registry_path),
+        // The Tauri app is local-only and trusted; always enable CRUD so the
+        // settings panel can add/remove databases without an extra flag.
+        allow_database_management: true,
     };
 
     crate::server::run_server_with_shutdown(server_config, shutdown_rx).await

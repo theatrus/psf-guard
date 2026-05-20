@@ -38,6 +38,11 @@ pub struct AppState {
     /// set, the CRUD endpoints (`POST/PUT/DELETE /api/databases/...`) persist
     /// changes here. `None` disables the CRUD endpoints (e.g. in tests).
     pub registry_path: RwLock<Option<PathBuf>>,
+    /// Whether HTTP clients are allowed to call the database CRUD endpoints.
+    /// Required *in addition to* `registry_path` being set, so an
+    /// untrustworthy client cannot mutate the user's configuration even if
+    /// the server has a registry to persist to.
+    pub allow_database_management: RwLock<bool>,
 }
 
 #[derive(Clone)]
@@ -296,13 +301,25 @@ impl AppState {
             pregeneration_config,
             cache_dir_root: cache_dir,
             registry_path: RwLock::new(None),
+            allow_database_management: RwLock::new(false),
         })
     }
 
     /// Attach the path of the on-disk registry that mirrors this state.
-    /// Enables the CRUD endpoints to persist runtime changes.
+    /// Required (but not sufficient) for the CRUD endpoints to function — see
+    /// also `set_allow_database_management`.
     pub fn set_registry_path(&self, path: Option<PathBuf>) {
         *self.registry_path.write().unwrap() = path;
+    }
+
+    /// Toggle the database CRUD endpoints. When false, mutating routes on
+    /// `/api/databases` return 403.
+    pub fn set_allow_database_management(&self, allow: bool) {
+        *self.allow_database_management.write().unwrap() = allow;
+    }
+
+    pub fn database_management_allowed(&self) -> bool {
+        *self.allow_database_management.read().unwrap()
     }
 
     /// Convenience constructor for a single database. Computes a default slug
@@ -358,6 +375,7 @@ impl AppState {
             pregeneration_config: crate::cli::PregenerationConfig::default(),
             cache_dir_root: "/tmp/psf-guard-test".to_string(),
             registry_path: RwLock::new(None),
+            allow_database_management: RwLock::new(false),
         }
     }
 }

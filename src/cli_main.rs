@@ -229,6 +229,7 @@ pub fn main() -> Result<()> {
             pregenerate_annotated,
             pregenerate_all,
             cache_expiry,
+            allow_database_management,
         } => {
             use crate::config::Config;
             use crate::db_registry::DbRegistry;
@@ -311,6 +312,7 @@ pub fn main() -> Result<()> {
                     server_port,
                     pregeneration_config,
                     Some(registry_path),
+                    allow_database_management,
                 )
                 .await
             })?;

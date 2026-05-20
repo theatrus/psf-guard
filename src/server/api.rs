@@ -230,6 +230,9 @@ pub struct PreviewOptions {
 pub struct ServerInfo {
     pub version: String,
     pub cache_directory: String,
+    /// Whether `/api/databases` accepts mutating requests (POST/PUT/DELETE).
+    /// Frontend hides add/edit/remove controls when false.
+    pub allow_database_management: bool,
 }
 
 /// Summary of one configured database, returned by `GET /api/databases`.

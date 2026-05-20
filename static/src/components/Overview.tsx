@@ -1,5 +1,7 @@
 import { useState, useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { apiClient } from '../api/client';
 import type { ProjectOverview, TargetOverview, DateRange } from '../api/types';
 import {
   useAllDatabases,
@@ -16,6 +18,11 @@ export default function Overview() {
   const [collapsedDbs, setCollapsedDbs] = useState<Set<string>>(new Set());
 
   const { data: databases } = useAllDatabases();
+  const { data: serverInfo } = useQuery({
+    queryKey: ['serverInfo'],
+    queryFn: apiClient.getServerInfo,
+    staleTime: 5 * 60 * 1000,
+  });
   const { data: overallStats, isLoading: statsLoading } = useMergedOverallStats();
   const { data: projects, isLoading: projectsLoading } = useMergedProjectsOverview();
   const { data: targets, isLoading: targetsLoading } = useMergedTargetsOverview();
@@ -105,16 +112,36 @@ export default function Overview() {
   }
 
   if (!databases || databases.length === 0) {
+    const managementAllowed = serverInfo?.allow_database_management ?? false;
     return (
       <div className="overview-empty">
         <h2>No databases configured</h2>
-        <p>Add a N.I.N.A. scheduler database to get started.</p>
-        <button
-          className="action-button primary"
-          onClick={() => window.dispatchEvent(new CustomEvent('psf-guard:open-settings'))}
-        >
-          Open Settings
-        </button>
+        {managementAllowed ? (
+          <>
+            <p>Add a N.I.N.A. scheduler database to get started.</p>
+            <button
+              className="action-button primary"
+              onClick={() => window.dispatchEvent(new CustomEvent('psf-guard:open-settings'))}
+            >
+              Open Settings
+            </button>
+          </>
+        ) : (
+          <>
+            <p>
+              This server doesn't permit configuration changes from the
+              browser. Register a database on the command line:
+            </p>
+            <pre className="code-block">
+              psf-guard server &lt;db.sqlite&gt; &lt;image-dir&gt;
+            </pre>
+            <p>
+              …or restart with{' '}
+              <code>--allow-database-management</code> to enable in-browser
+              settings.
+            </p>
+          </>
+        )}
       </div>
     );
   }
