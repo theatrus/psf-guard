@@ -1,0 +1,27 @@
+{
+  "$comment": "Manifest of FITS files used by the e2e suite. Files are too large to commit; global-setup.ts downloads them from `base_url + name`, caches them under ~/.cache/psf-guard-e2e-fixtures/, and verifies sha256 before use. Update `release_tag` whenever a new release tag is published; the rest derives from it. Override the base URL entirely with PSF_GUARD_E2E_FIXTURE_BASE.",
+  "release_tag": "e2e-fixtures-v1",
+  "base_url": "https://github.com/theatrus/psf-guard/releases/download/e2e-fixtures-v1",
+  "files": [
+    {
+      "name": "2026-04-16_22-25-11_B_-10.00_60.00s_0028.fits",
+      "sha256": "788f9790b3387de0641d2c3b7c834714be7d79bdcfd07b73db02bc72e791e6a3",
+      "size_mb": 117
+    },
+    {
+      "name": "2026-04-16_22-26-17_B_-10.00_60.00s_0029.fits",
+      "sha256": "b89a6ca9e8483bf6228c7e939183efb37c40e6a75bff1ef5453a970f62028f1d",
+      "size_mb": 117
+    },
+    {
+      "name": "2026-04-16_22-27-23_B_-10.00_60.00s_0030.fits",
+      "sha256": "4609d336b543f61ccfe612909c6e470596001967608ddc71076e0bab4d9bbf06",
+      "size_mb": 117
+    },
+    {
+      "name": "2026-04-17_00-06-56_B_-10.00_60.00s_0104.fits",
+      "sha256": "14cc1e4a35b98a0f8cb4ae9c7736e603f2ce51eebbfaab3f4be22f09e1f56532",
+      "size_mb": 117
+    }
+  ]
+}

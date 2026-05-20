@@ -206,6 +206,14 @@ jobs:
         cd static
         npx playwright install --with-deps chromium
 
+    - name: Cache FITS fixtures
+      # ~470 MB across four files; reuse between runs when the manifest
+      # hasn't changed (sha256 of each file is checked at download time).
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/psf-guard-e2e-fixtures
+        key: ${{ runner.os }}-e2e-fits-${{ hashFiles('static/e2e/fixtures/manifest.json') }}
+
     - name: Download psf-guard binary
       uses: actions/download-artifact@v6
       with:
