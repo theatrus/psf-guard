@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
 import type { DbEntry, DbRegistry } from '../utils/tauri';
+import { apiClient } from '../api/client';
+import type { DatabaseSummary } from '../api/types';
 import './TauriSettings.css';
 
 interface TauriSettingsProps {
@@ -16,10 +19,16 @@ interface TauriSettingsProps {
  * not exposed here (breaks every existing bookmark for that DB) — users who
  * really want to rename a slug can hand-edit `config.json`.
  *
- * Applies changes via the in-process Tauri commands directly, then asks the
- * embedded server to restart so the new registry is loaded.
+ * Works in both Tauri and browser/CLI-server mode:
+ * - Tauri mode prefers the in-process commands so add/edit feel native and
+ *   file pickers open OS dialogs.
+ * - Browser mode falls back to HTTP `POST/PUT/DELETE /api/databases` so the
+ *   same UI is usable when the server was launched via `psf-guard server`.
+ *   The file pickers degrade to plain text inputs.
  */
 export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
+  const isTauri = isTauriApp();
+  const queryClient = useQueryClient();
   const [registry, setRegistry] = useState<DbRegistry | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
@@ -35,7 +44,25 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
   const reload = useCallback(async () => {
     setIsLoading(true);
     try {
-      const reg = await tauriConfig.getCurrentConfiguration();
+      // Prefer the Tauri command (returns the full registry including
+      // schema_version and active_db_id); fall back to the HTTP listing
+      // which gives us enough to render the UI.
+      let reg: DbRegistry | null = null;
+      if (isTauri) {
+        reg = await tauriConfig.getCurrentConfiguration();
+      }
+      if (!reg) {
+        const summaries: DatabaseSummary[] = await apiClient.getDatabases();
+        reg = {
+          schema_version: 2,
+          databases: summaries.map((s) => ({
+            id: s.id,
+            name: s.name,
+            db_path: s.database_path,
+            image_dirs: s.image_directories,
+          })),
+        };
+      }
       setRegistry(reg);
       // If empty, default to showing the add form so the welcome flow lands
       // somewhere usable.
@@ -45,7 +72,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [isTauri]);
 
   useEffect(() => {
     if (!isTauriApp() || !isOpen) return;
@@ -74,17 +101,26 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setFormName('');
     setFormImageDirs([]);
     setShowAddForm(true);
+    setFormDbPath('');
 
-    // Try to seed with the default N.I.N.A. database path (Windows only).
-    try {
-      const def = await tauriFileSystem.getDefaultNinaPath();
-      setFormDbPath(def || '');
-    } catch {
-      setFormDbPath('');
+    if (isTauri) {
+      // Try to seed with the default N.I.N.A. database path (Windows only).
+      try {
+        const def = await tauriFileSystem.getDefaultNinaPath();
+        if (def) setFormDbPath(def);
+      } catch {
+        // Ignore — the form just stays empty.
+      }
     }
   };
 
   const handlePickDbPath = async () => {
+    if (!isTauri) {
+      setStatusMessage(
+        'File picker is only available in the desktop app — paste the path into the field.'
+      );
+      return;
+    }
     try {
       const path = await tauriFileSystem.pickDatabaseFile();
       if (path) setFormDbPath(path);
@@ -94,6 +130,12 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
   };
 
   const handleAddImageDir = async () => {
+    if (!isTauri) {
+      setStatusMessage(
+        'Image directory picker is only available in the desktop app — type the path below and press the Add button.'
+      );
+      return;
+    }
     try {
       const path = await tauriFileSystem.pickImageDirectory();
       if (path && !formImageDirs.includes(path)) {
@@ -101,6 +143,16 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
       }
     } catch (err) {
       console.error('pickImageDirectory failed:', err);
+    }
+  };
+
+  // Browser-mode fallback: manually add an image directory from a text input.
+  const [pendingImageDir, setPendingImageDir] = useState('');
+  const handleAddManualImageDir = () => {
+    const trimmed = pendingImageDir.trim();
+    if (trimmed && !formImageDirs.includes(trimmed)) {
+      setFormImageDirs([...formImageDirs, trimmed]);
+      setPendingImageDir('');
     }
   };
 
@@ -123,38 +175,35 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setStatusMessage('');
 
     try {
-      if (editingId && registry) {
-        // Edit-in-place: replace the matching entry in the registry and save.
-        const updated: DbRegistry = {
-          ...registry,
-          databases: registry.databases.map((d) =>
-            d.id === editingId
-              ? {
-                  ...d,
-                  name: inferredName,
-                  db_path: formDbPath.trim(),
-                  image_dirs: formImageDirs,
-                }
-              : d
-          ),
-        };
-        const ok = await tauriConfig.saveConfiguration(updated);
-        if (!ok) throw new Error('saveConfiguration returned false');
+      // Use HTTP endpoints — they're available in both Tauri and CLI-server
+      // mode, and updating live `AppState.databases` rather than waiting for
+      // a server restart.
+      if (editingId) {
+        await apiClient.updateDatabase(editingId, {
+          name: inferredName,
+          db_path: formDbPath.trim(),
+          image_dirs: formImageDirs,
+        });
       } else {
-        const added = await tauriConfig.addDatabase(
-          inferredName,
-          formDbPath.trim(),
-          formImageDirs
-        );
-        if (!added) throw new Error('addDatabase returned null');
+        await apiClient.addDatabase({
+          name: inferredName,
+          db_path: formDbPath.trim(),
+          image_dirs: formImageDirs,
+        });
       }
+
+      // Invalidate every per-DB query so the merged-overview hooks pull
+      // fresh data for the just-added/edited DB.
+      queryClient.invalidateQueries({ queryKey: ['databases'] });
+      queryClient.invalidateQueries({ queryKey: ['db'] });
 
       await reload();
       resetForm();
       setStatusMessage('Saved.');
     } catch (err) {
       console.error('save failed:', err);
-      setStatusMessage(`Failed to save: ${err}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      setStatusMessage(`Failed to save: ${msg}`);
     } finally {
       setIsApplying(false);
     }
@@ -164,8 +213,10 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     if (!confirm(`Remove "${entry.name}" from the configured databases?`)) return;
     setIsApplying(true);
     try {
-      const ok = await tauriConfig.removeDatabase(entry.id);
+      const ok = await apiClient.removeDatabase(entry.id);
       if (ok) {
+        queryClient.invalidateQueries({ queryKey: ['databases'] });
+        queryClient.invalidateQueries({ queryKey: ['db', entry.id] });
         await reload();
         setStatusMessage(`Removed ${entry.name}.`);
       } else {
@@ -173,13 +224,23 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
       }
     } catch (err) {
       console.error('remove failed:', err);
-      setStatusMessage(`Failed to remove: ${err}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      setStatusMessage(`Failed to remove: ${msg}`);
     } finally {
       setIsApplying(false);
     }
   };
 
-  const handleApplyAndRestart = async () => {
+  // CRUD changes are applied to the live server immediately (HTTP endpoints
+  // update both registry file and AppState.databases). The restart button is
+  // only useful in rare cases where the live state diverged from disk — keep
+  // it as an opt-in escape hatch in Tauri mode.
+  const handleRestart = async () => {
+    if (!isTauri) {
+      setStatusMessage('Refreshing interface...');
+      setTimeout(() => window.location.reload(), 800);
+      return;
+    }
     setIsApplying(true);
     setStatusMessage('Restarting server...');
     try {
@@ -308,9 +369,34 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
 
               <div className="database-config">
                 <label>Image Directories:</label>
-                <button onClick={handleAddImageDir} className="add-directory-button">
-                  + Add Image Directory
-                </button>
+                {isTauri ? (
+                  <button onClick={handleAddImageDir} className="add-directory-button">
+                    + Add Image Directory
+                  </button>
+                ) : (
+                  <div className="file-input-group">
+                    <input
+                      type="text"
+                      value={pendingImageDir}
+                      onChange={(e) => setPendingImageDir(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddManualImageDir();
+                        }
+                      }}
+                      placeholder="Type an absolute path and press Add"
+                      className="file-path-input"
+                    />
+                    <button
+                      onClick={handleAddManualImageDir}
+                      className="browse-button"
+                      disabled={!pendingImageDir.trim()}
+                    >
+                      Add
+                    </button>
+                  </div>
+                )}
                 {formImageDirs.length > 0 && (
                   <div className="image-directories">
                     {formImageDirs.map((dir, index) => (
@@ -362,16 +448,20 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
             </div>
           )}
           <div className="modal-buttons">
-            <button onClick={onClose} className="cancel-button" disabled={isApplying}>
-              Close
+            <button onClick={onClose} className="save-button" disabled={isApplying}>
+              Done
             </button>
             <button
-              onClick={handleApplyAndRestart}
-              className="save-button"
-              disabled={isApplying || !hasDatabases}
-              title="Restart the embedded server to pick up changes"
+              onClick={handleRestart}
+              className="cancel-button"
+              disabled={isApplying}
+              title={
+                isTauri
+                  ? 'Force a server restart (rarely needed — changes are applied live)'
+                  : 'Reload the page'
+              }
             >
-              {isApplying ? 'Restarting…' : 'Apply & Restart Server'}
+              {isTauri ? 'Restart Server' : 'Reload Page'}
             </button>
           </div>
         </div>

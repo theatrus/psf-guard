@@ -95,6 +95,47 @@ export const apiClient = {
     return data.data || [];
   },
 
+  /** Register a new database. Works in both Tauri and browser mode. */
+  addDatabase: async (req: {
+    name: string;
+    db_path: string;
+    image_dirs: string[];
+    slug?: string;
+  }): Promise<DatabaseSummary> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<DatabaseSummary>>('/databases', req);
+    if (!data.data) throw new Error(data.error || 'Failed to add database');
+    return data.data;
+  },
+
+  /** Update an existing database. */
+  updateDatabase: async (
+    dbId: string,
+    req: {
+      name?: string;
+      slug?: string;
+      db_path?: string;
+      image_dirs?: string[];
+    }
+  ): Promise<DatabaseSummary> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<DatabaseSummary>>(
+      `/databases/${encodeURIComponent(dbId)}`,
+      req
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to update database');
+    return data.data;
+  },
+
+  /** Remove a database by slug. */
+  removeDatabase: async (dbId: string): Promise<boolean> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.delete<ApiResponse<{ removed: boolean }>>(
+      `/databases/${encodeURIComponent(dbId)}`
+    );
+    return data.data?.removed ?? false;
+  },
+
   // ── Per-DB ────────────────────────────────────────────────────────────────
 
   refreshFileCache: async (dbId: string): Promise<FileCheckResponse> => {

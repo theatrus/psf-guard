@@ -108,7 +108,13 @@ export default function Overview() {
     return (
       <div className="overview-empty">
         <h2>No databases configured</h2>
-        <p>Open settings to add a N.I.N.A. scheduler database.</p>
+        <p>Add a N.I.N.A. scheduler database to get started.</p>
+        <button
+          className="action-button primary"
+          onClick={() => window.dispatchEvent(new CustomEvent('psf-guard:open-settings'))}
+        >
+          Open Settings
+        </button>
       </div>
     );
   }

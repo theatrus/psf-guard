@@ -9,6 +9,7 @@ import AggregatedCacheStatus from './components/AggregatedCacheStatus';
 import TauriSettings from './components/TauriSettings';
 import { useGridState } from './hooks/useUrlState';
 import { isTauriApp, tauriConfig } from './utils/tauri';
+import { apiClient } from './api/client';
 import './App.css';
 
 function App() {
@@ -17,40 +18,54 @@ function App() {
   const { showStats, setShowStats } = useGridState();
   const [showHelp, setShowHelp] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [isTauri, setIsTauri] = useState(false);
+  // We track this only to short-circuit checks against Tauri-only commands;
+  // the modal itself is shown regardless of mode.
+  const [, setIsTauri] = useState(false);
 
-  // Check if we're in Tauri mode and handle settings
+  // Check configuration on mount. In both Tauri and browser/CLI-server mode,
+  // we pop the settings modal automatically when no databases are configured.
   useEffect(() => {
-    const checkTauriAndConfiguration = async () => {
+    let cancelled = false;
+
+    const checkConfiguration = async () => {
       const tauriDetected = isTauriApp();
-      console.log('App mounted, checking if Tauri app:', tauriDetected);
-      setIsTauri(tauriDetected);
-      
-      if (tauriDetected) {
-        try {
-          // Use the backend validation to check if configuration is complete and valid
-          const isValid = await tauriConfig.isConfigurationValid();
-          
-          if (!isValid) {
-            console.log('Tauri detected with invalid/incomplete configuration, showing settings modal');
-            setShowSettings(true);
-          } else {
-            console.log('Tauri detected with valid configuration, not showing settings modal');
-          }
-        } catch (error) {
-          console.error('Failed to check configuration validity, showing settings modal:', error);
+      if (!cancelled) setIsTauri(tauriDetected);
+
+      try {
+        // Prefer the Tauri validation when available (it can detect a config
+        // file present but pointing at a missing DB). In browser mode fall
+        // back to the HTTP listing.
+        let hasValid = false;
+        if (tauriDetected) {
+          hasValid = await tauriConfig.isConfigurationValid();
+        } else {
+          const dbs = await apiClient.getDatabases();
+          hasValid = dbs.length > 0;
+        }
+        if (!cancelled && !hasValid) {
+          console.log('No databases configured — opening settings modal');
           setShowSettings(true);
         }
-      } else {
-        console.log('Not a Tauri app, skipping auto-settings');
+      } catch (error) {
+        console.error('Failed to check configuration:', error);
+        if (!cancelled) setShowSettings(true);
       }
     };
 
-    // Check immediately
-    checkTauriAndConfiguration();
-    
-    // Also check after a delay in case Tauri globals load later
-    setTimeout(checkTauriAndConfiguration, 1000);
+    checkConfiguration();
+    // Re-check after a delay in case Tauri globals load late.
+    const handle = setTimeout(checkConfiguration, 1000);
+
+    // Let any component request opening settings via a window event (e.g.
+    // the Overview empty-state button).
+    const openHandler = () => setShowSettings(true);
+    window.addEventListener('psf-guard:open-settings', openHandler);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+      window.removeEventListener('psf-guard:open-settings', openHandler);
+    };
   }, []);
 
   // Keyboard shortcut for help
@@ -104,11 +119,9 @@ function App() {
               {showStats ? 'Hide Stats' : 'Stats'}
             </button>
           )}
-          {isTauri && (
-            <button onClick={() => setShowSettings(true)} className="header-button">
-              Settings
-            </button>
-          )}
+          <button onClick={() => setShowSettings(true)} className="header-button">
+            Settings
+          </button>
           <button onClick={() => setShowHelp(true)} className="header-button">
             Help
           </button>
@@ -124,10 +137,10 @@ function App() {
         <KeyboardShortcutHelp onClose={() => setShowHelp(false)} />
       )}
       
-      {showSettings && isTauri && (
-        <TauriSettings 
-          isOpen={showSettings} 
-          onClose={() => setShowSettings(false)} 
+      {showSettings && (
+        <TauriSettings
+          isOpen={showSettings}
+          onClose={() => setShowSettings(false)}
         />
       )}
     </div>
