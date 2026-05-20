@@ -33,7 +33,7 @@ const mockTargets = [
   { id: 2, name: 'NGC7000', ra: 314.0, dec: 44.0, active: true, image_count: 10, accepted_count: 8, rejected_count: 0, has_files: true },
 ];
 
-function createWrapper(initialRoute = '/sequence?project=1&target=1') {
+function createWrapper(initialRoute = '/sequence?db=test&project=1&target=1') {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: {
@@ -55,10 +55,10 @@ function createWrapper(initialRoute = '/sequence?project=1&target=1') {
 
 function setupDefaultHandlers() {
   server.use(
-    http.get('/api/analysis/sequence', () => {
+    http.get('/api/db/:dbId/analysis/sequence', () => {
       return HttpResponse.json(normalFixture);
     }),
-    http.get('/api/projects/:projectId/targets', () => {
+    http.get('/api/db/:dbId/projects/:projectId/targets', () => {
       return HttpResponse.json({
         success: true,
         data: mockTargets,
@@ -66,7 +66,7 @@ function setupDefaultHandlers() {
         status: 'ready',
       });
     }),
-    http.get('/api/images', () => {
+    http.get('/api/db/:dbId/images', () => {
       return HttpResponse.json({
         success: true,
         data: mockImages,
@@ -74,7 +74,7 @@ function setupDefaultHandlers() {
         status: 'ready',
       });
     }),
-    http.get('/api/images/:imageId', () => {
+    http.get('/api/db/:dbId/images/:imageId', () => {
       return HttpResponse.json({
         success: true,
         data: mockImages[0],
@@ -82,7 +82,7 @@ function setupDefaultHandlers() {
         status: 'ready',
       });
     }),
-    http.put('/api/images/:imageId/grade', () => {
+    http.put('/api/db/:dbId/images/:imageId/grade', () => {
       return HttpResponse.json({
         success: true,
         data: null,
@@ -95,13 +95,13 @@ function setupDefaultHandlers() {
 
 describe('SequenceView: rendering states', () => {
   it('shows empty state when no project is selected', () => {
-    render(<SequenceView />, { wrapper: createWrapper('/sequence') });
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test') });
     expect(screen.getByText('Select a project to analyze image sequences')).toBeInTheDocument();
   });
 
   it('shows target selection when project is selected but no target', () => {
     server.use(
-      http.get('/api/projects/:projectId/targets', () => {
+      http.get('/api/db/:dbId/projects/:projectId/targets', () => {
         return HttpResponse.json({
           success: true,
           data: mockTargets,
@@ -109,7 +109,7 @@ describe('SequenceView: rendering states', () => {
           status: 'ready',
         });
       }),
-      http.get('/api/images', () => {
+      http.get('/api/db/:dbId/images', () => {
         return HttpResponse.json({
           success: true,
           data: [],
@@ -119,14 +119,14 @@ describe('SequenceView: rendering states', () => {
       }),
     );
 
-    render(<SequenceView />, { wrapper: createWrapper('/sequence?project=1') });
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1') });
     expect(screen.getByText('Sequence Analysis')).toBeInTheDocument();
     expect(screen.getByText(/Select a target/)).toBeInTheDocument();
   });
 
   it('shows available targets as buttons', async () => {
     server.use(
-      http.get('/api/projects/:projectId/targets', () => {
+      http.get('/api/db/:dbId/projects/:projectId/targets', () => {
         return HttpResponse.json({
           success: true,
           data: mockTargets,
@@ -134,7 +134,7 @@ describe('SequenceView: rendering states', () => {
           status: 'ready',
         });
       }),
-      http.get('/api/images', () => {
+      http.get('/api/db/:dbId/images', () => {
         return HttpResponse.json({
           success: true,
           data: [],
@@ -144,7 +144,7 @@ describe('SequenceView: rendering states', () => {
       }),
     );
 
-    render(<SequenceView />, { wrapper: createWrapper('/sequence?project=1') });
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1') });
 
     await waitFor(() => {
       expect(screen.getByText('M42')).toBeInTheDocument();
@@ -155,11 +155,11 @@ describe('SequenceView: rendering states', () => {
   it('shows loading state while analyzing', async () => {
     // Use a delayed response to catch the loading state
     server.use(
-      http.get('/api/analysis/sequence', async () => {
+      http.get('/api/db/:dbId/analysis/sequence', async () => {
         await new Promise(resolve => setTimeout(resolve, 100));
         return HttpResponse.json(normalFixture);
       }),
-      http.get('/api/projects/:projectId/targets', () => {
+      http.get('/api/db/:dbId/projects/:projectId/targets', () => {
         return HttpResponse.json({
           success: true,
           data: mockTargets,
@@ -167,7 +167,7 @@ describe('SequenceView: rendering states', () => {
           status: 'ready',
         });
       }),
-      http.get('/api/images', () => {
+      http.get('/api/db/:dbId/images', () => {
         return HttpResponse.json({
           success: true,
           data: mockImages,
@@ -177,20 +177,20 @@ describe('SequenceView: rendering states', () => {
       }),
     );
 
-    render(<SequenceView />, { wrapper: createWrapper('/sequence?project=1&target=1') });
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     expect(screen.getByText('Analyzing image sequences...')).toBeInTheDocument();
   });
 
   it('shows error state on analysis failure', async () => {
     server.use(
-      http.get('/api/analysis/sequence', () => {
+      http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json(
           { success: false, data: null, error: 'Target not found', status: null },
           { status: 400 },
         );
       }),
-      http.get('/api/projects/:projectId/targets', () => {
+      http.get('/api/db/:dbId/projects/:projectId/targets', () => {
         return HttpResponse.json({
           success: true,
           data: mockTargets,
@@ -198,7 +198,7 @@ describe('SequenceView: rendering states', () => {
           status: 'ready',
         });
       }),
-      http.get('/api/images', () => {
+      http.get('/api/db/:dbId/images', () => {
         return HttpResponse.json({
           success: true,
           data: mockImages,
@@ -208,7 +208,7 @@ describe('SequenceView: rendering states', () => {
       }),
     );
 
-    render(<SequenceView />, { wrapper: createWrapper('/sequence?project=1&target=1') });
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
       expect(screen.getByText(/Failed to analyze sequence/)).toBeInTheDocument();
@@ -217,10 +217,10 @@ describe('SequenceView: rendering states', () => {
 
   it('shows empty state when no sequences found', async () => {
     server.use(
-      http.get('/api/analysis/sequence', () => {
+      http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json(emptyFixture);
       }),
-      http.get('/api/projects/:projectId/targets', () => {
+      http.get('/api/db/:dbId/projects/:projectId/targets', () => {
         return HttpResponse.json({
           success: true,
           data: mockTargets,
@@ -228,7 +228,7 @@ describe('SequenceView: rendering states', () => {
           status: 'ready',
         });
       }),
-      http.get('/api/images', () => {
+      http.get('/api/db/:dbId/images', () => {
         return HttpResponse.json({
           success: true,
           data: mockImages,
@@ -238,7 +238,7 @@ describe('SequenceView: rendering states', () => {
       }),
     );
 
-    render(<SequenceView />, { wrapper: createWrapper('/sequence?project=1&target=1') });
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
       expect(screen.getByText(/No sequences found/)).toBeInTheDocument();
@@ -250,7 +250,7 @@ describe('SequenceView: quality display', () => {
   it('renders summary bar with quality counts', async () => {
     setupDefaultHandlers();
 
-    render(<SequenceView />, { wrapper: createWrapper('/sequence?project=1&target=1') });
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
       expect(screen.getByText(/3 excellent/)).toBeInTheDocument();
@@ -262,7 +262,7 @@ describe('SequenceView: quality display', () => {
   it('renders image cards with quality badges', async () => {
     setupDefaultHandlers();
 
-    render(<SequenceView />, { wrapper: createWrapper('/sequence?project=1&target=1') });
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
       // Quality badges show percentage (e.g., "82" for 0.82)
@@ -272,10 +272,10 @@ describe('SequenceView: quality display', () => {
 
   it('shows cloud event badges when clouds are detected', async () => {
     server.use(
-      http.get('/api/analysis/sequence', () => {
+      http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json(cloudsFixture);
       }),
-      http.get('/api/projects/:projectId/targets', () => {
+      http.get('/api/db/:dbId/projects/:projectId/targets', () => {
         return HttpResponse.json({
           success: true,
           data: mockTargets,
@@ -283,7 +283,7 @@ describe('SequenceView: quality display', () => {
           status: 'ready',
         });
       }),
-      http.get('/api/images', () => {
+      http.get('/api/db/:dbId/images', () => {
         return HttpResponse.json({
           success: true,
           data: mockImages,
@@ -293,7 +293,7 @@ describe('SequenceView: quality display', () => {
       }),
     );
 
-    render(<SequenceView />, { wrapper: createWrapper('/sequence?project=1&target=1') });
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
       expect(screen.getByText(/cloud event/i)).toBeInTheDocument();
@@ -302,10 +302,10 @@ describe('SequenceView: quality display', () => {
 
   it('shows category labels on cloud-affected images', async () => {
     server.use(
-      http.get('/api/analysis/sequence', () => {
+      http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json(cloudsFixture);
       }),
-      http.get('/api/projects/:projectId/targets', () => {
+      http.get('/api/db/:dbId/projects/:projectId/targets', () => {
         return HttpResponse.json({
           success: true,
           data: mockTargets,
@@ -313,7 +313,7 @@ describe('SequenceView: quality display', () => {
           status: 'ready',
         });
       }),
-      http.get('/api/images', () => {
+      http.get('/api/db/:dbId/images', () => {
         return HttpResponse.json({
           success: true,
           data: mockImages,
@@ -323,7 +323,7 @@ describe('SequenceView: quality display', () => {
       }),
     );
 
-    render(<SequenceView />, { wrapper: createWrapper('/sequence?project=1&target=1') });
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
       // formatCategory converts "likely_clouds" to "Likely Clouds"
@@ -338,7 +338,7 @@ describe('SequenceView: interactions', () => {
     setupDefaultHandlers();
     const user = userEvent.setup();
 
-    render(<SequenceView />, { wrapper: createWrapper('/sequence?project=1&target=1') });
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
       expect(screen.getByText('82')).toBeInTheDocument();
@@ -362,7 +362,7 @@ describe('SequenceView: interactions', () => {
     setupDefaultHandlers();
     const user = userEvent.setup();
 
-    render(<SequenceView />, { wrapper: createWrapper('/sequence?project=1&target=1') });
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
       expect(screen.getByText('Select Below Threshold')).toBeInTheDocument();
@@ -389,10 +389,10 @@ describe('SequenceView: interactions', () => {
 
   it('shows "Select Clouded" button and selects cloud runs', async () => {
     server.use(
-      http.get('/api/analysis/sequence', () => {
+      http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json(cloudsFixture);
       }),
-      http.get('/api/projects/:projectId/targets', () => {
+      http.get('/api/db/:dbId/projects/:projectId/targets', () => {
         return HttpResponse.json({
           success: true,
           data: mockTargets,
@@ -400,7 +400,7 @@ describe('SequenceView: interactions', () => {
           status: 'ready',
         });
       }),
-      http.get('/api/images', () => {
+      http.get('/api/db/:dbId/images', () => {
         return HttpResponse.json({
           success: true,
           data: mockImages,
@@ -412,7 +412,7 @@ describe('SequenceView: interactions', () => {
 
     const user = userEvent.setup();
 
-    render(<SequenceView />, { wrapper: createWrapper('/sequence?project=1&target=1') });
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
       expect(screen.getByText('Select Clouded')).toBeInTheDocument();
@@ -430,10 +430,10 @@ describe('SequenceView: interactions', () => {
 
   it('clears selection when Clear button is clicked', async () => {
     server.use(
-      http.get('/api/analysis/sequence', () => {
+      http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json(cloudsFixture);
       }),
-      http.get('/api/projects/:projectId/targets', () => {
+      http.get('/api/db/:dbId/projects/:projectId/targets', () => {
         return HttpResponse.json({
           success: true,
           data: mockTargets,
@@ -441,7 +441,7 @@ describe('SequenceView: interactions', () => {
           status: 'ready',
         });
       }),
-      http.get('/api/images', () => {
+      http.get('/api/db/:dbId/images', () => {
         return HttpResponse.json({
           success: true,
           data: mockImages,
@@ -453,7 +453,7 @@ describe('SequenceView: interactions', () => {
 
     const user = userEvent.setup();
 
-    render(<SequenceView />, { wrapper: createWrapper('/sequence?project=1&target=1') });
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
       expect(screen.getByText('Select Clouded')).toBeInTheDocument();
@@ -479,10 +479,10 @@ describe('SequenceView: interactions', () => {
 describe('SequenceView: multi-session', () => {
   it('renders sequence tabs for multiple sessions', async () => {
     server.use(
-      http.get('/api/analysis/sequence', () => {
+      http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json(multiSessionFixture);
       }),
-      http.get('/api/projects/:projectId/targets', () => {
+      http.get('/api/db/:dbId/projects/:projectId/targets', () => {
         return HttpResponse.json({
           success: true,
           data: mockTargets,
@@ -490,7 +490,7 @@ describe('SequenceView: multi-session', () => {
           status: 'ready',
         });
       }),
-      http.get('/api/images', () => {
+      http.get('/api/db/:dbId/images', () => {
         return HttpResponse.json({
           success: true,
           data: [],
@@ -500,7 +500,7 @@ describe('SequenceView: multi-session', () => {
       }),
     );
 
-    render(<SequenceView />, { wrapper: createWrapper('/sequence?project=1&target=2') });
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=2') });
 
     await waitFor(() => {
       // Each tab shows "filter_name (image_count)"
@@ -511,10 +511,10 @@ describe('SequenceView: multi-session', () => {
 
   it('switches between sequences when tabs are clicked', async () => {
     server.use(
-      http.get('/api/analysis/sequence', () => {
+      http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json(multiSessionFixture);
       }),
-      http.get('/api/projects/:projectId/targets', () => {
+      http.get('/api/db/:dbId/projects/:projectId/targets', () => {
         return HttpResponse.json({
           success: true,
           data: mockTargets,
@@ -522,7 +522,7 @@ describe('SequenceView: multi-session', () => {
           status: 'ready',
         });
       }),
-      http.get('/api/images', () => {
+      http.get('/api/db/:dbId/images', () => {
         return HttpResponse.json({
           success: true,
           data: [],
@@ -534,7 +534,7 @@ describe('SequenceView: multi-session', () => {
 
     const user = userEvent.setup();
 
-    render(<SequenceView />, { wrapper: createWrapper('/sequence?project=1&target=2') });
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=2') });
 
     await waitFor(() => {
       const tabs = screen.getAllByText(/L \(5\)/);
@@ -558,10 +558,10 @@ describe('SequenceView: multi-session', () => {
 describe('SequenceView: batch operations', () => {
   it('calls grade API when rejecting selected images', async () => {
     server.use(
-      http.get('/api/analysis/sequence', () => {
+      http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json(cloudsFixture);
       }),
-      http.get('/api/projects/:projectId/targets', () => {
+      http.get('/api/db/:dbId/projects/:projectId/targets', () => {
         return HttpResponse.json({
           success: true,
           data: mockTargets,
@@ -569,7 +569,7 @@ describe('SequenceView: batch operations', () => {
           status: 'ready',
         });
       }),
-      http.get('/api/images', () => {
+      http.get('/api/db/:dbId/images', () => {
         return HttpResponse.json({
           success: true,
           data: mockImages,
@@ -577,7 +577,7 @@ describe('SequenceView: batch operations', () => {
           status: 'ready',
         });
       }),
-      http.get('/api/images/:imageId', () => {
+      http.get('/api/db/:dbId/images/:imageId', () => {
         return HttpResponse.json({
           success: true,
           data: mockImages[0],
@@ -589,7 +589,7 @@ describe('SequenceView: batch operations', () => {
 
     const gradeRequests: Array<{ imageId: string; body: unknown }> = [];
     server.use(
-      http.put('/api/images/:imageId/grade', async ({ params, request }) => {
+      http.put('/api/db/:dbId/images/:imageId/grade', async ({ params, request }) => {
         const body = await request.json();
         gradeRequests.push({ imageId: params.imageId as string, body });
         return HttpResponse.json({
@@ -603,7 +603,7 @@ describe('SequenceView: batch operations', () => {
 
     const user = userEvent.setup();
 
-    render(<SequenceView />, { wrapper: createWrapper('/sequence?project=1&target=1') });
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
       expect(screen.getByText('Select Clouded')).toBeInTheDocument();
@@ -633,7 +633,7 @@ describe('SequenceView: batch operations', () => {
   it('shows Re-analyze button', async () => {
     setupDefaultHandlers();
 
-    render(<SequenceView />, { wrapper: createWrapper('/sequence?project=1&target=1') });
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
       expect(screen.getByText('Re-analyze')).toBeInTheDocument();

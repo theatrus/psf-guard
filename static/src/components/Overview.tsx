@@ -1,38 +1,50 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { apiClient } from '../api/client';
 import type { ProjectOverview, TargetOverview, DateRange } from '../api/types';
+import {
+  useAllDatabases,
+  useMergedProjectsOverview,
+  useMergedTargetsOverview,
+  useMergedOverallStats,
+  type WithDb,
+} from '../hooks/useDatabases';
 import './Overview.css';
 
 export default function Overview() {
   const navigate = useNavigate();
-  const [expandedProjects, setExpandedProjects] = useState<Set<number>>(new Set());
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
+  const [collapsedDbs, setCollapsedDbs] = useState<Set<string>>(new Set());
 
-  // Fetch overview data
-  const { data: overallStats, isLoading: statsLoading } = useQuery({
-    queryKey: ['overall-stats'],
-    queryFn: apiClient.getOverallStats,
+  const { data: databases } = useAllDatabases();
+  const { data: serverInfo } = useQuery({
+    queryKey: ['serverInfo'],
+    queryFn: apiClient.getServerInfo,
+    staleTime: 5 * 60 * 1000,
   });
+  const { data: overallStats, isLoading: statsLoading } = useMergedOverallStats();
+  const { data: projects, isLoading: projectsLoading } = useMergedProjectsOverview();
+  const { data: targets, isLoading: targetsLoading } = useMergedTargetsOverview();
 
-  const { data: projects = [], isLoading: projectsLoading } = useQuery({
-    queryKey: ['projects-overview'],
-    queryFn: apiClient.getProjectsOverview,
-  });
-
-  const { data: targets = [], isLoading: targetsLoading } = useQuery({
-    queryKey: ['targets-overview'], 
-    queryFn: apiClient.getTargetsOverview,
-  });
-
-  // Group targets by project
-  const targetsByProject = targets.reduce((acc, target) => {
-    if (!acc[target.project_id]) {
-      acc[target.project_id] = [];
+  // Group targets by (db_id, project_id) since project IDs collide across DBs.
+  const targetsByProject = useMemo(() => {
+    const map: Record<string, WithDb<TargetOverview>[]> = {};
+    for (const target of targets) {
+      const key = `${target.db_id}:${target.project_id}`;
+      (map[key] ||= []).push(target);
     }
-    acc[target.project_id].push(target);
-    return acc;
-  }, {} as Record<number, TargetOverview[]>);
+    return map;
+  }, [targets]);
+
+  // Group projects by their source DB so each section renders together.
+  const projectsByDb = useMemo(() => {
+    const map: Record<string, WithDb<ProjectOverview>[]> = {};
+    for (const p of projects) {
+      (map[p.db_id] ||= []).push(p);
+    }
+    return map;
+  }, [projects]);
 
   // Helper functions
   const formatDate = (timestamp?: number) => {
@@ -64,35 +76,74 @@ export default function Overview() {
     return Math.round((accepted / desired) * 100);
   };
 
-  // Navigation handlers
-  const handleSelectProject = (project: ProjectOverview) => {
-    // Navigate with explicit search params instead of relying on state updates
-    navigate(`/grid?project=${project.id}`);
+  // Navigation handlers. Each click carries the project's db_id so the scoped
+  // view knows which database to query.
+  const handleSelectProject = (project: WithDb<ProjectOverview>) => {
+    navigate(`/grid?db=${encodeURIComponent(project.db_id)}&project=${project.id}`);
   };
 
-  const handleSelectTarget = (target: TargetOverview) => {
-    // Navigate with explicit search params instead of relying on state updates
-    navigate(`/grid?project=${target.project_id}&target=${target.id}`);
+  const handleSelectTarget = (target: WithDb<TargetOverview>) => {
+    navigate(
+      `/grid?db=${encodeURIComponent(target.db_id)}&project=${target.project_id}&target=${target.id}`
+    );
   };
 
-  const handleViewAllProjects = () => {
-    // Navigate to grid with no search params (all projects)
-    navigate('/grid');
-  };
-
-  // Project expansion handlers
-  const toggleProject = (projectId: number) => {
+  // Project expansion handlers (key by db_id + project_id to avoid collisions).
+  const projectKey = (dbId: string, projectId: number) => `${dbId}:${projectId}`;
+  const toggleProject = (key: string) => {
     const newExpanded = new Set(expandedProjects);
-    if (newExpanded.has(projectId)) {
-      newExpanded.delete(projectId);
+    if (newExpanded.has(key)) {
+      newExpanded.delete(key);
     } else {
-      newExpanded.add(projectId);
+      newExpanded.add(key);
     }
     setExpandedProjects(newExpanded);
   };
 
+  const toggleDb = (dbId: string) => {
+    const next = new Set(collapsedDbs);
+    if (next.has(dbId)) next.delete(dbId);
+    else next.add(dbId);
+    setCollapsedDbs(next);
+  };
+
   if (statsLoading || projectsLoading || targetsLoading) {
     return <div className="overview-loading">Loading overview...</div>;
+  }
+
+  if (!databases || databases.length === 0) {
+    const managementAllowed = serverInfo?.allow_database_management ?? false;
+    return (
+      <div className="overview-empty">
+        <h2>No databases configured</h2>
+        {managementAllowed ? (
+          <>
+            <p>Add a N.I.N.A. scheduler database to get started.</p>
+            <button
+              className="action-button primary"
+              onClick={() => window.dispatchEvent(new CustomEvent('psf-guard:open-settings'))}
+            >
+              Open Settings
+            </button>
+          </>
+        ) : (
+          <>
+            <p>
+              This server doesn't permit configuration changes from the
+              browser. Register a database on the command line:
+            </p>
+            <pre className="code-block">
+              psf-guard server &lt;db.sqlite&gt; &lt;image-dir&gt;
+            </pre>
+            <p>
+              …or restart with{' '}
+              <code>--allow-database-management</code> to enable in-browser
+              settings.
+            </p>
+          </>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -197,35 +248,43 @@ export default function Overview() {
             </div>
           </div>
 
-          {/* Quick Actions */}
-          <div className="quick-actions">
-            <button 
-              className="action-button primary" 
-              onClick={handleViewAllProjects}
-            >
-              View All Projects
-            </button>
-          </div>
         </div>
       )}
 
       <div className="content-grid">
-        {/* Projects List with Nested Targets */}
+        {/* Projects grouped by database. Each section is collapsible. */}
         <div className="projects-section">
-          <h2>Projects ({projects.length})</h2>
-          <div className="projects-list">
-            {projects.map((project) => {
+          {databases.map((db) => {
+            const dbProjects = projectsByDb[db.id] || [];
+            const isCollapsed = collapsedDbs.has(db.id);
+            return (
+              <section key={db.id} className="db-section">
+                <h2 className="db-section-header" onClick={() => toggleDb(db.id)}>
+                  <span className={`expand-toggle ${isCollapsed ? '' : 'expanded'}`}>▶</span>
+                  <span>{db.name}</span>
+                  <span className="db-section-count">
+                    {dbProjects.length} project{dbProjects.length === 1 ? '' : 's'}
+                  </span>
+                  <code className="db-section-slug">{db.id}</code>
+                </h2>
+                {!isCollapsed && dbProjects.length === 0 && (
+                  <div className="empty-state">No projects with images in this database yet.</div>
+                )}
+                {!isCollapsed && (
+                <div className="projects-list">
+            {dbProjects.map((project) => {
               const progress = getGradingProgress(
-                project.accepted_images, 
-                project.rejected_images, 
+                project.accepted_images,
+                project.rejected_images,
                 project.pending_images
               );
-              const projectTargets = targetsByProject[project.id] || [];
-              const isExpanded = expandedProjects.has(project.id);
-              
+              const key = projectKey(project.db_id, project.id);
+              const projectTargets = targetsByProject[key] || [];
+              const isExpanded = expandedProjects.has(key);
+
               return (
-                <div key={project.id} className={`project-card ${!project.has_files ? 'no-files' : ''}`}>
-                  <div className="project-header" onClick={() => toggleProject(project.id)}>
+                <div key={key} className={`project-card ${!project.has_files ? 'no-files' : ''}`}>
+                  <div className="project-header" onClick={() => toggleProject(key)}>
                     <div style={{ display: 'flex', alignItems: 'center' }}>
                       <h3>{project.display_name}</h3>
                       {projectTargets.length > 0 && (
@@ -389,7 +448,11 @@ export default function Overview() {
                 </div>
               );
             })}
-          </div>
+                </div>
+                )}
+              </section>
+            );
+          })}
         </div>
       </div>
 

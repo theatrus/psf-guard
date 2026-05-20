@@ -28,7 +28,7 @@ function createWrapper() {
 
 describe('useSequenceAnalysis', () => {
   it('starts with no data and not loading', () => {
-    const { result } = renderHook(() => useSequenceAnalysis(), {
+    const { result } = renderHook(() => useSequenceAnalysis('test'), {
       wrapper: createWrapper(),
     });
 
@@ -39,12 +39,12 @@ describe('useSequenceAnalysis', () => {
 
   it('fetches data after analyze() is called', async () => {
     server.use(
-      http.get('/api/analysis/sequence', () => {
+      http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json(normalFixture);
       }),
     );
 
-    const { result } = renderHook(() => useSequenceAnalysis(), {
+    const { result } = renderHook(() => useSequenceAnalysis('test'), {
       wrapper: createWrapper(),
     });
 
@@ -63,12 +63,12 @@ describe('useSequenceAnalysis', () => {
 
   it('resets state when reset() is called', async () => {
     server.use(
-      http.get('/api/analysis/sequence', () => {
+      http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json(normalFixture);
       }),
     );
 
-    const { result } = renderHook(() => useSequenceAnalysis(), {
+    const { result } = renderHook(() => useSequenceAnalysis('test'), {
       wrapper: createWrapper(),
     });
 
@@ -94,7 +94,7 @@ describe('useSequenceAnalysis', () => {
 
   it('handles server errors', async () => {
     server.use(
-      http.get('/api/analysis/sequence', () => {
+      http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json(
           { success: false, data: null, error: 'Target not found', status: null },
           { status: 400 },
@@ -102,7 +102,7 @@ describe('useSequenceAnalysis', () => {
       }),
     );
 
-    const { result } = renderHook(() => useSequenceAnalysis(), {
+    const { result } = renderHook(() => useSequenceAnalysis('test'), {
       wrapper: createWrapper(),
     });
 
@@ -118,7 +118,7 @@ describe('useSequenceAnalysis', () => {
 
 describe('useImageQuality', () => {
   it('does not fetch when imageId is undefined', () => {
-    const { result } = renderHook(() => useImageQuality(undefined), {
+    const { result } = renderHook(() => useImageQuality('test', undefined), {
       wrapper: createWrapper(),
     });
 
@@ -128,12 +128,12 @@ describe('useImageQuality', () => {
 
   it('fetches image quality when imageId is provided', async () => {
     server.use(
-      http.get('/api/analysis/image/:imageId', () => {
+      http.get('/api/db/:dbId/analysis/image/:imageId', () => {
         return HttpResponse.json(imageQualityFixture);
       }),
     );
 
-    const { result } = renderHook(() => useImageQuality(5), {
+    const { result } = renderHook(() => useImageQuality('test', 5), {
       wrapper: createWrapper(),
     });
 

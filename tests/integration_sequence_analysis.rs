@@ -111,12 +111,15 @@ fn create_test_app(conn: Connection) -> Router {
 
     let state = Arc::new(AppState::new_for_test(conn));
 
-    Router::new()
-        .route("/api/analysis/sequence", get(handlers::analyze_sequence))
+    let db_routes: Router<Arc<AppState>> = Router::new()
+        .route("/analysis/sequence", get(handlers::analyze_sequence))
         .route(
-            "/api/analysis/image/{image_id}",
+            "/analysis/image/{image_id}",
             get(handlers::get_image_quality),
-        )
+        );
+
+    Router::new()
+        .nest("/api/db/{db_id}", db_routes)
         .with_state(state)
 }
 
@@ -292,7 +295,11 @@ async fn test_analyze_sequence_normal() {
     load_normal_sequence(&conn);
     let app = create_test_app(conn);
 
-    let (status, json) = get_json(app, "/api/analysis/sequence?target_id=1&filter_name=L").await;
+    let (status, json) = get_json(
+        app,
+        "/api/db/test/analysis/sequence?target_id=1&filter_name=L",
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["success"], true);
@@ -353,7 +360,11 @@ async fn test_analyze_sequence_cloud_detection() {
     load_cloud_passage(&conn);
     let app = create_test_app(conn);
 
-    let (status, json) = get_json(app, "/api/analysis/sequence?target_id=1&filter_name=Ha").await;
+    let (status, json) = get_json(
+        app,
+        "/api/db/test/analysis/sequence?target_id=1&filter_name=Ha",
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["success"], true);
@@ -416,7 +427,7 @@ async fn test_analyze_sequence_session_split() {
     let app = create_test_app(conn);
 
     // No filter_name to get all filters for the target
-    let (status, json) = get_json(app, "/api/analysis/sequence?target_id=2").await;
+    let (status, json) = get_json(app, "/api/db/test/analysis/sequence?target_id=2").await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["success"], true);
@@ -454,7 +465,7 @@ async fn test_analyze_sequence_short() {
     load_short_sequence(&conn);
     let app = create_test_app(conn);
 
-    let (status, json) = get_json(app, "/api/analysis/sequence?target_id=3").await;
+    let (status, json) = get_json(app, "/api/db/test/analysis/sequence?target_id=3").await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["success"], true);
@@ -489,7 +500,7 @@ async fn test_analyze_sequence_missing_metrics() {
     load_missing_metrics(&conn);
     let app = create_test_app(conn);
 
-    let (status, json) = get_json(app, "/api/analysis/sequence?target_id=4").await;
+    let (status, json) = get_json(app, "/api/db/test/analysis/sequence?target_id=4").await;
 
     assert_eq!(
         status,
@@ -548,7 +559,7 @@ async fn test_analyze_sequence_empty_target() {
     load_empty_target(&conn);
     let app = create_test_app(conn);
 
-    let (status, json) = get_json(app, "/api/analysis/sequence?target_id=5").await;
+    let (status, json) = get_json(app, "/api/db/test/analysis/sequence?target_id=5").await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["success"], true);
@@ -568,7 +579,7 @@ async fn test_analyze_sequence_nonexistent_target() {
     // No fixtures loaded - just empty schema
     let app = create_test_app(conn);
 
-    let (status, json) = get_json(app, "/api/analysis/sequence?target_id=9999").await;
+    let (status, json) = get_json(app, "/api/db/test/analysis/sequence?target_id=9999").await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(json["success"], false);
@@ -589,7 +600,7 @@ async fn test_image_quality_context() {
     let app = create_test_app(conn);
 
     // Request quality context for image 5 (in the middle of the normal sequence)
-    let (status, json) = get_json(app, "/api/analysis/image/5").await;
+    let (status, json) = get_json(app, "/api/db/test/analysis/image/5").await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["success"], true);
@@ -628,7 +639,7 @@ async fn test_image_quality_nonexistent_image() {
     create_test_schema(&conn);
     let app = create_test_app(conn);
 
-    let (status, _json) = get_json(app, "/api/analysis/image/99999").await;
+    let (status, _json) = get_json(app, "/api/db/test/analysis/image/99999").await;
 
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
@@ -641,7 +652,7 @@ async fn test_analyze_sequence_custom_weights() {
     load_normal_sequence(&conn);
     let app = create_test_app(conn);
 
-    let uri = "/api/analysis/sequence?target_id=1&filter_name=L\
+    let uri = "/api/db/test/analysis/sequence?target_id=1&filter_name=L\
         &weight_star_count=1.0&weight_hfr=0.0&weight_eccentricity=0.0\
         &weight_snr=0.0&weight_background=0.0";
 
@@ -691,7 +702,7 @@ async fn test_analyze_sequence_custom_session_gap() {
     create_test_schema(&conn1);
     load_session_gap(&conn1);
     let app1 = create_test_app(conn1);
-    let (_, json_default) = get_json(app1, "/api/analysis/sequence?target_id=2").await;
+    let (_, json_default) = get_json(app1, "/api/db/test/analysis/sequence?target_id=2").await;
     let default_count = json_default["data"]["sequences"].as_array().unwrap().len();
     assert_eq!(default_count, 2, "Default should produce 2 sequences");
 
@@ -702,7 +713,7 @@ async fn test_analyze_sequence_custom_session_gap() {
     let app2 = create_test_app(conn2);
     let (status, json) = get_json(
         app2,
-        "/api/analysis/sequence?target_id=2&session_gap_minutes=5",
+        "/api/db/test/analysis/sequence?target_id=2&session_gap_minutes=5",
     )
     .await;
 
@@ -726,7 +737,11 @@ async fn test_json_contract_structure() {
     load_normal_sequence(&conn);
     let app = create_test_app(conn);
 
-    let (status, json) = get_json(app, "/api/analysis/sequence?target_id=1&filter_name=L").await;
+    let (status, json) = get_json(
+        app,
+        "/api/db/test/analysis/sequence?target_id=1&filter_name=L",
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -814,7 +829,11 @@ async fn test_json_contract_structure() {
     create_test_schema(&conn2);
     load_cloud_passage(&conn2);
     let app2 = create_test_app(conn2);
-    let (_, cloud_json) = get_json(app2, "/api/analysis/sequence?target_id=1&filter_name=Ha").await;
+    let (_, cloud_json) = get_json(
+        app2,
+        "/api/db/test/analysis/sequence?target_id=1&filter_name=Ha",
+    )
+    .await;
 
     let cloud_images = cloud_json["data"]["sequences"][0]["images"]
         .as_array()
@@ -843,7 +862,11 @@ async fn test_api_response_wrapper_structure() {
 
     // Test successful response
     let app = create_test_app(conn);
-    let (_, json) = get_json(app, "/api/analysis/sequence?target_id=1&filter_name=L").await;
+    let (_, json) = get_json(
+        app,
+        "/api/db/test/analysis/sequence?target_id=1&filter_name=L",
+    )
+    .await;
 
     // Top-level keys
     assert!(json.get("success").is_some(), "Missing 'success'");
@@ -864,7 +887,7 @@ async fn test_api_response_wrapper_structure() {
     let conn2 = Connection::open_in_memory().unwrap();
     create_test_schema(&conn2);
     let app2 = create_test_app(conn2);
-    let (_, err_json) = get_json(app2, "/api/analysis/sequence?target_id=9999").await;
+    let (_, err_json) = get_json(app2, "/api/db/test/analysis/sequence?target_id=9999").await;
 
     assert_eq!(err_json["success"], false);
     assert!(

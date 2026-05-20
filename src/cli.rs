@@ -331,10 +331,17 @@ pub enum Commands {
         #[arg(short, long)]
         config: Option<String>,
 
-        /// Database file to use (overrides config file)
+        /// Path to the database registry JSON file (defaults to the platform
+        /// config directory; useful for dev/test isolation).
+        #[arg(long)]
+        registry: Option<String>,
+
+        /// Database file to use. Registered into the registry on first run
+        /// so subsequent starts pick it up automatically.
         database: Option<String>,
 
-        /// Base directories containing the image files (can specify multiple, overrides config file)
+        /// Base directories containing the image files. Used as the new
+        /// database's image directories when registering for the first time.
         image_dirs: Vec<String>,
 
         /// Directory to serve static files from (for React app, optional - uses embedded files if not provided)
@@ -376,6 +383,14 @@ pub enum Commands {
         /// Cache expiration time for pre-generated images (default: 1y)
         #[arg(long, default_value = "1y")]
         cache_expiry: String,
+
+        /// Allow HTTP clients to add/edit/remove databases via the
+        /// `/api/databases` endpoints. Off by default because the same UI
+        /// could let any reachable client mutate the user's configured DB list
+        /// and image directories. Enable only when the server is bound to a
+        /// trusted interface (e.g. localhost). Tauri mode always enables it.
+        #[arg(long)]
+        allow_database_management: bool,
     },
 }
 

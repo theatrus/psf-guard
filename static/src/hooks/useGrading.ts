@@ -9,15 +9,15 @@ interface UseGradingOptions {
   onError?: (error: Error, imageIds: number[]) => void;
 }
 
-export function useGrading(options: UseGradingOptions = {}) {
+export function useGrading(dbId: string, options: UseGradingOptions = {}) {
   const { onSuccess, onError } = options;
   const queryClient = useQueryClient();
-  const undoRedo = useUndoRedo();
+  const undoRedo = useUndoRedo(dbId);
 
   // Single image grading mutation
   const singleGradeMutation = useMutation({
-    mutationFn: async ({ imageId, request, recordHistory = true }: { 
-      imageId: number; 
+    mutationFn: async ({ imageId, request, recordHistory = true }: {
+      imageId: number;
       request: UpdateGradeRequest;
       recordHistory?: boolean;
     }) => {
@@ -25,23 +25,23 @@ export function useGrading(options: UseGradingOptions = {}) {
       let actionId: string | null = null;
       if (recordHistory) {
         actionId = await undoRedo.recordAction(
-          [imageId], 
-          request.status, 
+          [imageId],
+          request.status,
           request.reason,
           `${request.status} image`
         );
       }
 
       // Apply the grading change
-      await apiClient.updateImageGrade(imageId, request);
-      
+      await apiClient.updateImageGrade(dbId, imageId, request);
+
       return { imageId, actionId };
     },
     onSuccess: (_, variables) => {
       // Invalidate queries
-      queryClient.invalidateQueries({ queryKey: ['image', variables.imageId] });
-      queryClient.invalidateQueries({ queryKey: ['all-images'] });
-      
+      queryClient.invalidateQueries({ queryKey: ['db', dbId, 'image', variables.imageId] });
+      queryClient.invalidateQueries({ queryKey: ['db', dbId, 'all-images'] });
+
       if (onSuccess) {
         onSuccess([variables.imageId], variables.request.status);
       }
@@ -56,8 +56,8 @@ export function useGrading(options: UseGradingOptions = {}) {
 
   // Batch grading mutation
   const batchGradeMutation = useMutation({
-    mutationFn: async ({ imageIds, request, recordHistory = true }: { 
-      imageIds: number[]; 
+    mutationFn: async ({ imageIds, request, recordHistory = true }: {
+      imageIds: number[];
       request: UpdateGradeRequest;
       recordHistory?: boolean;
     }) => {
@@ -65,29 +65,29 @@ export function useGrading(options: UseGradingOptions = {}) {
       let actionId: string | null = null;
       if (recordHistory) {
         actionId = await undoRedo.recordAction(
-          imageIds, 
-          request.status, 
+          imageIds,
+          request.status,
           request.reason,
           `${request.status} ${imageIds.length} images`
         );
       }
 
       // Apply the grading changes
-      const promises = imageIds.map(imageId =>
-        apiClient.updateImageGrade(imageId, request)
+      const promises = imageIds.map((imageId) =>
+        apiClient.updateImageGrade(dbId, imageId, request)
       );
-      
+
       await Promise.all(promises);
-      
+
       return { imageIds, actionId };
     },
     onSuccess: (_, variables) => {
       // Invalidate queries for all affected images
-      variables.imageIds.forEach(imageId => {
-        queryClient.invalidateQueries({ queryKey: ['image', imageId] });
+      variables.imageIds.forEach((imageId) => {
+        queryClient.invalidateQueries({ queryKey: ['db', dbId, 'image', imageId] });
       });
-      queryClient.invalidateQueries({ queryKey: ['all-images'] });
-      
+      queryClient.invalidateQueries({ queryKey: ['db', dbId, 'all-images'] });
+
       if (onSuccess) {
         onSuccess(variables.imageIds, variables.request.status);
       }

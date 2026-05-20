@@ -2,7 +2,7 @@ import { useMemo, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { apiClient } from '../api/client';
-import { useProjectTarget, useFilters, useGridState } from './useUrlState';
+import { useDbProjectTarget, useFilters, useGridState } from './useUrlState';
 import type { Image } from '../api/types';
 
 /**
@@ -11,19 +11,20 @@ import type { Image } from '../api/types';
 export function useImageNavigation(currentImageId?: number) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { projectId, targetId } = useProjectTarget();
+  const { dbId, projectId, targetId } = useDbProjectTarget();
   const { filters } = useFilters();
   const { groupingMode, expandedGroups } = useGridState();
 
   // Fetch all images for navigation context
   const { data: allImages = [] } = useQuery({
-    queryKey: ['all-images', projectId, targetId],
-    queryFn: () => apiClient.getImages({
-      project_id: projectId!,
-      target_id: targetId || undefined,
-      limit: 10000,
-    }),
-    enabled: !!projectId,
+    queryKey: ['db', dbId, 'all-images', projectId, targetId],
+    queryFn: () =>
+      apiClient.getImages(dbId!, {
+        project_id: projectId!,
+        target_id: targetId || undefined,
+        limit: 10000,
+      }),
+    enabled: !!dbId && !!projectId,
   });
 
   // Apply the same filtering logic as GroupedImageGrid

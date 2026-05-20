@@ -144,6 +144,37 @@ cargo build --release
 psf-guard server db.sqlite /primary/images/ /backup/images/ /archive/images/
 ```
 
+### Multi-Database Support
+
+The server can manage many N.I.N.A. scheduler databases at once. The
+configured database list lives in a shared JSON registry at the platform
+config location (`~/Library/Application Support/psf-guard/config.json` on
+macOS, `~/.config/psf-guard/config.json` on Linux,
+`%APPDATA%\psf-guard\config.json` on Windows).
+
+```bash
+# Register a database (idempotent — registers it once, then reuses on later
+# runs). The server loads every configured database, not just this one.
+psf-guard server schedulerdb.sqlite /images/
+
+# Manage the list at runtime via the desktop app's Settings panel, or via
+# HTTP: POST/PUT/DELETE on /api/databases (see CLAUDE.md for the schema).
+```
+
+**Important — CLI behavior change:** `psf-guard server <db> <dirs>` now
+**persists** `<db>` into the shared registry on first run. Subsequent
+invocations pick it up automatically, even without args. If you previously
+relied on the "one-shot, untouched config" behavior, use a scratch
+registry file:
+
+```bash
+# Ad-hoc session that doesn't touch the user's real config.
+psf-guard server --registry /tmp/scratch.json schedulerdb.sqlite /images/
+```
+
+The registry is automatically migrated from the v1 single-DB format on
+first load (the old file is preserved as `config.json.bak`).
+
 ## Configuration File
 
 PSF Guard supports TOML configuration files for easier management:
@@ -233,10 +264,14 @@ The main dashboard provides a comprehensive view of your imaging projects:
 ### Core Commands
 
 ```bash
-# Web server (CLI args)
+# Web server (CLI args; registers the DB into the shared config on first run)
 psf-guard server <database> <image-dirs...> [--port 3000]
 
-# Web server (config file)
+# Web server with isolated scratch registry (does NOT touch the user's real config)
+psf-guard server --registry /tmp/scratch.json <database> <image-dirs...>
+
+# Web server (TOML knobs file — port/cache/pregen; database list still comes
+# from the registry)
 psf-guard server --config psf-guard.toml [--port 8080]  # CLI overrides config
 
 # Move rejected images  

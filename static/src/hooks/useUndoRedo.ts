@@ -21,14 +21,14 @@ interface UseUndoRedoOptions {
   maxHistorySize?: number;
 }
 
-export function useUndoRedo(options: UseUndoRedoOptions = {}) {
+export function useUndoRedo(dbId: string, options: UseUndoRedoOptions = {}) {
   const { maxHistorySize = 50 } = options;
   const queryClient = useQueryClient();
-  
+
   const [undoStack, setUndoStack] = useState<GradingAction[]>([]);
   const [redoStack, setRedoStack] = useState<GradingAction[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
-  
+
   // Keep track of current action ID to prevent duplicate tracking
   const currentActionId = useRef<string | null>(null);
 
@@ -36,20 +36,26 @@ export function useUndoRedo(options: UseUndoRedoOptions = {}) {
     return Date.now().toString(36) + Math.random().toString(36).substr(2);
   };
 
-  const getCurrentImageState = useCallback(async (imageId: number) => {
-    try {
-      const image = await apiClient.getImage(imageId);
-      return {
-        status: image.grading_status === 0 ? 'pending' as const :
-                image.grading_status === 1 ? 'accepted' as const :
-                'rejected' as const,
-        reason: image.reject_reason || undefined,
-      };
-    } catch (error) {
-      console.warn(`Failed to get current state for image ${imageId}:`, error);
-      return null;
-    }
-  }, []);
+  const getCurrentImageState = useCallback(
+    async (imageId: number) => {
+      try {
+        const image = await apiClient.getImage(dbId, imageId);
+        return {
+          status:
+            image.grading_status === 0
+              ? ('pending' as const)
+              : image.grading_status === 1
+                ? ('accepted' as const)
+                : ('rejected' as const),
+          reason: image.reject_reason || undefined,
+        };
+      } catch (error) {
+        console.warn(`Failed to get current state for image ${imageId}:`, error);
+        return null;
+      }
+    },
+    [dbId]
+  );
 
   const recordAction = useCallback(async (
     imageIds: number[],
@@ -129,7 +135,7 @@ export function useUndoRedo(options: UseUndoRedoOptions = {}) {
       
       // Restore previous states for all images in the action
       const promises = action.previousStates.map(({ imageId, previousStatus, previousReason }) =>
-        apiClient.updateImageGrade(imageId, {
+        apiClient.updateImageGrade(dbId, imageId, {
           status: previousStatus,
           reason: previousReason,
         })
@@ -138,14 +144,14 @@ export function useUndoRedo(options: UseUndoRedoOptions = {}) {
       await Promise.all(promises);
 
       // Update stacks
-      setUndoStack(prev => prev.slice(0, -1));
-      setRedoStack(prev => [action, ...prev]);
+      setUndoStack((prev) => prev.slice(0, -1));
+      setRedoStack((prev) => [action, ...prev]);
 
       // Invalidate queries for affected images
-      action.imageIds.forEach(imageId => {
-        queryClient.invalidateQueries({ queryKey: ['image', imageId] });
+      action.imageIds.forEach((imageId) => {
+        queryClient.invalidateQueries({ queryKey: ['db', dbId, 'image', imageId] });
       });
-      queryClient.invalidateQueries({ queryKey: ['all-images'] });
+      queryClient.invalidateQueries({ queryKey: ['db', dbId, 'all-images'] });
 
       return true;
     } catch (error) {
@@ -154,7 +160,7 @@ export function useUndoRedo(options: UseUndoRedoOptions = {}) {
     } finally {
       setIsProcessing(false);
     }
-  }, [undoStack, isProcessing, queryClient]);
+  }, [dbId, undoStack, isProcessing, queryClient]);
 
   const redo = useCallback(async () => {
     if (redoStack.length === 0 || isProcessing) return false;
@@ -165,8 +171,8 @@ export function useUndoRedo(options: UseUndoRedoOptions = {}) {
       const action = redoStack[0];
       
       // Reapply the action to all images
-      const promises = action.imageIds.map(imageId =>
-        apiClient.updateImageGrade(imageId, {
+      const promises = action.imageIds.map((imageId) =>
+        apiClient.updateImageGrade(dbId, imageId, {
           status: action.newStatus,
           reason: action.newReason,
         })
@@ -175,14 +181,14 @@ export function useUndoRedo(options: UseUndoRedoOptions = {}) {
       await Promise.all(promises);
 
       // Update stacks
-      setRedoStack(prev => prev.slice(1));
-      setUndoStack(prev => [...prev, action]);
+      setRedoStack((prev) => prev.slice(1));
+      setUndoStack((prev) => [...prev, action]);
 
       // Invalidate queries for affected images
-      action.imageIds.forEach(imageId => {
-        queryClient.invalidateQueries({ queryKey: ['image', imageId] });
+      action.imageIds.forEach((imageId) => {
+        queryClient.invalidateQueries({ queryKey: ['db', dbId, 'image', imageId] });
       });
-      queryClient.invalidateQueries({ queryKey: ['all-images'] });
+      queryClient.invalidateQueries({ queryKey: ['db', dbId, 'all-images'] });
 
       return true;
     } catch (error) {
@@ -191,7 +197,7 @@ export function useUndoRedo(options: UseUndoRedoOptions = {}) {
     } finally {
       setIsProcessing(false);
     }
-  }, [redoStack, isProcessing, queryClient]);
+  }, [dbId, redoStack, isProcessing, queryClient]);
 
   const clearHistory = useCallback(() => {
     setUndoStack([]);

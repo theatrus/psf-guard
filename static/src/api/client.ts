@@ -10,6 +10,7 @@ import type {
   StarDetectionResponse,
   PreviewOptions,
   ServerInfo,
+  DatabaseSummary,
   FileCheckResponse,
   DirectoryTreeResponse,
   ProjectOverview,
@@ -38,7 +39,7 @@ const initializeApi = async () => {
   if (!initializedApi) {
     const serverUrl = await getServerUrl();
     cachedServerUrl = serverUrl;
-    
+
     const baseURL = serverUrl ? `${serverUrl}/api` : '/api';
     initializedApi = axios.create({
       baseURL,
@@ -46,7 +47,7 @@ const initializeApi = async () => {
         'Content-Type': 'application/json',
       },
     });
-    
+
     // Add response interceptor for error handling
     initializedApi.interceptors.response.use(
       (response) => response,
@@ -74,8 +75,12 @@ export const initializeApiClient = async () => {
   await initializeApi();
 };
 
+// Build a per-DB path under /api/db/{dbId}.
+const dbPath = (dbId: string, path: string) => `/db/${encodeURIComponent(dbId)}${path}`;
+
 export const apiClient = {
-  // Server info
+  // ── Global ────────────────────────────────────────────────────────────────
+
   getServerInfo: async (): Promise<ServerInfo> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<ServerInfo>>('/info');
@@ -83,80 +88,144 @@ export const apiClient = {
     return data.data;
   },
 
-  // Refresh file cache
-  refreshFileCache: async (): Promise<FileCheckResponse> => {
+  /** List every configured database. */
+  getDatabases: async (): Promise<DatabaseSummary[]> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.put<ApiResponse<FileCheckResponse>>('/refresh-cache');
+    const { data } = await apiInstance.get<ApiResponse<DatabaseSummary[]>>('/databases');
+    return data.data || [];
+  },
+
+  /** Register a new database. Works in both Tauri and browser mode. */
+  addDatabase: async (req: {
+    name: string;
+    db_path: string;
+    image_dirs: string[];
+    slug?: string;
+  }): Promise<DatabaseSummary> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<DatabaseSummary>>('/databases', req);
+    if (!data.data) throw new Error(data.error || 'Failed to add database');
+    return data.data;
+  },
+
+  /** Update an existing database. */
+  updateDatabase: async (
+    dbId: string,
+    req: {
+      name?: string;
+      slug?: string;
+      db_path?: string;
+      image_dirs?: string[];
+    }
+  ): Promise<DatabaseSummary> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<DatabaseSummary>>(
+      `/databases/${encodeURIComponent(dbId)}`,
+      req
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to update database');
+    return data.data;
+  },
+
+  /** Remove a database by slug. */
+  removeDatabase: async (dbId: string): Promise<boolean> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.delete<ApiResponse<{ removed: boolean }>>(
+      `/databases/${encodeURIComponent(dbId)}`
+    );
+    return data.data?.removed ?? false;
+  },
+
+  // ── Per-DB ────────────────────────────────────────────────────────────────
+
+  refreshFileCache: async (dbId: string): Promise<FileCheckResponse> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<FileCheckResponse>>(
+      dbPath(dbId, '/refresh-cache')
+    );
     if (!data.data) throw new Error('Failed to refresh cache');
     return data.data;
   },
 
-  // Refresh directory cache
-  refreshDirectoryCache: async (): Promise<DirectoryTreeResponse> => {
+  refreshDirectoryCache: async (dbId: string): Promise<DirectoryTreeResponse> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.put<ApiResponse<DirectoryTreeResponse>>('/refresh-directory-cache');
+    const { data } = await apiInstance.put<ApiResponse<DirectoryTreeResponse>>(
+      dbPath(dbId, '/refresh-directory-cache')
+    );
     if (!data.data) throw new Error('Failed to refresh directory cache');
     return data.data;
   },
 
-  // Projects
-  getProjects: async (): Promise<Project[]> => {
+  getProjects: async (dbId: string): Promise<Project[]> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.get<ApiResponse<Project[]>>('/projects');
+    const { data } = await apiInstance.get<ApiResponse<Project[]>>(dbPath(dbId, '/projects'));
     return data.data || [];
   },
 
-  // Targets
-  getTargets: async (projectId: number): Promise<Target[]> => {
+  getTargets: async (dbId: string, projectId: number): Promise<Target[]> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.get<ApiResponse<Target[]>>(`/projects/${projectId}/targets`);
+    const { data } = await apiInstance.get<ApiResponse<Target[]>>(
+      dbPath(dbId, `/projects/${projectId}/targets`)
+    );
     return data.data || [];
   },
 
-  // Images
-  getImages: async (query: ImageQuery): Promise<Image[]> => {
+  getImages: async (dbId: string, query: ImageQuery): Promise<Image[]> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.get<ApiResponse<Image[]>>('/images', { params: query });
+    const { data } = await apiInstance.get<ApiResponse<Image[]>>(dbPath(dbId, '/images'), {
+      params: query,
+    });
     return data.data || [];
   },
 
-  getImage: async (imageId: number): Promise<Image> => {
+  getImage: async (dbId: string, imageId: number): Promise<Image> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.get<ApiResponse<Image>>(`/images/${imageId}`);
+    const { data } = await apiInstance.get<ApiResponse<Image>>(
+      dbPath(dbId, `/images/${imageId}`)
+    );
     if (!data.data) throw new Error('Image not found');
     return data.data;
   },
 
-  // Grading
-  updateImageGrade: async (imageId: number, request: UpdateGradeRequest): Promise<void> => {
+  updateImageGrade: async (
+    dbId: string,
+    imageId: number,
+    request: UpdateGradeRequest
+  ): Promise<void> => {
     const apiInstance = await getApi();
-    await apiInstance.put(`/images/${imageId}/grade`, request);
+    await apiInstance.put(dbPath(dbId, `/images/${imageId}/grade`), request);
   },
 
-  // Star detection
-  getStarDetection: async (imageId: number): Promise<StarDetectionResponse> => {
+  getStarDetection: async (dbId: string, imageId: number): Promise<StarDetectionResponse> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.get<ApiResponse<StarDetectionResponse>>(`/images/${imageId}/stars`);
+    const { data } = await apiInstance.get<ApiResponse<StarDetectionResponse>>(
+      dbPath(dbId, `/images/${imageId}/stars`)
+    );
     if (!data.data) throw new Error('Star detection failed');
     return data.data;
   },
 
-  // Preview URL builder (uses cached server URL for synchronous access)
-  getPreviewUrl: (imageId: number, options?: PreviewOptions): string => {
+  getPreviewUrl: (dbId: string, imageId: number, options?: PreviewOptions): string => {
     const serverUrl = getCachedServerUrl();
     const params = new URLSearchParams();
     if (options?.size) params.append('size', options.size);
     if (options?.stretch !== undefined) params.append('stretch', String(options.stretch));
     if (options?.midtone !== undefined) params.append('midtone', String(options.midtone));
     if (options?.shadow !== undefined) params.append('shadow', String(options.shadow));
-    
+
     const queryString = params.toString();
     const basePath = serverUrl ? `${serverUrl}/api` : '/api';
-    return `${basePath}/images/${imageId}/preview${queryString ? `?${queryString}` : ''}`;
+    return `${basePath}${dbPath(dbId, `/images/${imageId}/preview`)}${
+      queryString ? `?${queryString}` : ''
+    }`;
   },
 
-  // Annotated image URL (uses cached server URL for synchronous access)
-  getAnnotatedUrl: (imageId: number, size: 'screen' | 'large' | 'original' = 'large', maxStars?: number): string => {
+  getAnnotatedUrl: (
+    dbId: string,
+    imageId: number,
+    size: 'screen' | 'large' | 'original' = 'large',
+    maxStars?: number
+  ): string => {
     const serverUrl = getCachedServerUrl();
     const params = new URLSearchParams();
     params.append('size', size);
@@ -164,17 +233,20 @@ export const apiClient = {
       params.append('max_stars', String(maxStars));
     }
     const basePath = serverUrl ? `${serverUrl}/api` : '/api';
-    return `${basePath}/images/${imageId}/annotated?${params.toString()}`;
+    return `${basePath}${dbPath(dbId, `/images/${imageId}/annotated`)}?${params.toString()}`;
   },
 
-  // PSF visualization URL (uses cached server URL for synchronous access)
-  getPsfUrl: (imageId: number, options?: {
-    num_stars?: number;
-    psf_type?: string;
-    sort_by?: string;
-    grid_cols?: number;
-    selection?: string;
-  }): string => {
+  getPsfUrl: (
+    dbId: string,
+    imageId: number,
+    options?: {
+      num_stars?: number;
+      psf_type?: string;
+      sort_by?: string;
+      grid_cols?: number;
+      selection?: string;
+    }
+  ): string => {
     const serverUrl = getCachedServerUrl();
     const params = new URLSearchParams();
     if (options?.num_stars) params.append('num_stars', String(options.num_stars));
@@ -182,51 +254,66 @@ export const apiClient = {
     if (options?.sort_by) params.append('sort_by', options.sort_by);
     if (options?.grid_cols) params.append('grid_cols', String(options.grid_cols));
     if (options?.selection) params.append('selection', options.selection);
-    
+
     const queryString = params.toString();
     const basePath = serverUrl ? `${serverUrl}/api` : '/api';
-    return `${basePath}/images/${imageId}/psf${queryString ? `?${queryString}` : ''}`;
+    return `${basePath}${dbPath(dbId, `/images/${imageId}/psf`)}${
+      queryString ? `?${queryString}` : ''
+    }`;
   },
 
-  // Overview endpoints
-  getProjectsOverview: async (): Promise<ProjectOverview[]> => {
+  getProjectsOverview: async (dbId: string): Promise<ProjectOverview[]> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.get<ApiResponse<ProjectOverview[]>>('/projects/overview');
+    const { data } = await apiInstance.get<ApiResponse<ProjectOverview[]>>(
+      dbPath(dbId, '/projects/overview')
+    );
     return data.data || [];
   },
 
-  getTargetsOverview: async (): Promise<TargetOverview[]> => {
+  getTargetsOverview: async (dbId: string): Promise<TargetOverview[]> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.get<ApiResponse<TargetOverview[]>>('/targets/overview');
+    const { data } = await apiInstance.get<ApiResponse<TargetOverview[]>>(
+      dbPath(dbId, '/targets/overview')
+    );
     return data.data || [];
   },
 
-  getOverallStats: async (): Promise<OverallStats> => {
+  getOverallStats: async (dbId: string): Promise<OverallStats> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.get<ApiResponse<OverallStats>>('/stats/overall');
+    const { data } = await apiInstance.get<ApiResponse<OverallStats>>(
+      dbPath(dbId, '/stats/overall')
+    );
     if (!data.data) throw new Error('Failed to get overall stats');
     return data.data;
   },
 
-  // Cache progress
-  getCacheProgress: async (): Promise<CacheRefreshProgress> => {
+  getCacheProgress: async (dbId: string): Promise<CacheRefreshProgress> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.get<ApiResponse<CacheRefreshProgress>>('/cache-progress');
+    const { data } = await apiInstance.get<ApiResponse<CacheRefreshProgress>>(
+      dbPath(dbId, '/cache-progress')
+    );
     if (!data.data) throw new Error('Failed to get cache progress');
     return data.data;
   },
 
-  // Sequence analysis
-  analyzeSequence: async (request: SequenceAnalysisRequest): Promise<SequenceAnalysisResponse> => {
+  analyzeSequence: async (
+    dbId: string,
+    request: SequenceAnalysisRequest
+  ): Promise<SequenceAnalysisResponse> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.get<ApiResponse<SequenceAnalysisResponse>>('/analysis/sequence', { params: request });
+    const { data } = await apiInstance.get<ApiResponse<SequenceAnalysisResponse>>(
+      dbPath(dbId, '/analysis/sequence'),
+      { params: request }
+    );
     if (!data.data) throw new Error('Sequence analysis failed');
     return data.data;
   },
 
-  getImageQuality: async (imageId: number): Promise<ImageQualityResponse> => {
+  getImageQuality: async (dbId: string, imageId: number): Promise<ImageQualityResponse> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.get<ApiResponse<ImageQualityResponse>>(`/analysis/image/${imageId}`);
+    const { data } = await apiInstance.get<ApiResponse<ImageQualityResponse>>(
+      dbPath(dbId, `/analysis/image/${imageId}`)
+    );
     if (!data.data) throw new Error('Image quality data not found');
     return data.data;
   },

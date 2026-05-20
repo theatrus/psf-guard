@@ -1,5 +1,5 @@
 import { useLocation, useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { useProjectTarget } from '../hooks/useUrlState';
+import { useDbProjectTarget } from '../hooks/useUrlState';
 import GroupedImageGrid from './GroupedImageGrid';
 import ImageDetailView from './ImageDetailView';
 import ImageComparisonView from './ImageComparisonView';
@@ -11,7 +11,7 @@ export default function MainView() {
   const params = useParams();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { projectId } = useProjectTarget();
+  const { dbId, projectId } = useDbProjectTarget();
 
   // Determine current view mode from URL
   const isDetailView = location.pathname.startsWith('/detail/');
@@ -23,7 +23,7 @@ export default function MainView() {
 
   // Navigation and grading hooks for overlays
   const navigation = useImageNavigation(imageId || rightImageId);
-  const grading = useGrading();
+  const grading = useGrading(dbId!);
 
   const handleGrade = async (status: 'accepted' | 'rejected' | 'pending') => {
     if (!imageId) return;
@@ -133,9 +133,10 @@ export default function MainView() {
       <GroupedImageGrid useLazyImages={true} />
 
       {/* Show detail view overlay when in detail mode */}
-      {isDetailView && imageId && (
+      {isDetailView && imageId && dbId && (
         <div className="overlay-container detail-overlay">
           <ImageDetailView
+            dbId={dbId}
             imageId={imageId}
             onClose={navigation.goToGrid}
             onNext={navigation.goToNext}
@@ -148,9 +149,10 @@ export default function MainView() {
       )}
 
       {/* Show comparison view overlay when in comparison mode */}
-      {isComparisonView && leftImageId && rightImageId && (
+      {isComparisonView && leftImageId && rightImageId && dbId && (
         <div className="overlay-container comparison-overlay">
           <ImageComparisonView
+            dbId={dbId}
             leftImageId={leftImageId}
             rightImageId={rightImageId}
             onClose={navigation.goToGrid}

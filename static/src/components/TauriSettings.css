@@ -347,3 +347,69 @@
 .tauri-settings .restart-button:hover {
   background-color: var(--color-success-hover);
 }
+/* B5/F3: multi-DB list rows */
+.tauri-settings .db-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border, #444);
+  border-radius: 4px;
+  margin-bottom: 8px;
+  background-color: var(--color-bg-input, rgba(255, 255, 255, 0.02));
+}
+
+.tauri-settings .db-row-main {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tauri-settings .db-row-title {
+  margin-bottom: 4px;
+}
+
+.tauri-settings .db-row-slug {
+  font-size: 11px;
+  color: var(--color-text-secondary, #999);
+  background: var(--color-bg-button, rgba(255, 255, 255, 0.05));
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-left: 6px;
+}
+
+.tauri-settings .db-row-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.tauri-settings .db-row-actions .remove-button {
+  width: auto;
+  padding: 4px 10px;
+}
+
+.tauri-settings .muted {
+  color: var(--color-text-secondary, #999);
+}
+
+.tauri-settings .info-panel-content .db-list {
+  list-style: none;
+  padding-left: 0;
+  margin: 4px 0 0 0;
+}
+
+.tauri-settings .info-panel-content .db-list li {
+  margin-bottom: 8px;
+}
+
+.tauri-settings .info-panel-content .db-list code {
+  font-size: 11px;
+  color: var(--color-text-secondary, #999);
+}
+
+.tauri-settings .info-panel-content .db-list .image-dirs {
+  font-size: 12px;
+  color: var(--color-text-secondary, #999);
+}

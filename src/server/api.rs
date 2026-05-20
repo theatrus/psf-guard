@@ -228,10 +228,46 @@ pub struct PreviewOptions {
 
 #[derive(Debug, Serialize)]
 pub struct ServerInfo {
-    pub database_path: String,
-    pub image_directory: String,
-    pub cache_directory: String,
     pub version: String,
+    pub cache_directory: String,
+    /// Whether `/api/databases` accepts mutating requests (POST/PUT/DELETE).
+    /// Frontend hides add/edit/remove controls when false.
+    pub allow_database_management: bool,
+}
+
+/// Summary of one configured database, returned by `GET /api/databases`.
+#[derive(Debug, Serialize)]
+pub struct DatabaseSummary {
+    pub id: String,
+    pub name: String,
+    pub database_path: String,
+    pub image_directories: Vec<String>,
+}
+
+/// Body of `POST /api/databases`.
+#[derive(Debug, Deserialize)]
+pub struct AddDatabaseRequest {
+    pub name: String,
+    pub db_path: String,
+    #[serde(default)]
+    pub image_dirs: Vec<String>,
+    /// Optional user-supplied slug; if omitted, derived from the path.
+    #[serde(default)]
+    pub slug: Option<String>,
+}
+
+/// Body of `PUT /api/databases/{db_id}`. All fields are optional; absent fields
+/// leave the existing value unchanged.
+#[derive(Debug, Deserialize, Default)]
+pub struct UpdateDatabaseRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub slug: Option<String>,
+    #[serde(default)]
+    pub db_path: Option<String>,
+    #[serde(default)]
+    pub image_dirs: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]

@@ -16,12 +16,12 @@ beforeEach(() => {
 describe('apiClient.analyzeSequence', () => {
   it('returns sequence analysis data for a target', async () => {
     server.use(
-      http.get('/api/analysis/sequence', () => {
+      http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json(normalFixture);
       }),
     );
 
-    const result = await apiClient.analyzeSequence({ target_id: 1, filter_name: 'L' });
+    const result = await apiClient.analyzeSequence('test', { target_id: 1, filter_name: 'L' });
 
     expect(result.sequences).toHaveLength(1);
     expect(result.sequences[0].target_id).toBe(1);
@@ -33,12 +33,12 @@ describe('apiClient.analyzeSequence', () => {
 
   it('returns cloud-affected sequence data', async () => {
     server.use(
-      http.get('/api/analysis/sequence', () => {
+      http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json(cloudsFixture);
       }),
     );
 
-    const result = await apiClient.analyzeSequence({ target_id: 1, filter_name: 'Ha' });
+    const result = await apiClient.analyzeSequence('test', { target_id: 1, filter_name: 'Ha' });
 
     expect(result.sequences).toHaveLength(1);
     expect(result.sequences[0].image_count).toBe(8);
@@ -56,13 +56,13 @@ describe('apiClient.analyzeSequence', () => {
     let capturedUrl: URL | null = null;
 
     server.use(
-      http.get('/api/analysis/sequence', ({ request }) => {
+      http.get('/api/db/:dbId/analysis/sequence', ({ request }) => {
         capturedUrl = new URL(request.url);
         return HttpResponse.json(normalFixture);
       }),
     );
 
-    await apiClient.analyzeSequence({
+    await apiClient.analyzeSequence('test', {
       target_id: 1,
       filter_name: 'Ha',
       session_gap_minutes: 90,
@@ -78,7 +78,7 @@ describe('apiClient.analyzeSequence', () => {
 
   it('throws when data is null', async () => {
     server.use(
-      http.get('/api/analysis/sequence', () => {
+      http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json({
           success: true,
           data: null,
@@ -88,19 +88,19 @@ describe('apiClient.analyzeSequence', () => {
       }),
     );
 
-    await expect(apiClient.analyzeSequence({ target_id: 1 })).rejects.toThrow('Sequence analysis failed');
+    await expect(apiClient.analyzeSequence('test', { target_id: 1 })).rejects.toThrow('Sequence analysis failed');
   });
 });
 
 describe('apiClient.getImageQuality', () => {
   it('returns image quality context', async () => {
     server.use(
-      http.get('/api/analysis/image/:imageId', () => {
+      http.get('/api/db/:dbId/analysis/image/:imageId', () => {
         return HttpResponse.json(imageQualityFixture);
       }),
     );
 
-    const result = await apiClient.getImageQuality(5);
+    const result = await apiClient.getImageQuality('test', 5);
 
     expect(result.image_id).toBe(5);
     expect(result.quality).toBeDefined();
@@ -114,7 +114,7 @@ describe('apiClient.getImageQuality', () => {
 
   it('throws when data is null', async () => {
     server.use(
-      http.get('/api/analysis/image/:imageId', () => {
+      http.get('/api/db/:dbId/analysis/image/:imageId', () => {
         return HttpResponse.json({
           success: false,
           data: null,
@@ -124,6 +124,6 @@ describe('apiClient.getImageQuality', () => {
       }),
     );
 
-    await expect(apiClient.getImageQuality(99999)).rejects.toThrow();
+    await expect(apiClient.getImageQuality('test', 99999)).rejects.toThrow();
   });
 });

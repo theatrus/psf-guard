@@ -1,7 +1,10 @@
 pub mod api;
 pub mod cache;
+pub mod database_context;
 pub mod embedded_static;
+pub mod extract;
 pub mod handlers;
+pub mod slug;
 pub mod state;
 pub mod static_file_service;
 
@@ -24,23 +27,33 @@ use tokio::sync::oneshot;
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
-    pub database_path: String,
-    pub image_dirs: Vec<String>,
+    /// Every database the server should load at startup. Empty means the
+    /// server still runs (the UI shows an empty state).
+    pub databases: Vec<crate::db_registry::DbEntry>,
     pub static_dir: Option<String>,
     pub cache_dir: String,
     pub host: String,
     pub port: u16,
     pub pregeneration_config: PregenerationConfig,
+    /// Path of the on-disk registry that mirrors `databases`. When set, the
+    /// CRUD endpoints (`POST/PUT/DELETE /api/databases/...`) persist runtime
+    /// changes here. `None` disables those endpoints.
+    pub registry_path: Option<PathBuf>,
+    /// Allow HTTP clients to mutate the configured database list. Off by
+    /// default for CLI servers; Tauri always enables it.
+    pub allow_database_management: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_server(
-    database_path: String,
-    image_dirs: Vec<String>,
+    databases: Vec<crate::db_registry::DbEntry>,
     static_dir: Option<String>,
     cache_dir: String,
     host: String,
     port: u16,
     pregeneration_config: PregenerationConfig,
+    registry_path: Option<PathBuf>,
+    allow_database_management: bool,
 ) -> anyhow::Result<()> {
     // Initialize tracing with environment-based filtering (for CLI mode)
     // Set RUST_LOG=debug for debug logs, RUST_LOG=info for info logs, etc.
@@ -56,13 +69,14 @@ pub async fn run_server(
         .init();
 
     let config = ServerConfig {
-        database_path,
-        image_dirs,
+        databases,
         static_dir,
         cache_dir,
         host,
         port,
         pregeneration_config,
+        registry_path,
+        allow_database_management,
     };
 
     run_server_internal(config, None).await
@@ -90,8 +104,15 @@ async fn run_server_internal(
     shutdown_rx: Option<oneshot::Receiver<()>>,
 ) -> anyhow::Result<()> {
     tracing::info!("🚀 Starting PSF Guard server");
-    tracing::info!("📊 Database: {}", config.database_path);
-    tracing::info!("📁 Image directories: {}", config.image_dirs.join(", "));
+    tracing::info!(
+        "📊 Databases ({}):{}",
+        config.databases.len(),
+        config
+            .databases
+            .iter()
+            .map(|d| format!("\n   - {} ({}): {}", d.name, d.id, d.db_path))
+            .collect::<String>()
+    );
     tracing::info!("💾 Cache directory: {}", config.cache_dir);
 
     // Log pregeneration configuration
@@ -110,14 +131,26 @@ async fn run_server_internal(
     std::fs::create_dir_all(&config.cache_dir)?;
 
     // Create app state
-    let state = match AppState::new(
-        config.database_path.clone(),
-        config.image_dirs.clone(),
+    let state = match AppState::from_databases(
+        config.databases.clone(),
         config.cache_dir.clone(),
         config.pregeneration_config.clone(),
     ) {
         Ok(state) => {
             tracing::info!("✅ Application state initialized successfully");
+            state.set_registry_path(config.registry_path.clone());
+            state.set_allow_database_management(config.allow_database_management);
+            if config.allow_database_management {
+                tracing::warn!(
+                    "⚠️ Database management via HTTP is ENABLED. Anyone who can reach \
+                     this server can add/edit/remove configured databases."
+                );
+            } else {
+                tracing::info!(
+                    "🔒 Database management via HTTP is disabled. Pass \
+                     --allow-database-management to the server command to enable."
+                );
+            }
             Arc::new(state)
         }
         Err(e) => {
@@ -126,19 +159,23 @@ async fn run_server_internal(
         }
     };
 
-    // Start background cache refresh at server startup
-    // This ensures the singleton refresh is started immediately
-    let startup_status = state.ensure_cache_available();
-    match startup_status {
-        crate::server::state::RefreshStatus::InProgressWait
-        | crate::server::state::RefreshStatus::InProgressServeStale => {
-            tracing::info!("🔄 Cache refresh started at server startup");
-        }
-        crate::server::state::RefreshStatus::NotNeeded => {
-            tracing::info!("✅ Cache is already available at startup");
-        }
-        crate::server::state::RefreshStatus::NeedsRefresh => {
-            tracing::warn!("⚠️ Cache refresh needed but not started - this shouldn't happen");
+    // Kick off a background cache refresh for every configured database.
+    for ctx in state.all_databases() {
+        let status = ctx.ensure_cache_available();
+        match status {
+            crate::server::state::RefreshStatus::InProgressWait
+            | crate::server::state::RefreshStatus::InProgressServeStale => {
+                tracing::info!("🔄 Cache refresh started at server startup (db={})", ctx.id);
+            }
+            crate::server::state::RefreshStatus::NotNeeded => {
+                tracing::info!("✅ Cache is already available at startup (db={})", ctx.id);
+            }
+            crate::server::state::RefreshStatus::NeedsRefresh => {
+                tracing::warn!(
+                    "⚠️ Cache refresh needed but not started for db={} - this shouldn't happen",
+                    ctx.id
+                );
+            }
         }
     }
 
@@ -150,9 +187,8 @@ async fn run_server_internal(
         });
     }
 
-    // Create API routes
-    let api_routes = Router::new()
-        .route("/info", get(handlers::get_server_info))
+    // Per-DB routes — nested under /api/db/{db_id}/.
+    let db_routes: Router<Arc<AppState>> = Router::new()
         .route("/refresh-cache", put(handlers::refresh_file_cache))
         .route("/cache-progress", get(handlers::get_cache_refresh_progress))
         .route(
@@ -190,7 +226,20 @@ async fn run_server_internal(
         .route(
             "/analysis/image/{image_id}",
             get(handlers::get_image_quality),
+        );
+
+    // Top-level API: global endpoints + nested per-DB routes.
+    let api_routes = Router::new()
+        .route("/info", get(handlers::get_server_info))
+        .route(
+            "/databases",
+            get(handlers::list_databases).post(handlers::add_database_route),
         )
+        .route(
+            "/databases/{db_id}",
+            put(handlers::update_database_route).delete(handlers::remove_database_route),
+        )
+        .nest("/db/{db_id}", db_routes)
         .with_state(state);
 
     // Create main app with either embedded or filesystem static serving
@@ -283,155 +332,184 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
         // Wait for next scan interval
         interval_timer.tick().await;
 
-        tracing::debug!("🔍 Scanning for images needing pre-generation");
+        // Iterate every configured database; pre-generation is per-DB work.
+        for ctx in state.all_databases() {
+            tracing::debug!(
+                "🔍 Scanning db={} for images needing pre-generation",
+                ctx.id
+            );
 
-        // Get all images from database
-        let images = match get_all_images_for_pregeneration(&state).await {
-            Ok(images) => images,
-            Err(e) => {
-                tracing::error!("❌ Failed to get images for pre-generation: {}", e);
+            let images = match get_all_images_for_pregeneration(&ctx).await {
+                Ok(images) => images,
+                Err(e) => {
+                    tracing::error!(
+                        "❌ Failed to get images for pre-generation (db={}): {}",
+                        ctx.id,
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            if images.is_empty() {
+                tracing::debug!("📭 No images found for pre-generation in db={}", ctx.id);
                 continue;
             }
-        };
 
-        if images.is_empty() {
-            tracing::debug!("📭 No images found for pre-generation");
-            continue;
-        }
+            tracing::info!(
+                "🎯 Found {} images for pre-generation in db={}",
+                images.len(),
+                ctx.id
+            );
 
-        tracing::info!("🎯 Found {} images for pre-generation", images.len());
+            let mut processed_count = 0;
+            let mut generated_count = 0;
+            let mut skipped_count = 0;
+            let mut error_count = 0;
 
-        // Process images in batches with rate limiting
-        let mut processed_count = 0;
-        let mut generated_count = 0;
-        let mut skipped_count = 0;
-        let mut error_count = 0;
+            for batch in images.chunks(batch_size) {
+                for (image_id, file_only, target_name) in batch {
+                    let mut _formats_processed = 0;
 
-        for batch in images.chunks(batch_size) {
-            for (image_id, file_only, target_name) in batch {
-                let mut _formats_processed = 0;
-
-                // Pre-generate each enabled format
-                if state.pregeneration_config.screen_enabled {
-                    match pregenerate_preview(&state, *image_id, file_only, target_name, "screen")
+                    if state.pregeneration_config.screen_enabled {
+                        match pregenerate_preview(
+                            &state,
+                            &ctx,
+                            *image_id,
+                            file_only,
+                            target_name,
+                            "screen",
+                        )
                         .await
-                    {
-                        Ok(generated) => {
-                            _formats_processed += 1;
-                            if generated {
-                                generated_count += 1;
-                            } else {
-                                skipped_count += 1;
+                        {
+                            Ok(generated) => {
+                                _formats_processed += 1;
+                                if generated {
+                                    generated_count += 1;
+                                } else {
+                                    skipped_count += 1;
+                                }
+                            }
+                            Err(e) => {
+                                error_count += 1;
+                                tracing::warn!(
+                                    "⚠️ Failed to pre-generate screen preview for image {} (db={}): {}",
+                                    image_id, ctx.id, e
+                                );
                             }
                         }
-                        Err(e) => {
-                            error_count += 1;
-                            tracing::warn!(
-                                "⚠️ Failed to pre-generate screen preview for image {}: {}",
-                                image_id,
-                                e
-                            );
-                        }
                     }
-                }
 
-                if state.pregeneration_config.large_enabled {
-                    match pregenerate_preview(&state, *image_id, file_only, target_name, "large")
+                    if state.pregeneration_config.large_enabled {
+                        match pregenerate_preview(
+                            &state,
+                            &ctx,
+                            *image_id,
+                            file_only,
+                            target_name,
+                            "large",
+                        )
                         .await
-                    {
-                        Ok(generated) => {
-                            _formats_processed += 1;
-                            if generated {
-                                generated_count += 1;
-                            } else {
-                                skipped_count += 1;
+                        {
+                            Ok(generated) => {
+                                _formats_processed += 1;
+                                if generated {
+                                    generated_count += 1;
+                                } else {
+                                    skipped_count += 1;
+                                }
+                            }
+                            Err(e) => {
+                                error_count += 1;
+                                tracing::warn!(
+                                    "⚠️ Failed to pre-generate large preview for image {} (db={}): {}",
+                                    image_id, ctx.id, e
+                                );
                             }
                         }
-                        Err(e) => {
-                            error_count += 1;
-                            tracing::warn!(
-                                "⚠️ Failed to pre-generate large preview for image {}: {}",
-                                image_id,
-                                e
-                            );
-                        }
                     }
-                }
 
-                if state.pregeneration_config.original_enabled {
-                    match pregenerate_preview(&state, *image_id, file_only, target_name, "original")
+                    if state.pregeneration_config.original_enabled {
+                        match pregenerate_preview(
+                            &state,
+                            &ctx,
+                            *image_id,
+                            file_only,
+                            target_name,
+                            "original",
+                        )
                         .await
-                    {
-                        Ok(generated) => {
-                            _formats_processed += 1;
-                            if generated {
-                                generated_count += 1;
-                            } else {
-                                skipped_count += 1;
+                        {
+                            Ok(generated) => {
+                                _formats_processed += 1;
+                                if generated {
+                                    generated_count += 1;
+                                } else {
+                                    skipped_count += 1;
+                                }
+                            }
+                            Err(e) => {
+                                error_count += 1;
+                                tracing::warn!(
+                                    "⚠️ Failed to pre-generate original preview for image {} (db={}): {}",
+                                    image_id, ctx.id, e
+                                );
                             }
                         }
-                        Err(e) => {
-                            error_count += 1;
-                            tracing::warn!(
-                                "⚠️ Failed to pre-generate original preview for image {}: {}",
-                                image_id,
-                                e
-                            );
-                        }
                     }
-                }
 
-                if state.pregeneration_config.annotated_enabled {
-                    match pregenerate_annotated(&state, *image_id, file_only, target_name).await {
-                        Ok(generated) => {
-                            _formats_processed += 1;
-                            if generated {
-                                generated_count += 1;
-                            } else {
-                                skipped_count += 1;
+                    if state.pregeneration_config.annotated_enabled {
+                        match pregenerate_annotated(&state, &ctx, *image_id, file_only, target_name)
+                            .await
+                        {
+                            Ok(generated) => {
+                                _formats_processed += 1;
+                                if generated {
+                                    generated_count += 1;
+                                } else {
+                                    skipped_count += 1;
+                                }
+                            }
+                            Err(e) => {
+                                error_count += 1;
+                                tracing::warn!(
+                                    "⚠️ Failed to pre-generate annotated image for image {} (db={}): {}",
+                                    image_id, ctx.id, e
+                                );
                             }
                         }
-                        Err(e) => {
-                            error_count += 1;
-                            tracing::warn!(
-                                "⚠️ Failed to pre-generate annotated image for image {}: {}",
-                                image_id,
-                                e
-                            );
-                        }
                     }
+
+                    processed_count += 1;
+                    sleep(rate_limit_delay).await;
                 }
 
-                processed_count += 1;
-
-                // Rate limiting delay
-                sleep(rate_limit_delay).await;
+                tracing::debug!(
+                    "📈 Pre-generation progress for db={}: {}/{} images processed",
+                    ctx.id,
+                    processed_count,
+                    images.len()
+                );
             }
 
-            tracing::debug!(
-                "📈 Pre-generation progress: {}/{} images processed",
-                processed_count,
-                images.len()
-            );
-        }
-
-        if processed_count > 0 {
-            tracing::info!(
-                "✅ Pre-generation cycle complete: {} generated, {} skipped, {} errors ({} images processed)",
-                generated_count, skipped_count, error_count, processed_count
-            );
+            if processed_count > 0 {
+                tracing::info!(
+                    "✅ Pre-generation cycle complete for db={}: {} generated, {} skipped, {} errors ({} images processed)",
+                    ctx.id, generated_count, skipped_count, error_count, processed_count
+                );
+            }
         }
     }
 }
 
 async fn get_all_images_for_pregeneration(
-    state: &Arc<AppState>,
+    ctx: &Arc<crate::server::database_context::DatabaseContext>,
 ) -> Result<Vec<(i32, String, String)>> {
     use crate::db::Database;
 
     // Get all images from database
     let images = {
-        let conn = state.db();
+        let conn = ctx.db();
         let conn = conn
             .lock()
             .map_err(|_| anyhow::anyhow!("Database lock error"))?;
@@ -463,6 +541,7 @@ async fn get_all_images_for_pregeneration(
 
 async fn pregenerate_preview(
     state: &Arc<AppState>,
+    ctx: &Arc<crate::server::database_context::DatabaseContext>,
     image_id: i32,
     file_only: &str,
     target_name: &str,
@@ -474,7 +553,7 @@ async fn pregenerate_preview(
     let image_data = {
         use crate::db::Database;
 
-        let conn = state.db();
+        let conn = ctx.db();
         let conn = conn
             .lock()
             .map_err(|_| anyhow::anyhow!("Database lock error"))?;
@@ -504,7 +583,7 @@ async fn pregenerate_preview(
         -28000     // shadow -2.8 * 10000
     );
 
-    let cache_manager = CacheManager::new(std::path::PathBuf::from(&state.cache_dir));
+    let cache_manager = CacheManager::new(std::path::PathBuf::from(&ctx.cache_dir));
     cache_manager.ensure_category_dir("previews")?;
     let cache_path = cache_manager.get_cached_path("previews", &cache_key, "png");
 
@@ -526,7 +605,7 @@ async fn pregenerate_preview(
     tracing::debug!("🎨 Pre-generating {} preview for image {}", size, image_id);
 
     // Find FITS file using existing function
-    let fits_path = handlers::find_fits_file(state, &image_data, target_name, file_only)
+    let fits_path = handlers::find_fits_file(ctx, &image_data, target_name, file_only)
         .map_err(|_| anyhow::anyhow!("FITS file not found for image {}", image_id))?;
 
     // Determine target dimensions
@@ -562,6 +641,7 @@ async fn pregenerate_preview(
 
 async fn pregenerate_annotated(
     state: &Arc<AppState>,
+    ctx: &Arc<crate::server::database_context::DatabaseContext>,
     image_id: i32,
     file_only: &str,
     target_name: &str,
@@ -576,7 +656,7 @@ async fn pregenerate_annotated(
     let image_data = {
         use crate::db::Database;
 
-        let conn = state.db();
+        let conn = ctx.db();
         let conn = conn
             .lock()
             .map_err(|_| anyhow::anyhow!("Database lock error"))?;
@@ -606,7 +686,7 @@ async fn pregenerate_annotated(
         max_stars
     );
 
-    let cache_manager = CacheManager::new(std::path::PathBuf::from(&state.cache_dir));
+    let cache_manager = CacheManager::new(std::path::PathBuf::from(&ctx.cache_dir));
     cache_manager.ensure_category_dir("annotated")?;
     let cache_path = cache_manager.get_cached_path("annotated", &cache_key, "png");
 
@@ -627,7 +707,7 @@ async fn pregenerate_annotated(
     tracing::debug!("🎨 Pre-generating annotated image for image {}", image_id);
 
     // Find FITS file
-    let fits_path = handlers::find_fits_file(state, &image_data, target_name, file_only)
+    let fits_path = handlers::find_fits_file(ctx, &image_data, target_name, file_only)
         .map_err(|_| anyhow::anyhow!("FITS file not found for image {}", image_id))?;
 
     // Generate annotated image

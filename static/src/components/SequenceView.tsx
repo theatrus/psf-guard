@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import { useSequenceAnalysis } from '../hooks/useSequenceAnalysis';
 import { useGrading } from '../hooks/useGrading';
-import { useProjectTarget } from '../hooks/useUrlState';
+import { useDbProjectTarget } from '../hooks/useUrlState';
 import UndoRedoToolbar from './UndoRedoToolbar';
 import type { ScoredSequence, ImageQualityResult } from '../api/types';
 
@@ -30,11 +30,11 @@ function qualityLabel(score: number): string {
 }
 
 export default function SequenceView() {
-  const { projectId, targetId } = useProjectTarget();
+  const { dbId, projectId, targetId } = useDbProjectTarget();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const grading = useGrading();
-  const { analyze, data: analysisData, isLoading: isAnalyzing, error: analysisError } = useSequenceAnalysis();
+  const grading = useGrading(dbId!);
+  const { analyze, data: analysisData, isLoading: isAnalyzing, error: analysisError } = useSequenceAnalysis(dbId);
 
   const filterName = searchParams.get('filterName') || undefined;
   const [threshold, setThreshold] = useState(0.5);
@@ -43,20 +43,21 @@ export default function SequenceView() {
 
   // Fetch targets for the project to allow selection
   const { data: targets = [] } = useQuery({
-    queryKey: ['targets', projectId],
-    queryFn: () => apiClient.getTargets(projectId!),
-    enabled: !!projectId,
+    queryKey: ['db', dbId, 'targets', projectId],
+    queryFn: () => apiClient.getTargets(dbId!, projectId!),
+    enabled: !!dbId && !!projectId,
   });
 
   // Fetch images for the target (for preview URLs)
   const { data: images = [] } = useQuery({
-    queryKey: ['all-images', projectId, targetId],
-    queryFn: () => apiClient.getImages({
-      project_id: projectId || undefined,
-      target_id: targetId || undefined,
-      limit: 10000,
-    }),
-    enabled: projectId !== undefined,
+    queryKey: ['db', dbId, 'all-images', projectId, targetId],
+    queryFn: () =>
+      apiClient.getImages(dbId!, {
+        project_id: projectId || undefined,
+        target_id: targetId || undefined,
+        limit: 10000,
+      }),
+    enabled: !!dbId && projectId !== undefined,
   });
 
   // Build image lookup map
@@ -343,6 +344,7 @@ export default function SequenceView() {
                   return (
                     <SequenceImageCard
                       key={qr.image_id}
+                      dbId={dbId!}
                       quality={qr}
                       image={img}
                       isSelected={isSelected}
@@ -451,6 +453,7 @@ function SequenceTimeline({
 
 // Individual image card in the sequence strip
 function SequenceImageCard({
+  dbId,
   quality,
   image,
   isSelected,
@@ -458,6 +461,7 @@ function SequenceImageCard({
   onClick,
   onDoubleClick,
 }: {
+  dbId: string;
   quality: ImageQualityResult;
   image?: { id: number; target_name: string; filter_name: string | null; acquired_date: number | null; grading_status: number };
   isSelected: boolean;
@@ -478,7 +482,7 @@ function SequenceImageCard({
     >
       <div className="sequence-image-preview">
         <img
-          src={apiClient.getPreviewUrl(quality.image_id, { size: 'screen' })}
+          src={apiClient.getPreviewUrl(dbId, quality.image_id, { size: 'screen' })}
           alt={`Image ${quality.image_id}`}
           loading="lazy"
         />

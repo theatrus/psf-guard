@@ -216,6 +216,7 @@ pub fn main() -> Result<()> {
         }
         Commands::Server {
             config,
+            registry,
             database,
             image_dirs,
             static_dir,
@@ -228,39 +229,55 @@ pub fn main() -> Result<()> {
             pregenerate_annotated,
             pregenerate_all,
             cache_expiry,
+            allow_database_management,
         } => {
             use crate::config::Config;
+            use crate::db_registry::DbRegistry;
+            use std::path::PathBuf;
 
-            // Load configuration from file or use defaults
+            // 1) Resolve and load the database registry.
+            let registry_path = match registry {
+                Some(p) => PathBuf::from(p),
+                None => DbRegistry::default_path().context("resolving default registry path")?,
+            };
+            let mut db_registry = DbRegistry::load_or_init(&registry_path)
+                .with_context(|| format!("loading registry at {}", registry_path.display()))?;
+
+            // 2) If the user passed a positional DB, register it (idempotent).
+            if let Some(db_path) = database {
+                if db_registry.find_by_path(&db_path).is_none() {
+                    let name = PathBuf::from(&db_path)
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| "Database".to_string());
+                    db_registry
+                        .add(name, db_path.clone(), image_dirs.clone(), None)
+                        .with_context(|| format!("registering {}", db_path))?;
+                    db_registry.save(&registry_path).with_context(|| {
+                        format!("saving registry to {}", registry_path.display())
+                    })?;
+                    eprintln!("Registered new database in {}", registry_path.display());
+                } else if !image_dirs.is_empty() {
+                    eprintln!(
+                        "Database already registered; positional image dirs ignored \
+                         (edit the registry to update them)"
+                    );
+                }
+            }
+
+            // 3) Load shared TOML config for port/cache_dir/pregeneration knobs.
             let mut app_config = if let Some(config_path) = config {
                 Config::from_file(&config_path)
                     .with_context(|| format!("Failed to load config file: {}", config_path))?
             } else {
                 Config::default()
             };
+            app_config.merge_with_cli(None, None, port, cache_dir);
 
-            // Override config with command line arguments
-            let database_path = if database.is_some() || image_dirs.is_empty() {
-                database
-            } else {
-                // If no database specified and we have image_dirs from CLI, use the default
-                Some(app_config.database.path.clone())
-            };
+            // We deliberately do NOT call app_config.validate() — the DB path
+            // requirement no longer applies (DBs come from the registry).
 
-            let image_directories = if !image_dirs.is_empty() {
-                Some(image_dirs)
-            } else {
-                None
-            };
-
-            app_config.merge_with_cli(database_path, image_directories, port, cache_dir);
-
-            // Validate configuration
-            app_config
-                .validate()
-                .context("Configuration validation failed")?;
-
-            // Create pregeneration configuration
             use crate::cli::PregenerationConfig;
             let pregeneration_config = if pregenerate_all
                 || pregenerate_screen
@@ -268,7 +285,6 @@ pub fn main() -> Result<()> {
                 || pregenerate_original
                 || pregenerate_annotated
             {
-                // CLI flags take precedence
                 PregenerationConfig::from_server_args(
                     pregenerate_screen,
                     pregenerate_large,
@@ -278,28 +294,25 @@ pub fn main() -> Result<()> {
                     &cache_expiry,
                 )?
             } else {
-                // Use config file settings
                 PregenerationConfig::from_config(app_config.get_pregeneration())
             };
 
-            // Clone values before use to avoid borrow checker issues
-            let database_path = app_config.database.path.clone();
-            let image_directories = app_config.images.directories.clone();
             let cache_directory = app_config.get_cache_directory();
             let server_host = app_config.get_host();
             let server_port = app_config.get_port();
+            let databases = db_registry.databases.clone();
 
-            // Use tokio runtime for async server
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(async {
                 crate::server::run_server(
-                    database_path,
-                    image_directories,
+                    databases,
                     static_dir,
                     cache_directory,
                     server_host,
                     server_port,
                     pregeneration_config,
+                    Some(registry_path),
+                    allow_database_management,
                 )
                 .await
             })?;

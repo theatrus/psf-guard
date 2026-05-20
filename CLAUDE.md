@@ -34,6 +34,35 @@ cargo build --release --features tauri   # GUI capable
 - **Web Server**: Axum + embedded React frontend
 - **Cache System**: Directory tree + file cache with 5-minute TTL
 
+### Multi-database support (2026-05)
+The server can manage many N.I.N.A. scheduler databases at once. Both the
+Tauri app and the CLI `server` command read from a shared JSON registry at
+the platform config location (`<config>/psf-guard/config.json` by default).
+
+- **Registry**: `src/db_registry.rs` owns the on-disk schema (v2). Each entry
+  is `{ id, name, db_path, image_dirs }` where `id` is a user-editable
+  URL-safe slug seeded from a hash of the canonical DB path. Migration from
+  v1 (`{database_path, image_directories}`) happens on first load and writes
+  a `.bak`.
+- **Server state**: `AppState.databases` is a `HashMap<slug, Arc<DatabaseContext>>`.
+  Each context owns its own SQLite connection, directory tree cache, file
+  cache, and refresh mutex.
+- **API**: every per-DB endpoint is nested under `/api/db/{db_id}/...`.
+  Cross-DB endpoints (`/api/info`, `/api/databases`, and CRUD on
+  `/api/databases/{id}`) sit at the top level.
+- **Frontend model**: no "active DB" switcher. The Overview merges projects
+  and targets across all configured databases, grouping by DB. Scoped views
+  (grid, detail, comparison) read `?db=<slug>` from the URL alongside the
+  other identifiers; missing `?db=` shows an empty state.
+- **Per-DB cache**: artifacts live under `<cache_root>/<slug>/`. Slug rename
+  via `PUT /api/databases/{id}` renames the cache subdirectory too so
+  previously generated previews carry over.
+- **CLI persistence**: `psf-guard server <db> <dirs>` registers the DB into
+  the shared registry on first run. Use `--registry /tmp/scratch.json` for
+  ad-hoc sessions that should not touch the user's real config.
+
+Implementation tracker and design rationale: [MULTI_DB_PLAN.md](./MULTI_DB_PLAN.md).
+
 ### Smart Binary Mode Selection
 - **Single binary** `psf-guard` with intelligent mode detection
 - **GUI mode**: When tauri feature is enabled and no arguments passed → Desktop app launches
@@ -65,13 +94,25 @@ acquiredimage:
 
 ### API Endpoints
 ```
-GET  /api/projects
-GET  /api/images?project_id=X&target_id=Y
-PUT  /api/images/{id}/grade
-GET  /api/images/{id}/preview?size=screen|large|original
-POST /api/cache/refresh (file cache)
-POST /api/cache/refresh-directory (directory cache)
-GET  /api/cache/status (SSE progress stream)
+# Global
+GET    /api/info
+GET    /api/databases                    # list configured DBs
+POST   /api/databases                    # register a new DB
+PUT    /api/databases/{db_id}            # rename / re-point / change image dirs
+DELETE /api/databases/{db_id}            # drop a DB
+
+# Per-DB (nested)
+GET    /api/db/{db_id}/projects
+GET    /api/db/{db_id}/projects/overview
+GET    /api/db/{db_id}/targets/overview
+GET    /api/db/{db_id}/stats/overall
+GET    /api/db/{db_id}/images?project_id=X&target_id=Y
+PUT    /api/db/{db_id}/images/{id}/grade
+GET    /api/db/{db_id}/images/{id}/preview?size=screen|large|original
+PUT    /api/db/{db_id}/refresh-cache
+PUT    /api/db/{db_id}/refresh-directory-cache
+GET    /api/db/{db_id}/cache-progress    # polling (1s); aggregated indicator
+                                          # on the frontend fan-outs across DBs
 ```
 
 ### Frontend Architecture
@@ -109,6 +150,11 @@ cargo fmt && cargo clippy && cargo test
 
 # Run with logging
 RUST_LOG=debug cargo run -- server db.sqlite images/
+
+# Browser end-to-end (Playwright) — drives the embedded React UI against
+# a real `psf-guard server` instance with --allow-database-management.
+# Requires a built release binary; specs live under static/e2e/.
+cd static && npm run test:e2e
 
 # Tauri desktop development
 cargo tauri dev

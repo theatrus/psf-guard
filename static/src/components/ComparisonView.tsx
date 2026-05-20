@@ -2,17 +2,19 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import ImageComparisonView from './ImageComparisonView';
 import { useImageNavigation } from '../hooks/useImageNavigation';
 import { useGrading } from '../hooks/useGrading';
+import { useDbProjectTarget } from '../hooks/useUrlState';
 
 export default function ComparisonView() {
   const { leftImageId, rightImageId } = useParams<{ leftImageId: string; rightImageId: string }>();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  
+  const { dbId } = useDbProjectTarget();
+
   const leftImageIdNum = leftImageId ? parseInt(leftImageId, 10) : undefined;
   const rightImageIdNum = rightImageId ? parseInt(rightImageId, 10) : undefined;
-  
+
   const navigation = useImageNavigation(rightImageIdNum);
-  const grading = useGrading();
+  const grading = useGrading(dbId!);
 
   const handleClose = () => {
     // Preserve all current URL parameters when going back to grid
@@ -74,8 +76,17 @@ export default function ComparisonView() {
     return <div>Loading...</div>;
   }
 
+  if (!dbId) {
+    return (
+      <div className="empty-state">
+        Database not specified. <a href="#/overview">Back to overview</a>
+      </div>
+    );
+  }
+
   return (
     <ImageComparisonView
+      dbId={dbId}
       leftImageId={leftImageIdNum!}
       rightImageId={rightImageIdNum!}
       onClose={handleClose}

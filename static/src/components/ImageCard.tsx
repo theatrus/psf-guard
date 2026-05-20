@@ -4,6 +4,7 @@ import { GradingStatus } from '../api/types';
 import { apiClient } from '../api/client';
 
 interface ImageCardProps {
+  dbId: string;
   image: Image;
   isSelected: boolean;
   onClick: (event: React.MouseEvent) => void;
@@ -11,7 +12,7 @@ interface ImageCardProps {
   qualityScore?: number;
 }
 
-export default function ImageCard({ image, isSelected, onClick, onDoubleClick, qualityScore }: ImageCardProps) {
+export default function ImageCard({ dbId, image, isSelected, onClick, onDoubleClick, qualityScore }: ImageCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const [imageError, setImageError] = useState(false);
@@ -27,9 +28,9 @@ export default function ImageCard({ image, isSelected, onClick, onDoubleClick, q
   useEffect(() => {
     if (isSelected && image.id) {
       const preloadImg = new Image();
-      preloadImg.src = apiClient.getPreviewUrl(image.id, { size: 'large' });
+      preloadImg.src = apiClient.getPreviewUrl(dbId, image.id, { size: 'large' });
     }
-  }, [isSelected, image.id]);
+  }, [isSelected, image.id, dbId]);
 
   const getStatusClass = () => {
     switch (image.grading_status) {
@@ -107,7 +108,7 @@ export default function ImageCard({ image, isSelected, onClick, onDoubleClick, q
         ) : (
           <img
             ref={imgRef}
-            src={apiClient.getPreviewUrl(image.id, { size: 'screen' })}
+            src={apiClient.getPreviewUrl(dbId, image.id, { size: 'screen' })}
             alt={`${image.target_name} - ${image.filter_name || 'No filter'}`}
             loading="lazy"
             onError={() => setImageError(true)}
