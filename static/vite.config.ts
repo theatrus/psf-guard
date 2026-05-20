@@ -9,6 +9,9 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     globals: true,
+    // Don't let vitest scan the Playwright suite — those specs use
+    // `@playwright/test` and can't run under vitest.
+    exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**'],
   },
   server: {
     proxy: {
