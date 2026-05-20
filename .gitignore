@@ -59,3 +59,10 @@ test_output/
 /static/playwright-report/
 /static/blob-report/
 /static/playwright/.cache/
+
+# Local dev artifacts
+/Frameworks/
+/psf-guard
+/mise.toml
+/TAURI_TODOS.md
+/scripts/__pycache__/

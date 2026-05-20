@@ -286,9 +286,14 @@ mergeable commit.
   made for this image (move them back) before failing the run. The DB
   insert (step 6) is the commit point.
 
-### Phase A6 — Deprecation shim for `filter-rejected`
-- Keep the existing command but emit a warning and call into the new path
-  with default args. Update README + CLAUDE.md.
+### Phase A6 — Deprecation notice on `filter-rejected`
+- Print a one-time deprecation warning at the top of the command that
+  points users at `move-rejects` for the out-of-tree archiving flow.
+- Keep the old behavior working — the existing command also runs
+  statistical analysis (`--stat-*` flags) that `move-rejects` doesn't
+  duplicate, and silently redirecting would break workflows. Removal
+  in a future cycle once the docs settle.
+- Update README + CLAUDE.md with the new command and a migration note.
 
 ### Phase A7 — Integration test
 - Synthesize a tiny SQLite (the test-fixture pattern from
@@ -342,12 +347,12 @@ mergeable commit.
 - [x] **A3** `archive_path_for` pure function + tests
 - [x] **A4** `find_sidecars` discovery + tests
 - [x] **A5** `psf-guard move-rejects` CLI command (multi-DB-aware) with transactional move + DB row + manifest entry
-- [ ] **A6** Deprecation shim for `filter-rejected`
+- [x] **A6** Deprecation shim for `filter-rejected`
 - [ ] **A7** Integration test against a synthesized NINA-style tempdir
 
 ### Docs / follow-up
-- [ ] Update `README.md` (CLI section)
-- [ ] Update `CLAUDE.md` (Architecture / Multi-database support note)
+- [x] Update `README.md` (CLI section)
+- [x] Update `CLAUDE.md` (Architecture / Multi-database support note)
 - [ ] Watch upstream `tcpalmer/nina.plugin.targetscheduler` for any new
       writes to `acquiredImage.Metadata` (would invalidate the residual
       "metadata stamping is safe today" claim — we're not relying on it,

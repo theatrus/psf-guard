@@ -114,6 +114,18 @@ pub fn main() -> Result<()> {
             verbose,
             stat_options,
         } => {
+            eprintln!(
+                "⚠️  `filter-rejected` is deprecated. It renames `LIGHT/` → \
+                 `LIGHT_REJECT/` as a sibling under the same project root, \
+                 which PixInsight's bulk-load workflows still pick up.\n   \
+                 For an out-of-tree archive with idempotency, sidecar moves, \
+                 and a future restore path, register the DB in the registry \
+                 (run `psf-guard server <db> <dirs>` once) and use:\n     \
+                 psf-guard move-rejects --db <slug>\n   See \
+                 REJECT_ARCHIVE_PLAN.md for the full design. `filter-rejected` \
+                 still works for now and retains its statistical-analysis \
+                 flags that the new command does not duplicate.\n"
+            );
             let conn = Connection::open(&database)
                 .with_context(|| format!("Failed to open database: {}", database))?;
 

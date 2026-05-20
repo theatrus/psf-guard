@@ -63,6 +63,29 @@ the platform config location (`<config>/psf-guard/config.json` by default).
 
 Implementation tracker and design rationale: [MULTI_DB_PLAN.md](./MULTI_DB_PLAN.md).
 
+### Out-of-tree reject archive (2026-05)
+- **Command**: `psf-guard move-rejects --db <slug>` (multi-DB-aware via the
+  registry). Moves files marked `gradingStatus = 2` to
+  `<image_dir>/<P>/REJECT/<rest>` by default, plus same-stem sidecars
+  (`.xisf`, `.json`, `.txt` by default). Idempotent across re-runs.
+- **State**: a `psf_guard_archive` sibling table in the same SQLite file
+  records each move, keyed on `acquiredimage.guid` (TS plugin migration
+  22). The plan deliberately avoids stamping the upstream `metadata`
+  JSON column (TS's `ImageMetadata` DTO drops unknown keys on
+  round-trip, see plan §3). Each archive root also gets a redundant
+  `.psf-guard-manifest.json` for disaster recovery.
+- **Config precedence**: CLI flags > per-DB `reject_archive` block in
+  the registry (`segment_name`, `depth`, `sidecar_exts`) > compiled-in
+  defaults (`REJECT`, `1`, `[.xisf, .json, .txt]`).
+- **Schema requirement**: TS plugin schema v22+ (the `guid` column).
+  Older DBs are refused with an actionable error pointing at the
+  legacy `filter-rejected` command.
+- **Legacy**: `psf-guard filter-rejected <db> <base>` still works
+  (still useful for its `--stat-*` statistical-regrading flags) but
+  prints a deprecation banner pointing at `move-rejects`.
+
+Design, phases, tracker: [REJECT_ARCHIVE_PLAN.md](./REJECT_ARCHIVE_PLAN.md).
+
 ### Smart Binary Mode Selection
 - **Single binary** `psf-guard` with intelligent mode detection
 - **GUI mode**: When tauri feature is enabled and no arguments passed → Desktop app launches
