@@ -53,3 +53,9 @@ test_output/
 /static/node_modules/
 /static/dist/
 /static/.vite/
+
+# Playwright
+/static/test-results/
+/static/playwright-report/
+/static/blob-report/
+/static/playwright/.cache/

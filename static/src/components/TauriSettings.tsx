@@ -85,7 +85,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
   }, [isTauri, managementAllowed]);
 
   useEffect(() => {
-    if (!isTauriApp() || !isOpen) return;
+    if (!isOpen) return;
     reload();
     setStatusMessage('');
   }, [isOpen, reload]);

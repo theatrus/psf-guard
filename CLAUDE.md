@@ -151,6 +151,11 @@ cargo fmt && cargo clippy && cargo test
 # Run with logging
 RUST_LOG=debug cargo run -- server db.sqlite images/
 
+# Browser end-to-end (Playwright) — drives the embedded React UI against
+# a real `psf-guard server` instance with --allow-database-management.
+# Requires a built release binary; specs live under static/e2e/.
+cd static && npm run test:e2e
+
 # Tauri desktop development
 cargo tauri dev
 
