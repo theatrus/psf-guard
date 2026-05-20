@@ -348,7 +348,10 @@ mergeable commit.
 - [x] **A4** `find_sidecars` discovery + tests
 - [x] **A5** `psf-guard move-rejects` CLI command (multi-DB-aware) with transactional move + DB row + manifest entry
 - [x] **A6** Deprecation shim for `filter-rejected`
-- [ ] **A7** Integration test against a synthesized NINA-style tempdir
+- [x] **A7** Integration test against a synthesized NINA-style tempdir
+  (`tests/integration_reject_archive.rs`, 4 cases: dry-run, live move +
+  sidecar discrimination + manifest, idempotent re-run, legacy DB
+  refusal)
 
 ### Docs / follow-up
 - [x] Update `README.md` (CLI section)
