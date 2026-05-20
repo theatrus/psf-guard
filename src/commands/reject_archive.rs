@@ -16,6 +16,124 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::db::SchemaCapabilities;
+use crate::db_registry::RejectArchiveOverrides;
+
+/// Compiled-in defaults for the reject-archive feature. Overridden by
+/// per-DB registry fields (`DbEntry.reject_archive`), then by per-invocation
+/// CLI flags. See REJECT_ARCHIVE_PLAN.md §4.2 for the precedence rules.
+pub const DEFAULT_SEGMENT_NAME: &str = "REJECT";
+pub const DEFAULT_DEPTH: u32 = 1;
+pub const DEFAULT_SIDECAR_EXTS: &[&str] = &[".xisf", ".json", ".txt"];
+
+/// Resolved (CLI ∪ per-DB ∪ defaults) configuration used at command time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RejectArchiveConfig {
+    pub segment_name: String,
+    pub depth: u32,
+    pub sidecar_exts: Vec<String>,
+}
+
+impl Default for RejectArchiveConfig {
+    fn default() -> Self {
+        Self {
+            segment_name: DEFAULT_SEGMENT_NAME.to_string(),
+            depth: DEFAULT_DEPTH,
+            sidecar_exts: DEFAULT_SIDECAR_EXTS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+        }
+    }
+}
+
+/// Compose the effective archive config. CLI overrides win, then per-DB
+/// registry block, then compiled-in defaults. Each field resolves
+/// independently — e.g. a CLI segment override doesn't reset the per-DB
+/// sidecar list.
+///
+/// Validates the resolved `segment_name` is non-empty and contains no
+/// path separators (we use it as a literal path component). Validates
+/// `sidecar_exts` are non-empty and dot-prefixed. Depth has no upper
+/// bound — extreme values just degrade to "deeper anchor than the file
+/// has segments," which `archive_path_for` handles by falling back to
+/// the depth-0 case (A3).
+pub fn resolve_config(
+    per_db: Option<&RejectArchiveOverrides>,
+    cli_segment: Option<&str>,
+    cli_depth: Option<u32>,
+    cli_sidecar_exts: Option<&[String]>,
+) -> Result<RejectArchiveConfig> {
+    let defaults = RejectArchiveConfig::default();
+
+    let segment_name = cli_segment
+        .map(|s| s.to_string())
+        .or_else(|| per_db.and_then(|o| o.segment_name.clone()))
+        .unwrap_or(defaults.segment_name);
+    validate_segment_name(&segment_name)?;
+
+    let depth = cli_depth
+        .or_else(|| per_db.and_then(|o| o.depth))
+        .unwrap_or(defaults.depth);
+
+    let sidecar_exts = cli_sidecar_exts
+        .map(|s| s.to_vec())
+        .or_else(|| per_db.and_then(|o| o.sidecar_exts.clone()))
+        .unwrap_or(defaults.sidecar_exts);
+    for ext in &sidecar_exts {
+        validate_sidecar_ext(ext)?;
+    }
+
+    Ok(RejectArchiveConfig {
+        segment_name,
+        depth,
+        sidecar_exts,
+    })
+}
+
+fn validate_segment_name(s: &str) -> Result<()> {
+    if s.is_empty() {
+        return Err(anyhow::anyhow!(
+            "reject_archive.segment_name cannot be empty"
+        ));
+    }
+    if s.contains('/') || s.contains('\\') {
+        return Err(anyhow::anyhow!(
+            "reject_archive.segment_name '{}' contains a path separator; \
+             it must be a single directory name",
+            s
+        ));
+    }
+    if s == "." || s == ".." {
+        return Err(anyhow::anyhow!(
+            "reject_archive.segment_name '{}' is a special directory name",
+            s
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sidecar_ext(ext: &str) -> Result<()> {
+    if !ext.starts_with('.') {
+        return Err(anyhow::anyhow!(
+            "reject_archive.sidecar_exts entry '{}' must start with a dot \
+             (e.g. \".xisf\")",
+            ext
+        ));
+    }
+    if ext.len() < 2 {
+        return Err(anyhow::anyhow!(
+            "reject_archive.sidecar_exts entry '{}' is too short",
+            ext
+        ));
+    }
+    if ext.contains('/') || ext.contains('\\') {
+        return Err(anyhow::anyhow!(
+            "reject_archive.sidecar_exts entry '{}' contains a path separator",
+            ext
+        ));
+    }
+    Ok(())
+}
 
 /// `psf-guard`'s view of a single archived rejected image. One row per
 /// `acquired_image_guid` (upstream's stable cross-tool join key).
@@ -251,6 +369,69 @@ mod tests {
 
         let by_id = get_archive_record_by_image_id(&conn, 42).unwrap().unwrap();
         assert_eq!(by_id, by_guid);
+    }
+
+    #[test]
+    fn resolve_config_uses_defaults_when_nothing_overrides() {
+        let cfg = resolve_config(None, None, None, None).unwrap();
+        assert_eq!(cfg.segment_name, "REJECT");
+        assert_eq!(cfg.depth, 1);
+        assert_eq!(cfg.sidecar_exts, vec![".xisf", ".json", ".txt"]);
+    }
+
+    #[test]
+    fn resolve_config_per_db_overrides_defaults() {
+        let per_db = RejectArchiveOverrides {
+            segment_name: Some("BAD".into()),
+            depth: Some(2),
+            sidecar_exts: Some(vec![".xisf".into()]),
+        };
+        let cfg = resolve_config(Some(&per_db), None, None, None).unwrap();
+        assert_eq!(cfg.segment_name, "BAD");
+        assert_eq!(cfg.depth, 2);
+        assert_eq!(cfg.sidecar_exts, vec![".xisf"]);
+    }
+
+    #[test]
+    fn resolve_config_cli_wins_over_per_db_per_field() {
+        // CLI provides segment only; depth + sidecars fall through to per-DB.
+        let per_db = RejectArchiveOverrides {
+            segment_name: Some("BAD".into()),
+            depth: Some(2),
+            sidecar_exts: Some(vec![".xisf".into()]),
+        };
+        let cli_exts: Option<&[String]> = None;
+        let cfg = resolve_config(Some(&per_db), Some("KEPT-AWAY"), None, cli_exts).unwrap();
+        assert_eq!(cfg.segment_name, "KEPT-AWAY", "CLI segment wins");
+        assert_eq!(
+            cfg.depth, 2,
+            "per-DB depth wins when CLI doesn't supply one"
+        );
+        assert_eq!(
+            cfg.sidecar_exts,
+            vec![".xisf"],
+            "per-DB exts win when CLI doesn't supply"
+        );
+    }
+
+    #[test]
+    fn resolve_config_rejects_invalid_segment() {
+        for bad in ["", "has/slash", "has\\backslash", ".", ".."] {
+            let err = resolve_config(None, Some(bad), None, None).unwrap_err();
+            let msg = format!("{err}");
+            assert!(
+                msg.contains("segment_name"),
+                "error for {:?} should name the field: {msg}",
+                bad
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_config_rejects_invalid_sidecar_exts() {
+        let bad_exts: Vec<String> = vec!["xisf".into()]; // missing dot
+        let err = resolve_config(None, None, None, Some(&bad_exts)).unwrap_err();
+        assert!(format!("{err}").contains("sidecar_exts"));
     }
 
     #[test]

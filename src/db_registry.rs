@@ -28,6 +28,38 @@ pub struct DbEntry {
     pub db_path: String,
     #[serde(default)]
     pub image_dirs: Vec<String>,
+    /// Per-DB overrides for the out-of-tree reject-archive feature (see
+    /// REJECT_ARCHIVE_PLAN.md). All fields optional; absent values fall
+    /// back to the CLI flag, then the compiled-in defaults
+    /// (`segment_name = "REJECT"`, `depth = 1`,
+    /// `sidecar_exts = [".xisf", ".json", ".txt"]`).
+    ///
+    /// The block itself is also optional; absent in older configs means
+    /// "no per-DB overrides — use CLI flags or defaults entirely."
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reject_archive: Option<RejectArchiveOverrides>,
+}
+
+/// Persisted per-DB override block for the reject archive. All fields are
+/// optional so users can set just the knobs they care about (e.g. only the
+/// segment name) without re-specifying every default.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct RejectArchiveOverrides {
+    /// Folder name inserted into the archive path. Default `"REJECT"`.
+    /// Validated (URL-safe-ish, no path separators) at command time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segment_name: Option<String>,
+    /// How many path segments below `image_dir` to descend before
+    /// inserting `segment_name`. Default `1` (right under the project
+    /// folder); set to `0` to drop everything into a single per-image-dir
+    /// REJECT bucket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<u32>,
+    /// Extensions of sibling files that move alongside the primary FITS.
+    /// Defaults to `.xisf`, `.json`, `.txt` (set via the resolver in the
+    /// CLI command — this slot is only the override).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidecar_exts: Option<Vec<String>>,
 }
 
 /// Persisted shape of the database registry on disk (v2+).
@@ -122,6 +154,7 @@ impl DbRegistry {
                 name,
                 db_path,
                 image_dirs: v1.image_directories,
+                reject_archive: None,
             });
         }
         reg.save(path)?;
@@ -188,6 +221,7 @@ impl DbRegistry {
             name,
             db_path,
             image_dirs,
+            reject_archive: None,
         });
         Ok(self.databases.last().unwrap())
     }
@@ -364,6 +398,57 @@ mod tests {
         reg.save(&path).unwrap();
         let reloaded = DbRegistry::load_or_init(&path).unwrap();
         assert_eq!(reloaded.databases, reg.databases);
+    }
+
+    #[test]
+    fn loads_v2_config_without_reject_archive_block() {
+        // Configs written before A2 don't have the `reject_archive` key.
+        // Older configs must keep loading; the field defaults to None.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let body = serde_json::json!({
+            "schema_version": 2,
+            "databases": [
+                {"id": "a", "name": "A", "db_path": "/tmp/a.sqlite", "image_dirs": []}
+            ],
+        });
+        write(&path, &body.to_string());
+        let reg = DbRegistry::load_or_init(&path).unwrap();
+        assert_eq!(reg.databases.len(), 1);
+        assert!(reg.databases[0].reject_archive.is_none());
+    }
+
+    #[test]
+    fn round_trips_reject_archive_overrides() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut reg = DbRegistry::default();
+        reg.add(
+            "Imaging Rig".into(),
+            "/tmp/imaging.sqlite".into(),
+            vec!["/tmp/imgs".into()],
+            Some("imaging-rig".into()),
+        )
+        .unwrap();
+        reg.databases[0].reject_archive = Some(RejectArchiveOverrides {
+            segment_name: Some("BAD".into()),
+            depth: Some(2),
+            sidecar_exts: Some(vec![".xisf".into(), ".json".into()]),
+        });
+        reg.save(&path).unwrap();
+        let reloaded = DbRegistry::load_or_init(&path).unwrap();
+        assert_eq!(reloaded.databases, reg.databases);
+
+        // The serialized JSON should NOT include the block when it's None,
+        // so older psf-guards skip it cleanly (forward-compat sanity).
+        let mut bare = DbRegistry::default();
+        bare.add("X".into(), "/tmp/x.sqlite".into(), vec![], Some("x".into()))
+            .unwrap();
+        let json = serde_json::to_string(&bare).unwrap();
+        assert!(
+            !json.contains("reject_archive"),
+            "default config should not write the key: {json}"
+        );
     }
 
     #[test]
