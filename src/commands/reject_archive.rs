@@ -193,6 +193,65 @@ pub fn archive_path_for(
     Some(archive)
 }
 
+/// Find sidecar files in the same directory as `primary` whose stem matches
+/// the primary's and whose extension is one of `exts`. Extension comparison
+/// is case-insensitive; entries in `exts` must start with a `.` (validated
+/// upstream in `resolve_config`).
+///
+/// Returns absolute paths sorted lexicographically for deterministic
+/// dry-run output and stable archive-record contents. Returns an empty
+/// vec — never errors — if the directory can't be read; the move
+/// orchestrator handles missing primaries earlier.
+///
+/// Calibration masters (`Bias_master.fits`, `Dark_*.fits`, etc.) have a
+/// different stem and are therefore never selected, even if their
+/// extension is in the list.
+pub fn find_sidecars(primary: &std::path::Path, exts: &[String]) -> Vec<std::path::PathBuf> {
+    let Some(parent) = primary.parent() else {
+        return Vec::new();
+    };
+    let Some(stem) = primary.file_stem() else {
+        return Vec::new();
+    };
+    let primary_filename = primary.file_name();
+
+    // Normalize the configured extensions once for the membership check.
+    let lc_exts: Vec<String> = exts
+        .iter()
+        .map(|e| e.trim_start_matches('.').to_ascii_lowercase())
+        .collect();
+
+    let entries = match std::fs::read_dir(parent) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut out: Vec<std::path::PathBuf> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if entry.file_type().map(|t| !t.is_file()).unwrap_or(true) {
+            continue;
+        }
+        // Don't list the primary as its own sidecar.
+        if primary_filename.is_some() && path.file_name() == primary_filename {
+            continue;
+        }
+        if path.file_stem() != Some(stem) {
+            continue;
+        }
+        let ext_lc = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase());
+        let Some(ext_lc) = ext_lc else { continue };
+        if lc_exts.iter().any(|want| *want == ext_lc) {
+            out.push(path);
+        }
+    }
+    out.sort();
+    out
+}
+
 fn validate_sidecar_ext(ext: &str) -> Result<()> {
     if !ext.starts_with('.') {
         return Err(anyhow::anyhow!(
@@ -628,6 +687,84 @@ mod tests {
         )
         .unwrap();
         assert_eq!(archive, p("targets/M31/REJECT/2026-04-16/LIGHT/img.fits"));
+    }
+
+    #[test]
+    fn find_sidecars_picks_same_stem_only() {
+        use std::fs;
+        let dir = tempfile::tempdir().unwrap();
+        let primary = dir.path().join("img_0028.fits");
+        fs::write(&primary, b"").unwrap();
+
+        // Sidecars (should be picked up):
+        fs::write(dir.path().join("img_0028.xisf"), b"").unwrap();
+        fs::write(dir.path().join("img_0028.json"), b"").unwrap();
+        fs::write(dir.path().join("img_0028.txt"), b"").unwrap();
+
+        // Same stem but extension not in the list:
+        fs::write(dir.path().join("img_0028.log"), b"").unwrap();
+
+        // Different stem — typical calibration-master shape:
+        fs::write(dir.path().join("Bias_master.fits"), b"").unwrap();
+        fs::write(dir.path().join("Dark_60s.xisf"), b"").unwrap();
+
+        // Subdirectory should not be descended into:
+        let sub = dir.path().join("nested");
+        fs::create_dir(&sub).unwrap();
+        fs::write(sub.join("img_0028.xisf"), b"").unwrap();
+
+        let exts: Vec<String> = [".xisf", ".json", ".txt"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let found = find_sidecars(&primary, &exts);
+
+        let expected = vec![
+            dir.path().join("img_0028.json"),
+            dir.path().join("img_0028.txt"),
+            dir.path().join("img_0028.xisf"),
+        ];
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn find_sidecars_extension_match_is_case_insensitive() {
+        use std::fs;
+        let dir = tempfile::tempdir().unwrap();
+        let primary = dir.path().join("img.fits");
+        fs::write(&primary, b"").unwrap();
+        fs::write(dir.path().join("img.XISF"), b"").unwrap();
+        fs::write(dir.path().join("img.Json"), b"").unwrap();
+
+        let exts: Vec<String> = [".xisf", ".json"].iter().map(|s| s.to_string()).collect();
+        let mut found = find_sidecars(&primary, &exts);
+        found.sort();
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().any(|p| p.file_name().unwrap() == "img.XISF"));
+        assert!(found.iter().any(|p| p.file_name().unwrap() == "img.Json"));
+    }
+
+    #[test]
+    fn find_sidecars_returns_empty_when_parent_missing() {
+        let found = find_sidecars(
+            &std::path::Path::new("/no/such/dir/img.fits"),
+            &[".xisf".to_string()],
+        );
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn find_sidecars_excludes_the_primary_itself() {
+        // If exts somehow listed `.fits` (caller bug), the primary file
+        // itself should still not be returned as its own sidecar.
+        use std::fs;
+        let dir = tempfile::tempdir().unwrap();
+        let primary = dir.path().join("img.fits");
+        fs::write(&primary, b"").unwrap();
+
+        let exts = vec![".fits".to_string()];
+        let found = find_sidecars(&primary, &exts);
+        assert!(found.is_empty());
     }
 
     #[test]
