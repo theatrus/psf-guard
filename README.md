@@ -282,6 +282,13 @@ psf-guard move-rejects --db <slug> [--dry-run]
                        [--sidecar-exts ".xisf,.json,.txt"]
                        [--project NAME] [--target NAME]
 
+# Move archived rejects back into the tree. By default restores only files
+# you've un-rejected in the UI (grade no longer Rejected); --all restores
+# everything. Never overwrites — restores beside an occupant with a
+# `.restored` suffix. Removes the archive row and prunes emptied dirs.
+psf-guard restore-rejects --db <slug> [--all]
+                          [--image-id N] [--guid X] [--dry-run]
+
 # Legacy: in-place rename `LIGHT/` → `LIGHT_REJECT/` as a sibling folder
 # under the same project root. Deprecated — files stay in the same tree
 # PixInsight loads. Still works for the statistical-regrading flags

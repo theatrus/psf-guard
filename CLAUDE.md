@@ -67,13 +67,24 @@ Implementation tracker and design rationale: [MULTI_DB_PLAN.md](./MULTI_DB_PLAN.
 - **Command**: `psf-guard move-rejects --db <slug>` (multi-DB-aware via the
   registry). Moves files marked `gradingStatus = 2` to
   `<image_dir>/<P>/REJECT/<rest>` by default, plus same-stem sidecars
-  (`.xisf`, `.json`, `.txt` by default). Idempotent across re-runs.
+  (`.xisf`, `.json`, `.txt` by default). Idempotent across re-runs. Files
+  stay findable in the web UI — the directory tree indexes the REJECT
+  subtree and resolves previews by basename. `--dry-run` performs no DB
+  writes (the `psf_guard_archive` table is not even created).
+- **Restore**: `psf-guard restore-rejects --db <slug>` reverses a move. By
+  default restores only rows whose current grade is no longer `Rejected`
+  (un-rejected in the UI, to Accepted *or* Pending); `--all` /
+  `--image-id` / `--guid` override that. Never overwrites — restores
+  beside an occupant with a `.restored[.N]` suffix. Deletes the archive
+  row and prunes emptied REJECT dirs (a dir still holding the manifest is
+  kept).
 - **State**: a `psf_guard_archive` sibling table in the same SQLite file
   records each move, keyed on `acquiredimage.guid` (TS plugin migration
   22). The plan deliberately avoids stamping the upstream `metadata`
   JSON column (TS's `ImageMetadata` DTO drops unknown keys on
-  round-trip, see plan §3). Each archive root also gets a redundant
-  `.psf-guard-manifest.json` for disaster recovery.
+  round-trip, see plan §3). Each archive root
+  (`<image_dir>/<P>/REJECT/.psf-guard-manifest.json`, one per tree — not
+  per leaf) also gets a redundant manifest for disaster recovery.
 - **Config precedence**: CLI flags > per-DB `reject_archive` block in
   the registry (`segment_name`, `depth`, `sidecar_exts`) > compiled-in
   defaults (`REJECT`, `1`, `[.xisf, .json, .txt]`).

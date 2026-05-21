@@ -1,7 +1,7 @@
 # Out-of-Tree Reject Archive — Design & Implementation Plan
 
-Status: **Draft / not started**
-Owner: TBD
+Status: **Implemented (A1–A7); A8 restore-rejects in progress**
+Owner: psf-guard maintainers
 Last updated: 2026-05-20
 
 ## 1. Goal
@@ -223,18 +223,36 @@ prints a deprecation warning, looks up the DB in the registry by canonical
 path of the supplied `<db>`, and calls into the new code with default
 arguments. Removed in a future cycle once the docs and any scripts catch up.
 
-### 4.7 Restore command (future, designed-for-but-not-built)
-
-Out of scope for v1, but the shape is dictated by the state-tracking
-design:
+### 4.7 Restore command (implemented, A8)
 
 ```
-psf-guard restore-rejects --db <slug> [--image-id N] [--guid X] [--dry-run]
+psf-guard restore-rejects --db <slug> [--all]
+                          [--image-id N] [--guid X]
+                          [--dry-run] [--registry <path>] [--verbose]
 ```
 
-Reads `psf_guard_archive`, moves each archived file (plus sidecars) back to
-`original_path`, and deletes the row. Errors on rows whose archive path no
-longer exists.
+Reads `psf_guard_archive` (LEFT JOIN to `acquiredimage` on `guid` for the
+current grade), moves each eligible archived file plus sidecars back toward
+`original_path`, deletes the row, and prunes emptied archive directories.
+
+- **Default scope:** only rows whose current `gradingStatus` is no longer
+  `Rejected` — i.e. files un-rejected in the UI, whether re-Accepted or set
+  back to Pending (the `U` undo key). This is the everyday "I changed my
+  mind, bring it back" flow and the reason the join exists.
+- `--all` restores every archived row regardless of current grade.
+- `--image-id N` / `--guid X` target a single row and restore it regardless
+  of grade (an explicit, deliberate request).
+- **Never overwrites.** If `original_path` (or a sidecar's original path) is
+  occupied by a different file, the restored file lands beside it with a
+  `.restored` suffix inserted before the extension (`img.fits` →
+  `img.restored.fits`, then `.restored.1`, … on further collision).
+- **Pruning.** After a successful restore the now-empty leaf archive dirs are
+  removed up to and including the `REJECT` segment, stopping at the first
+  non-empty directory. A `REJECT` dir that still holds the manifest (or other
+  not-yet-restored files) is kept.
+- Rows whose `archive_path` is missing on disk are reported (`missing_archive`
+  counter) and left in place so the loss stays visible.
+- `--dry-run` prints the plan without moving files or deleting rows.
 
 ---
 
@@ -349,9 +367,15 @@ mergeable commit.
 - [x] **A5** `psf-guard move-rejects` CLI command (multi-DB-aware) with transactional move + DB row + manifest entry
 - [x] **A6** Deprecation shim for `filter-rejected`
 - [x] **A7** Integration test against a synthesized NINA-style tempdir
-  (`tests/integration_reject_archive.rs`, 4 cases: dry-run, live move +
-  sidecar discrimination + manifest, idempotent re-run, legacy DB
-  refusal)
+  (`tests/integration_reject_archive.rs`: move cases — dry-run, live move +
+  sidecar discrimination + single manifest at REJECT root, idempotent
+  re-run, legacy DB refusal; restore cases — default un-rejected-only,
+  `--all` + dir pruning, never-overwrite suffix, dry-run, targeted-by-guid)
+- [x] **A8** `psf-guard restore-rejects` command — default restores files no
+  longer graded Rejected; `--all` / `--image-id` / `--guid` override the
+  grade filter; never overwrites (`.restored[.N]` suffix beside an
+  occupant); deletes the archive row and prunes emptied REJECT dirs
+  (keeping a dir that still holds the manifest)
 
 ### Docs / follow-up
 - [x] Update `README.md` (CLI section)
@@ -362,6 +386,5 @@ mergeable commit.
       but a regression there could affect anyone else who is)
 
 ### Deferred
-- [ ] **A8** `psf-guard restore-rejects` command
 - [ ] UI trigger (button on Overview DB section)
 - [ ] Cross-DB archive lookup helper

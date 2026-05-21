@@ -197,6 +197,53 @@ pub fn archive_path_for(
     Some(archive)
 }
 
+/// Compute the archive *root* directory for a rejected file: the path up to
+/// and including the inserted `segment_name`. This is where the single
+/// per-archive `.psf-guard-manifest.json` lives — one manifest per REJECT
+/// tree, not one per leaf directory.
+///
+/// ```text
+/// image_dir = /data
+/// source    = /data/M31/2026-04-16/LIGHT/img.fits   (depth=1, segment=REJECT)
+/// root      = /data/M31/REJECT
+/// ```
+///
+/// Returns `None` under exactly the same conditions as
+/// [`archive_path_for`] (source not under `image_dir`, or source == image_dir),
+/// so callers can compute both and treat a `Some`/`None` from one as
+/// authoritative for the other.
+pub fn archive_root_for(
+    image_dir: &std::path::Path,
+    source_path: &std::path::Path,
+    depth: u32,
+    segment_name: &str,
+) -> Option<std::path::PathBuf> {
+    use std::path::{Component, PathBuf};
+
+    let relative = source_path.strip_prefix(image_dir).ok()?;
+    let segments: Vec<&std::ffi::OsStr> = relative
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(s) => Some(s),
+            _ => None,
+        })
+        .collect();
+
+    if segments.is_empty() {
+        return None;
+    }
+
+    let depth = depth as usize;
+    let mut root = PathBuf::from(image_dir);
+    if depth != 0 && segments.len() > depth {
+        for seg in &segments[..depth] {
+            root.push(seg);
+        }
+    }
+    root.push(segment_name);
+    Some(root)
+}
+
 /// Find sidecar files in the same directory as `primary` whose stem matches
 /// the primary's and whose extension is one of `exts`. Extension comparison
 /// is case-insensitive; entries in `exts` must start with a `.` (validated
@@ -332,6 +379,20 @@ pub fn ensure_archive_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Whether the `psf_guard_archive` table exists yet. Used by dry-run paths
+/// that must not create it: a missing table simply means "nothing archived
+/// yet," so callers treat every image as not-yet-archived.
+pub fn archive_table_exists(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'psf_guard_archive'",
+        [],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|o| o.is_some())
+    .unwrap_or(false)
+}
+
 /// Refuse to operate against a Target Scheduler database that pre-dates the
 /// `acquiredimage.guid` column (migration 22). Without `guid`, we have no
 /// stable cross-export key to anchor archive rows against; falling back to
@@ -390,6 +451,17 @@ pub fn get_archive_record_by_image_id(
     .context("querying psf_guard_archive by image_id")
 }
 
+/// Delete the archive record for a guid. Called by `restore-rejects` once a
+/// file is back at (near) its original location.
+pub fn delete_archive_record_by_guid(conn: &Connection, guid: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM psf_guard_archive WHERE acquired_image_guid = ?1",
+        params![guid],
+    )
+    .with_context(|| format!("deleting psf_guard_archive row for guid {}", guid))?;
+    Ok(())
+}
+
 fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArchiveRecord> {
     let sidecar_raw: String = row.get("sidecar_files")?;
     let sidecar_files = serde_json::from_str::<Vec<String>>(&sidecar_raw).unwrap_or_default();
@@ -430,6 +502,10 @@ pub struct MoveRejectsSummary {
     pub planned: usize,
     pub archived: usize,
     pub already_archived: usize,
+    /// Rows whose `psf_guard_archive` record exists but whose `archive_path`
+    /// is no longer on disk. Surfaced for manual intervention rather than
+    /// silently counted as `already_archived`.
+    pub missing_archive: usize,
     pub not_found_on_disk: usize,
     pub errors: usize,
 }
@@ -444,15 +520,19 @@ pub struct MoveRejectsSummary {
 /// one bad row still archives the other 99.
 ///
 /// The function assumes:
-/// - `ensure_archive_schema(conn)` has already been called (caller does).
 /// - `require_target_scheduler_guid(conn)` has passed (caller does).
 /// - `options.config` is valid (resolved through `resolve_config`).
+/// - For live runs, `ensure_archive_schema(conn)` has been called. In
+///   `--dry-run` mode the table may not exist yet (we deliberately don't
+///   create it); the prior-archive lookup is skipped in that case and every
+///   image is treated as not-yet-archived for planning purposes.
 pub fn move_rejects(
     conn: &Connection,
     image_dirs: &[String],
     options: &MoveRejectsOptions,
 ) -> Result<MoveRejectsSummary> {
     let db = Database::new(conn);
+    let archive_table_known = archive_table_exists(conn);
 
     let images = db
         .query_images(
@@ -468,21 +548,26 @@ pub fn move_rejects(
         ..Default::default()
     };
 
-    // Build a directory tree per image_dir (lazily). Each tree caches the
-    // first-hit basename → absolute-path mapping that powers the fallback
-    // lookup when the date-aware path heuristics miss.
-    let mut trees: Vec<DirectoryTree> = Vec::with_capacity(image_dirs.len());
-    for dir in image_dirs {
-        match DirectoryTree::build_multiple(&[std::path::Path::new(dir)]) {
-            Ok(t) => trees.push(t),
-            Err(e) => {
-                eprintln!(
-                    "⚠️  Could not index image directory {} ({}); continuing without it",
-                    dir, e
-                );
-            }
-        }
-    }
+    // Build a directory tree per image_dir. Each tree caches the first-hit
+    // basename → absolute-path mapping that powers the fallback lookup when
+    // the date-aware path heuristics miss. The vec is kept index-aligned with
+    // `image_dirs` (a failed build becomes `None`) so `trees[dir_idx]` always
+    // refers to the correct directory.
+    let trees: Vec<Option<DirectoryTree>> = image_dirs
+        .iter()
+        .map(
+            |dir| match DirectoryTree::build_multiple(&[std::path::Path::new(dir)]) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    eprintln!(
+                        "⚠️  Could not index image directory {} ({}); continuing without it",
+                        dir, e
+                    );
+                    None
+                }
+            },
+        )
+        .collect();
 
     for (image, _project_name, target_name) in images {
         let Some(guid) = image.guid.as_deref() else {
@@ -497,13 +582,28 @@ pub fn move_rejects(
             continue;
         };
 
-        // Already archived? Skip silently (idempotent re-runs).
-        if let Some(prior) = get_archive_record_by_guid(conn, guid)? {
-            if options.verbose {
-                println!("⏭️  {} already archived at {}", guid, prior.archive_path);
+        // Already archived? Skip (idempotent re-runs). If the recorded
+        // archive_path has gone missing, surface it for manual intervention
+        // rather than masking a broken archive as a clean skip.
+        if archive_table_known {
+            if let Some(prior) = get_archive_record_by_guid(conn, guid)? {
+                if std::path::Path::new(&prior.archive_path).exists() {
+                    if options.verbose {
+                        println!("⏭️  {} already archived at {}", guid, prior.archive_path);
+                    }
+                    summary.already_archived += 1;
+                } else {
+                    eprintln!(
+                        "⚠️  Image id={} guid={} has a psf_guard_archive row pointing at \
+                         {} but that file is missing. Leaving the DB row in place; \
+                         resolve manually (restore from backup, or delete the row to \
+                         re-archive).",
+                        image.id, guid, prior.archive_path
+                    );
+                    summary.missing_archive += 1;
+                }
+                continue;
             }
-            summary.already_archived += 1;
-            continue;
         }
 
         // Extract filename from the metadata JSON.
@@ -535,7 +635,7 @@ pub fn move_rejects(
                 }
             }
             if located.is_none() {
-                if let Some(tree) = trees.get(dir_idx) {
+                if let Some(Some(tree)) = trees.get(dir_idx) {
                     if let Some(path) = tree.find_file_first(&filename) {
                         if path.exists() {
                             located = Some((dir.clone(), path.clone()));
@@ -559,7 +659,7 @@ pub fn move_rejects(
             continue;
         };
 
-        // Compute destination.
+        // Compute destination + the archive root that owns the manifest.
         let archive_path = match archive_path_for(
             Path::new(&image_dir),
             &source_path,
@@ -577,6 +677,13 @@ pub fn move_rejects(
                 continue;
             }
         };
+        let archive_root = archive_root_for(
+            Path::new(&image_dir),
+            &source_path,
+            options.config.depth,
+            &options.config.segment_name,
+        )
+        .expect("archive_root_for succeeds whenever archive_path_for did");
 
         let sidecars = find_sidecars(&source_path, &options.config.sidecar_exts);
 
@@ -604,6 +711,7 @@ pub fn move_rejects(
             image_id: image.id,
             source_path: &source_path,
             archive_path: &archive_path,
+            archive_root: &archive_root,
             sidecars: &sidecars,
             config: &options.config,
             source_db_slug: &options.source_db_slug,
@@ -640,6 +748,10 @@ struct MoveContext<'a> {
     image_id: i32,
     source_path: &'a Path,
     archive_path: &'a Path,
+    /// Directory up to and including the inserted segment (e.g.
+    /// `<image_dir>/<P>/REJECT`). The single per-archive manifest lives here,
+    /// not in the leaf directory that holds the moved file.
+    archive_root: &'a Path,
     sidecars: &'a [PathBuf],
     config: &'a RejectArchiveConfig,
     source_db_slug: &'a str,
@@ -651,6 +763,7 @@ fn execute_one_move(conn: &Connection, ctx: &MoveContext<'_>) -> Result<()> {
         image_id,
         source_path,
         archive_path,
+        archive_root,
         sidecars,
         config,
         source_db_slug,
@@ -724,8 +837,8 @@ fn execute_one_move(conn: &Connection, ctx: &MoveContext<'_>) -> Result<()> {
         return Err(anyhow::Error::new(e).context("inserting psf_guard_archive row"));
     }
 
-    // Manifest at the archive root (best-effort; if it fails, we log but
-    // don't roll back — the DB row is the authoritative source).
+    // Single manifest at the archive root (best-effort; if it fails, we log
+    // but don't roll back — the DB row is the authoritative source).
     let manifest_ctx = ManifestEntryInput {
         guid,
         image_id,
@@ -735,10 +848,10 @@ fn execute_one_move(conn: &Connection, ctx: &MoveContext<'_>) -> Result<()> {
         sidecar_files: &sidecar_names,
         config,
     };
-    if let Err(e) = append_to_manifest(archive_parent, &manifest_ctx) {
+    if let Err(e) = append_to_manifest(archive_root, &manifest_ctx) {
         eprintln!(
             "⚠️  Wrote DB row but could not append manifest at {}: {:#}",
-            archive_parent.display(),
+            archive_root.display(),
             e
         );
     }
@@ -762,6 +875,305 @@ fn rollback(moved: &[(PathBuf, PathBuf)]) {
 impl RejectArchiveConfig {
     fn archive_depth_as_i64(&self) -> i64 {
         self.depth as i64
+    }
+}
+
+// ── Restore ────────────────────────────────────────────────────────────────
+
+/// Options for `restore-rejects`. Mirrors the CLI flags.
+#[derive(Debug, Clone, Default)]
+pub struct RestoreRejectsOptions {
+    /// Restore every archived row regardless of the image's current grade.
+    /// When false (the default), only rows whose current `gradingStatus` is
+    /// no longer `Rejected` are restored — i.e. files the user un-rejected in
+    /// the UI (to Accepted *or* Pending).
+    pub restore_all: bool,
+    /// Restore only the row for this `acquiredimage.Id`. Implies "regardless
+    /// of grade" for that one row (an explicit, targeted request).
+    pub image_id_filter: Option<i64>,
+    /// Restore only the row for this guid. Same "regardless of grade" rule.
+    pub guid_filter: Option<String>,
+    pub dry_run: bool,
+    pub verbose: bool,
+}
+
+/// Summary counters for a `restore-rejects` run.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RestoreRejectsSummary {
+    /// Rows considered (after the grade/id/guid filtering).
+    pub planned: usize,
+    pub restored: usize,
+    /// Rows skipped because the image is still graded `Rejected` and no
+    /// targeted filter / `--all` overrode that.
+    pub skipped_still_rejected: usize,
+    /// Rows whose `archive_path` is no longer on disk — can't restore.
+    pub missing_archive: usize,
+    /// Files restored next to (not over) an occupant via a `.restored`
+    /// suffix. Counted in `restored` too; this is just a heads-up tally.
+    pub restored_with_suffix: usize,
+    pub errors: usize,
+}
+
+/// One archive row joined with the image's current grade (None if no
+/// `acquiredimage` row matches the stored guid — e.g. after a DB reimport).
+struct RestoreCandidate {
+    record: ArchiveRecord,
+    current_grade: Option<i32>,
+}
+
+/// Run the restore pipeline. Reads `psf_guard_archive`, optionally filtered to
+/// a single id/guid, and for each eligible row moves the archived primary
+/// (plus its sidecars) back toward `original_path`, deletes the row, and
+/// prunes now-empty archive directories.
+///
+/// Assumes `require_target_scheduler_guid(conn)` has passed. If the archive
+/// table doesn't exist yet, there's nothing to restore — returns an empty
+/// summary.
+pub fn restore_rejects(
+    conn: &Connection,
+    options: &RestoreRejectsOptions,
+) -> Result<RestoreRejectsSummary> {
+    let mut summary = RestoreRejectsSummary::default();
+    if !archive_table_exists(conn) {
+        return Ok(summary);
+    }
+
+    let candidates = load_restore_candidates(conn, options)?;
+
+    // A targeted id/guid request, or --all, restores regardless of grade.
+    let targeted = options.image_id_filter.is_some() || options.guid_filter.is_some();
+    let ignore_grade = options.restore_all || targeted;
+
+    for cand in candidates {
+        let eligible = ignore_grade || cand.current_grade != Some(GradingStatus::Rejected as i32);
+        if !eligible {
+            summary.skipped_still_rejected += 1;
+            if options.verbose {
+                println!(
+                    "⏭️  {} still Rejected; leaving archived (use --all to override)",
+                    cand.record.acquired_image_guid
+                );
+            }
+            continue;
+        }
+        summary.planned += 1;
+
+        let archive_path = PathBuf::from(&cand.record.archive_path);
+        if !archive_path.exists() {
+            eprintln!(
+                "⚠️  Archived file missing for guid={}: {} — cannot restore. \
+                 Leaving the DB row so the loss stays visible.",
+                cand.record.acquired_image_guid, cand.record.archive_path
+            );
+            summary.missing_archive += 1;
+            continue;
+        }
+
+        match restore_one(conn, &cand.record, options, &mut summary) {
+            Ok(()) => summary.restored += 1,
+            Err(e) => {
+                eprintln!(
+                    "❌ Failed to restore guid={}: {:#}",
+                    cand.record.acquired_image_guid, e
+                );
+                summary.errors += 1;
+            }
+        }
+    }
+
+    Ok(summary)
+}
+
+fn load_restore_candidates(
+    conn: &Connection,
+    options: &RestoreRejectsOptions,
+) -> Result<Vec<RestoreCandidate>> {
+    // LEFT JOIN so rows survive even if no acquiredimage matches the guid
+    // (current_grade becomes NULL); the default filter treats unknown grade
+    // as "not confirmed un-rejected" and skips it unless --all/targeted.
+    let mut sql = String::from(
+        "SELECT a.acquired_image_guid, a.acquired_image_id, a.moved_at,
+                a.original_path, a.archive_path, a.segment_name, a.archive_depth,
+                a.sidecar_files, a.source_db_slug, ai.gradingStatus
+         FROM psf_guard_archive a
+         LEFT JOIN acquiredimage ai ON ai.guid = a.acquired_image_guid
+         WHERE 1=1",
+    );
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if let Some(id) = options.image_id_filter {
+        sql.push_str(" AND a.acquired_image_id = ?");
+        params.push(Box::new(id));
+    }
+    if let Some(ref g) = options.guid_filter {
+        sql.push_str(" AND a.acquired_image_guid = ?");
+        params.push(Box::new(g.clone()));
+    }
+    sql.push_str(" ORDER BY a.moved_at ASC");
+
+    let mut stmt = conn.prepare(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let rows = stmt
+        .query_map(param_refs.as_slice(), |row| {
+            let record = row_to_record(row)?;
+            let current_grade: Option<i32> = row.get("gradingStatus")?;
+            Ok(RestoreCandidate {
+                record,
+                current_grade,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Move one archived file (and sidecars) back toward its original location.
+/// Never overwrites: if the original path is occupied by a different file,
+/// the restored file lands beside it with a `.restored[.N]` suffix. Deletes
+/// the DB row on success and prunes emptied archive directories.
+fn restore_one(
+    conn: &Connection,
+    record: &ArchiveRecord,
+    options: &RestoreRejectsOptions,
+    summary: &mut RestoreRejectsSummary,
+) -> Result<()> {
+    let archive_path = PathBuf::from(&record.archive_path);
+    let archive_dir = archive_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("archive_path has no parent: {}", record.archive_path))?
+        .to_path_buf();
+    let original_path = PathBuf::from(&record.original_path);
+    let original_dir = original_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("original_path has no parent: {}", record.original_path))?
+        .to_path_buf();
+
+    // Plan the primary destination (collision-safe).
+    let primary_dest = unique_restore_dest(&original_path);
+    let suffixed = primary_dest != original_path;
+
+    // Plan sidecar destinations: each sidecar moves from the archive dir back
+    // to the original dir, also collision-safe and independently uniquified.
+    let mut plan: Vec<(PathBuf, PathBuf)> = vec![(archive_path.clone(), primary_dest.clone())];
+    for name in &record.sidecar_files {
+        let src = archive_dir.join(name);
+        if !src.exists() {
+            eprintln!(
+                "⚠️  Sidecar {} missing in archive for guid={}; skipping it",
+                src.display(),
+                record.acquired_image_guid
+            );
+            continue;
+        }
+        let desired = original_dir.join(name);
+        plan.push((src, unique_restore_dest(&desired)));
+    }
+
+    let kind = if options.dry_run { "PLAN" } else { "RESTORE" };
+    for (src, dest) in &plan {
+        println!("{}  {} → {}", kind, src.display(), dest.display());
+    }
+    if suffixed {
+        summary.restored_with_suffix += 1;
+        if options.verbose {
+            println!(
+                "       (original {} occupied; restored beside it)",
+                original_path.display()
+            );
+        }
+    }
+
+    if options.dry_run {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(&original_dir)
+        .with_context(|| format!("creating original dir {}", original_dir.display()))?;
+
+    // Move everything, tracking for rollback.
+    let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for (src, dest) in &plan {
+        if let Err(e) = std::fs::rename(src, dest) {
+            rollback(&moved);
+            return Err(anyhow::Error::new(e).context(format!(
+                "restoring {} → {}",
+                src.display(),
+                dest.display()
+            )));
+        }
+        moved.push((src.clone(), dest.clone()));
+    }
+
+    // Delete the DB row. If this fails, roll the files back so on-disk state
+    // matches the still-present DB row.
+    if let Err(e) = delete_archive_record_by_guid(conn, &record.acquired_image_guid) {
+        rollback(&moved);
+        return Err(e.context("deleting archive row after restore"));
+    }
+
+    prune_empty_dirs(&archive_dir, &record.segment_name);
+    Ok(())
+}
+
+/// Return `desired` if nothing is there, otherwise a sibling path with
+/// `.restored` (then `.restored.1`, `.restored.2`, …) inserted before the
+/// extension. Guarantees the returned path does not currently exist, so a
+/// rename into it never overwrites.
+fn unique_restore_dest(desired: &Path) -> PathBuf {
+    if !desired.exists() {
+        return desired.to_path_buf();
+    }
+    let dir = desired.parent().unwrap_or_else(|| Path::new("."));
+    let stem = desired
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ext = desired
+        .extension()
+        .map(|e| e.to_string_lossy().into_owned());
+    for n in 0u32.. {
+        let base = if n == 0 {
+            format!("{}.restored", stem)
+        } else {
+            format!("{}.restored.{}", stem, n)
+        };
+        let name = match &ext {
+            Some(e) => format!("{}.{}", base, e),
+            None => base,
+        };
+        let candidate = dir.join(name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("u32 range exhausted finding a free restore path")
+}
+
+/// Remove `archive_dir` and any parent directories up to (and including) the
+/// inserted `segment_name` directory, stopping at the first non-empty one.
+/// A directory containing only the manifest is considered non-empty so the
+/// recovery breadcrumb survives. Best-effort: errors are ignored.
+fn prune_empty_dirs(archive_dir: &Path, segment_name: &str) {
+    let mut dir = archive_dir.to_path_buf();
+    loop {
+        if dir_is_empty(&dir) {
+            if std::fs::remove_dir(&dir).is_err() {
+                return;
+            }
+        } else {
+            return;
+        }
+        // Stop after we've removed the segment directory itself.
+        let was_segment = dir.file_name().map(|n| n == segment_name).unwrap_or(false);
+        match dir.parent() {
+            Some(p) if !was_segment => dir = p.to_path_buf(),
+            _ => return,
+        }
+    }
+}
+
+fn dir_is_empty(dir: &Path) -> bool {
+    match std::fs::read_dir(dir) {
+        Ok(mut entries) => entries.next().is_none(),
+        Err(_) => false,
     }
 }
 
@@ -1113,6 +1525,84 @@ mod tests {
         assert_eq!(
             archive,
             p("/data/M31/PSF-Guard-Rejects/2026-04-16/LIGHT/img.fits")
+        );
+    }
+
+    #[test]
+    fn archive_root_for_is_path_up_to_segment() {
+        let root = archive_root_for(
+            &p("/data"),
+            &p("/data/M31/2026-04-16/LIGHT/img.fits"),
+            1,
+            "REJECT",
+        )
+        .unwrap();
+        assert_eq!(root, p("/data/M31/REJECT"));
+    }
+
+    #[test]
+    fn archive_root_for_depth_zero_and_shallow_collapse_to_top() {
+        // depth 0: single bucket directly under image_dir.
+        let root = archive_root_for(
+            &p("/data"),
+            &p("/data/M31/2026-04-16/LIGHT/img.fits"),
+            0,
+            "REJECT",
+        )
+        .unwrap();
+        assert_eq!(root, p("/data/REJECT"));
+        // shallow fallback (file directly under image_dir) also lands at top.
+        let root2 = archive_root_for(&p("/data"), &p("/data/img.fits"), 1, "REJECT").unwrap();
+        assert_eq!(root2, p("/data/REJECT"));
+    }
+
+    #[test]
+    fn archive_root_for_matches_archive_path_prefix() {
+        // The archive root must be a prefix of the computed archive path so
+        // the manifest sits above every leaf move in its tree.
+        let img = p("/data/M31/2026-04-16/LIGHT/img.fits");
+        let path = archive_path_for(&p("/data"), &img, 1, "REJECT").unwrap();
+        let root = archive_root_for(&p("/data"), &img, 1, "REJECT").unwrap();
+        assert!(
+            path.starts_with(&root),
+            "{path:?} should start with {root:?}"
+        );
+    }
+
+    #[test]
+    fn archive_root_for_returns_none_outside_image_dir() {
+        assert!(archive_root_for(&p("/data"), &p("/other/img.fits"), 1, "REJECT").is_none());
+    }
+
+    #[test]
+    fn unique_restore_dest_returns_input_when_free() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("img_0028.fits");
+        assert_eq!(unique_restore_dest(&target), target);
+    }
+
+    #[test]
+    fn unique_restore_dest_inserts_suffix_on_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("img_0028.fits");
+        std::fs::write(&target, b"occupied").unwrap();
+        let alt = unique_restore_dest(&target);
+        assert_eq!(alt, dir.path().join("img_0028.restored.fits"));
+
+        // Occupy the .restored slot too → numeric bump.
+        std::fs::write(&alt, b"also occupied").unwrap();
+        let alt2 = unique_restore_dest(&target);
+        assert_eq!(alt2, dir.path().join("img_0028.restored.1.fits"));
+    }
+
+    #[test]
+    fn unique_restore_dest_handles_extensionless_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("README");
+        std::fs::write(&target, b"x").unwrap();
+        assert_eq!(
+            unique_restore_dest(&target),
+            dir.path().join("README.restored")
         );
     }
 

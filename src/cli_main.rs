@@ -75,7 +75,11 @@ pub fn main() -> Result<()> {
             let conn = Connection::open(&entry.db_path)
                 .with_context(|| format!("opening database at {}", entry.db_path))?;
             require_target_scheduler_guid(&conn)?;
-            ensure_archive_schema(&conn)?;
+            // Dry-run must not write to the DB — defer table creation to live
+            // runs. move_rejects tolerates a missing table in dry-run mode.
+            if !dry_run {
+                ensure_archive_schema(&conn)?;
+            }
 
             let resolved = resolve_config(
                 entry.reject_archive.as_ref(),
@@ -95,12 +99,67 @@ pub fn main() -> Result<()> {
 
             let summary = move_rejects(&conn, &entry.image_dirs, &options)?;
             println!(
-                "\nReject archive {}: planned={}, archived={}, already_archived={}, not_found={}, errors={}",
+                "\nReject archive {}: planned={}, archived={}, already_archived={}, missing_archive={}, not_found={}, errors={}",
                 if dry_run { "(dry-run)" } else { "(live)" },
                 summary.planned,
                 summary.archived,
                 summary.already_archived,
+                summary.missing_archive,
                 summary.not_found_on_disk,
+                summary.errors,
+            );
+        }
+
+        Commands::RestoreRejects {
+            db,
+            all,
+            image_id,
+            guid,
+            dry_run,
+            registry,
+            verbose,
+        } => {
+            use crate::commands::reject_archive::{
+                require_target_scheduler_guid, restore_rejects, RestoreRejectsOptions,
+            };
+            use crate::db_registry::DbRegistry;
+            use std::path::PathBuf;
+
+            let registry_path = match registry {
+                Some(p) => PathBuf::from(p),
+                None => DbRegistry::default_path().context("resolving default registry path")?,
+            };
+            let db_registry = DbRegistry::load_or_init(&registry_path)
+                .with_context(|| format!("loading registry at {}", registry_path.display()))?;
+            let entry = db_registry
+                .find(&db)
+                .ok_or_else(|| anyhow::anyhow!(
+                    "No database with slug '{}' in {} (use `psf-guard server` once to register, or hand-edit the file).",
+                    db,
+                    registry_path.display(),
+                ))?;
+
+            let conn = Connection::open(&entry.db_path)
+                .with_context(|| format!("opening database at {}", entry.db_path))?;
+            require_target_scheduler_guid(&conn)?;
+
+            let options = RestoreRejectsOptions {
+                restore_all: all,
+                image_id_filter: image_id,
+                guid_filter: guid,
+                dry_run,
+                verbose,
+            };
+
+            let summary = restore_rejects(&conn, &options)?;
+            println!(
+                "\nRestore rejects {}: planned={}, restored={} (with_suffix={}), skipped_still_rejected={}, missing_archive={}, errors={}",
+                if dry_run { "(dry-run)" } else { "(live)" },
+                summary.planned,
+                summary.restored,
+                summary.restored_with_suffix,
+                summary.skipped_still_rejected,
+                summary.missing_archive,
                 summary.errors,
             );
         }

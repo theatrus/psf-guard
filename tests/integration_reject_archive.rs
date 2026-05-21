@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use psf_guard::commands::reject_archive::{
     ensure_archive_schema, move_rejects, require_target_scheduler_guid, resolve_config,
-    MoveRejectsOptions,
+    restore_rejects, MoveRejectsOptions, RestoreRejectsOptions, RestoreRejectsSummary,
 };
 use rusqlite::{params, Connection};
 use tempfile::tempdir;
@@ -190,6 +190,21 @@ fn run_archive(
     move_rejects(&conn, &dirs, &options).unwrap()
 }
 
+fn run_restore(fixture: &Fixture, options: RestoreRejectsOptions) -> RestoreRejectsSummary {
+    let conn = open_conn(&fixture.db_path);
+    require_target_scheduler_guid(&conn).unwrap();
+    restore_rejects(&conn, &options).unwrap()
+}
+
+fn set_grade(fixture: &Fixture, image_id: i64, grade: i32) {
+    let conn = open_conn(&fixture.db_path);
+    conn.execute(
+        "UPDATE acquiredimage SET gradingStatus = ?1 WHERE Id = ?2",
+        params![grade, image_id],
+    )
+    .unwrap();
+}
+
 #[test]
 fn dry_run_leaves_filesystem_and_db_alone() {
     let fixture = build_fixture();
@@ -285,9 +300,18 @@ fn live_run_moves_primary_plus_matching_sidecars_only() {
     sidecars_sorted.sort();
     assert_eq!(sidecars_sorted, vec!["img_0028.json", "img_0028.xisf"]);
 
-    // Manifest file appended.
-    let manifest = archive_dir.join(".psf-guard-manifest.json");
-    assert!(manifest.exists());
+    // Manifest lives at the REJECT root (<image_dir>/M31/REJECT), not in the
+    // leaf archive directory — one manifest per archive tree.
+    let manifest = fixture
+        .image_dir
+        .join("M31")
+        .join("REJECT")
+        .join(".psf-guard-manifest.json");
+    assert!(manifest.exists(), "manifest should live at the REJECT root");
+    assert!(
+        !archive_dir.join(".psf-guard-manifest.json").exists(),
+        "no manifest should be written in the leaf archive dir"
+    );
     let body: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&manifest).unwrap()).unwrap();
     let moves = body["moves"].as_array().unwrap();
@@ -334,4 +358,136 @@ fn legacy_db_without_guid_column_is_refused() {
         msg.contains("filter-rejected"),
         "msg should point at the legacy command: {msg}"
     );
+}
+
+fn archive_count(fixture: &Fixture) -> i64 {
+    let conn = open_conn(&fixture.db_path);
+    conn.query_row("SELECT COUNT(*) FROM psf_guard_archive", [], |r| r.get(0))
+        .unwrap()
+}
+
+#[test]
+fn restore_default_only_moves_un_rejected() {
+    let fixture = build_fixture();
+    run_archive(&fixture, false);
+    assert_eq!(archive_count(&fixture), 2);
+
+    // Un-reject img1 (id=1) to Accepted; leave img2 (id=2) Rejected.
+    set_grade(&fixture, 1, 1);
+
+    let summary = run_restore(&fixture, RestoreRejectsOptions::default());
+    assert_eq!(summary.planned, 1);
+    assert_eq!(summary.restored, 1);
+    assert_eq!(summary.skipped_still_rejected, 1);
+    assert_eq!(summary.errors, 0);
+
+    // img1 primary + sidecars are back at their original paths.
+    assert!(fixture.img1_src.exists(), "primary 28 restored");
+    let orig_dir = fixture.img1_src.parent().unwrap();
+    assert!(orig_dir.join("img_0028.xisf").exists());
+    assert!(orig_dir.join("img_0028.json").exists());
+
+    // img2 is still archived (still Rejected); its row remains.
+    assert_eq!(archive_count(&fixture), 1);
+    assert!(!fixture.img2_src.exists(), "img2 still archived on disk");
+}
+
+#[test]
+fn restore_all_moves_everything_and_prunes() {
+    let fixture = build_fixture();
+    run_archive(&fixture, false);
+
+    // Both still Rejected; --all overrides the grade filter.
+    let summary = run_restore(
+        &fixture,
+        RestoreRejectsOptions {
+            restore_all: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(summary.planned, 2);
+    assert_eq!(summary.restored, 2);
+    assert_eq!(summary.skipped_still_rejected, 0);
+    assert_eq!(archive_count(&fixture), 0);
+
+    assert!(fixture.img1_src.exists());
+    assert!(fixture.img2_src.exists());
+
+    // The emptied leaf archive dirs are pruned; the REJECT root survives
+    // because it still holds the manifest.
+    let reject_root = fixture.image_dir.join("M31").join("REJECT");
+    assert!(
+        reject_root.join(".psf-guard-manifest.json").exists(),
+        "manifest kept at REJECT root"
+    );
+    assert!(
+        !reject_root.join("2026-04-16").exists(),
+        "emptied date dir should be pruned"
+    );
+}
+
+#[test]
+fn restore_never_overwrites_uses_suffix() {
+    let fixture = build_fixture();
+    run_archive(&fixture, false);
+    set_grade(&fixture, 1, 1); // un-reject img1
+
+    // A *different* file now occupies img1's original path.
+    let orig = &fixture.img1_src;
+    fs::write(orig, b"a different newer capture").unwrap();
+
+    let summary = run_restore(&fixture, RestoreRejectsOptions::default());
+    assert_eq!(summary.restored, 1);
+    assert_eq!(summary.restored_with_suffix, 1);
+    assert_eq!(summary.errors, 0);
+
+    // The occupant is untouched.
+    assert_eq!(
+        fs::read_to_string(orig).unwrap(),
+        "a different newer capture"
+    );
+    // The archived primary landed beside it with a .restored suffix.
+    let restored = orig.parent().unwrap().join("img_0028.restored.fits");
+    assert!(restored.exists(), "restored beside the occupant");
+    assert_eq!(fs::read_to_string(&restored).unwrap(), "primary 28");
+}
+
+#[test]
+fn restore_dry_run_changes_nothing() {
+    let fixture = build_fixture();
+    run_archive(&fixture, false);
+    set_grade(&fixture, 1, 1);
+    set_grade(&fixture, 2, 1);
+
+    let summary = run_restore(
+        &fixture,
+        RestoreRejectsOptions {
+            dry_run: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(summary.planned, 2);
+    assert_eq!(summary.restored, 2); // counted as planned-and-would-restore
+    assert_eq!(archive_count(&fixture), 2, "rows untouched in dry-run");
+    assert!(!fixture.img1_src.exists(), "files not moved in dry-run");
+}
+
+#[test]
+fn restore_targeted_by_guid_ignores_grade() {
+    let fixture = build_fixture();
+    run_archive(&fixture, false);
+    // Both still Rejected. Target img2's guid explicitly.
+    let summary = run_restore(
+        &fixture,
+        RestoreRejectsOptions {
+            guid_filter: Some("guid-img-29".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(summary.planned, 1);
+    assert_eq!(summary.restored, 1);
+    assert_eq!(summary.skipped_still_rejected, 0);
+    assert!(fixture.img2_src.exists(), "targeted img2 restored");
+    assert!(!fixture.img1_src.exists(), "img1 left archived");
+    assert_eq!(archive_count(&fixture), 1);
 }

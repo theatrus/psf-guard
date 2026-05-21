@@ -43,7 +43,6 @@ pub enum Commands {
         project: String,
     },
 
-    /// Filter rejected files and move them to LIGHT_REJECT folders
     /// Move rejected files out of the directory tree PixInsight scans.
     ///
     /// Walks `gradingStatus = 2` images for the specified database (selected
@@ -59,7 +58,8 @@ pub enum Commands {
         #[arg(long)]
         db: String,
 
-        /// Perform a dry run (print the plan; no files moved, no DB writes)
+        /// Perform a dry run (print the plan; no files moved, no DB writes —
+        /// the `psf_guard_archive` table is not created in dry-run mode).
         #[arg(long)]
         dry_run: bool,
 
@@ -91,6 +91,46 @@ pub enum Commands {
         target: Option<String>,
 
         /// Verbose: print per-image trace including paths that didn't match.
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Move archived rejects back into the directory tree.
+    ///
+    /// Reverses `move-rejects`. By default restores only files that are no
+    /// longer graded `Rejected` (i.e. you un-rejected them in the UI — to
+    /// Accepted or Pending); use `--all` to restore everything in the
+    /// archive. Never overwrites: if the original path is occupied, the file
+    /// is restored beside it with a `.restored` suffix. On success the
+    /// `psf_guard_archive` row is removed and emptied REJECT directories are
+    /// pruned (a directory left holding only the manifest is kept).
+    RestoreRejects {
+        /// Slug of the database (from the registry) to operate on.
+        #[arg(long)]
+        db: String,
+
+        /// Restore every archived row regardless of current grade.
+        #[arg(long)]
+        all: bool,
+
+        /// Restore only this acquiredimage Id (regardless of grade).
+        #[arg(long)]
+        image_id: Option<i64>,
+
+        /// Restore only this acquiredimage guid (regardless of grade).
+        #[arg(long)]
+        guid: Option<String>,
+
+        /// Perform a dry run (print the plan; no files moved, no DB writes).
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Path to the database registry JSON file (defaults to the platform
+        /// config directory). Useful for dev/test isolation.
+        #[arg(long)]
+        registry: Option<String>,
+
+        /// Verbose: print per-image trace.
         #[arg(short, long)]
         verbose: bool,
     },
