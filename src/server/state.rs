@@ -342,6 +342,7 @@ impl AppState {
                 name,
                 db_path,
                 image_dirs,
+                reject_archive: None,
             }],
             cache_dir,
             pregeneration_config,

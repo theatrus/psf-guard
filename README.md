@@ -274,7 +274,25 @@ psf-guard server --registry /tmp/scratch.json <database> <image-dirs...>
 # from the registry)
 psf-guard server --config psf-guard.toml [--port 8080]  # CLI overrides config
 
-# Move rejected images  
+# Archive rejected images out of the directory tree PixInsight scans
+# (default: <image_dir>/<Project>/REJECT/<rest> with same-stem sidecars).
+# Idempotent and reversible — see REJECT_ARCHIVE_PLAN.md for the design.
+psf-guard move-rejects --db <slug> [--dry-run]
+                       [--reject-segment NAME] [--reject-depth N]
+                       [--sidecar-exts ".xisf,.json,.txt"]
+                       [--project NAME] [--target NAME]
+
+# Move archived rejects back into the tree. By default restores only files
+# you've un-rejected in the UI (grade no longer Rejected); --all restores
+# everything. Never overwrites — restores beside an occupant with a
+# `.restored` suffix. Removes the archive row and prunes emptied dirs.
+psf-guard restore-rejects --db <slug> [--all]
+                          [--image-id N] [--guid X] [--dry-run]
+
+# Legacy: in-place rename `LIGHT/` → `LIGHT_REJECT/` as a sibling folder
+# under the same project root. Deprecated — files stay in the same tree
+# PixInsight loads. Still works for the statistical-regrading flags
+# (`--stat-*`) that `move-rejects` doesn't duplicate.
 psf-guard filter-rejected <database> <image-dir> [--dry-run] [--project NAME]
 
 # Star detection analysis

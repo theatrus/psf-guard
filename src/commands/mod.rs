@@ -8,6 +8,7 @@ pub mod list_projects;
 pub mod list_targets;
 pub mod read_fits;
 pub mod regrade;
+pub mod reject_archive;
 pub mod show_images;
 pub mod stretch_to_png;
 pub mod update_grade;

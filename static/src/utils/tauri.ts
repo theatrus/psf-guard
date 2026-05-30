@@ -43,12 +43,23 @@ export const initializeApiBaseUrl = async (): Promise<string> => {
   return serverUrl ? `${serverUrl}/api` : '/api';
 };
 
+// Per-DB overrides for the reject-archive feature (mirrors
+// `RejectArchiveOverrides` in src/db_registry.rs). All fields optional;
+// missing keys fall through to the CLI flag, then the compiled-in defaults
+// (`REJECT`, depth 1, `.xisf` / `.json` / `.txt`).
+export interface RejectArchiveOverrides {
+  segment_name?: string;
+  depth?: number;
+  sidecar_exts?: string[];
+}
+
 // One configured database entry (mirrors `DbEntry` in the Rust db_registry module).
 export interface DbEntry {
   id: string;
   name: string;
   db_path: string;
   image_dirs: string[];
+  reject_archive?: RejectArchiveOverrides;
 }
 
 // Persisted registry of all configured databases (mirrors `DbRegistry`).
