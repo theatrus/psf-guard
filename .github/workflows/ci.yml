@@ -215,7 +215,7 @@ jobs:
         key: ${{ runner.os }}-e2e-fits-${{ hashFiles('static/e2e/fixtures/manifest.json') }}
 
     - name: Download psf-guard binary
-      uses: actions/download-artifact@v7
+      uses: actions/download-artifact@v8
       with:
         name: psf-guard-linux-x64
         path: ${{ runner.temp }}/psf-guard-bin
