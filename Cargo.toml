@@ -77,4 +77,4 @@ opt-level = 1
 overflow-checks = false
 
 [build-dependencies]
-tauri-build = { version = "2.5.6", features = [] }
+tauri-build = { version = "2.6.2", features = [] }
