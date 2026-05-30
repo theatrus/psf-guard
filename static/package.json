@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.85.5",
-    "@tauri-apps/api": "^2.8",
+    "@tauri-apps/api": "^2.11.0",
     "@types/react-router-dom": "^5.3.3",
     "axios": "^1.15.2",
     "react": "^19.1.1",
