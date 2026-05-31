@@ -29,9 +29,13 @@ export default defineConfig({
     // Optimize chunk size
     rollupOptions: {
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom'],
-          query: ['@tanstack/react-query', 'axios'],
+        manualChunks: (id) => {
+          if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/')) {
+            return 'vendor'
+          }
+          if (id.includes('node_modules/@tanstack/react-query/') || id.includes('node_modules/axios/')) {
+            return 'query'
+          }
         },
       },
     },
