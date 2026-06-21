@@ -48,7 +48,7 @@
     "msw": "^2.12.9",
     "typescript": "~5.8.3",
     "typescript-eslint": "^8.39.1",
-    "vite": "^8.0.14",
+    "vite": "^8.0.16",
     "vitest": "^4.0.18"
   }
 }
