@@ -1,32 +1,29 @@
 # PSF Guard Configuration File
-# 
+#
 # This is an example configuration file for PSF Guard.
 # Copy this file to psf-guard.toml and customize it for your setup.
 # Command line arguments will override values in this config file.
+#
+# NOTE: This file holds only server-wide knobs (port, cache, pregeneration).
+# The set of databases and their image directories is NOT configured here --
+# it lives in the database registry (JSON), by default at
+# <config>/psf-guard/config.json. Register a database with:
+#   psf-guard server <db.sqlite> <image-dir>...
+# or manage them from the web UI / Tauri app. See REJECT_ARCHIVE_PLAN.md and
+# the "Multi-database support" section of CLAUDE.md for details.
+#
+# A legacy [database]/[images] section is still parsed for backward
+# compatibility, but it is IGNORED in server mode -- do not add it here.
 
 [server]
 # Port to bind to (default: 3000)
 port = 3000
 
-# Host to bind to (default: "0.0.0.0")  
+# Host to bind to (default: "0.0.0.0")
 host = "0.0.0.0"
 
 # Enable CORS (default: true)
 cors = true
-
-[database]
-# Path to the SQLite database file (required)
-# Windows N.I.N.A. location: %LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite
-path = "schedulerdb.sqlite"
-
-[images]
-# List of image directories to scan (in priority order)
-# The first directory where a file is found will be used
-directories = [
-    "/path/to/primary/images",
-    "/path/to/backup/images",
-    "/path/to/archive/images"
-]
 
 [cache]
 # Cache directory path (default: "./cache")

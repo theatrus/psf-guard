@@ -191,16 +191,16 @@ psf-guard server --config psf-guard.toml
 
 ### Configuration Options
 
+The TOML config holds only server-wide knobs. **Databases and their image
+directories are not configured here** — they live in the database registry
+(JSON), by default at `<config>/psf-guard/config.json`. Register a database
+with `psf-guard server <db.sqlite> <image-dir>...`, or manage databases from
+the web UI / Tauri app.
+
 ```toml
 [server]
 port = 3000
 host = "0.0.0.0"
-
-[database]  
-path = "schedulerdb.sqlite"
-
-[images]
-directories = ["/path/to/images1", "/path/to/images2"]
 
 [cache]
 directory = "./cache"  
@@ -212,6 +212,10 @@ enabled = true
 screen = true   # Generate 1200px previews
 large = false   # Generate 2000px previews
 ```
+
+> A legacy `[database]` / `[images]` section is still parsed for backward
+> compatibility but is **ignored in server mode**; databases come from the
+> registry. Don't add it to new config files.
 
 Command line arguments override config file settings.
 

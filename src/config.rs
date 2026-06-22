@@ -4,14 +4,19 @@ use std::path::Path;
 use std::time::Duration;
 
 /// Main configuration structure for PSF Guard server
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     /// Server configuration
     pub server: ServerConfig,
-    /// Database configuration  
-    pub database: DatabaseConfig,
-    /// Image directories configuration
-    pub images: ImagesConfig,
+    /// Database configuration. Obsolete for server mode (databases come from
+    /// the registry, see `db_registry.rs`); kept optional only for backward
+    /// compatibility with old TOMLs that still carry a `[database]` section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database: Option<DatabaseConfig>,
+    /// Image directories configuration. Obsolete for server mode (image dirs
+    /// live in the registry); optional for backward compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<ImagesConfig>,
     /// Cache configuration
     pub cache: CacheConfig,
     /// Optional pregeneration configuration
@@ -60,22 +65,6 @@ pub struct PregenerationConfig {
     pub large: Option<bool>,
     /// Number of worker threads (default: num_cpus)
     pub workers: Option<usize>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig::default(),
-            database: DatabaseConfig {
-                path: "schedulerdb.sqlite".to_string(),
-            },
-            images: ImagesConfig {
-                directories: vec!["./images".to_string()],
-            },
-            cache: CacheConfig::default(),
-            pregeneration: None,
-        }
-    }
 }
 
 impl Default for ServerConfig {
@@ -129,15 +118,15 @@ impl Config {
         port: Option<u16>,
         cache_dir: Option<String>,
     ) {
-        // CLI database path overrides config
+        // CLI database path overrides config (legacy; server mode ignores this)
         if let Some(db_path) = database_path {
-            self.database.path = db_path;
+            self.database = Some(DatabaseConfig { path: db_path });
         }
 
-        // CLI image directories override config
+        // CLI image directories override config (legacy; server mode ignores this)
         if let Some(dirs) = image_dirs {
             if !dirs.is_empty() {
-                self.images.directories = dirs;
+                self.images = Some(ImagesConfig { directories: dirs });
             }
         }
 
@@ -192,29 +181,34 @@ impl Config {
 
     /// Validate configuration values
     pub fn validate(&self) -> Result<()> {
-        // Check database path exists
-        let db_path = Path::new(&self.database.path);
-        if !db_path.exists() {
-            return Err(anyhow::anyhow!(
-                "Database file does not exist: {}",
-                self.database.path
-            ));
-        }
-
-        // Check image directories exist
-        if self.images.directories.is_empty() {
-            return Err(anyhow::anyhow!(
-                "At least one image directory must be specified"
-            ));
-        }
-
-        for dir in &self.images.directories {
-            let path = Path::new(dir);
-            if !path.exists() {
-                return Err(anyhow::anyhow!("Image directory does not exist: {}", dir));
+        // The `[database]` / `[images]` sections are obsolete for server mode
+        // (databases come from the registry). Only validate them when present,
+        // for the benefit of any legacy caller that still sets them.
+        if let Some(database) = &self.database {
+            let db_path = Path::new(&database.path);
+            if !db_path.exists() {
+                return Err(anyhow::anyhow!(
+                    "Database file does not exist: {}",
+                    database.path
+                ));
             }
-            if !path.is_dir() {
-                return Err(anyhow::anyhow!("Image path is not a directory: {}", dir));
+        }
+
+        if let Some(images) = &self.images {
+            if images.directories.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "At least one image directory must be specified"
+                ));
+            }
+
+            for dir in &images.directories {
+                let path = Path::new(dir);
+                if !path.exists() {
+                    return Err(anyhow::anyhow!("Image directory does not exist: {}", dir));
+                }
+                if !path.is_dir() {
+                    return Err(anyhow::anyhow!("Image path is not a directory: {}", dir));
+                }
             }
         }
 
@@ -259,8 +253,9 @@ mod tests {
         assert_eq!(config.get_port(), 3000);
         assert_eq!(config.get_host(), "0.0.0.0");
         assert!(config.get_cors_enabled());
-        assert_eq!(config.database.path, "schedulerdb.sqlite");
-        assert_eq!(config.images.directories, vec!["./images"]);
+        // Database/images are obsolete and default to absent.
+        assert!(config.database.is_none());
+        assert!(config.images.is_none());
         assert_eq!(config.get_cache_directory(), "./cache");
         assert_eq!(config.get_file_ttl(), Duration::from_secs(300));
         assert_eq!(config.get_directory_ttl(), Duration::from_secs(300));
@@ -271,16 +266,55 @@ mod tests {
         let config = Config::default();
         let toml_string = toml_edit::ser::to_string_pretty(&config).unwrap();
 
-        // Should contain all major sections
+        // Should contain the live sections; obsolete database/images are
+        // skipped when absent (the default).
         assert!(toml_string.contains("[server]"));
-        assert!(toml_string.contains("[database]"));
-        assert!(toml_string.contains("[images]"));
+        assert!(!toml_string.contains("[database]"));
+        assert!(!toml_string.contains("[images]"));
         assert!(toml_string.contains("[cache]"));
 
         // Parse back
         let parsed: Config = toml_edit::de::from_str(&toml_string).unwrap();
         assert_eq!(parsed.get_port(), config.get_port());
-        assert_eq!(parsed.database.path, config.database.path);
+        assert_eq!(parsed.database.is_none(), config.database.is_none());
+    }
+
+    #[test]
+    fn test_config_parses_without_database_or_images_sections() {
+        // A server-mode TOML carries only server/cache/pregeneration knobs;
+        // databases come from the registry. This must parse cleanly.
+        let toml = r#"
+[server]
+port = 3002
+
+[cache]
+directory = "./cache"
+"#;
+        let config: Config = toml_edit::de::from_str(toml).unwrap();
+        assert_eq!(config.get_port(), 3002);
+        assert!(config.database.is_none());
+        assert!(config.images.is_none());
+    }
+
+    #[test]
+    fn test_config_still_parses_legacy_database_section() {
+        // Old TOMLs that still carry [database]/[images] must keep loading.
+        let toml = r#"
+[server]
+port = 3000
+
+[database]
+path = "/tmp/legacy.sqlite"
+
+[images]
+directories = ["/tmp/imgs"]
+
+[cache]
+directory = "./cache"
+"#;
+        let config: Config = toml_edit::de::from_str(toml).unwrap();
+        assert_eq!(config.database.unwrap().path, "/tmp/legacy.sqlite");
+        assert_eq!(config.images.unwrap().directories, vec!["/tmp/imgs"]);
     }
 
     #[test]
@@ -294,13 +328,13 @@ mod tests {
             Some("/new/cache".to_string()),
         );
 
-        assert_eq!(config.database.path, "/new/database.sqlite");
-        assert_eq!(
-            config.images.directories,
-            vec!["/new/images1", "/new/images2"]
-        );
         assert_eq!(config.get_port(), 8080);
         assert_eq!(config.get_cache_directory(), "/new/cache");
+        assert_eq!(config.database.unwrap().path, "/new/database.sqlite");
+        assert_eq!(
+            config.images.unwrap().directories,
+            vec!["/new/images1", "/new/images2"]
+        );
     }
 
     #[test]
@@ -314,8 +348,8 @@ mod tests {
         // Load from file
         let loaded_config = Config::from_file(temp_file.path()).unwrap();
         assert_eq!(loaded_config.get_port(), config.get_port());
-        assert_eq!(loaded_config.database.path, config.database.path);
-        assert_eq!(loaded_config.images.directories, config.images.directories);
+        assert_eq!(loaded_config.database.is_none(), config.database.is_none());
+        assert_eq!(loaded_config.images.is_none(), config.images.is_none());
     }
 
     #[test]
@@ -359,8 +393,12 @@ mod tests {
         let mut config = Config::default();
 
         // Need to set valid directories and database for validation to get to TTL check
-        config.images.directories = vec!["src".to_string()]; // Use src dir which exists
-        config.database.path = "Cargo.toml".to_string(); // Use Cargo.toml which exists
+        config.images = Some(ImagesConfig {
+            directories: vec!["src".to_string()], // Use src dir which exists
+        });
+        config.database = Some(DatabaseConfig {
+            path: "Cargo.toml".to_string(), // Use Cargo.toml which exists
+        });
         config.cache.file_ttl = Some("invalid_format".to_string());
 
         let result = config.validate();
