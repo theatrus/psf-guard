@@ -209,7 +209,7 @@ impl FitsImage {
         let sum: u64 = self.data.iter().map(|&x| x as u64).sum();
         let mean = sum as f64 / self.data.len() as f64;
 
-        let median = if self.data.len() % 2 == 0 {
+        let median = if self.data.len().is_multiple_of(2) {
             let mid = self.data.len() / 2;
             (sorted_data[mid - 1] as f64 + sorted_data[mid] as f64) / 2.0
         } else {
@@ -322,7 +322,7 @@ impl FitsImage {
             .collect();
         deviations.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-        if deviations.len() % 2 == 0 {
+        if deviations.len().is_multiple_of(2) {
             let mid = deviations.len() / 2;
             (deviations[mid - 1] + deviations[mid]) / 2.0
         } else {
