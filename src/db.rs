@@ -645,11 +645,12 @@ impl<'a> Database<'a> {
         query.push_str(" AND gradingStatus != 0");
 
         let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-        let count: usize = self
+        // rusqlite 0.40 dropped the `usize: FromSql` impl; read as i64 and cast.
+        let count: i64 = self
             .conn
             .query_row(&query, param_refs.as_slice(), |row| row.get(0))?;
 
-        Ok(count)
+        Ok(count as usize)
     }
 
     // Transaction helpers
