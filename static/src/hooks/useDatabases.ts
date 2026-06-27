@@ -3,6 +3,7 @@ import { useMemo } from 'react';
 import { apiClient } from '../api/client';
 import type {
   DatabaseSummary,
+  Project,
   ProjectOverview,
   TargetOverview,
   OverallStats,
@@ -34,13 +35,15 @@ interface MergedResult<T> {
 function useMergedPerDb<T>(
   databases: DatabaseSummary[] | undefined,
   queryKeyTail: string,
-  fetcher: (dbId: string) => Promise<T[]>
+  fetcher: (dbId: string) => Promise<T[]>,
+  extraOptions?: { refetchInterval?: number; refetchIntervalInBackground?: boolean }
 ): MergedResult<T> {
   const queries = useQueries({
     queries: (databases ?? []).map((db) => ({
       queryKey: ['db', db.id, queryKeyTail],
       queryFn: () => fetcher(db.id),
       staleTime: 30_000,
+      ...extraOptions,
     })),
   });
 
@@ -67,6 +70,25 @@ function useMergedPerDb<T>(
 
     return { data: rows, isLoading, isError, errors };
   }, [queries, databases]);
+}
+
+/**
+ * Merged lightweight project list (`/projects`) across every configured
+ * database, stamped with `db_id`/`db_name`. Used by the header
+ * project/target selector so it can offer projects from all DBs at once.
+ * Polls every 30s to match the single-DB selector's old behavior.
+ */
+export function useMergedProjects() {
+  const { data: databases, isLoading: dbsLoading } = useAllDatabases();
+  const merged = useMergedPerDb<Project>(databases, 'projects', apiClient.getProjects, {
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: true,
+  });
+  return {
+    ...merged,
+    databases,
+    isLoading: dbsLoading || merged.isLoading,
+  };
 }
 
 /** Merged projects-overview across every configured database. */

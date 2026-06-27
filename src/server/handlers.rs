@@ -680,10 +680,9 @@ pub async fn get_images(
                 .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
             // Create display name - we need the profile_id to do this properly
-            let project_display_name = if show_profile && img.profile_id.is_some() {
-                format!("{} → {}", img.profile_id.as_ref().unwrap(), proj_name)
-            } else {
-                proj_name.clone()
+            let project_display_name = match img.profile_id.as_ref() {
+                Some(profile_id) if show_profile => format!("{} → {}", profile_id, proj_name),
+                _ => proj_name.clone(),
             };
 
             ImageResponse {
@@ -833,10 +832,9 @@ pub async fn get_image(
     }
 
     // Create display name
-    let project_display_name = if show_profile && image.profile_id.is_some() {
-        format!("{} → {}", image.profile_id.as_ref().unwrap(), proj_name)
-    } else {
-        proj_name.clone()
+    let project_display_name = match image.profile_id.as_ref() {
+        Some(profile_id) if show_profile => format!("{} → {}", profile_id, proj_name),
+        _ => proj_name.clone(),
     };
 
     let response = ImageResponse {

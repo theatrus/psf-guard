@@ -390,15 +390,16 @@ directory = "./cache"
 
     #[test]
     fn test_config_validation_invalid_ttl() {
-        let mut config = Config::default();
-
         // Need to set valid directories and database for validation to get to TTL check
-        config.images = Some(ImagesConfig {
-            directories: vec!["src".to_string()], // Use src dir which exists
-        });
-        config.database = Some(DatabaseConfig {
-            path: "Cargo.toml".to_string(), // Use Cargo.toml which exists
-        });
+        let mut config = Config {
+            images: Some(ImagesConfig {
+                directories: vec!["src".to_string()], // Use src dir which exists
+            }),
+            database: Some(DatabaseConfig {
+                path: "Cargo.toml".to_string(), // Use Cargo.toml which exists
+            }),
+            ..Default::default()
+        };
         config.cache.file_ttl = Some("invalid_format".to_string());
 
         let result = config.validate();

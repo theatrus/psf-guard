@@ -1,13 +1,16 @@
+import { useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import { useDbProjectTarget } from '../hooks/useUrlState';
+import { useMergedProjects, type WithDb } from '../hooks/useDatabases';
+import type { Project } from '../api/types';
 
 export default function ProjectTargetSelector() {
   const {
     dbId,
     projectId: selectedProjectId,
     targetId: selectedTargetId,
-    setProjectId,
+    setDbProjectTarget,
     setTargetId,
   } = useDbProjectTarget();
   const queryClient = useQueryClient();
@@ -57,14 +60,17 @@ export default function ProjectTargetSelector() {
     },
   });
 
-  // Fetch projects with periodic refresh
-  const { data: projects = [], isLoading: projectsLoading } = useQuery({
-    queryKey: ['db', dbId, 'projects'],
-    queryFn: () => apiClient.getProjects(dbId!),
-    enabled: !!dbId,
-    refetchInterval: 30000, // Refresh every 30 seconds
-    refetchIntervalInBackground: true,
-  });
+  // Fetch projects from EVERY configured database so the dropdown spans DBs.
+  const { data: projects, databases, isLoading: projectsLoading } = useMergedProjects();
+
+  // Group projects by their source DB so each renders under its own optgroup.
+  const projectsByDb = useMemo(() => {
+    const map: Record<string, WithDb<Project>[]> = {};
+    for (const p of projects) {
+      (map[p.db_id] ||= []).push(p);
+    }
+    return map;
+  }, [projects]);
 
   // Fetch targets for selected project with periodic refresh
   const { data: targets = [], isLoading: targetsLoading } = useQuery({
@@ -75,18 +81,33 @@ export default function ProjectTargetSelector() {
     refetchIntervalInBackground: true,
   });
 
+  // Option values encode the source DB since project IDs collide across DBs:
+  //   ""              -> placeholder (clears the scope)
+  //   "<db>:all"      -> all projects in that DB
+  //   "<db>:<number>" -> a specific project in that DB
   const handleProjectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value;
-    let projectId: number | null = null;
-    
-    if (value === 'all') {
-      projectId = null; // null means all projects
-    } else if (value) {
-      projectId = Number(value);
+    if (!value) {
+      setDbProjectTarget(null, null, null);
+      return;
     }
-    
-    setProjectId(projectId);
+    const sep = value.indexOf(':');
+    const db = value.slice(0, sep);
+    const rest = value.slice(sep + 1);
+    const projectId = rest === 'all' ? null : Number(rest);
+    // Switching project (or DB) always resets the target.
+    setDbProjectTarget(db, projectId, null);
   };
+
+  // Reflect the current (db, project) selection back onto the <select> value.
+  const projectValue =
+    dbId == null
+      ? ''
+      : selectedProjectId === null
+        ? `${dbId}:all`
+        : selectedProjectId
+          ? `${dbId}:${selectedProjectId}`
+          : '';
 
   const handleTargetChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const targetId = e.target.value ? Number(e.target.value) : null;
@@ -100,20 +121,24 @@ export default function ProjectTargetSelector() {
         <select
           id="project-select"
           className="compact-select"
-          value={selectedProjectId === null ? 'all' : selectedProjectId || ''}
+          value={projectValue}
           onChange={handleProjectChange}
           disabled={projectsLoading}
         >
           <option value="">Select project</option>
-          <option value="all">- All Projects -</option>
-          {projects.map(project => (
-            <option 
-              key={project.id} 
-              value={project.id}
-              disabled={!project.has_files}
-            >
-              {project.display_name} {!project.has_files && '(no files)'}
-            </option>
+          {(databases ?? []).map(db => (
+            <optgroup key={db.id} label={db.name}>
+              <option value={`${db.id}:all`}>- All Projects -</option>
+              {(projectsByDb[db.id] ?? []).map(project => (
+                <option
+                  key={`${db.id}:${project.id}`}
+                  value={`${db.id}:${project.id}`}
+                  disabled={!project.has_files}
+                >
+                  {project.display_name} {!project.has_files && '(no files)'}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
       </div>
@@ -149,7 +174,7 @@ export default function ProjectTargetSelector() {
             refreshCacheMutation.mutate();
           }
         }}
-        disabled={refreshCacheMutation.isPending || refreshDirectoryCacheMutation.isPending || refreshBothCachesMutation.isPending}
+        disabled={!dbId || refreshCacheMutation.isPending || refreshDirectoryCacheMutation.isPending || refreshBothCachesMutation.isPending}
         title={
           refreshBothCachesMutation.isPending 
             ? 'Refreshing directory and file caches...'

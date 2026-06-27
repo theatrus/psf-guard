@@ -474,7 +474,7 @@ fn calculate_median(data: &[f64]) -> f64 {
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
     let len = sorted.len();
-    if len % 2 == 0 {
+    if len.is_multiple_of(2) {
         (sorted[len / 2 - 1] + sorted[len / 2]) / 2.0
     } else {
         sorted[len / 2]
@@ -784,7 +784,7 @@ fn measure_star_properties(
     // Calculate background median
     background_pixels.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let background = if !background_pixels.is_empty() {
-        if background_pixels.len() % 2 == 0 {
+        if background_pixels.len().is_multiple_of(2) {
             (background_pixels[background_pixels.len() / 2 - 1]
                 + background_pixels[background_pixels.len() / 2])
                 / 2.0
@@ -819,7 +819,7 @@ fn measure_star_properties(
     // Calculate star median for flatness check
     star_pixel_values.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let star_median = if !star_pixel_values.is_empty() {
-        if star_pixel_values.len() % 2 == 0 {
+        if star_pixel_values.len().is_multiple_of(2) {
             (star_pixel_values[star_pixel_values.len() / 2 - 1]
                 + star_pixel_values[star_pixel_values.len() / 2])
                 / 2.0

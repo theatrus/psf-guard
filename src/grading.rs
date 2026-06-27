@@ -226,7 +226,7 @@ impl StatisticalGrader {
         }
         values.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let mid = values.len() / 2;
-        if values.len() % 2 == 0 {
+        if values.len().is_multiple_of(2) {
             (values[mid - 1] + values[mid]) / 2.0
         } else {
             values[mid]
@@ -239,7 +239,7 @@ impl StatisticalGrader {
         }
         values.sort();
         let mid = values.len() / 2;
-        if values.len() % 2 == 0 {
+        if values.len().is_multiple_of(2) {
             (values[mid - 1] + values[mid]) as f64 / 2.0
         } else {
             values[mid] as f64
@@ -431,7 +431,7 @@ impl StatisticalGrader {
                 // Calculate baseline median
                 let mut sorted_baseline = baseline_values.clone();
                 sorted_baseline.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                let baseline_median = if sorted_baseline.len() % 2 == 0 {
+                let baseline_median = if sorted_baseline.len().is_multiple_of(2) {
                     let mid = sorted_baseline.len() / 2;
                     (sorted_baseline[mid - 1] + sorted_baseline[mid]) / 2.0
                 } else {
@@ -491,7 +491,7 @@ impl StatisticalGrader {
                     // Calculate baseline median
                     let mut sorted_baseline = baseline_values.clone();
                     sorted_baseline.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                    let baseline_median = if sorted_baseline.len() % 2 == 0 {
+                    let baseline_median = if sorted_baseline.len().is_multiple_of(2) {
                         let mid = sorted_baseline.len() / 2;
                         (sorted_baseline[mid - 1] + sorted_baseline[mid]) / 2.0
                     } else {
