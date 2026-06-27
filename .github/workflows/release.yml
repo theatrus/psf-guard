@@ -27,7 +27,7 @@ jobs:
             asset_name: psf-guard-macos-x64
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Install system dependencies (Ubuntu)
       if: matrix.os == 'ubuntu-22.04'
