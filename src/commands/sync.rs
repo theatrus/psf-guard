@@ -63,8 +63,17 @@ pub struct SyncGradesOptions {
     pub target_filter: Option<String>,
     /// Compute the plan but make no writes to the destination.
     pub dry_run: bool,
-    /// Print a per-image trace for each staged change.
-    pub verbose: bool,
+}
+
+/// A single staged grade change — a destination guid moving from one grade to
+/// another. Returned (rather than printed) so the CLI/UI layer can render a
+/// trace while the core sync stays side-effect free.
+#[derive(Debug, Clone)]
+pub struct GradeChange {
+    pub guid: String,
+    pub from: i32,
+    pub to: i32,
+    pub reason: Option<String>,
 }
 
 /// Outcome counters for a grade push.
@@ -88,6 +97,8 @@ pub struct SyncSummary {
     pub duplicate_guids: usize,
     /// Per-transition counts, e.g. `"Pending→Rejected" => 12`.
     pub transitions: BTreeMap<String, usize>,
+    /// Each staged change, in source iteration order (for verbose tracing).
+    pub changes: Vec<GradeChange>,
 }
 
 fn grade_from_i32(v: i32) -> Result<GradingStatus> {
@@ -207,22 +218,19 @@ pub fn sync_grades(
             GradingStatus::from_i32(img.grading_status),
         );
         *summary.transitions.entry(label).or_insert(0) += 1;
-
-        if opts.verbose {
-            println!(
-                "  {}  {} → {}{}",
-                guid,
-                GradingStatus::from_i32(*dest_grade),
-                GradingStatus::from_i32(img.grading_status),
-                img.reject_reason
-                    .as_deref()
-                    .map(|r| format!("  [{}]", r))
-                    .unwrap_or_default(),
-            );
-        }
+        summary.changes.push(GradeChange {
+            guid: guid.to_string(),
+            from: *dest_grade,
+            to: img.grading_status,
+            reason: img.reject_reason.clone(),
+        });
     }
 
-    summary.duplicate_guids = src_dup_guids.len() + dest_dups.len();
+    // Distinct guids that were ambiguous in either DB (a guid duplicated in
+    // *both* must only be counted once).
+    let mut dup_guids: HashSet<&str> = src_dup_guids.clone();
+    dup_guids.extend(dest_dups.iter().map(|g| g.as_str()));
+    summary.duplicate_guids = dup_guids.len();
     summary.dest_only = dest_map
         .keys()
         .filter(|g| !matched_dest.contains(g.as_str()))
@@ -289,7 +297,6 @@ mod tests {
             project_filter: None,
             target_filter: None,
             dry_run: false,
-            verbose: false,
         }
     }
 
@@ -425,6 +432,37 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn duplicate_guid_in_both_dbs_counts_once() {
+        // g1 is duplicated in BOTH source and destination. It must contribute
+        // a single distinct entry to duplicate_guids, not two.
+        let src = setup_db(
+            &[(1, 2, Some("g1"), Some("x")), (2, 2, Some("g1"), Some("y"))],
+            true,
+        );
+        let dest = setup_db(
+            &[(10, 0, Some("g1"), None), (11, 0, Some("g1"), None)],
+            true,
+        );
+
+        let summary = sync_grades(&src, &dest, &opts()).unwrap();
+        assert_eq!(summary.duplicate_guids, 1);
+        assert_eq!(summary.changed, 0);
+    }
+
+    #[test]
+    fn changes_trace_is_returned_not_printed() {
+        let src = setup_db(&[(1, 2, Some("g1"), Some("clouds"))], true);
+        let dest = setup_db(&[(10, 0, Some("g1"), None)], true);
+
+        let summary = sync_grades(&src, &dest, &opts()).unwrap();
+        assert_eq!(summary.changes.len(), 1);
+        let c = &summary.changes[0];
+        assert_eq!(c.guid, "g1");
+        assert_eq!((c.from, c.to), (0, 2));
+        assert_eq!(c.reason.as_deref(), Some("clouds"));
     }
 
     #[test]

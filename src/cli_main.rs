@@ -424,13 +424,26 @@ pub fn main() -> Result<()> {
                     project_filter: project,
                     target_filter: target,
                     dry_run,
-                    verbose,
                 };
 
-                if verbose {
-                    println!("Grade transitions (dest → src):");
-                }
                 let summary = sync_grades(&src, &dest, &options)?;
+
+                if verbose && !summary.changes.is_empty() {
+                    use crate::models::GradingStatus;
+                    println!("Grade transitions (dest → src):");
+                    for c in &summary.changes {
+                        println!(
+                            "  {}  {} → {}{}",
+                            c.guid,
+                            GradingStatus::from_i32(c.from),
+                            GradingStatus::from_i32(c.to),
+                            c.reason
+                                .as_deref()
+                                .map(|r| format!("  [{}]", r))
+                                .unwrap_or_default(),
+                        );
+                    }
+                }
 
                 println!(
                     "\nGrade sync {} {} → {}:",
