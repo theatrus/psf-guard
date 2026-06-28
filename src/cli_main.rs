@@ -357,6 +357,114 @@ pub fn main() -> Result<()> {
         } => {
             benchmark_psf(&fits_path, runs, verbose)?;
         }
+        Commands::Sync { kind } => match kind {
+            crate::cli::SyncKind::Grades {
+                from,
+                to,
+                dry_run,
+                status,
+                project,
+                target,
+                registry,
+                verbose,
+            } => {
+                use crate::commands::sync::{
+                    parse_status, resolve_db_path, sync_grades, SyncGradesOptions,
+                };
+                use crate::db_registry::DbRegistry;
+                use rusqlite::OpenFlags;
+                use std::path::{Path, PathBuf};
+
+                // Load the registry only when a side might be a slug (i.e. isn't
+                // already an existing file), so syncing two plain paths doesn't
+                // create a registry file as a side effect.
+                let need_registry = !Path::new(&from).is_file() || !Path::new(&to).is_file();
+                let registry_obj = if need_registry {
+                    let registry_path = match &registry {
+                        Some(p) => PathBuf::from(p),
+                        None => {
+                            DbRegistry::default_path().context("resolving default registry path")?
+                        }
+                    };
+                    Some(DbRegistry::load_or_init(&registry_path).with_context(|| {
+                        format!("loading registry at {}", registry_path.display())
+                    })?)
+                } else {
+                    None
+                };
+
+                let from_path = resolve_db_path(registry_obj.as_ref(), &from)?;
+                let to_path = resolve_db_path(registry_obj.as_ref(), &to)?;
+
+                // Refuse to "sync" a database with itself.
+                let from_canon =
+                    std::fs::canonicalize(&from_path).unwrap_or_else(|_| from_path.clone());
+                let to_canon = std::fs::canonicalize(&to_path).unwrap_or_else(|_| to_path.clone());
+                if from_canon == to_canon {
+                    return Err(anyhow::anyhow!(
+                        "Source and destination resolve to the same database ({}); nothing to sync",
+                        from_canon.display()
+                    ));
+                }
+
+                let status_filter = match status.as_deref() {
+                    Some(s) => Some(parse_status(s)?),
+                    None => None,
+                };
+
+                let src = Connection::open_with_flags(&from_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                    .with_context(|| format!("opening source database {}", from_path.display()))?;
+                let dest = Connection::open_with_flags(&to_path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+                    .with_context(|| {
+                        format!("opening destination database {}", to_path.display())
+                    })?;
+
+                let options = SyncGradesOptions {
+                    status_filter,
+                    project_filter: project,
+                    target_filter: target,
+                    dry_run,
+                    verbose,
+                };
+
+                if verbose {
+                    println!("Grade transitions (dest → src):");
+                }
+                let summary = sync_grades(&src, &dest, &options)?;
+
+                println!(
+                    "\nGrade sync {} {} → {}:",
+                    if dry_run { "(dry-run)" } else { "(live)" },
+                    from_path.display(),
+                    to_path.display(),
+                );
+                println!(
+                    "  source rows considered: {} (skipped, no guid: {})",
+                    summary.source_considered, summary.source_no_guid
+                );
+                println!("  matched in destination: {}", summary.matched);
+                println!(
+                    "    changed:   {}{}",
+                    summary.changed,
+                    if dry_run { " (would change)" } else { "" }
+                );
+                println!("    unchanged: {}", summary.unchanged);
+                println!(
+                    "  source guid not in destination: {}",
+                    summary.unmatched_source
+                );
+                println!("  destination guid not in source: {}", summary.dest_only);
+                if summary.duplicate_guids > 0 {
+                    println!("  duplicate guids skipped: {}", summary.duplicate_guids);
+                }
+                if !summary.transitions.is_empty() {
+                    println!("  transitions:");
+                    for (label, count) in &summary.transitions {
+                        println!("    {}: {}", label, count);
+                    }
+                }
+            }
+        },
         Commands::Server {
             config,
             registry,

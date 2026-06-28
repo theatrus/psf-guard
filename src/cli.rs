@@ -416,6 +416,18 @@ pub enum Commands {
         verbose: bool,
     },
 
+    /// Sync state between two Target Scheduler databases.
+    ///
+    /// Currently supports pushing grading state (accept/reject/pending plus the
+    /// reject reason) one-way from a source DB into a destination DB, matched
+    /// by the stable `acquiredimage.guid` (TS plugin schema v22+). The two DBs
+    /// are assumed same-lineage (one a copy/export of the other). The source
+    /// always wins — run it both ways for a crude bidirectional reconcile.
+    Sync {
+        #[command(subcommand)]
+        kind: SyncKind,
+    },
+
     /// Start the web server for API access and static file serving
     Server {
         /// Path to TOML configuration file
@@ -482,6 +494,45 @@ pub enum Commands {
         /// trusted interface (e.g. localhost). Tauri mode always enables it.
         #[arg(long)]
         allow_database_management: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SyncKind {
+    /// Push grading state from one database into another (one-way, by guid).
+    Grades {
+        /// Source database (read-only): a registry slug or a path to a .sqlite file.
+        #[arg(long)]
+        from: String,
+
+        /// Destination database (written): a registry slug or a path to a .sqlite file.
+        #[arg(long)]
+        to: String,
+
+        /// Print the plan without writing to the destination.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Only push rows whose SOURCE grade is this (pending|accepted|rejected).
+        #[arg(long)]
+        status: Option<String>,
+
+        /// Restrict to source rows whose project name matches (substring).
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Restrict to source rows whose target name matches (substring).
+        #[arg(short, long)]
+        target: Option<String>,
+
+        /// Path to the database registry JSON file (only consulted when
+        /// --from/--to is a slug; defaults to the platform config directory).
+        #[arg(long)]
+        registry: Option<String>,
+
+        /// Verbose: print a per-image trace of each grade transition.
+        #[arg(short, long)]
+        verbose: bool,
     },
 }
 
