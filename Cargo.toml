@@ -29,7 +29,7 @@ byteorder = "1.5"
 fitrs = "0.5"
 bumpalo = { version = "3.20", features = ["collections"] }
 image = "0.25"
-imageproc = "0.26"
+imageproc = "0.27"
 rand = "0.10"
 nalgebra = "0.35"
 # OpenCV integration for advanced computer vision
