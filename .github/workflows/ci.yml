@@ -62,7 +62,7 @@ jobs:
     - name: Cache vcpkg (Windows)
       if: matrix.os == 'windows-latest'
       id: vcpkg-cache
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: C:\vcpkg
         key: ${{ runner.os }}-vcpkg-opencv4-v2
@@ -101,21 +101,21 @@ jobs:
         toolchain: ${{ steps.rust-toolchain.outputs.channel }}
         components: rustfmt, clippy
     - name: Cache cargo registry
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       continue-on-error: true
       with:
         path: ~/.cargo/registry
         key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
 
     - name: Cache cargo index
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       continue-on-error: true
       with:
         path: ~/.cargo/git
         key: ${{ runner.os }}-cargo-index-${{ hashFiles('Cargo.lock') }}
 
     - name: Cache cargo build
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       continue-on-error: true
       with:
         path: target
@@ -196,7 +196,7 @@ jobs:
         npm ci
 
     - name: Cache Playwright browsers
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: ~/.cache/ms-playwright
         key: ${{ runner.os }}-playwright-${{ hashFiles('static/package-lock.json') }}
@@ -209,7 +209,7 @@ jobs:
     - name: Cache FITS fixtures
       # ~470 MB across four files; reuse between runs when the manifest
       # hasn't changed (sha256 of each file is checked at download time).
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: ~/.cache/psf-guard-e2e-fixtures
         key: ${{ runner.os }}-e2e-fits-${{ hashFiles('static/e2e/fixtures/manifest.json') }}
@@ -315,7 +315,7 @@ jobs:
     - name: Cache vcpkg (Windows)
       if: matrix.os == 'windows-latest'
       id: vcpkg-cache
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: C:\vcpkg
         key: ${{ runner.os }}-vcpkg-opencv4-v2
@@ -356,28 +356,28 @@ jobs:
         components: rustfmt, clippy
 
     - name: Cache cargo registry
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       continue-on-error: true
       with:
         path: ~/.cargo/registry
         key: ${{ runner.os }}-cargo-registry-tauri-${{ hashFiles('Cargo.lock') }}
 
     - name: Cache cargo bin
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       continue-on-error: true
       with:
         path: ~/.cargo/bin
         key: ${{ runner.os }}-cargo-bin-tauri-${{ hashFiles('Cargo.lock') }}
 
     - name: Cache cargo index
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       continue-on-error: true
       with:
         path: ~/.cargo/git
         key: ${{ runner.os }}-cargo-index-tauri-${{ hashFiles('Cargo.lock') }}
 
     - name: Cache cargo build
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       continue-on-error: true
       with:
         path: target
