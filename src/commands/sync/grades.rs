@@ -125,18 +125,30 @@ pub fn sync_grades(
         }
     }
 
-    // Count guid occurrences in the (filtered) source to spot duplicates.
-    let mut src_counts: HashMap<&str, usize> = HashMap::new();
-    for (img, _, _) in &src_rows {
-        if let Some(g) = img.guid.as_deref() {
-            if !g.is_empty() {
-                *src_counts.entry(g).or_insert(0) += 1;
+    // Duplicate guids must be detected across ALL source images, not just the
+    // filtered subset: two ambiguous rows sharing a guid but with different
+    // grades could otherwise look unique under --status/--project/--target and
+    // push an arbitrary grade. (require_target_scheduler_guid guarantees guid.)
+    let src_dup_guids: HashSet<String> = {
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        let mut stmt = src.prepare("SELECT guid FROM acquiredimage")?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            if let Some(g) = r.get::<_, Option<String>>(0)? {
+                if !g.is_empty() {
+                    *counts.entry(g).or_insert(0) += 1;
+                }
             }
         }
-    }
+        counts
+            .into_iter()
+            .filter(|(_, c)| *c > 1)
+            .map(|(g, _)| g)
+            .collect()
+    };
 
     let mut matched_dest: HashSet<&str> = HashSet::new();
-    let mut src_dup_guids: HashSet<&str> = HashSet::new();
+    let mut skipped_dups: HashSet<&str> = HashSet::new();
     let mut updates: Vec<(i32, GradingStatus, Option<String>)> = Vec::new();
 
     for (img, _, _) in &src_rows {
@@ -147,16 +159,13 @@ pub fn sync_grades(
                 continue;
             }
         };
-        if src_counts.get(guid).copied().unwrap_or(0) > 1 {
-            src_dup_guids.insert(guid);
+        if src_dup_guids.contains(guid) || dest_dups.contains(guid) {
+            // Ambiguous in either DB — never push an arbitrary grade.
+            skipped_dups.insert(guid);
             continue;
         }
         summary.source_considered += 1;
 
-        if dest_dups.contains(guid) {
-            // Ambiguous on the destination side; leave it alone.
-            continue;
-        }
         let (dest_id, dest_grade, dest_reason) = match dest_map.get(guid) {
             Some(entry) => entry,
             None => {
@@ -189,11 +198,8 @@ pub fn sync_grades(
         });
     }
 
-    // Distinct guids that were ambiguous in either DB (a guid duplicated in
-    // *both* must only be counted once).
-    let mut dup_guids: HashSet<&str> = src_dup_guids.clone();
-    dup_guids.extend(dest_dups.iter().map(|g| g.as_str()));
-    summary.duplicate_guids = dup_guids.len();
+    // Distinct guids skipped because they were ambiguous in either DB.
+    summary.duplicate_guids = skipped_dups.len();
     summary.dest_only = dest_map
         .keys()
         .filter(|g| !matched_dest.contains(g.as_str()))
@@ -426,5 +432,24 @@ mod tests {
         assert_eq!(c.guid, "g1");
         assert_eq!((c.from, c.to), (0, 2));
         assert_eq!(c.reason.as_deref(), Some("clouds"));
+    }
+
+    #[test]
+    fn duplicate_source_guid_skipped_even_under_status_filter() {
+        // Two source rows share guid g1 with different grades. A --status filter
+        // selects only one, but duplicate detection is global, so g1 is still
+        // recognized as ambiguous and no arbitrary grade is pushed.
+        let src = setup_db(
+            &[(1, 1, Some("g1"), None), (2, 2, Some("g1"), Some("x"))],
+            true,
+        );
+        let dest = setup_db(&[(10, 0, Some("g1"), None)], true);
+
+        let mut o = opts();
+        o.status_filter = Some(GradingStatus::Accepted); // selects only the grade=1 row
+        let s = sync_grades(&src, &dest, &o).unwrap();
+        assert_eq!(s.changed, 0); // ambiguous -> nothing pushed
+        assert_eq!(s.duplicate_guids, 1);
+        assert_eq!(grade_of(&dest, "g1"), (0, None)); // destination untouched
     }
 }

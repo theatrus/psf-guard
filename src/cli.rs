@@ -416,13 +416,14 @@ pub enum Commands {
         verbose: bool,
     },
 
-    /// Sync state between two Target Scheduler databases.
-    ///
-    /// Currently supports pushing grading state (accept/reject/pending plus the
-    /// reject reason) one-way from a source DB into a destination DB, matched
-    /// by the stable `acquiredimage.guid` (TS plugin schema v22+). The two DBs
-    /// are assumed same-lineage (one a copy/export of the other). The source
-    /// always wins — run it both ways for a crude bidirectional reconcile.
+    /// Sync state between two Target Scheduler databases, matched by the stable
+    /// `acquiredimage.guid` (TS plugin schema v22+). Two complementary one-way
+    /// operations: `sync pull` mirrors structure + captured images from a
+    /// telescope DB into your local DB (preserving your local grading), and
+    /// `sync grades` pushes your grading decisions from the local DB back into
+    /// the telescope DB. Use them together — pull to refresh, grade locally,
+    /// push grades back — rather than reversing one direction, which would
+    /// overwrite work.
     Sync {
         #[command(subcommand)]
         kind: SyncKind,
