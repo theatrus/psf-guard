@@ -233,6 +233,11 @@ jobs:
           - **Windows**: `psf-guard-windows-x64.exe` - standalone CLI binary
           - **macOS**: `psf-guard-macos-x64` - standalone CLI binary
 
+          ### Fedora packages 📦
+          - **Fedora 43 / 44**: `psf-guard-*.fc43.x86_64.rpm` / `*.fc44.x86_64.rpm`
+            install the CLI/server plus a `psf-guard.service` systemd unit
+            (`sudo dnf install ./psf-guard-*.rpm`)
+
           ### Features
           - 🖥️ **Smart Binary**: Single binary that automatically switches between GUI and CLI modes
           - 📊 **N.I.N.A. Integration**: Direct support for N.I.N.A. scheduler databases
