@@ -51,6 +51,25 @@ Build without OpenCV:
 rpmbuild -ba --without opencv packaging/rpm/psf-guard.spec
 ```
 
+## Build in clean Fedora containers (podman)
+
+`build-in-podman.sh` reproduces the CI build locally: it runs the whole flow
+(toolchain install, source generation, `rpmbuild`, and an `rpm -i` +
+`psf-guard --help` smoke test) inside throwaway `fedora:<ver>` containers and
+drops the artifacts on the host.
+
+```bash
+# Builds Fedora 43 and 44 in parallel into ./dist/rpm/fedora-<ver>/
+./packaging/rpm/build-in-podman.sh
+
+# Pick releases and an output directory; build one at a time:
+./packaging/rpm/build-in-podman.sh 43 44 --outdir /tmp/psf-rpms --sequential
+```
+
+Each release lands in `<outdir>/fedora-<ver>/` alongside a `build.log`. Only
+podman is required on the host (the container does the rest; network is needed
+for npm + cargo vendor).
+
 ## Build in mock (clean chroot, e.g. Fedora 44)
 
 ```bash
