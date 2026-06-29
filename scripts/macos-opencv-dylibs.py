@@ -264,9 +264,15 @@ class DylibProcessor:
         print("📝 Updating Tauri configuration...")
         
         try:
-            with open(self.tauri_config, 'r') as f:
-                config = json.load(f)
-            
+            # tauri.macos.conf.json is gitignored — it only ever carries the
+            # machine-local dylib paths we inject below. Start from any existing
+            # file (preserving hand-set keys) or a minimal skeleton if absent.
+            if self.tauri_config.exists():
+                with open(self.tauri_config, 'r') as f:
+                    config = json.load(f)
+            else:
+                config = {"build": {}, "bundle": {"macOS": {}}}
+
             # Ensure the structure exists
             if 'bundle' not in config:
                 config['bundle'] = {}
@@ -297,10 +303,9 @@ class DylibProcessor:
             print("   Make sure to build the release binary first with: cargo build --release --features tauri")
             return False
         
-        if not self.tauri_config.exists():
-            print(f"❌ Tauri macOS config not found at {self.tauri_config}")
-            return False
-        
+        # tauri.macos.conf.json is gitignored and may be absent on a fresh
+        # checkout; update_tauri_config() recreates it from a skeleton.
+
         # Build homebrew index for fast lookups
         self.build_homebrew_index()
         
