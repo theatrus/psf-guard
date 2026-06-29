@@ -556,9 +556,9 @@ pub enum SyncKind {
         #[arg(long)]
         dry_run: bool,
 
-        /// Also copy the (large) imagedata thumbnail BLOBs.
+        /// Skip copying the (large) imagedata thumbnail BLOBs (copied by default).
         #[arg(long)]
-        with_image_data: bool,
+        no_image_data: bool,
 
         /// Restrict the pull to projects whose name matches (substring);
         /// cascades to their targets, plans, and images.

@@ -117,7 +117,8 @@ READ_WRITE, refuse same-path source/dest, and have `--dry-run` + `--verbose`.
 
 **`sync pull --from <telescope> --to <our>`** — pull structure + captures.
 - Mirrors `exposuretemplate`, `project`, `ruleweight`, `target`, `exposureplan`,
-  `acquiredimage` (and `imagedata` blobs with `--with-image-data`) into our DB.
+  `acquiredimage`, and `imagedata` blobs (copied by default; `--no-image-data`
+  to skip) into our DB.
   Processed in FK order, building `src_guid → dest_Id` maps so child FKs
   (target→project, plan→target+template, image→project+target+exposureId,
   ruleweight→project) are remapped onto the destination's local autoincrement

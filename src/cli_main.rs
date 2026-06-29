@@ -482,7 +482,7 @@ pub fn main() -> Result<()> {
                 from,
                 to,
                 dry_run,
-                with_image_data,
+                no_image_data,
                 project,
                 registry,
                 verbose,
@@ -530,7 +530,7 @@ pub fn main() -> Result<()> {
 
                 let options = PullOptions {
                     dry_run,
-                    with_image_data,
+                    with_image_data: !no_image_data,
                     project_filter: project,
                 };
 
@@ -568,7 +568,7 @@ pub fn main() -> Result<()> {
                 if summary.imagedata_synced {
                     tc("imagedata", &summary.imagedata);
                 } else {
-                    println!("  imagedata        skipped (pass --with-image-data to copy blobs)");
+                    println!("  imagedata        skipped (--no-image-data)");
                 }
             }
         },
