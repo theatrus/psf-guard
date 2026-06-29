@@ -15,7 +15,7 @@
 use super::require_pull_capable;
 use anyhow::{anyhow, Context, Result};
 use rusqlite::types::Value;
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql, Transaction};
+use rusqlite::{params, params_from_iter, Connection, ToSql, Transaction};
 use std::collections::{HashMap, HashSet};
 
 /// Knobs for a pull.
@@ -35,6 +35,9 @@ pub struct TableCounts {
     pub inserted: usize,
     pub updated: usize,
     pub unchanged: usize,
+    /// Rows skipped as ambiguous: a duplicate guid in either DB, or a non-null
+    /// parent FK that didn't map to a destination row.
+    pub skipped: usize,
 }
 
 /// Outcome of a pull.
@@ -126,6 +129,111 @@ fn quoted(cols: &[&str]) -> String {
         .join(",")
 }
 
+/// Columns present in BOTH source and destination (intersection, in source
+/// order). Lets a source at a newer TS migration level than the destination
+/// (or vice-versa) sync the columns they share instead of failing the whole
+/// pull on an unknown column.
+fn shared_columns(src: &Connection, tx: &Transaction, table: &str) -> Result<Vec<String>> {
+    let src_cols = table_columns(src, table)?;
+    let dest_cols = table_columns(tx, table)?;
+    let dest_set: HashSet<String> = dest_cols.iter().map(|c| c.to_lowercase()).collect();
+    Ok(src_cols
+        .into_iter()
+        .filter(|c| dest_set.contains(&c.to_lowercase()))
+        .collect())
+}
+
+/// Distinct guids that appear more than once among the source rows of `table`
+/// selected by `filter_col ∈ allowed` (None = all rows). Such rows are skipped
+/// so two source entities can't silently merge onto one destination row.
+fn source_dup_guids(
+    src: &Connection,
+    table: &str,
+    filter_col: &str,
+    allowed: Option<&HashSet<i64>>,
+) -> Result<HashSet<String>> {
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    let mut stmt = src.prepare(&format!("SELECT \"{}\", guid FROM {}", filter_col, table))?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        if let Some(a) = allowed {
+            match r.get::<_, Option<i64>>(0)? {
+                Some(k) if a.contains(&k) => {}
+                _ => continue,
+            }
+        }
+        if let Some(g) = r.get::<_, Option<String>>(1)? {
+            if !g.is_empty() {
+                *counts.entry(g).or_insert(0) += 1;
+            }
+        }
+    }
+    Ok(counts
+        .into_iter()
+        .filter(|(_, c)| *c > 1)
+        .map(|(g, _)| g)
+        .collect())
+}
+
+/// A destination `guid -> (dest Id, write-column values)` map paired with the
+/// set of guids that were ambiguous (appeared more than once) in the destination.
+type DestGuidMap = (HashMap<String, (i64, Vec<Value>)>, HashSet<String>);
+
+/// Build a destination `guid -> (Id, write-col values)` map. Guids that occur
+/// more than once in the destination are removed and returned in the dups set;
+/// matching against an ambiguous destination guid is unsafe, so callers skip it.
+fn dest_guid_map(
+    tx: &Transaction,
+    table: &str,
+    write_cols: &[&str],
+    guid_w: usize,
+) -> Result<DestGuidMap> {
+    let sql = format!("SELECT Id,{} FROM {}", quoted(write_cols), table);
+    let mut stmt = tx.prepare(&sql)?;
+    let n = write_cols.len();
+    let mut map: HashMap<String, (i64, Vec<Value>)> = HashMap::new();
+    let mut dups: HashSet<String> = HashSet::new();
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let dest_id: i64 = row.get(0)?;
+        let vals: Vec<Value> = (0..n)
+            .map(|i| row.get::<_, Value>(i + 1))
+            .collect::<rusqlite::Result<_>>()?;
+        if let Value::Text(g) = &vals[guid_w] {
+            if !g.is_empty() {
+                if dups.contains(g) {
+                    continue;
+                }
+                if map.remove(g).is_some() {
+                    dups.insert(g.clone());
+                } else {
+                    map.insert(g.clone(), (dest_id, vals));
+                }
+            }
+        }
+    }
+    Ok((map, dups))
+}
+
+/// Remap an FK column in place. Returns `false` if the column held a non-null id
+/// absent from `map` — the caller must skip the row rather than retain the
+/// source id (which could attach the child to an unrelated destination row).
+fn remap_fk_checked(values: &mut [Value], pos: Option<usize>, map: &HashMap<i64, i64>) -> bool {
+    match pos {
+        Some(p) => match values[p] {
+            Value::Integer(src_fk) => match map.get(&src_fk) {
+                Some(dest_fk) => {
+                    values[p] = Value::Integer(*dest_fk);
+                    true
+                }
+                None => false,
+            },
+            _ => true, // NULL (or non-integer) FK: nothing to remap
+        },
+        None => true, // column not in the shared set
+    }
+}
+
 struct GuidUpsert {
     /// Source local Id → destination local Id (for FK remapping of children).
     id_map: HashMap<i64, i64>,
@@ -143,7 +251,7 @@ fn upsert_guid_table(
     allowed_src_ids: Option<&HashSet<i64>>,
     changes: &mut Vec<String>,
 ) -> Result<GuidUpsert> {
-    let cols = table_columns(src, table)?;
+    let cols = shared_columns(src, tx, table)?;
     let id_pos = cols
         .iter()
         .position(|c| c.eq_ignore_ascii_case("Id"))
@@ -169,25 +277,10 @@ fn upsert_guid_table(
         })
         .collect();
 
-    // Destination guid -> (dest_id, write-col values), the pre-pull state.
-    let mut dest_map: HashMap<String, (i64, Vec<Value>)> = HashMap::new();
-    {
-        let sql = format!("SELECT Id,{} FROM {}", quoted(&write_cols), table);
-        let mut stmt = tx.prepare(&sql)?;
-        let n = write_cols.len();
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            let dest_id: i64 = row.get(0)?;
-            let vals: Vec<Value> = (0..n)
-                .map(|i| row.get::<_, Value>(i + 1))
-                .collect::<rusqlite::Result<_>>()?;
-            if let Value::Text(g) = &vals[guid_w] {
-                if !g.is_empty() {
-                    dest_map.insert(g.clone(), (dest_id, vals));
-                }
-            }
-        }
-    }
+    // Pre-pull destination state (guids ambiguous in dest are dropped), and the
+    // set of guids that are duplicated within the (filtered) source.
+    let (dest_map, dest_dups) = dest_guid_map(tx, table, &write_cols, guid_w)?;
+    let src_dups = source_dup_guids(src, table, "Id", allowed_src_ids)?;
 
     let insert_sql = format!(
         "INSERT INTO {} ({}) VALUES ({})",
@@ -231,14 +324,24 @@ fn upsert_guid_table(
             Value::Text(g) if !g.is_empty() => g.clone(),
             _ => continue,
         };
+        if src_dups.contains(&guid) || dest_dups.contains(&guid) {
+            counts.skipped += 1;
+            changes.push(format!("skip {} {} (ambiguous guid)", table, guid));
+            continue;
+        }
 
         let mut write_values: Vec<Value> = write_idx.iter().map(|&i| all_vals[i].clone()).collect();
+        let mut unmapped = false;
         for (pos, map) in &fk_positions {
-            if let Value::Integer(src_fk) = write_values[*pos] {
-                if let Some(dest_fk) = map.get(&src_fk) {
-                    write_values[*pos] = Value::Integer(*dest_fk);
-                }
+            if !remap_fk_checked(&mut write_values, Some(*pos), map) {
+                unmapped = true;
+                break;
             }
+        }
+        if unmapped {
+            counts.skipped += 1;
+            changes.push(format!("skip {} {} (unmapped parent)", table, guid));
+            continue;
         }
 
         match dest_map.get(&guid) {
@@ -287,7 +390,7 @@ fn upsert_acquired_images(
     summary: &mut PullSummary,
 ) -> Result<HashMap<i64, i64>> {
     let table = "acquiredimage";
-    let cols = table_columns(src, table)?;
+    let cols = shared_columns(src, tx, table)?;
     let ci = |n: &str| cols.iter().position(|c| c.eq_ignore_ascii_case(n));
     let id_pos = ci("Id").ok_or_else(|| anyhow!("acquiredimage.Id missing"))?;
     let guid_pos = ci("guid").ok_or_else(|| anyhow!("acquiredimage.guid missing"))?;
@@ -303,25 +406,9 @@ fn upsert_acquired_images(
     let tgt_w = wpos("targetId");
     let expo_w = wpos("exposureId");
 
-    // Destination guid -> (dest_id, write values).
-    let mut dest_map: HashMap<String, (i64, Vec<Value>)> = HashMap::new();
-    {
-        let sql = format!("SELECT Id,{} FROM {}", quoted(&write_cols), table);
-        let mut stmt = tx.prepare(&sql)?;
-        let n = write_cols.len();
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            let dest_id: i64 = row.get(0)?;
-            let vals: Vec<Value> = (0..n)
-                .map(|i| row.get::<_, Value>(i + 1))
-                .collect::<rusqlite::Result<_>>()?;
-            if let Value::Text(g) = &vals[guid_w] {
-                if !g.is_empty() {
-                    dest_map.insert(g.clone(), (dest_id, vals));
-                }
-            }
-        }
-    }
+    // Pre-pull destination state + duplicate-guid sets (ambiguous rows skipped).
+    let (dest_map, dest_dups) = dest_guid_map(tx, table, &write_cols, guid_w)?;
+    let src_dups = source_dup_guids(src, table, "projectId", allowed_project_ids)?;
 
     let insert_sql = format!(
         "INSERT INTO {} ({}) VALUES ({})",
@@ -365,11 +452,29 @@ fn upsert_acquired_images(
             Value::Text(g) if !g.is_empty() => g.clone(),
             _ => continue,
         };
+        if src_dups.contains(&guid) || dest_dups.contains(&guid) {
+            summary.acquiredimage.skipped += 1;
+            summary
+                .changes
+                .push(format!("skip acquiredimage {} (ambiguous guid)", guid));
+            continue;
+        }
 
         let mut write_values: Vec<Value> = write_idx.iter().map(|&i| all_vals[i].clone()).collect();
-        remap_fk(&mut write_values, proj_w, proj_map);
-        remap_fk(&mut write_values, tgt_w, tgt_map);
-        // exposureId references exposureplan.Id; if unmatched, write 0.
+        // projectId/targetId are required FKs: skip the row if either parent
+        // wasn't pulled, rather than retaining a source id that points at an
+        // unrelated destination row.
+        if !remap_fk_checked(&mut write_values, proj_w, proj_map)
+            || !remap_fk_checked(&mut write_values, tgt_w, tgt_map)
+        {
+            summary.acquiredimage.skipped += 1;
+            summary
+                .changes
+                .push(format!("skip acquiredimage {} (unmapped parent)", guid));
+            continue;
+        }
+        // exposureId is a soft reference to exposureplan.Id; if unmatched, write
+        // 0 (the "no plan" sentinel) — never retain the source id.
         if let Some(p) = expo_w {
             if let Value::Integer(src_plan) = write_values[p] {
                 write_values[p] = Value::Integer(plan_map.get(&src_plan).copied().unwrap_or(0));
@@ -419,16 +524,6 @@ fn upsert_acquired_images(
     }
 
     Ok(id_map)
-}
-
-fn remap_fk(values: &mut [Value], pos: Option<usize>, map: &HashMap<i64, i64>) {
-    if let Some(p) = pos {
-        if let Value::Integer(src_fk) = values[p] {
-            if let Some(dest_fk) = map.get(&src_fk) {
-                values[p] = Value::Integer(*dest_fk);
-            }
-        }
-    }
 }
 
 /// Upsert per-project rule weights (no guid; matched by `(projectId, name)`).
@@ -481,8 +576,12 @@ fn upsert_ruleweights(
     Ok(())
 }
 
-/// Copy imagedata BLOBs for pulled images (insert-only; blobs are immutable per
-/// image). In dry-run mode the rows are counted but not written.
+/// Copy imagedata BLOBs for pulled images (insert-only; blobs are immutable).
+///
+/// An acquired image can hold several ImageData records (one per `tag`), so the
+/// match is per `(acquiredimageid, tag)` — a destination already holding one tag
+/// still receives any other tags it's missing. In dry-run mode rows are counted
+/// (with sizes) but nothing is written.
 fn copy_imagedata(
     src: &Connection,
     tx: &Transaction,
@@ -491,35 +590,39 @@ fn copy_imagedata(
     bytes: &mut u64,
     dry_run: bool,
 ) -> Result<()> {
-    let mut exists_stmt =
-        tx.prepare("SELECT 1 FROM imagedata WHERE acquiredimageid = ?1 LIMIT 1")?;
-    let mut count_stmt = src.prepare(
-        "SELECT COUNT(*), COALESCE(SUM(LENGTH(imagedata)),0) FROM imagedata WHERE acquiredimageid = ?1",
-    )?;
-    let mut sel_stmt = src.prepare(
+    let mut existing_stmt = tx.prepare("SELECT tag FROM imagedata WHERE acquiredimageid = ?1")?;
+    let mut sel_len_stmt =
+        src.prepare("SELECT tag, LENGTH(imagedata) FROM imagedata WHERE acquiredimageid = ?1")?;
+    let mut sel_full_stmt = src.prepare(
         "SELECT tag, imagedata, width, height FROM imagedata WHERE acquiredimageid = ?1",
     )?;
     let mut ins_stmt = tx.prepare(
         "INSERT INTO imagedata (tag, imagedata, acquiredimageid, width, height) VALUES (?1,?2,?3,?4,?5)",
     )?;
     for (src_img, dest_img) in img_map {
-        let already = exists_stmt
-            .query_row(params![dest_img], |_| Ok(()))
-            .optional()?
-            .is_some();
-        if already {
-            counts.unchanged += 1;
-            continue;
+        // Tags already present at the destination for this image.
+        let mut existing: HashSet<Option<String>> = HashSet::new();
+        {
+            let mut rows = existing_stmt.query(params![dest_img])?;
+            while let Some(r) = rows.next()? {
+                existing.insert(r.get::<_, Option<String>>(0)?);
+            }
         }
         if dry_run {
-            let (n, sz): (i64, i64) =
-                count_stmt.query_row(params![src_img], |r| Ok((r.get(0)?, r.get(1)?)))?;
-            counts.inserted += n as usize;
-            *bytes += sz.max(0) as u64;
+            let mut rows = sel_len_stmt.query(params![src_img])?;
+            while let Some(r) = rows.next()? {
+                let tag: Option<String> = r.get(0)?;
+                if existing.contains(&tag) {
+                    counts.unchanged += 1;
+                } else {
+                    counts.inserted += 1;
+                    *bytes += r.get::<_, i64>(1).unwrap_or(0).max(0) as u64;
+                }
+            }
             continue;
         }
         #[allow(clippy::type_complexity)]
-        let blobs: Vec<(Option<String>, Option<Vec<u8>>, i64, i64)> = sel_stmt
+        let blobs: Vec<(Option<String>, Option<Vec<u8>>, i64, i64)> = sel_full_stmt
             .query_map(params![src_img], |r| {
                 Ok((
                     r.get(0)?,
@@ -530,6 +633,10 @@ fn copy_imagedata(
             })?
             .collect::<rusqlite::Result<_>>()?;
         for (tag, blob, w, h) in blobs {
+            if existing.contains(&tag) {
+                counts.unchanged += 1;
+                continue;
+            }
             *bytes += blob.as_ref().map(|b| b.len() as u64).unwrap_or(0);
             ins_stmt.execute(params![tag, blob, dest_img, w, h])?;
             counts.inserted += 1;
@@ -955,5 +1062,125 @@ mod tests {
         schema(&dest, false); // no guid columns
         let err = sync_pull(&src, &dest, &opts()).unwrap_err();
         assert!(format!("{:#}", err).contains("destination"));
+    }
+
+    #[test]
+    fn duplicate_source_guid_is_skipped() {
+        let src = Connection::open_in_memory().unwrap();
+        schema(&src, true);
+        // Two distinct projects sharing one guid — ambiguous, must not merge.
+        src.execute_batch(
+            "INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (1,'p','A','',1,1,'dup');
+             INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (2,'p','B','',1,1,'dup');",
+        ).unwrap();
+        let dest = empty_local();
+        let s = sync_pull(&src, &dest, &opts()).unwrap();
+        assert_eq!(s.project.inserted, 0);
+        assert_eq!(s.project.skipped, 2);
+        assert_eq!(one::<i64>(&dest, "SELECT COUNT(*) FROM project"), 0);
+    }
+
+    #[test]
+    fn duplicate_dest_guid_skips_and_cascades() {
+        let src = telescope(); // project guid 'pg' with a target + images
+        let dest = empty_local();
+        // Destination already has the project guid twice -> ambiguous match.
+        dest.execute_batch(
+            "INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (1,'p','X','',1,1,'pg');
+             INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (2,'p','Y','',1,1,'pg');",
+        ).unwrap();
+        let s = sync_pull(&src, &dest, &opts()).unwrap();
+        // Source project can't be safely matched -> skipped, and its children
+        // can't remap their parent -> they skip too (no silent mis-attach).
+        assert_eq!(s.project.skipped, 1);
+        assert_eq!(s.target.skipped, 1);
+        assert_eq!(s.acquiredimage.skipped, 2);
+        assert_eq!(s.acquiredimage.inserted, 0);
+    }
+
+    #[test]
+    fn unmapped_parent_skips_child() {
+        // A target whose project is NOT in the source at all: its projectid
+        // can't remap, so the target must be skipped rather than attach to an
+        // unrelated destination project.
+        let src = Connection::open_in_memory().unwrap();
+        schema(&src, true);
+        src.execute_batch(
+            "INSERT INTO target (Id,name,active,ra,dec,epochcode,projectid,guid) VALUES (1,'Orphan',1,0,0,0,999,'tg-orphan');",
+        ).unwrap();
+        let dest = empty_local();
+        // Give dest a project at Id 999 to prove we do NOT attach to it.
+        dest.execute_batch(
+            "INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (999,'p','Unrelated','',1,1,'unrelated');",
+        ).unwrap();
+        let s = sync_pull(&src, &dest, &opts()).unwrap();
+        assert_eq!(s.target.inserted, 0);
+        assert_eq!(s.target.skipped, 1);
+        assert_eq!(one::<i64>(&dest, "SELECT COUNT(*) FROM target"), 0);
+    }
+
+    #[test]
+    fn schema_drift_syncs_shared_columns() {
+        // Source carries a column the destination lacks (newer migration). The
+        // pull must succeed, syncing the shared columns.
+        let src = telescope();
+        src.execute("ALTER TABLE project ADD COLUMN futurecol TEXT", [])
+            .unwrap();
+        src.execute("UPDATE project SET futurecol='x' WHERE guid='pg'", [])
+            .unwrap();
+        let dest = empty_local(); // no futurecol
+        let s = sync_pull(&src, &dest, &opts()).unwrap();
+        assert_eq!(s.project.inserted, 1);
+        assert_eq!(
+            one::<String>(&dest, "SELECT name FROM project WHERE guid='pg'"),
+            "Caldwell"
+        );
+    }
+
+    #[test]
+    fn imagedata_copies_missing_tags() {
+        let src = telescope(); // img1 + img2 each have one imagedata row (tag '')
+                               // Give img1 a second tagged ImageData record.
+        src.execute(
+            "INSERT INTO imagedata (tag, imagedata, acquiredimageid, width, height) VALUES ('thumb', X'AABBCCDD', 1, 50, 50)",
+            [],
+        ).unwrap();
+        let dest = empty_local();
+        let mut o = opts();
+        o.with_image_data = true;
+        sync_pull(&src, &dest, &o).unwrap();
+        let img1: i64 = one(&dest, "SELECT Id FROM acquiredimage WHERE guid='img1'");
+        // Both tags copied.
+        assert_eq!(
+            one::<i64>(
+                &dest,
+                &format!(
+                    "SELECT COUNT(*) FROM imagedata WHERE acquiredimageid={}",
+                    img1
+                )
+            ),
+            2
+        );
+        // Drop one tag locally; a re-pull restores just the missing one.
+        dest.execute(
+            &format!(
+                "DELETE FROM imagedata WHERE acquiredimageid={} AND tag='thumb'",
+                img1
+            ),
+            [],
+        )
+        .unwrap();
+        let s = sync_pull(&src, &dest, &o).unwrap();
+        assert_eq!(s.imagedata.inserted, 1); // only the missing 'thumb'
+        assert_eq!(
+            one::<i64>(
+                &dest,
+                &format!(
+                    "SELECT COUNT(*) FROM imagedata WHERE acquiredimageid={}",
+                    img1
+                )
+            ),
+            2
+        );
     }
 }

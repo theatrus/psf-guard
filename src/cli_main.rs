@@ -544,9 +544,14 @@ pub fn main() -> Result<()> {
                 }
 
                 let tc = |label: &str, c: &TableCounts| {
+                    let skipped = if c.skipped > 0 {
+                        format!(" skipped={}", c.skipped)
+                    } else {
+                        String::new()
+                    };
                     println!(
-                        "  {:<16} inserted={} updated={} unchanged={}",
-                        label, c.inserted, c.updated, c.unchanged
+                        "  {:<16} inserted={} updated={} unchanged={}{}",
+                        label, c.inserted, c.updated, c.unchanged, skipped
                     );
                 };
                 println!(
