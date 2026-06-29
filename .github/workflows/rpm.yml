@@ -1,0 +1,62 @@
+name: RPM
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    name: Build RPM on Fedora ${{ matrix.fedora }}
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:${{ matrix.fedora }}
+    strategy:
+      fail-fast: false
+      matrix:
+        fedora: [ '43', '44' ]
+
+    steps:
+      - name: Install build tooling
+        run: |
+          dnf -y install --setopt=install_weak_deps=False \
+            rpm-build rpmdevtools \
+            rust cargo clang-devel opencv-devel \
+            gcc gcc-c++ pkgconf-pkg-config \
+            nodejs npm git xz tar findutils
+          rpmdev-setuptree
+
+      - uses: actions/checkout@v4
+        with:
+          # cargo vendor needs the full history-free tree but git archive needs
+          # the checkout to be a git repo; a shallow checkout is fine.
+          fetch-depth: 0
+
+      - name: Mark checkout as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Generate source tarballs (frontend + vendored crates)
+        run: ./scripts/make-rpm-sources.sh
+
+      - name: Build RPM
+        run: |
+          cp packaging/rpm/psf-guard.spec ~/rpmbuild/SPECS/
+          rpmbuild -ba ~/rpmbuild/SPECS/psf-guard.spec
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p out
+          find ~/rpmbuild/RPMS ~/rpmbuild/SRPMS -name '*.rpm' -exec cp {} out/ \;
+          ls -l out
+
+      - name: Smoke-test the built binary
+        run: |
+          rpm -i out/psf-guard-[0-9]*.rpm
+          psf-guard --help
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: psf-guard-fedora-${{ matrix.fedora }}-rpms
+          path: out/*.rpm

@@ -83,6 +83,24 @@ docker run -d -p 3000:3000 \
 
 Open your browser to http://localhost:3000/
 
+### Fedora / RPM (build from source)
+
+PSF Guard can be built as a native RPM on Fedora 43, Fedora 44, and other
+recent releases using mainline RPM tooling (`rpmbuild`, `mock`, COPR). The
+build is fully offline once sources are prepared, so it works in a clean
+chroot:
+
+```bash
+sudo dnf install -y rpm-build rpmdevtools cargo rust clang-devel \
+    opencv-devel nodejs npm git
+rpmdev-setuptree
+./scripts/make-rpm-sources.sh                 # builds frontend + vendors crates
+rpmbuild -ba packaging/rpm/psf-guard.spec      # RPMs in ~/rpmbuild/RPMS/
+```
+
+See [`packaging/rpm/README.md`](packaging/rpm/README.md) for details (mock
+builds, the `--without opencv` variant, and releasing a new version).
+
 ### Pre-built CLI/Server Binaries for Windows, macOS, Linux
 
 Download the latest release for your platform:
