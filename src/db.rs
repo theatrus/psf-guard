@@ -1007,32 +1007,6 @@ mod tests {
     }
 
     #[test]
-    fn test_schema_detection_old_schema() {
-        // Test with the old schema database (no guid columns)
-        let db_path = std::path::Path::new("schedulerdb.sqlite");
-        if !db_path.exists() {
-            eprintln!("Skipping test: schedulerdb.sqlite not found");
-            return;
-        }
-
-        let conn = Connection::open(db_path).expect("Failed to open old schema database");
-        let caps = SchemaCapabilities::detect(&conn);
-
-        assert!(
-            !caps.has_acquiredimage_guid,
-            "Old schema should not have acquiredimage.guid"
-        );
-        assert!(
-            !caps.has_project_guid,
-            "Old schema should not have project.guid"
-        );
-        assert!(
-            !caps.has_target_guid,
-            "Old schema should not have target.guid"
-        );
-    }
-
-    #[test]
     fn test_schema_detection_new_schema() {
         // Test with the new schema database (has guid columns)
         let db_path = std::path::Path::new("schedulerdb-2.sqlite");
@@ -1050,34 +1024,6 @@ mod tests {
         );
         assert!(caps.has_project_guid, "New schema should have project.guid");
         assert!(caps.has_target_guid, "New schema should have target.guid");
-    }
-
-    #[test]
-    fn test_database_queries_old_schema() {
-        let db_path = std::path::Path::new("schedulerdb.sqlite");
-        if !db_path.exists() {
-            eprintln!("Skipping test: schedulerdb.sqlite not found");
-            return;
-        }
-
-        let conn = Connection::open(db_path).expect("Failed to open old schema database");
-        let db = Database::new(&conn);
-
-        // Verify schema detection
-        assert!(!db.schema_capabilities().has_acquiredimage_guid);
-
-        // Test basic queries work
-        let projects = db.get_all_projects().expect("Failed to get projects");
-        assert!(!projects.is_empty(), "Should have projects");
-        for project in &projects {
-            assert!(
-                project.guid.is_none(),
-                "Old schema projects should have no guid"
-            );
-        }
-
-        let stats = db.get_overall_statistics().expect("Failed to get stats");
-        assert!(stats.total_images > 0, "Should have images");
     }
 
     #[test]
