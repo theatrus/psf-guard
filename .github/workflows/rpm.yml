@@ -21,11 +21,11 @@ jobs:
     steps:
       - name: Install build tooling
         run: |
+          # Tooling needed before rpmbuild (source generation); the remaining
+          # BuildRequires are pulled from the spec via `dnf builddep` below.
           dnf -y install --setopt=install_weak_deps=False \
-            rpm-build rpmdevtools \
-            rust cargo clang-devel opencv-devel \
-            gcc gcc-c++ pkgconf-pkg-config \
-            nodejs npm git xz tar findutils
+            rpm-build rpmdevtools 'dnf-command(builddep)' \
+            cargo nodejs npm git xz tar findutils
           rpmdev-setuptree
 
       - uses: actions/checkout@v4
@@ -43,6 +43,7 @@ jobs:
       - name: Build RPM
         run: |
           cp packaging/rpm/psf-guard.spec ~/rpmbuild/SPECS/
+          dnf -y builddep ~/rpmbuild/SPECS/psf-guard.spec
           rpmbuild -ba ~/rpmbuild/SPECS/psf-guard.spec
 
       - name: Collect artifacts

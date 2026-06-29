@@ -94,10 +94,8 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard.sysusers \
 install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
     %{buildroot}%{_sysconfdir}/%{name}/server.conf
 
-%pre
-# The psfguard system user is created by the sysusers.d file trigger; no
-# explicit useradd needed here.
-
+# The psfguard system user is created by the sysusers.d file trigger that
+# systemd installs for %%{_sysusersdir}, so no %%pre useradd is needed.
 %post
 %systemd_post %{name}.service
 

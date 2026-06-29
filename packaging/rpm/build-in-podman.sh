@@ -44,17 +44,21 @@ command -v podman >/dev/null 2>&1 || { echo "podman is required" >&2; exit 1; }
 # The script executed inside each container.
 read -r -d '' CONTAINER_SCRIPT <<'EOS' || true
 set -euxo pipefail
+# Tooling needed up front to generate sources (cargo vendor + npm build).
 dnf -y install --setopt=install_weak_deps=False \
-    rpm-build rpmdevtools \
-    rust cargo clang-devel opencv-devel \
-    gcc gcc-c++ pkgconf-pkg-config \
-    nodejs npm git xz tar findutils
+    rpm-build rpmdevtools 'dnf-command(builddep)' \
+    cargo nodejs npm git xz tar findutils
 rpmdev-setuptree
 git config --global --add safe.directory /src
 cd /src
 ./scripts/make-rpm-sources.sh
 cp packaging/rpm/psf-guard.spec ~/rpmbuild/SPECS/
-rpmbuild -ba ~/rpmbuild/SPECS/psf-guard.spec
+# Pull the rest of the BuildRequires straight from the spec (rust, opencv-devel,
+# clang-devel, gcc-c++, systemd-rpm-macros, ...) so the list stays in sync.
+dnf -y builddep ~/rpmbuild/SPECS/psf-guard.spec
+# tee to the bind-mounted /out so the rpmbuild log survives even if the
+# container's piped stdout is truncated/buffered on failure.
+rpmbuild -ba ~/rpmbuild/SPECS/psf-guard.spec 2>&1 | tee /out/rpmbuild.log
 mkdir -p /out
 find ~/rpmbuild/RPMS ~/rpmbuild/SRPMS -name '*.rpm' -exec cp {} /out/ \;
 # Smoke test: install the binary RPM (dnf resolves Requires, incl. systemd)
