@@ -143,26 +143,19 @@ fn shared_columns(src: &Connection, tx: &Transaction, table: &str) -> Result<Vec
         .collect())
 }
 
-/// Distinct guids that appear more than once among the source rows of `table`
-/// selected by `filter_col ∈ allowed` (None = all rows). Such rows are skipped
-/// so two source entities can't silently merge onto one destination row.
-fn source_dup_guids(
-    src: &Connection,
-    table: &str,
-    filter_col: &str,
-    allowed: Option<&HashSet<i64>>,
-) -> Result<HashSet<String>> {
+/// Distinct guids that appear more than once anywhere in the source `table`.
+///
+/// Counting is **global** (independent of any `--project` filter): a guid shared
+/// by two entities is ambiguous regardless of which one a given filtered pull
+/// selects, so it must be skipped consistently across runs — otherwise two
+/// filtered pulls selecting one each would each see a unique guid and merge both
+/// onto the same destination entity.
+fn source_dup_guids(src: &Connection, table: &str) -> Result<HashSet<String>> {
     let mut counts: HashMap<String, u32> = HashMap::new();
-    let mut stmt = src.prepare(&format!("SELECT \"{}\", guid FROM {}", filter_col, table))?;
+    let mut stmt = src.prepare(&format!("SELECT guid FROM {}", table))?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
-        if let Some(a) = allowed {
-            match r.get::<_, Option<i64>>(0)? {
-                Some(k) if a.contains(&k) => {}
-                _ => continue,
-            }
-        }
-        if let Some(g) = r.get::<_, Option<String>>(1)? {
+        if let Some(g) = r.get::<_, Option<String>>(0)? {
             if !g.is_empty() {
                 *counts.entry(g).or_insert(0) += 1;
             }
@@ -280,7 +273,7 @@ fn upsert_guid_table(
     // Pre-pull destination state (guids ambiguous in dest are dropped), and the
     // set of guids that are duplicated within the (filtered) source.
     let (dest_map, dest_dups) = dest_guid_map(tx, table, &write_cols, guid_w)?;
-    let src_dups = source_dup_guids(src, table, "Id", allowed_src_ids)?;
+    let src_dups = source_dup_guids(src, table)?;
 
     let insert_sql = format!(
         "INSERT INTO {} ({}) VALUES ({})",
@@ -408,7 +401,7 @@ fn upsert_acquired_images(
 
     // Pre-pull destination state + duplicate-guid sets (ambiguous rows skipped).
     let (dest_map, dest_dups) = dest_guid_map(tx, table, &write_cols, guid_w)?;
-    let src_dups = source_dup_guids(src, table, "projectId", allowed_project_ids)?;
+    let src_dups = source_dup_guids(src, table)?;
 
     let insert_sql = format!(
         "INSERT INTO {} ({}) VALUES ({})",
@@ -1077,6 +1070,26 @@ mod tests {
         let s = sync_pull(&src, &dest, &opts()).unwrap();
         assert_eq!(s.project.inserted, 0);
         assert_eq!(s.project.skipped, 2);
+        assert_eq!(one::<i64>(&dest, "SELECT COUNT(*) FROM project"), 0);
+    }
+
+    #[test]
+    fn duplicate_source_guid_skipped_even_under_project_filter() {
+        // Two projects share a guid but have different names, so a --project
+        // filter can select just one. Detection is global, so it is still
+        // recognized as ambiguous and skipped — never merged across runs.
+        let src = Connection::open_in_memory().unwrap();
+        schema(&src, true);
+        src.execute_batch(
+            "INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (1,'p','Alpha','',1,1,'dup');
+             INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (2,'p','Beta','',1,1,'dup');",
+        ).unwrap();
+        let dest = empty_local();
+        let mut o = opts();
+        o.project_filter = Some("Alpha".to_string());
+        let s = sync_pull(&src, &dest, &o).unwrap();
+        assert_eq!(s.project.inserted, 0);
+        assert_eq!(s.project.skipped, 1); // Alpha was selected, but skipped as ambiguous
         assert_eq!(one::<i64>(&dest, "SELECT COUNT(*) FROM project"), 0);
     }
 
