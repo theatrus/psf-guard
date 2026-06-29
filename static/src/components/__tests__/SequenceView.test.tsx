@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
@@ -150,6 +150,38 @@ describe('SequenceView: rendering states', () => {
       expect(screen.getByText('M42')).toBeInTheDocument();
     });
     expect(screen.getByText('NGC7000')).toBeInTheDocument();
+  });
+
+  it('clicking a target card keeps the db/project context (no blank analysis)', async () => {
+    setupDefaultHandlers();
+
+    // Probe the live router location so we can assert the URL after navigation.
+    let search = '';
+    function LocationProbe() {
+      search = useLocation().search;
+      return null;
+    }
+
+    const Wrapper = createWrapper('/sequence?db=test&project=1');
+    render(
+      <Wrapper>
+        <SequenceView />
+        <LocationProbe />
+      </Wrapper>
+    );
+
+    // From the target-selection screen, click into a target's analysis.
+    const card = await screen.findByText('M42');
+    await userEvent.click(card);
+
+    // The db slug (and project/target) must survive the navigation — dropping
+    // ?db= is what stranded the user on a blank analysis view.
+    await waitFor(() => {
+      const params = new URLSearchParams(search);
+      expect(params.get('db')).toBe('test');
+      expect(params.get('project')).toBe('1');
+      expect(params.get('target')).toBe('1'); // M42 = id 1
+    });
   });
 
   it('shows loading state while analyzing', async () => {
