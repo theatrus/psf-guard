@@ -97,6 +97,44 @@ Implementation tracker and design rationale: [MULTI_DB_PLAN.md](./MULTI_DB_PLAN.
 
 Design, phases, tracker: [REJECT_ARCHIVE_PLAN.md](./REJECT_ARCHIVE_PLAN.md).
 
+### Two-DB sync (2026-06)
+Lives in `src/commands/sync/` (`mod.rs` shared helpers + `grades.rs` + `pull.rs`).
+Two complementary single-direction kinds, structured as `sync <kind>` so more
+kinds slot in without breaking the CLI. Both match by `guid` (TS schema v22+),
+accept a registry slug *or* a raw `.sqlite` path for `--from`/`--to` (registry
+loaded only when a side isn't already a file), open source READ_ONLY / dest
+READ_WRITE, refuse same-path source/dest, and have `--dry-run` + `--verbose`.
+
+**`sync grades --from <our> --to <telescope>`** — push grading state.
+- Pushes `gradingStatus` + `rejectreason` one-way; source wins. Match by
+  `acquiredimage.guid`, guard via `require_target_scheduler_guid`.
+- `--status pending|accepted|rejected` scopes source rows; `--project` /
+  `--target` substring filters. One transaction (`batch_update_grading_status`),
+  reuses `query_images` for both sides.
+- Reports considered / matched / changed / unchanged / unmatched-source /
+  dest-only + per-transition breakdown. NULL/empty and within-DB-duplicate guids
+  skipped (counted, not fatal).
+
+**`sync pull --from <telescope> --to <our>`** — pull structure + captures.
+- Mirrors `exposuretemplate`, `project`, `ruleweight`, `target`, `exposureplan`,
+  `acquiredimage`, and `imagedata` blobs (copied by default; `--no-image-data`
+  to skip) into our DB.
+  Processed in FK order, building `src_guid → dest_Id` maps so child FKs
+  (target→project, plan→target+template, image→project+target+exposureId,
+  ruleweight→project) are remapped onto the destination's local autoincrement
+  Ids. Generic guid-keyed upsert reads all columns via `pragma_table_info` so it
+  survives TS schema additions; `ruleweight` (no guid) matches by
+  `(projectId, name)`; `imagedata` is insert-only.
+- **Telescope wins for structure** (upsert: insert new, update changed fields —
+  project state, plan desired/acquired counts, coordinates). **Local grading is
+  preserved**: a new image takes the telescope grade; an existing image keeps
+  its grade unless still Pending (0), in which case it adopts the telescope's
+  grade. Guard via `require_pull_capable` (guid on all 5 core tables).
+- `--project <substr>` scopes the pull (cascades to that project's targets,
+  plans, images; templates always synced so plan FKs resolve). Whole pull runs
+  in one transaction, rolled back on `--dry-run`.
+- Reports per-table inserted/updated/unchanged plus grades filled/preserved.
+
 ### Smart Binary Mode Selection
 - **Single binary** `psf-guard` with intelligent mode detection
 - **GUI mode**: When tauri feature is enabled and no arguments passed → Desktop app launches

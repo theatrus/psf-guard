@@ -1,0 +1,1199 @@
+//! Entity pull (telescope → our DB).
+//!
+//! Mirrors the telescope's scheduler structure and captured images into our
+//! local DB: projects, targets (coordinates), exposure templates/plans, rule
+//! weights, acquired images, and optionally the imagedata thumbnail BLOBs.
+//! Entities are matched by their stable `guid` (TS schema v22+); foreign keys
+//! are remapped onto the destination's local autoincrement Ids. The telescope
+//! wins for structure fields (upsert), but **local grading is preserved**: an
+//! existing image keeps its `gradingStatus`/`rejectreason` unless ours is still
+//! Pending, in which case it adopts the telescope's grade.
+//!
+//! Pure DB logic; the whole pull runs in one destination transaction (rolled
+//! back on `--dry-run`). CLI glue lives in `cli_main.rs`.
+
+use super::require_pull_capable;
+use anyhow::{anyhow, Context, Result};
+use rusqlite::types::Value;
+use rusqlite::{params, params_from_iter, Connection, ToSql, Transaction};
+use std::collections::{HashMap, HashSet};
+
+/// Knobs for a pull.
+pub struct PullOptions {
+    /// Compute & report the plan but roll back all writes.
+    pub dry_run: bool,
+    /// Also copy the (large) `imagedata` thumbnail BLOBs.
+    pub with_image_data: bool,
+    /// Restrict the pull to projects whose name matches (substring); cascades to
+    /// their targets, plans, and images.
+    pub project_filter: Option<String>,
+}
+
+/// Insert/update/unchanged counters for one table.
+#[derive(Debug, Default, Clone)]
+pub struct TableCounts {
+    pub inserted: usize,
+    pub updated: usize,
+    pub unchanged: usize,
+    /// Rows skipped as ambiguous: a duplicate guid in either DB, or a non-null
+    /// parent FK that didn't map to a destination row.
+    pub skipped: usize,
+}
+
+/// Outcome of a pull.
+#[derive(Debug, Default)]
+pub struct PullSummary {
+    pub exposuretemplate: TableCounts,
+    pub project: TableCounts,
+    pub ruleweight: TableCounts,
+    pub target: TableCounts,
+    pub exposureplan: TableCounts,
+    pub acquiredimage: TableCounts,
+    /// Existing images whose Pending grade adopted the telescope's grade.
+    pub grade_filled: usize,
+    /// Existing images whose local (non-Pending) grade was preserved.
+    pub grade_preserved: usize,
+    pub imagedata: TableCounts,
+    /// Bytes of imagedata BLOBs copied (or, in dry-run, that would be copied).
+    pub imagedata_bytes: u64,
+    /// True when imagedata was synced (else it was left untouched).
+    pub imagedata_synced: bool,
+    /// Per-entity trace lines (for `--verbose`).
+    pub changes: Vec<String>,
+}
+
+impl PullSummary {
+    /// Total rows inserted across every table.
+    pub fn total_inserted(&self) -> usize {
+        self.exposuretemplate.inserted
+            + self.project.inserted
+            + self.ruleweight.inserted
+            + self.target.inserted
+            + self.exposureplan.inserted
+            + self.acquiredimage.inserted
+            + self.imagedata.inserted
+    }
+
+    /// Total rows updated across every table.
+    pub fn total_updated(&self) -> usize {
+        self.exposuretemplate.updated
+            + self.project.updated
+            + self.ruleweight.updated
+            + self.target.updated
+            + self.exposureplan.updated
+            + self.acquiredimage.updated
+            + self.imagedata.updated
+    }
+}
+
+fn as_i64(v: &Value) -> Option<i64> {
+    match v {
+        Value::Integer(n) => Some(*n),
+        Value::Real(r) => Some(*r as i64),
+        _ => None,
+    }
+}
+
+/// SQLite-aware value equality (treats Integer/Real numerically) so idempotent
+/// re-pulls report `unchanged` rather than spurious updates.
+fn value_eq(a: &Value, b: &Value) -> bool {
+    use Value::*;
+    match (a, b) {
+        (Null, Null) => true,
+        (Integer(x), Integer(y)) => x == y,
+        (Real(x), Real(y)) => x == y,
+        (Integer(x), Real(y)) | (Real(y), Integer(x)) => (*x as f64) == *y,
+        (Text(x), Text(y)) => x == y,
+        (Blob(x), Blob(y)) => x == y,
+        _ => false,
+    }
+}
+
+fn values_equal(a: &[Value], b: &[Value]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| value_eq(x, y))
+}
+
+/// Column names of `table` in declared order.
+fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info('{}')", table))?;
+    let cols = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(cols)
+}
+
+fn quoted(cols: &[&str]) -> String {
+    cols.iter()
+        .map(|c| format!("\"{}\"", c))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Columns present in BOTH source and destination (intersection, in source
+/// order). Lets a source at a newer TS migration level than the destination
+/// (or vice-versa) sync the columns they share instead of failing the whole
+/// pull on an unknown column.
+fn shared_columns(src: &Connection, tx: &Transaction, table: &str) -> Result<Vec<String>> {
+    let src_cols = table_columns(src, table)?;
+    let dest_cols = table_columns(tx, table)?;
+    let dest_set: HashSet<String> = dest_cols.iter().map(|c| c.to_lowercase()).collect();
+    Ok(src_cols
+        .into_iter()
+        .filter(|c| dest_set.contains(&c.to_lowercase()))
+        .collect())
+}
+
+/// Distinct guids that appear more than once anywhere in the source `table`.
+///
+/// Counting is **global** (independent of any `--project` filter): a guid shared
+/// by two entities is ambiguous regardless of which one a given filtered pull
+/// selects, so it must be skipped consistently across runs — otherwise two
+/// filtered pulls selecting one each would each see a unique guid and merge both
+/// onto the same destination entity.
+fn source_dup_guids(src: &Connection, table: &str) -> Result<HashSet<String>> {
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    let mut stmt = src.prepare(&format!("SELECT guid FROM {}", table))?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        if let Some(g) = r.get::<_, Option<String>>(0)? {
+            if !g.is_empty() {
+                *counts.entry(g).or_insert(0) += 1;
+            }
+        }
+    }
+    Ok(counts
+        .into_iter()
+        .filter(|(_, c)| *c > 1)
+        .map(|(g, _)| g)
+        .collect())
+}
+
+/// A destination `guid -> (dest Id, write-column values)` map paired with the
+/// set of guids that were ambiguous (appeared more than once) in the destination.
+type DestGuidMap = (HashMap<String, (i64, Vec<Value>)>, HashSet<String>);
+
+/// Build a destination `guid -> (Id, write-col values)` map. Guids that occur
+/// more than once in the destination are removed and returned in the dups set;
+/// matching against an ambiguous destination guid is unsafe, so callers skip it.
+fn dest_guid_map(
+    tx: &Transaction,
+    table: &str,
+    write_cols: &[&str],
+    guid_w: usize,
+) -> Result<DestGuidMap> {
+    let sql = format!("SELECT Id,{} FROM {}", quoted(write_cols), table);
+    let mut stmt = tx.prepare(&sql)?;
+    let n = write_cols.len();
+    let mut map: HashMap<String, (i64, Vec<Value>)> = HashMap::new();
+    let mut dups: HashSet<String> = HashSet::new();
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let dest_id: i64 = row.get(0)?;
+        let vals: Vec<Value> = (0..n)
+            .map(|i| row.get::<_, Value>(i + 1))
+            .collect::<rusqlite::Result<_>>()?;
+        if let Value::Text(g) = &vals[guid_w] {
+            if !g.is_empty() {
+                if dups.contains(g) {
+                    continue;
+                }
+                if map.remove(g).is_some() {
+                    dups.insert(g.clone());
+                } else {
+                    map.insert(g.clone(), (dest_id, vals));
+                }
+            }
+        }
+    }
+    Ok((map, dups))
+}
+
+/// Remap an FK column in place. Returns `false` if the column held a non-null id
+/// absent from `map` — the caller must skip the row rather than retain the
+/// source id (which could attach the child to an unrelated destination row).
+fn remap_fk_checked(values: &mut [Value], pos: Option<usize>, map: &HashMap<i64, i64>) -> bool {
+    match pos {
+        Some(p) => match values[p] {
+            Value::Integer(src_fk) => match map.get(&src_fk) {
+                Some(dest_fk) => {
+                    values[p] = Value::Integer(*dest_fk);
+                    true
+                }
+                None => false,
+            },
+            _ => true, // NULL (or non-integer) FK: nothing to remap
+        },
+        None => true, // column not in the shared set
+    }
+}
+
+struct GuidUpsert {
+    /// Source local Id → destination local Id (for FK remapping of children).
+    id_map: HashMap<i64, i64>,
+    counts: TableCounts,
+}
+
+/// Upsert every (optionally filtered) source row of a guid-keyed `table` into
+/// the destination, matching by `guid` and remapping the named FK columns
+/// through the provided source-Id→dest-Id maps. Telescope wins on conflict.
+fn upsert_guid_table(
+    src: &Connection,
+    tx: &Transaction,
+    table: &str,
+    fk_remaps: &[(&str, &HashMap<i64, i64>)],
+    allowed_src_ids: Option<&HashSet<i64>>,
+    changes: &mut Vec<String>,
+) -> Result<GuidUpsert> {
+    let cols = shared_columns(src, tx, table)?;
+    let id_pos = cols
+        .iter()
+        .position(|c| c.eq_ignore_ascii_case("Id"))
+        .ok_or_else(|| anyhow!("table {} has no Id column", table))?;
+    let guid_pos = cols
+        .iter()
+        .position(|c| c.eq_ignore_ascii_case("guid"))
+        .ok_or_else(|| anyhow!("table {} has no guid column", table))?;
+
+    let write_idx: Vec<usize> = (0..cols.len()).filter(|&i| i != id_pos).collect();
+    let write_cols: Vec<&str> = write_idx.iter().map(|&i| cols[i].as_str()).collect();
+    let guid_w = write_cols
+        .iter()
+        .position(|c| c.eq_ignore_ascii_case("guid"))
+        .unwrap();
+    let fk_positions: Vec<(usize, &HashMap<i64, i64>)> = fk_remaps
+        .iter()
+        .filter_map(|(name, map)| {
+            write_cols
+                .iter()
+                .position(|c| c.eq_ignore_ascii_case(name))
+                .map(|p| (p, *map))
+        })
+        .collect();
+
+    // Pre-pull destination state (guids ambiguous in dest are dropped), and the
+    // set of guids that are duplicated within the (filtered) source.
+    let (dest_map, dest_dups) = dest_guid_map(tx, table, &write_cols, guid_w)?;
+    let src_dups = source_dup_guids(src, table)?;
+
+    let insert_sql = format!(
+        "INSERT INTO {} ({}) VALUES ({})",
+        table,
+        quoted(&write_cols),
+        write_cols.iter().map(|_| "?").collect::<Vec<_>>().join(",")
+    );
+    let update_sql = format!(
+        "UPDATE {} SET {} WHERE Id=?",
+        table,
+        write_cols
+            .iter()
+            .map(|c| format!("\"{}\"=?", c))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let mut ins_stmt = tx.prepare(&insert_sql)?;
+    let mut upd_stmt = tx.prepare(&update_sql)?;
+
+    let mut counts = TableCounts::default();
+    let mut id_map: HashMap<i64, i64> = HashMap::new();
+
+    let src_sql = format!("SELECT {} FROM {}", quoted(&cols_str(&cols)), table);
+    let mut src_stmt = src.prepare(&src_sql)?;
+    let ncols = cols.len();
+    let mut rows = src_stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let all_vals: Vec<Value> = (0..ncols)
+            .map(|i| row.get::<_, Value>(i))
+            .collect::<rusqlite::Result<_>>()?;
+        let src_id = match as_i64(&all_vals[id_pos]) {
+            Some(n) => n,
+            None => continue,
+        };
+        if let Some(allowed) = allowed_src_ids {
+            if !allowed.contains(&src_id) {
+                continue;
+            }
+        }
+        let guid = match &all_vals[guid_pos] {
+            Value::Text(g) if !g.is_empty() => g.clone(),
+            _ => continue,
+        };
+        if src_dups.contains(&guid) || dest_dups.contains(&guid) {
+            counts.skipped += 1;
+            changes.push(format!("skip {} {} (ambiguous guid)", table, guid));
+            continue;
+        }
+
+        let mut write_values: Vec<Value> = write_idx.iter().map(|&i| all_vals[i].clone()).collect();
+        let mut unmapped = false;
+        for (pos, map) in &fk_positions {
+            if !remap_fk_checked(&mut write_values, Some(*pos), map) {
+                unmapped = true;
+                break;
+            }
+        }
+        if unmapped {
+            counts.skipped += 1;
+            changes.push(format!("skip {} {} (unmapped parent)", table, guid));
+            continue;
+        }
+
+        match dest_map.get(&guid) {
+            Some((dest_id, cur_vals)) => {
+                id_map.insert(src_id, *dest_id);
+                if values_equal(&write_values, cur_vals) {
+                    counts.unchanged += 1;
+                } else {
+                    let mut p: Vec<&dyn ToSql> =
+                        write_values.iter().map(|v| v as &dyn ToSql).collect();
+                    let did = *dest_id;
+                    p.push(&did);
+                    upd_stmt.execute(p.as_slice())?;
+                    counts.updated += 1;
+                    changes.push(format!("update {} {}", table, guid));
+                }
+            }
+            None => {
+                ins_stmt.execute(params_from_iter(write_values.iter()))?;
+                let dest_id = tx.last_insert_rowid();
+                id_map.insert(src_id, dest_id);
+                counts.inserted += 1;
+                changes.push(format!("insert {} {}", table, guid));
+            }
+        }
+    }
+
+    Ok(GuidUpsert { id_map, counts })
+}
+
+fn cols_str(cols: &[String]) -> Vec<&str> {
+    cols.iter().map(|s| s.as_str()).collect()
+}
+
+/// Upsert acquired-image rows with the grade rule: new rows take the telescope
+/// grade; existing rows keep their local grade unless it's Pending (0), in
+/// which case they adopt the telescope's grade. FK columns
+/// (`projectId`/`targetId`/`exposureId`) are remapped.
+fn upsert_acquired_images(
+    src: &Connection,
+    tx: &Transaction,
+    proj_map: &HashMap<i64, i64>,
+    tgt_map: &HashMap<i64, i64>,
+    plan_map: &HashMap<i64, i64>,
+    allowed_project_ids: Option<&HashSet<i64>>,
+    summary: &mut PullSummary,
+) -> Result<HashMap<i64, i64>> {
+    let table = "acquiredimage";
+    let cols = shared_columns(src, tx, table)?;
+    let ci = |n: &str| cols.iter().position(|c| c.eq_ignore_ascii_case(n));
+    let id_pos = ci("Id").ok_or_else(|| anyhow!("acquiredimage.Id missing"))?;
+    let guid_pos = ci("guid").ok_or_else(|| anyhow!("acquiredimage.guid missing"))?;
+    let proj_pos = ci("projectId").ok_or_else(|| anyhow!("acquiredimage.projectId missing"))?;
+
+    let write_idx: Vec<usize> = (0..cols.len()).filter(|&i| i != id_pos).collect();
+    let write_cols: Vec<&str> = write_idx.iter().map(|&i| cols[i].as_str()).collect();
+    let wpos = |n: &str| write_cols.iter().position(|c| c.eq_ignore_ascii_case(n));
+    let guid_w = wpos("guid").unwrap();
+    let grade_w = wpos("gradingStatus").ok_or_else(|| anyhow!("gradingStatus missing"))?;
+    let reason_w = wpos("rejectreason");
+    let proj_w = wpos("projectId");
+    let tgt_w = wpos("targetId");
+    let expo_w = wpos("exposureId");
+
+    // Pre-pull destination state + duplicate-guid sets (ambiguous rows skipped).
+    let (dest_map, dest_dups) = dest_guid_map(tx, table, &write_cols, guid_w)?;
+    let src_dups = source_dup_guids(src, table)?;
+
+    let insert_sql = format!(
+        "INSERT INTO {} ({}) VALUES ({})",
+        table,
+        quoted(&write_cols),
+        write_cols.iter().map(|_| "?").collect::<Vec<_>>().join(",")
+    );
+    let update_sql = format!(
+        "UPDATE {} SET {} WHERE Id=?",
+        table,
+        write_cols
+            .iter()
+            .map(|c| format!("\"{}\"=?", c))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let mut ins_stmt = tx.prepare(&insert_sql)?;
+    let mut upd_stmt = tx.prepare(&update_sql)?;
+
+    let mut id_map: HashMap<i64, i64> = HashMap::new();
+    let src_sql = format!("SELECT {} FROM {}", quoted(&cols_str(&cols)), table);
+    let mut src_stmt = src.prepare(&src_sql)?;
+    let ncols = cols.len();
+    let mut rows = src_stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let all_vals: Vec<Value> = (0..ncols)
+            .map(|i| row.get::<_, Value>(i))
+            .collect::<rusqlite::Result<_>>()?;
+        let src_id = match as_i64(&all_vals[id_pos]) {
+            Some(n) => n,
+            None => continue,
+        };
+        let src_proj = as_i64(&all_vals[proj_pos]);
+        if let Some(allowed) = allowed_project_ids {
+            match src_proj {
+                Some(p) if allowed.contains(&p) => {}
+                _ => continue,
+            }
+        }
+        let guid = match &all_vals[guid_pos] {
+            Value::Text(g) if !g.is_empty() => g.clone(),
+            _ => continue,
+        };
+        if src_dups.contains(&guid) || dest_dups.contains(&guid) {
+            summary.acquiredimage.skipped += 1;
+            summary
+                .changes
+                .push(format!("skip acquiredimage {} (ambiguous guid)", guid));
+            continue;
+        }
+
+        let mut write_values: Vec<Value> = write_idx.iter().map(|&i| all_vals[i].clone()).collect();
+        // projectId/targetId are required FKs: skip the row if either parent
+        // wasn't pulled, rather than retaining a source id that points at an
+        // unrelated destination row.
+        if !remap_fk_checked(&mut write_values, proj_w, proj_map)
+            || !remap_fk_checked(&mut write_values, tgt_w, tgt_map)
+        {
+            summary.acquiredimage.skipped += 1;
+            summary
+                .changes
+                .push(format!("skip acquiredimage {} (unmapped parent)", guid));
+            continue;
+        }
+        // exposureId is a soft reference to exposureplan.Id; if unmatched, write
+        // 0 (the "no plan" sentinel) — never retain the source id.
+        if let Some(p) = expo_w {
+            if let Value::Integer(src_plan) = write_values[p] {
+                write_values[p] = Value::Integer(plan_map.get(&src_plan).copied().unwrap_or(0));
+            }
+        }
+
+        match dest_map.get(&guid) {
+            Some((dest_id, cur_vals)) => {
+                id_map.insert(src_id, *dest_id);
+                let dest_grade = as_i64(&cur_vals[grade_w]).unwrap_or(0);
+                if dest_grade != 0 {
+                    // Preserve local decision.
+                    write_values[grade_w] = cur_vals[grade_w].clone();
+                    if let Some(rp) = reason_w {
+                        write_values[rp] = cur_vals[rp].clone();
+                    }
+                    summary.grade_preserved += 1;
+                } else if as_i64(&write_values[grade_w]).unwrap_or(0) != 0 {
+                    // Local Pending adopts the telescope's (non-Pending) grade.
+                    summary.grade_filled += 1;
+                }
+
+                if values_equal(&write_values, cur_vals) {
+                    summary.acquiredimage.unchanged += 1;
+                } else {
+                    let mut p: Vec<&dyn ToSql> =
+                        write_values.iter().map(|v| v as &dyn ToSql).collect();
+                    let did = *dest_id;
+                    p.push(&did);
+                    upd_stmt.execute(p.as_slice())?;
+                    summary.acquiredimage.updated += 1;
+                    summary
+                        .changes
+                        .push(format!("update acquiredimage {}", guid));
+                }
+            }
+            None => {
+                ins_stmt.execute(params_from_iter(write_values.iter()))?;
+                let dest_id = tx.last_insert_rowid();
+                id_map.insert(src_id, dest_id);
+                summary.acquiredimage.inserted += 1;
+                summary
+                    .changes
+                    .push(format!("insert acquiredimage {}", guid));
+            }
+        }
+    }
+
+    Ok(id_map)
+}
+
+/// Upsert per-project rule weights (no guid; matched by `(projectId, name)`).
+fn upsert_ruleweights(
+    src: &Connection,
+    tx: &Transaction,
+    proj_map: &HashMap<i64, i64>,
+    counts: &mut TableCounts,
+    changes: &mut Vec<String>,
+) -> Result<()> {
+    let mut src_stmt = src.prepare("SELECT name, weight FROM ruleweight WHERE projectid = ?1")?;
+    for (src_proj, dest_proj) in proj_map {
+        let mut dest_existing: HashMap<String, (i64, f64)> = HashMap::new();
+        {
+            let mut ds =
+                tx.prepare("SELECT Id, name, weight FROM ruleweight WHERE projectid = ?1")?;
+            let mut rows = ds.query(params![dest_proj])?;
+            while let Some(r) = rows.next()? {
+                dest_existing.insert(r.get::<_, String>(1)?, (r.get(0)?, r.get(2)?));
+            }
+        }
+        let mut rows = src_stmt.query(params![src_proj])?;
+        while let Some(r) = rows.next()? {
+            let name: String = r.get(0)?;
+            let weight: f64 = r.get(1)?;
+            match dest_existing.get(&name) {
+                Some((id, w)) => {
+                    if (*w - weight).abs() < f64::EPSILON {
+                        counts.unchanged += 1;
+                    } else {
+                        tx.execute(
+                            "UPDATE ruleweight SET weight=?1 WHERE Id=?2",
+                            params![weight, id],
+                        )?;
+                        counts.updated += 1;
+                        changes.push(format!("update ruleweight {}", name));
+                    }
+                }
+                None => {
+                    tx.execute(
+                        "INSERT INTO ruleweight (name, weight, projectid) VALUES (?1,?2,?3)",
+                        params![name, weight, dest_proj],
+                    )?;
+                    counts.inserted += 1;
+                    changes.push(format!("insert ruleweight {}", name));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Copy imagedata BLOBs for pulled images (insert-only; blobs are immutable).
+///
+/// An acquired image can hold several ImageData records (one per `tag`), so the
+/// match is per `(acquiredimageid, tag)` — a destination already holding one tag
+/// still receives any other tags it's missing. In dry-run mode rows are counted
+/// (with sizes) but nothing is written.
+fn copy_imagedata(
+    src: &Connection,
+    tx: &Transaction,
+    img_map: &HashMap<i64, i64>,
+    counts: &mut TableCounts,
+    bytes: &mut u64,
+    dry_run: bool,
+) -> Result<()> {
+    let mut existing_stmt = tx.prepare("SELECT tag FROM imagedata WHERE acquiredimageid = ?1")?;
+    let mut sel_len_stmt =
+        src.prepare("SELECT tag, LENGTH(imagedata) FROM imagedata WHERE acquiredimageid = ?1")?;
+    let mut sel_full_stmt = src.prepare(
+        "SELECT tag, imagedata, width, height FROM imagedata WHERE acquiredimageid = ?1",
+    )?;
+    let mut ins_stmt = tx.prepare(
+        "INSERT INTO imagedata (tag, imagedata, acquiredimageid, width, height) VALUES (?1,?2,?3,?4,?5)",
+    )?;
+    for (src_img, dest_img) in img_map {
+        // Tags already present at the destination for this image.
+        let mut existing: HashSet<Option<String>> = HashSet::new();
+        {
+            let mut rows = existing_stmt.query(params![dest_img])?;
+            while let Some(r) = rows.next()? {
+                existing.insert(r.get::<_, Option<String>>(0)?);
+            }
+        }
+        if dry_run {
+            let mut rows = sel_len_stmt.query(params![src_img])?;
+            while let Some(r) = rows.next()? {
+                let tag: Option<String> = r.get(0)?;
+                if existing.contains(&tag) {
+                    counts.unchanged += 1;
+                } else {
+                    counts.inserted += 1;
+                    *bytes += r.get::<_, i64>(1).unwrap_or(0).max(0) as u64;
+                }
+            }
+            continue;
+        }
+        #[allow(clippy::type_complexity)]
+        let blobs: Vec<(Option<String>, Option<Vec<u8>>, i64, i64)> = sel_full_stmt
+            .query_map(params![src_img], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get::<_, i64>(2).unwrap_or(0),
+                    r.get::<_, i64>(3).unwrap_or(0),
+                ))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        for (tag, blob, w, h) in blobs {
+            if existing.contains(&tag) {
+                counts.unchanged += 1;
+                continue;
+            }
+            *bytes += blob.as_ref().map(|b| b.len() as u64).unwrap_or(0);
+            ins_stmt.execute(params![tag, blob, dest_img, w, h])?;
+            counts.inserted += 1;
+        }
+    }
+    Ok(())
+}
+
+/// Compute the set of source row Ids in `table` whose `fk_col` is in `parents`.
+fn child_ids(
+    src: &Connection,
+    table: &str,
+    fk_col: &str,
+    parents: &HashSet<i64>,
+) -> Result<HashSet<i64>> {
+    let mut set = HashSet::new();
+    let mut stmt = src.prepare(&format!("SELECT Id, \"{}\" FROM {}", fk_col, table))?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let id: i64 = r.get(0)?;
+        let fk: Option<i64> = r.get(1)?;
+        if let Some(fk) = fk {
+            if parents.contains(&fk) {
+                set.insert(id);
+            }
+        }
+    }
+    Ok(set)
+}
+
+/// Pull telescope structure + captures into the destination DB.
+pub fn sync_pull(src: &Connection, dest: &Connection, opts: &PullOptions) -> Result<PullSummary> {
+    require_pull_capable(src).context("source database")?;
+    require_pull_capable(dest).context("destination database")?;
+
+    let tx = dest.unchecked_transaction()?;
+    let mut summary = PullSummary::default();
+
+    // Resolve the project filter into cascading source-Id sets.
+    let included_projects: Option<HashSet<i64>> = match &opts.project_filter {
+        Some(sub) => {
+            let mut stmt = src.prepare("SELECT Id FROM project WHERE name LIKE ?1")?;
+            let ids: HashSet<i64> = stmt
+                .query_map(params![format!("%{}%", sub)], |r| r.get::<_, i64>(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            Some(ids)
+        }
+        None => None,
+    };
+    let included_targets: Option<HashSet<i64>> = match &included_projects {
+        Some(projs) => Some(child_ids(src, "target", "projectid", projs)?),
+        None => None,
+    };
+    let included_plans: Option<HashSet<i64>> = match &included_targets {
+        Some(tgts) => Some(child_ids(src, "exposureplan", "targetid", tgts)?),
+        None => None,
+    };
+
+    // 1. exposuretemplate — profile-scoped, no FK; synced fully so plan FKs resolve.
+    let tmpl = upsert_guid_table(
+        src,
+        &tx,
+        "exposuretemplate",
+        &[],
+        None,
+        &mut summary.changes,
+    )?;
+    summary.exposuretemplate = tmpl.counts;
+    let tmpl_map = tmpl.id_map;
+
+    // 2. project
+    let proj = upsert_guid_table(
+        src,
+        &tx,
+        "project",
+        &[],
+        included_projects.as_ref(),
+        &mut summary.changes,
+    )?;
+    summary.project = proj.counts;
+    let proj_map = proj.id_map;
+
+    // 3. ruleweight (children of pulled projects)
+    upsert_ruleweights(
+        src,
+        &tx,
+        &proj_map,
+        &mut summary.ruleweight,
+        &mut summary.changes,
+    )?;
+
+    // 4. target (remap projectid)
+    let tgt = upsert_guid_table(
+        src,
+        &tx,
+        "target",
+        &[("projectid", &proj_map)],
+        included_targets.as_ref(),
+        &mut summary.changes,
+    )?;
+    summary.target = tgt.counts;
+    let tgt_map = tgt.id_map;
+
+    // 5. exposureplan (remap targetid + exposureTemplateId)
+    let plan = upsert_guid_table(
+        src,
+        &tx,
+        "exposureplan",
+        &[("targetid", &tgt_map), ("exposureTemplateId", &tmpl_map)],
+        included_plans.as_ref(),
+        &mut summary.changes,
+    )?;
+    summary.exposureplan = plan.counts;
+    let plan_map = plan.id_map;
+
+    // 6. acquiredimage (grade fill-if-pending; remap proj/tgt/exposureId)
+    let img_map = upsert_acquired_images(
+        src,
+        &tx,
+        &proj_map,
+        &tgt_map,
+        &plan_map,
+        included_projects.as_ref(),
+        &mut summary,
+    )?;
+
+    // 7. imagedata (optional, heavy)
+    if opts.with_image_data {
+        copy_imagedata(
+            src,
+            &tx,
+            &img_map,
+            &mut summary.imagedata,
+            &mut summary.imagedata_bytes,
+            opts.dry_run,
+        )?;
+        summary.imagedata_synced = true;
+    }
+
+    if opts.dry_run {
+        tx.rollback()?;
+    } else {
+        tx.commit()?;
+    }
+    Ok(summary)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a representative v22 scheduler schema (optionally without guids).
+    fn schema(conn: &Connection, with_guid: bool) {
+        let g = if with_guid { ", guid TEXT" } else { "" };
+        conn.execute_batch(&format!(
+            "CREATE TABLE project (Id INTEGER PRIMARY KEY, profileId TEXT, name TEXT, description TEXT, state INTEGER, priority INTEGER{g});
+             CREATE TABLE target (Id INTEGER PRIMARY KEY, name TEXT, active INTEGER, ra REAL, dec REAL, epochcode INTEGER, projectid INTEGER{g});
+             CREATE TABLE exposuretemplate (Id INTEGER PRIMARY KEY, profileId TEXT, name TEXT, filtername TEXT, gain INTEGER{g});
+             CREATE TABLE exposureplan (Id INTEGER PRIMARY KEY, profileId TEXT, exposure REAL, desired INTEGER, acquired INTEGER, accepted INTEGER, targetid INTEGER, exposureTemplateId INTEGER{g});
+             CREATE TABLE acquiredimage (Id INTEGER PRIMARY KEY, projectId INTEGER, targetId INTEGER, acquireddate INTEGER, filtername TEXT, gradingStatus INTEGER NOT NULL, metadata TEXT NOT NULL, rejectreason TEXT, profileId TEXT, exposureId INTEGER{g});
+             CREATE TABLE ruleweight (Id INTEGER PRIMARY KEY, name TEXT, weight REAL, projectid INTEGER);
+             CREATE TABLE imagedata (Id INTEGER PRIMARY KEY, tag TEXT, imagedata BLOB, acquiredimageid INTEGER, width INTEGER DEFAULT 0, height INTEGER DEFAULT 0);"
+        ))
+        .unwrap();
+    }
+
+    fn opts() -> PullOptions {
+        PullOptions {
+            dry_run: false,
+            with_image_data: false,
+            project_filter: None,
+        }
+    }
+
+    /// Seed one project (guid pg) with one target (tg), one template (eg), one
+    /// plan (lg, exposureplan.Id=1), and images. Returns the connection.
+    fn telescope() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        schema(&c, true);
+        c.execute_batch(
+            "INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (1,'p','Caldwell','',1,5,'pg');
+             INSERT INTO target (Id,name,active,ra,dec,epochcode,projectid,guid) VALUES (1,'C33',1,10.6,41.2,0,1,'tg');
+             INSERT INTO exposuretemplate (Id,profileId,name,filtername,gain,guid) VALUES (1,'p','Ha','Ha',100,'eg');
+             INSERT INTO exposureplan (Id,profileId,exposure,desired,acquired,accepted,targetid,exposureTemplateId,guid) VALUES (1,'p',300,50,10,8,1,1,'lg');
+             INSERT INTO ruleweight (Id,name,weight,projectid) VALUES (1,'Priority',1.0,1);
+             INSERT INTO acquiredimage (Id,projectId,targetId,acquireddate,filtername,gradingStatus,metadata,rejectreason,profileId,exposureId,guid)
+               VALUES (1,1,1,1000,'Ha',1,'{\"FileName\":\"a.fits\"}',NULL,'p',1,'img1');
+             INSERT INTO acquiredimage (Id,projectId,targetId,acquireddate,filtername,gradingStatus,metadata,rejectreason,profileId,exposureId,guid)
+               VALUES (2,1,1,2000,'Ha',2,'{\"FileName\":\"b.fits\"}','clouds','p',1,'img2');
+             INSERT INTO imagedata (Id,tag,imagedata,acquiredimageid,width,height) VALUES (1,'',X'01020304',1,100,100);
+             INSERT INTO imagedata (Id,tag,imagedata,acquiredimageid,width,height) VALUES (2,'',X'05060708',2,100,100);",
+        )
+        .unwrap();
+        c
+    }
+
+    fn empty_local() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        schema(&c, true);
+        c
+    }
+
+    fn one<T: rusqlite::types::FromSql>(c: &Connection, sql: &str) -> T {
+        c.query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn inserts_full_tree_into_empty_local() {
+        let src = telescope();
+        let dest = empty_local();
+        let s = sync_pull(&src, &dest, &opts()).unwrap();
+
+        assert_eq!(s.project.inserted, 1);
+        assert_eq!(s.target.inserted, 1);
+        assert_eq!(s.exposuretemplate.inserted, 1);
+        assert_eq!(s.exposureplan.inserted, 1);
+        assert_eq!(s.acquiredimage.inserted, 2);
+        assert_eq!(s.ruleweight.inserted, 1);
+
+        // Referential integrity: target.projectid points at the new project Id,
+        // and acquiredimage FKs resolve.
+        assert_eq!(one::<i64>(&dest, "SELECT COUNT(*) FROM acquiredimage ai JOIN project p ON ai.projectId=p.Id JOIN target t ON ai.targetId=t.Id"), 2);
+        assert_eq!(one::<i64>(&dest, "SELECT COUNT(*) FROM exposureplan ep JOIN target t ON ep.targetid=t.Id JOIN exposuretemplate et ON ep.exposureTemplateId=et.Id"), 1);
+        // New image takes the telescope grade.
+        assert_eq!(
+            one::<i64>(
+                &dest,
+                "SELECT gradingStatus FROM acquiredimage WHERE guid='img1'"
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn remaps_fks_when_local_ids_differ() {
+        let src = telescope();
+        let dest = empty_local();
+        // Pre-seed dest with unrelated rows so autoincrement assigns DIFFERENT
+        // Ids to the pulled project/target than their source Ids.
+        dest.execute_batch(
+            "INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (50,'p','Other','',1,1,'other-pg');
+             INSERT INTO target (Id,name,active,ra,dec,epochcode,projectid,guid) VALUES (70,'OtherT',1,0,0,0,50,'other-tg');",
+        ).unwrap();
+
+        sync_pull(&src, &dest, &opts()).unwrap();
+        // Pulled project got a fresh Id (not 1); its target points at it.
+        let proj_id: i64 = one(&dest, "SELECT Id FROM project WHERE guid='pg'");
+        assert_ne!(proj_id, 1);
+        let tgt_proj: i64 = one(&dest, "SELECT projectid FROM target WHERE guid='tg'");
+        assert_eq!(tgt_proj, proj_id);
+        // acquiredimage.exposureId remapped to the dest plan Id.
+        let plan_id: i64 = one(&dest, "SELECT Id FROM exposureplan WHERE guid='lg'");
+        assert_eq!(
+            one::<i64>(
+                &dest,
+                "SELECT exposureId FROM acquiredimage WHERE guid='img1'"
+            ),
+            plan_id
+        );
+    }
+
+    #[test]
+    fn preserves_local_grade_but_fills_pending() {
+        let src = telescope();
+        let dest = empty_local();
+        // dest already has img1 (locally Accepted=1 -> but set to Rejected=2 to
+        // prove preservation) and img2 still Pending(0).
+        dest.execute_batch(
+            "INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (1,'p','Caldwell','',1,5,'pg');
+             INSERT INTO target (Id,name,active,ra,dec,epochcode,projectid,guid) VALUES (1,'C33',1,10.6,41.2,0,1,'tg');
+             INSERT INTO acquiredimage (Id,projectId,targetId,acquireddate,filtername,gradingStatus,metadata,rejectreason,profileId,exposureId,guid)
+               VALUES (1,1,1,1000,'Ha',2,'{}','local-reject','p',0,'img1');
+             INSERT INTO acquiredimage (Id,projectId,targetId,acquireddate,filtername,gradingStatus,metadata,rejectreason,profileId,exposureId,guid)
+               VALUES (2,1,1,2000,'Ha',0,'{}',NULL,'p',0,'img2');",
+        ).unwrap();
+
+        let s = sync_pull(&src, &dest, &opts()).unwrap();
+        // img1 local Rejected preserved despite telescope Accepted(1).
+        assert_eq!(
+            one::<i64>(
+                &dest,
+                "SELECT gradingStatus FROM acquiredimage WHERE guid='img1'"
+            ),
+            2
+        );
+        assert_eq!(
+            one::<String>(
+                &dest,
+                "SELECT rejectreason FROM acquiredimage WHERE guid='img1'"
+            ),
+            "local-reject"
+        );
+        // img2 was Pending -> adopts telescope Rejected(2) + reason.
+        assert_eq!(
+            one::<i64>(
+                &dest,
+                "SELECT gradingStatus FROM acquiredimage WHERE guid='img2'"
+            ),
+            2
+        );
+        assert_eq!(
+            one::<String>(
+                &dest,
+                "SELECT rejectreason FROM acquiredimage WHERE guid='img2'"
+            ),
+            "clouds"
+        );
+        assert_eq!(s.grade_preserved, 1);
+        assert_eq!(s.grade_filled, 1);
+    }
+
+    #[test]
+    fn is_idempotent() {
+        let src = telescope();
+        let dest = empty_local();
+        sync_pull(&src, &dest, &opts()).unwrap();
+        let s = sync_pull(&src, &dest, &opts()).unwrap();
+        // Second run changes nothing.
+        assert_eq!(s.project.inserted + s.project.updated, 0);
+        assert_eq!(s.target.inserted + s.target.updated, 0);
+        assert_eq!(s.exposureplan.inserted + s.exposureplan.updated, 0);
+        assert_eq!(s.acquiredimage.inserted + s.acquiredimage.updated, 0);
+        assert_eq!(s.acquiredimage.unchanged, 2);
+    }
+
+    #[test]
+    fn updates_changed_structure_fields() {
+        let src = telescope();
+        let dest = empty_local();
+        sync_pull(&src, &dest, &opts()).unwrap();
+        // Telescope changes project state and plan acquired count.
+        src.execute("UPDATE project SET state=3, priority=9 WHERE guid='pg'", [])
+            .unwrap();
+        src.execute("UPDATE exposureplan SET acquired=42 WHERE guid='lg'", [])
+            .unwrap();
+        let s = sync_pull(&src, &dest, &opts()).unwrap();
+        assert_eq!(s.project.updated, 1);
+        assert_eq!(s.exposureplan.updated, 1);
+        assert_eq!(
+            one::<i64>(&dest, "SELECT state FROM project WHERE guid='pg'"),
+            3
+        );
+        assert_eq!(
+            one::<i64>(&dest, "SELECT acquired FROM exposureplan WHERE guid='lg'"),
+            42
+        );
+    }
+
+    #[test]
+    fn dry_run_writes_nothing() {
+        let src = telescope();
+        let dest = empty_local();
+        let mut o = opts();
+        o.dry_run = true;
+        let s = sync_pull(&src, &dest, &o).unwrap();
+        assert_eq!(s.acquiredimage.inserted, 2); // planned
+        assert_eq!(one::<i64>(&dest, "SELECT COUNT(*) FROM acquiredimage"), 0); // but nothing written
+        assert_eq!(one::<i64>(&dest, "SELECT COUNT(*) FROM project"), 0);
+    }
+
+    #[test]
+    fn imagedata_gated_on_flag() {
+        let src = telescope();
+        let dest = empty_local();
+        // Default: no blobs.
+        sync_pull(&src, &dest, &opts()).unwrap();
+        assert_eq!(one::<i64>(&dest, "SELECT COUNT(*) FROM imagedata"), 0);
+
+        // With flag: blobs copied for the pulled images.
+        let mut o = opts();
+        o.with_image_data = true;
+        let s = sync_pull(&src, &dest, &o).unwrap();
+        assert!(s.imagedata_synced);
+        assert_eq!(one::<i64>(&dest, "SELECT COUNT(*) FROM imagedata"), 2);
+        assert_eq!(s.imagedata.inserted, 2);
+        assert_eq!(s.imagedata_bytes, 8); // two 4-byte blobs
+                                          // Blob bound to the dest image Id.
+        let img1: i64 = one(&dest, "SELECT Id FROM acquiredimage WHERE guid='img1'");
+        assert_eq!(
+            one::<i64>(
+                &dest,
+                &format!(
+                    "SELECT COUNT(*) FROM imagedata WHERE acquiredimageid={}",
+                    img1
+                )
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn project_filter_scopes_pull() {
+        let src = telescope();
+        // Add a second project + target + image that must NOT be pulled.
+        src.execute_batch(
+            "INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (2,'p','Messier','',1,5,'pg2');
+             INSERT INTO target (Id,name,active,ra,dec,epochcode,projectid,guid) VALUES (2,'M31',1,0,0,0,2,'tg2');
+             INSERT INTO acquiredimage (Id,projectId,targetId,acquireddate,filtername,gradingStatus,metadata,rejectreason,profileId,exposureId,guid)
+               VALUES (3,2,2,3000,'L',1,'{}',NULL,'p',0,'img3');",
+        ).unwrap();
+        let dest = empty_local();
+        let mut o = opts();
+        o.project_filter = Some("Caldwell".to_string());
+        sync_pull(&src, &dest, &o).unwrap();
+        assert_eq!(one::<i64>(&dest, "SELECT COUNT(*) FROM project"), 1);
+        assert_eq!(
+            one::<i64>(
+                &dest,
+                "SELECT COUNT(*) FROM acquiredimage WHERE guid='img3'"
+            ),
+            0
+        );
+        assert_eq!(
+            one::<i64>(&dest, "SELECT COUNT(*) FROM target WHERE guid='tg2'"),
+            0
+        );
+    }
+
+    #[test]
+    fn refuses_pre_v22_database() {
+        let src = telescope();
+        let dest = Connection::open_in_memory().unwrap();
+        schema(&dest, false); // no guid columns
+        let err = sync_pull(&src, &dest, &opts()).unwrap_err();
+        assert!(format!("{:#}", err).contains("destination"));
+    }
+
+    #[test]
+    fn duplicate_source_guid_is_skipped() {
+        let src = Connection::open_in_memory().unwrap();
+        schema(&src, true);
+        // Two distinct projects sharing one guid — ambiguous, must not merge.
+        src.execute_batch(
+            "INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (1,'p','A','',1,1,'dup');
+             INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (2,'p','B','',1,1,'dup');",
+        ).unwrap();
+        let dest = empty_local();
+        let s = sync_pull(&src, &dest, &opts()).unwrap();
+        assert_eq!(s.project.inserted, 0);
+        assert_eq!(s.project.skipped, 2);
+        assert_eq!(one::<i64>(&dest, "SELECT COUNT(*) FROM project"), 0);
+    }
+
+    #[test]
+    fn duplicate_source_guid_skipped_even_under_project_filter() {
+        // Two projects share a guid but have different names, so a --project
+        // filter can select just one. Detection is global, so it is still
+        // recognized as ambiguous and skipped — never merged across runs.
+        let src = Connection::open_in_memory().unwrap();
+        schema(&src, true);
+        src.execute_batch(
+            "INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (1,'p','Alpha','',1,1,'dup');
+             INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (2,'p','Beta','',1,1,'dup');",
+        ).unwrap();
+        let dest = empty_local();
+        let mut o = opts();
+        o.project_filter = Some("Alpha".to_string());
+        let s = sync_pull(&src, &dest, &o).unwrap();
+        assert_eq!(s.project.inserted, 0);
+        assert_eq!(s.project.skipped, 1); // Alpha was selected, but skipped as ambiguous
+        assert_eq!(one::<i64>(&dest, "SELECT COUNT(*) FROM project"), 0);
+    }
+
+    #[test]
+    fn duplicate_dest_guid_skips_and_cascades() {
+        let src = telescope(); // project guid 'pg' with a target + images
+        let dest = empty_local();
+        // Destination already has the project guid twice -> ambiguous match.
+        dest.execute_batch(
+            "INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (1,'p','X','',1,1,'pg');
+             INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (2,'p','Y','',1,1,'pg');",
+        ).unwrap();
+        let s = sync_pull(&src, &dest, &opts()).unwrap();
+        // Source project can't be safely matched -> skipped, and its children
+        // can't remap their parent -> they skip too (no silent mis-attach).
+        assert_eq!(s.project.skipped, 1);
+        assert_eq!(s.target.skipped, 1);
+        assert_eq!(s.acquiredimage.skipped, 2);
+        assert_eq!(s.acquiredimage.inserted, 0);
+    }
+
+    #[test]
+    fn unmapped_parent_skips_child() {
+        // A target whose project is NOT in the source at all: its projectid
+        // can't remap, so the target must be skipped rather than attach to an
+        // unrelated destination project.
+        let src = Connection::open_in_memory().unwrap();
+        schema(&src, true);
+        src.execute_batch(
+            "INSERT INTO target (Id,name,active,ra,dec,epochcode,projectid,guid) VALUES (1,'Orphan',1,0,0,0,999,'tg-orphan');",
+        ).unwrap();
+        let dest = empty_local();
+        // Give dest a project at Id 999 to prove we do NOT attach to it.
+        dest.execute_batch(
+            "INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (999,'p','Unrelated','',1,1,'unrelated');",
+        ).unwrap();
+        let s = sync_pull(&src, &dest, &opts()).unwrap();
+        assert_eq!(s.target.inserted, 0);
+        assert_eq!(s.target.skipped, 1);
+        assert_eq!(one::<i64>(&dest, "SELECT COUNT(*) FROM target"), 0);
+    }
+
+    #[test]
+    fn schema_drift_syncs_shared_columns() {
+        // Source carries a column the destination lacks (newer migration). The
+        // pull must succeed, syncing the shared columns.
+        let src = telescope();
+        src.execute("ALTER TABLE project ADD COLUMN futurecol TEXT", [])
+            .unwrap();
+        src.execute("UPDATE project SET futurecol='x' WHERE guid='pg'", [])
+            .unwrap();
+        let dest = empty_local(); // no futurecol
+        let s = sync_pull(&src, &dest, &opts()).unwrap();
+        assert_eq!(s.project.inserted, 1);
+        assert_eq!(
+            one::<String>(&dest, "SELECT name FROM project WHERE guid='pg'"),
+            "Caldwell"
+        );
+    }
+
+    #[test]
+    fn imagedata_copies_missing_tags() {
+        let src = telescope(); // img1 + img2 each have one imagedata row (tag '')
+                               // Give img1 a second tagged ImageData record.
+        src.execute(
+            "INSERT INTO imagedata (tag, imagedata, acquiredimageid, width, height) VALUES ('thumb', X'AABBCCDD', 1, 50, 50)",
+            [],
+        ).unwrap();
+        let dest = empty_local();
+        let mut o = opts();
+        o.with_image_data = true;
+        sync_pull(&src, &dest, &o).unwrap();
+        let img1: i64 = one(&dest, "SELECT Id FROM acquiredimage WHERE guid='img1'");
+        // Both tags copied.
+        assert_eq!(
+            one::<i64>(
+                &dest,
+                &format!(
+                    "SELECT COUNT(*) FROM imagedata WHERE acquiredimageid={}",
+                    img1
+                )
+            ),
+            2
+        );
+        // Drop one tag locally; a re-pull restores just the missing one.
+        dest.execute(
+            &format!(
+                "DELETE FROM imagedata WHERE acquiredimageid={} AND tag='thumb'",
+                img1
+            ),
+            [],
+        )
+        .unwrap();
+        let s = sync_pull(&src, &dest, &o).unwrap();
+        assert_eq!(s.imagedata.inserted, 1); // only the missing 'thumb'
+        assert_eq!(
+            one::<i64>(
+                &dest,
+                &format!(
+                    "SELECT COUNT(*) FROM imagedata WHERE acquiredimageid={}",
+                    img1
+                )
+            ),
+            2
+        );
+    }
+}

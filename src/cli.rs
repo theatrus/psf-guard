@@ -416,6 +416,19 @@ pub enum Commands {
         verbose: bool,
     },
 
+    /// Sync state between two Target Scheduler databases, matched by the stable
+    /// `acquiredimage.guid` (TS plugin schema v22+). Two complementary one-way
+    /// operations: `sync pull` mirrors structure + captured images from a
+    /// telescope DB into your local DB (preserving your local grading), and
+    /// `sync grades` pushes your grading decisions from the local DB back into
+    /// the telescope DB. Use them together — pull to refresh, grade locally,
+    /// push grades back — rather than reversing one direction, which would
+    /// overwrite work.
+    Sync {
+        #[command(subcommand)]
+        kind: SyncKind,
+    },
+
     /// Start the web server for API access and static file serving
     Server {
         /// Path to TOML configuration file
@@ -482,6 +495,85 @@ pub enum Commands {
         /// trusted interface (e.g. localhost). Tauri mode always enables it.
         #[arg(long)]
         allow_database_management: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SyncKind {
+    /// Push grading state from one database into another (one-way, by guid).
+    Grades {
+        /// Source database (read-only): a registry slug or a path to a .sqlite file.
+        #[arg(long)]
+        from: String,
+
+        /// Destination database (written): a registry slug or a path to a .sqlite file.
+        #[arg(long)]
+        to: String,
+
+        /// Print the plan without writing to the destination.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Only push rows whose SOURCE grade is this (pending|accepted|rejected).
+        #[arg(long)]
+        status: Option<String>,
+
+        /// Restrict to source rows whose project name matches (substring).
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Restrict to source rows whose target name matches (substring).
+        #[arg(short, long)]
+        target: Option<String>,
+
+        /// Path to the database registry JSON file (only consulted when
+        /// --from/--to is a slug; defaults to the platform config directory).
+        #[arg(long)]
+        registry: Option<String>,
+
+        /// Verbose: print a per-image trace of each grade transition.
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Pull structure + captured images FROM a telescope DB INTO our local DB.
+    ///
+    /// Mirrors projects, targets (coordinates), exposure templates/plans, rule
+    /// weights, and acquired images, matched by `guid` (TS schema v22+) with
+    /// foreign keys remapped onto the destination's local Ids. The telescope
+    /// wins for structure fields, but local grading is preserved: an existing
+    /// image keeps its grade unless it is still Pending, in which case it
+    /// adopts the telescope's grade. Push grades back with `sync grades`.
+    Pull {
+        /// Telescope database (source, read-only): a registry slug or a .sqlite path.
+        #[arg(long)]
+        from: String,
+
+        /// Local database (destination, written): a registry slug or a .sqlite path.
+        #[arg(long)]
+        to: String,
+
+        /// Print the plan without writing to the destination.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip copying the (large) imagedata thumbnail BLOBs (copied by default).
+        #[arg(long)]
+        no_image_data: bool,
+
+        /// Restrict the pull to projects whose name matches (substring);
+        /// cascades to their targets, plans, and images.
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Path to the database registry JSON file (only consulted when
+        /// --from/--to is a slug; defaults to the platform config directory).
+        #[arg(long)]
+        registry: Option<String>,
+
+        /// Verbose: print a per-entity trace of inserts/updates.
+        #[arg(short, long)]
+        verbose: bool,
     },
 }
 
