@@ -1,0 +1,82 @@
+name: RPM
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build RPM on Fedora ${{ matrix.fedora }}
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:${{ matrix.fedora }}
+    strategy:
+      fail-fast: false
+      matrix:
+        fedora: [ '43', '44' ]
+
+    steps:
+      - name: Install build tooling
+        run: |
+          # Tooling needed before rpmbuild (source generation); the remaining
+          # BuildRequires are pulled from the spec via `dnf builddep` below.
+          dnf -y install --setopt=install_weak_deps=False \
+            rpm-build rpmdevtools 'dnf-command(builddep)' \
+            cargo nodejs npm git xz tar findutils
+          rpmdev-setuptree
+
+      - uses: actions/checkout@v4
+        with:
+          # cargo vendor needs the full history-free tree but git archive needs
+          # the checkout to be a git repo; a shallow checkout is fine.
+          fetch-depth: 0
+
+      - name: Mark checkout as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Generate source tarballs (frontend + vendored crates)
+        run: ./scripts/make-rpm-sources.sh
+
+      - name: Build RPM
+        run: |
+          cp packaging/rpm/psf-guard.spec ~/rpmbuild/SPECS/
+          dnf -y builddep ~/rpmbuild/SPECS/psf-guard.spec
+          rpmbuild -ba ~/rpmbuild/SPECS/psf-guard.spec
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p out
+          find ~/rpmbuild/RPMS ~/rpmbuild/SRPMS -name '*.rpm' -exec cp {} out/ \;
+          ls -l out
+
+      - name: Smoke-test the built binary
+        run: |
+          # dnf resolves Requires (incl. systemd pulled in by the unit/sysusers).
+          dnf -y install out/psf-guard-[0-9]*.x86_64.rpm
+          psf-guard --help
+          test -f /usr/lib/systemd/system/psf-guard.service
+          test -f /etc/psf-guard/server.conf
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: psf-guard-fedora-${{ matrix.fedora }}-rpms
+          path: out/*.rpm
+
+      - name: Attach RPMs to the GitHub release
+        # On tag builds only, add the binary RPMs to the release created by
+        # release.yml (matched by tag; this only appends files, it does not
+        # touch the release name/notes). The SRPM is left off to keep assets
+        # lean -- it bundles the full vendored crate tree.
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: out/psf-guard-[0-9]*.x86_64.rpm
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,5 @@
+# PSF Guard runs the server under a dedicated, unprivileged system user.
+# Installed as %{_sysusersdir}/psf-guard.conf; systemd-sysusers creates the
+# account on package install via the systemd file trigger.
+#Type Name      ID   GECOS              Home
+u     psfguard  -    "PSF Guard"        /var/lib/psf-guard
