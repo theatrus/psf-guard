@@ -12,7 +12,7 @@
 
 Name:           psf-guard
 Version:        0.3.0
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
 License:        Apache-2.0
@@ -115,6 +115,9 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Sun Jun 28 2026 Yann Ramin <github@theatr.us> - 0.3.0-2
+- Bump packaging release
+
 * Sun Jun 28 2026 Yann Ramin <github@theatr.us> - 0.3.0-1
 - Initial Fedora packaging (offline build from vendored crates + prebuilt frontend)
 - Ship psf-guard.service (server mode) with a dedicated psfguard system user,
