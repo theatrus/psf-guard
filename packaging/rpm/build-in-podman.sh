@@ -57,9 +57,13 @@ cp packaging/rpm/psf-guard.spec ~/rpmbuild/SPECS/
 rpmbuild -ba ~/rpmbuild/SPECS/psf-guard.spec
 mkdir -p /out
 find ~/rpmbuild/RPMS ~/rpmbuild/SRPMS -name '*.rpm' -exec cp {} /out/ \;
-# Smoke test: install the binary RPM and run it.
-rpm -i /out/psf-guard-[0-9]*.rpm
+# Smoke test: install the binary RPM (dnf resolves Requires, incl. systemd)
+# and confirm the binary, unit, and config landed.
+dnf -y install /out/psf-guard-[0-9]*.x86_64.rpm
 psf-guard --help | head -5
+test -f /usr/lib/systemd/system/psf-guard.service
+test -f /etc/psf-guard/server.conf
+systemd-analyze verify /usr/lib/systemd/system/psf-guard.service || true
 echo "BUILD_OK"
 EOS
 

@@ -27,6 +27,14 @@ BuildRequires:  rust >= 1.89.0
 BuildRequires:  cargo
 # libsqlite3-sys is built with the `bundled` feature: it compiles SQLite from C.
 BuildRequires:  gcc
+# systemd unit + sysusers.d handling (%%_unitdir, %%systemd_* macros, etc.).
+BuildRequires:  systemd-rpm-macros
+
+# Pulls the right Requires for the sysusers.d-created system user.
+%{?sysusers_requires_compat}
+Requires(post):   systemd
+Requires(preun):  systemd
+Requires(postun): systemd
 %if %{with opencv}
 # The opencv crate runs bindgen (needs libclang), compiles a C++ shim, links
 # the system OpenCV, and probes it via pkg-config in build.rs.
@@ -78,11 +86,38 @@ cargo build --release --locked \
 %install
 install -Dpm0755 target/release/%{name} %{buildroot}%{_bindir}/%{name}
 
+# systemd server integration.
+install -Dpm0644 packaging/rpm/systemd/psf-guard.service \
+    %{buildroot}%{_unitdir}/%{name}.service
+install -Dpm0644 packaging/rpm/systemd/psf-guard.sysusers \
+    %{buildroot}%{_sysusersdir}/%{name}.conf
+install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
+    %{buildroot}%{_sysconfdir}/%{name}/server.conf
+
+%pre
+# The psfguard system user is created by the sysusers.d file trigger; no
+# explicit useradd needed here.
+
+%post
+%systemd_post %{name}.service
+
+%preun
+%systemd_preun %{name}.service
+
+%postun
+%systemd_postun_with_restart %{name}.service
+
 %files
 %license LICENSE
 %doc README.md psf-guard.toml.example
 %{_bindir}/%{name}
+%{_unitdir}/%{name}.service
+%{_sysusersdir}/%{name}.conf
+%dir %{_sysconfdir}/%{name}
+%config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
 * Sun Jun 28 2026 Yann Ramin <github@theatr.us> - 0.3.0-1
 - Initial Fedora packaging (offline build from vendored crates + prebuilt frontend)
+- Ship psf-guard.service (server mode) with a dedicated psfguard system user,
+  StateDirectory registry, CacheDirectory cache, and /etc/psf-guard/server.conf

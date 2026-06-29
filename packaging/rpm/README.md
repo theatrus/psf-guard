@@ -28,6 +28,36 @@ The result is two sources:
 OpenCV is enabled by default (matching the upstream default features). Build a
 lighter package without it using `--without opencv`.
 
+## Systemd server service
+
+The package ships a `psf-guard.service` unit that runs the web server
+(`psf-guard server`) under a dedicated, unprivileged `psfguard` system user
+(created via `sysusers.d`). It is **not** enabled by default.
+
+| Path                          | Purpose                                              |
+| ----------------------------- | ---------------------------------------------------- |
+| `/etc/psf-guard/server.conf`  | `EnvironmentFile` — host/port, registry, cache, args |
+| `/var/lib/psf-guard/`         | `StateDirectory` — the mutable database registry     |
+| `/var/cache/psf-guard/`       | `CacheDirectory` — generated/preview image cache     |
+
+```bash
+# Configure (bind address, port, extra args) then enable + start:
+sudoedit /etc/psf-guard/server.conf
+sudo systemctl enable --now psf-guard
+
+# Register a scheduler database + image directories (or do it from the web UI,
+# which is enabled by the default --allow-database-management):
+sudo -u psfguard psf-guard server \
+    --registry /var/lib/psf-guard/registry.json \
+    /path/to/schedulerdb.sqlite /path/to/images
+sudo systemctl restart psf-guard
+```
+
+The unit binds to `127.0.0.1:3000` by default and is sandboxed (`ProtectSystem=strict`,
+`ProtectHome=read-only`, restricted syscalls/capabilities). If your image
+libraries live somewhere `ProtectHome=read-only` blocks, relax it with a
+drop-in: `systemctl edit psf-guard`.
+
 ## Build locally
 
 ```bash

@@ -53,8 +53,11 @@ jobs:
 
       - name: Smoke-test the built binary
         run: |
-          rpm -i out/psf-guard-[0-9]*.rpm
+          # dnf resolves Requires (incl. systemd pulled in by the unit/sysusers).
+          dnf -y install out/psf-guard-[0-9]*.x86_64.rpm
           psf-guard --help
+          test -f /usr/lib/systemd/system/psf-guard.service
+          test -f /etc/psf-guard/server.conf
 
       - uses: actions/upload-artifact@v4
         with:

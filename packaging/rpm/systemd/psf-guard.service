@@ -1,0 +1,56 @@
+[Unit]
+Description=PSF Guard astronomical image analysis server
+Documentation=https://github.com/theatrus/psf-guard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=psfguard
+Group=psfguard
+EnvironmentFile=/etc/psf-guard/server.conf
+ExecStart=/usr/bin/psf-guard server \
+    --host ${PSF_GUARD_HOST} \
+    --port ${PSF_GUARD_PORT} \
+    --registry ${PSF_GUARD_REGISTRY} \
+    --cache-dir ${PSF_GUARD_CACHE_DIR} \
+    $PSF_GUARD_EXTRA_ARGS
+Restart=on-failure
+RestartSec=5
+
+# Persistent registry + image cache. systemd creates and chowns these to the
+# service user; they map to PSF_GUARD_REGISTRY / PSF_GUARD_CACHE_DIR above.
+StateDirectory=psf-guard
+StateDirectoryMode=0750
+CacheDirectory=psf-guard
+CacheDirectoryMode=0750
+
+# Sandboxing. The server only needs to read image directories and write its
+# state/cache dirs. ProtectHome=read-only keeps image libraries under /home
+# readable while blocking writes; relax it (or add ReadOnlyPaths/BindPaths via
+# a drop-in) if your images live somewhere this blocks.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
