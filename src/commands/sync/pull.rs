@@ -51,10 +51,36 @@ pub struct PullSummary {
     /// Existing images whose local (non-Pending) grade was preserved.
     pub grade_preserved: usize,
     pub imagedata: TableCounts,
-    /// True when `--with-image-data` ran (else imagedata was left untouched).
+    /// Bytes of imagedata BLOBs copied (or, in dry-run, that would be copied).
+    pub imagedata_bytes: u64,
+    /// True when imagedata was synced (else it was left untouched).
     pub imagedata_synced: bool,
     /// Per-entity trace lines (for `--verbose`).
     pub changes: Vec<String>,
+}
+
+impl PullSummary {
+    /// Total rows inserted across every table.
+    pub fn total_inserted(&self) -> usize {
+        self.exposuretemplate.inserted
+            + self.project.inserted
+            + self.ruleweight.inserted
+            + self.target.inserted
+            + self.exposureplan.inserted
+            + self.acquiredimage.inserted
+            + self.imagedata.inserted
+    }
+
+    /// Total rows updated across every table.
+    pub fn total_updated(&self) -> usize {
+        self.exposuretemplate.updated
+            + self.project.updated
+            + self.ruleweight.updated
+            + self.target.updated
+            + self.exposureplan.updated
+            + self.acquiredimage.updated
+            + self.imagedata.updated
+    }
 }
 
 fn as_i64(v: &Value) -> Option<i64> {
@@ -462,12 +488,14 @@ fn copy_imagedata(
     tx: &Transaction,
     img_map: &HashMap<i64, i64>,
     counts: &mut TableCounts,
+    bytes: &mut u64,
     dry_run: bool,
 ) -> Result<()> {
     let mut exists_stmt =
         tx.prepare("SELECT 1 FROM imagedata WHERE acquiredimageid = ?1 LIMIT 1")?;
-    let mut count_stmt =
-        src.prepare("SELECT COUNT(*) FROM imagedata WHERE acquiredimageid = ?1")?;
+    let mut count_stmt = src.prepare(
+        "SELECT COUNT(*), COALESCE(SUM(LENGTH(imagedata)),0) FROM imagedata WHERE acquiredimageid = ?1",
+    )?;
     let mut sel_stmt = src.prepare(
         "SELECT tag, imagedata, width, height FROM imagedata WHERE acquiredimageid = ?1",
     )?;
@@ -484,8 +512,10 @@ fn copy_imagedata(
             continue;
         }
         if dry_run {
-            let n: i64 = count_stmt.query_row(params![src_img], |r| r.get(0))?;
+            let (n, sz): (i64, i64) =
+                count_stmt.query_row(params![src_img], |r| Ok((r.get(0)?, r.get(1)?)))?;
             counts.inserted += n as usize;
+            *bytes += sz.max(0) as u64;
             continue;
         }
         #[allow(clippy::type_complexity)]
@@ -500,6 +530,7 @@ fn copy_imagedata(
             })?
             .collect::<rusqlite::Result<_>>()?;
         for (tag, blob, w, h) in blobs {
+            *bytes += blob.as_ref().map(|b| b.len() as u64).unwrap_or(0);
             ins_stmt.execute(params![tag, blob, dest_img, w, h])?;
             counts.inserted += 1;
         }
@@ -627,7 +658,14 @@ pub fn sync_pull(src: &Connection, dest: &Connection, opts: &PullOptions) -> Res
 
     // 7. imagedata (optional, heavy)
     if opts.with_image_data {
-        copy_imagedata(src, &tx, &img_map, &mut summary.imagedata, opts.dry_run)?;
+        copy_imagedata(
+            src,
+            &tx,
+            &img_map,
+            &mut summary.imagedata,
+            &mut summary.imagedata_bytes,
+            opts.dry_run,
+        )?;
         summary.imagedata_synced = true;
     }
 
@@ -866,7 +904,9 @@ mod tests {
         let s = sync_pull(&src, &dest, &o).unwrap();
         assert!(s.imagedata_synced);
         assert_eq!(one::<i64>(&dest, "SELECT COUNT(*) FROM imagedata"), 2);
-        // Blob bound to the dest image Id.
+        assert_eq!(s.imagedata.inserted, 2);
+        assert_eq!(s.imagedata_bytes, 8); // two 4-byte blobs
+                                          // Blob bound to the dest image Id.
         let img1: i64 = one(&dest, "SELECT Id FROM acquiredimage WHERE guid='img1'");
         assert_eq!(
             one::<i64>(

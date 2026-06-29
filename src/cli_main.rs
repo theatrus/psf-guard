@@ -570,6 +570,36 @@ pub fn main() -> Result<()> {
                 } else {
                     println!("  imagedata        skipped (--no-image-data)");
                 }
+
+                // Human-readable byte size.
+                let human = |n: u64| -> String {
+                    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+                    let mut f = n as f64;
+                    let mut i = 0;
+                    while f >= 1024.0 && i < UNITS.len() - 1 {
+                        f /= 1024.0;
+                        i += 1;
+                    }
+                    if i == 0 {
+                        format!("{} {}", n, UNITS[0])
+                    } else {
+                        format!("{:.1} {}", f, UNITS[i])
+                    }
+                };
+                let suffix = if dry_run { " (planned)" } else { "" };
+                println!(
+                    "  ── total: inserted={} updated={}{}",
+                    summary.total_inserted(),
+                    summary.total_updated(),
+                    suffix
+                );
+                if summary.imagedata_synced {
+                    println!(
+                        "     imagedata copied: {}{}",
+                        human(summary.imagedata_bytes),
+                        suffix
+                    );
+                }
             }
         },
         Commands::Server {
