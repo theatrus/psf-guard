@@ -1,57 +1,20 @@
-//! Two-database grading-state sync.
+//! One-way grading-state push (our DB → telescope).
 //!
-//! Pushes grading state (`gradingStatus` + `rejectreason`) one-way from a
-//! source Target Scheduler database into a destination database. Images are
-//! matched by the stable `acquiredimage.guid` (TS plugin schema v22+), so the
-//! two databases are assumed to be same-lineage (one a copy/export of the
-//! other). The source always wins; running the command in both directions
-//! gives a crude bidirectional reconcile.
+//! Pushes grading state (`gradingStatus` + `rejectreason`) from a source Target
+//! Scheduler database into a destination database. Images are matched by the
+//! stable `acquiredimage.guid` (TS plugin schema v22+), so the two databases
+//! are assumed same-lineage (one a copy/export of the other). The source always
+//! wins; running it in both directions gives a crude bidirectional reconcile.
 //!
-//! This module is intentionally pure DB logic so it can be unit-tested against
-//! a pair of in-memory SQLite databases. The CLI glue (argument resolution,
-//! connection opening, reporting) lives in `cli_main.rs`.
+//! Pure DB logic: the CLI glue (argument resolution, connection opening,
+//! reporting) lives in `cli_main.rs`; shared helpers live in the module root.
 
 use crate::commands::reject_archive::require_target_scheduler_guid;
 use crate::db::Database;
-use crate::db_registry::DbRegistry;
 use crate::models::GradingStatus;
 use anyhow::{anyhow, Context, Result};
 use rusqlite::Connection;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::PathBuf;
-
-/// Parse a grading-status filter string (`pending|accepted|rejected`).
-pub fn parse_status(s: &str) -> Result<GradingStatus> {
-    match s.to_lowercase().as_str() {
-        "pending" => Ok(GradingStatus::Pending),
-        "accepted" => Ok(GradingStatus::Accepted),
-        "rejected" => Ok(GradingStatus::Rejected),
-        other => Err(anyhow!(
-            "Invalid status '{}'. Use pending, accepted, or rejected",
-            other
-        )),
-    }
-}
-
-/// Resolve a `--from`/`--to` argument to a database file path. Prefers a
-/// registry slug match (when a registry is available); otherwise treats the
-/// argument as a path to an existing `.sqlite` file. Image directories are
-/// irrelevant for grade sync, so raw paths need no registry entry.
-pub fn resolve_db_path(registry: Option<&DbRegistry>, arg: &str) -> Result<PathBuf> {
-    if let Some(reg) = registry {
-        if let Some(entry) = reg.find(arg) {
-            return Ok(PathBuf::from(&entry.db_path));
-        }
-    }
-    let path = PathBuf::from(arg);
-    if path.is_file() {
-        return Ok(path);
-    }
-    Err(anyhow!(
-        "Could not resolve '{}': not a known registry slug and not an existing file path",
-        arg
-    ))
-}
 
 /// Knobs for a one-way grade push.
 pub struct SyncGradesOptions {
@@ -463,11 +426,5 @@ mod tests {
         assert_eq!(c.guid, "g1");
         assert_eq!((c.from, c.to), (0, 2));
         assert_eq!(c.reason.as_deref(), Some("clouds"));
-    }
-
-    #[test]
-    fn resolve_db_path_prefers_path_when_no_registry() {
-        // A non-existent arg with no registry errors out.
-        assert!(resolve_db_path(None, "definitely-not-a-real-file.sqlite").is_err());
     }
 }

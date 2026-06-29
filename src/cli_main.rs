@@ -477,6 +477,100 @@ pub fn main() -> Result<()> {
                     }
                 }
             }
+
+            crate::cli::SyncKind::Pull {
+                from,
+                to,
+                dry_run,
+                with_image_data,
+                project,
+                registry,
+                verbose,
+            } => {
+                use crate::commands::sync::{resolve_db_path, sync_pull, PullOptions, TableCounts};
+                use crate::db_registry::DbRegistry;
+                use rusqlite::OpenFlags;
+                use std::path::{Path, PathBuf};
+
+                // Load the registry only when a side might be a slug.
+                let need_registry = !Path::new(&from).is_file() || !Path::new(&to).is_file();
+                let registry_obj = if need_registry {
+                    let registry_path = match &registry {
+                        Some(p) => PathBuf::from(p),
+                        None => {
+                            DbRegistry::default_path().context("resolving default registry path")?
+                        }
+                    };
+                    Some(DbRegistry::load_or_init(&registry_path).with_context(|| {
+                        format!("loading registry at {}", registry_path.display())
+                    })?)
+                } else {
+                    None
+                };
+
+                let from_path = resolve_db_path(registry_obj.as_ref(), &from)?;
+                let to_path = resolve_db_path(registry_obj.as_ref(), &to)?;
+
+                let from_canon =
+                    std::fs::canonicalize(&from_path).unwrap_or_else(|_| from_path.clone());
+                let to_canon = std::fs::canonicalize(&to_path).unwrap_or_else(|_| to_path.clone());
+                if from_canon == to_canon {
+                    return Err(anyhow::anyhow!(
+                        "Source and destination resolve to the same database ({}); nothing to pull",
+                        from_canon.display()
+                    ));
+                }
+
+                let src = Connection::open_with_flags(&from_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                    .with_context(|| format!("opening source database {}", from_path.display()))?;
+                let dest = Connection::open_with_flags(&to_path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+                    .with_context(|| {
+                        format!("opening destination database {}", to_path.display())
+                    })?;
+
+                let options = PullOptions {
+                    dry_run,
+                    with_image_data,
+                    project_filter: project,
+                };
+
+                let summary = sync_pull(&src, &dest, &options)?;
+
+                if verbose && !summary.changes.is_empty() {
+                    println!("Entity changes:");
+                    for c in &summary.changes {
+                        println!("  {}", c);
+                    }
+                }
+
+                let tc = |label: &str, c: &TableCounts| {
+                    println!(
+                        "  {:<16} inserted={} updated={} unchanged={}",
+                        label, c.inserted, c.updated, c.unchanged
+                    );
+                };
+                println!(
+                    "\nEntity pull {} {} → {}:",
+                    if dry_run { "(dry-run)" } else { "(live)" },
+                    from_path.display(),
+                    to_path.display(),
+                );
+                tc("exposuretemplate", &summary.exposuretemplate);
+                tc("project", &summary.project);
+                tc("ruleweight", &summary.ruleweight);
+                tc("target", &summary.target);
+                tc("exposureplan", &summary.exposureplan);
+                tc("acquiredimage", &summary.acquiredimage);
+                println!(
+                    "    grades: filled(pending→telescope)={} preserved(local)={}",
+                    summary.grade_filled, summary.grade_preserved
+                );
+                if summary.imagedata_synced {
+                    tc("imagedata", &summary.imagedata);
+                } else {
+                    println!("  imagedata        skipped (pass --with-image-data to copy blobs)");
+                }
+            }
         },
         Commands::Server {
             config,

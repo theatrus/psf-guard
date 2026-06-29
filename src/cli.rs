@@ -534,6 +534,46 @@ pub enum SyncKind {
         #[arg(short, long)]
         verbose: bool,
     },
+
+    /// Pull structure + captured images FROM a telescope DB INTO our local DB.
+    ///
+    /// Mirrors projects, targets (coordinates), exposure templates/plans, rule
+    /// weights, and acquired images, matched by `guid` (TS schema v22+) with
+    /// foreign keys remapped onto the destination's local Ids. The telescope
+    /// wins for structure fields, but local grading is preserved: an existing
+    /// image keeps its grade unless it is still Pending, in which case it
+    /// adopts the telescope's grade. Push grades back with `sync grades`.
+    Pull {
+        /// Telescope database (source, read-only): a registry slug or a .sqlite path.
+        #[arg(long)]
+        from: String,
+
+        /// Local database (destination, written): a registry slug or a .sqlite path.
+        #[arg(long)]
+        to: String,
+
+        /// Print the plan without writing to the destination.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Also copy the (large) imagedata thumbnail BLOBs.
+        #[arg(long)]
+        with_image_data: bool,
+
+        /// Restrict the pull to projects whose name matches (substring);
+        /// cascades to their targets, plans, and images.
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Path to the database registry JSON file (only consulted when
+        /// --from/--to is a slug; defaults to the platform config directory).
+        #[arg(long)]
+        registry: Option<String>,
+
+        /// Verbose: print a per-entity trace of inserts/updates.
+        #[arg(short, long)]
+        verbose: bool,
+    },
 }
 
 #[derive(Parser, Debug, Clone)]
