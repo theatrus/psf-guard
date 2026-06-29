@@ -16,6 +16,12 @@ function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const { showStats, setShowStats } = useGridState();
+
+  // Carry the active (db, project, target, filter…) query context when switching
+  // between scoped views, so navigation never drops the ?db= slug and strands
+  // the user on an empty view.
+  const toScoped = (path: string) =>
+    location.search ? `${path}${location.search}` : path;
   const [showHelp, setShowHelp] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   // We track this only to short-circuit checks against Tauri-only commands;
@@ -114,12 +120,12 @@ function App() {
             </button>
           )}
           {!isOnGrid && (
-            <button onClick={() => navigate('/grid')} className="header-button">
+            <button onClick={() => navigate(toScoped('/grid'))} className="header-button">
               Images
             </button>
           )}
           {!isOnSequence && (
-            <button onClick={() => navigate('/sequence')} className="header-button">
+            <button onClick={() => navigate(toScoped('/sequence'))} className="header-button">
               Sequence
             </button>
           )}

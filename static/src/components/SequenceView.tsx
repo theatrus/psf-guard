@@ -170,7 +170,15 @@ export default function SequenceView() {
                 <button
                   key={t.id}
                   className="target-card-btn"
-                  onClick={() => navigate(`/sequence?project=${projectId}&target=${t.id}`)}
+                  onClick={() => {
+                    // Preserve the existing query context (notably ?db=) and
+                    // just set the chosen target, instead of rebuilding the URL
+                    // from scratch and dropping the db slug.
+                    const params = new URLSearchParams(searchParams);
+                    params.set('project', String(projectId));
+                    params.set('target', String(t.id));
+                    navigate(`/sequence?${params.toString()}`);
+                  }}
                 >
                   <span className="target-card-name">{t.name}</span>
                   <span className="target-card-count">{t.image_count} images</span>
