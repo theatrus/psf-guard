@@ -31,7 +31,7 @@ jobs:
             cargo nodejs npm git xz tar findutils
           rpmdev-setuptree
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # cargo vendor needs the full history-free tree but git archive needs
           # the checkout to be a git repo; a shallow checkout is fine.
