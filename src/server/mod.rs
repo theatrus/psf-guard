@@ -5,12 +5,13 @@ pub mod embedded_static;
 pub mod extract;
 pub mod handlers;
 pub mod slug;
+pub mod spatial_scan;
 pub mod state;
 pub mod static_file_service;
 
 use anyhow::Result;
 use axum::{
-    routing::{get, put},
+    routing::{get, post, put},
     Router,
 };
 use std::path::PathBuf;
@@ -226,6 +227,10 @@ async fn run_server_internal(
         .route(
             "/analysis/image/{image_id}",
             get(handlers::get_image_quality),
+        )
+        .route(
+            "/analysis/spatial-scan",
+            post(handlers::start_spatial_scan).get(handlers::get_spatial_scan_progress),
         );
 
     // Top-level API: global endpoints + nested per-DB routes.

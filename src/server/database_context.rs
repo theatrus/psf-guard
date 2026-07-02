@@ -37,6 +37,9 @@ pub struct DatabaseContext {
     pub file_check_cache: Arc<RwLock<FileCheckCache>>,
     pub directory_tree_cache: Arc<RwLock<Option<DirectoryTree>>>,
     pub refresh_mutex: Arc<TokioMutex<()>>,
+    /// Per-DB spatial (occlusion) metrics store + scan progress; persisted
+    /// under `cache_dir` as spatial_metrics.json.
+    pub spatial_metrics: crate::server::spatial_scan::SharedSpatialStore,
 }
 
 impl DatabaseContext {
@@ -97,6 +100,7 @@ impl DatabaseContext {
             file_check_cache: Arc::new(RwLock::new(FileCheckCache::new())),
             directory_tree_cache: Arc::new(RwLock::new(None)),
             refresh_mutex: Arc::new(TokioMutex::new(())),
+            spatial_metrics: Arc::new(RwLock::new(Default::default())),
         })
     }
 
@@ -648,6 +652,7 @@ impl DatabaseContext {
             file_check_cache: Arc::new(RwLock::new(FileCheckCache::new())),
             directory_tree_cache: Arc::new(RwLock::new(None)),
             refresh_mutex: Arc::new(TokioMutex::new(())),
+            spatial_metrics: Arc::new(RwLock::new(Default::default())),
         }
     }
 }
@@ -666,6 +671,7 @@ impl Clone for DatabaseContext {
             file_check_cache: self.file_check_cache.clone(),
             directory_tree_cache: self.directory_tree_cache.clone(),
             refresh_mutex: self.refresh_mutex.clone(),
+            spatial_metrics: self.spatial_metrics.clone(),
         }
     }
 }

@@ -127,6 +127,18 @@ Design, phases, tracker: [REJECT_ARCHIVE_PLAN.md](./REJECT_ARCHIVE_PLAN.md).
   verdict OK/WARN/REJECT (`--min-score`, `--dead-cell-rise` strictness,
   `--format table|csv|json`). Occlusion/cloud categories reject regardless of
   composite score; sky-gradient warns (recoverable via gradient removal).
+- **Server/UI trigger**: `src/server/spatial_scan.rs` + `POST
+  /api/db/{id}/analysis/spatial-scan` runs the same computation as a
+  singleton per-DB background task (2 worker threads, ~8s/frame full-frame)
+  over a target's FITS files (paths via `find_fits_file`). Results live in
+  `DatabaseContext.spatial_metrics` and persist to
+  `<cache_dir>/spatial_metrics.json` (survives restarts; entries invalidated
+  by filename change; re-scan skips cached, `force` recomputes).
+  `analyze_sequence` + `get_image_quality` merge the stored metrics into
+  `ImageMetrics` so the SequenceView gains occlusion classification once a
+  scan has run. Frontend: "Scan Occlusion" button in SequenceView
+  (`useSpatialScan` hook, 1s progress poll, auto-invalidates
+  sequence-analysis queries when the scan finishes).
 
 ### Two-DB sync (2026-06)
 Lives in `src/commands/sync/` (`mod.rs` shared helpers + `grades.rs` + `pull.rs`).
@@ -216,6 +228,9 @@ PUT    /api/db/{db_id}/refresh-cache
 PUT    /api/db/{db_id}/refresh-directory-cache
 GET    /api/db/{db_id}/cache-progress    # polling (1s); aggregated indicator
                                           # on the frontend fan-outs across DBs
+POST   /api/db/{db_id}/analysis/spatial-scan  # start background occlusion scan
+                                               # {target_id, filter_name?, force?}
+GET    /api/db/{db_id}/analysis/spatial-scan  # scan progress (1s poll) + cache size
 ```
 
 ### Frontend Architecture
