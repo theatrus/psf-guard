@@ -19,7 +19,7 @@ use crate::sequence_analysis::{
 };
 use crate::spatial_analysis::{compute_spatial_metrics, PixelCalibration, SpatialAnalysisConfig};
 use anyhow::Result;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -32,6 +32,13 @@ pub struct ScreenOptions {
     pub dead_cell_rise: f64,
     pub threads: Option<usize>,
     pub session_gap_minutes: u64,
+    /// Registry slug or path of a scheduler DB to write `[Auto]` rejections
+    /// into for frames with a REJECT verdict (matched by FITS basename).
+    pub regrade_db: Option<String>,
+    /// Report what the regrade would change without writing.
+    pub dry_run: bool,
+    /// Registry override for resolving `regrade_db` slugs.
+    pub registry: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -113,6 +120,126 @@ pub fn screen_fits(path: &str, options: &ScreenOptions) -> Result<()> {
         _ => print_table(&results),
     }
 
+    if let Some(db_arg) = &options.regrade_db {
+        apply_regrade(&results, db_arg, options)?;
+    }
+
+    Ok(())
+}
+
+/// Write `[Auto]` rejections for REJECT verdicts into a scheduler DB,
+/// matching frames by FITS basename. Frames already rejected in the DB are
+/// left untouched (manual and prior auto rejections are preserved); Pending
+/// and Accepted frames are regraded, since a wrongly Accepted occluded frame
+/// is exactly the case this screening exists for.
+fn apply_regrade(results: &[ScreenResult], db_arg: &str, options: &ScreenOptions) -> Result<()> {
+    use crate::commands::sync::resolve_db_path;
+    use crate::db::Database;
+    use crate::db_registry::DbRegistry;
+    use crate::models::GradingStatus;
+    use rusqlite::Connection;
+
+    let registry = match &options.registry {
+        Some(p) => DbRegistry::load_or_init(Path::new(p)).ok(),
+        None => DbRegistry::default_path()
+            .ok()
+            .and_then(|p| DbRegistry::load_or_init(&p).ok()),
+    };
+    let db_path = resolve_db_path(registry.as_ref(), db_arg)?;
+    let conn = Connection::open(&db_path)?;
+    let db = Database::new(&conn);
+
+    // Basename -> (image id, grading status), for every image in the DB.
+    // N.I.N.A. filenames embed a timestamp, so basenames are unique per
+    // capture; ambiguous matches are skipped defensively.
+    let mut by_basename: HashMap<String, Vec<(i32, i32)>> = HashMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT Id, gradingStatus, json_extract(metadata, '$.FileName') FROM acquiredimage",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i32>(0)?,
+                row.get::<_, i32>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, status, filename) = row?;
+            let Some(filename) = filename else { continue };
+            let Some(base) = filename.split(&['\\', '/'][..]).next_back() else {
+                continue;
+            };
+            by_basename
+                .entry(base.to_string())
+                .or_default()
+                .push((id, status));
+        }
+    }
+
+    let mut updates: Vec<(i32, GradingStatus, Option<String>)> = Vec::new();
+    let mut unmatched = 0usize;
+    let mut ambiguous = 0usize;
+    let mut already_rejected = 0usize;
+
+    for r in results.iter().filter(|r| r.verdict == Verdict::Reject) {
+        let matches = by_basename.get(&r.file);
+        let (id, status) = match matches.map(|m| m.as_slice()) {
+            Some([single]) => *single,
+            Some(_) => {
+                eprintln!("  Ambiguous filename match, skipping: {}", r.file);
+                ambiguous += 1;
+                continue;
+            }
+            None => {
+                unmatched += 1;
+                continue;
+            }
+        };
+        if status == GradingStatus::Rejected as i32 {
+            already_rejected += 1;
+            continue;
+        }
+        let reason = format!(
+            "[Auto] {} - score {:.2}{}",
+            match &r.category {
+                Some(IssueCategory::PossibleObstruction) => "Obstruction",
+                Some(IssueCategory::LikelyClouds) => "Clouds",
+                _ => "Screening",
+            },
+            r.quality_score.unwrap_or(0.0),
+            r.details
+                .as_deref()
+                .map(|d| format!("; {}", d))
+                .unwrap_or_default(),
+        );
+        updates.push((id, GradingStatus::Rejected, Some(reason)));
+    }
+
+    println!(
+        "\nRegrade against {}: {} rejects -> {} to update, {} already rejected, {} unmatched, {} ambiguous",
+        db_path.display(),
+        results.iter().filter(|r| r.verdict == Verdict::Reject).count(),
+        updates.len(),
+        already_rejected,
+        unmatched,
+        ambiguous,
+    );
+
+    if options.dry_run {
+        for (id, _, reason) in &updates {
+            println!(
+                "  Would reject image {}: {}",
+                id,
+                reason.as_deref().unwrap_or("")
+            );
+        }
+        println!("Dry run - no changes written.");
+        return Ok(());
+    }
+
+    db.batch_update_grading_status(&updates)?;
+    println!("Applied {} rejections.", updates.len());
     Ok(())
 }
 
@@ -583,6 +710,9 @@ mod tests {
             dead_cell_rise: 0.08,
             threads: None,
             session_gap_minutes: 60,
+            regrade_db: None,
+            dry_run: false,
+            registry: None,
         };
         assert_eq!(verdict_for(&0.9, &None, &options), Verdict::Ok);
         assert_eq!(verdict_for(&0.2, &None, &options), Verdict::Reject);

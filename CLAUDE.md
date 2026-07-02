@@ -127,6 +127,14 @@ Design, phases, tracker: [REJECT_ARCHIVE_PLAN.md](./REJECT_ARCHIVE_PLAN.md).
   verdict OK/WARN/REJECT (`--min-score`, `--dead-cell-rise` strictness,
   `--format table|csv|json`). Occlusion/cloud categories reject regardless of
   composite score; sky-gradient warns (recoverable via gradient removal).
+- **DB regrade**: `screen-fits <dir> --regrade-db <slug-or-path> [--dry-run]`
+  writes `[Auto] Obstruction/Clouds - score …` rejections for REJECT
+  verdicts into the scheduler DB (matched by FITS basename; ambiguous
+  matches skipped; already-Rejected rows untouched — but wrongly Accepted
+  ones ARE regraded, since N.I.N.A.'s rolling star-count baseline absorbs
+  slow occlusions and accepts frames that are >80% blocked; observed on the
+  real DB where 31/33 occluded 06-30 R frames were Accepted). Rejections
+  then flow through `move-rejects` as usual.
 - **Server/UI trigger**: `src/server/spatial_scan.rs` + `POST
   /api/db/{id}/analysis/spatial-scan` runs the same computation as a
   singleton per-DB background task (2 worker threads, ~8s/frame full-frame)

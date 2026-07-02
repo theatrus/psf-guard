@@ -267,6 +267,9 @@ pub fn main() -> Result<()> {
             dead_cell_rise,
             threads,
             session_gap,
+            regrade_db,
+            dry_run,
+            registry,
             verbose,
         } => {
             crate::debug::init_debug(verbose);
@@ -277,6 +280,9 @@ pub fn main() -> Result<()> {
                 dead_cell_rise,
                 threads,
                 session_gap_minutes: session_gap,
+                regrade_db,
+                dry_run,
+                registry,
             };
             screen_fits(&path, &options)?;
         }

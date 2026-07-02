@@ -296,6 +296,21 @@ pub enum Commands {
         #[arg(long, default_value = "60")]
         session_gap: u64,
 
+        /// Write [Auto] rejections for REJECT verdicts into this scheduler DB
+        /// (registry slug or path to a .sqlite file); frames are matched by
+        /// FITS filename. Already-rejected frames are left untouched.
+        #[arg(long)]
+        regrade_db: Option<String>,
+
+        /// With --regrade-db: show what would change without writing
+        #[arg(long, requires = "regrade_db")]
+        dry_run: bool,
+
+        /// Registry file for resolving --regrade-db slugs (defaults to the
+        /// platform config location)
+        #[arg(long)]
+        registry: Option<String>,
+
         /// Enable verbose debug output
         #[arg(long, short)]
         verbose: bool,
