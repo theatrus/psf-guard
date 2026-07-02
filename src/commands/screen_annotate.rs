@@ -31,6 +31,7 @@ pub(crate) struct AnnotationData {
     pub cell_relative_ratios: Vec<Option<f64>>,
     pub star_drop_cells: Vec<bool>,
     pub bg_rise_cells: Vec<bool>,
+    pub bg_fall_cells: Vec<bool>,
     pub caption_lines: Vec<String>,
 }
 
@@ -40,6 +41,7 @@ const RED: Rgb<u8> = Rgb([235, 60, 60]);
 const ORANGE: Rgb<u8> = Rgb([245, 160, 40]);
 const MAGENTA: Rgb<u8> = Rgb([225, 80, 225]);
 const YELLOW: Rgb<u8> = Rgb([240, 230, 60]);
+const BLUE: Rgb<u8> = Rgb([80, 150, 255]);
 const GRID_GRAY: Rgb<u8> = Rgb([90, 90, 90]);
 const TEXT_WHITE: Rgb<u8> = Rgb([230, 230, 230]);
 
@@ -74,14 +76,24 @@ pub(crate) fn render_annotated_frame(
     let cell_w = out_w as f64 / cols as f64;
     let cell_h = out_h as f64 / rows as f64;
 
-    // Dead cells from raw counts, mirroring star_grid_metrics.
+    // Dead cells from raw counts, mirroring star_grid_metrics including its
+    // sparse branch: when most cells are empty the median is 0 and the dead
+    // criterion becomes "no stars at all" (a mostly-occluded frame must
+    // still tint red).
     let dead_cells: Vec<bool> = if data.star_cell_counts.len() == cols * rows {
         let mut sorted = data.star_cell_counts.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let median = sorted[sorted.len() / 2];
+        let any_stars = sorted.last().copied().unwrap_or(0.0) > 0.0;
         data.star_cell_counts
             .iter()
-            .map(|&c| median > 0.0 && c < 0.25 * median)
+            .map(|&c| {
+                if median > 0.0 {
+                    c < 0.25 * median
+                } else {
+                    any_stars && c == 0.0
+                }
+            })
             .collect()
     } else {
         vec![false; cols * rows]
@@ -121,6 +133,9 @@ pub(crate) fn render_annotated_frame(
             if at(&data.bg_rise_cells, c) {
                 draw_rect_border(&mut img, x0, y0, x1, y1, YELLOW, 3);
             }
+            if at(&data.bg_fall_cells, c) {
+                draw_rect_border(&mut img, x0, y0, x1, y1, BLUE, 3);
+            }
             if let Some(r) = extinct {
                 draw_text(&mut img, x0 + 6, y0 + 6, &format!("X{:.2}", r), ORANGE, 2);
             }
@@ -147,6 +162,7 @@ pub(crate) fn render_annotated_frame(
         (ORANGE, "EXTINCT"),
         (MAGENTA, "STARDROP"),
         (YELLOW, "BGRISE"),
+        (BLUE, "BGFALL"),
     ] {
         for dy in 0..12u32 {
             for dx in 0..12u32 {
@@ -342,6 +358,11 @@ mod tests {
             bg_rise_cells: {
                 let mut v = vec![false; 48];
                 v[10] = true; // yellow border
+                v
+            },
+            bg_fall_cells: {
+                let mut v = vec![false; 48];
+                v[20] = true; // blue border
                 v
             },
             caption_lines: vec![

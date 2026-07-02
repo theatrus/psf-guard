@@ -2439,6 +2439,7 @@ fn merge_photometric_signals(
                 m.extinction_cell_fraction = sig.extinction_cell_fraction;
                 m.star_cell_drop_fraction = sig.star_cell_drop_fraction;
                 m.bg_cell_rise_fraction = sig.bg_cell_rise_fraction;
+                m.bg_cell_fall_fraction = sig.bg_cell_fall_fraction;
             }
         }
     }

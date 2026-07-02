@@ -408,10 +408,14 @@ pub struct FrameSignals {
     /// Fraction of cells with a hard transient background rise the frame's
     /// own gradient does not explain (errant light).
     pub bg_cell_rise_fraction: Option<f64>,
+    /// Fraction of cells with a hard transient background FALL: a dark
+    /// occluder or cloud shadow blocking skyglow reads darker, not milky.
+    pub bg_cell_fall_fraction: Option<f64>,
     /// Per-cell diagnostics for annotation (empty when unavailable).
     pub cell_relative_ratios: Vec<Option<f64>>,
     pub star_drop_cells: Vec<bool>,
     pub bg_rise_cells: Vec<bool>,
+    pub bg_fall_cells: Vec<bool>,
 }
 
 /// Run photometry and the per-cell temporal baselines over one sequence
@@ -450,22 +454,27 @@ pub fn sequence_screening_signals(
             }
         })
         .collect();
-    for (o, f) in out
-        .iter_mut()
-        .zip(star_share_drop_fractions(&star_grids, 4.0))
-    {
-        o.star_cell_drop_fraction = f;
+    for (o, f) in out.iter_mut().zip(star_share_drop_cells(&star_grids, 4.0)) {
+        if let Some(cells) = f {
+            o.star_cell_drop_fraction = Some(cells.fraction);
+            o.star_drop_cells = cells.flagged;
+        }
     }
 
-    // Background rise pass only when every frame has a grid: a frame with a
+    // Background shift pass only when every frame has a grid: a frame with a
     // synthesized all-zero grid would corrupt the temporal baselines.
     if frames.iter().all(|f| f.bg_cell_medians.len() == cells) {
         let bg_grids: Vec<Vec<f64>> = frames.iter().map(|f| f.bg_cell_medians.clone()).collect();
         for (o, f) in out
             .iter_mut()
-            .zip(bg_rise_fractions(&bg_grids, grid.0, grid.1, 5.0))
+            .zip(bg_shift_cells(&bg_grids, grid.0, grid.1, 5.0))
         {
-            o.bg_cell_rise_fraction = f;
+            if let Some(shift) = f {
+                o.bg_cell_rise_fraction = Some(shift.rise.fraction);
+                o.bg_rise_cells = shift.rise.flagged;
+                o.bg_cell_fall_fraction = Some(shift.fall.fraction);
+                o.bg_fall_cells = shift.fall.flagged;
+            }
         }
     }
 
@@ -598,6 +607,17 @@ pub fn bg_rise_fractions(
         .collect()
 }
 
+/// Rise + fall per-cell background anomalies for one frame.
+#[derive(Debug, Clone)]
+pub struct BgShiftCells {
+    /// Transient localized rise (errant light).
+    pub rise: CellAnomalies,
+    /// Transient localized fall: something blocking skyglow (dark occluder,
+    /// cloud shadow) - the affected region reads *darker* than its own
+    /// history, not milky.
+    pub fall: CellAnomalies,
+}
+
 /// Per-cell variant of [`bg_rise_fractions`].
 pub fn bg_rise_cells(
     grids: &[Vec<f64>],
@@ -605,6 +625,19 @@ pub fn bg_rise_cells(
     rows: usize,
     sigma: f64,
 ) -> Vec<Option<CellAnomalies>> {
+    bg_shift_cells(grids, cols, rows, sigma)
+        .into_iter()
+        .map(|o| o.map(|s| s.rise))
+        .collect()
+}
+
+/// Two-sided variant: rise (errant light) and fall (dark patch) per cell.
+pub fn bg_shift_cells(
+    grids: &[Vec<f64>],
+    cols: usize,
+    rows: usize,
+    sigma: f64,
+) -> Vec<Option<BgShiftCells>> {
     let n = grids.len();
     let mut out = vec![None; n];
     let cells = cols * rows;
@@ -612,12 +645,14 @@ pub fn bg_rise_cells(
         return out;
     }
 
-    // Plane-detrended relative residuals per frame.
+    // Plane-detrended relative residuals per frame. The fit is robust
+    // (outlier cells excluded and refit) so a strong localized patch cannot
+    // tilt the plane and manufacture spurious shifts in unaffected cells.
     let mut resid: Vec<Vec<f64>> = Vec::with_capacity(n);
     for g in grids {
         let mut level: Vec<f64> = g.clone();
         let level = median(&mut level).max(1.0);
-        let plane = fit_plane(g, cols, rows);
+        let plane = fit_plane_robust(g, cols, rows);
         resid.push(
             g.iter()
                 .enumerate()
@@ -638,26 +673,58 @@ pub fn bg_rise_cells(
 
     const REL_FLOOR: f64 = 0.02; // 2% of sky: below this is noise, not light.
     for f in 0..n {
-        let mut flags = vec![false; cells];
-        let mut flagged = 0usize;
-        for (c, flag) in flags.iter_mut().enumerate() {
-            let rise = resid[f][c] - cell_median[c];
-            if rise > (sigma * 1.4826 * cell_mad[c]).max(REL_FLOOR) {
-                *flag = true;
-                flagged += 1;
+        let mut rise_flags = vec![false; cells];
+        let mut fall_flags = vec![false; cells];
+        let mut risen = 0usize;
+        let mut fallen = 0usize;
+        for c in 0..cells {
+            let shift = resid[f][c] - cell_median[c];
+            let threshold = (sigma * 1.4826 * cell_mad[c]).max(REL_FLOOR);
+            if shift > threshold {
+                rise_flags[c] = true;
+                risen += 1;
+            } else if -shift > threshold {
+                fall_flags[c] = true;
+                fallen += 1;
             }
         }
-        out[f] = Some(CellAnomalies {
-            fraction: flagged as f64 / cells as f64,
-            flagged: flags,
+        out[f] = Some(BgShiftCells {
+            rise: CellAnomalies {
+                fraction: risen as f64 / cells as f64,
+                flagged: rise_flags,
+            },
+            fall: CellAnomalies {
+                fraction: fallen as f64 / cells as f64,
+                flagged: fall_flags,
+            },
         });
     }
     out
 }
 
-/// Least-squares plane a + b*gx + c*gy over grid cells.
-fn fit_plane(values: &[f64], cols: usize, rows: usize) -> Vec<f64> {
-    let n = (cols * rows) as f64;
+/// Robust plane fit: least squares, then refit excluding cells whose
+/// residual is a hard outlier, so a localized bright/dark patch cannot tilt
+/// the plane for the rest of the frame.
+fn fit_plane_robust(values: &[f64], cols: usize, rows: usize) -> Vec<f64> {
+    let first = fit_plane_masked(values, cols, rows, None);
+    let mut resid: Vec<f64> = values.iter().zip(&first).map(|(v, p)| v - p).collect();
+    let mut abs: Vec<f64> = resid.iter().map(|r| r.abs()).collect();
+    let mad = median(&mut abs);
+    let threshold = (3.0 * 1.4826 * mad).max(1e-9);
+    let mask: Vec<bool> = resid.iter().map(|r| r.abs() <= threshold).collect();
+    let kept = mask.iter().filter(|&&m| m).count();
+    if kept < 6 || kept == mask.len() {
+        return first;
+    }
+    // Recompute residual basis for the final answer.
+    resid.clear();
+    fit_plane_masked(values, cols, rows, Some(&mask))
+}
+
+/// Least-squares plane a + b*gx + c*gy over grid cells, optionally
+/// restricted to masked-in cells (the returned plane still covers all).
+fn fit_plane_masked(values: &[f64], cols: usize, rows: usize, mask: Option<&[bool]>) -> Vec<f64> {
+    let mut n = 0.0f64;
     let mut sx = 0.0;
     let mut sy = 0.0;
     let mut sxx = 0.0;
@@ -668,8 +735,15 @@ fn fit_plane(values: &[f64], cols: usize, rows: usize) -> Vec<f64> {
     let mut syv = 0.0;
     for gy in 0..rows {
         for gx in 0..cols {
-            let v = values[gy * cols + gx];
+            let c = gy * cols + gx;
+            if let Some(m) = mask {
+                if !m[c] {
+                    continue;
+                }
+            }
+            let v = values[c];
             let (x, y) = (gx as f64, gy as f64);
+            n += 1.0;
             sx += x;
             sy += y;
             sxx += x * x;
@@ -938,6 +1012,66 @@ mod tests {
             "two bumped cells should flag, got {}",
             f7
         );
+    }
+
+    #[test]
+    fn bg_fall_flags_transient_dark_patch() {
+        let (cols, rows) = (8usize, 6usize);
+        let cells = cols * rows;
+        let base: Vec<f64> = vec![1500.0; cells];
+        let mut grids: Vec<Vec<f64>> = (0..10).map(|_| base.clone()).collect();
+        // Frame 5: a dark occluder blocks skyglow in three cells (-20%).
+        for cell in grids[5].iter_mut().take(3) {
+            *cell = 1200.0;
+        }
+        let shifts = bg_shift_cells(&grids, cols, rows, 5.0);
+        let f5 = shifts[5].as_ref().unwrap();
+        assert!(
+            f5.fall.fraction > 0.02 && f5.fall.fraction < 0.2,
+            "dark patch should flag as fall, got {}",
+            f5.fall.fraction
+        );
+        assert_eq!(f5.rise.fraction, 0.0, "no rise on a darkening frame corner");
+        assert_eq!(shifts[4].as_ref().unwrap().fall.fraction, 0.0);
+    }
+
+    #[test]
+    fn sequence_signals_populate_per_cell_outputs_end_to_end() {
+        // Regression: the combined pass must populate the per-cell temporal
+        // outputs (drop/rise/fall flags AND fractions), not just photometry.
+        let field = base_field(500);
+        let cells = GRID.0 * GRID.1;
+        let mut frames: Vec<FrameInputs> = (0..8)
+            .map(|i| FrameInputs {
+                catalog: make_frame(&field, (i as f64, 0.0), 1.0, |_| Some(1.0)),
+                star_cell_counts: vec![100.0; cells],
+                bg_cell_medians: vec![1500.0; cells],
+            })
+            .collect();
+        // Frame 5: dark occluder - three cells lose bg AND stars.
+        for c in 0..3 {
+            frames[5].bg_cell_medians[c] = 1100.0;
+            frames[5].star_cell_counts[c] = 10.0;
+        }
+
+        let signals = sequence_screening_signals(&frames, W, H, GRID, &PhotometryConfig::default());
+        let s5 = &signals[5];
+        assert!(
+            s5.bg_cell_fall_fraction.unwrap() > 0.02,
+            "fall fraction should populate: {:?}",
+            s5.bg_cell_fall_fraction
+        );
+        assert!(
+            s5.bg_fall_cells.iter().take(3).all(|&f| f),
+            "fall flags set"
+        );
+        assert!(
+            s5.star_cell_drop_fraction.unwrap() > 0.02,
+            "star drop fraction should populate"
+        );
+        assert!(s5.star_drop_cells.iter().take(3).all(|&f| f));
+        assert_eq!(signals[4].bg_cell_fall_fraction, Some(0.0));
+        assert!(s5.transparency.is_some());
     }
 
     #[test]

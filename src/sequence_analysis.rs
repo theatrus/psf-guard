@@ -119,6 +119,11 @@ pub struct ImageMetrics {
     /// rise vs their own temporal baseline (errant light).
     #[serde(default)]
     pub bg_cell_rise_fraction: Option<f64>,
+    /// Fraction of cells with a transient, gradient-detrended background
+    /// FALL vs their own temporal baseline: a dark occluder or cloud shadow
+    /// blocking skyglow (affected regions read darker, not milky).
+    #[serde(default)]
+    pub bg_cell_fall_fraction: Option<f64>,
 }
 
 /// Configurable weights for composite quality scoring.
@@ -807,8 +812,17 @@ impl SequenceAnalyzer {
             // single-frame events - they move).
             let extinction = images[i].extinction_cell_fraction.unwrap_or(0.0);
             let star_cell_drop = images[i].star_cell_drop_fraction.unwrap_or(0.0);
+            // A transient localized background FALL (dark occluder / cloud
+            // shadow) corroborates weaker star-based evidence: with a dark
+            // patch present, half-threshold extinction or star loss is
+            // enough.
+            let dark_patch = images[i].bg_cell_fall_fraction.unwrap_or(0.0)
+                > self.config.bg_rise_cells_threshold;
             let small_cloud = extinction > self.config.extinction_cells_threshold
-                || star_cell_drop > self.config.star_drop_cells_threshold;
+                || star_cell_drop > self.config.star_drop_cells_threshold
+                || (dark_patch
+                    && (extinction > self.config.extinction_cells_threshold * 0.5
+                        || star_cell_drop > self.config.star_drop_cells_threshold * 0.5));
             let veiled = images[i]
                 .transparency
                 .is_some_and(|t| t < self.config.transparency_threshold);
@@ -853,10 +867,15 @@ impl SequenceAnalyzer {
                 (
                     Some(IssueCategory::LikelyClouds),
                     Some(format!(
-                        "Localized extinction over {:.0}% of the field (flux dip {:.0}% of cells, star loss {:.0}% of cells) with global transparency {:.0}%. Small cloud passing through.",
+                        "Localized extinction over {:.0}% of the field (flux dip {:.0}% of cells, star loss {:.0}% of cells{}) with global transparency {:.0}%. Small cloud passing through.",
                         extinction.max(star_cell_drop) * 100.0,
                         extinction * 100.0,
                         star_cell_drop * 100.0,
+                        if dark_patch {
+                            ", corroborated by a localized background darkening"
+                        } else {
+                            ""
+                        },
                         images[i].transparency.unwrap_or(1.0) * 100.0,
                     )),
                 )
@@ -1202,6 +1221,7 @@ pub fn extract_metrics_from_metadata(
         extinction_cell_fraction: metadata["ExtinctionCellFraction"].as_f64(),
         star_cell_drop_fraction: None,
         bg_cell_rise_fraction: None,
+        bg_cell_fall_fraction: None,
     }
 }
 
@@ -1224,6 +1244,7 @@ mod tests {
             extinction_cell_fraction: None,
             star_cell_drop_fraction: None,
             bg_cell_rise_fraction: None,
+            bg_cell_fall_fraction: None,
         }
     }
 
@@ -1250,6 +1271,7 @@ mod tests {
             extinction_cell_fraction: None,
             star_cell_drop_fraction: None,
             bg_cell_rise_fraction: None,
+            bg_cell_fall_fraction: None,
         }
     }
 
@@ -1275,6 +1297,7 @@ mod tests {
             extinction_cell_fraction: None,
             star_cell_drop_fraction: None,
             bg_cell_rise_fraction: None,
+            bg_cell_fall_fraction: None,
         }
     }
 
@@ -1292,6 +1315,7 @@ mod tests {
         m.extinction_cell_fraction = Some(extinction);
         m.star_cell_drop_fraction = Some(star_cell_drop);
         m.bg_cell_rise_fraction = Some(bg_cell_rise);
+        m.bg_cell_fall_fraction = Some(0.0);
         m
     }
 
@@ -1318,6 +1342,39 @@ mod tests {
             seq.images[5].details
         );
         assert_eq!(seq.images[4].category, None);
+    }
+
+    #[test]
+    fn test_dark_patch_corroborates_weak_extinction_as_cloud() {
+        // A dark cloud blocks skyglow: localized background FALL plus
+        // extinction just below the standalone threshold. The dark patch
+        // corroborates it into a cloud classification.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            min_sequence_length: 3,
+            ..Default::default()
+        });
+        let mut images: Vec<ImageMetrics> = (0..8)
+            .map(|i| make_photometric_image(i, i as i64 * 300, 1.0, 0.0, 0.0, 0.0))
+            .collect();
+        let mut dark = make_photometric_image(5, 5 * 300, 0.97, 0.04, 0.0, 0.0);
+        dark.bg_cell_fall_fraction = Some(0.10);
+        images[5] = dark;
+
+        let results = analyzer.analyze(&images, 1, "test", "R");
+        let seq = &results[0];
+        assert_eq!(
+            seq.images[5].category,
+            Some(IssueCategory::LikelyClouds),
+            "dark patch + weak extinction should classify as cloud: {:?}",
+            seq.images[5].details
+        );
+        // Without the dark patch the same weak extinction stays unclassified.
+        let mut images2: Vec<ImageMetrics> = (0..8)
+            .map(|i| make_photometric_image(i, i as i64 * 300, 1.0, 0.0, 0.0, 0.0))
+            .collect();
+        images2[5] = make_photometric_image(5, 5 * 300, 0.97, 0.04, 0.0, 0.0);
+        let results2 = analyzer.analyze(&images2, 1, "test", "R");
+        assert_eq!(results2[0].images[5].category, None);
     }
 
     #[test]

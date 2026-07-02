@@ -107,6 +107,7 @@ struct ScreenResult {
     extinction_cell_fraction: Option<f64>,
     star_cell_drop_fraction: Option<f64>,
     bg_cell_rise_fraction: Option<f64>,
+    bg_cell_fall_fraction: Option<f64>,
     quality_score: Option<f64>,
     category: Option<IssueCategory>,
     details: Option<String>,
@@ -222,6 +223,11 @@ fn annotate_flagged(
                     .unwrap_or_else(|| "-".into()),
             ),
         ];
+        if let Some(fall) = r.bg_cell_fall_fraction.filter(|&v| v > 0.0) {
+            if let Some(first) = caption.get_mut(1) {
+                first.push_str(&format!(" FALL={:.0}%", fall * 100.0));
+            }
+        }
         if let Some(details) = &r.details {
             caption.push(details.chars().take(110).collect());
         }
@@ -235,6 +241,7 @@ fn annotate_flagged(
                 .unwrap_or_default(),
             star_drop_cells: sig.map(|s| s.star_drop_cells.clone()).unwrap_or_default(),
             bg_rise_cells: sig.map(|s| s.bg_rise_cells.clone()).unwrap_or_default(),
+            bg_fall_cells: sig.map(|s| s.bg_fall_cells.clone()).unwrap_or_default(),
             caption_lines: caption,
         };
 
@@ -716,6 +723,7 @@ fn score_records(
                 extinction_cell_fraction: None,
                 star_cell_drop_fraction: None,
                 bg_cell_rise_fraction: None,
+                bg_cell_fall_fraction: None,
                 quality_score: None,
                 category: None,
                 details: None,
@@ -774,6 +782,7 @@ fn score_records(
                     extinction_cell_fraction: sig.and_then(|s| s.extinction_cell_fraction),
                     star_cell_drop_fraction: sig.and_then(|s| s.star_cell_drop_fraction),
                     bg_cell_rise_fraction: sig.and_then(|s| s.bg_cell_rise_fraction),
+                    bg_cell_fall_fraction: sig.and_then(|s| s.bg_cell_fall_fraction),
                 }
             })
             .collect();
@@ -784,6 +793,7 @@ fn score_records(
                 res.extinction_cell_fraction = m.extinction_cell_fraction;
                 res.star_cell_drop_fraction = m.star_cell_drop_fraction;
                 res.bg_cell_rise_fraction = m.bg_cell_rise_fraction;
+                res.bg_cell_fall_fraction = m.bg_cell_fall_fraction;
             }
         }
 
@@ -911,11 +921,11 @@ fn truncate_name(name: &str, max: usize) -> String {
 
 fn print_csv(results: &[ScreenResult]) {
     println!(
-        "File,Filter,ExposureS,Timestamp,Stars,AvgHFR,MedianADU,DeadCellFraction,StarUniformity,BgCellSpread,BgCellMaxDev,Transparency,ExtinctionCellFraction,StarCellDropFraction,BgCellRiseFraction,Score,Category,Verdict"
+        "File,Filter,ExposureS,Timestamp,Stars,AvgHFR,MedianADU,DeadCellFraction,StarUniformity,BgCellSpread,BgCellMaxDev,Transparency,ExtinctionCellFraction,StarCellDropFraction,BgCellRiseFraction,BgCellFallFraction,Score,Category,Verdict"
     );
     for r in results {
         println!(
-            "{},{},{},{},{},{:.3},{:.1},{},{},{:.4},{:.4},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{:.3},{:.1},{},{},{:.4},{:.4},{},{},{},{},{},{},{},{}",
             r.file,
             r.filter,
             r.exposure_s.map(|e| e.to_string()).unwrap_or_default(),
@@ -941,6 +951,9 @@ fn print_csv(results: &[ScreenResult]) {
                 .map(|v| format!("{:.4}", v))
                 .unwrap_or_default(),
             r.bg_cell_rise_fraction
+                .map(|v| format!("{:.4}", v))
+                .unwrap_or_default(),
+            r.bg_cell_fall_fraction
                 .map(|v| format!("{:.4}", v))
                 .unwrap_or_default(),
             r.quality_score
