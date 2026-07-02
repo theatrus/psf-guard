@@ -5,8 +5,8 @@ use rusqlite::Connection;
 use crate::cli::{Cli, Commands};
 use crate::commands::{
     analyze_fits_and_compare, annotate_stars, benchmark_psf, dump_grading_results,
-    filter_rejected_files, list_projects, list_targets, read_fits, regrade_images, show_images,
-    stretch_to_png, update_grade,
+    filter_rejected_files, list_projects, list_targets, read_fits, regrade_images, screen_fits,
+    show_images, stretch_to_png, update_grade,
 };
 
 pub fn main() -> Result<()> {
@@ -258,6 +258,33 @@ pub fn main() -> Result<()> {
                 &psf_type,
                 verbose,
             )?;
+        }
+        Commands::ScreenFits {
+            path,
+            detector,
+            format,
+            min_score,
+            dead_cell_rise,
+            threads,
+            session_gap,
+            regrade_db,
+            dry_run,
+            registry,
+            verbose,
+        } => {
+            crate::debug::init_debug(verbose);
+            let options = crate::commands::screen_fits::ScreenOptions {
+                detector,
+                format,
+                min_score,
+                dead_cell_rise,
+                threads,
+                session_gap_minutes: session_gap,
+                regrade_db,
+                dry_run,
+                registry,
+            };
+            screen_fits(&path, &options)?;
         }
         Commands::StretchToPng {
             fits_path,

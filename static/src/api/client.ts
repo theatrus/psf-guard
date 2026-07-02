@@ -20,6 +20,8 @@ import type {
   SequenceAnalysisRequest,
   SequenceAnalysisResponse,
   ImageQualityResponse,
+  SpatialScanRequest,
+  SpatialScanStatus,
 } from './types';
 
 // Default API instance (used as fallback)
@@ -315,6 +317,28 @@ export const apiClient = {
       dbPath(dbId, `/analysis/image/${imageId}`)
     );
     if (!data.data) throw new Error('Image quality data not found');
+    return data.data;
+  },
+
+  startSpatialScan: async (
+    dbId: string,
+    request: SpatialScanRequest
+  ): Promise<SpatialScanStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<SpatialScanStatus>>(
+      dbPath(dbId, '/analysis/spatial-scan'),
+      request
+    );
+    if (!data.data) throw new Error('Failed to start spatial scan');
+    return data.data;
+  },
+
+  getSpatialScanStatus: async (dbId: string): Promise<SpatialScanStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<SpatialScanStatus>>(
+      dbPath(dbId, '/analysis/spatial-scan')
+    );
+    if (!data.data) throw new Error('Failed to get spatial scan status');
     return data.data;
   },
 };

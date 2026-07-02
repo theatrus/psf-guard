@@ -21,6 +21,7 @@ pub mod opencv_wavelets;
 pub mod psf_fitting;
 pub mod sequence_analysis;
 pub mod server;
+pub mod spatial_analysis;
 pub mod utils;
 
 // Main entry points

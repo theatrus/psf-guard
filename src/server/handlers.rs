@@ -2097,6 +2097,7 @@ pub async fn analyze_sequence(
     let weight_eccentricity = params.weight_eccentricity;
     let weight_snr = params.weight_snr;
     let weight_background = params.weight_background;
+    let weight_spatial = params.weight_spatial;
 
     // Fetch images from database
     let (images_data, target_name) = {
@@ -2136,7 +2137,10 @@ pub async fn analyze_sequence(
         )));
     }
 
-    // Extract metrics and group by filter
+    // Extract metrics and group by filter. Spatial metrics from a prior
+    // background scan are merged in when the DB metadata lacks them.
+    crate::server::spatial_scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
+    let spatial_store = ctx.spatial_metrics.clone();
     let target_name_clone = target_name.clone();
     let result = tokio::task::spawn_blocking(move || {
         let mut config = SequenceAnalyzerConfig::default();
@@ -2149,6 +2153,7 @@ pub async fn analyze_sequence(
             || weight_eccentricity.is_some()
             || weight_snr.is_some()
             || weight_background.is_some()
+            || weight_spatial.is_some()
         {
             config.quality_weights = QualityWeights {
                 star_count: weight_star_count.unwrap_or(config.quality_weights.star_count),
@@ -2156,6 +2161,7 @@ pub async fn analyze_sequence(
                 eccentricity: weight_eccentricity.unwrap_or(config.quality_weights.eccentricity),
                 snr: weight_snr.unwrap_or(config.quality_weights.snr),
                 background: weight_background.unwrap_or(config.quality_weights.background),
+                spatial: weight_spatial.unwrap_or(config.quality_weights.spatial),
             };
         }
 
@@ -2165,7 +2171,9 @@ pub async fn analyze_sequence(
         let mut by_filter: std::collections::HashMap<String, Vec<_>> =
             std::collections::HashMap::new();
         for (img, _proj, _target) in &images_data {
-            let metrics = extract_metrics_from_metadata(img.id, &img.metadata, img.acquired_date);
+            let mut metrics =
+                extract_metrics_from_metadata(img.id, &img.metadata, img.acquired_date);
+            merge_spatial_metrics(&mut metrics, &spatial_store, &img.metadata);
             by_filter
                 .entry(img.filter_name.clone())
                 .or_default()
@@ -2263,6 +2271,8 @@ pub async fn get_image_quality(
     let filter_name_for_task = filter_name.clone();
     let seq_target_id = target_image.target_id;
     let target_name_clone = target_name.clone();
+    crate::server::spatial_scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
+    let spatial_store = ctx.spatial_metrics.clone();
 
     let result = tokio::task::spawn_blocking(move || {
         let config = SequenceAnalyzerConfig::default();
@@ -2271,7 +2281,9 @@ pub async fn get_image_quality(
         let metrics: Vec<_> = all_filter_images
             .iter()
             .map(|(img, _, _)| {
-                extract_metrics_from_metadata(img.id, &img.metadata, img.acquired_date)
+                let mut m = extract_metrics_from_metadata(img.id, &img.metadata, img.acquired_date);
+                merge_spatial_metrics(&mut m, &spatial_store, &img.metadata);
+                m
             })
             .collect();
 
@@ -2312,6 +2324,204 @@ pub async fn get_image_quality(
             reference_values: None,
         },
     )))
+}
+
+// ---------------- Spatial (occlusion) metrics scan ----------------
+
+/// Extract the FITS basename from an acquiredimage metadata JSON blob.
+fn filename_from_metadata(metadata_json: &str) -> Option<String> {
+    let metadata: serde_json::Value = serde_json::from_str(metadata_json).ok()?;
+    let filename = metadata["FileName"].as_str()?;
+    filename
+        .split(&['\\', '/'][..])
+        .next_back()
+        .map(|s| s.to_string())
+}
+
+/// Fill spatial metric fields from the per-DB scan store when the DB
+/// metadata did not provide them (N.I.N.A. never does).
+fn merge_spatial_metrics(
+    metrics: &mut crate::sequence_analysis::ImageMetrics,
+    store: &crate::server::spatial_scan::SharedSpatialStore,
+    metadata_json: &str,
+) {
+    if metrics.dead_cell_fraction.is_some() && metrics.bg_cell_spread.is_some() {
+        return;
+    }
+    let Some(file_only) = filename_from_metadata(metadata_json) else {
+        return;
+    };
+    if let Some(entry) =
+        crate::server::spatial_scan::valid_entry(store, metrics.image_id, &file_only)
+    {
+        if metrics.dead_cell_fraction.is_none() {
+            metrics.dead_cell_fraction = entry.dead_cell_fraction;
+        }
+        if metrics.bg_cell_spread.is_none() {
+            metrics.bg_cell_spread = Some(entry.bg_cell_spread);
+        }
+    }
+}
+
+/// POST /api/db/{db_id}/analysis/spatial-scan
+///
+/// Start a background scan computing spatial occlusion metrics from the FITS
+/// files of a target's images. Singleton per database: if a scan is already
+/// running (or nothing needs computing) this returns `started: false` with
+/// the current progress. Poll GET on the same path for progress.
+pub async fn start_spatial_scan(
+    ctx: DbContext,
+    Json(req): Json<SpatialScanRequest>,
+) -> Result<Json<ApiResponse<SpatialScanStatusResponse>>, AppError> {
+    use crate::server::spatial_scan as scan;
+
+    scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
+
+    // Collect this target's images.
+    let candidates = {
+        let conn = ctx.db();
+        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+        let db = Database::new(&conn);
+
+        let targets = db
+            .get_targets_by_ids(&[req.target_id])
+            .map_err(|_| AppError::DatabaseError)?;
+        let target = targets
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::BadRequest(format!("Target {} not found", req.target_id)))?;
+        let target_name = target.name.clone();
+
+        let all_images = db
+            .query_images(None, None, None, None)
+            .map_err(|_| AppError::DatabaseError)?;
+
+        all_images
+            .into_iter()
+            .filter(|(img, _, _)| {
+                img.target_id == req.target_id
+                    && req
+                        .filter_name
+                        .as_ref()
+                        .is_none_or(|f| img.filter_name == *f)
+            })
+            .map(|(img, _, _)| (img, target_name.clone()))
+            .collect::<Vec<_>>()
+    };
+
+    // Partition into needs-compute vs already-cached.
+    let mut work = Vec::new();
+    let mut skipped_cached = 0usize;
+    for (img, target_name) in candidates {
+        let Some(file_only) = filename_from_metadata(&img.metadata) else {
+            continue;
+        };
+        if !req.force && scan::valid_entry(&ctx.spatial_metrics, img.id, &file_only).is_some() {
+            skipped_cached += 1;
+            continue;
+        }
+        work.push((img, target_name, file_only));
+    }
+
+    if work.is_empty() {
+        let (progress, cached_count) = scan::progress_snapshot(&ctx.spatial_metrics);
+        return Ok(Json(ApiResponse::success(SpatialScanStatusResponse {
+            started: false,
+            progress,
+            cached_count,
+        })));
+    }
+
+    if !scan::try_begin_scan(
+        &ctx.spatial_metrics,
+        req.target_id,
+        req.filter_name.clone(),
+        work.len(),
+        skipped_cached,
+    ) {
+        let (progress, cached_count) = scan::progress_snapshot(&ctx.spatial_metrics);
+        return Ok(Json(ApiResponse::success(SpatialScanStatusResponse {
+            started: false,
+            progress,
+            cached_count,
+        })));
+    }
+
+    tracing::info!(
+        "📐 Spatial scan started for db={} target={} ({} images, {} cached)",
+        ctx.id,
+        req.target_id,
+        work.len(),
+        skipped_cached
+    );
+
+    let ctx_arc = ctx.0.clone();
+    let target_id = req.target_id;
+    tokio::task::spawn_blocking(move || {
+        // Any panic below would be silently swallowed by tokio (the join
+        // handle is dropped) and leave the singleton wedged at running=true;
+        // catch it and always finalize.
+        let scan_body = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Resolve FITS paths first; unresolvable files count as errors.
+            let mut items = Vec::with_capacity(work.len());
+            for (img, target_name, file_only) in &work {
+                match find_fits_file(&ctx_arc, img, target_name, file_only) {
+                    Ok(path) => items.push(crate::server::spatial_scan::ScanWorkItem {
+                        image_id: img.id,
+                        filename: file_only.clone(),
+                        fits_path: path,
+                    }),
+                    Err(_) => {
+                        let mut s = ctx_arc.spatial_metrics.write().unwrap();
+                        s.progress.processed += 1;
+                        s.progress.errors += 1;
+                        s.progress.last_error = Some(format!("{}: FITS file not found", file_only));
+                    }
+                }
+            }
+            crate::server::spatial_scan::run_scan(
+                &ctx_arc.spatial_metrics,
+                &ctx_arc.cache_dir_path,
+                &items,
+            );
+        }));
+        if scan_body.is_err() {
+            tracing::error!(
+                "📐 Spatial scan panicked for db={} target={}; finalizing progress",
+                ctx_arc.id,
+                target_id
+            );
+            crate::server::spatial_scan::finalize_scan(&ctx_arc.spatial_metrics);
+        } else {
+            tracing::info!(
+                "📐 Spatial scan finished for db={} target={}",
+                ctx_arc.id,
+                target_id
+            );
+        }
+    });
+
+    let (progress, cached_count) = scan::progress_snapshot(&ctx.spatial_metrics);
+    Ok(Json(ApiResponse::success(SpatialScanStatusResponse {
+        started: true,
+        progress,
+        cached_count,
+    })))
+}
+
+/// GET /api/db/{db_id}/analysis/spatial-scan — progress + store size.
+pub async fn get_spatial_scan_progress(
+    ctx: DbContext,
+) -> Result<Json<ApiResponse<SpatialScanStatusResponse>>, AppError> {
+    use crate::server::spatial_scan as scan;
+
+    scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
+    let (progress, cached_count) = scan::progress_snapshot(&ctx.spatial_metrics);
+    Ok(Json(ApiResponse::success(SpatialScanStatusResponse {
+        started: progress.running,
+        progress,
+        cached_count,
+    })))
 }
 
 // Error handling

@@ -21,6 +21,12 @@ pub struct NormalizedMetrics {
     pub eccentricity: Option<f64>,
     pub snr: Option<f64>,
     pub background: Option<f64>,
+    /// Spatial star coverage: 1.0 = stars across the whole frame, 0.0 = half
+    /// or more of the frame's grid cells without stars. Unlike the other
+    /// metrics this is an absolute mapping, not sequence-relative: a dead
+    /// cell fraction is already dimensionless and comparable across setups.
+    #[serde(default)]
+    pub spatial_coverage: Option<f64>,
 }
 
 /// Quality analysis result for a single image within its sequence context.
@@ -81,6 +87,17 @@ pub struct ImageMetrics {
     pub eccentricity: Option<f64>,
     pub snr: Option<f64>,
     pub background: Option<f64>,
+    /// Fraction of frame grid cells with collapsed star density
+    /// (see `spatial_analysis::SpatialMetrics::star_dead_cell_fraction`).
+    /// Detects partial occlusion (trees, dome, stray light) that global star
+    /// counts miss.
+    #[serde(default)]
+    pub dead_cell_fraction: Option<f64>,
+    /// Relative spread of per-cell background medians
+    /// (see `spatial_analysis::SpatialMetrics::bg_cell_spread`). Detects
+    /// stray-light gradients, often before any stars are lost.
+    #[serde(default)]
+    pub bg_cell_spread: Option<f64>,
 }
 
 /// Configurable weights for composite quality scoring.
@@ -91,6 +108,15 @@ pub struct QualityWeights {
     pub eccentricity: f64,
     pub snr: f64,
     pub background: f64,
+    /// Weight for spatial star coverage (occlusion). Only contributes when
+    /// spatial metrics are available (FITS-computed); DB-metadata-only
+    /// analysis is unaffected because missing metrics are renormalized away.
+    #[serde(default = "default_spatial_quality_weight")]
+    pub spatial: f64,
+}
+
+fn default_spatial_quality_weight() -> f64 {
+    0.20
 }
 
 impl Default for QualityWeights {
@@ -101,6 +127,7 @@ impl Default for QualityWeights {
             eccentricity: 0.10,
             snr: 0.25,
             background: 0.10,
+            spatial: default_spatial_quality_weight(),
         }
     }
 }
@@ -108,7 +135,12 @@ impl Default for QualityWeights {
 impl QualityWeights {
     /// Normalize weights so they sum to 1.0. If all weights are zero, returns defaults.
     pub fn normalized(self) -> Self {
-        let sum = self.star_count + self.hfr + self.eccentricity + self.snr + self.background;
+        let sum = self.star_count
+            + self.hfr
+            + self.eccentricity
+            + self.snr
+            + self.background
+            + self.spatial;
         if sum < 1e-10 {
             return Self::default();
         }
@@ -121,6 +153,7 @@ impl QualityWeights {
             eccentricity: self.eccentricity / sum,
             snr: self.snr / sum,
             background: self.background / sum,
+            spatial: self.spatial / sum,
         }
     }
 }
@@ -132,6 +165,15 @@ pub struct TemporalWeights {
     pub background: f64,
     pub hfr: f64,
     pub snr: f64,
+    /// Weight for a rise in the dead-cell fraction relative to the EWMA
+    /// baseline. The deviation is the absolute rise (already a fraction of
+    /// the frame), not a relative change, since the baseline is often 0.
+    #[serde(default = "default_spatial_temporal_weight")]
+    pub spatial: f64,
+}
+
+fn default_spatial_temporal_weight() -> f64 {
+    0.40
 }
 
 impl Default for TemporalWeights {
@@ -141,6 +183,7 @@ impl Default for TemporalWeights {
             background: 0.25,
             hfr: 0.20,
             snr: 0.15,
+            spatial: default_spatial_temporal_weight(),
         }
     }
 }
@@ -157,6 +200,55 @@ pub struct SequenceAnalyzerConfig {
     pub bg_rise_threshold: f64,
     pub hfr_rise_threshold: f64,
     pub sudden_change_rate: f64,
+    /// Rise in dead-cell fraction over the local baseline that flags a
+    /// localized occlusion (absolute fraction of the frame). Clean-frame
+    /// jitter stays <= 0.04 across validated nights/filters, so 0.08 leaves
+    /// a 2x margin while catching occlusion onset (0.08-0.2).
+    #[serde(default = "default_dead_cell_rise_threshold")]
+    pub dead_cell_rise_threshold: f64,
+    /// Absolute dead-cell fraction above which a frame is considered
+    /// occluded regardless of the baseline (half the frame without stars).
+    #[serde(default = "default_dead_cell_abs_threshold")]
+    pub dead_cell_abs_threshold: f64,
+    /// Rise of the per-cell background spread over the local baseline that
+    /// flags a stray-light gradient (clean frames stay <= ~0.1; gradients
+    /// reach 0.3+ before stars are lost).
+    #[serde(default = "default_bg_spread_rise_threshold")]
+    pub bg_spread_rise_threshold: f64,
+    /// Temporal-anomaly score above which a frame is excluded from the EWMA
+    /// baseline update. Without this, a slowly growing occlusion (tree drift
+    /// across 20+ frames) gets absorbed into the baseline and stops being
+    /// anomalous ("boiling frog"). Set >= 1.0 to disable freezing.
+    #[serde(default = "default_baseline_freeze_threshold")]
+    pub baseline_freeze_threshold: f64,
+    /// Maximum consecutive frames the EWMA baselines stay frozen. A run of
+    /// anomalous frames longer than this is accepted as a new steady state
+    /// (moonrise, light dome) and the baselines re-seed from the current
+    /// frame, so a permanent condition change cannot mark the entire rest of
+    /// a session anomalous. Occluded frames remain penalized regardless via
+    /// the absolute spatial-coverage term.
+    #[serde(default = "default_baseline_freeze_max_frames")]
+    pub baseline_freeze_max_frames: usize,
+}
+
+fn default_dead_cell_rise_threshold() -> f64 {
+    0.08
+}
+
+fn default_dead_cell_abs_threshold() -> f64 {
+    0.5
+}
+
+fn default_bg_spread_rise_threshold() -> f64 {
+    0.15
+}
+
+fn default_baseline_freeze_threshold() -> f64 {
+    0.15
+}
+
+fn default_baseline_freeze_max_frames() -> usize {
+    15
 }
 
 impl Default for SequenceAnalyzerConfig {
@@ -171,6 +263,11 @@ impl Default for SequenceAnalyzerConfig {
             bg_rise_threshold: 0.10,
             hfr_rise_threshold: 0.15,
             sudden_change_rate: 0.15,
+            dead_cell_rise_threshold: default_dead_cell_rise_threshold(),
+            dead_cell_abs_threshold: default_dead_cell_abs_threshold(),
+            bg_spread_rise_threshold: default_bg_spread_rise_threshold(),
+            baseline_freeze_threshold: default_baseline_freeze_threshold(),
+            baseline_freeze_max_frames: default_baseline_freeze_max_frames(),
         }
     }
 }
@@ -263,6 +360,7 @@ impl SequenceAnalyzer {
                         eccentricity: Some(1.0),
                         snr: Some(1.0),
                         background: Some(1.0),
+                        spatial_coverage: Some(1.0),
                     },
                     details: None,
                 })
@@ -310,6 +408,18 @@ impl SequenceAnalyzer {
         let norm_bg = self.normalize_metric_lower_better(
             &images.iter().map(|i| i.background).collect::<Vec<_>>(),
         );
+        // Spatial coverage uses an absolute mapping instead of the
+        // sequence-relative percentile normalization: dead_cell_fraction is
+        // already a dimensionless fraction of the frame, and relative
+        // normalization would blow tiny variations on an all-clean sequence
+        // up to the full 0..1 range.
+        let norm_spatial: Vec<Option<f64>> = images
+            .iter()
+            .map(|i| {
+                i.dead_cell_fraction
+                    .map(|dead| 1.0 - (dead / self.config.dead_cell_abs_threshold).clamp(0.0, 1.0))
+            })
+            .collect();
 
         // Compute EWMA temporal deviation scores
         let temporal_scores = self.compute_temporal_scores(&images);
@@ -324,6 +434,7 @@ impl SequenceAnalyzer {
             let ne = norm_ecc[i];
             let nsn = norm_snr[i];
             let nb = norm_bg[i];
+            let nsp = norm_spatial[i];
 
             // Weighted sum using available metrics
             let (score, total_weight) = weighted_sum_available(&[
@@ -332,6 +443,7 @@ impl SequenceAnalyzer {
                 (ne, w.eccentricity),
                 (nsn, w.snr),
                 (nb, w.background),
+                (nsp, w.spatial),
             ]);
 
             let quality_score = if total_weight > 0.0 {
@@ -356,6 +468,7 @@ impl SequenceAnalyzer {
                     eccentricity: ne,
                     snr: nsn,
                     background: nb,
+                    spatial_coverage: nsp,
                 },
                 details: None,
             });
@@ -439,6 +552,10 @@ impl SequenceAnalyzer {
         let mut bl_bg: Option<f64> = None;
         let mut bl_hfr: Option<f64> = None;
         let mut bl_snr: Option<f64> = None;
+        let mut bl_dead: Option<f64> = None;
+        // Consecutive frames excluded from the baseline update; bounds the
+        // freeze so a permanent condition change becomes the new baseline.
+        let mut frozen_streak: usize = 0;
 
         for i in 0..n {
             let img = &images[i];
@@ -489,10 +606,42 @@ impl SequenceAnalyzer {
                 0.0
             };
 
+            // Dead-cell fraction deviation (absolute rise; the baseline is
+            // typically ~0 on clean frames, so a relative change is
+            // meaningless).
+            let dead_dev = if let (Some(val), Some(bl)) = (img.dead_cell_fraction, bl_dead) {
+                (val - bl).max(0.0)
+            } else {
+                0.0
+            };
+
             scores[i] = tw.star_count * star_dev
                 + tw.background * bg_dev
                 + tw.hfr * hfr_dev
-                + tw.snr * snr_dev;
+                + tw.snr * snr_dev
+                + tw.spatial * dead_dev;
+
+            // Exclude anomalous frames from the baseline so a slow-growing
+            // problem (tree drifting through the field over many frames)
+            // cannot normalize itself into the baseline — but only for a
+            // bounded number of frames. A longer run is a new steady state
+            // (moonrise, light dome): re-seed the baselines from the current
+            // frame so the rest of the session is not scored anomalous.
+            if scores[i] > self.config.baseline_freeze_threshold {
+                frozen_streak += 1;
+                if frozen_streak < self.config.baseline_freeze_max_frames.max(1) {
+                    continue;
+                }
+                // Regime change accepted: hard re-seed instead of EWMA blend.
+                bl_stars = img.star_count.or(bl_stars);
+                bl_bg = img.background.or(bl_bg);
+                bl_hfr = img.hfr.or(bl_hfr);
+                bl_snr = img.snr.or(bl_snr);
+                bl_dead = img.dead_cell_fraction.or(bl_dead);
+                frozen_streak = 0;
+                continue;
+            }
+            frozen_streak = 0;
 
             // Update EWMA baselines
             if let Some(val) = img.star_count {
@@ -519,6 +668,12 @@ impl SequenceAnalyzer {
                     None => val,
                 });
             }
+            if let Some(val) = img.dead_cell_fraction {
+                bl_dead = Some(match bl_dead {
+                    Some(bl) => alpha * val + (1.0 - alpha) * bl,
+                    None => val,
+                });
+            }
         }
 
         scores
@@ -531,16 +686,49 @@ impl SequenceAnalyzer {
             return;
         }
 
+        // Frames already flagged as temporally anomalous are excluded from
+        // local baselines so that a long-running problem does not become its
+        // own reference.
+        let anomalous: Vec<bool> = results
+            .iter()
+            .map(|r| r.temporal_anomaly_score > self.config.baseline_freeze_threshold)
+            .collect();
+
+        // Per-frame dead-cell rise, precomputed so each frame can check its
+        // neighbors for corroboration.
+        let dead_rises: Vec<f64> = (0..n)
+            .map(|i| self.compute_additive_rise(images, &anomalous, i, |m| m.dead_cell_fraction))
+            .collect();
+
         #[allow(clippy::needless_range_loop)]
         for i in 0..n {
-            if results[i].quality_score >= 0.7 {
+            // Spatial occlusion signals: checked even for frames whose
+            // composite score is still good, because a subtle occlusion
+            // (10-20% of the frame) barely moves the global metrics.
+            let dead_abs = images[i].dead_cell_fraction.unwrap_or(0.0);
+            let dead_rise = dead_rises[i];
+            // A rise-based occlusion call needs corroboration from an
+            // adjacent frame: real occluders (trees, dome) persist across
+            // frames, while a single-frame blip (wind gust, passing wisp)
+            // must not reject an otherwise excellent frame.
+            let neighbor_elevated = (i > 0
+                && dead_rises[i - 1] > self.config.dead_cell_rise_threshold * 0.5)
+                || (i + 1 < n && dead_rises[i + 1] > self.config.dead_cell_rise_threshold * 0.5);
+            let occluded = dead_abs > self.config.dead_cell_abs_threshold
+                || (dead_rise > self.config.dead_cell_rise_threshold && neighbor_elevated);
+
+            let bg_spread_rise =
+                self.compute_additive_rise(images, &anomalous, i, |m| m.bg_cell_spread);
+            let stray_gradient = bg_spread_rise > self.config.bg_spread_rise_threshold;
+
+            if results[i].quality_score >= 0.7 && !occluded && !stray_gradient {
                 continue; // No classification needed for good frames
             }
 
-            let star_drop = self.compute_fractional_drop(images, i, |m| m.star_count);
-            let bg_rise = self.compute_fractional_rise(images, i, |m| m.background);
-            let hfr_rise = self.compute_fractional_rise(images, i, |m| m.hfr);
-            let ecc_rise = self.compute_fractional_rise(images, i, |m| m.eccentricity);
+            let star_drop = self.compute_fractional_drop(images, &anomalous, i, |m| m.star_count);
+            let bg_rise = self.compute_fractional_rise(images, &anomalous, i, |m| m.background);
+            let hfr_rise = self.compute_fractional_rise(images, &anomalous, i, |m| m.hfr);
+            let ecc_rise = self.compute_fractional_rise(images, &anomalous, i, |m| m.eccentricity);
 
             let is_gradual_hfr = self.is_gradual_change(images, i, |m| m.hfr, 3);
             let is_gradual_bg = self.is_gradual_change(images, i, |m| m.background, 3);
@@ -549,8 +737,27 @@ impl SequenceAnalyzer {
             let bg_stable = bg_rise < self.config.bg_rise_threshold;
             let ecc_stable = ecc_rise < 0.15;
 
-            // Classification rules from the design document
-            let (category, details) = if star_drop > self.config.star_drop_threshold
+            // Classification rules. A localized dead region is checked first:
+            // it is the most specific signature (clouds veil the frame
+            // uniformly, occluders kill a contiguous part of it).
+            let (category, details) = if occluded {
+                (
+                    Some(IssueCategory::PossibleObstruction),
+                    Some(format!(
+                        "{:.0}% of frame grid cells have no stars (baseline {:.0}%). Localized occlusion (trees, dome, dew shield, or foreground lit by stray light).",
+                        dead_abs * 100.0,
+                        (dead_abs - dead_rise).max(0.0) * 100.0,
+                    )),
+                )
+            } else if stray_gradient && star_stable {
+                (
+                    Some(IssueCategory::SkyBrightening),
+                    Some(format!(
+                        "Background non-uniformity rose by {:.2} with stable star coverage. Stray light or moonlight gradient entering the optical path.",
+                        bg_spread_rise
+                    )),
+                )
+            } else if star_drop > self.config.star_drop_threshold
                 && bg_rise > self.config.bg_rise_threshold
             {
                 (
@@ -622,6 +829,7 @@ impl SequenceAnalyzer {
     fn compute_fractional_drop(
         &self,
         images: &[ImageMetrics],
+        anomalous: &[bool],
         idx: usize,
         f: impl Fn(&ImageMetrics) -> Option<f64>,
     ) -> f64 {
@@ -630,7 +838,7 @@ impl SequenceAnalyzer {
             None => return 0.0,
         };
 
-        let baseline = self.local_baseline(images, idx, &f);
+        let baseline = self.local_baseline(images, anomalous, idx, &f);
         if baseline.abs() < 1e-10 {
             return 0.0;
         }
@@ -641,6 +849,7 @@ impl SequenceAnalyzer {
     fn compute_fractional_rise(
         &self,
         images: &[ImageMetrics],
+        anomalous: &[bool],
         idx: usize,
         f: impl Fn(&ImageMetrics) -> Option<f64>,
     ) -> f64 {
@@ -649,22 +858,55 @@ impl SequenceAnalyzer {
             None => return 0.0,
         };
 
-        let baseline = self.local_baseline(images, idx, &f);
+        let baseline = self.local_baseline(images, anomalous, idx, &f);
         if baseline.abs() < 1e-10 {
             return 0.0;
         }
         ((current - baseline) / baseline).max(0.0)
     }
 
-    /// Compute local baseline as median of up to 5 preceding frames.
+    /// Compute an absolute (additive) rise over the local baseline, for
+    /// metrics that are already dimensionless fractions (dead-cell fraction,
+    /// background spread) where a baseline of 0 makes relative change
+    /// meaningless.
+    fn compute_additive_rise(
+        &self,
+        images: &[ImageMetrics],
+        anomalous: &[bool],
+        idx: usize,
+        f: impl Fn(&ImageMetrics) -> Option<f64>,
+    ) -> f64 {
+        let current = match f(&images[idx]) {
+            Some(v) => v,
+            None => return 0.0,
+        };
+        let baseline = self.local_baseline(images, anomalous, idx, &f);
+        (current - baseline).max(0.0)
+    }
+
+    /// Compute local baseline as the median of up to 5 preceding
+    /// non-anomalous frames. Anomalous frames are skipped (looking back up to
+    /// 15 frames) so that an ongoing problem does not become its own
+    /// baseline; if no clean frame is found, fall back to the plain
+    /// 5-preceding-frames median.
     fn local_baseline(
         &self,
         images: &[ImageMetrics],
+        anomalous: &[bool],
         idx: usize,
         f: &impl Fn(&ImageMetrics) -> Option<f64>,
     ) -> f64 {
-        let start = idx.saturating_sub(5);
-        let mut vals: Vec<f64> = (start..idx).filter_map(|j| f(&images[j])).collect();
+        let start = idx.saturating_sub(15);
+        let mut vals: Vec<f64> = (start..idx)
+            .rev()
+            .filter(|&j| !anomalous.get(j).copied().unwrap_or(false))
+            .filter_map(|j| f(&images[j]))
+            .take(5)
+            .collect();
+        if vals.is_empty() {
+            let start = idx.saturating_sub(5);
+            vals = (start..idx).filter_map(|j| f(&images[j])).collect();
+        }
         if vals.is_empty() {
             return f(&images[idx]).unwrap_or(0.0);
         }
@@ -814,6 +1056,11 @@ pub fn extract_metrics_from_metadata(
         .as_f64()
         .or_else(|| metadata["Median"].as_f64());
 
+    // Spatial metrics are only present when computed by psf-guard itself
+    // (N.I.N.A. does not produce them).
+    let dead_cell_fraction = metadata["DeadCellFraction"].as_f64();
+    let bg_cell_spread = metadata["BgCellSpread"].as_f64();
+
     ImageMetrics {
         image_id,
         timestamp,
@@ -822,6 +1069,8 @@ pub fn extract_metrics_from_metadata(
         eccentricity,
         snr,
         background,
+        dead_cell_fraction,
+        bg_cell_spread,
     }
 }
 
@@ -838,6 +1087,8 @@ mod tests {
             eccentricity: None,
             snr: None,
             background: None,
+            dead_cell_fraction: None,
+            bg_cell_spread: None,
         }
     }
 
@@ -858,6 +1109,29 @@ mod tests {
             eccentricity: Some(ecc),
             snr: Some(snr),
             background: Some(bg),
+            dead_cell_fraction: None,
+            bg_cell_spread: None,
+        }
+    }
+
+    fn make_spatial_image(
+        id: i32,
+        ts: i64,
+        stars: f64,
+        hfr: f64,
+        dead: f64,
+        bg_spread: f64,
+    ) -> ImageMetrics {
+        ImageMetrics {
+            image_id: id,
+            timestamp: Some(ts),
+            star_count: Some(stars),
+            hfr: Some(hfr),
+            eccentricity: None,
+            snr: None,
+            background: None,
+            dead_cell_fraction: Some(dead),
+            bg_cell_spread: Some(bg_spread),
         }
     }
 
@@ -1264,6 +1538,7 @@ mod tests {
                     eccentricity: None,
                     snr: None,
                     background: None,
+                    spatial_coverage: None,
                 },
                 details: None,
             },
@@ -1278,6 +1553,7 @@ mod tests {
                     eccentricity: None,
                     snr: None,
                     background: None,
+                    spatial_coverage: None,
                 },
                 details: None,
             },
@@ -1292,6 +1568,7 @@ mod tests {
                     eccentricity: None,
                     snr: None,
                     background: None,
+                    spatial_coverage: None,
                 },
                 details: Some("Cloud".to_string()),
             },
@@ -1316,6 +1593,7 @@ mod tests {
                 eccentricity: 0.0,
                 snr: 0.0,
                 background: 0.0,
+                spatial: 0.0,
             },
             ..Default::default()
         };
@@ -1352,13 +1630,15 @@ mod tests {
             eccentricity: 1.0,
             snr: 0.0,
             background: 0.0,
+            spatial: 0.0,
         };
         let normalized = weights.normalized();
         let sum = normalized.star_count
             + normalized.hfr
             + normalized.eccentricity
             + normalized.snr
-            + normalized.background;
+            + normalized.background
+            + normalized.spatial;
         assert!(
             (sum - 1.0).abs() < 1e-10,
             "Normalized weights should sum to 1.0, got {}",
@@ -1370,11 +1650,21 @@ mod tests {
     }
 
     #[test]
-    fn test_weight_normalization_already_normalized() {
+    fn test_weight_normalization_of_defaults_preserves_ratios() {
+        // Defaults sum to 1.20 (the spatial weight is additive so that the
+        // relative ratios of the original five metrics are unchanged);
+        // normalized() rescales to 1.0.
         let weights = QualityWeights::default();
         let normalized = weights.normalized();
-        assert!((normalized.star_count - 0.30).abs() < 1e-10);
-        assert!((normalized.hfr - 0.25).abs() < 1e-10);
+        let sum = normalized.star_count
+            + normalized.hfr
+            + normalized.eccentricity
+            + normalized.snr
+            + normalized.background
+            + normalized.spatial;
+        assert!((sum - 1.0).abs() < 1e-10, "sum should be 1.0, got {}", sum);
+        // star_count : hfr ratio (0.30 : 0.25) preserved
+        assert!((normalized.star_count / normalized.hfr - 0.30 / 0.25).abs() < 1e-10);
     }
 
     #[test]
@@ -1385,6 +1675,7 @@ mod tests {
             eccentricity: 0.0,
             snr: 0.0,
             background: 0.0,
+            spatial: 0.0,
         };
         let normalized = weights.normalized();
         let defaults = QualityWeights::default();
@@ -1447,5 +1738,260 @@ mod tests {
         ];
         let best = best_value(&images, |i| i.hfr, false);
         assert_eq!(best, Some(2.3));
+    }
+
+    #[test]
+    fn test_subtle_occlusion_flagged_despite_stable_global_metrics() {
+        // Modeled on NGC 6820 2026-06-30 frames 0004-0011: global star count
+        // and HFR stay within normal variation while an occluder kills 15% of
+        // the frame's grid cells.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            min_sequence_length: 3,
+            ..Default::default()
+        });
+
+        let mut images: Vec<ImageMetrics> = (0..8)
+            .map(|i| make_spatial_image(i, i as i64 * 300, 4700.0, 2.55, 0.02, 0.05))
+            .collect();
+        // Frame 6-7: corner occluded; star count barely moves.
+        images[6] = make_spatial_image(6, 6 * 300, 4650.0, 2.60, 0.17, 0.10);
+        images[7] = make_spatial_image(7, 7 * 300, 4600.0, 2.58, 0.21, 0.12);
+
+        let results = analyzer.analyze(&images, 1, "NGC 6820", "R");
+        let seq = &results[0];
+
+        assert_eq!(
+            seq.images[6].category,
+            Some(IssueCategory::PossibleObstruction),
+            "subtle occlusion should classify as obstruction, got {:?} ({:?})",
+            seq.images[6].category,
+            seq.images[6].details,
+        );
+        assert_eq!(
+            seq.images[7].category,
+            Some(IssueCategory::PossibleObstruction)
+        );
+        // Clean frames stay unclassified.
+        assert_eq!(seq.images[3].category, None);
+        // Occluded frames must score below clean frames.
+        assert!(seq.images[6].quality_score < seq.images[3].quality_score);
+    }
+
+    #[test]
+    fn test_progressive_occlusion_does_not_normalize_into_baseline() {
+        // "Boiling frog": an occluder drifts across the field over many
+        // frames (tree line as the target sets). Every frame is only a bit
+        // worse than the previous one; without baseline freezing the EWMA
+        // absorbs the trend and late frames stop being flagged.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            min_sequence_length: 3,
+            ..Default::default()
+        });
+
+        // 5 clean frames, then dead fraction grows 0.08 per frame while star
+        // count decays, mirroring the validated sequences.
+        let mut images: Vec<ImageMetrics> = (0..5)
+            .map(|i| make_spatial_image(i, i as i64 * 300, 4700.0, 2.55, 0.02, 0.05))
+            .collect();
+        for j in 0..10 {
+            let dead = (0.02 + 0.08 * (j + 1) as f64).min(1.0);
+            let stars = 4700.0 * (1.0 - dead * 0.9);
+            images.push(make_spatial_image(
+                5 + j,
+                (5 + j as i64) * 300,
+                stars,
+                2.6,
+                dead,
+                0.05 + dead * 0.3,
+            ));
+        }
+
+        let results = analyzer.analyze(&images, 1, "NGC 6820", "R");
+        let seq = &results[0];
+
+        // Every frame from onset (dead >= 0.15) must be classified.
+        for r in seq.images.iter().skip(6) {
+            assert!(
+                r.category.is_some(),
+                "progressively occluded frame {} lost its classification (score {:.2})",
+                r.image_id,
+                r.quality_score
+            );
+        }
+        // Late, heavily occluded frames must score badly even though each
+        // step was small.
+        let last = seq.images.last().unwrap();
+        assert!(
+            last.quality_score < 0.3,
+            "fully occluded frame should score < 0.3, got {:.2}",
+            last.quality_score
+        );
+    }
+
+    #[test]
+    fn test_single_frame_dead_cell_blip_is_not_obstruction() {
+        // Regression (code review): a one-frame transient (wind gust, wisp)
+        // that nudges the dead-cell fraction past the rise threshold must not
+        // classify an otherwise excellent frame - occlusion needs neighbor
+        // corroboration.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            min_sequence_length: 3,
+            ..Default::default()
+        });
+
+        let mut images: Vec<ImageMetrics> = (0..10)
+            .map(|i| make_spatial_image(i, i as i64 * 300, 4700.0, 2.55, 0.02, 0.05))
+            .collect();
+        // Single-frame blip: 0.02 -> 0.12 -> 0.02.
+        images[5] = make_spatial_image(5, 5 * 300, 4650.0, 2.56, 0.12, 0.06);
+
+        let results = analyzer.analyze(&images, 1, "NGC 6820", "R");
+        let seq = &results[0];
+        assert_ne!(
+            seq.images[5].category,
+            Some(IssueCategory::PossibleObstruction),
+            "single-frame blip must not be classified as obstruction: {:?}",
+            seq.images[5].details
+        );
+    }
+
+    #[test]
+    fn test_permanent_condition_change_does_not_flag_rest_of_session() {
+        // Regression (code review): a lasting shift (moonrise, light dome)
+        // freezes the EWMA baselines at most baseline_freeze_max_frames;
+        // after that the new regime is accepted and later frames are neither
+        // temporally anomalous nor classified as clouds/obstruction.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            min_sequence_length: 3,
+            ..Default::default()
+        });
+
+        let mut images: Vec<ImageMetrics> = (0..5)
+            .map(|i| make_image(i, i as i64 * 300, 4000.0, 2.5))
+            .collect();
+        // Permanent 40% star-count drop for 30 frames (no spatial data -
+        // this is the DB-metadata-only path).
+        for j in 0..30 {
+            images.push(make_image(5 + j, (5 + j as i64) * 300, 2400.0, 2.5));
+        }
+
+        let results = analyzer.analyze(&images, 1, "test", "L");
+        let seq = &results[0];
+
+        for r in seq.images.iter().skip(25) {
+            assert!(
+                r.temporal_anomaly_score < 0.15,
+                "frame {} after regime re-establishment still anomalous ({:.2})",
+                r.image_id,
+                r.temporal_anomaly_score
+            );
+            assert!(
+                !matches!(
+                    r.category,
+                    Some(IssueCategory::LikelyClouds) | Some(IssueCategory::PossibleObstruction)
+                ),
+                "frame {} misclassified as {:?} after regime change",
+                r.image_id,
+                r.category
+            );
+        }
+    }
+
+    #[test]
+    fn test_stray_light_gradient_classified_as_sky_brightening() {
+        // Modeled on NGC 6820 2026-05-21 frames 0139-0141: background grid
+        // spread rises sharply before any stars are lost.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            min_sequence_length: 3,
+            ..Default::default()
+        });
+
+        let mut images: Vec<ImageMetrics> = (0..8)
+            .map(|i| make_spatial_image(i, i as i64 * 300, 3600.0, 2.55, 0.00, 0.05))
+            .collect();
+        images[7] = make_spatial_image(7, 7 * 300, 3550.0, 2.56, 0.00, 0.42);
+
+        let results = analyzer.analyze(&images, 1, "NGC 6820", "G");
+        let seq = &results[0];
+
+        assert_eq!(
+            seq.images[7].category,
+            Some(IssueCategory::SkyBrightening),
+            "stray-light gradient should classify as sky brightening, got {:?}",
+            seq.images[7].category
+        );
+    }
+
+    #[test]
+    fn test_clean_sequence_with_spatial_metrics_has_no_false_positives() {
+        // Clean-frame envelope from four validated nights: dead fraction
+        // jitters 0.00-0.04, bg spread 0.02-0.09.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            min_sequence_length: 3,
+            ..Default::default()
+        });
+
+        let images: Vec<ImageMetrics> = (0..20)
+            .map(|i| {
+                let jitter = (i % 3) as f64;
+                make_spatial_image(
+                    i,
+                    i as i64 * 300,
+                    4500.0 + jitter * 150.0,
+                    2.5 + jitter * 0.05,
+                    jitter * 0.02,
+                    0.03 + jitter * 0.02,
+                )
+            })
+            .collect();
+
+        let results = analyzer.analyze(&images, 1, "NGC 6820", "R");
+        let seq = &results[0];
+
+        for r in &seq.images {
+            assert_ne!(
+                r.category,
+                Some(IssueCategory::PossibleObstruction),
+                "clean frame {} misclassified as obstruction ({:?})",
+                r.image_id,
+                r.details
+            );
+        }
+        let poor = seq.images.iter().filter(|r| r.quality_score < 0.3).count();
+        assert_eq!(poor, 0, "clean sequence should have no poor frames");
+    }
+
+    #[test]
+    fn test_uniform_cloud_event_still_classified_as_clouds() {
+        // Clouds veil the frame uniformly: star count collapses everywhere,
+        // dead fraction stays low, background rises. Must NOT be classified
+        // as obstruction.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            min_sequence_length: 3,
+            ..Default::default()
+        });
+
+        let mut images: Vec<ImageMetrics> = (0..8)
+            .map(|i| {
+                let mut m = make_full_image(i, i as i64 * 300, 300.0, 2.5, 1200.0, 45.0, 0.35);
+                m.dead_cell_fraction = Some(0.02);
+                m.bg_cell_spread = Some(0.05);
+                m
+            })
+            .collect();
+        let mut cloud = make_full_image(6, 6 * 300, 100.0, 3.5, 1800.0, 15.0, 0.35);
+        cloud.dead_cell_fraction = Some(0.06); // uniform loss, few dead cells
+        cloud.bg_cell_spread = Some(0.08);
+        images[6] = cloud;
+
+        let results = analyzer.analyze(&images, 1, "test", "L");
+        let seq = &results[0];
+
+        assert_eq!(
+            seq.images[6].category,
+            Some(IssueCategory::LikelyClouds),
+            "uniform veiling should classify as clouds, got {:?}",
+            seq.images[6].category
+        );
     }
 }

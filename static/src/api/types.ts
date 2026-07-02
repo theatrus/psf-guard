@@ -246,8 +246,40 @@ export interface ImageQualityResult {
     eccentricity: number | null;
     snr: number | null;
     background: number | null;
+    /** Spatial star coverage (1 = whole frame, 0 = half+ of grid cells dead).
+     * Only populated when spatial metrics were computed from FITS files;
+     * DB-metadata-only analysis leaves it null. Optional for older servers. */
+    spatial_coverage?: number | null;
   };
   details: string | null;
+}
+
+export interface SpatialScanProgress {
+  running: boolean;
+  target_id: number | null;
+  filter_name: string | null;
+  total: number;
+  processed: number;
+  skipped_cached: number;
+  errors: number;
+  current_file: string | null;
+  started_at: number | null;
+  finished_at: number | null;
+  last_error: string | null;
+}
+
+export interface SpatialScanStatus {
+  /** POST: whether this request started a scan. GET: whether one is running. */
+  started: boolean;
+  progress: SpatialScanProgress;
+  /** Images with cached spatial metrics in this database. */
+  cached_count: number;
+}
+
+export interface SpatialScanRequest {
+  target_id: number;
+  filter_name?: string;
+  force?: boolean;
 }
 
 export interface SequenceSummary {

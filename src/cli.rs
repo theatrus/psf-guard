@@ -266,6 +266,56 @@ pub enum Commands {
         verbose: bool,
     },
 
+    /// Screen FITS light frames for occlusion, clouds and stray light
+    ScreenFits {
+        /// Path to a FITS file or directory (searched recursively)
+        path: String,
+
+        /// Star detection algorithm to use (nina, hocusfocus)
+        #[arg(long, default_value = "hocusfocus")]
+        detector: String,
+
+        /// Output format (table, csv, json)
+        #[arg(short, long, default_value = "table")]
+        format: String,
+
+        /// Quality score below which a frame is rejected (0.0-1.0)
+        #[arg(long, default_value = "0.35")]
+        min_score: f64,
+
+        /// Rise in dead-cell fraction over baseline that flags occlusion
+        /// (0.0-1.0; lower = stricter). Clean-frame jitter is ~0.04.
+        #[arg(long, default_value = "0.08")]
+        dead_cell_rise: f64,
+
+        /// Worker threads for frame analysis (default: min(cores, 4))
+        #[arg(long)]
+        threads: Option<usize>,
+
+        /// Gap in minutes that splits an imaging session into sequences
+        #[arg(long, default_value = "60")]
+        session_gap: u64,
+
+        /// Write [Auto] rejections for REJECT verdicts into this scheduler DB
+        /// (registry slug or path to a .sqlite file); frames are matched by
+        /// FITS filename. Already-rejected frames are left untouched.
+        #[arg(long)]
+        regrade_db: Option<String>,
+
+        /// With --regrade-db: show what would change without writing
+        #[arg(long, requires = "regrade_db")]
+        dry_run: bool,
+
+        /// Registry file for resolving --regrade-db slugs (defaults to the
+        /// platform config location)
+        #[arg(long)]
+        registry: Option<String>,
+
+        /// Enable verbose debug output
+        #[arg(long, short)]
+        verbose: bool,
+    },
+
     /// Convert FITS to PNG with MTF stretch applied
     StretchToPng {
         /// Path to FITS file

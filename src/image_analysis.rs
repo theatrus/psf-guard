@@ -22,6 +22,13 @@ pub struct FitsImage {
     pub width: usize,
     pub height: usize,
     pub data: Vec<u16>, // Keep as 16-bit unsigned integers
+    /// Minimum raw (pre-BZERO) value of the source data; `data` is rescaled
+    /// so this maps to 0.
+    pub raw_min: f64,
+    /// Stored units per raw unit: `data = (raw - raw_min) * raw_scale`.
+    pub raw_scale: f64,
+    /// BZERO offset from the FITS header (0.0 when absent).
+    pub bzero: f64,
 }
 
 impl FitsImage {
@@ -176,8 +183,12 @@ impl FitsImage {
         let min = data_f64.iter().fold(f64::INFINITY, |a, &b| a.min(b));
         let max = data_f64.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
 
+        let scale = if max > min {
+            65535.0 / (max - min)
+        } else {
+            1.0
+        };
         let data_u16 = if max > min {
-            let scale = 65535.0 / (max - min);
             data_f64
                 .into_iter()
                 .map(|v| ((v - min) * scale).clamp(0.0, 65535.0) as u16)
@@ -190,7 +201,37 @@ impl FitsImage {
             width,
             height,
             data: data_u16,
+            raw_min: min,
+            raw_scale: scale,
+            bzero: Self::extract_bzero(path).unwrap_or(0.0),
         })
+    }
+
+    /// Extract the BZERO offset from the FITS header (commonly 32768 for
+    /// 16-bit unsigned camera data stored as signed integers).
+    fn extract_bzero(path: &Path) -> Option<f64> {
+        use fitrs::Fits;
+
+        let fits = Fits::open(path).ok()?;
+        let hdu = fits.get(0)?;
+        let value = hdu.value("BZERO")?;
+        let value_str = format!("{:?}", value);
+        let number_regex = regex::Regex::new(
+            r"(?:FloatingPoint|Integer|RealFloatingNumber|IntegerNumber)\(([^)]+)\)",
+        )
+        .unwrap();
+        number_regex
+            .captures(&value_str)
+            .and_then(|c| c[1].parse::<f64>().ok())
+    }
+
+    /// Map a value in stored (rescaled u16) units back to physical ADU.
+    ///
+    /// The stored data is per-frame min/max rescaled, so stored values are
+    /// NOT comparable across frames; physical ADU values are. Use this for
+    /// any cross-frame comparison of background or brightness levels.
+    pub fn stored_to_adu(&self, stored: f64) -> f64 {
+        stored / self.raw_scale + self.raw_min + self.bzero
     }
 
     /// Calculate basic statistics without star detection  

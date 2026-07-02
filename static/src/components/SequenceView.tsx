@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import { useSequenceAnalysis } from '../hooks/useSequenceAnalysis';
+import { useSpatialScan } from '../hooks/useSpatialScan';
 import { useGrading } from '../hooks/useGrading';
 import { useDbProjectTarget } from '../hooks/useUrlState';
 import UndoRedoToolbar from './UndoRedoToolbar';
@@ -40,6 +41,7 @@ export default function SequenceView() {
   const [threshold, setThreshold] = useState(0.5);
   const [selectedImages, setSelectedImages] = useState<Set<number>>(new Set());
   const [activeSequenceIndex, setActiveSequenceIndex] = useState(0);
+  const spatialScan = useSpatialScan(dbId, targetId ?? undefined, filterName);
 
   // Fetch targets for the project to allow selection
   const { data: targets = [] } = useQuery({
@@ -98,7 +100,7 @@ export default function SequenceView() {
     setSelectedImages(ids);
   }, [activeSequence, threshold]);
 
-  // Select contiguous runs of clouded/bad images
+  // Select contiguous runs of clouded/occluded/bad images
   const selectCloudedSequence = useCallback(() => {
     if (!activeSequence) return;
     const ids = new Set<number>();
@@ -106,7 +108,10 @@ export default function SequenceView() {
     const runBuffer: number[] = [];
 
     for (const img of activeSequence.images) {
-      const isBad = img.category === 'likely_clouds' || img.quality_score < 0.3;
+      const isBad =
+        img.category === 'likely_clouds' ||
+        img.category === 'possible_obstruction' ||
+        img.quality_score < 0.3;
       if (isBad) {
         inRun = true;
         runBuffer.push(img.image_id);
@@ -228,6 +233,36 @@ export default function SequenceView() {
             >
               {isAnalyzing ? 'Analyzing...' : 'Re-analyze'}
             </button>
+            <button
+              className="header-button"
+              onClick={() => spatialScan.start(undefined)}
+              disabled={spatialScan.isStarting || spatialScan.isRunning}
+              title="Analyze the FITS files on disk for partial occlusion (trees, dome, stray light) that global star counts miss. Takes a few seconds per frame; runs in the background."
+            >
+              {spatialScan.isRunning
+                ? `Scanning ${spatialScan.status?.progress.processed ?? 0}/${spatialScan.status?.progress.total ?? 0}...`
+                : 'Scan Occlusion'}
+            </button>
+            {spatialScan.isRunning && spatialScan.status?.progress.current_file && (
+              <span
+                className="spatial-scan-current"
+                style={{ color: 'var(--color-text-muted)', fontSize: '0.8rem' }}
+                title={spatialScan.status.progress.current_file}
+              >
+                {spatialScan.status.progress.current_file}
+              </span>
+            )}
+            {!spatialScan.isRunning &&
+              (spatialScan.status?.progress.errors ?? 0) > 0 &&
+              spatialScan.status?.progress.last_error && (
+                <span
+                  className="spatial-scan-errors"
+                  style={{ color: 'var(--color-warning)', fontSize: '0.8rem' }}
+                  title={spatialScan.status.progress.last_error}
+                >
+                  {spatialScan.status.progress.errors} scan errors
+                </span>
+              )}
           </div>
 
           <div className="sequence-controls-right">
@@ -511,6 +546,16 @@ function SequenceImageCard({
       </div>
       <div className="sequence-image-info">
         <span className="sequence-image-time">{formatDate(image?.acquired_date)}</span>
+        {quality.normalized_metrics.spatial_coverage != null &&
+          quality.normalized_metrics.spatial_coverage < 0.9 && (
+            <span
+              className="sequence-image-coverage"
+              style={{ color: 'var(--color-warning)', fontSize: '0.75rem' }}
+              title="Spatial star coverage from the occlusion scan (1.0 = stars across the whole frame)"
+            >
+              coverage {quality.normalized_metrics.spatial_coverage.toFixed(2)}
+            </span>
+          )}
         {quality.details && (
           <span className="sequence-image-details" title={quality.details}>
             {quality.details}

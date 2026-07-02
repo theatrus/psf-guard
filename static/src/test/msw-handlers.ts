@@ -28,10 +28,41 @@ const emptyList = {
 // `server.use(...)` overrides win for whatever the spec cares about; these
 // fill in the gaps so MSW's `onUnhandledRequest: 'error'` doesn't trip
 // every time a side-effect query fires.
+const idleSpatialScan = {
+  success: true,
+  data: {
+    started: false,
+    progress: {
+      running: false,
+      target_id: null,
+      filter_name: null,
+      total: 0,
+      processed: 0,
+      skipped_cached: 0,
+      errors: 0,
+      current_file: null,
+      started_at: null,
+      finished_at: null,
+      last_error: null,
+    },
+    cached_count: 0,
+  },
+  error: null,
+  status: 'ready',
+};
+
 export const handlers = [
   // Sequence analysis endpoint
   http.get('/api/db/:dbId/analysis/sequence', () => {
     return HttpResponse.json(emptySequenceAnalysis);
+  }),
+
+  // Spatial (occlusion) scan endpoints
+  http.get('/api/db/:dbId/analysis/spatial-scan', () => {
+    return HttpResponse.json(idleSpatialScan);
+  }),
+  http.post('/api/db/:dbId/analysis/spatial-scan', () => {
+    return HttpResponse.json(idleSpatialScan);
   }),
 
   // Image quality endpoint

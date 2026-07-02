@@ -350,11 +350,33 @@ pub struct SequenceAnalysisQuery {
     pub weight_eccentricity: Option<f64>,
     pub weight_snr: Option<f64>,
     pub weight_background: Option<f64>,
+    pub weight_spatial: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct SequenceAnalysisResponse {
     pub sequences: Vec<ScoredSequenceResponse>,
+}
+
+/// Request body for starting a spatial (occlusion) metrics scan.
+#[derive(Debug, Deserialize)]
+pub struct SpatialScanRequest {
+    pub target_id: i32,
+    pub filter_name: Option<String>,
+    /// Recompute images that already have cached metrics.
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// Status returned by both the scan-start and scan-progress endpoints.
+#[derive(Debug, Serialize)]
+pub struct SpatialScanStatusResponse {
+    /// POST: whether this request started a new scan. GET: whether a scan is
+    /// currently running.
+    pub started: bool,
+    pub progress: crate::server::spatial_scan::SpatialScanProgress,
+    /// Total number of images with cached spatial metrics in this database.
+    pub cached_count: usize,
 }
 
 #[derive(Debug, Serialize)]
