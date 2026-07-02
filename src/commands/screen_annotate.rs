@@ -32,6 +32,8 @@ pub(crate) struct AnnotationData {
     pub star_drop_cells: Vec<bool>,
     pub bg_rise_cells: Vec<bool>,
     pub bg_fall_cells: Vec<bool>,
+    /// Static glow cells (within-frame plane residual above threshold).
+    pub bg_glow_cells: Vec<bool>,
     pub caption_lines: Vec<String>,
 }
 
@@ -42,6 +44,7 @@ const ORANGE: Rgb<u8> = Rgb([245, 160, 40]);
 const MAGENTA: Rgb<u8> = Rgb([225, 80, 225]);
 const YELLOW: Rgb<u8> = Rgb([240, 230, 60]);
 const BLUE: Rgb<u8> = Rgb([80, 150, 255]);
+const CYAN: Rgb<u8> = Rgb([70, 210, 210]);
 const GRID_GRAY: Rgb<u8> = Rgb([90, 90, 90]);
 const TEXT_WHITE: Rgb<u8> = Rgb([230, 230, 230]);
 
@@ -117,13 +120,15 @@ pub(crate) fn render_annotated_frame(
                 .filter(|&r| r < 0.75);
 
             // Tint priority: dead (strongest evidence) > extinction >
-            // star-share drop.
+            // star-share drop > static glow.
             let tint = if at(&dead_cells, c) {
                 Some(RED)
             } else if extinct.is_some() {
                 Some(ORANGE)
             } else if at(&data.star_drop_cells, c) {
                 Some(MAGENTA)
+            } else if at(&data.bg_glow_cells, c) {
+                Some(CYAN)
             } else {
                 None
             };
@@ -163,6 +168,7 @@ pub(crate) fn render_annotated_frame(
         (MAGENTA, "STARDROP"),
         (YELLOW, "BGRISE"),
         (BLUE, "BGFALL"),
+        (CYAN, "GLOW"),
     ] {
         for dy in 0..12u32 {
             for dx in 0..12u32 {
@@ -363,6 +369,11 @@ mod tests {
             bg_fall_cells: {
                 let mut v = vec![false; 48];
                 v[20] = true; // blue border
+                v
+            },
+            bg_glow_cells: {
+                let mut v = vec![false; 48];
+                v[30] = true; // cyan tint
                 v
             },
             caption_lines: vec![

@@ -36,6 +36,17 @@ pub struct SpatialAnalysisConfig {
     /// Pixel subsampling stride used for per-cell background medians
     /// (default 4; medians are insensitive to this).
     pub background_subsample: usize,
+    /// A cell glows when its background exceeds the frame's own robust plane
+    /// model by this fraction of sky (default 0.025). Measured clean-frame
+    /// envelope across 4 nights / 2 filters: 0.014-0.021; static haze reads
+    /// 0.030-0.065.
+    pub glow_threshold: f64,
+    /// Additional absolute floor in ADU for the glow flag (default 30).
+    /// Narrowband frames have dark sky, so real diffuse nebulosity (measured
+    /// 19-22 ADU, mid-frame, same cells every night) reads as 4-5% of sky
+    /// and would false-flag on the relative threshold alone; true haze
+    /// measured 48-103 ADU. Rig/exposure-profile specific - tune per setup.
+    pub glow_min_adu: f64,
 }
 
 impl Default for SpatialAnalysisConfig {
@@ -46,6 +57,8 @@ impl Default for SpatialAnalysisConfig {
             dead_cell_ratio: 0.25,
             min_median_stars_per_cell: 3.0,
             background_subsample: 4,
+            glow_threshold: 0.025,
+            glow_min_adu: 30.0,
         }
     }
 }
@@ -105,6 +118,15 @@ pub struct SpatialMetrics {
     /// resolution (row-major). Input for transient errant-light detection.
     #[serde(default)]
     pub bg_cell_medians: Vec<f64>,
+    /// Largest positive deviation of any cell above the frame's own robust
+    /// plane model, as a fraction of sky. A STATIC localized glow - haze or
+    /// a lit occluder edge present from a sequence's first frame - never
+    /// trips the temporal detectors; this within-frame signal does.
+    #[serde(default)]
+    pub bg_glow_max: f64,
+    /// Cells exceeding `glow_threshold` (row-major; for annotation).
+    #[serde(default)]
+    pub bg_glow_cells: Vec<bool>,
 }
 
 impl SpatialMetrics {
@@ -155,6 +177,15 @@ pub fn compute_spatial_metrics(
         config.grid_rows,
     );
 
+    // Static glow: cells brighter than the frame's own robust plane model.
+    let (bg_glow_max, bg_glow_cells) = bg_glow(
+        &bg_cell_medians,
+        config.grid_cols,
+        config.grid_rows,
+        config.glow_threshold,
+        config.glow_min_adu,
+    );
+
     SpatialMetrics {
         grid_cols,
         grid_rows,
@@ -164,7 +195,45 @@ pub fn compute_spatial_metrics(
         bg_cell_max_dev,
         star_cell_counts,
         bg_cell_medians,
+        bg_glow_max,
+        bg_glow_cells,
     }
+}
+
+/// (max positive plane residual / sky over flagged cells, per-cell flags).
+///
+/// A cell flags only when its residual exceeds BOTH the relative threshold
+/// (fraction of sky) and the absolute ADU floor; the reported max covers
+/// flagged cells only, so downstream thresholds see 0.0 on frames where the
+/// structure is real nebulosity rather than glow.
+fn bg_glow(
+    cells: &[f64],
+    cols: usize,
+    rows: usize,
+    threshold: f64,
+    min_adu: f64,
+) -> (f64, Vec<bool>) {
+    let n = cols.max(1) * rows.max(1);
+    if cells.len() != n || cells.iter().all(|&c| c == 0.0) {
+        return (0.0, vec![false; n]);
+    }
+    let sky = median(cells).max(1.0);
+    let plane = crate::photometry::fit_plane_robust(cells, cols.max(1), rows.max(1));
+    let mut max_flagged = 0.0f64;
+    let flags: Vec<bool> = cells
+        .iter()
+        .zip(&plane)
+        .map(|(&c, &p)| {
+            let resid_adu = c - p;
+            let rel = resid_adu / sky;
+            let flagged = rel > threshold && resid_adu > min_adu;
+            if flagged {
+                max_flagged = max_flagged.max(rel);
+            }
+            flagged
+        })
+        .collect();
+    (max_flagged, flags)
 }
 
 /// Star counts binned at a fixed grid resolution (no coarsening).
@@ -542,6 +611,91 @@ mod tests {
             m.bg_cell_spread > 0.5,
             "expected large bg spread, got {}",
             m.bg_cell_spread
+        );
+    }
+
+    #[test]
+    fn static_corner_glow_is_detected() {
+        // A corner reading ~5% above the frame's own gradient (haze / lit
+        // occluder edge) must flag, since it is present in every frame and
+        // invisible to temporal baselines - and it stacks into artifacts.
+        let mut data = flat_frame(2000);
+        // Top-left corner cell region ~5% brighter.
+        for y in 0..H / 6 {
+            for x in 0..W / 8 {
+                data[y * W + x] = 2100;
+            }
+        }
+        let stars = stars_covering(1.0, 5);
+        let m = compute_spatial_metrics(
+            &stars,
+            &data,
+            W,
+            H,
+            &Default::default(),
+            &Default::default(),
+        );
+        assert!(
+            m.bg_glow_max > 0.03,
+            "corner glow should exceed threshold, got {}",
+            m.bg_glow_max
+        );
+        assert!(m.bg_glow_cells[0], "top-left cell should be flagged");
+        assert!(!m.bg_glow_cells[47], "opposite corner clean");
+    }
+
+    #[test]
+    fn narrowband_nebulosity_below_adu_floor_does_not_glow() {
+        // Real Ha nebulosity measured 19-22 ADU at mid-frame on dark (~450
+        // ADU) narrowband sky - 4-5% relative, but far below the 30 ADU
+        // floor. Must not flag as glow.
+        let mut data = flat_frame(450);
+        // Mid-frame cell +20 ADU (nebulosity).
+        let (cx0, cx1) = (3 * W / 8, 4 * W / 8);
+        let (cy0, cy1) = (2 * H / 6, 3 * H / 6);
+        for y in cy0..cy1 {
+            for x in cx0..cx1 {
+                data[y * W + x] = 470;
+            }
+        }
+        let stars = stars_covering(1.0, 5);
+        let m = compute_spatial_metrics(
+            &stars,
+            &data,
+            W,
+            H,
+            &Default::default(),
+            &Default::default(),
+        );
+        assert_eq!(
+            m.bg_glow_max, 0.0,
+            "20 ADU nebulosity must not read as glow"
+        );
+        assert!(m.bg_glow_cells.iter().all(|&f| !f));
+    }
+
+    #[test]
+    fn smooth_gradient_does_not_glow() {
+        // A pure linear sky gradient lives in the plane model: no glow.
+        let mut data = flat_frame(2000);
+        for y in 0..H {
+            for x in 0..W {
+                data[y * W + x] = (2000.0 + 200.0 * (x as f64 / W as f64)) as u16;
+            }
+        }
+        let stars = stars_covering(1.0, 5);
+        let m = compute_spatial_metrics(
+            &stars,
+            &data,
+            W,
+            H,
+            &Default::default(),
+            &Default::default(),
+        );
+        assert!(
+            m.bg_glow_max < 0.02,
+            "linear gradient must not read as glow, got {}",
+            m.bg_glow_max
         );
     }
 

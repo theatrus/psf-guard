@@ -124,6 +124,12 @@ pub struct ImageMetrics {
     /// blocking skyglow (affected regions read darker, not milky).
     #[serde(default)]
     pub bg_cell_fall_fraction: Option<f64>,
+    /// Largest positive within-frame deviation above the frame's own robust
+    /// plane model (fraction of sky). Catches STATIC localized glow - haze
+    /// or a lit occluder edge present from a sequence's first frame - which
+    /// temporal baselines can never see.
+    #[serde(default)]
+    pub bg_glow_max: Option<f64>,
 }
 
 /// Configurable weights for composite quality scoring.
@@ -275,6 +281,11 @@ pub struct SequenceAnalyzerConfig {
     /// errant light (per-cell temporal baseline, gradient-detrended).
     #[serde(default = "default_bg_rise_cells_threshold")]
     pub bg_rise_cells_threshold: f64,
+    /// Static within-frame glow (max positive robust-plane residual as a
+    /// fraction of sky) above which a frame is flagged for stray light.
+    /// Clean-frame envelope: 0.014-0.021; static haze: 0.030-0.065.
+    #[serde(default = "default_bg_glow_threshold")]
+    pub bg_glow_threshold: f64,
     /// Maximum consecutive frames the EWMA baselines stay frozen. A run of
     /// anomalous frames longer than this is accepted as a new steady state
     /// (moonrise, light dome) and the baselines re-seed from the current
@@ -321,6 +332,10 @@ fn default_bg_rise_cells_threshold() -> f64 {
     0.06
 }
 
+fn default_bg_glow_threshold() -> f64 {
+    0.025
+}
+
 impl Default for SequenceAnalyzerConfig {
     fn default() -> Self {
         Self {
@@ -342,6 +357,7 @@ impl Default for SequenceAnalyzerConfig {
             transparency_threshold: default_transparency_threshold(),
             star_drop_cells_threshold: default_star_drop_cells_threshold(),
             bg_rise_cells_threshold: default_bg_rise_cells_threshold(),
+            bg_glow_threshold: default_bg_glow_threshold(),
         }
     }
 }
@@ -828,6 +844,9 @@ impl SequenceAnalyzer {
                 .is_some_and(|t| t < self.config.transparency_threshold);
             let bg_cell_rise = images[i].bg_cell_rise_fraction.unwrap_or(0.0);
             let errant_light = bg_cell_rise > self.config.bg_rise_cells_threshold;
+            // Static glow is invisible to every temporal detector when the
+            // haze is present from the sequence's first frame.
+            let static_glow = images[i].bg_glow_max.unwrap_or(0.0) > self.config.bg_glow_threshold;
 
             if results[i].quality_score >= 0.7
                 && !occluded
@@ -835,6 +854,7 @@ impl SequenceAnalyzer {
                 && !small_cloud
                 && !veiled
                 && !errant_light
+                && !static_glow
             {
                 continue; // No classification needed for good frames
             }
@@ -893,6 +913,14 @@ impl SequenceAnalyzer {
                     Some(format!(
                         "Transient localized background rise over {:.0}% of the field that the frame's own gradient does not explain, with stable stars. Errant light (headlights, flashlight, neighbor lighting).",
                         bg_cell_rise * 100.0,
+                    )),
+                )
+            } else if static_glow && star_stable {
+                (
+                    Some(IssueCategory::SkyBrightening),
+                    Some(format!(
+                        "Static localized glow: a region reads {:.0}% above the frame's own gradient model in every frame of the session. Haze or a lit occluder edge at the field boundary.",
+                        images[i].bg_glow_max.unwrap_or(0.0) * 100.0
                     )),
                 )
             } else if stray_gradient && star_stable {
@@ -1222,6 +1250,7 @@ pub fn extract_metrics_from_metadata(
         star_cell_drop_fraction: None,
         bg_cell_rise_fraction: None,
         bg_cell_fall_fraction: None,
+        bg_glow_max: None,
     }
 }
 
@@ -1245,6 +1274,7 @@ mod tests {
             star_cell_drop_fraction: None,
             bg_cell_rise_fraction: None,
             bg_cell_fall_fraction: None,
+            bg_glow_max: None,
         }
     }
 
@@ -1272,6 +1302,7 @@ mod tests {
             star_cell_drop_fraction: None,
             bg_cell_rise_fraction: None,
             bg_cell_fall_fraction: None,
+            bg_glow_max: None,
         }
     }
 
@@ -1298,6 +1329,7 @@ mod tests {
             star_cell_drop_fraction: None,
             bg_cell_rise_fraction: None,
             bg_cell_fall_fraction: None,
+            bg_glow_max: None,
         }
     }
 
@@ -1421,6 +1453,33 @@ mod tests {
             "transient localized bg rise should classify as errant light: {:?}",
             seq.images[4].details
         );
+    }
+
+    #[test]
+    fn test_static_glow_classified_even_when_present_all_session() {
+        // Glow present from frame 1 (lit haze at the field edge): temporal
+        // detectors see nothing, the within-frame signal still flags it.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            min_sequence_length: 3,
+            ..Default::default()
+        });
+        let images: Vec<ImageMetrics> = (0..8)
+            .map(|i| {
+                let mut m = make_photometric_image(i, i as i64 * 300, 1.0, 0.0, 0.0, 0.0);
+                m.bg_glow_max = Some(0.045); // static, every frame
+                m
+            })
+            .collect();
+
+        let results = analyzer.analyze(&images, 1, "NGC 6820", "R");
+        for r in &results[0].images {
+            assert_eq!(
+                r.category,
+                Some(IssueCategory::SkyBrightening),
+                "static glow should classify every affected frame: {:?}",
+                r.details
+            );
+        }
     }
 
     #[test]

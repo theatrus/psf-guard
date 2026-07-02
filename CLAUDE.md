@@ -163,11 +163,21 @@ Design, phases, tracker: [REJECT_ARCHIVE_PLAN.md](./REJECT_ARCHIVE_PLAN.md).
   light; static gradients live in the plane + baseline). Fluxes MUST be
   ADU (`stored_flux / raw_scale`) — stored units are per-frame rescaled.
   Sessions split on the 60-min gap and group by (filter, exposure) before
-  matching. `screen-fits --annotate <dir>` renders a diagnostic PNG per
+  matching. **Static glow** (`bg_glow_max` in spatial_analysis): max positive
+  residual above the frame's own robust-plane model — catches haze/lit
+  occluder edges present from a session's FIRST frame, which every temporal
+  detector is structurally blind to. Flag requires BOTH >2.5% of sky AND
+  >30 ADU (`glow_min_adu`): real Ha nebulosity measures 19-22 ADU mid-frame
+  (4-5% of dark narrowband sky) and must not flag; measured haze is 48-103
+  ADU at field edges. WARN-only (SkyBrightening) — glow frames stack into
+  artifacts, so they surface for pre-integration review. Rig-signature
+  cross-series baselining is the robust future extension.
+  `screen-fits --annotate <dir>` renders a diagnostic PNG per
   WARN/REJECT frame (`src/commands/screen_annotate.rs`): grid overlay with
   RED = dead cells, ORANGE = localized extinction (labeled with the cell's
   flux ratio), MAGENTA = transient star-share drop, YELLOW = background
-  rise, plus a caption strip (verdict/score/metrics/details, built-in
+  rise, BLUE = background fall (dark occluder), CYAN = static glow, plus a
+  caption strip (verdict/score/metrics/details, built-in
   bitmap font — no font-file dependency). Classification: localized extinction / star-cell drop →
   `LikelyClouds` (small cloud, REJECT; single-frame allowed — multi-star
   evidence), transparency < 0.8 → `LikelyClouds` (veil), bg-cell rise with

@@ -2467,6 +2467,9 @@ fn merge_spatial_metrics(
         if metrics.bg_cell_spread.is_none() {
             metrics.bg_cell_spread = Some(entry.bg_cell_spread);
         }
+        if metrics.bg_glow_max.is_none() && entry.bg_glow_max > 0.0 {
+            metrics.bg_glow_max = Some(entry.bg_glow_max);
+        }
     }
 }
 

@@ -59,6 +59,10 @@ pub struct StoredSpatialMetrics {
     /// Exposure seconds from the FITS header (photometry groups by exposure).
     #[serde(default)]
     pub exposure_s: Option<f64>,
+    /// Static within-frame glow (max positive robust-plane residual as a
+    /// fraction of sky).
+    #[serde(default)]
+    pub bg_glow_max: f64,
 }
 
 /// Stars kept per stored catalog: matching quality saturates well below full
@@ -348,6 +352,7 @@ fn compute_one(
         width: fits.width,
         height: fits.height,
         exposure_s: headers.exposure_s,
+        bg_glow_max: spatial.bg_glow_max,
     })
 }
 
@@ -403,6 +408,7 @@ mod tests {
             width: 0,
             height: 0,
             exposure_s: None,
+            bg_glow_max: 0.0,
         }
     }
 

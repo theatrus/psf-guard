@@ -67,6 +67,8 @@ struct FrameRecord {
     catalog: FrameCatalog,
     star_cell_counts: Vec<f64>,
     bg_cell_medians: Vec<f64>,
+    bg_glow_max: f64,
+    bg_glow_cells: Vec<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -108,6 +110,7 @@ struct ScreenResult {
     star_cell_drop_fraction: Option<f64>,
     bg_cell_rise_fraction: Option<f64>,
     bg_cell_fall_fraction: Option<f64>,
+    bg_glow_max: Option<f64>,
     quality_score: Option<f64>,
     category: Option<IssueCategory>,
     details: Option<String>,
@@ -228,6 +231,11 @@ fn annotate_flagged(
                 first.push_str(&format!(" FALL={:.0}%", fall * 100.0));
             }
         }
+        if let Some(glow) = r.bg_glow_max.filter(|&v| v > 0.0) {
+            if let Some(first) = caption.get_mut(1) {
+                first.push_str(&format!(" GLOW={:.1}%", glow * 100.0));
+            }
+        }
         if let Some(details) = &r.details {
             caption.push(details.chars().take(110).collect());
         }
@@ -242,6 +250,7 @@ fn annotate_flagged(
             star_drop_cells: sig.map(|s| s.star_drop_cells.clone()).unwrap_or_default(),
             bg_rise_cells: sig.map(|s| s.bg_rise_cells.clone()).unwrap_or_default(),
             bg_fall_cells: sig.map(|s| s.bg_fall_cells.clone()).unwrap_or_default(),
+            bg_glow_cells: record.bg_glow_cells.clone(),
             caption_lines: caption,
         };
 
@@ -536,6 +545,8 @@ fn analyze_one_frame(path: &Path, options: &ScreenOptions) -> Result<FrameRecord
         catalog,
         star_cell_counts: spatial.star_cell_counts,
         bg_cell_medians: spatial.bg_cell_medians,
+        bg_glow_max: spatial.bg_glow_max,
+        bg_glow_cells: spatial.bg_glow_cells,
     })
 }
 
@@ -724,6 +735,7 @@ fn score_records(
                 star_cell_drop_fraction: None,
                 bg_cell_rise_fraction: None,
                 bg_cell_fall_fraction: None,
+                bg_glow_max: (r.bg_glow_max > 0.0).then_some(r.bg_glow_max),
                 quality_score: None,
                 category: None,
                 details: None,
@@ -783,6 +795,7 @@ fn score_records(
                     star_cell_drop_fraction: sig.and_then(|s| s.star_cell_drop_fraction),
                     bg_cell_rise_fraction: sig.and_then(|s| s.bg_cell_rise_fraction),
                     bg_cell_fall_fraction: sig.and_then(|s| s.bg_cell_fall_fraction),
+                    bg_glow_max: (r.bg_glow_max > 0.0).then_some(r.bg_glow_max),
                 }
             })
             .collect();
@@ -921,11 +934,11 @@ fn truncate_name(name: &str, max: usize) -> String {
 
 fn print_csv(results: &[ScreenResult]) {
     println!(
-        "File,Filter,ExposureS,Timestamp,Stars,AvgHFR,MedianADU,DeadCellFraction,StarUniformity,BgCellSpread,BgCellMaxDev,Transparency,ExtinctionCellFraction,StarCellDropFraction,BgCellRiseFraction,BgCellFallFraction,Score,Category,Verdict"
+        "File,Filter,ExposureS,Timestamp,Stars,AvgHFR,MedianADU,DeadCellFraction,StarUniformity,BgCellSpread,BgCellMaxDev,Transparency,ExtinctionCellFraction,StarCellDropFraction,BgCellRiseFraction,BgCellFallFraction,BgGlowMax,Score,Category,Verdict"
     );
     for r in results {
         println!(
-            "{},{},{},{},{},{:.3},{:.1},{},{},{:.4},{:.4},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{:.3},{:.1},{},{},{:.4},{:.4},{},{},{},{},{},{},{},{},{}",
             r.file,
             r.filter,
             r.exposure_s.map(|e| e.to_string()).unwrap_or_default(),
@@ -954,6 +967,9 @@ fn print_csv(results: &[ScreenResult]) {
                 .map(|v| format!("{:.4}", v))
                 .unwrap_or_default(),
             r.bg_cell_fall_fraction
+                .map(|v| format!("{:.4}", v))
+                .unwrap_or_default(),
+            r.bg_glow_max
                 .map(|v| format!("{:.4}", v))
                 .unwrap_or_default(),
             r.quality_score

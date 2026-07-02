@@ -705,7 +705,7 @@ pub fn bg_shift_cells(
 /// Robust plane fit: least squares, then refit excluding cells whose
 /// residual is a hard outlier, so a localized bright/dark patch cannot tilt
 /// the plane for the rest of the frame.
-fn fit_plane_robust(values: &[f64], cols: usize, rows: usize) -> Vec<f64> {
+pub(crate) fn fit_plane_robust(values: &[f64], cols: usize, rows: usize) -> Vec<f64> {
     let first = fit_plane_masked(values, cols, rows, None);
     let mut resid: Vec<f64> = values.iter().zip(&first).map(|(v, p)| v - p).collect();
     let mut abs: Vec<f64> = resid.iter().map(|r| r.abs()).collect();

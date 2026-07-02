@@ -151,6 +151,7 @@ fn stored_entry(image_id: i32, filename: &str, dead: f64, bg_spread: f64) -> Sto
         width: 0,
         height: 0,
         exposure_s: None,
+        bg_glow_max: 0.0,
     }
 }
 
