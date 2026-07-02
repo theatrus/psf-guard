@@ -407,125 +407,109 @@ impl StatisticalGrader {
             return rejections;
         }
 
-        // Track baseline establishment
-        let mut baseline_established = false;
-        let mut _baseline_start_idx = 0;
-        let mut baseline_values: Vec<f64> = Vec::new();
+        // Star count drop is the primary cloud/occlusion indicator: validated
+        // occlusion sequences (NGC 6820 2026-06) show star counts collapsing
+        // while HFR of the surviving stars stays flat until the frame is
+        // mostly gone. HFR rise runs as a second, independent check; an image
+        // flagged by both is reported once (first reason wins).
+        let star_rejections = self.detect_baseline_anomalies(
+            images,
+            |img| img.star_count.map(|s| s as f64),
+            /* drop_is_bad = */ true,
+            "Cloud Detection (Stars)",
+            |value, ratio, baseline| {
+                format!(
+                    "Star count {:.0} is {:.0}% below baseline {:.0} (threshold: {:.0}%)",
+                    value,
+                    ratio * 100.0,
+                    baseline,
+                    self.config.cloud_threshold * 100.0
+                )
+            },
+        );
+        let hfr_rejections = self.detect_baseline_anomalies(
+            images,
+            |img| img.hfr,
+            /* drop_is_bad = */ false,
+            "Cloud Detection",
+            |value, ratio, baseline| {
+                format!(
+                    "HFR {:.3} is {:.0}% above baseline {:.3} (threshold: {:.0}%)",
+                    value,
+                    ratio * 100.0,
+                    baseline,
+                    self.config.cloud_threshold * 100.0
+                )
+            },
+        );
 
-        // We'll use HFR as primary indicator for clouds (higher HFR = worse seeing/clouds)
-        // Calculate rolling median for each position
-        for (i, image) in images.iter().enumerate() {
-            if let Some(current_hfr) = image.hfr {
-                // Skip if no baseline yet
-                if !baseline_established {
-                    baseline_values.push(current_hfr);
-
-                    // Need enough images to establish baseline
-                    if baseline_values.len() >= self.config.cloud_baseline_count {
-                        baseline_established = true;
-                        _baseline_start_idx = i + 1;
-                    }
-                    continue;
-                }
-
-                // Calculate baseline median
-                let mut sorted_baseline = baseline_values.clone();
-                sorted_baseline.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                let baseline_median = if sorted_baseline.len().is_multiple_of(2) {
-                    let mid = sorted_baseline.len() / 2;
-                    (sorted_baseline[mid - 1] + sorted_baseline[mid]) / 2.0
-                } else {
-                    sorted_baseline[sorted_baseline.len() / 2]
-                };
-
-                // Check if current value represents a sudden rise (cloud event)
-                let increase_ratio = (current_hfr - baseline_median) / baseline_median;
-
-                if increase_ratio > self.config.cloud_threshold {
-                    // Cloud detected - reject this and following images until new baseline
-                    rejections.push(StatisticalRejection {
-                        image_id: image.id,
-                        reason: "Cloud Detection".to_string(),
-                        details: format!(
-                            "HFR {:.3} is {:.0}% above baseline {:.3} (threshold: {:.0}%)",
-                            current_hfr,
-                            increase_ratio * 100.0,
-                            baseline_median,
-                            self.config.cloud_threshold * 100.0
-                        ),
-                    });
-
-                    // Reset baseline establishment
-                    baseline_established = false;
-                    baseline_values.clear();
-                    baseline_values.push(current_hfr);
-                } else {
-                    // Update rolling baseline - remove oldest, add newest
-                    if baseline_values.len() >= self.config.cloud_baseline_count {
-                        baseline_values.remove(0);
-                    }
-                    baseline_values.push(current_hfr);
-                }
+        let mut rejected_ids = std::collections::HashSet::new();
+        for rejection in star_rejections.into_iter().chain(hfr_rejections) {
+            if rejected_ids.insert(rejection.image_id) {
+                rejections.push(rejection);
             }
         }
 
-        // Also check star count drops as secondary indicator
-        if rejections.is_empty() {
-            baseline_established = false;
-            baseline_values.clear();
+        rejections
+    }
 
-            for (i, image) in images.iter().enumerate() {
-                if let Some(current_stars) = image.star_count {
-                    let current_stars_f64 = current_stars as f64;
+    /// Rolling-median anomaly detection over one metric. The baseline is
+    /// seeded from the first `cloud_baseline_count` frames and then only
+    /// updated with frames that are within the threshold: an anomalous frame
+    /// never enters the baseline, so a multi-frame cloud/occlusion event
+    /// keeps being rejected instead of becoming its own baseline after the
+    /// first hit.
+    fn detect_baseline_anomalies(
+        &self,
+        images: &[&ImageStatistics],
+        metric: impl Fn(&ImageStatistics) -> Option<f64>,
+        drop_is_bad: bool,
+        reason: &str,
+        details: impl Fn(f64, f64, f64) -> String,
+    ) -> Vec<StatisticalRejection> {
+        let mut rejections = Vec::new();
+        let mut baseline_values: Vec<f64> = Vec::new();
+        let mut baseline_established = false;
 
-                    if !baseline_established {
-                        baseline_values.push(current_stars_f64);
+        for image in images {
+            let Some(value) = metric(image) else {
+                continue;
+            };
 
-                        if baseline_values.len() >= self.config.cloud_baseline_count {
-                            baseline_established = true;
-                            _baseline_start_idx = i + 1;
-                        }
-                        continue;
-                    }
-
-                    // Calculate baseline median
-                    let mut sorted_baseline = baseline_values.clone();
-                    sorted_baseline.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                    let baseline_median = if sorted_baseline.len().is_multiple_of(2) {
-                        let mid = sorted_baseline.len() / 2;
-                        (sorted_baseline[mid - 1] + sorted_baseline[mid]) / 2.0
-                    } else {
-                        sorted_baseline[sorted_baseline.len() / 2]
-                    };
-
-                    // For star count, a drop indicates clouds
-                    let decrease_ratio = (baseline_median - current_stars_f64) / baseline_median;
-
-                    if decrease_ratio > self.config.cloud_threshold {
-                        rejections.push(StatisticalRejection {
-                            image_id: image.id,
-                            reason: "Cloud Detection (Stars)".to_string(),
-                            details: format!(
-                                "Star count {} is {:.0}% below baseline {:.0} (threshold: {:.0}%)",
-                                current_stars,
-                                decrease_ratio * 100.0,
-                                baseline_median,
-                                self.config.cloud_threshold * 100.0
-                            ),
-                        });
-
-                        // Reset baseline
-                        baseline_established = false;
-                        baseline_values.clear();
-                        baseline_values.push(current_stars_f64);
-                    } else {
-                        // Update rolling baseline
-                        if baseline_values.len() >= self.config.cloud_baseline_count {
-                            baseline_values.remove(0);
-                        }
-                        baseline_values.push(current_stars_f64);
-                    }
+            if !baseline_established {
+                baseline_values.push(value);
+                if baseline_values.len() >= self.config.cloud_baseline_count {
+                    baseline_established = true;
                 }
+                continue;
+            }
+
+            let baseline_median = {
+                let mut sorted = baseline_values.clone();
+                self.calculate_median(&mut sorted)
+            };
+            if baseline_median.abs() < f64::EPSILON {
+                continue;
+            }
+
+            let bad_ratio = if drop_is_bad {
+                (baseline_median - value) / baseline_median
+            } else {
+                (value - baseline_median) / baseline_median
+            };
+
+            if bad_ratio > self.config.cloud_threshold {
+                rejections.push(StatisticalRejection {
+                    image_id: image.id,
+                    reason: reason.to_string(),
+                    details: details(value, bad_ratio, baseline_median),
+                });
+                // Anomalous frame: baseline deliberately NOT updated.
+            } else {
+                if baseline_values.len() >= self.config.cloud_baseline_count {
+                    baseline_values.remove(0);
+                }
+                baseline_values.push(value);
             }
         }
 
@@ -560,6 +544,93 @@ pub fn parse_image_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_stats(id: i32, hfr: Option<f64>, star_count: Option<i32>) -> ImageStatistics {
+        ImageStatistics {
+            id,
+            target_id: 1,
+            target_name: "test".to_string(),
+            filter_name: "L".to_string(),
+            hfr,
+            star_count,
+            exposure_time: "300".to_string(),
+            original_status: 0,
+            metadata_json: String::new(),
+        }
+    }
+
+    fn cloud_grader() -> StatisticalGrader {
+        StatisticalGrader::new(StatisticalGradingConfig {
+            enable_hfr_analysis: false,
+            enable_star_count_analysis: false,
+            enable_distribution_analysis: false,
+            enable_cloud_detection: true,
+            cloud_threshold: 0.20,
+            cloud_baseline_count: 3,
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn test_cloud_sequence_rejects_every_frame_of_a_long_event() {
+        // Regression: the old implementation reset the rolling baseline with
+        // the anomalous frame's own value, so only the first frame of a
+        // multi-frame cloud/occlusion event was rejected.
+        let grader = cloud_grader();
+        let mut images: Vec<ImageStatistics> = (0..5)
+            .map(|i| make_stats(i, Some(2.5), Some(1000)))
+            .collect();
+        for i in 5..10 {
+            images.push(make_stats(i, Some(2.6), Some(300)));
+        }
+        let refs: Vec<&ImageStatistics> = images.iter().collect();
+        let rejections = grader.check_cloud_sequence(&refs);
+
+        let rejected: std::collections::HashSet<i32> =
+            rejections.iter().map(|r| r.image_id).collect();
+        for id in 5..10 {
+            assert!(
+                rejected.contains(&id),
+                "frame {} of the cloud event should be rejected (got {:?})",
+                id,
+                rejected
+            );
+        }
+        assert!(!rejected.contains(&2), "clean baseline frame rejected");
+    }
+
+    #[test]
+    fn test_cloud_sequence_checks_stars_even_when_hfr_fires() {
+        // Regression: the old implementation only checked star counts when
+        // the HFR pass found nothing at all.
+        let grader = cloud_grader();
+        let mut images: Vec<ImageStatistics> = (0..4)
+            .map(|i| make_stats(i, Some(2.5), Some(1000)))
+            .collect();
+        // Frame 4: HFR spike only. Frame 5: star drop only (HFR normal).
+        images.push(make_stats(4, Some(3.5), Some(1000)));
+        images.push(make_stats(5, Some(2.5), Some(400)));
+
+        let refs: Vec<&ImageStatistics> = images.iter().collect();
+        let rejections = grader.check_cloud_sequence(&refs);
+        let rejected: std::collections::HashSet<i32> =
+            rejections.iter().map(|r| r.image_id).collect();
+
+        assert!(rejected.contains(&4), "HFR spike frame should be rejected");
+        assert!(rejected.contains(&5), "star drop frame should be rejected");
+        // No double-reporting of a single image.
+        assert_eq!(rejections.len(), rejected.len());
+    }
+
+    #[test]
+    fn test_cloud_sequence_clean_run_has_no_rejections() {
+        let grader = cloud_grader();
+        let images: Vec<ImageStatistics> = (0..10)
+            .map(|i| make_stats(i, Some(2.5 + (i % 2) as f64 * 0.1), Some(1000 + i * 10)))
+            .collect();
+        let refs: Vec<&ImageStatistics> = images.iter().collect();
+        assert!(grader.check_cloud_sequence(&refs).is_empty());
+    }
 
     #[test]
     fn test_statistical_grading_config_default() {

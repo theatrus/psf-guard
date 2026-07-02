@@ -142,24 +142,26 @@ pub fn detect_stars_hocus_focus(
     );
 
     // Debug output
-    eprintln!(
+    crate::debug_detection!(
         "Debug HocusFocus: noise_sigma: {:.3}, background_mean: {:.3}",
-        noise_estimate.sigma, noise_estimate.background_mean
+        noise_estimate.sigma,
+        noise_estimate.background_mean
     );
 
     // Step 5: Binarize structure map using noise threshold
     let median = calculate_median(&structure_map);
     let threshold = median + params.noise_clipping_multiplier * noise_estimate.sigma;
 
-    eprintln!(
+    crate::debug_detection!(
         "Debug HocusFocus: median: {:.3}, threshold: {:.3}",
-        median, threshold
+        median,
+        threshold
     );
     let mut binary_map = binarize(&structure_map, threshold);
 
     // Debug: Count non-zero pixels in binary map
     let non_zero = binary_map.iter().filter(|&&x| x).count();
-    eprintln!(
+    crate::debug_detection!(
         "Debug HocusFocus: Binary map has {} non-zero pixels ({:.2}%)",
         non_zero,
         non_zero as f64 / binary_map.len() as f64 * 100.0
@@ -182,7 +184,7 @@ pub fn detect_stars_hocus_focus(
             }
         };
         let eroded_count = binary_map.iter().filter(|&&x| x).count();
-        eprintln!(
+        crate::debug_detection!(
             "Debug HocusFocus: After erosion: {} non-zero pixels ({:.2}%)",
             eroded_count,
             eroded_count as f64 / binary_map.len() as f64 * 100.0
@@ -191,7 +193,7 @@ pub fn detect_stars_hocus_focus(
 
     // Step 6: Find star candidates
     let candidates = find_star_candidates(&binary_map, width, height, params);
-    eprintln!(
+    crate::debug_detection!(
         "Debug HocusFocus: Found {} star candidates",
         candidates.len()
     );
@@ -205,7 +207,7 @@ pub fn detect_stars_hocus_focus(
         params,
         &noise_estimate,
     );
-    eprintln!("Debug HocusFocus: {} stars passed validation", stars.len());
+    crate::debug_detection!("Debug HocusFocus: {} stars passed validation", stars.len());
 
     // Calculate statistics
     let average_hfr = if !stars.is_empty() {
@@ -345,14 +347,14 @@ fn create_structure_map(
     let above_50 = structure_map.iter().filter(|&&v| v > 50.0).count();
     let above_100 = structure_map.iter().filter(|&&v| v > 100.0).count();
 
-    eprintln!(
+    crate::debug_detection!(
         "Debug structure_map: min={:.1}, max={:.1}, non_zero={} ({:.1}%)",
         min,
         max,
         non_zero,
         non_zero as f64 / structure_map.len() as f64 * 100.0
     );
-    eprintln!(
+    crate::debug_detection!(
         "  Above 10: {} ({:.1}%), Above 50: {} ({:.1}%), Above 100: {} ({:.1}%)",
         above_10,
         above_10 as f64 / structure_map.len() as f64 * 100.0,
@@ -610,9 +612,12 @@ fn find_star_candidates(
             // Check size constraints BEFORE clearing the map
             if star_bounds.2 < params.min_star_size || star_bounds.3 < params.min_star_size {
                 too_small += 1;
-                eprintln!(
+                crate::debug_detection!(
                     "  Structure too small: {}x{} at ({},{})",
-                    star_bounds.2, star_bounds.3, star_bounds.0, star_bounds.1
+                    star_bounds.2,
+                    star_bounds.3,
+                    star_bounds.0,
+                    star_bounds.1
                 );
                 // Still need to clear to avoid re-processing
                 for sy in star_bounds.1..(star_bounds.1 + star_bounds.3).min(height) {
@@ -625,9 +630,12 @@ fn find_star_candidates(
 
             if star_bounds.2 > params.max_star_size || star_bounds.3 > params.max_star_size {
                 too_large += 1;
-                eprintln!(
+                crate::debug_detection!(
                     "  Structure too large: {}x{} at ({},{})",
-                    star_bounds.2, star_bounds.3, star_bounds.0, star_bounds.1
+                    star_bounds.2,
+                    star_bounds.3,
+                    star_bounds.0,
+                    star_bounds.1
                 );
                 // Still need to clear to avoid re-processing
                 for sy in star_bounds.1..(star_bounds.1 + star_bounds.3).min(height) {
@@ -659,7 +667,7 @@ fn find_star_candidates(
         }
     }
 
-    eprintln!(
+    crate::debug_detection!(
         "Debug star scanning: total_structures={}, too_small={}, too_large={}, candidates={}",
         total_structures,
         too_small,

@@ -50,6 +50,9 @@ mod tests {
             data: image.data.clone(),
             width: image.width,
             height: image.height,
+            raw_min: 0.0,
+            raw_scale: 1.0,
+            bzero: 0.0,
         };
         let stats = fits.calculate_basic_statistics();
         let stretch_params = StretchParameters::default();

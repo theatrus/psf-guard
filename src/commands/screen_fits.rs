@@ -1,0 +1,601 @@
+//! Screen a directory of FITS light frames for occlusion, clouds and stray
+//! light without needing a scheduler database.
+//!
+//! Per frame: star detection (positions included), grid-based spatial metrics
+//! (dead-cell fraction, background spread) and image statistics in physical
+//! ADU. Frames are grouped by (filter, exposure) from FITS headers, ordered
+//! by DATE-OBS, and run through the `SequenceAnalyzer` so both absolute
+//! (spatial) and sequence-relative (temporal) signals contribute. Prints a
+//! per-frame verdict: OK / WARN / REJECT.
+
+use crate::hocus_focus_star_detection::{detect_stars_hocus_focus, HocusFocusParams};
+use crate::image_analysis::FitsImage;
+use crate::mtf_stretch::{stretch_image, StretchParameters};
+use crate::nina_star_detection::{
+    detect_stars_with_original, NoiseReduction, StarDetectionParams, StarSensitivity,
+};
+use crate::sequence_analysis::{
+    ImageMetrics, IssueCategory, SequenceAnalyzer, SequenceAnalyzerConfig,
+};
+use crate::spatial_analysis::{compute_spatial_metrics, PixelCalibration, SpatialAnalysisConfig};
+use anyhow::Result;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+
+#[derive(Debug, Clone)]
+pub struct ScreenOptions {
+    pub detector: String,
+    pub format: String,
+    pub min_score: f64,
+    pub dead_cell_rise: f64,
+    pub threads: Option<usize>,
+    pub session_gap_minutes: u64,
+}
+
+#[derive(Debug, Clone)]
+struct FrameRecord {
+    path: PathBuf,
+    filter: String,
+    exposure_s: Option<f64>,
+    timestamp: Option<i64>,
+    star_count: usize,
+    avg_hfr: f64,
+    median_adu: f64,
+    dead_cell_fraction: Option<f64>,
+    star_uniformity: Option<f64>,
+    bg_cell_spread: f64,
+    bg_cell_max_dev: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+enum Verdict {
+    Ok,
+    Warn,
+    Reject,
+}
+
+impl std::fmt::Display for Verdict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Verdict::Ok => write!(f, "OK"),
+            Verdict::Warn => write!(f, "WARN"),
+            Verdict::Reject => write!(f, "REJECT"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct ScreenResult {
+    file: String,
+    filter: String,
+    exposure_s: Option<f64>,
+    timestamp: Option<i64>,
+    star_count: usize,
+    avg_hfr: f64,
+    median_adu: f64,
+    dead_cell_fraction: Option<f64>,
+    star_uniformity: Option<f64>,
+    bg_cell_spread: f64,
+    bg_cell_max_dev: f64,
+    quality_score: Option<f64>,
+    category: Option<IssueCategory>,
+    details: Option<String>,
+    verdict: Verdict,
+}
+
+pub fn screen_fits(path: &str, options: &ScreenOptions) -> Result<()> {
+    let dir = Path::new(path);
+    let files = collect_fits_files(dir)?;
+    if files.is_empty() {
+        return Err(anyhow::anyhow!(
+            "No FITS files found under: {}",
+            dir.display()
+        ));
+    }
+    eprintln!("Screening {} FITS frames...", files.len());
+
+    let records = analyze_frames(&files, options)?;
+    let results = score_records(records, options);
+
+    // Sort for output: filter, then timestamp.
+    let mut results = results;
+    results.sort_by(|a, b| {
+        (a.filter.as_str(), a.timestamp.unwrap_or(0))
+            .cmp(&(b.filter.as_str(), b.timestamp.unwrap_or(0)))
+    });
+
+    match options.format.as_str() {
+        "json" => print_json(&results)?,
+        "csv" => print_csv(&results),
+        _ => print_table(&results),
+    }
+
+    Ok(())
+}
+
+fn collect_fits_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    if dir.is_file() {
+        return Ok(vec![dir.to_path_buf()]);
+    }
+    if !dir.is_dir() {
+        return Err(anyhow::anyhow!(
+            "Path does not exist or is not accessible: {}",
+            dir.display()
+        ));
+    }
+    let mut files = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for entry in std::fs::read_dir(&d)? {
+            let entry = entry?;
+            let p = entry.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("fits") || e.eq_ignore_ascii_case("fit"))
+            {
+                files.push(p);
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+/// Analyze all frames, in parallel worker threads.
+fn analyze_frames(files: &[PathBuf], options: &ScreenOptions) -> Result<Vec<FrameRecord>> {
+    let threads = options
+        .threads
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+                .min(4)
+        })
+        .max(1);
+
+    let next = AtomicUsize::new(0);
+    let done = AtomicUsize::new(0);
+    let records: Mutex<Vec<FrameRecord>> = Mutex::new(Vec::with_capacity(files.len()));
+    let total = files.len();
+
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                if i >= total {
+                    break;
+                }
+                let path = &files[i];
+                match analyze_one_frame(path, options) {
+                    Ok(record) => {
+                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                        eprintln!(
+                            "[{}/{}] {}: {} stars, hfr {:.2}, dead {}, bg spread {:.3}",
+                            n,
+                            total,
+                            path.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
+                            record.star_count,
+                            record.avg_hfr,
+                            record
+                                .dead_cell_fraction
+                                .map(|d| format!("{:.0}%", d * 100.0))
+                                .unwrap_or_else(|| "n/a".to_string()),
+                            record.bg_cell_spread,
+                        );
+                        records.lock().unwrap().push(record);
+                    }
+                    Err(e) => {
+                        done.fetch_add(1, Ordering::Relaxed);
+                        eprintln!("Error analyzing {}: {}", path.display(), e);
+                    }
+                }
+            });
+        }
+    });
+
+    Ok(records.into_inner().unwrap())
+}
+
+fn analyze_one_frame(path: &Path, options: &ScreenOptions) -> Result<FrameRecord> {
+    let headers = extract_headers(path);
+    let fits = FitsImage::from_file(path)?;
+    let stats = fits.calculate_basic_statistics();
+
+    let (star_count, avg_hfr, positions) = detect_stars(&fits, &stats, &options.detector)?;
+
+    let calibration = PixelCalibration {
+        adu_offset: fits.raw_min + fits.bzero,
+        adu_per_stored: 1.0 / fits.raw_scale,
+    };
+    let spatial = compute_spatial_metrics(
+        &positions,
+        &fits.data,
+        fits.width,
+        fits.height,
+        &calibration,
+        &SpatialAnalysisConfig::default(),
+    );
+
+    Ok(FrameRecord {
+        path: path.to_path_buf(),
+        filter: headers.filter.unwrap_or_else(|| "unknown".to_string()),
+        exposure_s: headers.exposure_s,
+        timestamp: headers.timestamp,
+        star_count,
+        avg_hfr,
+        median_adu: fits.stored_to_adu(stats.median),
+        dead_cell_fraction: spatial.star_dead_cell_fraction,
+        star_uniformity: spatial.star_uniformity,
+        bg_cell_spread: spatial.bg_cell_spread,
+        bg_cell_max_dev: spatial.bg_cell_max_dev,
+    })
+}
+
+/// (star_count, average_hfr, star centroid positions)
+type DetectionSummary = (usize, f64, Vec<(f64, f64)>);
+
+fn detect_stars(
+    fits: &FitsImage,
+    stats: &crate::image_analysis::ImageStatistics,
+    detector: &str,
+) -> Result<DetectionSummary> {
+    match detector.to_lowercase().as_str() {
+        "nina" => {
+            let params = StarDetectionParams {
+                sensitivity: StarSensitivity::Normal,
+                noise_reduction: NoiseReduction::None,
+                use_roi: false,
+            };
+            let stretch_params = StretchParameters::default();
+            let stretched = stretch_image(
+                &fits.data,
+                stats,
+                stretch_params.factor,
+                stretch_params.black_clipping,
+            );
+            let result = detect_stars_with_original(
+                &stretched,
+                &fits.data,
+                fits.width,
+                fits.height,
+                &params,
+            );
+            let positions = result.star_list.iter().map(|s| s.position).collect();
+            Ok((result.star_list.len(), result.average_hfr, positions))
+        }
+        "hocusfocus" => {
+            let params = HocusFocusParams::default();
+            let result = detect_stars_hocus_focus(&fits.data, fits.width, fits.height, &params);
+            let positions = result.stars.iter().map(|s| s.position).collect();
+            Ok((result.stars.len(), result.average_hfr, positions))
+        }
+        other => Err(anyhow::anyhow!("Unknown detector: {}", other)),
+    }
+}
+
+#[derive(Debug, Default)]
+struct FrameHeaders {
+    filter: Option<String>,
+    exposure_s: Option<f64>,
+    timestamp: Option<i64>,
+}
+
+/// Extract filter, exposure and observation time from the FITS header.
+fn extract_headers(path: &Path) -> FrameHeaders {
+    use fitrs::Fits;
+
+    let mut out = FrameHeaders::default();
+    let Ok(fits) = Fits::open(path) else {
+        return out;
+    };
+    let Some(hdu) = fits.get(0) else {
+        return out;
+    };
+
+    let string_regex = regex::Regex::new(r#"CharacterString\("([^"]*)"\)"#).unwrap();
+    let number_regex =
+        regex::Regex::new(r"(?:FloatingPoint|RealFloatingNumber|IntegerNumber|Integer)\(([^)]+)\)")
+            .unwrap();
+
+    let get_string = |keys: &[&str]| -> Option<String> {
+        for key in keys {
+            if let Some(v) = hdu.value(key) {
+                let s = format!("{:?}", v);
+                if let Some(c) = string_regex.captures(&s) {
+                    return Some(c[1].trim().to_string());
+                }
+            }
+        }
+        None
+    };
+    let get_number = |keys: &[&str]| -> Option<f64> {
+        for key in keys {
+            if let Some(v) = hdu.value(key) {
+                let s = format!("{:?}", v);
+                if let Some(c) = number_regex.captures(&s) {
+                    if let Ok(n) = c[1].parse::<f64>() {
+                        return Some(n);
+                    }
+                }
+            }
+        }
+        None
+    };
+
+    out.filter = get_string(&["FILTER", "FILTERNAME"]);
+    out.exposure_s = get_number(&["EXPTIME", "EXPOSURE"]);
+    out.timestamp = get_string(&["DATE-OBS", "DATE-LOC"]).and_then(|s| parse_fits_datetime(&s));
+    out
+}
+
+/// Parse a FITS DATE-OBS style timestamp ("2026-07-01T05:40:25.6971960")
+/// into epoch seconds. Fractional seconds beyond nanoseconds are truncated.
+fn parse_fits_datetime(s: &str) -> Option<i64> {
+    let s = s.trim();
+    // chrono handles at most 9 fractional digits; N.I.N.A. writes 7.
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
+        return Some(dt.and_utc().timestamp());
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.timestamp());
+    }
+    None
+}
+
+/// Group frames into (filter, exposure) sequences, run the sequence analyzer,
+/// and attach verdicts.
+fn score_records(records: Vec<FrameRecord>, options: &ScreenOptions) -> Vec<ScreenResult> {
+    let config = SequenceAnalyzerConfig {
+        session_gap_minutes: options.session_gap_minutes,
+        dead_cell_rise_threshold: options.dead_cell_rise,
+        ..Default::default()
+    };
+    let analyzer = SequenceAnalyzer::new(config.clone());
+
+    // Group by (filter, exposure to the whole second): star counts are not
+    // comparable across filters or exposure lengths.
+    let mut groups: BTreeMap<(String, i64), Vec<usize>> = BTreeMap::new();
+    for (idx, r) in records.iter().enumerate() {
+        let exp_key = r.exposure_s.map(|e| e.round() as i64).unwrap_or(-1);
+        groups
+            .entry((r.filter.clone(), exp_key))
+            .or_default()
+            .push(idx);
+    }
+
+    let mut results: Vec<Option<ScreenResult>> = records
+        .iter()
+        .map(|r| {
+            Some(ScreenResult {
+                file: r
+                    .path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("?")
+                    .to_string(),
+                filter: r.filter.clone(),
+                exposure_s: r.exposure_s,
+                timestamp: r.timestamp,
+                star_count: r.star_count,
+                avg_hfr: r.avg_hfr,
+                median_adu: r.median_adu,
+                dead_cell_fraction: r.dead_cell_fraction,
+                star_uniformity: r.star_uniformity,
+                bg_cell_spread: r.bg_cell_spread,
+                bg_cell_max_dev: r.bg_cell_max_dev,
+                quality_score: None,
+                category: None,
+                details: None,
+                verdict: Verdict::Ok,
+            })
+        })
+        .collect();
+
+    for ((filter, _exp), indices) in &groups {
+        let metrics: Vec<ImageMetrics> = indices
+            .iter()
+            .map(|&idx| {
+                let r = &records[idx];
+                ImageMetrics {
+                    image_id: idx as i32,
+                    timestamp: r.timestamp,
+                    star_count: Some(r.star_count as f64),
+                    hfr: (r.avg_hfr > 0.0).then_some(r.avg_hfr),
+                    eccentricity: None,
+                    snr: None,
+                    background: Some(r.median_adu),
+                    dead_cell_fraction: r.dead_cell_fraction,
+                    bg_cell_spread: Some(r.bg_cell_spread),
+                }
+            })
+            .collect();
+
+        for seq in analyzer.analyze(&metrics, 0, "screen", filter) {
+            for img in seq.images {
+                let idx = img.image_id as usize;
+                if let Some(res) = results[idx].as_mut() {
+                    res.quality_score = Some(img.quality_score);
+                    res.category = img.category.clone();
+                    res.details = img.details.clone();
+                    res.verdict = verdict_for(&img.quality_score, &img.category, options);
+                }
+            }
+        }
+    }
+
+    results.into_iter().flatten().collect()
+}
+
+fn verdict_for(score: &f64, category: &Option<IssueCategory>, options: &ScreenOptions) -> Verdict {
+    let rejectable = matches!(
+        category,
+        Some(IssueCategory::PossibleObstruction) | Some(IssueCategory::LikelyClouds)
+    );
+    if *score < options.min_score || rejectable {
+        Verdict::Reject
+    } else if category.is_some() || *score < options.min_score + 0.15 {
+        Verdict::Warn
+    } else {
+        Verdict::Ok
+    }
+}
+
+fn category_label(category: &Option<IssueCategory>) -> &'static str {
+    match category {
+        Some(IssueCategory::LikelyClouds) => "clouds",
+        Some(IssueCategory::PossibleObstruction) => "obstruction",
+        Some(IssueCategory::FocusDrift) => "focus-drift",
+        Some(IssueCategory::TrackingError) => "tracking",
+        Some(IssueCategory::WindShake) => "wind",
+        Some(IssueCategory::SkyBrightening) => "sky-gradient",
+        Some(IssueCategory::UnknownDegradation) => "unknown",
+        None => "-",
+    }
+}
+
+fn print_table(results: &[ScreenResult]) {
+    println!(
+        "{:<52} {:>6} {:>6} {:>6} {:>7} {:>6} {:>8} {:>6} {:>13} {:>7}",
+        "File",
+        "Filter",
+        "Stars",
+        "HFR",
+        "MedADU",
+        "Dead%",
+        "BgSpread",
+        "Score",
+        "Category",
+        "Verdict"
+    );
+    println!("{}", "-".repeat(126));
+    for r in results {
+        println!(
+            "{:<52} {:>6} {:>6} {:>6.2} {:>7.0} {:>6} {:>8.3} {:>6} {:>13} {:>7}",
+            truncate_name(&r.file, 52),
+            r.filter,
+            r.star_count,
+            r.avg_hfr,
+            r.median_adu,
+            r.dead_cell_fraction
+                .map(|d| format!("{:.0}", d * 100.0))
+                .unwrap_or_else(|| "-".to_string()),
+            r.bg_cell_spread,
+            r.quality_score
+                .map(|s| format!("{:.2}", s))
+                .unwrap_or_else(|| "-".to_string()),
+            category_label(&r.category),
+            match r.verdict {
+                Verdict::Ok => "OK",
+                Verdict::Warn => "WARN",
+                Verdict::Reject => "REJECT",
+            },
+        );
+    }
+
+    let total = results.len();
+    let rejects = results
+        .iter()
+        .filter(|r| r.verdict == Verdict::Reject)
+        .count();
+    let warns = results
+        .iter()
+        .filter(|r| r.verdict == Verdict::Warn)
+        .count();
+    println!("{}", "-".repeat(126));
+    println!(
+        "{} frames: {} ok, {} warn, {} reject",
+        total,
+        total - rejects - warns,
+        warns,
+        rejects
+    );
+}
+
+fn truncate_name(name: &str, max: usize) -> String {
+    if name.len() <= max {
+        name.to_string()
+    } else {
+        format!("...{}", &name[name.len() - (max - 3)..])
+    }
+}
+
+fn print_csv(results: &[ScreenResult]) {
+    println!(
+        "File,Filter,ExposureS,Timestamp,Stars,AvgHFR,MedianADU,DeadCellFraction,StarUniformity,BgCellSpread,BgCellMaxDev,Score,Category,Verdict"
+    );
+    for r in results {
+        println!(
+            "{},{},{},{},{},{:.3},{:.1},{},{},{:.4},{:.4},{},{},{:?}",
+            r.file,
+            r.filter,
+            r.exposure_s.map(|e| e.to_string()).unwrap_or_default(),
+            r.timestamp.map(|t| t.to_string()).unwrap_or_default(),
+            r.star_count,
+            r.avg_hfr,
+            r.median_adu,
+            r.dead_cell_fraction
+                .map(|d| format!("{:.4}", d))
+                .unwrap_or_default(),
+            r.star_uniformity
+                .map(|u| format!("{:.4}", u))
+                .unwrap_or_default(),
+            r.bg_cell_spread,
+            r.bg_cell_max_dev,
+            r.quality_score
+                .map(|s| format!("{:.4}", s))
+                .unwrap_or_default(),
+            category_label(&r.category),
+            r.verdict,
+        );
+    }
+}
+
+fn print_json(results: &[ScreenResult]) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(results)?);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_nina_date_obs() {
+        // N.I.N.A. writes 7 fractional digits.
+        let ts = parse_fits_datetime("2026-07-01T05:40:25.6971960").unwrap();
+        assert_eq!(ts, 1782884425);
+        assert!(parse_fits_datetime("2024-01-15T22:00:00").is_some());
+        assert!(parse_fits_datetime("garbage").is_none());
+    }
+
+    #[test]
+    fn verdict_thresholds() {
+        let options = ScreenOptions {
+            detector: "hocusfocus".into(),
+            format: "table".into(),
+            min_score: 0.35,
+            dead_cell_rise: 0.08,
+            threads: None,
+            session_gap_minutes: 60,
+        };
+        assert_eq!(verdict_for(&0.9, &None, &options), Verdict::Ok);
+        assert_eq!(verdict_for(&0.2, &None, &options), Verdict::Reject);
+        assert_eq!(
+            verdict_for(&0.9, &Some(IssueCategory::PossibleObstruction), &options),
+            Verdict::Reject,
+            "occlusion rejects regardless of composite score"
+        );
+        assert_eq!(
+            verdict_for(&0.8, &Some(IssueCategory::SkyBrightening), &options),
+            Verdict::Warn,
+            "gradients are recoverable: warn, not reject"
+        );
+        assert_eq!(verdict_for(&0.45, &None, &options), Verdict::Warn);
+    }
+}

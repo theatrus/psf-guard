@@ -350,6 +350,7 @@ pub struct SequenceAnalysisQuery {
     pub weight_eccentricity: Option<f64>,
     pub weight_snr: Option<f64>,
     pub weight_background: Option<f64>,
+    pub weight_spatial: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]

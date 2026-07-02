@@ -97,6 +97,37 @@ Implementation tracker and design rationale: [MULTI_DB_PLAN.md](./MULTI_DB_PLAN.
 
 Design, phases, tracker: [REJECT_ARCHIVE_PLAN.md](./REJECT_ARCHIVE_PLAN.md).
 
+### Occlusion / cloud screening (2026-07)
+- **Spatial metrics**: `src/spatial_analysis.rs` — grid-based (8x6 default)
+  per-frame metrics: `star_dead_cell_fraction` (fraction of cells whose star
+  density collapsed; from detector star positions, ~free), `star_uniformity`,
+  `bg_cell_spread`/`bg_cell_max_dev` (per-cell background medians in physical
+  ADU). Rationale: partial occlusion (trees, dome, stray light) leaves global
+  star count/HFR within normal variation while killing part of the frame —
+  validated on NGC 6820 2026-05/06 sessions where HFR stayed ~2.6 until the
+  frame was >60% occluded. Clean-frame envelope across 4 nights/4 filters:
+  dead ≤ 0.04, bg_spread ≤ ~0.09.
+- **FitsImage ADU calibration**: `from_file` rescales each frame by its own
+  min/max, so stored values are NOT comparable across frames. `raw_min`,
+  `raw_scale`, `bzero` fields + `stored_to_adu()` recover physical ADU; any
+  cross-frame background comparison must use them.
+- **Sequence analyzer** (`src/sequence_analysis.rs`): `ImageMetrics` carries
+  `dead_cell_fraction` + `bg_cell_spread`; quality score has an absolute
+  spatial-coverage component (weight additive, missing-metric-safe for
+  DB-only flows); EWMA baseline freezes when a frame's temporal score exceeds
+  `baseline_freeze_threshold` and classification baselines skip anomalous
+  frames (prevents slow occlusions absorbing into the baseline);
+  `classify_issues` separates localized occlusion (dead-cell rise →
+  `PossibleObstruction`, fires even when the composite score is still good)
+  from uniform veiling (`LikelyClouds`) and stray-light gradients
+  (bg-spread rise → `SkyBrightening`).
+- **CLI**: `psf-guard screen-fits <dir>` — no DB needed. Detects stars +
+  spatial metrics per frame (parallel), groups by (filter, exposure) from
+  FITS headers, splits sessions, runs the sequence analyzer, prints per-frame
+  verdict OK/WARN/REJECT (`--min-score`, `--dead-cell-rise` strictness,
+  `--format table|csv|json`). Occlusion/cloud categories reject regardless of
+  composite score; sky-gradient warns (recoverable via gradient removal).
+
 ### Two-DB sync (2026-06)
 Lives in `src/commands/sync/` (`mod.rs` shared helpers + `grades.rs` + `pull.rs`).
 Two complementary single-direction kinds, structured as `sync <kind>` so more

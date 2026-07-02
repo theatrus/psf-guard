@@ -246,6 +246,10 @@ export interface ImageQualityResult {
     eccentricity: number | null;
     snr: number | null;
     background: number | null;
+    /** Spatial star coverage (1 = whole frame, 0 = half+ of grid cells dead).
+     * Only populated when spatial metrics were computed from FITS files;
+     * DB-metadata-only analysis leaves it null. Optional for older servers. */
+    spatial_coverage?: number | null;
   };
   details: string | null;
 }

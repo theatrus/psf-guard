@@ -1,5 +1,22 @@
 # Cloud Detection and Image Quality Scoring -- Design Document
 
+> **Addendum (2026-07): spatial occlusion screening.** The v1 non-goal
+> "per-pixel spatial analysis" has been revisited: validation against four
+> nights of progressively tree/stray-light-occluded frames (NGC 6820,
+> 2026-05/06) showed that global metrics cannot catch partial occlusion —
+> frames with 10-20% of the field occluded kept global star count and HFR
+> within normal variation, and HFR stayed flat until ~60% of the frame was
+> gone. `src/spatial_analysis.rs` now computes grid-based metrics per frame
+> (dead-cell fraction from detected star positions, background spread from
+> per-cell medians in physical ADU); `ImageMetrics` carries them, the
+> composite score includes an absolute spatial-coverage term, the EWMA
+> baseline freezes on anomalous frames so slow-growing occlusions cannot
+> normalize themselves into the baseline ("boiling frog"), and
+> `classify_issues` distinguishes localized occlusion (dead-cell rise) from
+> uniform cloud veiling and stray-light gradients (background-spread rise).
+> The `screen-fits` CLI command runs the whole pipeline over a directory of
+> FITS files with no database required.
+
 ## 1. Overview
 
 This document describes a multi-metric quality scoring system for PSF Guard that

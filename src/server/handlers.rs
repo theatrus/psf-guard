@@ -2097,6 +2097,7 @@ pub async fn analyze_sequence(
     let weight_eccentricity = params.weight_eccentricity;
     let weight_snr = params.weight_snr;
     let weight_background = params.weight_background;
+    let weight_spatial = params.weight_spatial;
 
     // Fetch images from database
     let (images_data, target_name) = {
@@ -2149,6 +2150,7 @@ pub async fn analyze_sequence(
             || weight_eccentricity.is_some()
             || weight_snr.is_some()
             || weight_background.is_some()
+            || weight_spatial.is_some()
         {
             config.quality_weights = QualityWeights {
                 star_count: weight_star_count.unwrap_or(config.quality_weights.star_count),
@@ -2156,6 +2158,7 @@ pub async fn analyze_sequence(
                 eccentricity: weight_eccentricity.unwrap_or(config.quality_weights.eccentricity),
                 snr: weight_snr.unwrap_or(config.quality_weights.snr),
                 background: weight_background.unwrap_or(config.quality_weights.background),
+                spatial: weight_spatial.unwrap_or(config.quality_weights.spatial),
             };
         }
 
