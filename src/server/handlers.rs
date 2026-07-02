@@ -2458,33 +2458,47 @@ pub async fn start_spatial_scan(
     let ctx_arc = ctx.0.clone();
     let target_id = req.target_id;
     tokio::task::spawn_blocking(move || {
-        // Resolve FITS paths first; unresolvable files count as errors.
-        let mut items = Vec::with_capacity(work.len());
-        for (img, target_name, file_only) in &work {
-            match find_fits_file(&ctx_arc, img, target_name, file_only) {
-                Ok(path) => items.push(crate::server::spatial_scan::ScanWorkItem {
-                    image_id: img.id,
-                    filename: file_only.clone(),
-                    fits_path: path,
-                }),
-                Err(_) => {
-                    let mut s = ctx_arc.spatial_metrics.write().unwrap();
-                    s.progress.processed += 1;
-                    s.progress.errors += 1;
-                    s.progress.last_error = Some(format!("{}: FITS file not found", file_only));
+        // Any panic below would be silently swallowed by tokio (the join
+        // handle is dropped) and leave the singleton wedged at running=true;
+        // catch it and always finalize.
+        let scan_body = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Resolve FITS paths first; unresolvable files count as errors.
+            let mut items = Vec::with_capacity(work.len());
+            for (img, target_name, file_only) in &work {
+                match find_fits_file(&ctx_arc, img, target_name, file_only) {
+                    Ok(path) => items.push(crate::server::spatial_scan::ScanWorkItem {
+                        image_id: img.id,
+                        filename: file_only.clone(),
+                        fits_path: path,
+                    }),
+                    Err(_) => {
+                        let mut s = ctx_arc.spatial_metrics.write().unwrap();
+                        s.progress.processed += 1;
+                        s.progress.errors += 1;
+                        s.progress.last_error = Some(format!("{}: FITS file not found", file_only));
+                    }
                 }
             }
+            crate::server::spatial_scan::run_scan(
+                &ctx_arc.spatial_metrics,
+                &ctx_arc.cache_dir_path,
+                &items,
+            );
+        }));
+        if scan_body.is_err() {
+            tracing::error!(
+                "📐 Spatial scan panicked for db={} target={}; finalizing progress",
+                ctx_arc.id,
+                target_id
+            );
+            crate::server::spatial_scan::finalize_scan(&ctx_arc.spatial_metrics);
+        } else {
+            tracing::info!(
+                "📐 Spatial scan finished for db={} target={}",
+                ctx_arc.id,
+                target_id
+            );
         }
-        crate::server::spatial_scan::run_scan(
-            &ctx_arc.spatial_metrics,
-            &ctx_arc.cache_dir_path,
-            &items,
-        );
-        tracing::info!(
-            "📐 Spatial scan finished for db={} target={}",
-            ctx_arc.id,
-            target_id
-        );
     });
 
     let (progress, cached_count) = scan::progress_snapshot(&ctx.spatial_metrics);

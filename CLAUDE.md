@@ -116,11 +116,20 @@ Design, phases, tracker: [REJECT_ARCHIVE_PLAN.md](./REJECT_ARCHIVE_PLAN.md).
   spatial-coverage component (weight additive, missing-metric-safe for
   DB-only flows); EWMA baseline freezes when a frame's temporal score exceeds
   `baseline_freeze_threshold` and classification baselines skip anomalous
-  frames (prevents slow occlusions absorbing into the baseline);
+  frames (prevents slow occlusions absorbing into the baseline). The freeze
+  is bounded: after `baseline_freeze_max_frames` (default 15) consecutive
+  anomalous frames the run is accepted as a new steady state and baselines
+  re-seed, so a permanent condition change (moonrise, light dome) cannot
+  flag the rest of a session — occluded frames stay penalized via the
+  absolute spatial term. Same bounded pattern in `grading.rs`
+  `check_cloud_sequence` (re-seeds after `2*cloud_baseline_count`).
   `classify_issues` separates localized occlusion (dead-cell rise →
-  `PossibleObstruction`, fires even when the composite score is still good)
-  from uniform veiling (`LikelyClouds`) and stray-light gradients
-  (bg-spread rise → `SkyBrightening`).
+  `PossibleObstruction`, fires even when the composite score is still good,
+  but requires an adjacent frame's dead fraction to corroborate so a
+  single-frame blip never rejects) from uniform veiling (`LikelyClouds`)
+  and stray-light gradients (bg-spread rise → `SkyBrightening`). Star-grid
+  metrics abstain (None) on uniformly sparse frames (narrowband/short subs
+  on slow rigs) instead of reporting phantom dead cells.
 - **CLI**: `psf-guard screen-fits <dir>` — no DB needed. Detects stars +
   spatial metrics per frame (parallel), groups by (filter, exposure) from
   FITS headers, splits sessions, runs the sequence analyzer, prints per-frame
@@ -129,12 +138,17 @@ Design, phases, tracker: [REJECT_ARCHIVE_PLAN.md](./REJECT_ARCHIVE_PLAN.md).
   composite score; sky-gradient warns (recoverable via gradient removal).
 - **DB regrade**: `screen-fits <dir> --regrade-db <slug-or-path> [--dry-run]`
   writes `[Auto] Obstruction/Clouds - score …` rejections for REJECT
-  verdicts into the scheduler DB (matched by FITS basename; ambiguous
-  matches skipped; already-Rejected rows untouched — but wrongly Accepted
-  ones ARE regraded, since N.I.N.A.'s rolling star-count baseline absorbs
-  slow occlusions and accepts frames that are >80% blocked; observed on the
-  real DB where 31/33 occluded 06-30 R frames were Accepted). Rejections
-  then flow through `move-rejects` as usual.
+  verdicts into the scheduler DB. Matching requires FITS basename AND
+  |DATE-OBS − acquireddate| ≤ 10 min (both UTC epoch; observed skew ~1s on
+  real N.I.N.A. data), so screening an unrelated directory can never
+  regrade the wrong row; ambiguous or timestamp-less matches are skipped
+  and counted. Already-Rejected rows untouched — but wrongly Accepted ones
+  ARE regraded, since N.I.N.A.'s rolling star-count baseline absorbs slow
+  occlusions and accepts frames that are >80% blocked (observed on the real
+  DB where 31/33 occluded 06-30 R frames were Accepted). Opens the DB
+  READ_WRITE without CREATE so a stale registry path errors instead of
+  leaving a junk sqlite file. Rejections then flow through `move-rejects`
+  as usual.
 - **Server/UI trigger**: `src/server/spatial_scan.rs` + `POST
   /api/db/{id}/analysis/spatial-scan` runs the same computation as a
   singleton per-DB background task (2 worker threads, ~8s/frame full-frame)

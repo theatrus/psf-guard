@@ -226,14 +226,20 @@ async fn scanned_metrics_merge_into_sequence_analysis() {
     let tmp = tempfile::tempdir().unwrap();
     let (app, state) = create_test_app(conn, tmp.path());
 
-    // Simulate a completed scan: clean frames except image 8, which has a
-    // heavily occluded frame (40% dead cells) that DB metadata alone would
-    // never reveal (its star count is normal).
+    // Simulate a completed scan: clean frames except images 8-9, which show
+    // a persistent occlusion (40%/35% dead cells) that DB metadata alone
+    // would never reveal (star counts are normal). Two consecutive elevated
+    // frames are required: single-frame blips are deliberately not
+    // classified (neighbor-corroboration rule).
     {
         let ctx = state.get_database("test").unwrap();
         let mut store = ctx.spatial_metrics.write().unwrap();
         for i in 0..10i32 {
-            let dead = if i == 7 { 0.40 } else { 0.02 };
+            let dead = match i {
+                7 => 0.40,
+                8 => 0.35,
+                _ => 0.02,
+            };
             let entry = stored_entry(i + 1, &format!("frame_{:04}.fits", i), dead, 0.05);
             store.metrics.insert(i + 1, entry);
         }

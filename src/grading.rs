@@ -470,6 +470,15 @@ impl StatisticalGrader {
         let mut rejections = Vec::new();
         let mut baseline_values: Vec<f64> = Vec::new();
         let mut baseline_established = false;
+        // Values of the current anomalous run, kept so a persistent condition
+        // change can be accepted as the new regime.
+        let mut anomalous_run: Vec<f64> = Vec::new();
+        // A run this long is treated as a new steady state rather than an
+        // ongoing event: the baseline re-seeds from the run's tail and
+        // rejection stops. Bounded on both sides: short events (clouds,
+        // several-frame occlusions) are rejected in full, while a permanent
+        // shift (moonrise, lasting haze) cannot reject the rest of the night.
+        let regime_change_after = self.config.cloud_baseline_count * 2;
 
         for image in images {
             let Some(value) = metric(image) else {
@@ -504,8 +513,21 @@ impl StatisticalGrader {
                     reason: reason.to_string(),
                     details: details(value, bad_ratio, baseline_median),
                 });
-                // Anomalous frame: baseline deliberately NOT updated.
+                // Anomalous frame: not folded into the baseline, so a
+                // multi-frame event keeps being rejected instead of becoming
+                // its own baseline after the first hit...
+                anomalous_run.push(value);
+                if anomalous_run.len() >= regime_change_after {
+                    // ...unless it persists long enough to be the new normal:
+                    // re-seed the baseline from the run's most recent values.
+                    let tail = anomalous_run
+                        .len()
+                        .saturating_sub(self.config.cloud_baseline_count);
+                    baseline_values = anomalous_run[tail..].to_vec();
+                    anomalous_run.clear();
+                }
             } else {
+                anomalous_run.clear();
                 if baseline_values.len() >= self.config.cloud_baseline_count {
                     baseline_values.remove(0);
                 }
@@ -597,6 +619,39 @@ mod tests {
             );
         }
         assert!(!rejected.contains(&2), "clean baseline frame rejected");
+    }
+
+    #[test]
+    fn test_cloud_sequence_adapts_to_permanent_regime_change() {
+        // Regression (code review): a lasting condition change (moonrise,
+        // persistent haze) must not reject the entire remainder of the
+        // sequence. After 2*cloud_baseline_count consecutive anomalous
+        // frames the baseline re-seeds and rejection stops.
+        let grader = cloud_grader(); // cloud_baseline_count = 3
+        let mut images: Vec<ImageStatistics> = (0..5)
+            .map(|i| make_stats(i, Some(2.5), Some(1000)))
+            .collect();
+        // Permanent 30% drop for the next 15 frames.
+        for i in 5..20 {
+            images.push(make_stats(i, Some(2.5), Some(700)));
+        }
+        let refs: Vec<&ImageStatistics> = images.iter().collect();
+        let rejections = grader.check_cloud_sequence(&refs);
+        let rejected: std::collections::HashSet<i32> =
+            rejections.iter().map(|r| r.image_id).collect();
+
+        // The onset of the shift is rejected (looks like an event)...
+        assert!(rejected.contains(&5));
+        assert!(rejected.contains(&10), "6th anomalous frame still rejected");
+        // ...but after the regime is accepted, later frames pass.
+        for id in 12..20 {
+            assert!(
+                !rejected.contains(&id),
+                "frame {} after regime re-establishment should not be rejected (got {:?})",
+                id,
+                rejected
+            );
+        }
     }
 
     #[test]

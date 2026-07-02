@@ -104,14 +104,27 @@ pub fn screen_fits(path: &str, options: &ScreenOptions) -> Result<()> {
     }
     eprintln!("Screening {} FITS frames...", files.len());
 
-    let records = analyze_frames(&files, options)?;
+    let mut records = analyze_frames(&files, options)?;
+    // Deterministic ordering regardless of worker completion order: sort by
+    // (timestamp, filename). Frames without a parseable DATE-OBS tie on
+    // timestamp and fall back to filename order (N.I.N.A. names sort
+    // chronologically), so sequence baselines - and therefore verdicts - are
+    // identical run to run. The analyzer's internal sort is stable, so this
+    // order survives into scoring.
+    records.sort_by(|a, b| {
+        (a.timestamp.unwrap_or(0), a.path.as_path())
+            .cmp(&(b.timestamp.unwrap_or(0), b.path.as_path()))
+    });
     let results = score_records(records, options);
 
     // Sort for output: filter, then timestamp.
     let mut results = results;
     results.sort_by(|a, b| {
-        (a.filter.as_str(), a.timestamp.unwrap_or(0))
-            .cmp(&(b.filter.as_str(), b.timestamp.unwrap_or(0)))
+        (a.filter.as_str(), a.timestamp.unwrap_or(0), a.file.as_str()).cmp(&(
+            b.filter.as_str(),
+            b.timestamp.unwrap_or(0),
+            b.file.as_str(),
+        ))
     });
 
     match options.format.as_str() {
@@ -146,26 +159,33 @@ fn apply_regrade(results: &[ScreenResult], db_arg: &str, options: &ScreenOptions
             .and_then(|p| DbRegistry::load_or_init(&p).ok()),
     };
     let db_path = resolve_db_path(registry.as_ref(), db_arg)?;
-    let conn = Connection::open(&db_path)?;
+    // READ_WRITE without CREATE: a stale registry path must error, not
+    // silently create an empty database file (especially under --dry-run).
+    let conn = Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
     let db = Database::new(&conn);
 
-    // Basename -> (image id, grading status), for every image in the DB.
-    // N.I.N.A. filenames embed a timestamp, so basenames are unique per
-    // capture; ambiguous matches are skipped defensively.
-    let mut by_basename: HashMap<String, Vec<(i32, i32)>> = HashMap::new();
+    // Basename -> (image id, grading status, acquireddate), for every image
+    // in the DB. N.I.N.A. filenames embed a timestamp, so basenames are
+    // unique per capture; ambiguous matches are skipped defensively.
+    let mut by_basename: HashMap<String, Vec<(i32, i32, Option<i64>)>> = HashMap::new();
     {
         let mut stmt = conn.prepare(
-            "SELECT Id, gradingStatus, json_extract(metadata, '$.FileName') FROM acquiredimage",
+            "SELECT Id, gradingStatus, acquireddate, json_extract(metadata, '$.FileName') \
+             FROM acquiredimage",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, i32>(0)?,
                 row.get::<_, i32>(1)?,
-                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, Option<String>>(3)?,
             ))
         })?;
         for row in rows {
-            let (id, status, filename) = row?;
+            let (id, status, acquired, filename) = row?;
             let Some(filename) = filename else { continue };
             let Some(base) = filename.split(&['\\', '/'][..]).next_back() else {
                 continue;
@@ -173,9 +193,15 @@ fn apply_regrade(results: &[ScreenResult], db_arg: &str, options: &ScreenOptions
             by_basename
                 .entry(base.to_string())
                 .or_default()
-                .push((id, status));
+                .push((id, status, acquired));
         }
     }
+
+    // Maximum |DATE-OBS - acquireddate| for a match. Both are UTC epoch
+    // seconds written by N.I.N.A. for the same capture (observed skew ~1s);
+    // 10 minutes absorbs exposure-length/save-time differences while
+    // rejecting same-basename rows from other sessions.
+    const MATCH_TOLERANCE_SECS: i64 = 600;
 
     let mut updates: Vec<(i32, GradingStatus, Option<String>)> = Vec::new();
     let mut unmatched = 0usize;
@@ -185,7 +211,23 @@ fn apply_regrade(results: &[ScreenResult], db_arg: &str, options: &ScreenOptions
     for r in results.iter().filter(|r| r.verdict == Verdict::Reject) {
         let matches = by_basename.get(&r.file);
         let (id, status) = match matches.map(|m| m.as_slice()) {
-            Some([single]) => *single,
+            Some([single]) => {
+                // Cross-check capture time so a basename collision with a
+                // different session's image can never regrade the wrong row.
+                match (r.timestamp, single.2) {
+                    (Some(ours), Some(theirs)) if (ours - theirs).abs() <= MATCH_TOLERANCE_SECS => {
+                        (single.0, single.1)
+                    }
+                    _ => {
+                        eprintln!(
+                            "  Timestamp mismatch (or missing), skipping: {} (screened {:?}, db {:?})",
+                            r.file, r.timestamp, single.2
+                        );
+                        unmatched += 1;
+                        continue;
+                    }
+                }
+            }
             Some(_) => {
                 eprintln!("  Ambiguous filename match, skipping: {}", r.file);
                 ambiguous += 1;
@@ -646,10 +688,15 @@ fn print_table(results: &[ScreenResult]) {
 
 fn truncate_name(name: &str, max: usize) -> String {
     if name.len() <= max {
-        name.to_string()
-    } else {
-        format!("...{}", &name[name.len() - (max - 3)..])
+        return name.to_string();
     }
+    // Byte-based cut point nudged forward to the next char boundary so
+    // multi-byte characters can never cause a slice panic.
+    let mut cut = name.len().saturating_sub(max.saturating_sub(3));
+    while cut < name.len() && !name.is_char_boundary(cut) {
+        cut += 1;
+    }
+    format!("...{}", &name[cut..])
 }
 
 fn print_csv(results: &[ScreenResult]) {
@@ -699,6 +746,20 @@ mod tests {
         assert_eq!(ts, 1782884425);
         assert!(parse_fits_datetime("2024-01-15T22:00:00").is_some());
         assert!(parse_fits_datetime("garbage").is_none());
+    }
+
+    #[test]
+    fn truncate_name_is_utf8_safe() {
+        // Regression (code review): multi-byte characters at the cut point
+        // must not panic.
+        let name = "Große_Magellansche_Wolke_Hα_2026-06-30_22-40-25_R_-10.10_60.00s_0008.fits";
+        let out = truncate_name(name, 52);
+        assert!(out.starts_with("..."));
+        assert!(out.len() <= 56);
+        // All-multibyte name with the cut landing mid-character.
+        let cjk = "银河系目标名称非常长需要截断的文件名称测试用例数据.fits";
+        let out = truncate_name(cjk, 20);
+        assert!(out.starts_with("..."));
     }
 
     #[test]

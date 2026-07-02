@@ -118,12 +118,23 @@ pub fn ensure_loaded(store: &RwLock<SpatialMetricsStore>, cache_dir: &Path) {
 }
 
 fn persist(store: &RwLock<SpatialMetricsStore>, cache_dir: &Path) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    // Unique temp file per call: two scan workers can persist concurrently,
+    // and a shared temp path would let one rename publish the other's
+    // partially written file. Renames of distinct complete files are atomic;
+    // last writer wins.
+    static PERSIST_SEQ: AtomicU64 = AtomicU64::new(0);
+
     let entries: Vec<StoredSpatialMetrics> = {
         let s = store.read().unwrap();
         s.metrics.values().cloned().collect()
     };
     let path = persist_path(cache_dir);
-    let tmp = path.with_extension("json.tmp");
+    let tmp = path.with_extension(format!(
+        "json.tmp.{}.{}",
+        std::process::id(),
+        PERSIST_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
     let json = match serde_json::to_string(&entries) {
         Ok(j) => j,
         Err(e) => {
@@ -137,6 +148,7 @@ fn persist(store: &RwLock<SpatialMetricsStore>, cache_dir: &Path) {
             path.display(),
             e
         );
+        let _ = std::fs::remove_file(&tmp);
     }
 }
 
@@ -192,7 +204,24 @@ pub fn run_scan(store: &RwLock<SpatialMetricsStore>, cache_dir: &Path, work: &[S
                     s.progress.current_file = Some(item.filename.clone());
                 }
 
-                match compute_one(item, &spatial_config) {
+                // A panic here (malformed FITS tripping an assert deep in
+                // detection) must not escape: it would propagate through
+                // thread::scope, skip the finalization below, and leave the
+                // per-DB scan singleton wedged at running=true until restart.
+                // compute_one holds no store lock, so catching cannot poison.
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    compute_one(item, &spatial_config)
+                }))
+                .unwrap_or_else(|panic| {
+                    let msg = panic
+                        .downcast_ref::<&str>()
+                        .map(|s| s.to_string())
+                        .or_else(|| panic.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "panic during analysis".to_string());
+                    Err(anyhow::anyhow!("panicked: {}", msg))
+                });
+
+                match outcome {
                     Ok(entry) => {
                         let mut s = store.write().unwrap();
                         s.metrics.insert(item.image_id, entry);
@@ -221,6 +250,12 @@ pub fn run_scan(store: &RwLock<SpatialMetricsStore>, cache_dir: &Path, work: &[S
     });
 
     persist(store, cache_dir);
+    finalize_scan(store);
+}
+
+/// Mark the scan finished. Split out so callers can guarantee finalization
+/// even when the scan body fails unexpectedly.
+pub fn finalize_scan(store: &RwLock<SpatialMetricsStore>) {
     let mut s = store.write().unwrap();
     s.progress.running = false;
     s.progress.current_file = None;

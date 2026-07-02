@@ -182,12 +182,16 @@ fn star_grid_counts(
         if median(&counts) >= config.min_median_stars_per_cell {
             return (cols, rows, Some(counts));
         }
-        // Sparse frames within a sequence of well-populated frames are far
-        // more likely occluded than genuinely star-poor: if more than half
-        // the cells are empty while others hold stars, report the grid rather
-        // than giving up.
+        // Distinguish "clustered" from "uniformly sparse". Stars packed into
+        // a few well-populated cells while most cells are empty is occlusion
+        // evidence and the grid is reported. A frame whose cells are ALL
+        // near-empty (narrowband / short exposures on a slow rig) carries no
+        // spatial information: without the max-cell requirement such frames
+        // would report a large dead fraction on every frame and mass-reject
+        // a perfectly healthy dataset. Abstain instead.
         let empty = counts.iter().filter(|&&c| c == 0.0).count();
-        if empty * 2 > counts.len() {
+        let max_cell = counts.iter().cloned().fold(0.0f64, f64::max);
+        if empty * 2 > counts.len() && max_cell >= config.min_median_stars_per_cell * 3.0 {
             return (cols, rows, Some(counts));
         }
     }
@@ -377,6 +381,34 @@ mod tests {
         let m = compute_spatial_metrics(&[], &data, W, H, &Default::default(), &Default::default());
         assert_eq!(m.star_dead_cell_fraction, Some(1.0));
         assert_eq!(m.star_uniformity, Some(0.0));
+    }
+
+    #[test]
+    fn uniformly_sparse_frame_abstains_with_default_config() {
+        // Regression (code review): a healthy narrowband/short-exposure frame
+        // with ~30 stars spread evenly leaves most grid cells empty. That is
+        // sparseness, not occlusion - the metrics must abstain rather than
+        // report a huge dead fraction that would mass-reject the dataset.
+        let mut stars = Vec::new();
+        for i in 0..20 {
+            let x = ((i * 7919) % 100) as f64 / 100.0 * W as f64;
+            let y = ((i * 104729) % 100) as f64 / 100.0 * H as f64;
+            stars.push((x, y));
+        }
+        let data = flat_frame(500);
+        let m = compute_spatial_metrics(
+            &stars,
+            &data,
+            W,
+            H,
+            &Default::default(),
+            &Default::default(),
+        );
+        assert_eq!(
+            m.star_dead_cell_fraction, None,
+            "uniformly sparse frame must abstain, got {:?}",
+            m.star_dead_cell_fraction
+        );
     }
 
     #[test]

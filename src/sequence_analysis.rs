@@ -221,6 +221,14 @@ pub struct SequenceAnalyzerConfig {
     /// anomalous ("boiling frog"). Set >= 1.0 to disable freezing.
     #[serde(default = "default_baseline_freeze_threshold")]
     pub baseline_freeze_threshold: f64,
+    /// Maximum consecutive frames the EWMA baselines stay frozen. A run of
+    /// anomalous frames longer than this is accepted as a new steady state
+    /// (moonrise, light dome) and the baselines re-seed from the current
+    /// frame, so a permanent condition change cannot mark the entire rest of
+    /// a session anomalous. Occluded frames remain penalized regardless via
+    /// the absolute spatial-coverage term.
+    #[serde(default = "default_baseline_freeze_max_frames")]
+    pub baseline_freeze_max_frames: usize,
 }
 
 fn default_dead_cell_rise_threshold() -> f64 {
@@ -239,6 +247,10 @@ fn default_baseline_freeze_threshold() -> f64 {
     0.15
 }
 
+fn default_baseline_freeze_max_frames() -> usize {
+    15
+}
+
 impl Default for SequenceAnalyzerConfig {
     fn default() -> Self {
         Self {
@@ -255,6 +267,7 @@ impl Default for SequenceAnalyzerConfig {
             dead_cell_abs_threshold: default_dead_cell_abs_threshold(),
             bg_spread_rise_threshold: default_bg_spread_rise_threshold(),
             baseline_freeze_threshold: default_baseline_freeze_threshold(),
+            baseline_freeze_max_frames: default_baseline_freeze_max_frames(),
         }
     }
 }
@@ -540,6 +553,9 @@ impl SequenceAnalyzer {
         let mut bl_hfr: Option<f64> = None;
         let mut bl_snr: Option<f64> = None;
         let mut bl_dead: Option<f64> = None;
+        // Consecutive frames excluded from the baseline update; bounds the
+        // freeze so a permanent condition change becomes the new baseline.
+        let mut frozen_streak: usize = 0;
 
         for i in 0..n {
             let img = &images[i];
@@ -607,10 +623,25 @@ impl SequenceAnalyzer {
 
             // Exclude anomalous frames from the baseline so a slow-growing
             // problem (tree drifting through the field over many frames)
-            // cannot normalize itself into the baseline.
+            // cannot normalize itself into the baseline — but only for a
+            // bounded number of frames. A longer run is a new steady state
+            // (moonrise, light dome): re-seed the baselines from the current
+            // frame so the rest of the session is not scored anomalous.
             if scores[i] > self.config.baseline_freeze_threshold {
+                frozen_streak += 1;
+                if frozen_streak < self.config.baseline_freeze_max_frames.max(1) {
+                    continue;
+                }
+                // Regime change accepted: hard re-seed instead of EWMA blend.
+                bl_stars = img.star_count.or(bl_stars);
+                bl_bg = img.background.or(bl_bg);
+                bl_hfr = img.hfr.or(bl_hfr);
+                bl_snr = img.snr.or(bl_snr);
+                bl_dead = img.dead_cell_fraction.or(bl_dead);
+                frozen_streak = 0;
                 continue;
             }
+            frozen_streak = 0;
 
             // Update EWMA baselines
             if let Some(val) = img.star_count {
@@ -663,16 +694,28 @@ impl SequenceAnalyzer {
             .map(|r| r.temporal_anomaly_score > self.config.baseline_freeze_threshold)
             .collect();
 
+        // Per-frame dead-cell rise, precomputed so each frame can check its
+        // neighbors for corroboration.
+        let dead_rises: Vec<f64> = (0..n)
+            .map(|i| self.compute_additive_rise(images, &anomalous, i, |m| m.dead_cell_fraction))
+            .collect();
+
         #[allow(clippy::needless_range_loop)]
         for i in 0..n {
             // Spatial occlusion signals: checked even for frames whose
             // composite score is still good, because a subtle occlusion
             // (10-20% of the frame) barely moves the global metrics.
             let dead_abs = images[i].dead_cell_fraction.unwrap_or(0.0);
-            let dead_rise =
-                self.compute_additive_rise(images, &anomalous, i, |m| m.dead_cell_fraction);
+            let dead_rise = dead_rises[i];
+            // A rise-based occlusion call needs corroboration from an
+            // adjacent frame: real occluders (trees, dome) persist across
+            // frames, while a single-frame blip (wind gust, passing wisp)
+            // must not reject an otherwise excellent frame.
+            let neighbor_elevated = (i > 0
+                && dead_rises[i - 1] > self.config.dead_cell_rise_threshold * 0.5)
+                || (i + 1 < n && dead_rises[i + 1] > self.config.dead_cell_rise_threshold * 0.5);
             let occluded = dead_abs > self.config.dead_cell_abs_threshold
-                || dead_rise > self.config.dead_cell_rise_threshold;
+                || (dead_rise > self.config.dead_cell_rise_threshold && neighbor_elevated);
 
             let bg_spread_rise =
                 self.compute_additive_rise(images, &anomalous, i, |m| m.bg_cell_spread);
@@ -1783,6 +1826,75 @@ mod tests {
             "fully occluded frame should score < 0.3, got {:.2}",
             last.quality_score
         );
+    }
+
+    #[test]
+    fn test_single_frame_dead_cell_blip_is_not_obstruction() {
+        // Regression (code review): a one-frame transient (wind gust, wisp)
+        // that nudges the dead-cell fraction past the rise threshold must not
+        // classify an otherwise excellent frame - occlusion needs neighbor
+        // corroboration.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            min_sequence_length: 3,
+            ..Default::default()
+        });
+
+        let mut images: Vec<ImageMetrics> = (0..10)
+            .map(|i| make_spatial_image(i, i as i64 * 300, 4700.0, 2.55, 0.02, 0.05))
+            .collect();
+        // Single-frame blip: 0.02 -> 0.12 -> 0.02.
+        images[5] = make_spatial_image(5, 5 * 300, 4650.0, 2.56, 0.12, 0.06);
+
+        let results = analyzer.analyze(&images, 1, "NGC 6820", "R");
+        let seq = &results[0];
+        assert_ne!(
+            seq.images[5].category,
+            Some(IssueCategory::PossibleObstruction),
+            "single-frame blip must not be classified as obstruction: {:?}",
+            seq.images[5].details
+        );
+    }
+
+    #[test]
+    fn test_permanent_condition_change_does_not_flag_rest_of_session() {
+        // Regression (code review): a lasting shift (moonrise, light dome)
+        // freezes the EWMA baselines at most baseline_freeze_max_frames;
+        // after that the new regime is accepted and later frames are neither
+        // temporally anomalous nor classified as clouds/obstruction.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            min_sequence_length: 3,
+            ..Default::default()
+        });
+
+        let mut images: Vec<ImageMetrics> = (0..5)
+            .map(|i| make_image(i, i as i64 * 300, 4000.0, 2.5))
+            .collect();
+        // Permanent 40% star-count drop for 30 frames (no spatial data -
+        // this is the DB-metadata-only path).
+        for j in 0..30 {
+            images.push(make_image(5 + j, (5 + j as i64) * 300, 2400.0, 2.5));
+        }
+
+        let results = analyzer.analyze(&images, 1, "test", "L");
+        let seq = &results[0];
+
+        for r in seq.images.iter().skip(25) {
+            assert!(
+                r.temporal_anomaly_score < 0.15,
+                "frame {} after regime re-establishment still anomalous ({:.2})",
+                r.image_id,
+                r.temporal_anomaly_score
+            );
+            assert!(
+                !matches!(
+                    r.category,
+                    Some(IssueCategory::LikelyClouds) | Some(IssueCategory::PossibleObstruction)
+                ),
+                "frame {} misclassified as {:?} after regime change",
+                r.image_id,
+                r.category
+            );
+        }
     }
 
     #[test]
