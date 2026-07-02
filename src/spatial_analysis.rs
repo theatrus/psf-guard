@@ -95,6 +95,16 @@ pub struct SpatialMetrics {
     /// Maximum absolute deviation of any cell median from the overall median,
     /// relative to the overall median.
     pub bg_cell_max_dev: f64,
+    /// Raw star counts per cell at the CONFIGURED grid resolution (row-major,
+    /// `config.grid_cols * config.grid_rows` cells), regardless of the
+    /// adaptive coarsening used for the dead-cell metric. Input for per-cell
+    /// temporal analysis across a sequence (`photometry` module).
+    #[serde(default)]
+    pub star_cell_counts: Vec<f64>,
+    /// Per-cell background medians in physical ADU at the configured grid
+    /// resolution (row-major). Input for transient errant-light detection.
+    #[serde(default)]
+    pub bg_cell_medians: Vec<f64>,
 }
 
 impl SpatialMetrics {
@@ -125,7 +135,7 @@ pub fn compute_spatial_metrics(
 
     // Background grid always uses the configured (full) resolution: it does
     // not depend on star statistics.
-    let (bg_cell_spread, bg_cell_max_dev) = background_grid_metrics(
+    let (bg_cell_spread, bg_cell_max_dev, bg_cell_medians) = background_grid_metrics(
         data,
         width,
         height,
@@ -135,6 +145,16 @@ pub fn compute_spatial_metrics(
         config.background_subsample.max(1),
     );
 
+    // Raw per-cell counts at the configured resolution, for sequence-level
+    // temporal analysis (independent of the adaptive metric grid above).
+    let star_cell_counts = fixed_grid_counts(
+        star_positions,
+        width,
+        height,
+        config.grid_cols,
+        config.grid_rows,
+    );
+
     SpatialMetrics {
         grid_cols,
         grid_rows,
@@ -142,7 +162,31 @@ pub fn compute_spatial_metrics(
         star_uniformity,
         bg_cell_spread,
         bg_cell_max_dev,
+        star_cell_counts,
+        bg_cell_medians,
     }
+}
+
+/// Star counts binned at a fixed grid resolution (no coarsening).
+fn fixed_grid_counts(
+    star_positions: &[(f64, f64)],
+    width: usize,
+    height: usize,
+    cols: usize,
+    rows: usize,
+) -> Vec<f64> {
+    let cols = cols.max(1);
+    let rows = rows.max(1);
+    let mut counts = vec![0.0f64; cols * rows];
+    if width == 0 || height == 0 {
+        return counts;
+    }
+    for &(x, y) in star_positions {
+        let gx = (((x / width as f64) * cols as f64) as usize).min(cols - 1);
+        let gy = (((y / height as f64) * rows as f64) as usize).min(rows - 1);
+        counts[gy * cols + gx] += 1.0;
+    }
+    counts
 }
 
 /// Bin star positions into a grid, coarsening once if the frame is too sparse
@@ -224,8 +268,9 @@ fn star_grid_metrics(cell_counts: &[f64], dead_cell_ratio: f64) -> (f64, f64) {
     (dead, uniformity)
 }
 
-/// Compute (bg_cell_spread, bg_cell_max_dev) from per-cell background medians
-/// in physical ADU.
+/// Compute (bg_cell_spread, bg_cell_max_dev, cell_medians) from per-cell
+/// background medians in physical ADU. Cells whose sampling window collapses
+/// contribute 0.0 so the vector length is always cols*rows.
 fn background_grid_metrics(
     data: &[u16],
     width: usize,
@@ -234,9 +279,9 @@ fn background_grid_metrics(
     cols: usize,
     rows: usize,
     subsample: usize,
-) -> (f64, f64) {
+) -> (f64, f64, Vec<f64>) {
     if data.is_empty() || width == 0 || height == 0 || data.len() < width * height {
-        return (0.0, 0.0);
+        return (0.0, 0.0, vec![0.0; cols.max(1) * rows.max(1)]);
     }
     let cols = cols.max(1);
     let rows = rows.max(1);
@@ -262,6 +307,7 @@ fn background_grid_metrics(
                 y += subsample;
             }
             if samples.is_empty() {
+                cell_medians.push(0.0);
                 continue;
             }
             let mid = samples.len() / 2;
@@ -270,8 +316,8 @@ fn background_grid_metrics(
         }
     }
 
-    if cell_medians.is_empty() {
-        return (0.0, 0.0);
+    if cell_medians.iter().all(|&m| m == 0.0) {
+        return (0.0, 0.0, cell_medians);
     }
 
     let overall = median(&cell_medians).max(1.0);
@@ -284,7 +330,7 @@ fn background_grid_metrics(
         .fold(0.0f64, f64::max)
         / overall;
 
-    (spread, max_dev)
+    (spread, max_dev, cell_medians)
 }
 
 fn median(values: &[f64]) -> f64 {

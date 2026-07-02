@@ -250,6 +250,10 @@ export interface ImageQualityResult {
      * Only populated when spatial metrics were computed from FITS files;
      * DB-metadata-only analysis leaves it null. Optional for older servers. */
     spatial_coverage?: number | null;
+    /** Photometric transparency mapped to 0..1 (1 = nominal matched-star
+     * flux, 0 = <=60% of the sequence reference). Populated after a spatial
+     * scan; null otherwise. Optional for older servers. */
+    transparency?: number | null;
   };
   details: string | null;
 }

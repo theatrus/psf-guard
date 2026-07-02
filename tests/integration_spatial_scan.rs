@@ -143,6 +143,14 @@ fn stored_entry(image_id: i32, filename: &str, dead: f64, bg_spread: f64) -> Sto
         bg_cell_max_dev: bg_spread,
         median_adu: 1500.0,
         computed_at: 0,
+        catalog: psf_guard::photometry::FrameCatalog::default(),
+        star_cell_counts: vec![],
+        bg_cell_medians: vec![],
+        grid_cols: 8,
+        grid_rows: 6,
+        width: 0,
+        height: 0,
+        exposure_s: None,
     }
 }
 
