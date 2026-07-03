@@ -1380,22 +1380,54 @@ pub async fn post_generation_status(
     ctx: DbContext,
     Json(req): Json<GenerationStatusRequest>,
 ) -> Result<Json<ApiResponse<GenerationStatusBatch>>, AppError> {
+    // Batch the DB work: one images lookup + one targets lookup for the whole
+    // request, instead of two locked point queries per item. A DB error fails
+    // the whole batch with a 5xx — which the frontend simply retries on the
+    // next poll tick — so a transient lock never collapses into a permanent
+    // per-tile "error"; only an id genuinely absent from the results is
+    // terminal.
+    let ids: Vec<i32> = req.requests.iter().map(|r| r.image_id).collect();
+    let (images_by_id, target_names): (
+        HashMap<i32, crate::models::AcquiredImage>,
+        HashMap<i32, String>,
+    ) = {
+        let conn = ctx.db();
+        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+        let db = Database::new(&conn);
+        let images = db
+            .get_images_by_ids(&ids)
+            .map_err(|_| AppError::DatabaseError)?;
+        let target_ids: Vec<i32> = images.iter().map(|i| i.target_id).collect();
+        let targets = db
+            .get_targets_by_ids(&target_ids)
+            .map_err(|_| AppError::DatabaseError)?;
+        (
+            images.into_iter().map(|i| (i.id, i)).collect(),
+            targets.into_iter().map(|t| (t.id, t.name)).collect(),
+        )
+    };
+
     let statuses = req
         .requests
         .iter()
-        .map(|item| resolve_and_status(&state, &ctx, item))
+        .map(|item| status_for_item(&state, &ctx, item, &images_by_id, &target_names))
         .collect();
     Ok(Json(ApiResponse::success(GenerationStatusBatch {
         statuses,
     })))
 }
 
-/// Resolve one status item to a `GenerationStatus`, enqueuing generation when
-/// the artifact is neither cached nor already known to the queue.
-fn resolve_and_status(
+/// Resolve one status item to a `GenerationStatus` from pre-fetched image /
+/// target maps, enqueuing generation when the artifact is neither cached nor
+/// already known to the queue. An id absent from `images_by_id` is a genuinely
+/// unknown image (permanent `error`); transient DB failures are handled one
+/// level up (the batch 5xx → frontend retry).
+fn status_for_item(
     state: &Arc<AppState>,
     ctx: &DatabaseContext,
     item: &GenStatusItem,
+    images_by_id: &HashMap<i32, crate::models::AcquiredImage>,
+    target_names: &HashMap<i32, String>,
 ) -> crate::server::preview_queue::GenerationStatus {
     use crate::server::preview_queue::{GenJob, GenKind, GenerationState, GenerationStatus};
 
@@ -1404,16 +1436,21 @@ fn resolve_and_status(
         error: Some(msg.to_string()),
     };
 
-    let size = item.size.clone().unwrap_or_else(|| "screen".to_string());
-    let (image, file_only, target_name) = match resolve_image_meta(ctx, item.image_id) {
-        Ok(m) => m,
-        Err(_) => return err("image not found"),
+    let Some(image) = images_by_id.get(&item.image_id) else {
+        return err("image not found");
+    };
+    let Some(target_name) = target_names.get(&image.target_id) else {
+        return err("target not found");
+    };
+    let Some(file_only) = filename_from_metadata(&image.metadata) else {
+        return err("no filename in metadata");
     };
 
+    let size = item.size.clone().unwrap_or_else(|| "screen".to_string());
     let (cache_path, kind) = match item.kind.as_deref() {
         Some("annotated") => {
             let max_stars = item.max_stars.unwrap_or(1000) as usize;
-            let key = annotated_cache_key(&image, &file_only, &size, max_stars);
+            let key = annotated_cache_key(image, &file_only, &size, max_stars);
             match artifact_cache_path(ctx, "annotated", &key) {
                 Ok(p) => (
                     p,
@@ -1429,7 +1466,7 @@ fn resolve_and_status(
             let stretch = item.stretch.unwrap_or(true);
             let midtone = item.midtone.unwrap_or(0.2);
             let shadow = item.shadow.unwrap_or(-2.8);
-            let key = preview_cache_key(&image, &file_only, &size, stretch, midtone, shadow);
+            let key = preview_cache_key(image, &file_only, &size, stretch, midtone, shadow);
             match artifact_cache_path(ctx, "previews", &key) {
                 Ok(p) => (
                     p,
@@ -1451,7 +1488,7 @@ fn resolve_and_status(
     }
 
     // Neither cached, in-flight, nor errored: ensure it's enqueued to generate.
-    match find_fits_file(ctx, &image, &target_name, &file_only) {
+    match find_fits_file(ctx, image, target_name, &file_only) {
         Ok(fits_path) => {
             state.enqueue_preview(GenJob {
                 fits_path,

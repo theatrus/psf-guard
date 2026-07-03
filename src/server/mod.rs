@@ -640,33 +640,18 @@ async fn pregenerate_preview(
         _ => Some((1200, 1200)),
     };
 
-    // Generate preview atomically (temp file then rename) so a concurrent
-    // viewer's readiness poll never observes a half-written PNG.
-    let fits_path_str = fits_path.to_string_lossy().to_string();
-    let cache_path_final = cache_path;
-    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        use crate::commands::stretch_to_png::stretch_to_png_with_resize;
-        let tmp = crate::server::preview_queue::temp_path(&cache_path_final);
-        match stretch_to_png_with_resize(
-            &fits_path_str,
-            Some(tmp.to_string_lossy().into_owned()),
-            0.2,   // midtone
-            -2.8,  // shadow
-            false, // logarithmic
-            false, // invert
+    // Generate atomically via the shared queue helper (temp file then rename),
+    // so a concurrent viewer's readiness poll never observes a half-written PNG.
+    let job = crate::server::preview_queue::GenJob {
+        fits_path,
+        cache_path,
+        kind: crate::server::preview_queue::GenKind::Preview {
+            midtone: 0.2,
+            shadow: -2.8,
             max_dimensions,
-        ) {
-            Ok(()) => {
-                std::fs::rename(&tmp, &cache_path_final)?;
-                Ok(())
-            }
-            Err(e) => {
-                let _ = std::fs::remove_file(&tmp);
-                Err(e)
-            }
-        }
-    })
-    .await??;
+        },
+    };
+    tokio::task::spawn_blocking(move || crate::server::preview_queue::generate(&job)).await??;
 
     tracing::trace!("✅ Generated {} preview for image {}", size, image_id);
     Ok(true) // Successfully generated
@@ -739,18 +724,18 @@ async fn pregenerate_annotated(
     let fits_path = handlers::find_fits_file(ctx, &image_data, target_name, file_only)
         .map_err(|_| anyhow::anyhow!("FITS file not found for image {}", image_id))?;
 
-    // Generate atomically via the shared helper — consistent sizing with the
-    // on-demand path, and temp-then-rename so a viewer never sees a partial file.
-    let cache_path_final = cache_path;
-    tokio::task::spawn_blocking(move || {
-        crate::server::preview_queue::generate_annotated(
-            &fits_path,
-            &cache_path_final,
-            size,
-            max_stars as usize,
-        )
-    })
-    .await??;
+    // Generate atomically via the shared queue helper — consistent sizing with
+    // the on-demand path, and temp-then-rename so a viewer never sees a partial
+    // file (the old direct File::create write was NOT atomic).
+    let job = crate::server::preview_queue::GenJob {
+        fits_path,
+        cache_path,
+        kind: crate::server::preview_queue::GenKind::Annotated {
+            max_stars: max_stars as usize,
+            size: size.to_string(),
+        },
+    };
+    tokio::task::spawn_blocking(move || crate::server::preview_queue::generate(&job)).await??;
 
     tracing::trace!("✅ Generated annotated image for image {}", image_id);
     Ok(true) // Successfully generated

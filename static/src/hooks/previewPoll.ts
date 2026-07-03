@@ -33,6 +33,17 @@ const pendingByDb = new Map<string, Map<string, Pending>>();
 let timer: ReturnType<typeof setInterval> | null = null;
 let polling = false;
 
+/** Test-only: clear all pending state and stop the timer, so the module
+ *  singleton doesn't leak between unit tests. */
+export function __resetForTest(): void {
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+  }
+  pendingByDb.clear();
+  polling = false;
+}
+
 export function descriptorKey(d: PreviewDescriptor): string {
   return [
     d.kind,

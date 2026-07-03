@@ -43,8 +43,6 @@ export default function ImageComparisonView({
   // Track image loading
   const [leftImageLoaded, setLeftImageLoaded] = useState(false);
   const [rightImageLoaded, setRightImageLoaded] = useState(false);
-  const [leftImageError, setLeftImageError] = useState(false);
-  const [rightImageError, setRightImageError] = useState(false);
   
   // Track original image preloading
   const [leftOriginalLoaded, setLeftOriginalLoaded] = useState(false);
@@ -102,13 +100,11 @@ export default function ImageComparisonView({
   // Reset loaded state when images change
   useEffect(() => {
     setLeftImageLoaded(false);
-    setLeftImageError(false);
     leftZoom.resetInitialization();
   }, [leftImageId, showStars, leftZoom]);
-  
+
   useEffect(() => {
     setRightImageLoaded(false);
-    setRightImageError(false);
     rightZoom.resetInitialization();
   }, [rightImageId, showStars, rightZoom]);
 
@@ -522,7 +518,7 @@ export default function ImageComparisonView({
                 onMouseUp={leftZoom.handleMouseUp}
                 onMouseLeave={leftZoom.handleMouseUp}
               >
-                {leftImageError || asyncLeft.state === 'error' ? (
+                {asyncLeft.state === 'error' ? (
                   <div className="comparison-image-error" style={{
                     width: '100%',
                     height: '100%',
@@ -681,7 +677,7 @@ export default function ImageComparisonView({
                     onMouseUp={syncZoom ? leftZoom.handleMouseUp : rightZoom.handleMouseUp}
                     onMouseLeave={syncZoom ? leftZoom.handleMouseUp : rightZoom.handleMouseUp}
                   >
-                    {rightImageError || asyncRight.state === 'error' ? (
+                    {asyncRight.state === 'error' ? (
                       <div className="comparison-image-error" style={{
                         width: '100%',
                         height: '100%',

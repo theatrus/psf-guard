@@ -87,6 +87,38 @@ test('cache miss returns 202, and the batch status endpoint drives generation to
   expect((await hit.body()).byteLength).toBeGreaterThan(0);
 });
 
+test('annotated images generate on-demand through the same queue', async ({
+  request,
+}) => {
+  const base = `/api/db/${encodeURIComponent(dbId)}`;
+
+  // Annotated cache miss also 202s (same async path as previews).
+  const miss = await request.get(`${base}/images/1/annotated?size=large`);
+  expect(miss.status()).toBe(202);
+  expect(miss.headers()['content-type']).toMatch(/application\/json/);
+
+  // Poll the batch endpoint with kind:'annotated' until ready.
+  await expect
+    .poll(
+      async () => {
+        const r = await request.post(`${base}/images/generation-status`, {
+          data: {
+            requests: [{ image_id: 1, kind: 'annotated', size: 'large' }],
+          },
+        });
+        return (await r.json()).data.statuses[0].state;
+      },
+      { timeout: 30_000, intervals: [500] }
+    )
+    .toBe('ready');
+
+  // The annotated endpoint now serves a PNG.
+  const hit = await request.get(`${base}/images/1/annotated?size=large`);
+  expect(hit.status()).toBe(200);
+  expect(hit.headers()['content-type']).toMatch(/^image\//);
+  expect((await hit.body()).byteLength).toBeGreaterThan(0);
+});
+
 test('grid shows a generating indicator, batch-polls status, and resolves to real pixels', async ({
   page,
 }) => {

@@ -206,7 +206,10 @@ fn record_error(inner: &mut QueueInner, cache_path: PathBuf, msg: String) {
 
 /// Generate one artifact to a unique temp path, then atomically rename into
 /// place, so a concurrent `Path::exists` poll never observes a partial file.
-fn generate(job: &GenJob) -> anyhow::Result<()> {
+/// Shared by the on-demand queue and the background pre-generation task, so
+/// both are atomic and a pregen/queue double-generate can't clobber a reader.
+/// Blocking; call from `spawn_blocking`.
+pub fn generate(job: &GenJob) -> anyhow::Result<()> {
     let tmp = temp_path(&job.cache_path);
     let result = match &job.kind {
         GenKind::Preview {
@@ -227,11 +230,10 @@ fn generate(job: &GenJob) -> anyhow::Result<()> {
         }
     };
 
-    match result {
-        Ok(()) => {
-            std::fs::rename(&tmp, &job.cache_path)?;
-            Ok(())
-        }
+    // Clean up the temp file on both a generation failure and a rename
+    // failure, so a failed run never orphans a `.tmp.*` file.
+    match result.and_then(|()| std::fs::rename(&tmp, &job.cache_path).map_err(Into::into)) {
+        Ok(()) => Ok(()),
         Err(e) => {
             let _ = std::fs::remove_file(&tmp);
             Err(e)
