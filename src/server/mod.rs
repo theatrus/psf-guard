@@ -9,7 +9,7 @@ pub mod spatial_scan;
 pub mod state;
 pub mod static_file_service;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     routing::{get, post, put},
     Router,
@@ -510,19 +510,14 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
 async fn get_all_images_for_pregeneration(
     ctx: &Arc<crate::server::database_context::DatabaseContext>,
 ) -> Result<Vec<(i32, String, String)>> {
-    use crate::db::Database;
-
-    // Get all images from database
-    let images = {
-        let conn = ctx.db();
-        let conn = conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Database lock error"))?;
-        let db = Database::new(&conn);
-
+    // `with_db` reopens and retries if the scheduler DB was replaced out from
+    // under our long-lived connection, so this periodic loop self-heals instead
+    // of erroring forever. `.context` keeps the underlying rusqlite error in the
+    // chain so the corruption detector can see it.
+    let images = ctx.with_db(|db| {
         db.query_images(None, None, None, None)
-            .map_err(|_| anyhow::anyhow!("Database query error"))?
-    };
+            .context("querying images for pre-generation")
+    })?;
 
     let mut result = Vec::new();
 

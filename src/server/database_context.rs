@@ -15,8 +15,85 @@ use anyhow::Result;
 use rusqlite::{Connection, OpenFlags};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::Mutex as TokioMutex;
+
+/// Flags used to (re)open every scheduler database connection. `NO_MUTEX`
+/// because we serialize access ourselves with `Mutex<Connection>`; no `CREATE`
+/// so a vanished path errors instead of leaving a junk empty database behind.
+fn db_open_flags() -> OpenFlags {
+    OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX
+}
+
+/// Identity of the on-disk database file, used to notice when another process
+/// has replaced it (a scheduler DB sync, an rsync/`cp` over the file, a
+/// restore-from-backup). A long-lived SQLite connection whose file is
+/// overwritten out from under it keeps a poisoned page cache and returns
+/// `SQLITE_CORRUPT` / "file is not a database" *perpetually* until the
+/// connection is reopened — this fingerprint is how we detect the swap and
+/// trigger that reopen.
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct DbFingerprint {
+    len: u64,
+    mtime: Option<SystemTime>,
+    #[cfg(unix)]
+    dev: u64,
+    #[cfg(unix)]
+    ino: u64,
+}
+
+/// Fingerprint the file at `path`, or `None` if it can't be stat'd right now
+/// (e.g. mid-replace). A `None` never compares equal to a real fingerprint, so
+/// a transient stat failure won't be mistaken for "unchanged", but it also
+/// won't trigger a reopen against a file we can't read (see
+/// `ensure_fresh_connection`).
+fn fingerprint_path(path: &str) -> Option<DbFingerprint> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some(DbFingerprint {
+        len: meta.len(),
+        mtime: meta.modified().ok(),
+        #[cfg(unix)]
+        dev: {
+            use std::os::unix::fs::MetadataExt;
+            meta.dev()
+        },
+        #[cfg(unix)]
+        ino: {
+            use std::os::unix::fs::MetadataExt;
+            meta.ino()
+        },
+    })
+}
+
+/// Whether a rusqlite error is the kind produced by a connection whose backing
+/// file was swapped or truncated underneath it — the errors that never clear
+/// on their own and warrant a reopen-and-retry.
+fn is_corruption_error(err: &rusqlite::Error) -> bool {
+    use rusqlite::ffi::ErrorCode;
+    match err {
+        rusqlite::Error::SqliteFailure(e, _) => matches!(
+            e.code,
+            ErrorCode::DatabaseCorrupt
+                | ErrorCode::NotADatabase
+                | ErrorCode::SystemIoFailure
+                | ErrorCode::CannotOpen
+                | ErrorCode::FileLockingProtocolFailed
+                | ErrorCode::SchemaChanged
+        ),
+        _ => false,
+    }
+}
+
+/// Walk an `anyhow` error chain looking for a corruption-class rusqlite error.
+/// The `Database` layer returns `anyhow::Result`, so the rusqlite error is
+/// wrapped one or more levels deep.
+fn error_is_corruption(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<rusqlite::Error>()
+            .is_some_and(is_corruption_error)
+    })
+}
 
 /// All per-database state for the running server.
 pub struct DatabaseContext {
@@ -34,6 +111,10 @@ pub struct DatabaseContext {
     pub cache_dir: String,
     pub cache_dir_path: PathBuf,
     db_connection: Arc<Mutex<Connection>>,
+    /// Fingerprint of `database_path` as of the currently open connection.
+    /// Guarded by its own mutex which is always locked *before*
+    /// `db_connection` when a reopen is needed, so the two never deadlock.
+    db_fingerprint: Arc<Mutex<Option<DbFingerprint>>>,
     pub file_check_cache: Arc<RwLock<FileCheckCache>>,
     pub directory_tree_cache: Arc<RwLock<Option<DirectoryTree>>>,
     pub refresh_mutex: Arc<TokioMutex<()>>,
@@ -83,10 +164,8 @@ impl DatabaseContext {
         })?;
         let cache_dir = cache_dir_path.to_string_lossy().into_owned();
 
-        let conn = Connection::open_with_flags(
-            &db_path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
+        let conn = Connection::open_with_flags(&db_path, db_open_flags())?;
+        let fingerprint = fingerprint_path(&db_path);
 
         Ok(Self {
             id,
@@ -97,6 +176,7 @@ impl DatabaseContext {
             cache_dir,
             cache_dir_path,
             db_connection: Arc::new(Mutex::new(conn)),
+            db_fingerprint: Arc::new(Mutex::new(fingerprint)),
             file_check_cache: Arc::new(RwLock::new(FileCheckCache::new())),
             directory_tree_cache: Arc::new(RwLock::new(None)),
             refresh_mutex: Arc::new(TokioMutex::new(())),
@@ -104,8 +184,150 @@ impl DatabaseContext {
         })
     }
 
+    /// Hand out the shared connection, first reopening it if the database file
+    /// has been replaced on disk since we last opened it. Every query path
+    /// goes through here, so an external DB swap heals on the *next* request
+    /// rather than failing forever.
     pub fn db(&self) -> Arc<Mutex<Connection>> {
+        self.ensure_fresh_connection();
         self.db_connection.clone()
+    }
+
+    /// The one blessed way to run a query: it locks the connection, hands the
+    /// closure a ready `Database`, and transparently reopens + retries **once**
+    /// if the query fails with a corruption-class error. Callers write
+    /// `ctx.with_db(|db| db.query_images(...))` instead of hand-rolling the
+    /// `db().lock()` + `Database::new` dance, so the reopen policy lives in
+    /// exactly one place rather than being duplicated at every call site.
+    ///
+    /// `db()` catches an external file swap proactively (via the fingerprint);
+    /// this is the reactive belt to that suspenders — it also recovers from the
+    /// rare in-place overwrite that preserves size and mtime, by reacting to
+    /// the error itself. The closure may run twice, so keep it idempotent (a
+    /// read, or a single transactional write).
+    pub fn with_db<T>(&self, f: impl Fn(&crate::db::Database) -> Result<T>) -> Result<T> {
+        self.ensure_fresh_connection();
+
+        let run = || -> Result<T> {
+            let conn = self
+                .db_connection
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
+            let db = crate::db::Database::new(&conn);
+            f(&db)
+        };
+
+        match run() {
+            Ok(value) => Ok(value),
+            Err(e) if error_is_corruption(&e) => {
+                tracing::warn!(
+                    "🔁 db={} query hit a corruption-class error ({}); reopening connection and retrying",
+                    self.id,
+                    e
+                );
+                self.force_reopen();
+                run()
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Reopen the connection if the backing file's fingerprint changed. Cheap
+    /// (one `stat`) on the common unchanged path; only takes the connection
+    /// lock when an actual reopen is required.
+    fn ensure_fresh_connection(&self) {
+        let current = fingerprint_path(&self.database_path);
+
+        // Fast path: compare against the fingerprint without disturbing the
+        // connection. Equal (including both `None`, e.g. an in-memory test DB)
+        // means nothing changed.
+        {
+            let stored = self.db_fingerprint.lock().unwrap();
+            if *stored == current {
+                return;
+            }
+        }
+
+        // Something differs. Take the fingerprint lock for the whole reopen so
+        // concurrent requests don't race to reopen; re-check under the lock in
+        // case another thread already did it.
+        let mut stored = self.db_fingerprint.lock().unwrap();
+        if *stored == current {
+            return;
+        }
+
+        // If we couldn't stat the file (mid-replace), don't reopen against a
+        // path we can't read — leave the old connection and retry next time.
+        let Some(new_fp) = current else {
+            return;
+        };
+
+        match Connection::open_with_flags(&self.database_path, db_open_flags()) {
+            Ok(new_conn) => {
+                {
+                    let mut guard = self.db_connection.lock().unwrap();
+                    *guard = new_conn;
+                }
+                *stored = Some(new_fp);
+                drop(stored);
+                tracing::warn!(
+                    "🔁 Database file for db={} was replaced on disk ({}); reopened connection and scheduling a cache rescan",
+                    self.id,
+                    self.database_path
+                );
+                self.invalidate_caches_after_reopen();
+            }
+            Err(e) => {
+                tracing::error!(
+                    "❌ Failed to reopen replaced database for db={} ({}): {}. Keeping existing connection; will retry.",
+                    self.id,
+                    self.database_path,
+                    e
+                );
+                // Leave `stored` untouched so we retry on the next access.
+            }
+        }
+    }
+
+    /// Unconditionally reopen the connection (used by the reactive retry path).
+    fn force_reopen(&self) {
+        let mut stored = self.db_fingerprint.lock().unwrap();
+        match Connection::open_with_flags(&self.database_path, db_open_flags()) {
+            Ok(new_conn) => {
+                {
+                    let mut guard = self.db_connection.lock().unwrap();
+                    *guard = new_conn;
+                }
+                *stored = fingerprint_path(&self.database_path);
+                drop(stored);
+                self.invalidate_caches_after_reopen();
+            }
+            Err(e) => {
+                tracing::error!(
+                    "❌ Forced reopen of db={} ({}) failed: {}",
+                    self.id,
+                    self.database_path,
+                    e
+                );
+            }
+        }
+    }
+
+    /// After a reopen, drop the in-memory caches so the next request triggers a
+    /// fresh directory + file-existence scan against the new database contents.
+    fn invalidate_caches_after_reopen(&self) {
+        {
+            let mut dir_cache = self.directory_tree_cache.write().unwrap();
+            *dir_cache = None;
+        }
+        {
+            let mut file_cache = self.file_check_cache.write().unwrap();
+            file_cache.clear();
+        }
+        tracing::info!(
+            "🗑️  Caches invalidated for db={} after connection reopen",
+            self.id
+        );
     }
 
     pub fn get_cache_path(&self, category: &str, filename: &str) -> PathBuf {
@@ -649,6 +871,7 @@ impl DatabaseContext {
             cache_dir: "/tmp/psf-guard-test".to_string(),
             cache_dir_path: PathBuf::from("/tmp/psf-guard-test"),
             db_connection: Arc::new(Mutex::new(conn)),
+            db_fingerprint: Arc::new(Mutex::new(None)),
             file_check_cache: Arc::new(RwLock::new(FileCheckCache::new())),
             directory_tree_cache: Arc::new(RwLock::new(None)),
             refresh_mutex: Arc::new(TokioMutex::new(())),
@@ -668,10 +891,136 @@ impl Clone for DatabaseContext {
             cache_dir: self.cache_dir.clone(),
             cache_dir_path: self.cache_dir_path.clone(),
             db_connection: self.db_connection.clone(),
+            db_fingerprint: self.db_fingerprint.clone(),
             file_check_cache: self.file_check_cache.clone(),
             directory_tree_cache: self.directory_tree_cache.clone(),
             refresh_mutex: self.refresh_mutex.clone(),
             spatial_metrics: self.spatial_metrics.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    /// Write a tiny standalone SQLite DB holding one project row.
+    fn make_db(path: &std::path::Path, project_name: &str) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch("CREATE TABLE project (Id INTEGER PRIMARY KEY, name TEXT NOT NULL);")
+            .unwrap();
+        conn.execute(
+            "INSERT INTO project (Id, name) VALUES (1, ?1)",
+            [project_name],
+        )
+        .unwrap();
+    }
+
+    fn read_project(ctx: &DatabaseContext) -> String {
+        let conn = ctx.db();
+        let guard = conn.lock().unwrap();
+        guard
+            .query_row("SELECT name FROM project WHERE Id = 1", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    fn build_ctx(dir: &std::path::Path, db_path: &std::path::Path) -> DatabaseContext {
+        let img_dir = dir.join("images");
+        std::fs::create_dir_all(&img_dir).unwrap();
+        DatabaseContext::new(
+            "test".into(),
+            "Test".into(),
+            db_path.to_string_lossy().into_owned(),
+            vec![img_dir.to_string_lossy().into_owned()],
+            dir.join("cache").to_string_lossy().into_owned(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn reopens_when_db_file_is_replaced_by_rename() {
+        // Simulates an external process atomically replacing the scheduler DB
+        // (a sync, restore, or `mv new.sqlite sched.sqlite`): the inode changes.
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("sched.sqlite");
+        make_db(&db_path, "ALPHA");
+        let ctx = build_ctx(tmp.path(), &db_path);
+
+        assert_eq!(read_project(&ctx), "ALPHA");
+
+        let replacement = tmp.path().join("replacement.sqlite");
+        make_db(&replacement, "BRAVO_DIFFERENT_LENGTH");
+        std::fs::rename(&replacement, &db_path).unwrap();
+
+        // Without the reopen the old inode is still open and would keep
+        // returning "ALPHA" forever; the fix must surface the new content.
+        assert_eq!(read_project(&ctx), "BRAVO_DIFFERENT_LENGTH");
+    }
+
+    #[test]
+    fn reopens_when_db_file_is_overwritten_in_place() {
+        // Simulates `cp new.sqlite sched.sqlite` / rsync: same inode, new
+        // contents and (larger) length.
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("sched.sqlite");
+        make_db(&db_path, "ALPHA");
+        let ctx = build_ctx(tmp.path(), &db_path);
+        assert_eq!(read_project(&ctx), "ALPHA");
+
+        let replacement = tmp.path().join("replacement.sqlite");
+        make_db(
+            &replacement,
+            "CHARLIE_A_MUCH_LONGER_PROJECT_NAME_THAN_BEFORE",
+        );
+        std::fs::copy(&replacement, &db_path).unwrap();
+
+        assert_eq!(
+            read_project(&ctx),
+            "CHARLIE_A_MUCH_LONGER_PROJECT_NAME_THAN_BEFORE"
+        );
+    }
+
+    #[test]
+    fn unchanged_file_keeps_the_same_connection() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("sched.sqlite");
+        make_db(&db_path, "STABLE");
+        let ctx = build_ctx(tmp.path(), &db_path);
+
+        let first = Arc::as_ptr(&ctx.db());
+        let second = Arc::as_ptr(&ctx.db());
+        // The Arc<Mutex<Connection>> identity is stable across accesses when
+        // the file hasn't changed (no spurious reopen churn).
+        assert_eq!(first, second);
+        assert_eq!(read_project(&ctx), "STABLE");
+    }
+
+    #[test]
+    fn corruption_errors_are_classified() {
+        use rusqlite::ffi::{Error as FfiError, SQLITE_BUSY, SQLITE_CORRUPT, SQLITE_NOTADB};
+
+        let corrupt = rusqlite::Error::SqliteFailure(
+            FfiError::new(SQLITE_CORRUPT),
+            Some("database disk image is malformed".to_string()),
+        );
+        assert!(is_corruption_error(&corrupt));
+
+        let not_a_db = rusqlite::Error::SqliteFailure(
+            FfiError::new(SQLITE_NOTADB),
+            Some("file is not a database".to_string()),
+        );
+        assert!(is_corruption_error(&not_a_db));
+
+        // Transient contention is NOT corruption — must not trigger a reopen.
+        let busy = rusqlite::Error::SqliteFailure(FfiError::new(SQLITE_BUSY), None);
+        assert!(!is_corruption_error(&busy));
+
+        // And detection survives being wrapped in an anyhow context chain.
+        let wrapped = anyhow::Error::new(corrupt).context("querying images");
+        assert!(error_is_corruption(&wrapped));
+        assert!(!error_is_corruption(&anyhow::anyhow!(
+            "some unrelated failure"
+        )));
     }
 }
