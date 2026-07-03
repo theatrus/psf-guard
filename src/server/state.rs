@@ -6,6 +6,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -43,6 +44,27 @@ pub struct AppState {
     /// untrustworthy client cannot mutate the user's configuration even if
     /// the server has a registry to persist to.
     pub allow_database_management: RwLock<bool>,
+    /// Tuning policy for the parallel scans and background pre-generation (see
+    /// `concurrency::WorkerPolicy`). Process-global; sourced from the TOML
+    /// `[server]` ratios, otherwise the compiled-in defaults.
+    pub worker_policy: RwLock<crate::concurrency::WorkerPolicy>,
+    /// Count of interactive (user-triggered) CPU-heavy jobs currently running,
+    /// process-wide. Background work reads this to yield: while it is nonzero,
+    /// pre-generation pauses so it doesn't compete for cores or memory with a
+    /// scan the user is waiting on. An `Arc` so a [`InteractiveJobGuard`] can
+    /// decrement it on drop from a `spawn_blocking` task.
+    active_interactive_jobs: Arc<AtomicUsize>,
+}
+
+/// RAII marker that an interactive CPU-heavy job is running. Increments the
+/// process-wide gauge on creation and decrements on drop, so background work
+/// yields for exactly the job's lifetime even if it panics.
+pub struct InteractiveJobGuard(Arc<AtomicUsize>);
+
+impl Drop for InteractiveJobGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 #[derive(Clone)]
@@ -302,6 +324,8 @@ impl AppState {
             cache_dir_root: cache_dir,
             registry_path: RwLock::new(None),
             allow_database_management: RwLock::new(false),
+            worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
+            active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -320,6 +344,30 @@ impl AppState {
 
     pub fn database_management_allowed(&self) -> bool {
         *self.allow_database_management.read().unwrap()
+    }
+
+    /// Set the worker tuning policy (from the TOML `[server]` config).
+    pub fn set_worker_policy(&self, policy: crate::concurrency::WorkerPolicy) {
+        *self.worker_policy.write().unwrap() = policy;
+    }
+
+    /// The worker tuning policy in effect.
+    pub fn worker_policy(&self) -> crate::concurrency::WorkerPolicy {
+        *self.worker_policy.read().unwrap()
+    }
+
+    /// Mark the start of an interactive CPU-heavy job (e.g. an occlusion
+    /// scan). Hold the returned guard for the job's lifetime; background work
+    /// yields while any guard is alive.
+    pub fn begin_interactive_job(&self) -> InteractiveJobGuard {
+        self.active_interactive_jobs.fetch_add(1, Ordering::SeqCst);
+        InteractiveJobGuard(Arc::clone(&self.active_interactive_jobs))
+    }
+
+    /// Whether any interactive CPU-heavy job is currently running. Background
+    /// work checks this and pauses so it doesn't compete for cores or memory.
+    pub fn interactive_job_active(&self) -> bool {
+        self.active_interactive_jobs.load(Ordering::SeqCst) > 0
     }
 
     /// Convenience constructor for a single database. Computes a default slug
@@ -377,6 +425,8 @@ impl AppState {
             cache_dir_root: "/tmp/psf-guard-test".to_string(),
             registry_path: RwLock::new(None),
             allow_database_management: RwLock::new(false),
+            worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
+            active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
         }
     }
 }

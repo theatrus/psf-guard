@@ -288,7 +288,8 @@ pub enum Commands {
         #[arg(long, default_value = "0.08")]
         dead_cell_rise: f64,
 
-        /// Worker threads for frame analysis (default: min(cores, 4))
+        /// Worker threads for frame analysis (default: all cores, bounded by
+        /// available memory)
         #[arg(long)]
         threads: Option<usize>,
 

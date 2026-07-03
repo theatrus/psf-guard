@@ -31,6 +31,19 @@ pub struct ServerConfig {
     pub host: Option<String>,
     /// Enable CORS (default: true)
     pub cors: Option<bool>,
+    /// Fraction of logical CPU cores interactive, user-triggered work (the
+    /// occlusion / spatial scan) may use (0.0–1.0, default 0.5). It runs on
+    /// the blocking pool while the server keeps serving the UI, so this leaves
+    /// headroom; it is further bounded by available memory and a hard maximum.
+    /// `1.0` uses all cores. See `concurrency::WorkerPolicy`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_worker_ratio: Option<f64>,
+    /// Fraction of logical CPU cores background work (image-preview
+    /// pre-generation) may use (0.0–1.0, default 0.25). Kept below
+    /// `scan_worker_ratio`; background work additionally pauses entirely while
+    /// an interactive scan is running. See `concurrency::WorkerPolicy`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_worker_ratio: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +86,8 @@ impl Default for ServerConfig {
             port: Some(3000),
             host: Some("0.0.0.0".to_string()),
             cors: Some(true),
+            scan_worker_ratio: None,
+            background_worker_ratio: None,
         }
     }
 }
@@ -155,6 +170,26 @@ impl Config {
 
     pub fn get_cors_enabled(&self) -> bool {
         self.server.cors.unwrap_or(true)
+    }
+
+    /// Effective worker tuning policy for the parallel scans and background
+    /// pre-generation. The on-disk TOML surfaces the two core ratios; the other
+    /// knobs keep their compiled-in defaults. Ratios are clamped to
+    /// `[0.05, 1.0]` so a typo can't disable the work or over-subscribe.
+    pub fn get_worker_policy(&self) -> crate::concurrency::WorkerPolicy {
+        let interactive = self
+            .server
+            .scan_worker_ratio
+            .unwrap_or(crate::concurrency::DEFAULT_INTERACTIVE_RATIO)
+            .clamp(0.05, 1.0);
+        let background = self
+            .server
+            .background_worker_ratio
+            .unwrap_or(crate::concurrency::DEFAULT_BACKGROUND_RATIO)
+            .clamp(0.05, 1.0);
+        crate::concurrency::WorkerPolicy::default()
+            .with_interactive_ratio(interactive)
+            .with_background_ratio(background)
     }
 
     pub fn get_cache_directory(&self) -> String {
@@ -369,6 +404,82 @@ directory = "./cache"
         assert_eq!(pregen_config.screen, Some(false));
         assert_eq!(pregen_config.large, Some(true));
         assert_eq!(pregen_config.workers, Some(4));
+    }
+
+    #[test]
+    fn test_worker_ratios_default_and_clamp() {
+        // Absent -> compiled-in defaults.
+        let config = Config::default();
+        let policy = config.get_worker_policy();
+        assert_eq!(
+            policy.interactive_ratio,
+            crate::concurrency::DEFAULT_INTERACTIVE_RATIO
+        );
+        assert_eq!(
+            policy.background_ratio,
+            crate::concurrency::DEFAULT_BACKGROUND_RATIO
+        );
+
+        // Configured values are honored.
+        let mut config = Config::default();
+        config.server.scan_worker_ratio = Some(0.75);
+        config.server.background_worker_ratio = Some(0.1);
+        let policy = config.get_worker_policy();
+        assert_eq!(policy.interactive_ratio, 0.75);
+        assert_eq!(policy.background_ratio, 0.1);
+
+        // Out-of-range values are clamped so a typo can't disable the work or
+        // over-subscribe.
+        config.server.scan_worker_ratio = Some(0.0);
+        config.server.background_worker_ratio = Some(5.0);
+        let policy = config.get_worker_policy();
+        assert_eq!(policy.interactive_ratio, 0.05);
+        assert_eq!(policy.background_ratio, 1.0);
+    }
+
+    #[test]
+    fn test_worker_ratios_toml_roundtrip() {
+        // The knobs live in [server] alongside port/host and round-trip.
+        let toml = r#"
+[server]
+port = 3000
+scan_worker_ratio = 0.25
+background_worker_ratio = 0.1
+
+[cache]
+directory = "./cache"
+"#;
+        let config: Config = toml_edit::de::from_str(toml).unwrap();
+        let policy = config.get_worker_policy();
+        assert_eq!(policy.interactive_ratio, 0.25);
+        assert_eq!(policy.background_ratio, 0.1);
+
+        // Absent keys must keep parsing (backward compatibility) and default.
+        let toml_no_key = r#"
+[server]
+port = 3000
+
+[cache]
+directory = "./cache"
+"#;
+        let config: Config = toml_edit::de::from_str(toml_no_key).unwrap();
+        let policy = config.get_worker_policy();
+        assert_eq!(
+            policy.interactive_ratio,
+            crate::concurrency::DEFAULT_INTERACTIVE_RATIO
+        );
+        assert_eq!(
+            policy.background_ratio,
+            crate::concurrency::DEFAULT_BACKGROUND_RATIO
+        );
+
+        // Default serialization omits the keys (kept clean like the other
+        // optional knobs) so older binaries ignore them cleanly.
+        let json = toml_edit::ser::to_string_pretty(&Config::default()).unwrap();
+        assert!(
+            !json.contains("scan_worker_ratio") && !json.contains("background_worker_ratio"),
+            "default config should not write the keys: {json}"
+        );
     }
 
     #[test]

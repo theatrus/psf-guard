@@ -2480,6 +2480,7 @@ fn merge_spatial_metrics(
 /// running (or nothing needs computing) this returns `started: false` with
 /// the current progress. Poll GET on the same path for progress.
 pub async fn start_spatial_scan(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Json(req): Json<SpatialScanRequest>,
 ) -> Result<Json<ApiResponse<SpatialScanStatusResponse>>, AppError> {
@@ -2567,7 +2568,13 @@ pub async fn start_spatial_scan(
 
     let ctx_arc = ctx.0.clone();
     let target_id = req.target_id;
+    let worker_policy = state.worker_policy();
+    // Mark this as an interactive job for its whole lifetime so background
+    // pre-generation yields cores + memory to it. Moved into the blocking task
+    // and dropped when the scan returns (or panics).
+    let interactive_guard = state.begin_interactive_job();
     tokio::task::spawn_blocking(move || {
+        let _interactive_guard = interactive_guard;
         // Any panic below would be silently swallowed by tokio (the join
         // handle is dropped) and leave the singleton wedged at running=true;
         // catch it and always finalize.
@@ -2589,10 +2596,28 @@ pub async fn start_spatial_scan(
                     }
                 }
             }
+            // Size the worker pool to the machine (configured core ratio) and
+            // the sensor (peak memory of one in-flight frame, probed from the
+            // first resolvable file). Leaves headroom for request serving.
+            let frame_pixels = items
+                .first()
+                .and_then(|it| crate::concurrency::probe_frame_pixels(&it.fits_path));
+            let budget = crate::concurrency::plan_workers(
+                None,
+                &worker_policy,
+                crate::concurrency::Priority::Interactive,
+                frame_pixels,
+            );
+            tracing::info!(
+                "📐 Spatial scan concurrency: {} worker(s) — {}",
+                budget.workers,
+                budget.rationale
+            );
             crate::server::spatial_scan::run_scan(
                 &ctx_arc.spatial_metrics,
                 &ctx_arc.cache_dir_path,
                 &items,
+                budget.workers,
             );
         }));
         if scan_body.is_err() {

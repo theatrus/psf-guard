@@ -3659,6 +3659,7 @@ dependencies = [
  "image",
  "imageproc",
  "include_dir",
+ "libc",
  "mime_guess",
  "nalgebra",
  "opencv",
@@ -3677,6 +3678,7 @@ dependencies = [
  "tower-http 0.7.0",
  "tracing",
  "tracing-subscriber",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

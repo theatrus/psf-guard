@@ -722,6 +722,7 @@ pub fn main() -> Result<()> {
             let cache_directory = app_config.get_cache_directory();
             let server_host = app_config.get_host();
             let server_port = app_config.get_port();
+            let worker_policy = app_config.get_worker_policy();
             let databases = db_registry.databases.clone();
 
             let runtime = tokio::runtime::Runtime::new()?;
@@ -735,6 +736,7 @@ pub fn main() -> Result<()> {
                     pregeneration_config,
                     Some(registry_path),
                     allow_database_management,
+                    worker_policy,
                 )
                 .await
             })?;

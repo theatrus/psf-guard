@@ -191,8 +191,10 @@ Design, phases, tracker: [REJECT_ARCHIVE_PLAN.md](./REJECT_ARCHIVE_PLAN.md).
   (reference presence filter) — that remains the dead-cell metric's job.
 - **Server/UI trigger**: `src/server/spatial_scan.rs` + `POST
   /api/db/{id}/analysis/spatial-scan` runs the same computation as a
-  singleton per-DB background task (2 worker threads, ~8s/frame full-frame)
-  over a target's FITS files (paths via `find_fits_file`). Results live in
+  singleton per-DB background task (~8s/frame full-frame) over a target's
+  FITS files (paths via `find_fits_file`). Worker count is sized by
+  `concurrency::plan_workers` (see the parallelism note below), not a fixed
+  2. Results live in
   `DatabaseContext.spatial_metrics` and persist to
   `<cache_dir>/spatial_metrics.json` (survives restarts; entries invalidated
   by filename change; re-scan skips cached, `force` recomputes).
@@ -201,6 +203,36 @@ Design, phases, tracker: [REJECT_ARCHIVE_PLAN.md](./REJECT_ARCHIVE_PLAN.md).
   scan has run. Frontend: "Scan Occlusion" button in SequenceView
   (`useSpatialScan` hook, 1s progress poll, auto-invalidates
   sequence-analysis queries when the scan finishes).
+
+### Worker-pool parallelism policy (2026-07)
+All CPU-bound parallel work is sized through `src/concurrency.rs` instead of
+hardcoded caps. The per-frame work (FITS load → star detection →
+`compute_spatial_metrics` / stretch-to-PNG) is single-threaded internally, so
+the lever is how many frames run at once.
+- **`WorkerPolicy`** groups the tunables: `interactive_ratio` (default 0.5),
+  `background_ratio` (default 0.25), `memory_budget_fraction` (0.5),
+  `hard_max_workers` (64), `peak_bytes_per_pixel` (32). Threads through
+  `ServerConfig` → `AppState` → the scan handler as one value.
+- **`plan_workers(requested, &policy, priority, frame_pixels)`** →
+  `WorkerBudget { workers, rationale }`. An explicit `--threads` override wins
+  (clamped to `[1, hard_max]`); otherwise `round(cores * ratio_for(priority))`,
+  then capped by `memory_budget_fraction * available_RAM / (frame_pixels *
+  peak_bytes_per_pixel)` when the frame size + RAM are known. `frame_pixels`
+  comes from `probe_frame_pixels` (reads NAXIS1×NAXIS2 without loading data).
+- **Memory probe** `available_memory_bytes()`: Linux `/proc/meminfo`
+  MemAvailable, macOS `sysctl hw.memsize` (libc), Windows `GlobalMemoryStatusEx`
+  (windows-sys). `None` → skip the memory cap.
+- **`parallel_index(len, workers, f)`** is the shared atomic work-stealing pool
+  both the CLI `screen-fits` and server scan use.
+- **Priority + yielding**: interactive work (server "Scan Occlusion", CLI
+  `screen-fits`) uses `Priority::Interactive`; the server scan holds an
+  `AppState::begin_interactive_job()` guard for its lifetime. Background image
+  pre-generation uses `Priority::Background` (fewer cores) AND pauses whenever
+  `AppState::interactive_job_active()` — so a user-triggered scan gets the
+  cores and memory, and background pre-warming resumes when it's idle.
+- **Config** (`[server]` in the TOML `--config`): `scan_worker_ratio` →
+  interactive, `background_worker_ratio` → background. Both optional, clamped
+  to `[0.05, 1.0]`, absent → compiled-in defaults.
 
 ### Two-DB sync (2026-06)
 Lives in `src/commands/sync/` (`mod.rs` shared helpers + `grades.rs` + `pull.rs`).

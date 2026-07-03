@@ -43,6 +43,9 @@ pub struct ServerConfig {
     /// Allow HTTP clients to mutate the configured database list. Off by
     /// default for CLI servers; Tauri always enables it.
     pub allow_database_management: bool,
+    /// Tuning policy for the parallel scans and background pre-generation.
+    /// See `concurrency::WorkerPolicy`.
+    pub worker_policy: crate::concurrency::WorkerPolicy,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -55,6 +58,7 @@ pub async fn run_server(
     pregeneration_config: PregenerationConfig,
     registry_path: Option<PathBuf>,
     allow_database_management: bool,
+    worker_policy: crate::concurrency::WorkerPolicy,
 ) -> anyhow::Result<()> {
     // Initialize tracing with environment-based filtering (for CLI mode)
     // Set RUST_LOG=debug for debug logs, RUST_LOG=info for info logs, etc.
@@ -78,6 +82,7 @@ pub async fn run_server(
         pregeneration_config,
         registry_path,
         allow_database_management,
+        worker_policy,
     };
 
     run_server_internal(config, None).await
@@ -141,6 +146,13 @@ async fn run_server_internal(
             tracing::info!("✅ Application state initialized successfully");
             state.set_registry_path(config.registry_path.clone());
             state.set_allow_database_management(config.allow_database_management);
+            state.set_worker_policy(config.worker_policy);
+            tracing::info!(
+                "📐 Worker ratios — interactive {:.2}, background {:.2} (of {} logical cores)",
+                config.worker_policy.interactive_ratio,
+                config.worker_policy.background_ratio,
+                crate::concurrency::logical_cores()
+            );
             if config.allow_database_management {
                 tracing::warn!(
                     "⚠️ Database management via HTTP is ENABLED. Anyone who can reach \
@@ -321,24 +333,33 @@ pub async fn run_server_with_shutdown(
 }
 
 async fn background_pregeneration_task(state: Arc<AppState>) {
+    use std::sync::Arc;
     use std::time::Duration;
-    use tokio::time::{interval, sleep};
+    use tokio::task::JoinSet;
+    use tokio::time::interval;
 
     tracing::info!("🎨 Starting background image pre-generation task");
 
-    // Rate limiting configuration
-    let rate_limit_delay = Duration::from_millis(500); // 2 images per second max
-    let batch_size = 10; // Process 10 images at a time
     let scan_interval = Duration::from_secs(300); // Re-scan every 5 minutes
-
     let mut interval_timer = interval(scan_interval);
 
     loop {
-        // Wait for next scan interval
         interval_timer.tick().await;
 
         // Iterate every configured database; pre-generation is per-DB work.
         for ctx in state.all_databases() {
+            // Yield to interactive work: while a user-triggered scan is
+            // running anywhere in the process, skip this cycle entirely so we
+            // don't take cores or memory from a job the user is waiting on. We
+            // re-check on the next tick.
+            if state.interactive_job_active() {
+                tracing::debug!(
+                    "⏸️ Pre-generation paused (db={}): interactive job running",
+                    ctx.id
+                );
+                continue;
+            }
+
             tracing::debug!(
                 "🔍 Scanning db={} for images needing pre-generation",
                 ctx.id
@@ -361,150 +382,124 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
                 continue;
             }
 
+            // Background worker budget: fewer cores than interactive work, and
+            // it will pause the moment an interactive job starts (below).
+            let budget = crate::concurrency::plan_workers(
+                None,
+                &state.worker_policy(),
+                crate::concurrency::Priority::Background,
+                None,
+            );
+            let concurrency = budget.workers.max(1);
+
             tracing::info!(
-                "🎯 Found {} images for pre-generation in db={}",
+                "🎯 Pre-generating up to {} images (db={}) with {} background worker(s) — {}",
                 images.len(),
-                ctx.id
+                ctx.id,
+                concurrency,
+                budget.rationale
             );
 
-            let mut processed_count = 0;
-            let mut generated_count = 0;
-            let mut skipped_count = 0;
-            let mut error_count = 0;
+            // Bound in-flight work to the background budget with a semaphore;
+            // each permit is held for one image's whole (multi-format) job.
+            let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+            let mut join_set: JoinSet<(u64, u64, u64)> = JoinSet::new();
+            let mut dispatched = 0usize;
+            let mut yielded_early = false;
 
-            for batch in images.chunks(batch_size) {
-                for (image_id, file_only, target_name) in batch {
-                    let mut _formats_processed = 0;
-
-                    if state.pregeneration_config.screen_enabled {
-                        match pregenerate_preview(
-                            &state,
-                            &ctx,
-                            *image_id,
-                            file_only,
-                            target_name,
-                            "screen",
-                        )
-                        .await
-                        {
-                            Ok(generated) => {
-                                _formats_processed += 1;
-                                if generated {
-                                    generated_count += 1;
-                                } else {
-                                    skipped_count += 1;
-                                }
-                            }
-                            Err(e) => {
-                                error_count += 1;
-                                tracing::warn!(
-                                    "⚠️ Failed to pre-generate screen preview for image {} (db={}): {}",
-                                    image_id, ctx.id, e
-                                );
-                            }
-                        }
-                    }
-
-                    if state.pregeneration_config.large_enabled {
-                        match pregenerate_preview(
-                            &state,
-                            &ctx,
-                            *image_id,
-                            file_only,
-                            target_name,
-                            "large",
-                        )
-                        .await
-                        {
-                            Ok(generated) => {
-                                _formats_processed += 1;
-                                if generated {
-                                    generated_count += 1;
-                                } else {
-                                    skipped_count += 1;
-                                }
-                            }
-                            Err(e) => {
-                                error_count += 1;
-                                tracing::warn!(
-                                    "⚠️ Failed to pre-generate large preview for image {} (db={}): {}",
-                                    image_id, ctx.id, e
-                                );
-                            }
-                        }
-                    }
-
-                    if state.pregeneration_config.original_enabled {
-                        match pregenerate_preview(
-                            &state,
-                            &ctx,
-                            *image_id,
-                            file_only,
-                            target_name,
-                            "original",
-                        )
-                        .await
-                        {
-                            Ok(generated) => {
-                                _formats_processed += 1;
-                                if generated {
-                                    generated_count += 1;
-                                } else {
-                                    skipped_count += 1;
-                                }
-                            }
-                            Err(e) => {
-                                error_count += 1;
-                                tracing::warn!(
-                                    "⚠️ Failed to pre-generate original preview for image {} (db={}): {}",
-                                    image_id, ctx.id, e
-                                );
-                            }
-                        }
-                    }
-
-                    if state.pregeneration_config.annotated_enabled {
-                        match pregenerate_annotated(&state, &ctx, *image_id, file_only, target_name)
-                            .await
-                        {
-                            Ok(generated) => {
-                                _formats_processed += 1;
-                                if generated {
-                                    generated_count += 1;
-                                } else {
-                                    skipped_count += 1;
-                                }
-                            }
-                            Err(e) => {
-                                error_count += 1;
-                                tracing::warn!(
-                                    "⚠️ Failed to pre-generate annotated image for image {} (db={}): {}",
-                                    image_id, ctx.id, e
-                                );
-                            }
-                        }
-                    }
-
-                    processed_count += 1;
-                    sleep(rate_limit_delay).await;
+            for (image_id, file_only, target_name) in images {
+                // Yield mid-cycle: stop dispatching new work as soon as an
+                // interactive job appears; already-running tasks drain.
+                if state.interactive_job_active() {
+                    yielded_early = true;
+                    break;
                 }
 
-                tracing::debug!(
-                    "📈 Pre-generation progress for db={}: {}/{} images processed",
-                    ctx.id,
-                    processed_count,
-                    images.len()
-                );
+                let permit = match Arc::clone(&sem).acquire_owned().await {
+                    Ok(p) => p,
+                    Err(_) => break, // semaphore closed (shouldn't happen)
+                };
+                let state = Arc::clone(&state);
+                let ctx = Arc::clone(&ctx);
+                join_set.spawn(async move {
+                    let _permit = permit;
+                    pregenerate_one_image(&state, &ctx, image_id, &file_only, &target_name).await
+                });
+                dispatched += 1;
             }
 
-            if processed_count > 0 {
+            let (mut generated, mut skipped, mut errors) = (0u64, 0u64, 0u64);
+            while let Some(res) = join_set.join_next().await {
+                if let Ok((g, s, e)) = res {
+                    generated += g;
+                    skipped += s;
+                    errors += e;
+                }
+            }
+
+            if dispatched > 0 {
                 tracing::info!(
-                    "✅ Pre-generation cycle complete for db={}: {} generated, {} skipped, {} errors ({} images processed)",
-                    ctx.id, generated_count, skipped_count, error_count, processed_count
+                    "✅ Pre-generation cycle for db={}: {} generated, {} skipped, {} errors ({} images{})",
+                    ctx.id,
+                    generated,
+                    skipped,
+                    errors,
+                    dispatched,
+                    if yielded_early {
+                        ", paused early to yield to interactive work"
+                    } else {
+                        ""
+                    }
                 );
             }
         }
     }
+}
+
+/// Pre-generate every enabled preview format for one image. Returns
+/// `(generated, skipped, errors)` counts across the formats.
+async fn pregenerate_one_image(
+    state: &Arc<AppState>,
+    ctx: &Arc<crate::server::database_context::DatabaseContext>,
+    image_id: i32,
+    file_only: &str,
+    target_name: &str,
+) -> (u64, u64, u64) {
+    let (mut generated, mut skipped, mut errors) = (0u64, 0u64, 0u64);
+
+    let mut tally = |result: Result<bool>, what: &str| match result {
+        Ok(true) => generated += 1,
+        Ok(false) => skipped += 1,
+        Err(e) => {
+            errors += 1;
+            tracing::warn!(
+                "⚠️ Failed to pre-generate {} for image {} (db={}): {}",
+                what,
+                image_id,
+                ctx.id,
+                e
+            );
+        }
+    };
+
+    if state.pregeneration_config.screen_enabled {
+        let r = pregenerate_preview(state, ctx, image_id, file_only, target_name, "screen").await;
+        tally(r, "screen preview");
+    }
+    if state.pregeneration_config.large_enabled {
+        let r = pregenerate_preview(state, ctx, image_id, file_only, target_name, "large").await;
+        tally(r, "large preview");
+    }
+    if state.pregeneration_config.original_enabled {
+        let r = pregenerate_preview(state, ctx, image_id, file_only, target_name, "original").await;
+        tally(r, "original preview");
+    }
+    if state.pregeneration_config.annotated_enabled {
+        let r = pregenerate_annotated(state, ctx, image_id, file_only, target_name).await;
+        tally(r, "annotated image");
+    }
+
+    (generated, skipped, errors)
 }
 
 async fn get_all_images_for_pregeneration(
