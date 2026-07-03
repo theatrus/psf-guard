@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import type { Image } from '../api/types';
 import { GradingStatus } from '../api/types';
 import { apiClient } from '../api/client';
+import PreviewImage from './PreviewImage';
+import { ensurePreviewReady } from '../hooks/previewPoll';
 
 interface ImageCardProps {
   dbId: string;
@@ -14,8 +16,6 @@ interface ImageCardProps {
 
 export default function ImageCard({ dbId, image, isSelected, onClick, onDoubleClick, qualityScore }: ImageCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
-  const imgRef = useRef<HTMLImageElement>(null);
-  const [imageError, setImageError] = useState(false);
 
   // Scroll into view when selected
   useEffect(() => {
@@ -24,11 +24,15 @@ export default function ImageCard({ dbId, image, isSelected, onClick, onDoubleCl
     }
   }, [isSelected]);
 
-  // Preload full size image when selected (for quick detail view opening)
+  // Preload full size image when selected (for quick detail view opening).
+  // Warms the interactive queue so the 'large' preview is generated if needed.
   useEffect(() => {
     if (isSelected && image.id) {
-      const preloadImg = new Image();
-      preloadImg.src = apiClient.getPreviewUrl(dbId, image.id, { size: 'large' });
+      void ensurePreviewReady(
+        dbId,
+        apiClient.getPreviewUrl(dbId, image.id, { size: 'large' }),
+        { imageId: image.id, kind: 'preview', size: 'large' }
+      );
     }
   }, [isSelected, image.id, dbId]);
 
@@ -79,41 +83,13 @@ export default function ImageCard({ dbId, image, isSelected, onClick, onDoubleCl
       onDoubleClick={onDoubleClick}
     >
       <div className="image-preview">
-        {imageError ? (
-          <div className="image-error-placeholder" style={{ 
-            width: '100%', 
-            paddingBottom: '100%', // Maintain aspect ratio
-            background: '#1a1a1a',
-            position: 'relative',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center'
-          }}>
-            <div style={{
-              position: 'absolute',
-              top: '50%',
-              left: '50%',
-              transform: 'translate(-50%, -50%)',
-              textAlign: 'center',
-              color: '#666'
-            }}>
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ marginBottom: '8px' }}>
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                <line x1="9" y1="9" x2="15" y2="15" />
-                <line x1="15" y1="9" x2="9" y2="15" />
-              </svg>
-              <div style={{ fontSize: '0.8rem' }}>Image not found</div>
-            </div>
-          </div>
-        ) : (
-          <img
-            ref={imgRef}
-            src={apiClient.getPreviewUrl(dbId, image.id, { size: 'screen' })}
-            alt={`${image.target_name} - ${image.filter_name || 'No filter'}`}
-            loading="lazy"
-            onError={() => setImageError(true)}
-          />
-        )}
+        <PreviewImage
+          dbId={dbId}
+          src={apiClient.getPreviewUrl(dbId, image.id, { size: 'screen' })}
+          descriptor={{ imageId: image.id, kind: 'preview', size: 'screen' }}
+          alt={`${image.target_name} - ${image.filter_name || 'No filter'}`}
+          loading="lazy"
+        />
         {qualityScore !== undefined && (
           <div
             className="quality-dot"

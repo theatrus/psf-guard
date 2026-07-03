@@ -3181,3 +3181,29 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Async preview-generation placeholder (PreviewImage / poll-on-error). Fills a
+   position:relative container (e.g. .image-preview, .detail-image) while the
+   server generates the PNG on the interactive queue. */
+.preview-status-box {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px;
+  text-align: center;
+  color: var(--color-text-secondary, #888);
+  background: var(--color-bg-primary, #1a1a1a);
+  z-index: 1;
+}
+
+.preview-status-label {
+  font-size: 0.8rem;
+}
+
+.preview-status-error {
+  color: #666;
+}

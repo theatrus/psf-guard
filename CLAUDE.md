@@ -234,6 +234,35 @@ the lever is how many frames run at once.
   interactive, `background_worker_ratio` → background. Both optional, clamped
   to `[0.05, 1.0]`, absent → compiled-in defaults.
 
+### Async on-demand preview generation (2026-07)
+Preview/annotated PNGs are no longer generated inside the request. `src/server/preview_queue.rs`
+holds a process-global `PreviewQueue` on `AppState`: on a cache miss the
+preview/annotated handlers `enqueue_preview(GenJob)` and return **HTTP 202**
+`{state:"generating"}` immediately (never blocking the `<img>` GET). The queue
+is a bounded, `Priority::Interactive` pool (semaphore sized lazily via
+`plan_workers` + a frame probe) where each job holds a
+`begin_interactive_job()` guard, so background pre-generation yields to
+user-driven preview work. Dedup is by full `cache_path`; generation writes to
+a temp file then atomically renames, so a readiness poll never sees a partial
+PNG (the pregen paths in `mod.rs` do the same now).
+- **Batch status**: `POST /api/db/{id}/images/generation-status` takes
+  `{requests:[{image_id,kind,size,stretch?,midtone?,shadow?,max_stars?}]}` and
+  returns parallel `{state: ready|generating|error}` — coalesces a whole grid's
+  polling into one request; enqueues unknown items idempotently.
+- **Cache keys**: `preview_cache_key` / `annotated_cache_key` in `handlers.rs`
+  are shared by the artifact handler, the status endpoint, and pregen so all
+  address the same file.
+- **Frontend** (`static/src`): optimistic `<img>` + poll-on-error. `hooks/previewPoll.ts`
+  is a singleton coordinator that batches pending descriptors (per DB) into one
+  `getGenerationStatus` POST every ~800ms; `hooks/useAsyncImage.ts` drives an
+  `<img>` (renders directly on a cache hit — zero extra requests; on the 202
+  error joins the poller, shows "Generating…", reloads with a cache-buster when
+  ready). `components/PreviewImage.tsx` wraps grid/sequence images;
+  `ImageDetailView`/`ImageComparisonView` use the hook directly (preserving the
+  zoom transforms), and `ensurePreviewReady` replaces the `new Image()` zoom-
+  switch preloads + `useImagePreloader` warming so an uncached 'original'
+  actually generates before the zoom swaps to it.
+
 ### Two-DB sync (2026-06)
 Lives in `src/commands/sync/` (`mod.rs` shared helpers + `grades.rs` + `pull.rs`).
 Two complementary single-direction kinds, structured as `sync <kind>` so more

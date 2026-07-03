@@ -79,6 +79,27 @@ export interface PreviewOptions {
   max_stars?: number;
 }
 
+// Readiness of an on-demand preview/annotated artifact (the server generates
+// it asynchronously on a bounded interactive queue; the frontend batch-polls).
+export type GenerationState = 'ready' | 'generating' | 'error';
+
+export interface GenerationStatus {
+  state: GenerationState;
+  error?: string;
+}
+
+// Identifies one artifact for the batch generation-status poll. Mirrors the
+// query params of getPreviewUrl / getAnnotatedUrl.
+export interface PreviewDescriptor {
+  imageId: number;
+  kind: 'preview' | 'annotated';
+  size: 'screen' | 'large' | 'original';
+  stretch?: boolean;
+  midtone?: number;
+  shadow?: number;
+  maxStars?: number;
+}
+
 export interface ServerInfo {
   version: string;
   cache_directory: string;

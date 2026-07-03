@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { apiClient } from '../api/client';
+import { ensurePreviewReady } from './previewPoll';
 
 /**
  * Hook to preload images for smooth navigation
@@ -28,32 +29,26 @@ export function useImagePreloader(
   useEffect(() => {
     if (!currentImageId || !dbId) return;
 
-    // Preload the next N images
+    // Preload the next N images. Warming goes through the interactive queue
+    // (ensurePreviewReady), so an uncached preview is actually generated —
+    // and its 202 no longer counts as a preload failure — by the time the
+    // user navigates to it.
     const imagesToPreload = nextImageIds.slice(0, preloadCount);
-    const preloadPromises: Promise<void>[] = [];
 
     imagesToPreload.forEach((imageId) => {
-      // Preload the regular preview
-      const previewUrl = apiClient.getPreviewUrl(dbId, imageId, { size: imageSize });
-      const previewImg = new Image();
-      previewImg.src = previewUrl;
-      preloadPromises.push(
-        new Promise((resolve) => {
-          previewImg.onload = () => resolve();
-          previewImg.onerror = () => resolve(); // Resolve even on error to not block
-        })
+      void ensurePreviewReady(
+        dbId,
+        apiClient.getPreviewUrl(dbId, imageId, { size: imageSize }),
+        { imageId, kind: 'preview', size: imageSize }
       );
 
-      // Optionally preload annotated version
+      // Optionally warm the annotated version (getAnnotatedUrl defaults to
+      // 'large' with 1000 stars).
       if (includeAnnotated) {
-        const annotatedUrl = apiClient.getAnnotatedUrl(dbId, imageId);
-        const annotatedImg = new Image();
-        annotatedImg.src = annotatedUrl;
-        preloadPromises.push(
-          new Promise((resolve) => {
-            annotatedImg.onload = () => resolve();
-            annotatedImg.onerror = () => resolve();
-          })
+        void ensurePreviewReady(
+          dbId,
+          apiClient.getAnnotatedUrl(dbId, imageId),
+          { imageId, kind: 'annotated', size: 'large' }
         );
       }
     });
