@@ -54,6 +54,10 @@ pub struct AppState {
     /// scan the user is waiting on. An `Arc` so a [`InteractiveJobGuard`] can
     /// decrement it on drop from a `spawn_blocking` task.
     active_interactive_jobs: Arc<AtomicUsize>,
+    /// Bounded, interactive-priority queue for on-demand preview / annotated
+    /// PNG generation (see `preview_queue`). Process-global so total concurrent
+    /// generation is bounded regardless of how many databases are loaded.
+    pub preview_queue: crate::server::preview_queue::PreviewQueue,
 }
 
 /// RAII marker that an interactive CPU-heavy job is running. Increments the
@@ -326,6 +330,7 @@ impl AppState {
             allow_database_management: RwLock::new(false),
             worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
+            preview_queue: crate::server::preview_queue::PreviewQueue::default(),
         })
     }
 
@@ -427,6 +432,7 @@ impl AppState {
             allow_database_management: RwLock::new(false),
             worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
+            preview_queue: crate::server::preview_queue::PreviewQueue::default(),
         }
     }
 }

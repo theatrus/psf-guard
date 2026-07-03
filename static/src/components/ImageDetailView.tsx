@@ -3,8 +3,11 @@ import { useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../api/client';
 import { GradingStatus } from '../api/types';
+import type { PreviewDescriptor } from '../api/types';
 import { useImagePreloader } from '../hooks/useImagePreloader';
 import { useImageZoom } from '../hooks/useImageZoom';
+import { useAsyncImage } from '../hooks/useAsyncImage';
+import { ensurePreviewReady } from '../hooks/previewPoll';
 import UndoRedoToolbar from './UndoRedoToolbar';
 
 interface ImageDetailViewProps {
@@ -45,7 +48,6 @@ export default function ImageDetailView({
   const [maxStars] = useState(1000);
   const [imageSize, setImageSize] = useState<'screen' | 'large' | 'original'>('large');
   const [isOriginalLoaded, setIsOriginalLoaded] = useState(false);
-  const preloadedOriginalRef = useRef<HTMLImageElement | null>(null);
   const [useOriginalImage, setUseOriginalImage] = useState(false);
   const imageDimensionsRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
   const [imageError, setImageError] = useState(false);
@@ -76,6 +78,18 @@ export default function ImageDetailView({
     includeStarData: showStars,
     imageSize: imageSize,
   });
+
+  // Async loading for the main preview/annotated image (PSF has its own
+  // endpoint and is not queued here). On a cache miss the server returns 202
+  // and this drives a "Generating…" indicator, then reloads when ready.
+  const mainSize: 'large' | 'original' = useOriginalImage ? 'original' : 'large';
+  const nonPsfSrc = showStars
+    ? apiClient.getAnnotatedUrl(dbId, imageId, mainSize, maxStars)
+    : apiClient.getPreviewUrl(dbId, imageId, { size: mainSize });
+  const nonPsfDescriptor: PreviewDescriptor = showStars
+    ? { imageId, kind: 'annotated', size: mainSize, maxStars }
+    : { imageId, kind: 'preview', size: mainSize };
+  const asyncImg = useAsyncImage(dbId, nonPsfSrc, nonPsfDescriptor);
 
   // Fetch image details
   const { data: image, isLoading, isFetching } = useQuery({
@@ -185,19 +199,20 @@ export default function ImageDetailView({
     const visualScale = zoom.getVisualScale();
     const state = imageStateRef.current;
     
-    // Preload when visual zoom > 80%
+    // Preload when visual zoom > 80%. Route through the interactive queue so an
+    // uncached 'original' is actually generated (its 202 is not a failure);
+    // only flip to it once generation completes.
     if (visualScale > 0.8 && !isOriginalLoaded && state === 'large') {
       const originalUrl = showStars
         ? apiClient.getAnnotatedUrl(dbId, imageId, 'original', maxStars)
         : apiClient.getPreviewUrl(dbId, imageId, { size: 'original' });
-      
-      const img = new Image();
-      img.src = originalUrl;
-      preloadedOriginalRef.current = img;
-      
-      img.onload = () => {
-        setIsOriginalLoaded(true);
-      };
+      const originalDescriptor: PreviewDescriptor = showStars
+        ? { imageId, kind: 'annotated', size: 'original', maxStars }
+        : { imageId, kind: 'preview', size: 'original' };
+
+      void ensurePreviewReady(dbId, originalUrl, originalDescriptor).then((ok) => {
+        if (ok) setIsOriginalLoaded(true);
+      });
     }
     
     // State machine transitions based on visual scale - only switch to original, never back
@@ -218,7 +233,6 @@ export default function ImageDetailView({
   // Reset preload state when image changes
   useEffect(() => {
     setIsOriginalLoaded(false);
-    preloadedOriginalRef.current = null;
     setUseOriginalImage(false);
     imageDimensionsRef.current = { width: 0, height: 0 };
     imageStateRef.current = 'large';
@@ -297,7 +311,7 @@ export default function ImageDetailView({
                   </div>
                 </div>
               ) : null}
-              {imageError ? (
+              {imageError || (!showPsf && asyncImg.state === 'error') ? (
                 <div className="detail-image-error" style={{
                   width: '100%',
                   height: '100%',
@@ -334,9 +348,7 @@ export default function ImageDetailView({
                           sort_by: 'r2',
                           selection: 'top-n',
                         })
-                      : showStars
-                        ? apiClient.getAnnotatedUrl(dbId, imageId, useOriginalImage ? 'original' : 'large', maxStars)
-                        : apiClient.getPreviewUrl(dbId, imageId, { size: useOriginalImage ? 'original' : 'large' })
+                      : asyncImg.src
                   }
                   alt={`${image.target_name} - ${image.filter_name || 'No filter'}`}
                   style={{
@@ -344,16 +356,18 @@ export default function ImageDetailView({
                     cursor: zoom.zoomState.scale > 1 ? 'grab' : 'default',
                     transformOrigin: '0 0',
                   }}
-                  onError={() => setImageError(true)}
+                  onError={showPsf ? () => setImageError(true) : asyncImg.onError}
                   onLoad={(e) => {
                   // Remove loading class when image loads
                   e.currentTarget.classList.remove('loading');
-                  
-                  // Clear PSF loading state when PSF image loads
+
+                  // Clear PSF loading state / mark the async image ready.
                   if (showPsf) {
                     setPsfImageLoading(false);
+                  } else {
+                    asyncImg.onLoad();
                   }
-                  
+
                   const img = e.currentTarget;
                   const newWidth = img.naturalWidth;
                   const newHeight = img.naturalHeight;
@@ -381,6 +395,14 @@ export default function ImageDetailView({
                   }}
                   draggable={false}
                 />
+              )}
+              {!showPsf && asyncImg.state === 'generating' && (
+                <div className="image-loading-overlay">
+                  <div className="loading-content">
+                    <div className="loading-spinner"></div>
+                    <span className="loading-text">Generating preview…</span>
+                  </div>
+                </div>
               )}
             </div>
           </div>

@@ -2,8 +2,10 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../api/client';
-import { GradingStatus, type Image } from '../api/types';
+import { GradingStatus, type Image, type PreviewDescriptor } from '../api/types';
 import { useImageZoom } from '../hooks/useImageZoom';
+import { useAsyncImage } from '../hooks/useAsyncImage';
+import { ensurePreviewReady } from '../hooks/previewPoll';
 
 interface ImageComparisonViewProps {
   dbId: string;
@@ -114,7 +116,34 @@ export default function ImageComparisonView({
   // Store the target zoom level when user zooms
   const targetRightZoomRef = useRef<number | null>(null);
   const targetLeftZoomRef = useRef<number | null>(null);
-  
+
+  // Async loading for both comparison images (poll-on-error + "Generating…").
+  // The size each pane requests must match its <img> below so the readiness
+  // poll addresses the same cache file.
+  const leftSize: 'large' | 'original' =
+    useLeftOriginal ||
+    (leftOriginalLoaded && targetLeftZoomRef.current !== null && targetLeftZoomRef.current > 1.0)
+      ? 'original'
+      : 'large';
+  const leftSrc = showStars
+    ? apiClient.getAnnotatedUrl(dbId, leftImageId, leftSize, maxStars)
+    : apiClient.getPreviewUrl(dbId, leftImageId, { size: leftSize });
+  const leftDescriptor: PreviewDescriptor = showStars
+    ? { imageId: leftImageId, kind: 'annotated', size: leftSize, maxStars }
+    : { imageId: leftImageId, kind: 'preview', size: leftSize };
+  const asyncLeft = useAsyncImage(dbId, leftSrc, leftDescriptor);
+
+  const rightSize: 'large' | 'original' =
+    useRightOriginal || useLeftOriginal ? 'original' : 'large';
+  const rightIdForUrl = rightImageId ?? 0;
+  const rightSrc = showStars
+    ? apiClient.getAnnotatedUrl(dbId, rightIdForUrl, rightSize, maxStars)
+    : apiClient.getPreviewUrl(dbId, rightIdForUrl, { size: rightSize });
+  const rightDescriptor: PreviewDescriptor = showStars
+    ? { imageId: rightIdForUrl, kind: 'annotated', size: rightSize, maxStars }
+    : { imageId: rightIdForUrl, kind: 'preview', size: rightSize };
+  const asyncRight = useAsyncImage(dbId, rightSrc, rightDescriptor);
+
   // Capture zoom intent before image change
   useEffect(() => {
     const visualScale = rightZoom.getVisualScale();
@@ -201,31 +230,33 @@ export default function ImageComparisonView({
                          (targetLeftZoomRef.current && targetLeftZoomRef.current > 0.8 && state === 'large');
     
     if (shouldPreload && !leftOriginalLoaded && !leftOriginalRef.current) {
+      leftOriginalRef.current = new Image(); // guard: preload only once
       const originalUrl = showStars
         ? apiClient.getAnnotatedUrl(dbId, leftImageId, 'original', maxStars)
         : apiClient.getPreviewUrl(dbId, leftImageId, { size: 'original' });
+      const descriptor: PreviewDescriptor = showStars
+        ? { imageId: leftImageId, kind: 'annotated', size: 'original', maxStars }
+        : { imageId: leftImageId, kind: 'preview', size: 'original' };
 
-      const img = new Image();
-      img.src = originalUrl;
-      leftOriginalRef.current = img;
-      
-      img.onload = () => {
+      // Route through the interactive queue so an uncached 'original' is
+      // generated (its 202 is not a failure); only flip once it's ready.
+      void ensurePreviewReady(dbId, originalUrl, descriptor).then((ok) => {
+        if (!ok) return;
         setLeftOriginalLoaded(true);
-        
+
         // If we were waiting for original due to high zoom, switch immediately
         const currentVisualScale = leftZoom.getVisualScale();
         const currentState = leftImageStateRef.current;
         if (currentState === 'large' && currentVisualScale > 1.0) {
           leftImageStateRef.current = 'switching-to-original';
           setUseLeftOriginal(true);
-          // Delay state update to allow render
           setTimeout(() => {
             if (leftImageStateRef.current === 'switching-to-original') {
               leftImageStateRef.current = 'original';
             }
           }, 300);
         }
-      };
+      });
     }
     
     // State machine transitions based on visual scale - only switch to original, never back
@@ -273,32 +304,32 @@ export default function ImageComparisonView({
                          (targetRightZoomRef.current && targetRightZoomRef.current > 0.8 && state === 'large') ||
                          (useLeftOriginal && state === 'large');
     
-    if (shouldPreload && !rightOriginalLoaded && !rightOriginalRef.current) {
+    if (shouldPreload && !rightOriginalLoaded && !rightOriginalRef.current && rightImageId) {
+      rightOriginalRef.current = new Image(); // guard: preload only once
       const originalUrl = showStars
         ? apiClient.getAnnotatedUrl(dbId, rightImageId, 'original', maxStars)
         : apiClient.getPreviewUrl(dbId, rightImageId, { size: 'original' });
+      const descriptor: PreviewDescriptor = showStars
+        ? { imageId: rightImageId, kind: 'annotated', size: 'original', maxStars }
+        : { imageId: rightImageId, kind: 'preview', size: 'original' };
 
-      const img = new Image();
-      img.src = originalUrl;
-      rightOriginalRef.current = img;
-      
-      img.onload = () => {
+      void ensurePreviewReady(dbId, originalUrl, descriptor).then((ok) => {
+        if (!ok) return;
         setRightOriginalLoaded(true);
-        
+
         // If we were waiting for original due to high zoom OR left is using original, switch immediately
         const currentVisualScale = rightZoom.getVisualScale();
         const currentState = rightImageStateRef.current;
         if (currentState === 'large' && (currentVisualScale > 1.0 || useLeftOriginal)) {
           rightImageStateRef.current = 'switching-to-original';
           setUseRightOriginal(true);
-          // Delay state update to allow render
           setTimeout(() => {
             if (rightImageStateRef.current === 'switching-to-original') {
               rightImageStateRef.current = 'original';
             }
           }, 300);
         }
-      };
+      });
     }
     
     // State machine transitions based on visual scale OR left image state
@@ -491,7 +522,7 @@ export default function ImageComparisonView({
                 onMouseUp={leftZoom.handleMouseUp}
                 onMouseLeave={leftZoom.handleMouseUp}
               >
-                {leftImageError ? (
+                {leftImageError || asyncLeft.state === 'error' ? (
                   <div className="comparison-image-error" style={{
                     width: '100%',
                     height: '100%',
@@ -517,15 +548,13 @@ export default function ImageComparisonView({
                 ) : (
                   <img
                     ref={leftZoom.imageRef}
-                    src={showStars
-                      ? apiClient.getAnnotatedUrl(dbId, leftImageId, (useLeftOriginal || (leftOriginalLoaded && targetLeftZoomRef.current && targetLeftZoomRef.current > 1.0)) ? 'original' : 'large', maxStars)
-                      : apiClient.getPreviewUrl(dbId, leftImageId, { size: (useLeftOriginal || (leftOriginalLoaded && targetLeftZoomRef.current && targetLeftZoomRef.current > 1.0)) ? 'original' : 'large' })
-                    }
+                    src={asyncLeft.src}
                     alt={`${leftImage.target_name} - ${leftImage.filter_name || 'No filter'}`}
-                    onError={() => setLeftImageError(true)}
+                    onError={asyncLeft.onError}
                     onLoad={(e) => {
+                    asyncLeft.onLoad();
                     setLeftImageLoaded(true);
-                    
+
                     const img = e.currentTarget;
                     const newWidth = img.naturalWidth;
                     const newHeight = img.naturalHeight;
@@ -561,6 +590,12 @@ export default function ImageComparisonView({
                   }}
                   draggable={false}
                   />
+                )}
+                {asyncLeft.state === 'generating' && (
+                  <div className="preview-status-box">
+                    <div className="loading-spinner" />
+                    <span className="preview-status-label">Generating…</span>
+                  </div>
                 )}
               </div>
             </div>
@@ -644,7 +679,7 @@ export default function ImageComparisonView({
                     onMouseUp={syncZoom ? leftZoom.handleMouseUp : rightZoom.handleMouseUp}
                     onMouseLeave={syncZoom ? leftZoom.handleMouseUp : rightZoom.handleMouseUp}
                   >
-                    {rightImageError ? (
+                    {rightImageError || asyncRight.state === 'error' ? (
                       <div className="comparison-image-error" style={{
                         width: '100%',
                         height: '100%',
@@ -668,22 +703,18 @@ export default function ImageComparisonView({
                         </div>
                       </div>
                     ) : (() => {
-                      // Match the left image's size for consistency
-                      const shouldUseOriginal = useRightOriginal || useLeftOriginal;
-                      const imageSize = shouldUseOriginal ? 'original' : 'large';
-                      
+                      // Size is chosen at the top (rightSize) so the readiness
+                      // poll addresses the same cache file as this <img>.
                       return (
                         <img
                           ref={rightZoom.imageRef}
-                          src={showStars
-                            ? apiClient.getAnnotatedUrl(dbId, rightImageId!, imageSize, maxStars)
-                            : apiClient.getPreviewUrl(dbId, rightImageId!, { size: imageSize })
-                          }
+                          src={asyncRight.src}
                         alt={`${rightImage.target_name} - ${rightImage.filter_name || 'No filter'}`}
-                        onError={() => setRightImageError(true)}
+                        onError={asyncRight.onError}
                         onLoad={(e) => {
+                        asyncRight.onLoad();
                         setRightImageLoaded(true);
-                        
+
                         const img = e.currentTarget;
                         const newWidth = img.naturalWidth;
                         const newHeight = img.naturalHeight;
@@ -721,6 +752,12 @@ export default function ImageComparisonView({
                         />
                       );
                     })()}
+                    {asyncRight.state === 'generating' && (
+                      <div className="preview-status-box">
+                        <div className="loading-spinner" />
+                        <span className="preview-status-label">Generating…</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 

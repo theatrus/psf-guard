@@ -7,6 +7,7 @@ import { useSpatialScan } from '../hooks/useSpatialScan';
 import { useGrading } from '../hooks/useGrading';
 import { useDbProjectTarget } from '../hooks/useUrlState';
 import UndoRedoToolbar from './UndoRedoToolbar';
+import PreviewImage from './PreviewImage';
 import type { ScoredSequence, ImageQualityResult } from '../api/types';
 
 function formatCategory(category: string): string {
@@ -524,8 +525,10 @@ function SequenceImageCard({
       onDoubleClick={onDoubleClick}
     >
       <div className="sequence-image-preview">
-        <img
+        <PreviewImage
+          dbId={dbId}
           src={apiClient.getPreviewUrl(dbId, quality.image_id, { size: 'screen' })}
+          descriptor={{ imageId: quality.image_id, kind: 'preview', size: 'screen' }}
           alt={`Image ${quality.image_id}`}
           loading="lazy"
         />

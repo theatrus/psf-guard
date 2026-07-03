@@ -22,6 +22,8 @@ import type {
   ImageQualityResponse,
   SpatialScanRequest,
   SpatialScanStatus,
+  PreviewDescriptor,
+  GenerationStatus,
 } from './types';
 
 // Default API instance (used as fallback)
@@ -205,6 +207,31 @@ export const apiClient = {
     );
     if (!data.data) throw new Error('Star detection failed');
     return data.data;
+  },
+
+  // Batch readiness poll for on-demand previews/annotated images. One request
+  // for a whole grid of pending images instead of one poll per image. Returns
+  // statuses parallel to `requests`.
+  getGenerationStatus: async (
+    dbId: string,
+    requests: PreviewDescriptor[]
+  ): Promise<GenerationStatus[]> => {
+    const apiInstance = await getApi();
+    const body = {
+      requests: requests.map((d) => ({
+        image_id: d.imageId,
+        kind: d.kind,
+        size: d.size,
+        stretch: d.stretch,
+        midtone: d.midtone,
+        shadow: d.shadow,
+        max_stars: d.maxStars,
+      })),
+    };
+    const { data } = await apiInstance.post<
+      ApiResponse<{ statuses: GenerationStatus[] }>
+    >(dbPath(dbId, '/images/generation-status'), body);
+    return data.data?.statuses ?? [];
   },
 
   getPreviewUrl: (dbId: string, imageId: number, options?: PreviewOptions): string => {

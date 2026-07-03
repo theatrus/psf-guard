@@ -4,6 +4,7 @@ pub mod database_context;
 pub mod embedded_static;
 pub mod extract;
 pub mod handlers;
+pub mod preview_queue;
 pub mod slug;
 pub mod spatial_scan;
 pub mod state;
@@ -218,6 +219,10 @@ async fn run_server_internal(
         )
         .route("/images", get(handlers::get_images))
         .route("/images/{image_id}", get(handlers::get_image))
+        .route(
+            "/images/generation-status",
+            post(handlers::post_generation_status),
+        )
         .route(
             "/images/{image_id}/preview",
             get(handlers::get_image_preview),
@@ -635,22 +640,31 @@ async fn pregenerate_preview(
         _ => Some((1200, 1200)),
     };
 
-    // Generate preview using existing stretch function
+    // Generate preview atomically (temp file then rename) so a concurrent
+    // viewer's readiness poll never observes a half-written PNG.
     let fits_path_str = fits_path.to_string_lossy().to_string();
-    let cache_path_str = cache_path.to_string_lossy().to_string();
-
-    tokio::task::spawn_blocking(move || {
+    let cache_path_final = cache_path;
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         use crate::commands::stretch_to_png::stretch_to_png_with_resize;
-
-        stretch_to_png_with_resize(
+        let tmp = crate::server::preview_queue::temp_path(&cache_path_final);
+        match stretch_to_png_with_resize(
             &fits_path_str,
-            Some(cache_path_str),
+            Some(tmp.to_string_lossy().into_owned()),
             0.2,   // midtone
             -2.8,  // shadow
             false, // logarithmic
             false, // invert
             max_dimensions,
-        )
+        ) {
+            Ok(()) => {
+                std::fs::rename(&tmp, &cache_path_final)?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                Err(e)
+            }
+        }
     })
     .await??;
 
@@ -665,11 +679,7 @@ async fn pregenerate_annotated(
     file_only: &str,
     target_name: &str,
 ) -> Result<bool> {
-    use crate::commands::annotate_stars_common::create_annotated_image;
-    use crate::image_analysis::FitsImage;
     use crate::server::cache::CacheManager;
-    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-    use image::{ColorType, ImageEncoder, Rgb};
 
     // Get image data from database first (needed for cache key)
     let image_data = {
@@ -729,37 +739,16 @@ async fn pregenerate_annotated(
     let fits_path = handlers::find_fits_file(ctx, &image_data, target_name, file_only)
         .map_err(|_| anyhow::anyhow!("FITS file not found for image {}", image_id))?;
 
-    // Generate annotated image
-    let fits_path_str = fits_path.to_string_lossy().to_string();
-    let cache_path_clone = cache_path.clone();
-
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        // Load FITS file
-        let fits = FitsImage::from_file(std::path::Path::new(&fits_path_str))?;
-
-        // Create annotated image
-        let rgb_image = create_annotated_image(
-            &fits,
-            max_stars,          // Use the same max_stars as cache key
-            0.2,                // midtone_factor
-            -2.8,               // shadow_clipping
-            Rgb([255, 255, 0]), // yellow color
-        )?;
-
-        // Save to cache
-        let cache_file = std::fs::File::create(&cache_path_clone)?;
-        let writer = std::io::BufWriter::new(cache_file);
-        let encoder =
-            PngEncoder::new_with_quality(writer, CompressionType::Best, FilterType::Adaptive);
-
-        encoder.write_image(
-            &rgb_image,
-            rgb_image.width(),
-            rgb_image.height(),
-            ColorType::Rgb8.into(),
-        )?;
-
-        Ok::<(), anyhow::Error>(())
+    // Generate atomically via the shared helper — consistent sizing with the
+    // on-demand path, and temp-then-rename so a viewer never sees a partial file.
+    let cache_path_final = cache_path;
+    tokio::task::spawn_blocking(move || {
+        crate::server::preview_queue::generate_annotated(
+            &fits_path,
+            &cache_path_final,
+            size,
+            max_stars as usize,
+        )
     })
     .await??;
 

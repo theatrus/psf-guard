@@ -7,7 +7,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -877,293 +877,170 @@ pub async fn update_image_grade(
     Ok(Json(ApiResponse::success(())))
 }
 
-// Image preview endpoint
-#[axum::debug_handler(state = Arc<AppState>)]
-pub async fn get_image_preview(
-    ctx: DbContext,
-    Path((_db_id, image_id)): Path<(String, i32)>,
-    Query(options): Query<PreviewOptions>,
-) -> Result<impl IntoResponse, AppError> {
-    let start_time = std::time::Instant::now();
-    let size = options.size.as_deref().unwrap_or("screen");
-    tracing::debug!(
-        "🖼️  Generating preview for image {} (size: {})",
-        image_id,
-        size
-    );
+/// Shared DB lookup for the image handlers: the acquired-image row, the FITS
+/// basename (from `metadata.FileName`), and the target name.
+fn resolve_image_meta(
+    ctx: &DatabaseContext,
+    image_id: i32,
+) -> Result<(crate::models::AcquiredImage, String, String), AppError> {
+    let conn = ctx.db();
+    let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+    let db = Database::new(&conn);
 
-    use crate::image_analysis::FitsImage;
-    use crate::server::cache::CacheManager;
+    let image = db
+        .get_images_by_ids(&[image_id])
+        .map_err(|_| AppError::DatabaseError)?
+        .into_iter()
+        .next()
+        .ok_or(AppError::NotFound)?;
 
-    // Get image metadata from database
-    let (image, file_only, target_name) = {
-        let conn = ctx.db();
-        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
-        let db = Database::new(&conn);
+    let target = db
+        .get_targets_by_ids(&[image.target_id])
+        .map_err(|_| AppError::DatabaseError)?
+        .into_iter()
+        .next()
+        .ok_or(AppError::NotFound)?;
+    let target_name = target.name.clone();
 
-        // Get image metadata
-        let images = db
-            .get_images_by_ids(&[image_id])
-            .map_err(|_| AppError::DatabaseError)?;
+    let metadata: serde_json::Value = serde_json::from_str(&image.metadata)
+        .map_err(|_| AppError::BadRequest("Invalid metadata".to_string()))?;
+    let filename = metadata["FileName"]
+        .as_str()
+        .ok_or_else(|| AppError::BadRequest("No filename in metadata".to_string()))?;
+    let file_only = filename
+        .split(&['\\', '/'][..])
+        .next_back()
+        .ok_or_else(|| AppError::BadRequest("Invalid filename format".to_string()))?
+        .to_string();
 
-        let image = images.into_iter().next().ok_or(AppError::NotFound)?;
+    Ok((image, file_only, target_name))
+}
 
-        // Get target name
-        let targets = db
-            .get_targets_by_ids(&[image.target_id])
-            .map_err(|_| AppError::DatabaseError)?;
-
-        let target = targets.into_iter().next().ok_or(AppError::NotFound)?;
-        let target_name = target.name.clone();
-
-        // Extract filename from metadata
-        let metadata: serde_json::Value = serde_json::from_str(&image.metadata)
-            .map_err(|_| AppError::BadRequest("Invalid metadata".to_string()))?;
-
-        let filename = metadata["FileName"]
-            .as_str()
-            .ok_or_else(|| AppError::BadRequest("No filename in metadata".to_string()))?;
-
-        // Extract just the filename from the full path
-        let file_only = filename
-            .split(&['\\', '/'][..])
-            .next_back()
-            .ok_or_else(|| AppError::BadRequest("Invalid filename format".to_string()))?
-            .to_string();
-
-        (image, file_only, target_name)
-    }; // Connection is dropped here
-
-    // Determine cache parameters
-    let stretch = options.stretch.unwrap_or(true);
-    let midtone = options.midtone.unwrap_or(0.2);
-    let shadow = options.shadow.unwrap_or(-2.8);
-
-    // Create comprehensive cache key including file identity and acquisition details
-    let cache_key = format!(
+/// Cache key for a stretched preview PNG. Must stay identical between the
+/// preview handler, the status endpoint, and the pre-generation path so all
+/// three address the same file.
+fn preview_cache_key(
+    image: &crate::models::AcquiredImage,
+    file_only: &str,
+    size: &str,
+    stretch: bool,
+    midtone: f64,
+    shadow: f64,
+) -> String {
+    format!(
         "{}_{}_{}_{}_{}_{}_{}_{}_{}",
-        image_id,
+        image.id,
         image.project_id,
         image.target_id,
-        image.acquired_date.unwrap_or(0), // Include acquisition timestamp
-        file_only.replace(&['.', ' ', '-'][..], "_"), // Include filename
+        image.acquired_date.unwrap_or(0),
+        file_only.replace(&['.', ' ', '-'][..], "_"),
         size,
         if stretch { "stretch" } else { "linear" },
-        (midtone * 10000.0) as i32, // Higher precision
-        (shadow * 10000.0) as i32   // Higher precision
-    );
+        (midtone * 10000.0) as i32,
+        (shadow * 10000.0) as i32,
+    )
+}
 
-    tracing::trace!("🔑 Cache key for image {}: {}", image_id, cache_key);
+/// Cache key for an annotated (star-marked) PNG. Same stability requirement.
+fn annotated_cache_key(
+    image: &crate::models::AcquiredImage,
+    file_only: &str,
+    size: &str,
+    max_stars: usize,
+) -> String {
+    format!(
+        "annotated_{}_{}_{}_{}_{}_{}_{}",
+        image.id,
+        image.project_id,
+        image.target_id,
+        image.acquired_date.unwrap_or(0),
+        file_only.replace(&['.', ' ', '-'][..], "_"),
+        size,
+        max_stars,
+    )
+}
 
-    let cache_manager = CacheManager::new(PathBuf::from(&ctx.cache_dir));
-    if let Err(e) = cache_manager.ensure_category_dir("previews") {
-        tracing::error!(
-            "❌ Failed to create cache directory for image {}: {}",
-            image_id,
-            e
-        );
-        return Err(AppError::InternalError(format!(
-            "Failed to create cache directory: {}",
-            e
-        )));
-    }
-    let cache_path = cache_manager.get_cached_path("previews", &cache_key, "png");
+/// Resolve the on-disk cache path for a preview/annotated artifact, creating
+/// the category dir. `category` is `"previews"` or `"annotated"`.
+fn artifact_cache_path(
+    ctx: &DatabaseContext,
+    category: &str,
+    key: &str,
+) -> Result<PathBuf, AppError> {
+    let cm = crate::server::cache::CacheManager::new(PathBuf::from(&ctx.cache_dir));
+    cm.ensure_category_dir(category)
+        .map_err(|e| AppError::InternalError(format!("Failed to create cache directory: {}", e)))?;
+    Ok(cm.get_cached_path(category, key, "png"))
+}
 
-    tracing::trace!("📂 Cache path for image {}: {:?}", image_id, cache_path);
-
-    // Check if cached version exists
-    if cache_manager.is_cached(&cache_path) {
-        tracing::debug!("💾 Cache HIT for image {} - serving from cache", image_id);
-
-        // Serve from cache
-        let mut file = File::open(&cache_path)
-            .await
-            .map_err(|_| AppError::InternalError("Failed to read cache".to_string()))?;
-
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer)
-            .await
-            .map_err(|_| AppError::InternalError("Failed to read file".to_string()))?;
-
-        tracing::debug!(
-            "⚡ Preview served from cache for image {} in {:?}",
-            image_id,
-            start_time.elapsed()
-        );
-
-        return Ok((
-            StatusCode::OK,
-            [
-                (CONTENT_TYPE, "image/png"),
-                (CACHE_CONTROL, "max-age=86400"), // TODO: Use configurable cache expiry
-            ],
-            buffer,
-        ));
-    }
-
-    tracing::debug!("💫 Cache MISS for image {} - generating preview", image_id);
-
-    // Add timeout for file finding to prevent hanging
-    let find_start = std::time::Instant::now();
-
-    // Find the FITS file
-    let fits_path = match find_fits_file(&ctx, &image, &target_name, &file_only) {
-        Ok(path) => {
-            tracing::info!(
-                "✅ Found FITS file for image {} in {:?}: {:?}",
-                image_id,
-                find_start.elapsed(),
-                path
-            );
-            path
-        }
-        Err(AppError::NotFound) => {
-            tracing::warn!(
-                "⚠️ FITS file not found for image {} (filename: {}) after {:?}",
-                image_id,
-                file_only,
-                find_start.elapsed()
-            );
-            return Err(AppError::NotFound);
-        }
-        Err(e) => {
-            tracing::error!(
-                "❌ Error finding FITS file for image {} (filename: {}) after {:?}: {:?}",
-                image_id,
-                file_only,
-                find_start.elapsed(),
-                e
-            );
-            return Err(e);
-        }
-    };
-
-    // Load FITS file (just to verify it exists and is valid)
-    let _fits = match FitsImage::from_file(&fits_path) {
-        Ok(fits) => fits,
-        Err(e) => {
-            tracing::error!(
-                "❌ Failed to load FITS file for image {} at path {:?}: {}",
-                image_id,
-                fits_path,
-                e
-            );
-            return Err(AppError::InternalError(format!(
-                "Failed to load FITS: {}",
-                e
-            )));
-        }
-    };
-
-    // Determine target size
-    let max_dimensions = match size {
-        "large" => Some((2000, 2000)),
-        "screen" => Some((1200, 1200)),
-        "original" => None,      // No resize for original
-        _ => Some((1200, 1200)), // Default to screen size for unknown values
-    };
-
-    // Use the existing stretch_to_png function to write directly to cache
-    use crate::commands::stretch_to_png::stretch_to_png_with_resize;
-
-    // Create a temporary path for the cache file
-    let cache_path_str = cache_path.to_string_lossy().to_string();
-
-    // Generate the stretched PNG with optional resizing
-    tracing::trace!(
-        "🎨 Generating PNG for image {} with size {:?}",
-        image_id,
-        max_dimensions
-    );
-
-    // Generate the PNG - wrap in spawn_blocking to prevent blocking the async runtime
-    tracing::trace!(
-        "🎨 Starting PNG generation for image {} to cache path: {}",
-        image_id,
-        cache_path_str
-    );
-
-    let fits_path_str = fits_path.to_string_lossy().to_string();
-    let cache_path_str_clone = cache_path_str.clone();
-    let generation_result = tokio::task::spawn_blocking(move || {
-        stretch_to_png_with_resize(
-            &fits_path_str,
-            Some(cache_path_str_clone),
-            midtone,
-            shadow,
-            false, // logarithmic
-            false, // invert
-            max_dimensions,
-        )
-    })
-    .await
-    .map_err(|e| {
-        tracing::error!(
-            "❌ PNG generation task panicked for image {}: {}",
-            image_id,
-            e
-        );
-        AppError::InternalError("PNG generation task failed".to_string())
-    })?;
-
-    match generation_result {
-        Ok(_) => {
-            tracing::trace!("✅ PNG generation completed for image {}", image_id);
-        }
-        Err(e) => {
-            tracing::error!(
-                "❌ Failed to generate PNG preview for image {} from {:?}: {}",
-                image_id,
-                fits_path,
-                e
-            );
-            return Err(AppError::InternalError(format!(
-                "Failed to generate preview: {}",
-                e
-            )));
-        }
-    }
-
-    // Read the file back into memory
-    let png_buffer = match tokio::fs::read(&cache_path).await {
-        Ok(buffer) => {
-            tracing::trace!(
-                "📖 Read generated PNG for image {} ({} bytes)",
-                image_id,
-                buffer.len()
-            );
-            buffer
-        }
-        Err(e) => {
-            tracing::error!(
-                "❌ Failed to read generated PNG for image {} from cache path {}: {}",
-                image_id,
-                cache_path_str,
-                e
-            );
-            // Try to clean up the potentially corrupted cache file
-            let _ = tokio::fs::remove_file(&cache_path).await;
-            return Err(AppError::InternalError(
-                "Failed to read generated PNG".to_string(),
-            ));
-        }
-    };
-
-    tracing::debug!(
-        "✅ Generated and cached preview for image {} in {:?} ({} bytes)",
-        image_id,
-        start_time.elapsed(),
-        png_buffer.len()
-    );
-
+/// Serve a cached PNG from disk.
+async fn serve_cached_png(cache_path: &std::path::Path) -> Result<Response, AppError> {
+    let buffer = tokio::fs::read(cache_path)
+        .await
+        .map_err(|_| AppError::InternalError("Failed to read cache".to_string()))?;
     Ok((
         StatusCode::OK,
         [
             (CONTENT_TYPE, "image/png"),
-            (CACHE_CONTROL, "max-age=86400"), // Cache for 1 day
+            (CACHE_CONTROL, "max-age=86400"),
         ],
-        png_buffer,
-    ))
+        buffer,
+    )
+        .into_response())
+}
+
+/// The immediate "not ready — poll for it" response on a cache miss. `<img>`
+/// treats the non-image body as an error and the frontend then batch-polls the
+/// generation-status endpoint.
+fn generating_response() -> Response {
+    (
+        StatusCode::ACCEPTED,
+        [(CACHE_CONTROL, "no-store")],
+        Json(ApiResponse::success(
+            crate::server::preview_queue::GenerationStatus {
+                state: crate::server::preview_queue::GenerationState::Generating,
+                error: None,
+            },
+        )),
+    )
+        .into_response()
+}
+
+// Image preview endpoint. Cache hit → 200 PNG; miss → enqueue on the bounded
+// interactive queue and return 202 (never generates inside the request).
+#[axum::debug_handler(state = Arc<AppState>)]
+pub async fn get_image_preview(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, image_id)): Path<(String, i32)>,
+    Query(options): Query<PreviewOptions>,
+) -> Result<Response, AppError> {
+    let size = options.size.as_deref().unwrap_or("screen");
+    let stretch = options.stretch.unwrap_or(true);
+    let midtone = options.midtone.unwrap_or(0.2);
+    let shadow = options.shadow.unwrap_or(-2.8);
+
+    let (image, file_only, target_name) = resolve_image_meta(&ctx, image_id)?;
+    let cache_key = preview_cache_key(&image, &file_only, size, stretch, midtone, shadow);
+    let cache_path = artifact_cache_path(&ctx, "previews", &cache_key)?;
+
+    if cache_path.exists() {
+        return serve_cached_png(&cache_path).await;
+    }
+
+    // Miss: resolve the source (404 if truly missing), hand generation to the
+    // bounded interactive queue, and tell the client to poll.
+    let fits_path = find_fits_file(&ctx, &image, &target_name, &file_only)?;
+    state.enqueue_preview(crate::server::preview_queue::GenJob {
+        fits_path,
+        cache_path,
+        kind: crate::server::preview_queue::GenKind::Preview {
+            midtone,
+            shadow,
+            max_dimensions: crate::server::preview_queue::max_dimensions_for_size(size),
+        },
+    });
+    Ok(generating_response())
 }
 
 // Helper function to find FITS file
@@ -1429,217 +1306,165 @@ pub async fn get_image_stars(
     Ok(Json(ApiResponse::success(response)))
 }
 
+// Annotated (star-marked) image endpoint. Same async model as the preview:
+// cache hit → 200 PNG; miss → enqueue on the interactive queue and 202.
 #[axum::debug_handler(state = Arc<AppState>)]
 pub async fn get_annotated_image(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,
     Query(options): Query<PreviewOptions>,
-) -> Result<impl IntoResponse, AppError> {
-    use crate::commands::annotate_stars_common::create_annotated_image;
-    use crate::image_analysis::FitsImage;
-    use crate::server::cache::CacheManager;
-    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-    use image::{ColorType, ImageEncoder, Rgb};
-
-    // Get image metadata from database
-    let (image, file_only, target_name) = {
-        let conn = ctx.db();
-        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
-        let db = Database::new(&conn);
-
-        let images = db
-            .get_images_by_ids(&[image_id])
-            .map_err(|_| AppError::DatabaseError)?;
-
-        let image = images.into_iter().next().ok_or(AppError::NotFound)?;
-
-        // Get target name
-        let targets = db
-            .get_targets_by_ids(&[image.target_id])
-            .map_err(|_| AppError::DatabaseError)?;
-
-        let target = targets.into_iter().next().ok_or(AppError::NotFound)?;
-        let target_name = target.name.clone();
-
-        let metadata: serde_json::Value = serde_json::from_str(&image.metadata)
-            .map_err(|_| AppError::BadRequest("Invalid metadata".to_string()))?;
-
-        let filename = metadata["FileName"]
-            .as_str()
-            .ok_or_else(|| AppError::BadRequest("No filename in metadata".to_string()))?;
-
-        let file_only = filename
-            .split(&['\\', '/'][..])
-            .next_back()
-            .ok_or_else(|| AppError::BadRequest("Invalid filename format".to_string()))?
-            .to_string();
-
-        (image, file_only, target_name)
-    };
-
-    // Determine size parameter
+) -> Result<Response, AppError> {
     let size = options.size.as_deref().unwrap_or("screen");
+    let max_stars = options.max_stars.unwrap_or(1000) as usize;
 
-    // Create comprehensive cache key for annotated image
-    let max_stars = options.max_stars.unwrap_or(1000);
-    let cache_key = format!(
-        "annotated_{}_{}_{}_{}_{}_{}_{}",
-        image_id,
-        image.project_id,
-        image.target_id,
-        image.acquired_date.unwrap_or(0),
-        file_only.replace(&['.', ' ', '-'][..], "_"),
-        size,
-        max_stars
-    );
-    let cache_manager = CacheManager::new(PathBuf::from(&ctx.cache_dir));
-    cache_manager
-        .ensure_category_dir("annotated")
-        .map_err(|e| AppError::InternalError(format!("Failed to create cache directory: {}", e)))?;
-    let cache_path = cache_manager.get_cached_path("annotated", &cache_key, "png");
+    let (image, file_only, target_name) = resolve_image_meta(&ctx, image_id)?;
+    let cache_key = annotated_cache_key(&image, &file_only, size, max_stars);
+    let cache_path = artifact_cache_path(&ctx, "annotated", &cache_key)?;
 
-    // Check if cached version exists
-    if cache_manager.is_cached(&cache_path) {
-        // Serve from cache
-        let mut file = File::open(&cache_path)
-            .await
-            .map_err(|_| AppError::InternalError("Failed to read cache".to_string()))?;
-
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer)
-            .await
-            .map_err(|_| AppError::InternalError("Failed to read file".to_string()))?;
-
-        return Ok((
-            StatusCode::OK,
-            [
-                (CONTENT_TYPE, "image/png"),
-                (CACHE_CONTROL, "max-age=86400"), // TODO: Use configurable cache expiry
-            ],
-            buffer,
-        ));
+    if cache_path.exists() {
+        return serve_cached_png(&cache_path).await;
     }
 
-    // Find FITS file path first (this is fast)
     let fits_path = find_fits_file(&ctx, &image, &target_name, &file_only)?;
+    state.enqueue_preview(crate::server::preview_queue::GenJob {
+        fits_path,
+        cache_path,
+        kind: crate::server::preview_queue::GenKind::Annotated {
+            max_stars,
+            size: size.to_string(),
+        },
+    });
+    Ok(generating_response())
+}
 
-    // Move expensive operations to spawn_blocking
-    let fits_path_str = fits_path.to_string_lossy().to_string();
-    let size_str = size.to_string();
-    let final_image = tokio::task::spawn_blocking(move || {
-        // Load FITS file
-        let fits = FitsImage::from_file(std::path::Path::new(&fits_path_str))
-            .map_err(|e| anyhow::anyhow!("Failed to load FITS: {}", e))?;
+/// One artifact whose readiness the frontend wants to know, sent in a batch so
+/// a grid of generating images produces a single poll instead of one per image.
+#[derive(Debug, Deserialize)]
+pub struct GenStatusItem {
+    pub image_id: i32,
+    /// "preview" (default) or "annotated".
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub size: Option<String>,
+    #[serde(default)]
+    pub stretch: Option<bool>,
+    #[serde(default)]
+    pub midtone: Option<f64>,
+    #[serde(default)]
+    pub shadow: Option<f64>,
+    #[serde(default)]
+    pub max_stars: Option<u32>,
+}
 
-        // Create annotated image using the common function
-        let max_stars = options.max_stars.unwrap_or(1000) as usize;
-        let rgb_image = create_annotated_image(
-            &fits,
-            max_stars,          // max_stars from parameter
-            0.2,                // midtone_factor
-            -2.8,               // shadow_clipping
-            Rgb([255, 255, 0]), // yellow color
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to create annotated image: {}", e))?;
+#[derive(Debug, Deserialize)]
+pub struct GenerationStatusRequest {
+    pub requests: Vec<GenStatusItem>,
+}
 
-        // Resize if needed based on size parameter
-        let final_image = match size_str.as_str() {
-            "large" => {
-                // Check if we need to resize for "large"
-                if fits.width > 2000 || fits.height > 2000 {
-                    let aspect_ratio = fits.width as f32 / fits.height as f32;
-                    let (new_width, new_height) = if fits.width > fits.height {
-                        (2000, (2000.0 / aspect_ratio) as u32)
-                    } else {
-                        ((2000.0 * aspect_ratio) as u32, 2000)
-                    };
-                    image::imageops::resize(
-                        &rgb_image,
-                        new_width,
-                        new_height,
-                        image::imageops::FilterType::Lanczos3,
-                    )
-                } else {
-                    rgb_image
-                }
+#[derive(Debug, Serialize)]
+pub struct GenerationStatusBatch {
+    /// Parallel to the request's `requests`.
+    pub statuses: Vec<crate::server::preview_queue::GenerationStatus>,
+}
+
+/// POST /api/db/{db_id}/images/generation-status
+///
+/// Batch readiness poll for on-demand previews / annotated images. For each
+/// item: cached → `ready`; generating → `generating`; failed → `error`;
+/// unknown → enqueue (idempotent) and report `generating`. Coalesces a whole
+/// grid's polling into one request instead of one-per-image.
+pub async fn post_generation_status(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Json(req): Json<GenerationStatusRequest>,
+) -> Result<Json<ApiResponse<GenerationStatusBatch>>, AppError> {
+    let statuses = req
+        .requests
+        .iter()
+        .map(|item| resolve_and_status(&state, &ctx, item))
+        .collect();
+    Ok(Json(ApiResponse::success(GenerationStatusBatch {
+        statuses,
+    })))
+}
+
+/// Resolve one status item to a `GenerationStatus`, enqueuing generation when
+/// the artifact is neither cached nor already known to the queue.
+fn resolve_and_status(
+    state: &Arc<AppState>,
+    ctx: &DatabaseContext,
+    item: &GenStatusItem,
+) -> crate::server::preview_queue::GenerationStatus {
+    use crate::server::preview_queue::{GenJob, GenKind, GenerationState, GenerationStatus};
+
+    let err = |msg: &str| GenerationStatus {
+        state: GenerationState::Error,
+        error: Some(msg.to_string()),
+    };
+
+    let size = item.size.clone().unwrap_or_else(|| "screen".to_string());
+    let (image, file_only, target_name) = match resolve_image_meta(ctx, item.image_id) {
+        Ok(m) => m,
+        Err(_) => return err("image not found"),
+    };
+
+    let (cache_path, kind) = match item.kind.as_deref() {
+        Some("annotated") => {
+            let max_stars = item.max_stars.unwrap_or(1000) as usize;
+            let key = annotated_cache_key(&image, &file_only, &size, max_stars);
+            match artifact_cache_path(ctx, "annotated", &key) {
+                Ok(p) => (
+                    p,
+                    GenKind::Annotated {
+                        max_stars,
+                        size: size.clone(),
+                    },
+                ),
+                Err(_) => return err("cache error"),
             }
-            "screen" => {
-                // Resize for screen viewing
-                if fits.width > 1200 || fits.height > 1200 {
-                    let aspect_ratio = fits.width as f32 / fits.height as f32;
-                    let (new_width, new_height) = if fits.width > fits.height {
-                        (1200, (1200.0 / aspect_ratio) as u32)
-                    } else {
-                        ((1200.0 * aspect_ratio) as u32, 1200)
-                    };
-                    image::imageops::resize(
-                        &rgb_image,
-                        new_width,
-                        new_height,
-                        image::imageops::FilterType::Lanczos3,
-                    )
-                } else {
-                    rgb_image
-                }
+        }
+        _ => {
+            let stretch = item.stretch.unwrap_or(true);
+            let midtone = item.midtone.unwrap_or(0.2);
+            let shadow = item.shadow.unwrap_or(-2.8);
+            let key = preview_cache_key(&image, &file_only, &size, stretch, midtone, shadow);
+            match artifact_cache_path(ctx, "previews", &key) {
+                Ok(p) => (
+                    p,
+                    GenKind::Preview {
+                        midtone,
+                        shadow,
+                        max_dimensions: crate::server::preview_queue::max_dimensions_for_size(
+                            &size,
+                        ),
+                    },
+                ),
+                Err(_) => return err("cache error"),
             }
-            "original" => rgb_image, // No resize for original
-            _ => {
-                // Default to screen size for unknown values
-                if fits.width > 1200 || fits.height > 1200 {
-                    let aspect_ratio = fits.width as f32 / fits.height as f32;
-                    let (new_width, new_height) = if fits.width > fits.height {
-                        (1200, (1200.0 / aspect_ratio) as u32)
-                    } else {
-                        ((1200.0 * aspect_ratio) as u32, 1200)
-                    };
-                    image::imageops::resize(
-                        &rgb_image,
-                        new_width,
-                        new_height,
-                        image::imageops::FilterType::Lanczos3,
-                    )
-                } else {
-                    rgb_image
-                }
+        }
+    };
+
+    if let Some(status) = state.preview_queue.status(&cache_path) {
+        return status;
+    }
+
+    // Neither cached, in-flight, nor errored: ensure it's enqueued to generate.
+    match find_fits_file(ctx, &image, &target_name, &file_only) {
+        Ok(fits_path) => {
+            state.enqueue_preview(GenJob {
+                fits_path,
+                cache_path,
+                kind,
+            });
+            GenerationStatus {
+                state: GenerationState::Generating,
+                error: None,
             }
-        };
-
-        Ok::<image::RgbImage, anyhow::Error>(final_image)
-    })
-    .await
-    .map_err(|e| {
-        AppError::InternalError(format!("Annotated image generation task panicked: {}", e))
-    })?
-    .map_err(|e| AppError::InternalError(format!("Failed to generate annotated image: {}", e)))?;
-
-    // Save to cache
-    let cache_file = std::fs::File::create(&cache_path)
-        .map_err(|_| AppError::InternalError("Failed to create cache file".to_string()))?;
-    let writer = std::io::BufWriter::new(cache_file);
-
-    // Create PNG encoder with best compression
-    let encoder = PngEncoder::new_with_quality(writer, CompressionType::Best, FilterType::Adaptive);
-
-    let (img_width, img_height) = final_image.dimensions();
-
-    // Write the image data
-    encoder
-        .write_image(&final_image, img_width, img_height, ColorType::Rgb8.into())
-        .map_err(|_| AppError::InternalError("Failed to write PNG".to_string()))?;
-
-    // Read the file back into memory
-    let png_buffer = tokio::fs::read(&cache_path)
-        .await
-        .map_err(|_| AppError::InternalError("Failed to read generated PNG".to_string()))?;
-
-    Ok((
-        StatusCode::OK,
-        [
-            (CONTENT_TYPE, "image/png"),
-            (CACHE_CONTROL, "max-age=86400"), // Cache for 1 day
-        ],
-        png_buffer,
-    ))
+        }
+        Err(_) => err("source file not found"),
+    }
 }
 
 // PSF multi image parameters
