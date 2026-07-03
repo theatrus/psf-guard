@@ -209,7 +209,7 @@ pub fn try_begin_scan(
 
 /// Run the scan synchronously (call from `spawn_blocking`). `work` must only
 /// contain images that actually need computing. `workers` is the desired
-/// concurrency (see `concurrency::plan_scan_workers`), clamped here to the
+/// concurrency (see `concurrency::plan_workers`), clamped here to the
 /// amount of work. Detection is CPU-bound at several seconds per full-frame
 /// image, so each worker roughly adds one frame's worth of throughput.
 pub fn run_scan(

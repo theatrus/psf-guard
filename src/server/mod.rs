@@ -383,12 +383,15 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
             }
 
             // Background worker budget: fewer cores than interactive work, and
-            // it will pause the moment an interactive job starts (below).
+            // it will pause the moment an interactive job starts (below). Probe
+            // a representative frame so the same memory ceiling as the scan
+            // applies — pre-generation loads full-frame buffers too.
+            let frame_pixels = probe_pregen_frame_pixels(&ctx, &images).await;
             let budget = crate::concurrency::plan_workers(
                 None,
                 &state.worker_policy(),
                 crate::concurrency::Priority::Background,
-                None,
+                frame_pixels,
             );
             let concurrency = budget.workers.max(1);
 
@@ -454,6 +457,40 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
             }
         }
     }
+}
+
+/// Best-effort pixel count of a representative frame from `images`, used to
+/// size the background pool's memory ceiling. Resolves each image's FITS via
+/// the same lookup pre-generation uses and probes its `NAXIS` without loading
+/// pixels; returns the first hit. Tries a handful so one missing file doesn't
+/// defeat the probe. `None` (e.g. all files missing) falls back to a
+/// core-only budget.
+async fn probe_pregen_frame_pixels(
+    ctx: &Arc<crate::server::database_context::DatabaseContext>,
+    images: &[(i32, String, String)],
+) -> Option<usize> {
+    use crate::db::Database;
+
+    for (image_id, file_only, target_name) in images.iter().take(8) {
+        let image_data = {
+            let conn = ctx.db();
+            let Ok(conn) = conn.lock() else { continue };
+            let db = Database::new(&conn);
+            match db.get_images_by_ids(&[*image_id]) {
+                Ok(v) => v.into_iter().next(),
+                Err(_) => None,
+            }
+        };
+        let Some(image_data) = image_data else {
+            continue;
+        };
+        if let Ok(path) = handlers::find_fits_file(ctx, &image_data, target_name, file_only) {
+            if let Some(px) = crate::concurrency::probe_frame_pixels(&path) {
+                return Some(px);
+            }
+        }
+    }
+    None
 }
 
 /// Pre-generate every enabled preview format for one image. Returns

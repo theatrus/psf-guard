@@ -430,3 +430,62 @@ impl AppState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_state() -> AppState {
+        AppState::new_for_test(Connection::open_in_memory().unwrap())
+    }
+
+    #[test]
+    fn interactive_job_gauge_tracks_guard_lifetime() {
+        let state = test_state();
+        // No interactive work initially — background may run.
+        assert!(!state.interactive_job_active());
+
+        {
+            let _guard = state.begin_interactive_job();
+            // A live guard means background work should yield.
+            assert!(state.interactive_job_active());
+        }
+        // Guard dropped -> gauge clears -> background may resume.
+        assert!(!state.interactive_job_active());
+    }
+
+    #[test]
+    fn interactive_job_gauge_nests() {
+        // Concurrent scans (e.g. across databases) must both have to finish
+        // before background work resumes; the gauge is a count, not a flag.
+        let state = test_state();
+        let g1 = state.begin_interactive_job();
+        let g2 = state.begin_interactive_job();
+        assert!(state.interactive_job_active());
+        drop(g1);
+        assert!(
+            state.interactive_job_active(),
+            "still active while one job remains"
+        );
+        drop(g2);
+        assert!(!state.interactive_job_active());
+    }
+
+    #[test]
+    fn interactive_guard_decrements_even_on_panic() {
+        // The whole point of the RAII guard: a panicking scan must not leave
+        // the gauge stuck > 0 and permanently starve background pre-generation.
+        let state = std::sync::Arc::new(test_state());
+        let state2 = std::sync::Arc::clone(&state);
+        let handle = std::thread::spawn(move || {
+            let _guard = state2.begin_interactive_job();
+            assert!(state2.interactive_job_active());
+            panic!("scan blew up");
+        });
+        assert!(handle.join().is_err(), "thread should have panicked");
+        assert!(
+            !state.interactive_job_active(),
+            "guard must decrement while unwinding"
+        );
+    }
+}

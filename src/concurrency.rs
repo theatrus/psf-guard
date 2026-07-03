@@ -12,8 +12,9 @@
 //!
 //! 1. **Priority** — [`Priority::Interactive`] work (a user asked for it) gets
 //!    the interactive core budget; [`Priority::Background`] work (pre-warming
-//!    caches) gets a smaller budget and is expected to *yield* to interactive
-//!    work entirely while it runs (the caller gates on that — see
+//!    caches) gets a smaller budget and *yields* to interactive work: the
+//!    caller stops dispatching new background items the moment an interactive
+//!    job appears and lets in-flight ones drain (see
 //!    `AppState::interactive_job_active`).
 //! 2. **Core budget** — a fraction of the logical cores per priority. The CLI
 //!    uses all cores for its foreground scan; the server leaves headroom to
@@ -339,13 +340,6 @@ pub fn available_memory_bytes() -> Option<u64> {
 fn parse_meminfo_kb(rest: &str) -> Option<u64> {
     let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
     Some(kb.saturating_mul(1024))
-}
-
-/// Peak-memory estimate (bytes) for analyzing one frame of `pixels` pixels,
-/// using the default per-pixel envelope. Exposed so callers can size a shared
-/// budget if they ever pipeline frames.
-pub fn estimated_frame_peak_bytes(pixels: usize) -> usize {
-    pixels.saturating_mul(DEFAULT_PEAK_BYTES_PER_PIXEL)
 }
 
 /// Read `NAXIS1 * NAXIS2` from a FITS primary header without loading the pixel
