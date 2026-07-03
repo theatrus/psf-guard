@@ -396,14 +396,19 @@ export default function ImageDetailView({
                   draggable={false}
                 />
               )}
-              {!showPsf && asyncImg.state === 'generating' && (
-                <div className="image-loading-overlay">
-                  <div className="loading-content">
-                    <div className="loading-spinner"></div>
-                    <span className="loading-text">Generating preview…</span>
+              {!showPsf &&
+                (asyncImg.state === 'generating' || asyncImg.state === 'loading') && (
+                  <div className="image-loading-overlay">
+                    <div className="loading-content">
+                      <div className="loading-spinner"></div>
+                      <span className="loading-text">
+                        {asyncImg.state === 'generating'
+                          ? 'Generating preview…'
+                          : 'Loading…'}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
             </div>
           </div>
 

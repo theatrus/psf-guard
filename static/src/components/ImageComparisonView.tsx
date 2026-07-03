@@ -591,10 +591,12 @@ export default function ImageComparisonView({
                   draggable={false}
                   />
                 )}
-                {asyncLeft.state === 'generating' && (
+                {(asyncLeft.state === 'generating' || asyncLeft.state === 'loading') && (
                   <div className="preview-status-box">
                     <div className="loading-spinner" />
-                    <span className="preview-status-label">Generating…</span>
+                    <span className="preview-status-label">
+                      {asyncLeft.state === 'generating' ? 'Generating…' : 'Loading…'}
+                    </span>
                   </div>
                 )}
               </div>
@@ -752,10 +754,12 @@ export default function ImageComparisonView({
                         />
                       );
                     })()}
-                    {asyncRight.state === 'generating' && (
+                    {(asyncRight.state === 'generating' || asyncRight.state === 'loading') && (
                       <div className="preview-status-box">
                         <div className="loading-spinner" />
-                        <span className="preview-status-label">Generating…</span>
+                        <span className="preview-status-label">
+                          {asyncRight.state === 'generating' ? 'Generating…' : 'Loading…'}
+                        </span>
                       </div>
                     )}
                   </div>
