@@ -12,6 +12,11 @@ A Rust utility for astronomical image analysis and grading, with N.I.N.A. Target
 | ![Overview](docs/overview.png) | ![Grid](docs/image_grid.png) | ![Compare](docs/compare.png) |
 | Complete project statistics and progress tracking | Grid view with filtering and batch operations | Synchronized zoom and detailed image comparison |
 
+| Sequence Analysis & Quality Screening | Star Detection | PSF Fitting |
+|:--:|:--:|:--:|
+| ![Sequence Analysis](docs/sequence-analysis.png) | ![Annotated Stars](docs/annotated-stars.jpg) | ![PSF Visualization](docs/psf-visualization.jpg) |
+| Per-frame quality scores, cloud/occlusion classification, and one-click occlusion scanning | HocusFocus detector with annotated output (`annotate-stars`) | Observed / fitted / residual grids with Moffat & Gaussian models (`visualize-psf-multi`) |
+
 ## Features
 
 - **N.I.N.A. Integration**: Query and analyze Target Scheduler SQLite databases.
@@ -381,9 +386,9 @@ psf-guard move-rejects --db my-db
 |:--:|:--:|
 | ![Occlusion onset](docs/screening-onset.jpg) | ![Veiled field](docs/screening-veil.jpg) |
 
-The web UI's Sequence view has a **Scan Occlusion** button that runs the
-same analysis server-side in the background and surfaces classifications
-and coverage badges on affected frames.
+The web UI's Sequence view (pictured under Screenshots above) has a **Scan
+Occlusion** button that runs the same analysis server-side in the background
+and surfaces classifications and coverage badges on affected frames.
 
 Full documentation — detection stack, annotated diagnostic examples,
 tuning, and safety properties: **[docs/SCREENING.md](docs/SCREENING.md)**.
