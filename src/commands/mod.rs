@@ -9,6 +9,7 @@ pub mod list_targets;
 pub mod read_fits;
 pub mod regrade;
 pub mod reject_archive;
+pub mod screen_annotate;
 pub mod screen_fits;
 pub mod show_images;
 pub mod stretch_to_png;

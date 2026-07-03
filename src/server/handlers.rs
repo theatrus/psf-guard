@@ -2162,18 +2162,26 @@ pub async fn analyze_sequence(
                 snr: weight_snr.unwrap_or(config.quality_weights.snr),
                 background: weight_background.unwrap_or(config.quality_weights.background),
                 spatial: weight_spatial.unwrap_or(config.quality_weights.spatial),
+                transparency: config.quality_weights.transparency,
             };
         }
 
+        let session_gap_minutes = config.session_gap_minutes;
         let analyzer = SequenceAnalyzer::new(config);
 
         // Group by filter_name and analyze each group
         let mut by_filter: std::collections::HashMap<String, Vec<_>> =
             std::collections::HashMap::new();
+        let mut entries_by_filter: std::collections::HashMap<String, Vec<_>> =
+            std::collections::HashMap::new();
         for (img, _proj, _target) in &images_data {
             let mut metrics =
                 extract_metrics_from_metadata(img.id, &img.metadata, img.acquired_date);
             merge_spatial_metrics(&mut metrics, &spatial_store, &img.metadata);
+            entries_by_filter
+                .entry(img.filter_name.clone())
+                .or_default()
+                .push(stored_entry_for(&spatial_store, img.id, &img.metadata));
             by_filter
                 .entry(img.filter_name.clone())
                 .or_default()
@@ -2181,7 +2189,10 @@ pub async fn analyze_sequence(
         }
 
         let mut all_sequences = Vec::new();
-        for (filter, metrics) in by_filter {
+        for (filter, mut metrics) in by_filter {
+            if let Some(entries) = entries_by_filter.get(&filter) {
+                merge_photometric_signals(&mut metrics, entries, session_gap_minutes);
+            }
             let scored = analyzer.analyze(&metrics, target_id, &target_name_clone, &filter);
             all_sequences.extend(scored);
         }
@@ -2276,16 +2287,18 @@ pub async fn get_image_quality(
 
     let result = tokio::task::spawn_blocking(move || {
         let config = SequenceAnalyzerConfig::default();
+        let session_gap_minutes = config.session_gap_minutes;
         let analyzer = SequenceAnalyzer::new(config);
 
-        let metrics: Vec<_> = all_filter_images
-            .iter()
-            .map(|(img, _, _)| {
-                let mut m = extract_metrics_from_metadata(img.id, &img.metadata, img.acquired_date);
-                merge_spatial_metrics(&mut m, &spatial_store, &img.metadata);
-                m
-            })
-            .collect();
+        let mut metrics: Vec<_> = Vec::with_capacity(all_filter_images.len());
+        let mut entries = Vec::with_capacity(all_filter_images.len());
+        for (img, _, _) in &all_filter_images {
+            let mut m = extract_metrics_from_metadata(img.id, &img.metadata, img.acquired_date);
+            merge_spatial_metrics(&mut m, &spatial_store, &img.metadata);
+            entries.push(stored_entry_for(&spatial_store, img.id, &img.metadata));
+            metrics.push(m);
+        }
+        merge_photometric_signals(&mut metrics, &entries, session_gap_minutes);
 
         analyzer.analyze(
             &metrics,
@@ -2338,6 +2351,100 @@ fn filename_from_metadata(metadata_json: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Fetch the filename-validated stored scan entry for an image, if any.
+fn stored_entry_for(
+    store: &crate::server::spatial_scan::SharedSpatialStore,
+    image_id: i32,
+    metadata_json: &str,
+) -> Option<crate::server::spatial_scan::StoredSpatialMetrics> {
+    let file_only = filename_from_metadata(metadata_json)?;
+    crate::server::spatial_scan::valid_entry(store, image_id, &file_only)
+}
+
+/// Run the cross-frame photometric pass (transparency, localized extinction,
+/// per-cell temporal baselines) over one filter group and merge the signals
+/// into its `ImageMetrics`. `entries` parallels `metrics` index-for-index;
+/// frames without a stored scan entry contribute empty inputs and receive no
+/// signals. Frames are bucketed by exposure (flux ratios are only meaningful
+/// within one exposure length) and split into sessions before the pass.
+fn merge_photometric_signals(
+    metrics: &mut [crate::sequence_analysis::ImageMetrics],
+    entries: &[Option<crate::server::spatial_scan::StoredSpatialMetrics>],
+    session_gap_minutes: u64,
+) {
+    use crate::photometry::{
+        sequence_screening_signals, split_sessions, FrameInputs, PhotometryConfig,
+    };
+
+    if metrics.len() != entries.len() {
+        return;
+    }
+
+    // Time order (the analyzer applies the same stable sort later).
+    let mut order: Vec<usize> = (0..metrics.len()).collect();
+    order.sort_by_key(|&i| (metrics[i].timestamp.unwrap_or(0), metrics[i].image_id));
+
+    // Bucket by exposure seconds.
+    let mut buckets: std::collections::BTreeMap<i64, Vec<usize>> =
+        std::collections::BTreeMap::new();
+    for &i in &order {
+        let key = entries[i]
+            .as_ref()
+            .and_then(|e| e.exposure_s)
+            .map(|e| e.round() as i64)
+            .unwrap_or(-1);
+        buckets.entry(key).or_default().push(i);
+    }
+
+    let phot_config = PhotometryConfig::default();
+    let gap_seconds = (session_gap_minutes * 60) as i64;
+    for indices in buckets.values() {
+        let timestamps: Vec<Option<i64>> = indices.iter().map(|&i| metrics[i].timestamp).collect();
+        for session in split_sessions(&timestamps, gap_seconds) {
+            let session_idx: Vec<usize> = session.iter().map(|&s| indices[s]).collect();
+            let inputs: Vec<FrameInputs> = session_idx
+                .iter()
+                .map(|&i| match &entries[i] {
+                    Some(e) => FrameInputs {
+                        catalog: e.catalog.clone(),
+                        star_cell_counts: e.star_cell_counts.clone(),
+                        bg_cell_medians: e.bg_cell_medians.clone(),
+                    },
+                    None => FrameInputs::default(),
+                })
+                .collect();
+            let dims = session_idx.iter().find_map(|&i| {
+                entries[i].as_ref().and_then(|e| {
+                    (e.width > 0 && e.grid_cols > 0).then_some((
+                        e.width,
+                        e.height,
+                        e.grid_cols,
+                        e.grid_rows,
+                    ))
+                })
+            });
+            let Some((width, height, grid_cols, grid_rows)) = dims else {
+                continue;
+            };
+            let signals = sequence_screening_signals(
+                &inputs,
+                width,
+                height,
+                (grid_cols, grid_rows),
+                &phot_config,
+            );
+            for (&i, sig) in session_idx.iter().zip(signals) {
+                let m = &mut metrics[i];
+                m.transparency = sig.transparency;
+                m.extinction_cell_fraction = sig.extinction_cell_fraction;
+                m.star_cell_drop_fraction = sig.star_cell_drop_fraction;
+                m.bg_cell_rise_fraction = sig.bg_cell_rise_fraction;
+                m.bg_cell_fall_fraction = sig.bg_cell_fall_fraction;
+            }
+        }
+    }
+}
+
 /// Fill spatial metric fields from the per-DB scan store when the DB
 /// metadata did not provide them (N.I.N.A. never does).
 fn merge_spatial_metrics(
@@ -2359,6 +2466,9 @@ fn merge_spatial_metrics(
         }
         if metrics.bg_cell_spread.is_none() {
             metrics.bg_cell_spread = Some(entry.bg_cell_spread);
+        }
+        if metrics.bg_glow_max.is_none() && entry.bg_glow_max > 0.0 {
+            metrics.bg_glow_max = Some(entry.bg_glow_max);
         }
     }
 }

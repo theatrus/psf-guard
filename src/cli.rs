@@ -311,6 +311,11 @@ pub enum Commands {
         #[arg(long)]
         registry: Option<String>,
 
+        /// Write annotated diagnostic PNGs for WARN/REJECT frames into this
+        /// directory (grid overlay showing which cells drove the verdict)
+        #[arg(long)]
+        annotate: Option<String>,
+
         /// Enable verbose debug output
         #[arg(long, short)]
         verbose: bool,

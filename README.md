@@ -12,6 +12,11 @@ A Rust utility for astronomical image analysis and grading, with N.I.N.A. Target
 | ![Overview](docs/overview.png) | ![Grid](docs/image_grid.png) | ![Compare](docs/compare.png) |
 | Complete project statistics and progress tracking | Grid view with filtering and batch operations | Synchronized zoom and detailed image comparison |
 
+| Sequence Analysis & Quality Screening | Star Detection | PSF Fitting |
+|:--:|:--:|:--:|
+| ![Sequence Analysis](docs/sequence-analysis.png) | ![Annotated Stars](docs/annotated-stars.jpg) | ![PSF Visualization](docs/psf-visualization.jpg) |
+| Per-frame quality scores, cloud/occlusion classification, and one-click occlusion scanning | HocusFocus detector with annotated output (`annotate-stars`) | Observed / fitted / residual grids with Moffat & Gaussian models (`visualize-psf-multi`) |
+
 ## Features
 
 - **N.I.N.A. Integration**: Query and analyze Target Scheduler SQLite databases.
@@ -26,10 +31,46 @@ A Rust utility for astronomical image analysis and grading, with N.I.N.A. Target
   more images if required. Ships as both a server for NAS hosting, and a
   stand-alone desktop app.
 - **CLI tools**: Regrading, batch operations, fits processing, batch image moving.
+- **Quality Screening**: Automatic detection of occlusion (trees, dome),
+  small clouds, thin veils, errant light and static glow — grid-based
+  spatial metrics plus cross-frame differential photometry, with annotated
+  diagnostic images explaining every verdict. See
+  [docs/SCREENING.md](docs/SCREENING.md).
 - **Statistical Analysis**: Advanced outlier detection using HFR, star count,
-  and (primitive) cloud detection in the batch modes.
+  and cloud detection in the batch modes.
 - **FITS Processing**: Convert to PNG, annotate stars, visualize PSF residuals
 - **Multi-Directory Support**: Scan multiple image directories with priority ordering
+
+## Quality Screening
+
+Screen light frames for occlusion, clouds, veils and stray light — problems
+that ruin integrations but pass conventional star-count/HFR grading. No
+database required for screening; optional write-back into the Target
+Scheduler DB closes the loop with `move-rejects`.
+
+```bash
+# Screen a night and see per-frame verdicts (OK / WARN / REJECT)
+psf-guard screen-fits "/path/to/2026-06-30/LIGHT"
+
+# Render annotated diagnostics showing WHY each frame was flagged
+psf-guard screen-fits "/path/to/LIGHT" --annotate /tmp/diagnostics
+
+# Write [Auto] rejections into the scheduler DB, then archive the files
+psf-guard screen-fits "/path/to/LIGHT" --regrade-db my-db --dry-run
+psf-guard screen-fits "/path/to/LIGHT" --regrade-db my-db
+psf-guard move-rejects --db my-db
+```
+
+| Occlusion arriving | Thin cloud veil (same field, clean vs veiled) |
+|:--:|:--:|
+| ![Occlusion onset](docs/screening-onset.jpg) | ![Veiled field](docs/screening-veil.jpg) |
+
+The web UI's Sequence view (pictured under Screenshots above) has a **Scan
+Occlusion** button that runs the same analysis server-side in the background
+and surfaces classifications and coverage badges on affected frames.
+
+Full documentation — detection stack, annotated diagnostic examples,
+tuning, and safety properties: **[docs/SCREENING.md](docs/SCREENING.md)**.
 
 ## Known Limits
 
@@ -317,6 +358,10 @@ psf-guard restore-rejects --db <slug> [--all]
 # (`--stat-*`) that `move-rejects` doesn't duplicate.
 psf-guard filter-rejected <database> <image-dir> [--dry-run] [--project NAME]
 
+# Screen lights for occlusion/clouds/stray light (see docs/SCREENING.md)
+psf-guard screen-fits ./lights --annotate ./diagnostics
+psf-guard screen-fits ./lights --regrade-db my-db --dry-run
+
 # Star detection analysis
 psf-guard analyze-fits image.fits [--compare-all] [--detector nina|hocusfocus]
 
@@ -354,7 +399,7 @@ Advanced outlier detection beyond database status:
 
 - **HFR Analysis**: Focus quality per target/filter
 - **Star Count**: Abnormal detection counts  
-- **Cloud Detection**: Sequence analysis for weather
+- **Cloud Detection**: Sequence analysis for weather (bounded-baseline: multi-frame events are fully rejected, permanent condition changes re-baseline)
 - **Distribution Analysis**: MAD for skewed data
 
 Enable with `--enable-statistical` flag.

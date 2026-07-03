@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::hocus_focus_star_detection::{detect_stars_hocus_focus, HocusFocusParams};
 use crate::image_analysis::FitsImage;
+use crate::photometry::{CatalogStar, FrameCatalog};
 use crate::spatial_analysis::{compute_spatial_metrics, PixelCalibration, SpatialAnalysisConfig};
 
 /// Persisted per-image spatial metrics.
@@ -36,7 +37,37 @@ pub struct StoredSpatialMetrics {
     pub median_adu: f64,
     /// Epoch seconds when computed.
     pub computed_at: i64,
+    /// Brightest detected stars (positions + ADU flux) for cross-frame
+    /// photometry. Empty on entries computed before photometric screening
+    /// existed; a re-scan fills them.
+    #[serde(default)]
+    pub catalog: FrameCatalog,
+    /// Star counts per cell at the configured grid (row-major).
+    #[serde(default)]
+    pub star_cell_counts: Vec<f64>,
+    /// Background medians per cell in ADU (row-major).
+    #[serde(default)]
+    pub bg_cell_medians: Vec<f64>,
+    #[serde(default)]
+    pub grid_cols: usize,
+    #[serde(default)]
+    pub grid_rows: usize,
+    #[serde(default)]
+    pub width: usize,
+    #[serde(default)]
+    pub height: usize,
+    /// Exposure seconds from the FITS header (photometry groups by exposure).
+    #[serde(default)]
+    pub exposure_s: Option<f64>,
+    /// Static within-frame glow (max positive robust-plane residual as a
+    /// fraction of sky).
+    #[serde(default)]
+    pub bg_glow_max: f64,
 }
+
+/// Stars kept per stored catalog: matching quality saturates well below full
+/// catalog size, and this keeps spatial_metrics.json compact.
+pub const STORED_CATALOG_STARS: usize = 300;
 
 /// Progress of the (singleton per-DB) spatial scan.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -266,12 +297,28 @@ fn compute_one(
     item: &ScanWorkItem,
     config: &SpatialAnalysisConfig,
 ) -> anyhow::Result<StoredSpatialMetrics> {
+    let headers = crate::commands::screen_fits::extract_headers(&item.fits_path);
     let fits = FitsImage::from_file(&item.fits_path)?;
     let stats = fits.calculate_basic_statistics();
 
     let params = HocusFocusParams::default();
     let result = detect_stars_hocus_focus(&fits.data, fits.width, fits.height, &params);
     let positions: Vec<(f64, f64)> = result.stars.iter().map(|s| s.position).collect();
+    // Background-subtracted fluxes in stored units are linear in raw_scale;
+    // divide for cross-frame-comparable ADU.
+    let catalog = FrameCatalog {
+        stars: result
+            .stars
+            .iter()
+            .filter(|s| s.flux > 0.0)
+            .map(|s| CatalogStar {
+                x: s.position.0,
+                y: s.position.1,
+                flux: s.flux / fits.raw_scale,
+            })
+            .collect(),
+    }
+    .truncated(STORED_CATALOG_STARS);
 
     let calibration = PixelCalibration {
         adu_offset: fits.raw_min + fits.bzero,
@@ -297,6 +344,15 @@ fn compute_one(
         bg_cell_max_dev: spatial.bg_cell_max_dev,
         median_adu: fits.stored_to_adu(stats.median),
         computed_at: chrono::Utc::now().timestamp(),
+        catalog,
+        star_cell_counts: spatial.star_cell_counts,
+        bg_cell_medians: spatial.bg_cell_medians,
+        grid_cols: config.grid_cols,
+        grid_rows: config.grid_rows,
+        width: fits.width,
+        height: fits.height,
+        exposure_s: headers.exposure_s,
+        bg_glow_max: spatial.bg_glow_max,
     })
 }
 
@@ -344,6 +400,15 @@ mod tests {
             bg_cell_max_dev: 0.04,
             median_adu: 1500.0,
             computed_at: 0,
+            catalog: crate::photometry::FrameCatalog::default(),
+            star_cell_counts: vec![],
+            bg_cell_medians: vec![],
+            grid_cols: 8,
+            grid_rows: 6,
+            width: 0,
+            height: 0,
+            exposure_s: None,
+            bg_glow_max: 0.0,
         }
     }
 

@@ -14,6 +14,10 @@ use crate::mtf_stretch::{stretch_image, StretchParameters};
 use crate::nina_star_detection::{
     detect_stars_with_original, NoiseReduction, StarDetectionParams, StarSensitivity,
 };
+use crate::photometry::{
+    sequence_screening_signals, split_sessions, CatalogStar, FrameCatalog, FrameInputs,
+    PhotometryConfig,
+};
 use crate::sequence_analysis::{
     ImageMetrics, IssueCategory, SequenceAnalyzer, SequenceAnalyzerConfig,
 };
@@ -39,6 +43,8 @@ pub struct ScreenOptions {
     pub dry_run: bool,
     /// Registry override for resolving `regrade_db` slugs.
     pub registry: Option<String>,
+    /// Directory to write annotated diagnostic PNGs for WARN/REJECT frames.
+    pub annotate_dir: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +60,15 @@ struct FrameRecord {
     star_uniformity: Option<f64>,
     bg_cell_spread: f64,
     bg_cell_max_dev: f64,
+    width: usize,
+    height: usize,
+    /// Star positions + ADU fluxes for cross-frame photometry (empty for
+    /// detectors without flux measurements).
+    catalog: FrameCatalog,
+    star_cell_counts: Vec<f64>,
+    bg_cell_medians: Vec<f64>,
+    bg_glow_max: f64,
+    bg_glow_cells: Vec<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -76,6 +91,9 @@ impl std::fmt::Display for Verdict {
 
 #[derive(Debug, Clone, serde::Serialize)]
 struct ScreenResult {
+    /// Index into the analysis records (for annotation); not serialized.
+    #[serde(skip)]
+    record_idx: usize,
     file: String,
     filter: String,
     exposure_s: Option<f64>,
@@ -87,6 +105,12 @@ struct ScreenResult {
     star_uniformity: Option<f64>,
     bg_cell_spread: f64,
     bg_cell_max_dev: f64,
+    transparency: Option<f64>,
+    extinction_cell_fraction: Option<f64>,
+    star_cell_drop_fraction: Option<f64>,
+    bg_cell_rise_fraction: Option<f64>,
+    bg_cell_fall_fraction: Option<f64>,
+    bg_glow_max: Option<f64>,
     quality_score: Option<f64>,
     category: Option<IssueCategory>,
     details: Option<String>,
@@ -115,7 +139,7 @@ pub fn screen_fits(path: &str, options: &ScreenOptions) -> Result<()> {
         (a.timestamp.unwrap_or(0), a.path.as_path())
             .cmp(&(b.timestamp.unwrap_or(0), b.path.as_path()))
     });
-    let results = score_records(records, options);
+    let (results, signals_by_idx) = score_records(&records, options);
 
     // Sort for output: filter, then timestamp.
     let mut results = results;
@@ -133,10 +157,123 @@ pub fn screen_fits(path: &str, options: &ScreenOptions) -> Result<()> {
         _ => print_table(&results),
     }
 
+    if let Some(dir) = &options.annotate_dir {
+        annotate_flagged(&results, &records, &signals_by_idx, dir)?;
+    }
+
     if let Some(db_arg) = &options.regrade_db {
         apply_regrade(&results, db_arg, options)?;
     }
 
+    Ok(())
+}
+
+/// Render diagnostic PNGs for every WARN/REJECT frame into `dir`, showing
+/// which grid cells drove the verdict (see `screen_annotate`).
+fn annotate_flagged(
+    results: &[ScreenResult],
+    records: &[FrameRecord],
+    signals: &HashMap<usize, crate::photometry::FrameSignals>,
+    dir: &str,
+) -> Result<()> {
+    use crate::commands::screen_annotate::{render_annotated_frame, AnnotationData};
+
+    let out_dir = Path::new(dir);
+    std::fs::create_dir_all(out_dir)?;
+    let spatial_config = SpatialAnalysisConfig::default();
+
+    let flagged: Vec<&ScreenResult> = results
+        .iter()
+        .filter(|r| r.verdict != Verdict::Ok)
+        .collect();
+    eprintln!(
+        "Annotating {} flagged frames into {}...",
+        flagged.len(),
+        out_dir.display()
+    );
+
+    for r in flagged {
+        let record = &records[r.record_idx];
+        let sig = signals.get(&r.record_idx);
+
+        let mut caption = vec![
+            format!(
+                "{} {} SCORE={}",
+                r.verdict,
+                category_label(&r.category).to_uppercase(),
+                r.quality_score
+                    .map(|s| format!("{:.2}", s))
+                    .unwrap_or_else(|| "-".into()),
+            ),
+            format!(
+                "STARS={} HFR={:.2} DEAD={} TRANSP={} EXT={} DROP={} BGRISE={}",
+                r.star_count,
+                r.avg_hfr,
+                r.dead_cell_fraction
+                    .map(|v| format!("{:.0}%", v * 100.0))
+                    .unwrap_or_else(|| "-".into()),
+                r.transparency
+                    .map(|v| format!("{:.2}", v))
+                    .unwrap_or_else(|| "-".into()),
+                r.extinction_cell_fraction
+                    .map(|v| format!("{:.0}%", v * 100.0))
+                    .unwrap_or_else(|| "-".into()),
+                r.star_cell_drop_fraction
+                    .map(|v| format!("{:.0}%", v * 100.0))
+                    .unwrap_or_else(|| "-".into()),
+                r.bg_cell_rise_fraction
+                    .map(|v| format!("{:.0}%", v * 100.0))
+                    .unwrap_or_else(|| "-".into()),
+            ),
+        ];
+        if let Some(fall) = r.bg_cell_fall_fraction.filter(|&v| v > 0.0) {
+            if let Some(first) = caption.get_mut(1) {
+                first.push_str(&format!(" FALL={:.0}%", fall * 100.0));
+            }
+        }
+        if let Some(glow) = r.bg_glow_max.filter(|&v| v > 0.0) {
+            if let Some(first) = caption.get_mut(1) {
+                first.push_str(&format!(" GLOW={:.1}%", glow * 100.0));
+            }
+        }
+        if let Some(details) = &r.details {
+            caption.push(details.chars().take(110).collect());
+        }
+
+        let data = AnnotationData {
+            grid_cols: spatial_config.grid_cols,
+            grid_rows: spatial_config.grid_rows,
+            star_cell_counts: record.star_cell_counts.clone(),
+            cell_relative_ratios: sig
+                .map(|s| s.cell_relative_ratios.clone())
+                .unwrap_or_default(),
+            star_drop_cells: sig.map(|s| s.star_drop_cells.clone()).unwrap_or_default(),
+            bg_rise_cells: sig.map(|s| s.bg_rise_cells.clone()).unwrap_or_default(),
+            bg_fall_cells: sig.map(|s| s.bg_fall_cells.clone()).unwrap_or_default(),
+            bg_glow_cells: record.bg_glow_cells.clone(),
+            caption_lines: caption,
+        };
+
+        let fits = match FitsImage::from_file(&record.path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("  Skipping annotation for {}: {}", r.file, e);
+                continue;
+            }
+        };
+        let out_path = out_dir.join(format!(
+            "{}.{}.png",
+            record
+                .path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("frame"),
+            r.verdict.to_string().to_lowercase()
+        ));
+        if let Err(e) = render_annotated_frame(&fits, &data, &out_path) {
+            eprintln!("  Failed to annotate {}: {}", r.file, e);
+        }
+    }
     Ok(())
 }
 
@@ -376,7 +513,7 @@ fn analyze_one_frame(path: &Path, options: &ScreenOptions) -> Result<FrameRecord
     let fits = FitsImage::from_file(path)?;
     let stats = fits.calculate_basic_statistics();
 
-    let (star_count, avg_hfr, positions) = detect_stars(&fits, &stats, &options.detector)?;
+    let (star_count, avg_hfr, positions, catalog) = detect_stars(&fits, &stats, &options.detector)?;
 
     let calibration = PixelCalibration {
         adu_offset: fits.raw_min + fits.bzero,
@@ -403,11 +540,18 @@ fn analyze_one_frame(path: &Path, options: &ScreenOptions) -> Result<FrameRecord
         star_uniformity: spatial.star_uniformity,
         bg_cell_spread: spatial.bg_cell_spread,
         bg_cell_max_dev: spatial.bg_cell_max_dev,
+        width: fits.width,
+        height: fits.height,
+        catalog,
+        star_cell_counts: spatial.star_cell_counts,
+        bg_cell_medians: spatial.bg_cell_medians,
+        bg_glow_max: spatial.bg_glow_max,
+        bg_glow_cells: spatial.bg_glow_cells,
     })
 }
 
-/// (star_count, average_hfr, star centroid positions)
-type DetectionSummary = (usize, f64, Vec<(f64, f64)>);
+/// (star_count, average_hfr, star centroid positions, photometric catalog)
+type DetectionSummary = (usize, f64, Vec<(f64, f64)>, FrameCatalog);
 
 fn detect_stars(
     fits: &FitsImage,
@@ -436,27 +580,47 @@ fn detect_stars(
                 &params,
             );
             let positions = result.star_list.iter().map(|s| s.position).collect();
-            Ok((result.star_list.len(), result.average_hfr, positions))
+            // The NINA port does not measure flux, so no photometric catalog.
+            Ok((
+                result.star_list.len(),
+                result.average_hfr,
+                positions,
+                FrameCatalog::default(),
+            ))
         }
         "hocusfocus" => {
             let params = HocusFocusParams::default();
             let result = detect_stars_hocus_focus(&fits.data, fits.width, fits.height, &params);
             let positions = result.stars.iter().map(|s| s.position).collect();
-            Ok((result.stars.len(), result.average_hfr, positions))
+            // Fluxes are background-subtracted sums in stored (per-frame
+            // rescaled) units; divide by raw_scale for cross-frame ADU.
+            let catalog = FrameCatalog {
+                stars: result
+                    .stars
+                    .iter()
+                    .filter(|s| s.flux > 0.0)
+                    .map(|s| CatalogStar {
+                        x: s.position.0,
+                        y: s.position.1,
+                        flux: s.flux / fits.raw_scale,
+                    })
+                    .collect(),
+            };
+            Ok((result.stars.len(), result.average_hfr, positions, catalog))
         }
         other => Err(anyhow::anyhow!("Unknown detector: {}", other)),
     }
 }
 
 #[derive(Debug, Default)]
-struct FrameHeaders {
-    filter: Option<String>,
-    exposure_s: Option<f64>,
-    timestamp: Option<i64>,
+pub(crate) struct FrameHeaders {
+    pub(crate) filter: Option<String>,
+    pub(crate) exposure_s: Option<f64>,
+    pub(crate) timestamp: Option<i64>,
 }
 
 /// Extract filter, exposure and observation time from the FITS header.
-fn extract_headers(path: &Path) -> FrameHeaders {
+pub(crate) fn extract_headers(path: &Path) -> FrameHeaders {
     use fitrs::Fits;
 
     let mut out = FrameHeaders::default();
@@ -519,7 +683,13 @@ fn parse_fits_datetime(s: &str) -> Option<i64> {
 
 /// Group frames into (filter, exposure) sequences, run the sequence analyzer,
 /// and attach verdicts.
-fn score_records(records: Vec<FrameRecord>, options: &ScreenOptions) -> Vec<ScreenResult> {
+fn score_records(
+    records: &[FrameRecord],
+    options: &ScreenOptions,
+) -> (
+    Vec<ScreenResult>,
+    HashMap<usize, crate::photometry::FrameSignals>,
+) {
     let config = SequenceAnalyzerConfig {
         session_gap_minutes: options.session_gap_minutes,
         dead_cell_rise_threshold: options.dead_cell_rise,
@@ -540,8 +710,10 @@ fn score_records(records: Vec<FrameRecord>, options: &ScreenOptions) -> Vec<Scre
 
     let mut results: Vec<Option<ScreenResult>> = records
         .iter()
-        .map(|r| {
+        .enumerate()
+        .map(|(record_idx, r)| {
             Some(ScreenResult {
+                record_idx,
                 file: r
                     .path
                     .file_name()
@@ -558,6 +730,12 @@ fn score_records(records: Vec<FrameRecord>, options: &ScreenOptions) -> Vec<Scre
                 star_uniformity: r.star_uniformity,
                 bg_cell_spread: r.bg_cell_spread,
                 bg_cell_max_dev: r.bg_cell_max_dev,
+                transparency: None,
+                extinction_cell_fraction: None,
+                star_cell_drop_fraction: None,
+                bg_cell_rise_fraction: None,
+                bg_cell_fall_fraction: None,
+                bg_glow_max: (r.bg_glow_max > 0.0).then_some(r.bg_glow_max),
                 quality_score: None,
                 category: None,
                 details: None,
@@ -566,11 +744,42 @@ fn score_records(records: Vec<FrameRecord>, options: &ScreenOptions) -> Vec<Scre
         })
         .collect();
 
+    let spatial_config = SpatialAnalysisConfig::default();
+    let grid = (spatial_config.grid_cols, spatial_config.grid_rows);
+    let phot_config = PhotometryConfig::default();
+    let gap_seconds = (options.session_gap_minutes * 60) as i64;
+    let mut signals_by_idx: HashMap<usize, crate::photometry::FrameSignals> = HashMap::new();
+
     for ((filter, _exp), indices) in &groups {
+        // Photometric + per-cell temporal signals, per session, before
+        // scoring (records are pre-sorted by time, so indices are ordered).
+        let timestamps: Vec<Option<i64>> = indices.iter().map(|&i| records[i].timestamp).collect();
+        for session in split_sessions(&timestamps, gap_seconds) {
+            let session_records: Vec<&FrameRecord> =
+                session.iter().map(|&si| &records[indices[si]]).collect();
+            let inputs: Vec<FrameInputs> = session_records
+                .iter()
+                .map(|r| FrameInputs {
+                    catalog: r.catalog.clone(),
+                    star_cell_counts: r.star_cell_counts.clone(),
+                    bg_cell_medians: r.bg_cell_medians.clone(),
+                })
+                .collect();
+            let (width, height) = session_records
+                .first()
+                .map(|r| (r.width, r.height))
+                .unwrap_or((0, 0));
+            let signals = sequence_screening_signals(&inputs, width, height, grid, &phot_config);
+            for (si, sig) in session.iter().zip(signals) {
+                signals_by_idx.insert(indices[*si], sig);
+            }
+        }
+
         let metrics: Vec<ImageMetrics> = indices
             .iter()
             .map(|&idx| {
                 let r = &records[idx];
+                let sig = signals_by_idx.get(&idx);
                 ImageMetrics {
                     image_id: idx as i32,
                     timestamp: r.timestamp,
@@ -581,9 +790,25 @@ fn score_records(records: Vec<FrameRecord>, options: &ScreenOptions) -> Vec<Scre
                     background: Some(r.median_adu),
                     dead_cell_fraction: r.dead_cell_fraction,
                     bg_cell_spread: Some(r.bg_cell_spread),
+                    transparency: sig.and_then(|s| s.transparency),
+                    extinction_cell_fraction: sig.and_then(|s| s.extinction_cell_fraction),
+                    star_cell_drop_fraction: sig.and_then(|s| s.star_cell_drop_fraction),
+                    bg_cell_rise_fraction: sig.and_then(|s| s.bg_cell_rise_fraction),
+                    bg_cell_fall_fraction: sig.and_then(|s| s.bg_cell_fall_fraction),
+                    bg_glow_max: (r.bg_glow_max > 0.0).then_some(r.bg_glow_max),
                 }
             })
             .collect();
+
+        for (&idx, m) in indices.iter().zip(&metrics) {
+            if let Some(res) = results[idx].as_mut() {
+                res.transparency = m.transparency;
+                res.extinction_cell_fraction = m.extinction_cell_fraction;
+                res.star_cell_drop_fraction = m.star_cell_drop_fraction;
+                res.bg_cell_rise_fraction = m.bg_cell_rise_fraction;
+                res.bg_cell_fall_fraction = m.bg_cell_fall_fraction;
+            }
+        }
 
         for seq in analyzer.analyze(&metrics, 0, "screen", filter) {
             for img in seq.images {
@@ -598,7 +823,7 @@ fn score_records(records: Vec<FrameRecord>, options: &ScreenOptions) -> Vec<Scre
         }
     }
 
-    results.into_iter().flatten().collect()
+    (results.into_iter().flatten().collect(), signals_by_idx)
 }
 
 fn verdict_for(score: &f64, category: &Option<IssueCategory>, options: &ScreenOptions) -> Verdict {
@@ -630,7 +855,7 @@ fn category_label(category: &Option<IssueCategory>) -> &'static str {
 
 fn print_table(results: &[ScreenResult]) {
     println!(
-        "{:<52} {:>6} {:>6} {:>6} {:>7} {:>6} {:>8} {:>6} {:>13} {:>7}",
+        "{:<52} {:>6} {:>6} {:>6} {:>7} {:>6} {:>8} {:>6} {:>5} {:>6} {:>13} {:>7}",
         "File",
         "Filter",
         "Stars",
@@ -638,14 +863,16 @@ fn print_table(results: &[ScreenResult]) {
         "MedADU",
         "Dead%",
         "BgSpread",
+        "Transp",
+        "Ext%",
         "Score",
         "Category",
         "Verdict"
     );
-    println!("{}", "-".repeat(126));
+    println!("{}", "-".repeat(139));
     for r in results {
         println!(
-            "{:<52} {:>6} {:>6} {:>6.2} {:>7.0} {:>6} {:>8.3} {:>6} {:>13} {:>7}",
+            "{:<52} {:>6} {:>6} {:>6.2} {:>7.0} {:>6} {:>8.3} {:>6} {:>5} {:>6} {:>13} {:>7}",
             truncate_name(&r.file, 52),
             r.filter,
             r.star_count,
@@ -655,6 +882,12 @@ fn print_table(results: &[ScreenResult]) {
                 .map(|d| format!("{:.0}", d * 100.0))
                 .unwrap_or_else(|| "-".to_string()),
             r.bg_cell_spread,
+            r.transparency
+                .map(|t| format!("{:.2}", t))
+                .unwrap_or_else(|| "-".to_string()),
+            r.extinction_cell_fraction
+                .map(|e| format!("{:.0}", e * 100.0))
+                .unwrap_or_else(|| "-".to_string()),
             r.quality_score
                 .map(|s| format!("{:.2}", s))
                 .unwrap_or_else(|| "-".to_string()),
@@ -676,7 +909,7 @@ fn print_table(results: &[ScreenResult]) {
         .iter()
         .filter(|r| r.verdict == Verdict::Warn)
         .count();
-    println!("{}", "-".repeat(126));
+    println!("{}", "-".repeat(139));
     println!(
         "{} frames: {} ok, {} warn, {} reject",
         total,
@@ -701,11 +934,11 @@ fn truncate_name(name: &str, max: usize) -> String {
 
 fn print_csv(results: &[ScreenResult]) {
     println!(
-        "File,Filter,ExposureS,Timestamp,Stars,AvgHFR,MedianADU,DeadCellFraction,StarUniformity,BgCellSpread,BgCellMaxDev,Score,Category,Verdict"
+        "File,Filter,ExposureS,Timestamp,Stars,AvgHFR,MedianADU,DeadCellFraction,StarUniformity,BgCellSpread,BgCellMaxDev,Transparency,ExtinctionCellFraction,StarCellDropFraction,BgCellRiseFraction,BgCellFallFraction,BgGlowMax,Score,Category,Verdict"
     );
     for r in results {
         println!(
-            "{},{},{},{},{},{:.3},{:.1},{},{},{:.4},{:.4},{},{},{:?}",
+            "{},{},{},{},{},{:.3},{:.1},{},{},{:.4},{:.4},{},{},{},{},{},{},{},{},{}",
             r.file,
             r.filter,
             r.exposure_s.map(|e| e.to_string()).unwrap_or_default(),
@@ -721,6 +954,24 @@ fn print_csv(results: &[ScreenResult]) {
                 .unwrap_or_default(),
             r.bg_cell_spread,
             r.bg_cell_max_dev,
+            r.transparency
+                .map(|v| format!("{:.4}", v))
+                .unwrap_or_default(),
+            r.extinction_cell_fraction
+                .map(|v| format!("{:.4}", v))
+                .unwrap_or_default(),
+            r.star_cell_drop_fraction
+                .map(|v| format!("{:.4}", v))
+                .unwrap_or_default(),
+            r.bg_cell_rise_fraction
+                .map(|v| format!("{:.4}", v))
+                .unwrap_or_default(),
+            r.bg_cell_fall_fraction
+                .map(|v| format!("{:.4}", v))
+                .unwrap_or_default(),
+            r.bg_glow_max
+                .map(|v| format!("{:.4}", v))
+                .unwrap_or_default(),
             r.quality_score
                 .map(|s| format!("{:.4}", s))
                 .unwrap_or_default(),
@@ -774,6 +1025,7 @@ mod tests {
             regrade_db: None,
             dry_run: false,
             registry: None,
+            annotate_dir: None,
         };
         assert_eq!(verdict_for(&0.9, &None, &options), Verdict::Ok);
         assert_eq!(verdict_for(&0.2, &None, &options), Verdict::Reject);

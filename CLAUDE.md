@@ -149,6 +149,46 @@ Design, phases, tracker: [REJECT_ARCHIVE_PLAN.md](./REJECT_ARCHIVE_PLAN.md).
   READ_WRITE without CREATE so a stale registry path errors instead of
   leaving a junk sqlite file. Rejections then flow through `move-rejects`
   as usual.
+- **Photometric screening (2026-07)**: `src/photometry.rs` — cross-frame
+  differential photometry + per-cell temporal baselines, for small clouds
+  and errant light that grid metrics dilute away. Stars are matched across
+  a session (grid-hash NN after estimating the global dither offset) against
+  a presence-filtered reference catalog (median flux per star). Signals per
+  frame: **transparency** (median matched-star flux ratio; thin uniform
+  cloud dims ~10-40% long before stars vanish), **extinction_cell_fraction**
+  (per-cell flux ratios ÷ global transparency < 0.75 → localized small
+  cloud), **star_cell_drop_fraction** (cell's share of stars vs its own
+  temporal median, Poisson floors), **bg_cell_rise_fraction** (plane-
+  detrended per-cell background vs temporal median → transient errant
+  light; static gradients live in the plane + baseline). Fluxes MUST be
+  ADU (`stored_flux / raw_scale`) — stored units are per-frame rescaled.
+  Sessions split on the 60-min gap and group by (filter, exposure) before
+  matching. **Static glow** (`bg_glow_max` in spatial_analysis): max positive
+  residual above the frame's own robust-plane model — catches haze/lit
+  occluder edges present from a session's FIRST frame, which every temporal
+  detector is structurally blind to. Flag requires BOTH >2.5% of sky AND
+  >30 ADU (`glow_min_adu`): real Ha nebulosity measures 19-22 ADU mid-frame
+  (4-5% of dark narrowband sky) and must not flag; measured haze is 48-103
+  ADU at field edges. WARN-only (SkyBrightening) — glow frames stack into
+  artifacts, so they surface for pre-integration review. Rig-signature
+  cross-series baselining is the robust future extension.
+  `screen-fits --annotate <dir>` renders a diagnostic PNG per
+  WARN/REJECT frame (`src/commands/screen_annotate.rs`): grid overlay with
+  RED = dead cells, ORANGE = localized extinction (labeled with the cell's
+  flux ratio), MAGENTA = transient star-share drop, YELLOW = background
+  rise, BLUE = background fall (dark occluder), CYAN = static glow, plus a
+  caption strip (verdict/score/metrics/details, built-in
+  bitmap font — no font-file dependency). Classification: localized extinction / star-cell drop →
+  `LikelyClouds` (small cloud, REJECT; single-frame allowed — multi-star
+  evidence), transparency < 0.8 → `LikelyClouds` (veil), bg-cell rise with
+  stable stars → `SkyBrightening` (errant light, WARN). Quality score gains
+  an absolute transparency term (weight 0.15 additive). Wired into BOTH
+  `screen-fits` (Transp/Ext% columns) and the server scan
+  (`StoredSpatialMetrics` persists a 300-star catalog + per-cell grids;
+  `analyze_sequence`/`get_image_quality` run the pass at query time —
+  pre-photometry cache entries lack catalogs and simply skip it until a
+  re-scan). Photometry is blind to regions occluded most of a sequence
+  (reference presence filter) — that remains the dead-cell metric's job.
 - **Server/UI trigger**: `src/server/spatial_scan.rs` + `POST
   /api/db/{id}/analysis/spatial-scan` runs the same computation as a
   singleton per-DB background task (2 worker threads, ~8s/frame full-frame)

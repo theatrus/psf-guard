@@ -27,6 +27,10 @@ pub struct NormalizedMetrics {
     /// cell fraction is already dimensionless and comparable across setups.
     #[serde(default)]
     pub spatial_coverage: Option<f64>,
+    /// Photometric transparency mapped to 0..1 (1.0 at nominal flux, 0.0 at
+    /// <= 60% of reference flux). Absolute mapping like spatial_coverage.
+    #[serde(default)]
+    pub transparency: Option<f64>,
 }
 
 /// Quality analysis result for a single image within its sequence context.
@@ -98,6 +102,34 @@ pub struct ImageMetrics {
     /// stray-light gradients, often before any stars are lost.
     #[serde(default)]
     pub bg_cell_spread: Option<f64>,
+    /// Median flux ratio of matched stars vs the sequence reference
+    /// (photometry module): 1.0 nominal, 0.7 = whole frame ~0.4 mag dimmer.
+    /// Detects thin uniform cloud long before stars are lost.
+    #[serde(default)]
+    pub transparency: Option<f64>,
+    /// Fraction of grid cells with localized extinction (cell flux ratio
+    /// well below the frame's global transparency): a small cloud.
+    #[serde(default)]
+    pub extinction_cell_fraction: Option<f64>,
+    /// Fraction of cells with a hard transient drop in their share of the
+    /// frame's stars vs their own temporal baseline (small opaque cloud).
+    #[serde(default)]
+    pub star_cell_drop_fraction: Option<f64>,
+    /// Fraction of cells with a transient, gradient-detrended background
+    /// rise vs their own temporal baseline (errant light).
+    #[serde(default)]
+    pub bg_cell_rise_fraction: Option<f64>,
+    /// Fraction of cells with a transient, gradient-detrended background
+    /// FALL vs their own temporal baseline: a dark occluder or cloud shadow
+    /// blocking skyglow (affected regions read darker, not milky).
+    #[serde(default)]
+    pub bg_cell_fall_fraction: Option<f64>,
+    /// Largest positive within-frame deviation above the frame's own robust
+    /// plane model (fraction of sky). Catches STATIC localized glow - haze
+    /// or a lit occluder edge present from a sequence's first frame - which
+    /// temporal baselines can never see.
+    #[serde(default)]
+    pub bg_glow_max: Option<f64>,
 }
 
 /// Configurable weights for composite quality scoring.
@@ -113,6 +145,14 @@ pub struct QualityWeights {
     /// analysis is unaffected because missing metrics are renormalized away.
     #[serde(default = "default_spatial_quality_weight")]
     pub spatial: f64,
+    /// Weight for photometric transparency (thin-cloud veiling). Additive
+    /// and missing-metric-safe like `spatial`.
+    #[serde(default = "default_transparency_quality_weight")]
+    pub transparency: f64,
+}
+
+fn default_transparency_quality_weight() -> f64 {
+    0.15
 }
 
 fn default_spatial_quality_weight() -> f64 {
@@ -128,6 +168,7 @@ impl Default for QualityWeights {
             snr: 0.25,
             background: 0.10,
             spatial: default_spatial_quality_weight(),
+            transparency: default_transparency_quality_weight(),
         }
     }
 }
@@ -140,7 +181,8 @@ impl QualityWeights {
             + self.eccentricity
             + self.snr
             + self.background
-            + self.spatial;
+            + self.spatial
+            + self.transparency;
         if sum < 1e-10 {
             return Self::default();
         }
@@ -154,6 +196,7 @@ impl QualityWeights {
             snr: self.snr / sum,
             background: self.background / sum,
             spatial: self.spatial / sum,
+            transparency: self.transparency / sum,
         }
     }
 }
@@ -221,6 +264,28 @@ pub struct SequenceAnalyzerConfig {
     /// anomalous ("boiling frog"). Set >= 1.0 to disable freezing.
     #[serde(default = "default_baseline_freeze_threshold")]
     pub baseline_freeze_threshold: f64,
+    /// Localized-extinction cell fraction above which a frame is classified
+    /// as a small passing cloud (photometric evidence: a coherent flux dip
+    /// in a patch of matched stars).
+    #[serde(default = "default_extinction_cells_threshold")]
+    pub extinction_cells_threshold: f64,
+    /// Global transparency below which a frame is classified as veiled by
+    /// thin cloud (median matched-star flux ratio vs sequence reference).
+    #[serde(default = "default_transparency_threshold")]
+    pub transparency_threshold: f64,
+    /// Star-share drop cell fraction above which a frame is classified as a
+    /// small opaque cloud (per-cell temporal baseline).
+    #[serde(default = "default_star_drop_cells_threshold")]
+    pub star_drop_cells_threshold: f64,
+    /// Background-rise cell fraction above which a frame is flagged for
+    /// errant light (per-cell temporal baseline, gradient-detrended).
+    #[serde(default = "default_bg_rise_cells_threshold")]
+    pub bg_rise_cells_threshold: f64,
+    /// Static within-frame glow (max positive robust-plane residual as a
+    /// fraction of sky) above which a frame is flagged for stray light.
+    /// Clean-frame envelope: 0.014-0.021; static haze: 0.030-0.065.
+    #[serde(default = "default_bg_glow_threshold")]
+    pub bg_glow_threshold: f64,
     /// Maximum consecutive frames the EWMA baselines stay frozen. A run of
     /// anomalous frames longer than this is accepted as a new steady state
     /// (moonrise, light dome) and the baselines re-seed from the current
@@ -251,6 +316,26 @@ fn default_baseline_freeze_max_frames() -> usize {
     15
 }
 
+fn default_extinction_cells_threshold() -> f64 {
+    0.06
+}
+
+fn default_transparency_threshold() -> f64 {
+    0.80
+}
+
+fn default_star_drop_cells_threshold() -> f64 {
+    0.06
+}
+
+fn default_bg_rise_cells_threshold() -> f64 {
+    0.06
+}
+
+fn default_bg_glow_threshold() -> f64 {
+    0.025
+}
+
 impl Default for SequenceAnalyzerConfig {
     fn default() -> Self {
         Self {
@@ -268,6 +353,11 @@ impl Default for SequenceAnalyzerConfig {
             bg_spread_rise_threshold: default_bg_spread_rise_threshold(),
             baseline_freeze_threshold: default_baseline_freeze_threshold(),
             baseline_freeze_max_frames: default_baseline_freeze_max_frames(),
+            extinction_cells_threshold: default_extinction_cells_threshold(),
+            transparency_threshold: default_transparency_threshold(),
+            star_drop_cells_threshold: default_star_drop_cells_threshold(),
+            bg_rise_cells_threshold: default_bg_rise_cells_threshold(),
+            bg_glow_threshold: default_bg_glow_threshold(),
         }
     }
 }
@@ -361,6 +451,7 @@ impl SequenceAnalyzer {
                         snr: Some(1.0),
                         background: Some(1.0),
                         spatial_coverage: Some(1.0),
+                        transparency: Some(1.0),
                     },
                     details: None,
                 })
@@ -420,6 +511,13 @@ impl SequenceAnalyzer {
                     .map(|dead| 1.0 - (dead / self.config.dead_cell_abs_threshold).clamp(0.0, 1.0))
             })
             .collect();
+        // Transparency is already sequence-relative (flux ratio vs the
+        // sequence reference), so map it absolutely: nominal (>= 1.0) -> 1.0,
+        // 40% flux loss or worse -> 0.0.
+        let norm_transparency: Vec<Option<f64>> = images
+            .iter()
+            .map(|i| i.transparency.map(|t| ((t - 0.6) / 0.4).clamp(0.0, 1.0)))
+            .collect();
 
         // Compute EWMA temporal deviation scores
         let temporal_scores = self.compute_temporal_scores(&images);
@@ -435,6 +533,7 @@ impl SequenceAnalyzer {
             let nsn = norm_snr[i];
             let nb = norm_bg[i];
             let nsp = norm_spatial[i];
+            let ntr = norm_transparency[i];
 
             // Weighted sum using available metrics
             let (score, total_weight) = weighted_sum_available(&[
@@ -444,6 +543,7 @@ impl SequenceAnalyzer {
                 (nsn, w.snr),
                 (nb, w.background),
                 (nsp, w.spatial),
+                (ntr, w.transparency),
             ]);
 
             let quality_score = if total_weight > 0.0 {
@@ -469,6 +569,7 @@ impl SequenceAnalyzer {
                     snr: nsn,
                     background: nb,
                     spatial_coverage: nsp,
+                    transparency: ntr,
                 },
                 details: None,
             });
@@ -721,7 +822,40 @@ impl SequenceAnalyzer {
                 self.compute_additive_rise(images, &anomalous, i, |m| m.bg_cell_spread);
             let stray_gradient = bg_spread_rise > self.config.bg_spread_rise_threshold;
 
-            if results[i].quality_score >= 0.7 && !occluded && !stray_gradient {
+            // Photometric small-transient signals. These are already
+            // sequence-relative and rest on multi-star evidence, so no
+            // neighbor corroboration is needed (small clouds are often
+            // single-frame events - they move).
+            let extinction = images[i].extinction_cell_fraction.unwrap_or(0.0);
+            let star_cell_drop = images[i].star_cell_drop_fraction.unwrap_or(0.0);
+            // A transient localized background FALL (dark occluder / cloud
+            // shadow) corroborates weaker star-based evidence: with a dark
+            // patch present, half-threshold extinction or star loss is
+            // enough.
+            let dark_patch = images[i].bg_cell_fall_fraction.unwrap_or(0.0)
+                > self.config.bg_rise_cells_threshold;
+            let small_cloud = extinction > self.config.extinction_cells_threshold
+                || star_cell_drop > self.config.star_drop_cells_threshold
+                || (dark_patch
+                    && (extinction > self.config.extinction_cells_threshold * 0.5
+                        || star_cell_drop > self.config.star_drop_cells_threshold * 0.5));
+            let veiled = images[i]
+                .transparency
+                .is_some_and(|t| t < self.config.transparency_threshold);
+            let bg_cell_rise = images[i].bg_cell_rise_fraction.unwrap_or(0.0);
+            let errant_light = bg_cell_rise > self.config.bg_rise_cells_threshold;
+            // Static glow is invisible to every temporal detector when the
+            // haze is present from the sequence's first frame.
+            let static_glow = images[i].bg_glow_max.unwrap_or(0.0) > self.config.bg_glow_threshold;
+
+            if results[i].quality_score >= 0.7
+                && !occluded
+                && !stray_gradient
+                && !small_cloud
+                && !veiled
+                && !errant_light
+                && !static_glow
+            {
                 continue; // No classification needed for good frames
             }
 
@@ -747,6 +881,46 @@ impl SequenceAnalyzer {
                         "{:.0}% of frame grid cells have no stars (baseline {:.0}%). Localized occlusion (trees, dome, dew shield, or foreground lit by stray light).",
                         dead_abs * 100.0,
                         (dead_abs - dead_rise).max(0.0) * 100.0,
+                    )),
+                )
+            } else if small_cloud {
+                (
+                    Some(IssueCategory::LikelyClouds),
+                    Some(format!(
+                        "Localized extinction over {:.0}% of the field (flux dip {:.0}% of cells, star loss {:.0}% of cells{}) with global transparency {:.0}%. Small cloud passing through.",
+                        extinction.max(star_cell_drop) * 100.0,
+                        extinction * 100.0,
+                        star_cell_drop * 100.0,
+                        if dark_patch {
+                            ", corroborated by a localized background darkening"
+                        } else {
+                            ""
+                        },
+                        images[i].transparency.unwrap_or(1.0) * 100.0,
+                    )),
+                )
+            } else if veiled {
+                (
+                    Some(IssueCategory::LikelyClouds),
+                    Some(format!(
+                        "Frame transparency is {:.0}% of the sequence reference (matched-star flux ratio). Thin cloud veiling the whole field.",
+                        images[i].transparency.unwrap_or(0.0) * 100.0,
+                    )),
+                )
+            } else if errant_light && star_stable {
+                (
+                    Some(IssueCategory::SkyBrightening),
+                    Some(format!(
+                        "Transient localized background rise over {:.0}% of the field that the frame's own gradient does not explain, with stable stars. Errant light (headlights, flashlight, neighbor lighting).",
+                        bg_cell_rise * 100.0,
+                    )),
+                )
+            } else if static_glow && star_stable {
+                (
+                    Some(IssueCategory::SkyBrightening),
+                    Some(format!(
+                        "Static localized glow: a region reads {:.0}% above the frame's own gradient model in every frame of the session. Haze or a lit occluder edge at the field boundary.",
+                        images[i].bg_glow_max.unwrap_or(0.0) * 100.0
                     )),
                 )
             } else if stray_gradient && star_stable {
@@ -1071,6 +1245,12 @@ pub fn extract_metrics_from_metadata(
         background,
         dead_cell_fraction,
         bg_cell_spread,
+        transparency: metadata["Transparency"].as_f64(),
+        extinction_cell_fraction: metadata["ExtinctionCellFraction"].as_f64(),
+        star_cell_drop_fraction: None,
+        bg_cell_rise_fraction: None,
+        bg_cell_fall_fraction: None,
+        bg_glow_max: None,
     }
 }
 
@@ -1089,6 +1269,12 @@ mod tests {
             background: None,
             dead_cell_fraction: None,
             bg_cell_spread: None,
+            transparency: None,
+            extinction_cell_fraction: None,
+            star_cell_drop_fraction: None,
+            bg_cell_rise_fraction: None,
+            bg_cell_fall_fraction: None,
+            bg_glow_max: None,
         }
     }
 
@@ -1111,6 +1297,12 @@ mod tests {
             background: Some(bg),
             dead_cell_fraction: None,
             bg_cell_spread: None,
+            transparency: None,
+            extinction_cell_fraction: None,
+            star_cell_drop_fraction: None,
+            bg_cell_rise_fraction: None,
+            bg_cell_fall_fraction: None,
+            bg_glow_max: None,
         }
     }
 
@@ -1132,6 +1324,192 @@ mod tests {
             background: None,
             dead_cell_fraction: Some(dead),
             bg_cell_spread: Some(bg_spread),
+            transparency: None,
+            extinction_cell_fraction: None,
+            star_cell_drop_fraction: None,
+            bg_cell_rise_fraction: None,
+            bg_cell_fall_fraction: None,
+            bg_glow_max: None,
+        }
+    }
+
+    /// Clean spatial frame with photometric signals attached.
+    fn make_photometric_image(
+        id: i32,
+        ts: i64,
+        transparency: f64,
+        extinction: f64,
+        star_cell_drop: f64,
+        bg_cell_rise: f64,
+    ) -> ImageMetrics {
+        let mut m = make_spatial_image(id, ts, 4700.0, 2.55, 0.02, 0.05);
+        m.transparency = Some(transparency);
+        m.extinction_cell_fraction = Some(extinction);
+        m.star_cell_drop_fraction = Some(star_cell_drop);
+        m.bg_cell_rise_fraction = Some(bg_cell_rise);
+        m.bg_cell_fall_fraction = Some(0.0);
+        m
+    }
+
+    #[test]
+    fn test_small_cloud_classified_from_localized_extinction() {
+        // A small cloud dims a patch of stars in one frame: star count, HFR
+        // and even the composite score stay good - only the photometric
+        // extinction map notices.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            min_sequence_length: 3,
+            ..Default::default()
+        });
+        let mut images: Vec<ImageMetrics> = (0..8)
+            .map(|i| make_photometric_image(i, i as i64 * 300, 1.0, 0.0, 0.0, 0.0))
+            .collect();
+        images[5] = make_photometric_image(5, 5 * 300, 0.96, 0.10, 0.04, 0.0);
+
+        let results = analyzer.analyze(&images, 1, "test", "R");
+        let seq = &results[0];
+        assert_eq!(
+            seq.images[5].category,
+            Some(IssueCategory::LikelyClouds),
+            "localized extinction should classify as small cloud: {:?}",
+            seq.images[5].details
+        );
+        assert_eq!(seq.images[4].category, None);
+    }
+
+    #[test]
+    fn test_dark_patch_corroborates_weak_extinction_as_cloud() {
+        // A dark cloud blocks skyglow: localized background FALL plus
+        // extinction just below the standalone threshold. The dark patch
+        // corroborates it into a cloud classification.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            min_sequence_length: 3,
+            ..Default::default()
+        });
+        let mut images: Vec<ImageMetrics> = (0..8)
+            .map(|i| make_photometric_image(i, i as i64 * 300, 1.0, 0.0, 0.0, 0.0))
+            .collect();
+        let mut dark = make_photometric_image(5, 5 * 300, 0.97, 0.04, 0.0, 0.0);
+        dark.bg_cell_fall_fraction = Some(0.10);
+        images[5] = dark;
+
+        let results = analyzer.analyze(&images, 1, "test", "R");
+        let seq = &results[0];
+        assert_eq!(
+            seq.images[5].category,
+            Some(IssueCategory::LikelyClouds),
+            "dark patch + weak extinction should classify as cloud: {:?}",
+            seq.images[5].details
+        );
+        // Without the dark patch the same weak extinction stays unclassified.
+        let mut images2: Vec<ImageMetrics> = (0..8)
+            .map(|i| make_photometric_image(i, i as i64 * 300, 1.0, 0.0, 0.0, 0.0))
+            .collect();
+        images2[5] = make_photometric_image(5, 5 * 300, 0.97, 0.04, 0.0, 0.0);
+        let results2 = analyzer.analyze(&images2, 1, "test", "R");
+        assert_eq!(results2[0].images[5].category, None);
+    }
+
+    #[test]
+    fn test_thin_veil_classified_from_transparency() {
+        // Uniform 30% dimming: star counts unchanged, no dead cells, no
+        // localized extinction - only the global flux ratio drops.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            min_sequence_length: 3,
+            ..Default::default()
+        });
+        let mut images: Vec<ImageMetrics> = (0..8)
+            .map(|i| make_photometric_image(i, i as i64 * 300, 1.0, 0.0, 0.0, 0.0))
+            .collect();
+        images[6] = make_photometric_image(6, 6 * 300, 0.70, 0.0, 0.0, 0.0);
+
+        let results = analyzer.analyze(&images, 1, "test", "R");
+        let seq = &results[0];
+        assert_eq!(
+            seq.images[6].category,
+            Some(IssueCategory::LikelyClouds),
+            "transparency dip should classify as veil: {:?}",
+            seq.images[6].details
+        );
+        // The veiled frame must also score worse than its clean neighbors.
+        assert!(seq.images[6].quality_score < seq.images[3].quality_score);
+    }
+
+    #[test]
+    fn test_errant_light_classified_from_bg_cell_rise() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            min_sequence_length: 3,
+            ..Default::default()
+        });
+        let mut images: Vec<ImageMetrics> = (0..8)
+            .map(|i| make_photometric_image(i, i as i64 * 300, 1.0, 0.0, 0.0, 0.0))
+            .collect();
+        images[4] = make_photometric_image(4, 4 * 300, 1.0, 0.0, 0.0, 0.10);
+
+        let results = analyzer.analyze(&images, 1, "test", "R");
+        let seq = &results[0];
+        assert_eq!(
+            seq.images[4].category,
+            Some(IssueCategory::SkyBrightening),
+            "transient localized bg rise should classify as errant light: {:?}",
+            seq.images[4].details
+        );
+    }
+
+    #[test]
+    fn test_static_glow_classified_even_when_present_all_session() {
+        // Glow present from frame 1 (lit haze at the field edge): temporal
+        // detectors see nothing, the within-frame signal still flags it.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            min_sequence_length: 3,
+            ..Default::default()
+        });
+        let images: Vec<ImageMetrics> = (0..8)
+            .map(|i| {
+                let mut m = make_photometric_image(i, i as i64 * 300, 1.0, 0.0, 0.0, 0.0);
+                m.bg_glow_max = Some(0.045); // static, every frame
+                m
+            })
+            .collect();
+
+        let results = analyzer.analyze(&images, 1, "NGC 6820", "R");
+        for r in &results[0].images {
+            assert_eq!(
+                r.category,
+                Some(IssueCategory::SkyBrightening),
+                "static glow should classify every affected frame: {:?}",
+                r.details
+            );
+        }
+    }
+
+    #[test]
+    fn test_clean_photometric_sequence_has_no_classifications() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            min_sequence_length: 3,
+            ..Default::default()
+        });
+        // Realistic clean jitter: transparency 0.97-1.03, tiny fractions.
+        let images: Vec<ImageMetrics> = (0..15)
+            .map(|i| {
+                let jitter = (i % 3) as f64;
+                make_photometric_image(
+                    i,
+                    i as i64 * 300,
+                    0.97 + jitter * 0.03,
+                    jitter * 0.01,
+                    jitter * 0.01,
+                    jitter * 0.01,
+                )
+            })
+            .collect();
+
+        let results = analyzer.analyze(&images, 1, "test", "R");
+        for r in &results[0].images {
+            assert_eq!(
+                r.category, None,
+                "clean frame {} classified: {:?}",
+                r.image_id, r.details
+            );
         }
     }
 
@@ -1539,6 +1917,7 @@ mod tests {
                     snr: None,
                     background: None,
                     spatial_coverage: None,
+                    transparency: None,
                 },
                 details: None,
             },
@@ -1554,6 +1933,7 @@ mod tests {
                     snr: None,
                     background: None,
                     spatial_coverage: None,
+                    transparency: None,
                 },
                 details: None,
             },
@@ -1569,6 +1949,7 @@ mod tests {
                     snr: None,
                     background: None,
                     spatial_coverage: None,
+                    transparency: None,
                 },
                 details: Some("Cloud".to_string()),
             },
@@ -1594,6 +1975,7 @@ mod tests {
                 snr: 0.0,
                 background: 0.0,
                 spatial: 0.0,
+                transparency: 0.0,
             },
             ..Default::default()
         };
@@ -1631,6 +2013,7 @@ mod tests {
             snr: 0.0,
             background: 0.0,
             spatial: 0.0,
+            transparency: 0.0,
         };
         let normalized = weights.normalized();
         let sum = normalized.star_count
@@ -1661,7 +2044,8 @@ mod tests {
             + normalized.eccentricity
             + normalized.snr
             + normalized.background
-            + normalized.spatial;
+            + normalized.spatial
+            + normalized.transparency;
         assert!((sum - 1.0).abs() < 1e-10, "sum should be 1.0, got {}", sum);
         // star_count : hfr ratio (0.30 : 0.25) preserved
         assert!((normalized.star_count / normalized.hfr - 0.30 / 0.25).abs() < 1e-10);
@@ -1676,6 +2060,7 @@ mod tests {
             snr: 0.0,
             background: 0.0,
             spatial: 0.0,
+            transparency: 0.0,
         };
         let normalized = weights.normalized();
         let defaults = QualityWeights::default();

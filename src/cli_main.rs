@@ -270,6 +270,7 @@ pub fn main() -> Result<()> {
             regrade_db,
             dry_run,
             registry,
+            annotate,
             verbose,
         } => {
             crate::debug::init_debug(verbose);
@@ -283,6 +284,7 @@ pub fn main() -> Result<()> {
                 regrade_db,
                 dry_run,
                 registry,
+                annotate_dir: annotate,
             };
             screen_fits(&path, &options)?;
         }
