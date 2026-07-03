@@ -55,6 +55,10 @@ export default function PreviewImage({
         </div>
       )}
       {img.state === 'error' && (fallback ?? <PreviewError />)}
+      {/* The img stays in layout (never display:none) so it actually loads —
+          a lazy + display:none image has no box and the browser never fetches
+          it, so onError/onLoad would never fire. While pending/error the
+          opaque .preview-status-box above covers it; when ready it shows. */}
       <img
         src={img.src}
         alt={alt}
@@ -62,7 +66,7 @@ export default function PreviewImage({
         onLoad={img.onLoad}
         onError={img.onError}
         className={className}
-        style={{ ...imgStyle, display: img.state === 'ready' ? undefined : 'none' }}
+        style={imgStyle}
       />
     </>
   );
