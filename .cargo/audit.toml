@@ -1,0 +1,22 @@
+# cargo-audit configuration (read by `cargo audit`, incl. the CI
+# "Security audit" workflow).
+
+[advisories]
+# quick-xml 0.38.x has two high-severity DoS advisories (unbounded namespace
+# allocation / quadratic duplicate-attribute scan), both fixed in >= 0.41.0.
+#
+# In this project quick-xml is a BUILD-ONLY transitive dependency:
+#   psf-guard (build-dependency tauri-build)
+#     -> tauri-utils -> plist -> quick-xml
+# plist uses it to parse the app's own Info.plist at build time. It is NOT
+# linked into the shipped psf-guard binary and never parses untrusted /
+# network-supplied XML, so the DoS conditions don't apply to the deployed
+# server.
+#
+# There is no upstream fix path yet: plist pins `quick-xml ^0.38`, and even the
+# latest plist (1.9.0) only reaches quick-xml 0.39.x. Remove these ignores once
+# plist / tauri release a version depending on quick-xml >= 0.41.
+ignore = [
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]
