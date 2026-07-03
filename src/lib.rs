@@ -1,6 +1,7 @@
 pub mod accord_imaging;
 pub mod cli;
 pub mod commands;
+pub mod concurrency;
 pub mod config;
 pub mod db;
 pub mod db_registry;

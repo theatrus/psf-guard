@@ -207,76 +207,70 @@ pub fn try_begin_scan(
     true
 }
 
-/// Worker threads for the scan. Detection is CPU-bound at several seconds
-/// per full-frame image; two workers roughly halve the wall clock while
-/// leaving cores free to keep serving requests.
-const SCAN_WORKERS: usize = 2;
-
 /// Run the scan synchronously (call from `spawn_blocking`). `work` must only
-/// contain images that actually need computing.
-pub fn run_scan(store: &RwLock<SpatialMetricsStore>, cache_dir: &Path, work: &[ScanWorkItem]) {
+/// contain images that actually need computing. `workers` is the desired
+/// concurrency (see `concurrency::plan_workers`), clamped here to the
+/// amount of work. Detection is CPU-bound at several seconds per full-frame
+/// image, so each worker roughly adds one frame's worth of throughput.
+pub fn run_scan(
+    store: &RwLock<SpatialMetricsStore>,
+    cache_dir: &Path,
+    work: &[ScanWorkItem],
+    workers: usize,
+) {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     let spatial_config = SpatialAnalysisConfig::default();
-    let next = AtomicUsize::new(0);
     let since_persist = AtomicUsize::new(0);
-    let workers = SCAN_WORKERS.min(work.len()).max(1);
 
-    std::thread::scope(|scope| {
-        for _ in 0..workers {
-            scope.spawn(|| loop {
-                let i = next.fetch_add(1, Ordering::Relaxed);
-                if i >= work.len() {
-                    break;
-                }
-                let item = &work[i];
-                {
-                    let mut s = store.write().unwrap();
-                    s.progress.current_file = Some(item.filename.clone());
-                }
+    // Shared work-stealing pool sized by the caller's worker budget.
+    crate::concurrency::parallel_index(work.len(), workers, |i| {
+        let item = &work[i];
+        {
+            let mut s = store.write().unwrap();
+            s.progress.current_file = Some(item.filename.clone());
+        }
 
-                // A panic here (malformed FITS tripping an assert deep in
-                // detection) must not escape: it would propagate through
-                // thread::scope, skip the finalization below, and leave the
-                // per-DB scan singleton wedged at running=true until restart.
-                // compute_one holds no store lock, so catching cannot poison.
-                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    compute_one(item, &spatial_config)
-                }))
-                .unwrap_or_else(|panic| {
-                    let msg = panic
-                        .downcast_ref::<&str>()
-                        .map(|s| s.to_string())
-                        .or_else(|| panic.downcast_ref::<String>().cloned())
-                        .unwrap_or_else(|| "panic during analysis".to_string());
-                    Err(anyhow::anyhow!("panicked: {}", msg))
-                });
+        // A panic here (malformed FITS tripping an assert deep in detection)
+        // must not escape: it would propagate through the pool's thread::scope,
+        // skip the finalization below, and leave the per-DB scan singleton
+        // wedged at running=true until restart. compute_one holds no store
+        // lock, so catching cannot poison.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            compute_one(item, &spatial_config)
+        }))
+        .unwrap_or_else(|panic| {
+            let msg = panic
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panic during analysis".to_string());
+            Err(anyhow::anyhow!("panicked: {}", msg))
+        });
 
-                match outcome {
-                    Ok(entry) => {
-                        let mut s = store.write().unwrap();
-                        s.metrics.insert(item.image_id, entry);
-                        s.progress.processed += 1;
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "📐 Spatial scan failed for image {} ({}): {}",
-                            item.image_id,
-                            item.filename,
-                            e
-                        );
-                        let mut s = store.write().unwrap();
-                        s.progress.errors += 1;
-                        s.progress.processed += 1;
-                        s.progress.last_error = Some(format!("{}: {}", item.filename, e));
-                    }
-                }
+        match outcome {
+            Ok(entry) => {
+                let mut s = store.write().unwrap();
+                s.metrics.insert(item.image_id, entry);
+                s.progress.processed += 1;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "📐 Spatial scan failed for image {} ({}): {}",
+                    item.image_id,
+                    item.filename,
+                    e
+                );
+                let mut s = store.write().unwrap();
+                s.progress.errors += 1;
+                s.progress.processed += 1;
+                s.progress.last_error = Some(format!("{}: {}", item.filename, e));
+            }
+        }
 
-                if since_persist.fetch_add(1, Ordering::Relaxed) + 1 >= PERSIST_EVERY {
-                    since_persist.store(0, Ordering::Relaxed);
-                    persist(store, cache_dir);
-                }
-            });
+        if since_persist.fetch_add(1, Ordering::Relaxed) + 1 >= PERSIST_EVERY {
+            since_persist.store(0, Ordering::Relaxed);
+            persist(store, cache_dir);
         }
     });
 

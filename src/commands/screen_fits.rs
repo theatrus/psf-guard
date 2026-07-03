@@ -455,53 +455,51 @@ fn collect_fits_files(dir: &Path) -> Result<Vec<PathBuf>> {
 
 /// Analyze all frames, in parallel worker threads.
 fn analyze_frames(files: &[PathBuf], options: &ScreenOptions) -> Result<Vec<FrameRecord>> {
-    let threads = options
-        .threads
-        .unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4)
-                .min(4)
-        })
-        .max(1);
+    // Default to all cores (bounded by available memory); `--threads`
+    // overrides. The old min(4) cap left most of a modern machine idle.
+    // Foreground CLI work, so the interactive tier applies.
+    let frame_pixels = files
+        .first()
+        .and_then(|p| crate::concurrency::probe_frame_pixels(p));
+    let budget = crate::concurrency::plan_workers(
+        options.threads,
+        &crate::concurrency::WorkerPolicy::all_cores(),
+        crate::concurrency::Priority::Interactive,
+        frame_pixels,
+    );
+    eprintln!(
+        "Analyzing with {} worker thread(s) — {}",
+        budget.workers, budget.rationale
+    );
 
-    let next = AtomicUsize::new(0);
     let done = AtomicUsize::new(0);
     let records: Mutex<Vec<FrameRecord>> = Mutex::new(Vec::with_capacity(files.len()));
     let total = files.len();
 
-    std::thread::scope(|scope| {
-        for _ in 0..threads {
-            scope.spawn(|| loop {
-                let i = next.fetch_add(1, Ordering::Relaxed);
-                if i >= total {
-                    break;
-                }
-                let path = &files[i];
-                match analyze_one_frame(path, options) {
-                    Ok(record) => {
-                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                        eprintln!(
-                            "[{}/{}] {}: {} stars, hfr {:.2}, dead {}, bg spread {:.3}",
-                            n,
-                            total,
-                            path.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
-                            record.star_count,
-                            record.avg_hfr,
-                            record
-                                .dead_cell_fraction
-                                .map(|d| format!("{:.0}%", d * 100.0))
-                                .unwrap_or_else(|| "n/a".to_string()),
-                            record.bg_cell_spread,
-                        );
-                        records.lock().unwrap().push(record);
-                    }
-                    Err(e) => {
-                        done.fetch_add(1, Ordering::Relaxed);
-                        eprintln!("Error analyzing {}: {}", path.display(), e);
-                    }
-                }
-            });
+    crate::concurrency::parallel_index(total, budget.workers, |i| {
+        let path = &files[i];
+        match analyze_one_frame(path, options) {
+            Ok(record) => {
+                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                eprintln!(
+                    "[{}/{}] {}: {} stars, hfr {:.2}, dead {}, bg spread {:.3}",
+                    n,
+                    total,
+                    path.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
+                    record.star_count,
+                    record.avg_hfr,
+                    record
+                        .dead_cell_fraction
+                        .map(|d| format!("{:.0}%", d * 100.0))
+                        .unwrap_or_else(|| "n/a".to_string()),
+                    record.bg_cell_spread,
+                );
+                records.lock().unwrap().push(record);
+            }
+            Err(e) => {
+                done.fetch_add(1, Ordering::Relaxed);
+                eprintln!("Error analyzing {}: {}", path.display(), e);
+            }
         }
     });
 
