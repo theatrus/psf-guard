@@ -309,6 +309,30 @@ READ_WRITE, refuse same-path source/dest, and have `--dry-run` + `--verbose`.
 - `src/cli_main.rs`: Traditional command-line interface implementation
 - `src/tauri_main.rs`: Tauri desktop application implementation
 
+#### Dedicated CLI binary + Windows installer (2026-07)
+- **`src/bin/psf-guard-cli.rs`**: a second bin target that just calls
+  `cli_main::main()` and never sets `windows_subsystem = "windows"`, so it stays
+  a **console** app. Needed because the `tauri`-feature release `psf-guard.exe`
+  is a GUI-subsystem binary (`main.rs` `#![cfg_attr(... windows_subsystem =
+  "windows")]`): dual-mode, but its stdout/stderr don't attach to a terminal on
+  Windows, making it a poor CLI. `psf-guard-cli` links no Tauri code and is the
+  source of every standalone `psf-guard-*-x64` release asset (release.yml —
+  `cargo tauri build` overwrites `target/release/psf-guard`, so the standalone
+  CLI must come from this separate target).
+- **Windows installer bundles it**: `tauri.windows.conf.json` (Tauri v2
+  platform-specific config, auto-merged only for Windows) adds
+  `bundle.externalBin = ["binaries/psf-guard-cli"]` so the MSI + NSIS ship
+  `psf-guard-cli.exe` next to the GUI app. CI/release build the sidecar and copy
+  it to `binaries/psf-guard-cli-<target-triple>.exe` before `cargo tauri build`.
+- **NSIS adds it to PATH**: `nsis/hooks.nsh` (`bundle.windows.nsis.installerHooks`)
+  appends the install dir to the **per-user** `HKCU\Environment` PATH on install
+  and removes it on uninstall (StrFunc dedup, `WM_WININICHANGE` broadcast), so
+  `psf-guard-cli` runs from any terminal. Per-user because Tauri's default NSIS
+  installMode is per-user (no elevation, short PATH, clean revert). The **MSI**
+  bundles the CLI but does **not** modify PATH yet (WiX `<Environment>` is a
+  possible follow-up; it can only be validated in Windows CI). Hook syntax is
+  locally checkable with `makensis` against a Tauri-shaped harness.
+
 ### Cache System (Current)
 - **File Cache**: Database-based existence checking, auto-refreshed every 5 minutes
 - **Directory Tree**: In-memory filename→path mapping, auto-refreshed every 5 minutes

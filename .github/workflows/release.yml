@@ -16,14 +16,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # artifact_name is the dedicated console CLI binary (psf-guard-cli),
+          # NOT the main `psf-guard` — `cargo tauri build` overwrites
+          # target/release/psf-guard with the GUI-subsystem app, so the
+          # standalone CLI asset must come from the separate psf-guard-cli target.
           - os: ubuntu-22.04
-            artifact_name: psf-guard
+            artifact_name: psf-guard-cli
             asset_name: psf-guard-linux-x64
           - os: windows-latest
-            artifact_name: psf-guard.exe
+            artifact_name: psf-guard-cli.exe
             asset_name: psf-guard-windows-x64.exe
           - os: macos-latest
-            artifact_name: psf-guard
+            artifact_name: psf-guard-cli
             asset_name: psf-guard-macos-x64
 
     steps:
@@ -145,7 +149,18 @@ jobs:
       continue-on-error: true
 
     - name: Build CLI binary
-      run: cargo build --release --locked
+      shell: bash
+      run: |
+        # Dedicated console-subsystem CLI (no tauri) — this is the standalone
+        # release asset and, on Windows, the installer's bundled CLI.
+        cargo build --release --locked --bin psf-guard-cli
+        # Stage the sidecar where Tauri's Windows bundler expects externalBin:
+        # binaries/psf-guard-cli-<target-triple>.exe.
+        if [ "${{ matrix.os }}" = "windows-latest" ]; then
+          triple=$(rustc -vV | sed -n 's/^host: //p')
+          mkdir -p binaries
+          cp "target/release/psf-guard-cli.exe" "binaries/psf-guard-cli-${triple}.exe"
+        fi
 
     - name: Build Tauri desktop app
       if: matrix.os != 'macos-latest'
@@ -225,7 +240,9 @@ jobs:
 
           ### Desktop Applications 🖥️
           - **Linux**: `.deb` package and `.AppImage` for easy installation
-          - **Windows**: `.msi` installer and NSIS installer
+          - **Windows**: `.msi` installer and NSIS installer. The NSIS setup also
+            installs a console `psf-guard-cli.exe` next to the app and adds it to
+            your user `PATH`, so you can run `psf-guard-cli` from any terminal.
           - **macOS**: `.dmg` installer and `.app` bundle (zipped)
 
           ### Command Line Interface 🖥️
