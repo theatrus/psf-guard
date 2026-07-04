@@ -915,6 +915,9 @@ mod tests {
         .unwrap();
     }
 
+    // Only used by the unix-only replace-by-rename test below; gated to match so
+    // Windows (`-D warnings`) doesn't see it as dead code.
+    #[cfg(unix)]
     fn read_project(ctx: &DatabaseContext) -> String {
         let conn = ctx.db();
         let guard = lock_recover(&conn);
@@ -961,6 +964,14 @@ mod tests {
         .unwrap()
     }
 
+    // Unix-only: the proactive reopen this exercises is itself `#[cfg(unix)]`
+    // (identity fingerprint needs a stable dev/ino; `fingerprint_path` returns
+    // `None` elsewhere), and the setup — renaming a fresh file over one an open
+    // SQLite connection still holds — is a POSIX behavior. On Windows that
+    // rename fails with ERROR_ACCESS_DENIED (the default SQLite VFS opens
+    // without FILE_SHARE_DELETE), so there is nothing to test there; Windows
+    // relies on the reactive reopen-on-corruption path instead.
+    #[cfg(unix)]
     #[test]
     fn reopens_when_db_file_is_replaced_by_rename() {
         // Simulates an external process atomically replacing the scheduler DB
