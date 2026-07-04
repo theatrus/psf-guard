@@ -396,10 +396,16 @@ jobs:
     - name: Test Tauri compilation
       run: cargo build --features tauri --verbose
 
-    - name: Build & stage CLI sidecar (Windows)
+    - name: Build Tauri desktop app (Linux)
+      if: matrix.os == 'ubuntu-22.04'
+      run: cargo tauri build --verbose
+
+    - name: Build Tauri desktop app (Windows, with bundled CLI)
       # The Windows bundle ships psf-guard-cli.exe (console subsystem, no tauri)
-      # next to the GUI app via externalBin. Build it and drop it where Tauri's
-      # bundler expects the sidecar: binaries/psf-guard-cli-<target-triple>.exe.
+      # next to the GUI app and adds it to PATH. externalBin + the NSIS hook live
+      # in tauri.bundle-windows.json, applied ONLY here via --config so plain
+      # tauri-feature compiles (Test Tauri compilation, clippy --all-features)
+      # don't require the sidecar. Stage it where the bundler expects it first.
       if: matrix.os == 'windows-latest'
       shell: pwsh
       run: |
@@ -407,15 +413,7 @@ jobs:
         $triple = (rustc -vV | Select-String '^host:').ToString().Split(' ')[1]
         New-Item -ItemType Directory -Force -Path binaries | Out-Null
         Copy-Item "target/release/psf-guard-cli.exe" "binaries/psf-guard-cli-$triple.exe" -Force
-
-    - name: Build Tauri desktop app
-      if: matrix.os != 'macos-latest'
-      env:
-        APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-        APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-        APPLE_API_KEY_PATH: AuthKey_${{ secrets.APPLE_API_KEY }}.p8
-      run: |
-        cargo tauri build --verbose
+        cargo tauri build --verbose --config tauri.bundle-windows.json
 
     - name: Build Tauri desktop app (macOS)
       if: matrix.os == 'macos-latest'
