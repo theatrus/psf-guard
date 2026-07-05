@@ -90,6 +90,15 @@ test('cache miss returns 202, and the batch status endpoint drives generation to
 test('annotated images generate on-demand through the same queue', async ({
   request,
 }) => {
+  // Annotated generation is genuinely heavy: it runs full-frame star
+  // detection (thousands of stars on a ~60 MP fixture, ~20 s single-threaded
+  // on a fast dev box, more on a shared CI runner) before drawing overlays —
+  // unlike the cheap preview stretch. `max_stars` does NOT bound that cost
+  // (detection finds every star and only the *drawn* set is capped), so the
+  // path is inherently slow. Give this one test a generous budget instead of
+  // the 30 s default so a slow-but-correct runner doesn't flake.
+  test.setTimeout(180_000);
+
   const base = `/api/db/${encodeURIComponent(dbId)}`;
 
   // Annotated cache miss also 202s (same async path as previews).
@@ -97,20 +106,29 @@ test('annotated images generate on-demand through the same queue', async ({
   expect(miss.status()).toBe(202);
   expect(miss.headers()['content-type']).toMatch(/application\/json/);
 
-  // Poll the batch endpoint with kind:'annotated' until ready.
-  await expect
-    .poll(
-      async () => {
-        const r = await request.post(`${base}/images/generation-status`, {
-          data: {
-            requests: [{ image_id: 1, kind: 'annotated', size: 'large' }],
-          },
-        });
-        return (await r.json()).data.statuses[0].state;
-      },
-      { timeout: 30_000, intervals: [500] }
-    )
-    .toBe('ready');
+  // Poll the batch endpoint with kind:'annotated' until it's ready. Fail fast
+  // (with the server's message) if generation actually errors, rather than
+  // silently burning the whole timeout on a job that will never be ready.
+  const statusReq = {
+    data: { requests: [{ image_id: 1, kind: 'annotated', size: 'large' }] },
+  };
+  const deadline = Date.now() + 150_000;
+  let state = 'generating';
+  while (Date.now() < deadline) {
+    const r = await request.post(`${base}/images/generation-status`, statusReq);
+    const status = (await r.json()).data.statuses[0];
+    state = status.state;
+    if (state === 'ready') break;
+    if (state === 'error') {
+      throw new Error(
+        `annotated generation reported error: ${status.error ?? '<no detail>'}`
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  expect(state, 'annotated generation should reach ready before the deadline').toBe(
+    'ready'
+  );
 
   // The annotated endpoint now serves a PNG.
   const hit = await request.get(`${base}/images/1/annotated?size=large`);

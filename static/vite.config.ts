@@ -9,6 +9,11 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     globals: true,
+    // The jsdom + MSW + userEvent component tests (e.g. SequenceView) can take
+    // several seconds on a loaded/slow CI runner — the whole suite ran ~15 s for
+    // 19 tests on Windows CI. Vitest's 5 s default flakes there, so raise the
+    // ceiling. This still fails a genuinely hung test, just not a slow-but-fine one.
+    testTimeout: 20_000,
     // Don't let vitest scan the Playwright suite — those specs use
     // `@playwright/test` and can't run under vitest.
     exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**'],
