@@ -20,6 +20,8 @@ points at your Target Scheduler database and image folders and gives you:
   database, so the scheduler knows to re-capture what you rejected.
 - **Safe reject archival** — move rejected frames (and their sidecars) out of
   the directory tree your stacking software scans, reversibly.
+- **Two-machine workflows** — sync projects, captured images, and grades
+  between the telescope's database and your grading machine.
 - **Star detection and PSF analysis** — a port of N.I.N.A.'s detector plus the
   HocusFocus detector, with Gaussian/Moffat PSF fitting and annotated output.
 
@@ -27,7 +29,9 @@ It runs as a desktop app (Windows/macOS/Linux), a self-hosted web server
 (Docker, NAS), or a standalone CLI.
 
 > **Back up your Target Scheduler database before first use.** PSF Guard
-> writes grades into it, and while it's careful, it's also young software.
+> writes grades into it, and its `sync` commands can merge entire databases —
+> projects, captured images, and grades — between machines. It's careful
+> (dry-run flags everywhere), but it's also young software.
 
 ## Screenshots
 
@@ -101,8 +105,18 @@ Then open http://localhost:3000/.
 
 ### Fedora RPM
 
-Native RPMs build on Fedora 43/44 with standard tooling (`rpmbuild`, `mock`,
-COPR), fully offline once sources are prepared:
+Releases after v0.3.0 attach prebuilt RPMs for Fedora 43 and 44 to the
+[releases page](https://github.com/theatrus/psf-guard/releases/latest):
+
+```bash
+sudo dnf install ./psf-guard-*.fc44.x86_64.rpm
+```
+
+The package installs the CLI/server plus a `psf-guard.service` systemd unit
+for running the web grader as a daemon.
+
+Prefer to build your own? Native RPMs build with standard tooling
+(`rpmbuild`, `mock`, COPR), fully offline once sources are prepared:
 
 ```bash
 sudo dnf install -y rpm-build rpmdevtools cargo rust clang-devel \
@@ -206,6 +220,26 @@ psf-guard restore-rejects --db my-db --all    # restores everything
 visible in the web UI. The legacy `filter-rejected` command still exists for
 its statistical-regrading flags but is deprecated in favor of `move-rejects`.
 
+## Syncing between machines
+
+Grade on one machine while the telescope keeps capturing on another. `sync`
+moves state between two scheduler databases — registry slugs or `.sqlite`
+paths — matching images by their stable GUID (Target Scheduler schema v22+):
+
+```bash
+# Mirror projects, targets and captured images FROM the telescope INTO your DB.
+# Your local grading is preserved; new images arrive with the telescope's grade.
+psf-guard sync pull --from telescope.sqlite --to my-db --dry-run
+
+# Push your grading decisions back TO the telescope (one-way, source wins).
+psf-guard sync grades --from my-db --to telescope.sqlite --dry-run
+```
+
+Use them as a loop — pull to refresh, grade locally, push grades back. Both
+directions support `--project` filters and `--dry-run` (`grades` also
+`--target` and `--status`), open the source read-only, and run in a single
+transaction.
+
 ## CLI reference
 
 One binary, many tools. `psf-guard --help` lists everything; the highlights:
@@ -219,24 +253,34 @@ psf-guard server --registry /tmp/scratch.json <db> <dirs...>  # throwaway sessio
 # Quality screening (see docs/SCREENING.md)
 psf-guard screen-fits ./lights --annotate ./diagnostics
 psf-guard screen-fits ./lights --regrade-db my-db --dry-run
+psf-guard screen-fits ./lights --format json         # or table, csv
 
 # Reject archival
 psf-guard move-rejects --db <slug> [--dry-run] [--project NAME] [--target NAME]
 psf-guard restore-rejects --db <slug> [--all] [--image-id N] [--dry-run]
 
+# Two-database sync (see "Syncing between machines" above)
+psf-guard sync pull --from telescope.sqlite --to my-db
+psf-guard sync grades --from my-db --to telescope.sqlite
+
 # Star detection & PSF analysis
 psf-guard analyze-fits image.fits [--detector nina|hocusfocus] [--compare-all]
 psf-guard annotate-stars image.fits [--max-stars 50]
+psf-guard visualize-psf image.fits [--star-index N]  # single-star fit residuals
 psf-guard visualize-psf-multi image.fits [--num-stars 25]
+psf-guard benchmark-psf image.fits                   # PSF fitting performance
 
 # FITS utilities
 psf-guard stretch-to-png image.fits -o output.png   # MTF auto-stretch
 psf-guard read-fits image.fits                      # header/metadata dump
 
-# Database queries
+# Database queries & manual grading
 psf-guard list-projects -d database.sqlite
 psf-guard list-targets "Project Name" -d database.sqlite
 psf-guard dump-grading -d database.sqlite [--project NAME]
+psf-guard show-images <IDS> -d database.sqlite
+psf-guard update-grade <ID> rejected -d database.sqlite
+psf-guard regrade database.sqlite [--dry-run]        # statistical re-grading
 ```
 
 Batch commands also support statistical outlier detection
@@ -276,6 +320,12 @@ psf-guard server --config psf-guard.toml
 [server]
 port = 3000
 host = "0.0.0.0"
+# Optional: fraction of CPU cores for parallel work (both default sensibly).
+# Interactive jobs (occlusion scans, on-demand previews) get scan_worker_ratio;
+# background pre-generation gets background_worker_ratio and pauses entirely
+# while an interactive job runs.
+#scan_worker_ratio = 0.5
+#background_worker_ratio = 0.25
 
 [cache]
 directory = "./cache"
