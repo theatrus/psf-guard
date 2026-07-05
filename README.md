@@ -113,7 +113,7 @@ sudo dnf install ./psf-guard-*.fc44.x86_64.rpm
 ```
 
 The package installs the CLI/server plus a `psf-guard.service` systemd unit
-for running the web grader as a daemon.
+for running the PSF Guard server as a daemon.
 
 Prefer to build your own? Native RPMs build with standard tooling
 (`rpmbuild`, `mock`, COPR), fully offline once sources are prepared:
@@ -144,9 +144,11 @@ and OpenCV with clang. OpenCV is the painful one — the CI workflows under
 per platform (vcpkg on Windows, Homebrew on macOS, `libopencv-dev` on
 Debian/Ubuntu).
 
-## The web grader
+## The grader UI
 
-Open the UI and you get an overview dashboard (projects, targets, completion,
+It's the same UI in the desktop app (built in — no server or browser needed)
+and served by `psf-guard server` for browser access on NAS and remote
+setups. Open it and you get an overview dashboard (projects, targets, completion,
 grading progress), an image grid, and a comparison mode:
 
 - **Grid**: filter by project/target/status/date, multi-select with
@@ -245,7 +247,7 @@ transaction.
 One binary, many tools. `psf-guard --help` lists everything; the highlights:
 
 ```bash
-# Serve the web grader (registers the DB in the shared registry on first run)
+# Serve the grader UI (registers the DB in the shared registry on first run)
 psf-guard server <database> <image-dirs...> [--port 3000]
 psf-guard server --config psf-guard.toml            # TOML for server knobs
 psf-guard server --registry /tmp/scratch.json <db> <dirs...>  # throwaway session
