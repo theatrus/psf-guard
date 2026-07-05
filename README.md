@@ -3,53 +3,182 @@
 [![CI](https://github.com/theatrus/psf-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/theatrus/psf-guard/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-A Rust utility for astronomical image analysis and grading, with N.I.N.A. Target Scheduler integration.
+**Image grading and quality screening for [N.I.N.A.](https://nighttime-imaging.eu/)
+astrophotography with the Target Scheduler plugin.**
+
+After an imaging session you're left with hundreds of subs — and some of them
+are ruined by clouds, a tree creeping into the frame, dome occlusion, or stray
+light that conventional star-count/HFR grading happily accepts. PSF Guard
+points at your Target Scheduler database and image folders and gives you:
+
+- **A fast visual grader** — web UI or desktop app with auto-stretched
+  previews, zoom/pan, side-by-side comparison, batch operations, and undo.
+- **Automatic quality screening** — grid-based spatial metrics and cross-frame
+  differential photometry that catch occlusion, small clouds, thin veils, and
+  errant light, with annotated diagnostic images explaining every verdict.
+- **Scheduler write-back** — every grade lands in the Target Scheduler
+  database, so the scheduler knows to re-capture what you rejected.
+- **Safe reject archival** — move rejected frames (and their sidecars) out of
+  the directory tree your stacking software scans, reversibly.
+- **Two-machine workflows** — sync projects, captured images, and grades
+  between the telescope's database and your grading machine.
+- **Star detection and PSF analysis** — a port of N.I.N.A.'s detector plus the
+  HocusFocus detector, with Gaussian/Moffat PSF fitting and annotated output.
+
+It runs as a desktop app (Windows/macOS/Linux), a self-hosted web server
+(Docker, NAS), or a standalone CLI.
+
+> **Back up your Target Scheduler database before first use.** PSF Guard
+> writes grades into it, and its `sync` commands can merge entire databases —
+> projects, captured images, and grades — between machines. It's careful
+> (dry-run flags everywhere), but it's also young software.
 
 ## Screenshots
 
 | Overview Dashboard | Image Grid | Side-by-Side Comparison |
 |:--:|:--:|:--:|
 | ![Overview](docs/overview.png) | ![Grid](docs/image_grid.png) | ![Compare](docs/compare.png) |
-| Complete project statistics and progress tracking | Grid view with filtering and batch operations | Synchronized zoom and detailed image comparison |
+| Project statistics and progress tracking | Grid view with filtering and batch operations | Synchronized zoom and detailed comparison |
 
 | Sequence Analysis & Quality Screening | Star Detection | PSF Fitting |
 |:--:|:--:|:--:|
 | ![Sequence Analysis](docs/sequence-analysis.png) | ![Annotated Stars](docs/annotated-stars.jpg) | ![PSF Visualization](docs/psf-visualization.jpg) |
-| Per-frame quality scores, cloud/occlusion classification, and one-click occlusion scanning | HocusFocus detector with annotated output (`annotate-stars`) | Observed / fitted / residual grids with Moffat & Gaussian models (`visualize-psf-multi`) |
+| Per-frame quality scores, cloud/occlusion classification, one-click occlusion scanning | HocusFocus detector with annotated output (`annotate-stars`) | Observed / fitted / residual grids with Moffat & Gaussian models (`visualize-psf-multi`) |
 
-## Features
+## Installation
 
-- **N.I.N.A. Integration**: Query and analyze Target Scheduler SQLite databases.
-  Note that Target Scheduler is required, using standard NINA file paths doesn't
-  work (yet), as we find images based on the database, and not based on the file
-  structure.
-- **Star Detection**: N.I.N.A. algorithm port + HocusFocus detector with PSF
-  fitting for analysis.
-- **Desktop App and Web Interface**: React-based UI for visual image grading
-  with zoom/pan, and comparisons, with auto-stretched images. Updates to grading
-  are written to the target scheduler DB to allow Target Scheduler to capture
-  more images if required. Ships as both a server for NAS hosting, and a
-  stand-alone desktop app.
-- **CLI tools**: Regrading, batch operations, fits processing, batch image moving.
-- **Quality Screening**: Automatic detection of occlusion (trees, dome),
-  small clouds, thin veils, errant light and static glow — grid-based
-  spatial metrics plus cross-frame differential photometry, with annotated
-  diagnostic images explaining every verdict. See
-  [docs/SCREENING.md](docs/SCREENING.md).
-- **Statistical Analysis**: Advanced outlier detection using HFR, star count,
-  and cloud detection in the batch modes.
-- **FITS Processing**: Convert to PNG, annotate stars, visualize PSF residuals
-- **Multi-Directory Support**: Scan multiple image directories with priority ordering
+### Desktop app (Windows / macOS / Linux)
 
-## Quality Screening
+Grab the installer for your platform from the
+**[latest release](https://github.com/theatrus/psf-guard/releases/latest)**:
 
-Screen light frames for occlusion, clouds, veils and stray light — problems
-that ruin integrations but pass conventional star-count/HFR grading. No
-database required for screening; optional write-back into the Target
-Scheduler DB closes the loop with `move-rejects`.
+| Platform | Asset |
+|----------|-------|
+| Windows x64 | `PSF.Guard_<version>_x64_en-US.msi` |
+| macOS (Apple Silicon) | `PSF.Guard_<version>_aarch64.dmg` |
+| Linux x64 | `PSF.Guard_<version>_amd64.deb` or `.AppImage` |
+
+Install, launch, and point the settings panel at your scheduler database and
+image directories. Releases after v0.3.0 also include a Windows NSIS
+installer (`-setup.exe`) that additionally installs a console
+`psf-guard-cli.exe` and adds it to your user `PATH`, so the full CLI works
+from any terminal.
+
+### Docker (Linux servers / NAS)
 
 ```bash
-# Screen a night and see per-frame verdicts (OK / WARN / REJECT)
+docker run -d -p 3000:3000 \
+  -v /path/to/schedulerdb.sqlite:/data/database.sqlite \
+  -v /path/to/images:/images:ro \
+  ghcr.io/theatrus/psf-guard:latest
+```
+
+Then open http://localhost:3000/. The database mount must be **writable** —
+grading writes back to it (that's the point!). Mount a TOML config at
+`/data/config.toml` and append `server --config /data/config.toml
+/data/database.sqlite /images` if you want to tune port, cache, or preview
+pre-generation (see [Configuration](#configuration)).
+
+### Standalone CLI binaries
+
+Version-independent download links, always pointing at the latest release:
+
+| Platform | Download | Notes |
+|----------|----------|-------|
+| Linux x64 | [`psf-guard-linux-x64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-linux-x64) | Needs system OpenCV — Docker is easier |
+| macOS | [`psf-guard-macos-x64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-macos-x64) | Needs Homebrew OpenCV |
+| Windows x64 | [`psf-guard-windows-x64.exe`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-windows-x64.exe) | Static binary, no dependencies |
+
+```bash
+# Linux / macOS
+chmod +x psf-guard-*
+./psf-guard-linux-x64 server schedulerdb.sqlite /path/to/images/
+```
+
+```bat
+:: Windows — back up the DB first, then serve it
+copy "%LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite" schedulerdb-backup.sqlite
+psf-guard-windows-x64.exe server "%LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite" C:\path\to\images
+```
+
+Then open http://localhost:3000/.
+
+### Fedora RPM
+
+Releases after v0.3.0 attach prebuilt RPMs for Fedora 43 and 44 to the
+[releases page](https://github.com/theatrus/psf-guard/releases/latest):
+
+```bash
+sudo dnf install ./psf-guard-*.fc44.x86_64.rpm
+```
+
+The package installs the CLI/server plus a `psf-guard.service` systemd unit
+for running the web grader as a daemon.
+
+Prefer to build your own? Native RPMs build with standard tooling
+(`rpmbuild`, `mock`, COPR), fully offline once sources are prepared:
+
+```bash
+sudo dnf install -y rpm-build rpmdevtools cargo rust clang-devel \
+    opencv-devel nodejs npm git
+rpmdev-setuptree
+./scripts/make-rpm-sources.sh                  # builds frontend + vendors crates
+rpmbuild -ba packaging/rpm/psf-guard.spec      # RPMs land in ~/rpmbuild/RPMS/
+```
+
+See [`packaging/rpm/README.md`](packaging/rpm/README.md) for mock builds, the
+`--without opencv` variant, and release steps.
+
+### Build from source
+
+```bash
+git clone https://github.com/theatrus/psf-guard.git
+cd psf-guard
+cargo build --release
+./target/release/psf-guard server schedulerdb.sqlite /path/to/images/
+```
+
+You'll need Rust, Node.js/npm (the React frontend is embedded at build time),
+and OpenCV with clang. OpenCV is the painful one — the CI workflows under
+[`.github/workflows/`](.github/workflows/) are the authoritative package lists
+per platform (vcpkg on Windows, Homebrew on macOS, `libopencv-dev` on
+Debian/Ubuntu).
+
+## The web grader
+
+Open the UI and you get an overview dashboard (projects, targets, completion,
+grading progress), an image grid, and a comparison mode:
+
+- **Grid**: filter by project/target/status/date, multi-select with
+  Shift/Ctrl+Click, accept/reject/unmark with instant feedback, HFR and
+  star-count metadata on every card.
+- **Comparison**: side-by-side with synchronized (or independent) zoom and
+  pan — grade both frames at once.
+- **Smart loading**: fast previews first, full resolution on zoom; previews
+  generate on demand in the background, so a fresh install is browsable
+  immediately.
+- **Undo/redo** for every grading action.
+
+| Key | Action | Key | Action |
+|-----|--------|-----|--------|
+| K / → | Next image | A | Accept |
+| J / ← | Previous | X | Reject |
+| C | Compare | U | Unmark |
+| S | Stars overlay | + / − | Zoom |
+| Ctrl+Z | Undo | Ctrl+Y | Redo |
+
+Grades are written straight to the Target Scheduler database, so the
+scheduler's acquired-image counts stay accurate and rejected frames get
+re-shot.
+
+## Quality screening
+
+Screen light frames for occlusion, clouds, veils, and stray light — the
+failure modes that ruin integrations but pass star-count/HFR grading. No
+database needed; write-back into the scheduler DB is optional.
+
+```bash
+# Screen a night, get per-frame verdicts (OK / WARN / REJECT)
 psf-guard screen-fits "/path/to/2026-06-30/LIGHT"
 
 # Render annotated diagnostics showing WHY each frame was flagged
@@ -65,386 +194,200 @@ psf-guard move-rejects --db my-db
 |:--:|:--:|
 | ![Occlusion onset](docs/screening-onset.jpg) | ![Veiled field](docs/screening-veil.jpg) |
 
-The web UI's Sequence view (pictured under Screenshots above) has a **Scan
-Occlusion** button that runs the same analysis server-side in the background
-and surfaces classifications and coverage badges on affected frames.
+The web UI's Sequence view has a **Scan Occlusion** button that runs the same
+analysis server-side in the background and badges affected frames with their
+classification.
 
-Full documentation — detection stack, annotated diagnostic examples,
+Full documentation — the detection stack, annotated diagnostic examples,
 tuning, and safety properties: **[docs/SCREENING.md](docs/SCREENING.md)**.
 
-## Known Limits
+## Managing rejected files
 
-- Current, we only support **monochrome** images. Debayering a color image is
-  not implemented and weird things may happen if you use color camera FITS
-  files. Please reach out to psf-guard@theatr.us if you want to contribute some
-  color FITS files for testing :)
-- Some directory paths are presuming this N.I.N.A pattern:
-  `%DATEMINUS12%/%TARGETNAME%/%DATEMINUS12%/LIGHT/standardfilename.fits`, with
-  or without the leading date. Other paths may not be reliably detected, but I'm
-  happy to support more paths and patterns in the future.
-- `psf-guard` may eat your NINA Target Scheduler DB. Make a backup.
-- The `filter-rejected` workflow may eat your FITS files. I use it, but there
-  are lots of subtleties which may lead to bad results. Make a backup. Other
-  commands do not touch FITS files, but still, make a backup.
-
-## Quick Start with Web Grader
-
-### Desktop App (Recommended for Windows/macOS)
-
-**Download PSF Guard Desktop** - Get the native desktop application:
-
-| Platform | Download | Notes |
-|----------|----------|-------|
-| **Windows x64** | [`.msi installer`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard_0.3.0_x64_en-US.msi) | Native Windows installer |
-| **Windows x64** | [`.exe installer`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard_0.3.0_x64-setup.exe) | NSIS installer |
-| **macOS x64** | [`.dmg`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard_0.3.0_x64.dmg) | Drag-and-drop installer |
-| **Linux x64** | [`.deb package`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard_0.3.0_amd64.deb) | Ubuntu/Debian package |
-| **Linux x64** | [`.AppImage`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard_0.3.0_amd64.AppImage) | Portable application |
-
-**Installation:**
-1. Download the appropriate installer for your platform
-2. Install following standard platform conventions
-3. Launch PSF Guard from your applications menu
-4. Configure your database and image directories in the settings panel
-5. Start analyzing your images!
-
-### Docker (Recommended for Linux Servers)
+Once frames are rejected (by hand or by screening), archive them out of the
+directory tree your stacking software scans — reversibly:
 
 ```bash
-# Pull and run
-docker pull ghcr.io/theatrus/psf-guard:latest
+# Move rejects to <image_dir>/<Project>/REJECT/... with their sidecars.
+# Idempotent; every move is recorded for restore.
+psf-guard move-rejects --db my-db [--dry-run]
 
-docker run -d -p 3000:3000 \
-  -v /path/to/database.sqlite:/data/database.sqlite:ro \
-  -v /path/to/images:/images:ro \
-  -v /path/to/psf-guard.toml:/data/config.toml:ro \
-  ghcr.io/theatrus/psf-guard:latest \
-  server --config /data/config.toml
+# Changed your mind? Un-reject frames in the UI, then:
+psf-guard restore-rejects --db my-db          # restores only un-rejected files
+psf-guard restore-rejects --db my-db --all    # restores everything
 ```
 
-Open your browser to http://localhost:3000/
+`restore-rejects` never overwrites an existing file, and archived frames stay
+visible in the web UI. The legacy `filter-rejected` command still exists for
+its statistical-regrading flags but is deprecated in favor of `move-rejects`.
 
-### Fedora / RPM (build from source)
+## Syncing between machines
 
-PSF Guard can be built as a native RPM on Fedora 43, Fedora 44, and other
-recent releases using mainline RPM tooling (`rpmbuild`, `mock`, COPR). The
-build is fully offline once sources are prepared, so it works in a clean
-chroot:
+Grade on one machine while the telescope keeps capturing on another. `sync`
+moves state between two scheduler databases — registry slugs or `.sqlite`
+paths — matching images by their stable GUID (Target Scheduler schema v22+):
 
 ```bash
-sudo dnf install -y rpm-build rpmdevtools cargo rust clang-devel \
-    opencv-devel nodejs npm git
-rpmdev-setuptree
-./scripts/make-rpm-sources.sh                 # builds frontend + vendors crates
-rpmbuild -ba packaging/rpm/psf-guard.spec      # RPMs in ~/rpmbuild/RPMS/
+# Mirror projects, targets and captured images FROM the telescope INTO your DB.
+# Your local grading is preserved; new images arrive with the telescope's grade.
+psf-guard sync pull --from telescope.sqlite --to my-db --dry-run
+
+# Push your grading decisions back TO the telescope (one-way, source wins).
+psf-guard sync grades --from my-db --to telescope.sqlite --dry-run
 ```
 
-See [`packaging/rpm/README.md`](packaging/rpm/README.md) for details (mock
-builds, the `--without opencv` variant, and releasing a new version).
+Use them as a loop — pull to refresh, grade locally, push grades back. Both
+directions support `--project` filters and `--dry-run` (`grades` also
+`--target` and `--status`), open the source read-only, and run in a single
+transaction.
 
-### Pre-built CLI/Server Binaries for Windows, macOS, Linux
+## CLI reference
 
-Download the latest release for your platform:
-
-| Platform | Download | Notes |
-|----------|----------|-------|
-| **Linux x64** | [`psf-guard-linux-x64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-linux-x64) | Requires system libraries - use Docker instead |
-| **macOS x64** | [`psf-guard-macos-x64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-macos-x64) | May require system libraries |
-| **Windows x64** | [`psf-guard-windows-x64.exe`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-windows-x64.exe) | Static binary |
-
-**Note**: Native binaries for macOS and Linux require system libraries (SQLite,
-image processing libraries) that are not included. Docker is recommended for
-Linux deployments to ease the install pain. For macOS, you'll need Homebrew to
-install OpenCV.
-
+One binary, many tools. `psf-guard --help` lists everything; the highlights:
 
 ```bash
-# Linux/macOS - make executable and run
-chmod +x psf-guard-*
-./psf-guard-linux-x64 server --config psf-guard.toml
+# Serve the web grader (registers the DB in the shared registry on first run)
+psf-guard server <database> <image-dirs...> [--port 3000]
+psf-guard server --config psf-guard.toml            # TOML for server knobs
+psf-guard server --registry /tmp/scratch.json <db> <dirs...>  # throwaway session
+psf-guard server --host 127.0.0.1 <db> <dirs...>    # localhost only (default binds 0.0.0.0)
 
-# Windows
-copy "%LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite" schedulerdb-backup.sqlite
-psf-guard-linux-x64 server "%LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite"
- C:\where_images_are
+# Quality screening (see docs/SCREENING.md)
+psf-guard screen-fits ./lights --annotate ./diagnostics
+psf-guard screen-fits ./lights --regrade-db my-db --dry-run
+psf-guard screen-fits ./lights --format json         # or table, csv
+
+# Reject archival
+psf-guard move-rejects --db <slug> [--dry-run] [--project NAME] [--target NAME]
+psf-guard restore-rejects --db <slug> [--all] [--image-id N] [--dry-run]
+
+# Two-database sync (see "Syncing between machines" above)
+psf-guard sync pull --from telescope.sqlite --to my-db
+psf-guard sync grades --from my-db --to telescope.sqlite
+
+# Star detection & PSF analysis
+psf-guard analyze-fits image.fits [--detector nina|hocusfocus] [--compare-all]
+psf-guard annotate-stars image.fits [--max-stars 50]
+psf-guard visualize-psf image.fits [--star-index N]  # single-star fit residuals
+psf-guard visualize-psf-multi image.fits [--num-stars 25]
+psf-guard benchmark-psf image.fits                   # PSF fitting performance
+
+# FITS utilities
+psf-guard stretch-to-png image.fits -o output.png   # MTF auto-stretch
+psf-guard read-fits image.fits                      # header/metadata dump
+
+# Database queries & manual grading
+psf-guard list-projects -d database.sqlite
+psf-guard list-targets "Project Name" -d database.sqlite
+psf-guard dump-grading -d database.sqlite [--project NAME]
+psf-guard show-images <IDS> -d database.sqlite
+psf-guard update-grade <ID> rejected -d database.sqlite
+psf-guard regrade database.sqlite [--dry-run]        # statistical re-grading
 ```
 
-Open your browser to http://localhost:3000/
+Batch commands also support statistical outlier detection
+(`--enable-statistical`): per-target/filter HFR and star-count distribution
+analysis plus sequence-based cloud detection. Details in
+[docs/STATISTICAL_GRADING.md](docs/STATISTICAL_GRADING.md).
 
-Note for Windows: This makes a local copy of the schedulerdb as an insurance
-policy when running psf-guard. You should always make a backup of the database
-in case something eats it.
+## Configuration
 
-### Build from Source
+### Databases: the registry
 
-You'll need to make sure to include several build tools depending on platform.
-The best luck is probably from reading the .github/ CI files for package install
-instructions. The OpenCV dependency is large and annoying. Its even more large
-and annoying on Windows.
+The server manages any number of scheduler databases. The list lives in a
+JSON registry at the platform config location — not in the TOML:
 
-```bash
-git clone https://github.com/theatrus/psf-guard.git
-cd psf-guard
-cargo build --release
+| Platform | Registry path |
+|----------|---------------|
+| Windows | `%APPDATA%\psf-guard\config.json` |
+| macOS | `~/Library/Application Support/psf-guard/config.json` |
+| Linux | `~/.config/psf-guard/config.json` |
 
-# Run server (traditional CLI args)
-./target/release/psf-guard server schedulerdb.sqlite /path/to/images/
+`psf-guard server <db> <dirs...>` **registers** that database on first run and
+reuses it afterwards; you can also manage the list from the desktop app's
+Settings panel or the `/api/databases` HTTP endpoints. For a one-off session
+that shouldn't touch your real config, pass `--registry /tmp/scratch.json`.
 
-# Or using config file
-./target/release/psf-guard server --config psf-guard.toml
+The default N.I.N.A. scheduler database on Windows lives at
+`%LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite`.
 
-# Open http://localhost:3000
-```
-
-### Multi-Directory Usage
-
-```bash
-# Scan multiple directories in priority order (first-hit wins)
-psf-guard server db.sqlite /primary/images/ /backup/images/ /archive/images/
-```
-
-### Multi-Database Support
-
-The server can manage many N.I.N.A. scheduler databases at once. The
-configured database list lives in a shared JSON registry at the platform
-config location (`~/Library/Application Support/psf-guard/config.json` on
-macOS, `~/.config/psf-guard/config.json` on Linux,
-`%APPDATA%\psf-guard\config.json` on Windows).
+### Server knobs: the TOML
 
 ```bash
-# Register a database (idempotent — registers it once, then reuses on later
-# runs). The server loads every configured database, not just this one.
-psf-guard server schedulerdb.sqlite /images/
-
-# Manage the list at runtime via the desktop app's Settings panel, or via
-# HTTP: POST/PUT/DELETE on /api/databases (see CLAUDE.md for the schema).
-```
-
-**Important — CLI behavior change:** `psf-guard server <db> <dirs>` now
-**persists** `<db>` into the shared registry on first run. Subsequent
-invocations pick it up automatically, even without args. If you previously
-relied on the "one-shot, untouched config" behavior, use a scratch
-registry file:
-
-```bash
-# Ad-hoc session that doesn't touch the user's real config.
-psf-guard server --registry /tmp/scratch.json schedulerdb.sqlite /images/
-```
-
-The registry is automatically migrated from the v1 single-DB format on
-first load (the old file is preserved as `config.json.bak`).
-
-## Configuration File
-
-PSF Guard supports TOML configuration files for easier management:
-
-```bash
-# Create from example
 cp psf-guard.toml.example psf-guard.toml
-# Edit with your settings
-nano psf-guard.toml
-
-# Use config file
 psf-guard server --config psf-guard.toml
 ```
-
-### Configuration Options
-
-The TOML config holds only server-wide knobs. **Databases and their image
-directories are not configured here** — they live in the database registry
-(JSON), by default at `<config>/psf-guard/config.json`. Register a database
-with `psf-guard server <db.sqlite> <image-dir>...`, or manage databases from
-the web UI / Tauri app.
 
 ```toml
 [server]
 port = 3000
 host = "0.0.0.0"
+# Optional: fraction of CPU cores for parallel work (both default sensibly).
+# Interactive jobs (occlusion scans, on-demand previews) get scan_worker_ratio;
+# background pre-generation gets background_worker_ratio and pauses entirely
+# while an interactive job runs.
+#scan_worker_ratio = 0.5
+#background_worker_ratio = 0.25
 
 [cache]
-directory = "./cache"  
-file_ttl = "5m"        # Human readable: 30s, 5m, 1h, 2h30m, 1d
+directory = "./cache"
+file_ttl = "5m"        # 30s, 5m, 1h, 2h30m, 1d ...
 directory_ttl = "5m"
 
-[pregeneration]  # Optional
+[pregeneration]        # optional background preview warming
 enabled = true
-screen = true   # Generate 1200px previews
-large = false   # Generate 2000px previews
+screen = true          # 1200px previews
+large = false          # 2000px previews
 ```
 
-> A legacy `[database]` / `[images]` section is still parsed for backward
-> compatibility but is **ignored in server mode**; databases come from the
-> registry. Don't add it to new config files.
-
-Command line arguments override config file settings.
-
-## Database Location
-
-**Windows N.I.N.A.:**
-```
-%LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite
-```
-
-## Web Interface
-
-### Dashboard Overview
-The main dashboard provides a comprehensive view of your imaging projects:
-- **Statistics Cards**: Projects, targets, images, and completion percentage
-- **Progress Visualization**: Color-coded grading progress bars
-- **File Status**: Real-time file discovery and cache status
-- **Filter Summary**: Date ranges and filter usage statistics
-
-### Image Grid View
-- **Smart Filtering**: Filter by project, target, status, and date range
-- **Batch Operations**: Multi-select with Shift+Click, Ctrl+Click
-- **Real-time Status**: Accept/reject/unmark with immediate visual feedback
-- **Quick Navigation**: Keyboard shortcuts for efficient workflow
-- **Metadata Display**: HFR, star counts, and acquisition details
-
-### Comparison Mode
-- **Side-by-Side**: Compare images with synchronized zoom and pan
-- **Independent Controls**: Each image can be manipulated separately
-- **Quick Actions**: Accept, reject, or unmark both images simultaneously
-- **Navigation**: Easy switching between image pairs
-
-### Key Features
-- **Smart Loading**: Fast preview → full resolution on zoom
-- **Cache Progress**: Real-time directory scanning with progress indicators
-- **Undo/Redo**: Full history with Ctrl+Z/Ctrl+Y
-
-### Keyboard Shortcuts
-
-| Key | Action | Key | Action |
-|-----|--------|-----|--------|
-| K/→ | Next image | A | Accept |
-| J/← | Previous | X | Reject |  
-| C | Compare | U | Unmark |
-| S | Stars overlay | +/- | Zoom |
-| Ctrl+Z | Undo | Ctrl+Y | Redo |
-
-## CLI Commands
-
-### Core Commands
-
-```bash
-# Web server (CLI args; registers the DB into the shared config on first run)
-psf-guard server <database> <image-dirs...> [--port 3000]
-
-# Web server with isolated scratch registry (does NOT touch the user's real config)
-psf-guard server --registry /tmp/scratch.json <database> <image-dirs...>
-
-# Web server (TOML knobs file — port/cache/pregen; database list still comes
-# from the registry)
-psf-guard server --config psf-guard.toml [--port 8080]  # CLI overrides config
-
-# Archive rejected images out of the directory tree PixInsight scans
-# (default: <image_dir>/<Project>/REJECT/<rest> with same-stem sidecars).
-# Idempotent and reversible — see REJECT_ARCHIVE_PLAN.md for the design.
-psf-guard move-rejects --db <slug> [--dry-run]
-                       [--reject-segment NAME] [--reject-depth N]
-                       [--sidecar-exts ".xisf,.json,.txt"]
-                       [--project NAME] [--target NAME]
-
-# Move archived rejects back into the tree. By default restores only files
-# you've un-rejected in the UI (grade no longer Rejected); --all restores
-# everything. Never overwrites — restores beside an occupant with a
-# `.restored` suffix. Removes the archive row and prunes emptied dirs.
-psf-guard restore-rejects --db <slug> [--all]
-                          [--image-id N] [--guid X] [--dry-run]
-
-# Legacy: in-place rename `LIGHT/` → `LIGHT_REJECT/` as a sibling folder
-# under the same project root. Deprecated — files stay in the same tree
-# PixInsight loads. Still works for the statistical-regrading flags
-# (`--stat-*`) that `move-rejects` doesn't duplicate.
-psf-guard filter-rejected <database> <image-dir> [--dry-run] [--project NAME]
-
-# Screen lights for occlusion/clouds/stray light (see docs/SCREENING.md)
-psf-guard screen-fits ./lights --annotate ./diagnostics
-psf-guard screen-fits ./lights --regrade-db my-db --dry-run
-
-# Star detection analysis
-psf-guard analyze-fits image.fits [--compare-all] [--detector nina|hocusfocus]
-
-# Create annotated images
-psf-guard annotate-stars image.fits [--max-stars 50] [--color red|yellow]
-```
-
-### Database Queries
-
-```bash
-# List projects and targets
-psf-guard list-projects -d database.sqlite
-psf-guard list-targets "Project Name" -d database.sqlite
-
-# Export grading data
-psf-guard dump-grading -d database.sqlite [--project NAME]
-```
-
-### FITS Processing
-
-```bash
-# Convert with MTF stretch
-psf-guard stretch-to-png image.fits output.png
-
-# PSF analysis grid
-psf-guard visualize-psf-multi image.fits [--num-stars 25]
-
-# Metadata display
-psf-guard read-fits image.fits
-```
-
-## Statistical Grading
-
-Advanced outlier detection beyond database status:
-
-- **HFR Analysis**: Focus quality per target/filter
-- **Star Count**: Abnormal detection counts  
-- **Cloud Detection**: Sequence analysis for weather (bounded-baseline: multi-frame events are fully rejected, permanent condition changes re-baseline)
-- **Distribution Analysis**: MAD for skewed data
-
-Enable with `--enable-statistical` flag.
+Command-line arguments override the config file. (A legacy
+`[database]`/`[images]` section is still parsed but ignored in server mode —
+databases come from the registry.)
 
 ## REST API
 
+Per-database endpoints are nested under `/api/db/{db_id}/`; `GET
+/api/databases` lists the configured databases and their ids.
+
 ```bash
 # List images with filters
-curl "localhost:3000/api/images?project_id=2&status=pending"
+curl "localhost:3000/api/db/my-db/images?project_id=2&status=pending"
 
-# Update grading
-curl -X PUT localhost:3000/api/images/123/grade \
+# Update a grade
+curl -X PUT localhost:3000/api/db/my-db/images/123/grade \
   -H "Content-Type: application/json" \
   -d '{"status": "accepted"}'
 
-# Get processed images
-curl "localhost:3000/api/images/123/preview?size=large" -o preview.png
-curl "localhost:3000/api/images/123/annotated" -o stars.png
+# Fetch processed images
+curl "localhost:3000/api/db/my-db/images/123/preview?size=large" -o preview.png
+curl "localhost:3000/api/db/my-db/images/123/annotated" -o stars.png
 ```
 
-## Cache System
+## Known limitations
 
-- **Auto-refresh**: Both file and directory caches refresh every 5 minutes
-- **Manual refresh**: UI button for file cache, Shift+click for both
-- **Real-time progress**: Live updates during directory scanning
-- **Multi-directory**: Scans all directories with first-hit preference
+- **Monochrome only.** Color/OSC FITS files are not debayered and will do
+  weird things. Want color support? Sample FITS files are welcome at
+  psf-guard@theatr.us.
+- **Target Scheduler required.** Images are located via the scheduler
+  database, not by walking N.I.N.A.'s standard file layout (yet).
+- **Path assumptions.** Directory layouts matching
+  `%DATEMINUS12%/%TARGETNAME%/%DATEMINUS12%/LIGHT/...` (with or without the
+  leading date) are detected reliably; other patterns may not be. Happy to
+  support more — open an issue.
+- **Make backups.** Of the scheduler database always, and of your FITS files
+  before using file-moving commands. `move-rejects` is designed to be
+  reversible and non-destructive, but it's your data.
 
 ## Development
 
 ```bash
-# Setup
-cargo fmt && cargo clippy && cargo test
-
-# Run with logging
+cargo fmt && cargo clippy && cargo test    # the basics
 RUST_LOG=debug cargo run -- server db.sqlite images/
-
-# Frontend development
-cd static && npm run dev
-
-# OpenCV (optional, enhanced star detection)
-brew install opencv  # macOS
+cd static && npm run dev                   # frontend dev server
+cd static && npm run test:e2e              # Playwright end-to-end suite
 ```
 
-See [CLAUDE.md](CLAUDE.md) for architecture details.
+Architecture notes live in [CLAUDE.md](CLAUDE.md).
 
 ## License
 
-Apache License 2.0 - See [LICENSE](LICENSE)
+Apache License 2.0 — see [LICENSE](LICENSE).
