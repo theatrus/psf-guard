@@ -309,6 +309,40 @@ READ_WRITE, refuse same-path source/dest, and have `--dry-run` + `--verbose`.
 - `src/cli_main.rs`: Traditional command-line interface implementation
 - `src/tauri_main.rs`: Tauri desktop application implementation
 
+#### Dedicated CLI binary + Windows installer (2026-07)
+- **`src/bin/psf-guard-cli.rs`**: a second bin target that just calls
+  `cli_main::main()` and never sets `windows_subsystem = "windows"`, so it stays
+  a **console** app. Needed because the `tauri`-feature release `psf-guard.exe`
+  is a GUI-subsystem binary (`main.rs` `#![cfg_attr(... windows_subsystem =
+  "windows")]`): dual-mode, but its stdout/stderr don't attach to a terminal on
+  Windows, making it a poor CLI. The standalone `psf-guard-*-x64` release assets
+  are built from this target (`cargo build --bin psf-guard-cli`, no tauri) —
+  `cargo tauri build` overwrites `target/release/psf-guard`, so the standalone
+  CLI must come from the separate bin. Having two bins requires
+  `default-run = "psf-guard"` (Cargo.toml) + `"mainBinaryName": "psf-guard"`
+  (tauri.conf.json) so `cargo run` and the Tauri bundler pick the app binary,
+  not the sidecar — otherwise Tauri bundles `psf-guard-cli` as the app (WiX
+  ICE30 duplicate-component error on Windows; a broken GUI elsewhere).
+- **Installer bundles it automatically**: Tauri bundles *every* cargo `[[bin]]`
+  target, so `psf-guard-cli.exe` ships next to the GUI app in the MSI + NSIS
+  (and in the macOS `.app` / Linux packages) with **no `externalBin`** — an
+  explicit `externalBin` would duplicate it and trip WiX ICE30. The only
+  Windows-specific bundle config is the NSIS PATH hook in
+  `tauri.bundle-windows.json`, applied at the bundle step via `cargo tauri build
+  --config tauri.bundle-windows.json`. Do NOT name that file
+  `tauri.windows.conf.json`: Tauri auto-merges `tauri.<platform>.conf.json` into
+  *every* tauri-feature compile (`build.rs` → `tauri_build::build()`), which
+  needlessly couples plain `clippy --all-features`/`cargo build --features tauri`
+  to bundle config.
+- **NSIS adds it to PATH**: `nsis/hooks.nsh` (`bundle.windows.nsis.installerHooks`)
+  appends the install dir to the **per-user** `HKCU\Environment` PATH on install
+  and removes it on uninstall (StrFunc dedup, `WM_WININICHANGE` broadcast), so
+  `psf-guard-cli` runs from any terminal. Per-user because Tauri's default NSIS
+  installMode is per-user (no elevation, short PATH, clean revert). The **MSI**
+  bundles the CLI but does **not** modify PATH yet (WiX `<Environment>` is a
+  possible follow-up; it can only be validated in Windows CI). Hook syntax is
+  locally checkable with `makensis` against a Tauri-shaped harness.
+
 ### Cache System (Current)
 - **File Cache**: Database-based existence checking, auto-refreshed every 5 minutes
 - **Directory Tree**: In-memory filename→path mapping, auto-refreshed every 5 minutes

@@ -3,6 +3,7 @@
   "productName": "PSF Guard",
   "version": "0.3.0",
   "identifier": "com.theatrus.psf-guard",
+  "mainBinaryName": "psf-guard",
   "build": {
     "devUrl": "http://localhost:5173",
     "frontendDist": "./static/dist",

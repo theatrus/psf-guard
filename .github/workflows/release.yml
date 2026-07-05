@@ -16,14 +16,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # artifact_name is the dedicated console CLI binary (psf-guard-cli),
+          # NOT the main `psf-guard` — `cargo tauri build` overwrites
+          # target/release/psf-guard with the GUI-subsystem app, so the
+          # standalone CLI asset must come from the separate psf-guard-cli target.
           - os: ubuntu-22.04
-            artifact_name: psf-guard
+            artifact_name: psf-guard-cli
             asset_name: psf-guard-linux-x64
           - os: windows-latest
-            artifact_name: psf-guard.exe
+            artifact_name: psf-guard-cli.exe
             asset_name: psf-guard-windows-x64.exe
           - os: macos-latest
-            artifact_name: psf-guard
+            artifact_name: psf-guard-cli
             asset_name: psf-guard-macos-x64
 
     steps:
@@ -145,16 +149,21 @@ jobs:
       continue-on-error: true
 
     - name: Build CLI binary
-      run: cargo build --release --locked
+      # Dedicated console-subsystem CLI (no tauri) — the standalone release
+      # asset. The installer's bundled copy comes from Tauri auto-bundling the
+      # psf-guard-cli bin target, so no sidecar staging is needed here.
+      run: cargo build --release --locked --bin psf-guard-cli
 
-    - name: Build Tauri desktop app
-      if: matrix.os != 'macos-latest'
-      env:
-        APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-        APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-        APPLE_API_KEY_PATH: AuthKey_${{ secrets.APPLE_API_KEY }}.p8
-      run: |
-        cargo tauri build --verbose
+    - name: Build Tauri desktop app (Linux)
+      if: matrix.os == 'ubuntu-22.04'
+      run: cargo tauri build --verbose
+
+    - name: Build Tauri desktop app (Windows, with bundled CLI)
+      # externalBin (the CLI sidecar staged above) + the NSIS PATH hook live in
+      # tauri.bundle-windows.json, applied only here via --config so other
+      # tauri-feature compiles don't require the sidecar.
+      if: matrix.os == 'windows-latest'
+      run: cargo tauri build --verbose --config tauri.bundle-windows.json
 
     - name: Build Tauri desktop app (macOS)
       if: matrix.os == 'macos-latest'
@@ -225,7 +234,9 @@ jobs:
 
           ### Desktop Applications 🖥️
           - **Linux**: `.deb` package and `.AppImage` for easy installation
-          - **Windows**: `.msi` installer and NSIS installer
+          - **Windows**: `.msi` installer and NSIS installer. The NSIS setup also
+            installs a console `psf-guard-cli.exe` next to the app and adds it to
+            your user `PATH`, so you can run `psf-guard-cli` from any terminal.
           - **macOS**: `.dmg` installer and `.app` bundle (zipped)
 
           ### Command Line Interface 🖥️
