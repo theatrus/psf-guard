@@ -315,24 +315,25 @@ READ_WRITE, refuse same-path source/dest, and have `--dry-run` + `--verbose`.
   a **console** app. Needed because the `tauri`-feature release `psf-guard.exe`
   is a GUI-subsystem binary (`main.rs` `#![cfg_attr(... windows_subsystem =
   "windows")]`): dual-mode, but its stdout/stderr don't attach to a terminal on
-  Windows, making it a poor CLI. `psf-guard-cli` links no Tauri code and is the
-  source of every standalone `psf-guard-*-x64` release asset (release.yml —
+  Windows, making it a poor CLI. The standalone `psf-guard-*-x64` release assets
+  are built from this target (`cargo build --bin psf-guard-cli`, no tauri) —
   `cargo tauri build` overwrites `target/release/psf-guard`, so the standalone
-  CLI must come from this separate target). Having two bins requires
+  CLI must come from the separate bin. Having two bins requires
   `default-run = "psf-guard"` (Cargo.toml) + `"mainBinaryName": "psf-guard"`
   (tauri.conf.json) so `cargo run` and the Tauri bundler pick the app binary,
   not the sidecar — otherwise Tauri bundles `psf-guard-cli` as the app (WiX
   ICE30 duplicate-component error on Windows; a broken GUI elsewhere).
-- **Windows installer bundles it**: `tauri.bundle-windows.json` adds
-  `bundle.externalBin = ["binaries/psf-guard-cli"]` so the MSI + NSIS ship
-  `psf-guard-cli.exe` next to the GUI app. It is applied **only** at the bundle
-  step via `cargo tauri build --config tauri.bundle-windows.json`. Do NOT name it
+- **Installer bundles it automatically**: Tauri bundles *every* cargo `[[bin]]`
+  target, so `psf-guard-cli.exe` ships next to the GUI app in the MSI + NSIS
+  (and in the macOS `.app` / Linux packages) with **no `externalBin`** — an
+  explicit `externalBin` would duplicate it and trip WiX ICE30. The only
+  Windows-specific bundle config is the NSIS PATH hook in
+  `tauri.bundle-windows.json`, applied at the bundle step via `cargo tauri build
+  --config tauri.bundle-windows.json`. Do NOT name that file
   `tauri.windows.conf.json`: Tauri auto-merges `tauri.<platform>.conf.json` into
-  *every* tauri-feature compile, and `tauri-build` validates `externalBin` at
-  compile time (`build.rs` → `tauri_build::build()`), so that name would force
-  `clippy --all-features` and `cargo build --features tauri` to need the sidecar
-  too. CI/release build the sidecar and copy it to
-  `binaries/psf-guard-cli-<target-triple>.exe` before that bundle command.
+  *every* tauri-feature compile (`build.rs` → `tauri_build::build()`), which
+  needlessly couples plain `clippy --all-features`/`cargo build --features tauri`
+  to bundle config.
 - **NSIS adds it to PATH**: `nsis/hooks.nsh` (`bundle.windows.nsis.installerHooks`)
   appends the install dir to the **per-user** `HKCU\Environment` PATH on install
   and removes it on uninstall (StrFunc dedup, `WM_WININICHANGE` broadcast), so

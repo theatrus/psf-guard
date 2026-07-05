@@ -401,19 +401,13 @@ jobs:
       run: cargo tauri build --verbose
 
     - name: Build Tauri desktop app (Windows, with bundled CLI)
-      # The Windows bundle ships psf-guard-cli.exe (console subsystem, no tauri)
-      # next to the GUI app and adds it to PATH. externalBin + the NSIS hook live
-      # in tauri.bundle-windows.json, applied ONLY here via --config so plain
-      # tauri-feature compiles (Test Tauri compilation, clippy --all-features)
-      # don't require the sidecar. Stage it where the bundler expects it first.
+      # Tauri auto-bundles every cargo bin target, so psf-guard-cli.exe (console
+      # subsystem) ships next to the GUI app with no externalBin/sidecar needed.
+      # tauri.bundle-windows.json adds only the NSIS PATH hook, applied via
+      # --config at bundle time (a name Tauri does NOT auto-merge into every
+      # tauri-feature compile).
       if: matrix.os == 'windows-latest'
-      shell: pwsh
-      run: |
-        cargo build --release --locked --bin psf-guard-cli
-        $triple = (rustc -vV | Select-String '^host:').ToString().Split(' ')[1]
-        New-Item -ItemType Directory -Force -Path binaries | Out-Null
-        Copy-Item "target/release/psf-guard-cli.exe" "binaries/psf-guard-cli-$triple.exe" -Force
-        cargo tauri build --verbose --config tauri.bundle-windows.json
+      run: cargo tauri build --verbose --config tauri.bundle-windows.json
 
     - name: Build Tauri desktop app (macOS)
       if: matrix.os == 'macos-latest'

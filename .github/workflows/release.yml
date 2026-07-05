@@ -149,18 +149,10 @@ jobs:
       continue-on-error: true
 
     - name: Build CLI binary
-      shell: bash
-      run: |
-        # Dedicated console-subsystem CLI (no tauri) — this is the standalone
-        # release asset and, on Windows, the installer's bundled CLI.
-        cargo build --release --locked --bin psf-guard-cli
-        # Stage the sidecar where Tauri's Windows bundler expects externalBin:
-        # binaries/psf-guard-cli-<target-triple>.exe.
-        if [ "${{ matrix.os }}" = "windows-latest" ]; then
-          triple=$(rustc -vV | sed -n 's/^host: //p')
-          mkdir -p binaries
-          cp "target/release/psf-guard-cli.exe" "binaries/psf-guard-cli-${triple}.exe"
-        fi
+      # Dedicated console-subsystem CLI (no tauri) — the standalone release
+      # asset. The installer's bundled copy comes from Tauri auto-bundling the
+      # psf-guard-cli bin target, so no sidecar staging is needed here.
+      run: cargo build --release --locked --bin psf-guard-cli
 
     - name: Build Tauri desktop app (Linux)
       if: matrix.os == 'ubuntu-22.04'

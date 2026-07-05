@@ -73,8 +73,3 @@ test_output/
 /gen/schemas/*-schema.json
 /gen/schemas/acl-manifests.json
 /tauri.macos.conf.json
-
-# Tauri externalBin sidecars for the Windows installer are built in CI
-# (cargo build --bin psf-guard-cli, then copied here with the target-triple
-# suffix) — never committed.
-/binaries/
