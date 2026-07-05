@@ -23,7 +23,7 @@ points at your Target Scheduler database and image folders and gives you:
 - **Two-machine workflows** — sync projects, captured images, and grades
   between the telescope's database and your grading machine.
 - **Star detection and PSF analysis** — a port of N.I.N.A.'s detector plus the
-  HocusFocus detector, with Gaussian/Moffat PSF fitting and annotated output.
+  HocusFocus-inspired detector, with Gaussian/Moffat PSF fitting and annotated output.
 
 It runs as a desktop app (Windows/macOS/Linux), a self-hosted web server
 (Docker, NAS), or a standalone CLI.
@@ -37,13 +37,13 @@ It runs as a desktop app (Windows/macOS/Linux), a self-hosted web server
 
 | Overview Dashboard | Image Grid | Side-by-Side Comparison |
 |:--:|:--:|:--:|
-| ![Overview](docs/overview.png) | ![Grid](docs/image_grid.png) | ![Compare](docs/compare.png) |
+| ![Overview](docs/overview.png) | ![Grid](docs/image_grid.jpg) | ![Compare](docs/compare.jpg) |
 | Project statistics and progress tracking | Grid view with filtering and batch operations | Synchronized zoom and detailed comparison |
 
 | Sequence Analysis & Quality Screening | Star Detection | PSF Fitting |
 |:--:|:--:|:--:|
 | ![Sequence Analysis](docs/sequence-analysis.png) | ![Annotated Stars](docs/annotated-stars.jpg) | ![PSF Visualization](docs/psf-visualization.jpg) |
-| Per-frame quality scores, cloud/occlusion classification, one-click occlusion scanning | HocusFocus detector with annotated output (`annotate-stars`) | Observed / fitted / residual grids with Moffat & Gaussian models (`visualize-psf-multi`) |
+| Per-frame quality scores, cloud/occlusion classification, one-click occlusion scanning | HocusFocus inspired detection with annotated output (`annotate-stars`) | Observed / fitted / residual grids with Moffat & Gaussian models (`visualize-psf-multi`) |
 
 ## Installation
 
@@ -113,7 +113,7 @@ sudo dnf install ./psf-guard-*.fc44.x86_64.rpm
 ```
 
 The package installs the CLI/server plus a `psf-guard.service` systemd unit
-for running the web grader as a daemon.
+for running the PSF Guard server as a daemon.
 
 Prefer to build your own? Native RPMs build with standard tooling
 (`rpmbuild`, `mock`, COPR), fully offline once sources are prepared:
@@ -144,9 +144,11 @@ and OpenCV with clang. OpenCV is the painful one — the CI workflows under
 per platform (vcpkg on Windows, Homebrew on macOS, `libopencv-dev` on
 Debian/Ubuntu).
 
-## The web grader
+## The grader UI
 
-Open the UI and you get an overview dashboard (projects, targets, completion,
+It's the same UI in the desktop app (built in — no server or browser needed)
+and served by `psf-guard server` for browser access on NAS and remote
+setups. Open it and you get an overview dashboard (projects, targets, completion,
 grading progress), an image grid, and a comparison mode:
 
 - **Grid**: filter by project/target/status/date, multi-select with
@@ -245,7 +247,7 @@ transaction.
 One binary, many tools. `psf-guard --help` lists everything; the highlights:
 
 ```bash
-# Serve the web grader (registers the DB in the shared registry on first run)
+# Serve the grader UI (registers the DB in the shared registry on first run)
 psf-guard server <database> <image-dirs...> [--port 3000]
 psf-guard server --config psf-guard.toml            # TOML for server knobs
 psf-guard server --registry /tmp/scratch.json <db> <dirs...>  # throwaway session
