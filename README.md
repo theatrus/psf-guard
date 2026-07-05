@@ -23,7 +23,7 @@ points at your Target Scheduler database and image folders and gives you:
 - **Two-machine workflows** — sync projects, captured images, and grades
   between the telescope's database and your grading machine.
 - **Star detection and PSF analysis** — a port of N.I.N.A.'s detector plus the
-  HocusFocus detector, with Gaussian/Moffat PSF fitting and annotated output.
+  HocusFocus-inspired detector, with Gaussian/Moffat PSF fitting and annotated output.
 
 It runs as a desktop app (Windows/macOS/Linux), a self-hosted web server
 (Docker, NAS), or a standalone CLI.
@@ -43,7 +43,7 @@ It runs as a desktop app (Windows/macOS/Linux), a self-hosted web server
 | Sequence Analysis & Quality Screening | Star Detection | PSF Fitting |
 |:--:|:--:|:--:|
 | ![Sequence Analysis](docs/sequence-analysis.png) | ![Annotated Stars](docs/annotated-stars.jpg) | ![PSF Visualization](docs/psf-visualization.jpg) |
-| Per-frame quality scores, cloud/occlusion classification, one-click occlusion scanning | HocusFocus detector with annotated output (`annotate-stars`) | Observed / fitted / residual grids with Moffat & Gaussian models (`visualize-psf-multi`) |
+| Per-frame quality scores, cloud/occlusion classification, one-click occlusion scanning | HocusFocus inspired detection with annotated output (`annotate-stars`) | Observed / fitted / residual grids with Moffat & Gaussian models (`visualize-psf-multi`) |
 
 ## Installation
 
