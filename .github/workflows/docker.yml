@@ -58,12 +58,21 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          # PRs validate the amd64 build only. Building linux/arm64 here means
+          # a full Rust+OpenCV compile under QEMU emulation (~60+ min), which
+          # (a) is slow and (b) overflows GitHub's ~10 GB Actions cache with
+          # mode=max, so blobs get LRU-evicted mid-build and the run dies with
+          # "cache entry no longer exists". Both arches are still built+pushed
+          # on main/tags below.
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Only write cache on push events. Letting PRs write cache (two arches,
+          # mode=max) evicts main's blobs from the shared repo cache, which then
+          # breaks other PRs' cache-from reads. PRs still read main's cache.
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,mode=max' || '' }}
 
 #      - name: Generate artifact attestation
 #        if: github.event_name != 'pull_request'
