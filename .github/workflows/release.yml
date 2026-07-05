@@ -197,10 +197,13 @@ jobs:
           windows-latest)
             # Copy .msi installers
             find target/release/bundle/msi -name "*.msi" -exec cp {} release-assets/ \; 2>/dev/null || echo "No .msi files found"
-            # Copy NSIS installers
-            find target/release/bundle/nsis -name "*.exe" | while read -r file; do
-              cp "$file" release-assets/$(basename "$file" .exe)-installer.exe 2>/dev/null || echo "No NSIS .exe files found"
-            done
+            # Copy NSIS installers. -exec is space-safe: the old
+            # `cp "$file" release-assets/$(basename ...)-installer.exe` pipeline
+            # word-split on the space in "PSF Guard_..." and silently copied
+            # nothing (why v0.3.0/v0.4.0 releases initially lacked the NSIS
+            # asset). Keep the original "-setup.exe" name — it's what the docs
+            # reference.
+            find target/release/bundle/nsis -name "*.exe" -exec cp {} release-assets/ \; 2>/dev/null || echo "No NSIS .exe files found"
             ;;
           macos-latest)
             # Copy .dmg installers
