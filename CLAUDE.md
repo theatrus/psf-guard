@@ -318,7 +318,11 @@ READ_WRITE, refuse same-path source/dest, and have `--dry-run` + `--verbose`.
   Windows, making it a poor CLI. `psf-guard-cli` links no Tauri code and is the
   source of every standalone `psf-guard-*-x64` release asset (release.yml —
   `cargo tauri build` overwrites `target/release/psf-guard`, so the standalone
-  CLI must come from this separate target).
+  CLI must come from this separate target). Having two bins requires
+  `default-run = "psf-guard"` (Cargo.toml) + `"mainBinaryName": "psf-guard"`
+  (tauri.conf.json) so `cargo run` and the Tauri bundler pick the app binary,
+  not the sidecar — otherwise Tauri bundles `psf-guard-cli` as the app (WiX
+  ICE30 duplicate-component error on Windows; a broken GUI elsewhere).
 - **Windows installer bundles it**: `tauri.bundle-windows.json` adds
   `bundle.externalBin = ["binaries/psf-guard-cli"]` so the MSI + NSIS ship
   `psf-guard-cli.exe` next to the GUI app. It is applied **only** at the bundle
