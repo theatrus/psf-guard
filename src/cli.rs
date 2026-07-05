@@ -516,9 +516,9 @@ pub enum Commands {
         #[arg(short, long)]
         port: Option<u16>,
 
-        /// Host to bind to
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
+        /// Host to bind to (overrides config file; defaults to 0.0.0.0)
+        #[arg(long)]
+        host: Option<String>,
 
         /// Enable background pre-generation of screen-sized preview images
         #[arg(long)]

@@ -644,7 +644,7 @@ pub fn main() -> Result<()> {
             static_dir,
             cache_dir,
             port,
-            host: _host,
+            host,
             pregenerate_screen,
             pregenerate_large,
             pregenerate_original,
@@ -695,7 +695,7 @@ pub fn main() -> Result<()> {
             } else {
                 Config::default()
             };
-            app_config.merge_with_cli(None, None, port, cache_dir);
+            app_config.merge_with_cli(None, None, port, host, cache_dir);
 
             // We deliberately do NOT call app_config.validate() — the DB path
             // requirement no longer applies (DBs come from the registry).

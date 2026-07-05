@@ -250,7 +250,8 @@ async fn start_server_for_tauri(
 
     // Tauri server has no TOML config; pull port/host from defaults overridden
     // by what we computed above.
-    config.merge_with_cli(None, None, Some(port), Some(cache_dir.clone()));
+    // (host: the desktop app deliberately binds localhost below, not the config.)
+    config.merge_with_cli(None, None, Some(port), None, Some(cache_dir.clone()));
     let host = "127.0.0.1".to_string();
 
     let server_config = crate::server::ServerConfig {

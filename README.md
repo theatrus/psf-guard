@@ -249,6 +249,7 @@ One binary, many tools. `psf-guard --help` lists everything; the highlights:
 psf-guard server <database> <image-dirs...> [--port 3000]
 psf-guard server --config psf-guard.toml            # TOML for server knobs
 psf-guard server --registry /tmp/scratch.json <db> <dirs...>  # throwaway session
+psf-guard server --host 127.0.0.1 <db> <dirs...>    # localhost only (default binds 0.0.0.0)
 
 # Quality screening (see docs/SCREENING.md)
 psf-guard screen-fits ./lights --annotate ./diagnostics

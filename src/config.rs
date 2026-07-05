@@ -131,6 +131,7 @@ impl Config {
         database_path: Option<String>,
         image_dirs: Option<Vec<String>>,
         port: Option<u16>,
+        host: Option<String>,
         cache_dir: Option<String>,
     ) {
         // CLI database path overrides config (legacy; server mode ignores this)
@@ -148,6 +149,11 @@ impl Config {
         // CLI port overrides config
         if let Some(cli_port) = port {
             self.server.port = Some(cli_port);
+        }
+
+        // CLI host overrides config
+        if let Some(cli_host) = host {
+            self.server.host = Some(cli_host);
         }
 
         // CLI cache directory overrides config
@@ -360,16 +366,28 @@ directory = "./cache"
             Some("/new/database.sqlite".to_string()),
             Some(vec!["/new/images1".to_string(), "/new/images2".to_string()]),
             Some(8080),
+            Some("127.0.0.1".to_string()),
             Some("/new/cache".to_string()),
         );
 
         assert_eq!(config.get_port(), 8080);
+        assert_eq!(config.get_host(), "127.0.0.1");
         assert_eq!(config.get_cache_directory(), "/new/cache");
         assert_eq!(config.database.unwrap().path, "/new/database.sqlite");
         assert_eq!(
             config.images.unwrap().directories,
             vec!["/new/images1", "/new/images2"]
         );
+    }
+
+    #[test]
+    fn merge_with_cli_without_host_keeps_config_default() {
+        // Regression: --host used to carry a clap default of 127.0.0.1 that was
+        // then silently ignored — the server always bound the config default.
+        // Now the flag is optional: absent → config default (0.0.0.0) stands.
+        let mut config = Config::default();
+        config.merge_with_cli(None, None, None, None, None);
+        assert_eq!(config.get_host(), "0.0.0.0");
     }
 
     #[test]
