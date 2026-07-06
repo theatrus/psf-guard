@@ -273,7 +273,7 @@ jobs:
 
 
     - name: Import Apple Developer Certificate (macOS)
-      if: matrix.os == 'macos-latest'
+      if: matrix.os == 'macos-latest' && github.event_name != 'pull_request'
       env:
         APPLE_CERTIFICATE: ${{ secrets.APPLE_BUILD_CERTIFICATE }}
         APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_BUILD_CERTIFICATE_PASSWORD }}
@@ -293,7 +293,7 @@ jobs:
 
         echo $APPLE_API_KEY_PRIVATE | base64 --decode > AuthKey_$APPLE_API_KEY.p8
     - name: Verify Certificate (macOS)
-      if: matrix.os == 'macos-latest'
+      if: matrix.os == 'macos-latest' && github.event_name != 'pull_request'
       run: |
         CERT_INFO=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID")
         CERT_ID=$(echo "$CERT_INFO" | awk -F'"' '{print $2}')
@@ -409,8 +409,12 @@ jobs:
       if: matrix.os == 'windows-latest'
       run: cargo tauri build --verbose --config tauri.bundle-windows.json
 
-    - name: Build Tauri desktop app (macOS)
-      if: matrix.os == 'macos-latest'
+    - name: Build Tauri desktop app (macOS, unsigned PR)
+      if: matrix.os == 'macos-latest' && github.event_name == 'pull_request'
+      run: bash scripts/build-macos.sh tauri build --no-bundle
+
+    - name: Build Tauri desktop app (macOS, signed and notarized)
+      if: matrix.os == 'macos-latest' && github.event_name != 'pull_request'
       env:
         APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
@@ -439,7 +443,7 @@ jobs:
           target/release/psf-guard.exe
           target/release/psf-guard-cli.exe
     - name: Upload Tauri artifacts (macOS)
-      if: matrix.os == 'macos-latest'
+      if: matrix.os == 'macos-latest' && github.event_name != 'pull_request'
       uses: actions/upload-artifact@v7
       with:
         name: psf-guard-tauri-macos-x64

@@ -1,0 +1,6 @@
+[tools]
+actionlint = "1.7.12"
+
+[tasks.actionlint]
+description = "Lint GitHub Actions workflows"
+run = "actionlint .github/workflows/*.yml"
