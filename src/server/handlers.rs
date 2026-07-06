@@ -508,15 +508,13 @@ pub async fn list_projects(
     // Get ALL projects with profile info from database (not just those with files)
     let (projects, profile_count) = {
         let conn = ctx.db();
-        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+        let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
 
         let projects = db
             .get_projects_with_images_and_profile_info()
-            .map_err(|_| AppError::DatabaseError)?;
-        let profile_count = db
-            .get_profile_count()
-            .map_err(|_| AppError::DatabaseError)?;
+            .map_err(AppError::db)?;
+        let profile_count = db.get_profile_count().map_err(AppError::db)?;
 
         (projects, profile_count)
     };
@@ -595,11 +593,11 @@ pub async fn list_targets(
     // Get ALL targets from database (not just those with files)
     let targets = {
         let conn = ctx.db();
-        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+        let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
 
         db.get_targets_with_images(project_id)
-            .map_err(|_| AppError::DatabaseError)?
+            .map_err(AppError::db)?
     };
 
     let response: Vec<TargetResponse> = targets
@@ -637,13 +635,11 @@ pub async fn get_images(
     Query(params): Query<ImageQuery>,
 ) -> Result<Json<ApiResponse<Vec<ImageResponse>>>, AppError> {
     let conn = ctx.db();
-    let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+    let conn = conn.lock().map_err(AppError::db)?;
     let db = Database::new(&conn);
 
     // Get profile count to determine display format
-    let profile_count = db
-        .get_profile_count()
-        .map_err(|_| AppError::DatabaseError)?;
+    let profile_count = db.get_profile_count().map_err(AppError::db)?;
     let show_profile = profile_count > 1;
 
     // Convert status string to GradingStatus enum
@@ -656,7 +652,7 @@ pub async fn get_images(
 
     let images = db
         .query_images(status_filter, None, None, None)
-        .map_err(|_| AppError::DatabaseError)?;
+        .map_err(AppError::db)?;
 
     // Filter by project_id and target_id if provided
     let filtered_images: Vec<_> = images
@@ -715,25 +711,21 @@ pub async fn get_image(
     // Get image data from database first (before any async operations)
     let (image, proj_name, target_name, mut metadata, show_profile) = {
         let conn = ctx.db();
-        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+        let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
 
         // Get profile count to determine display format
-        let profile_count = db
-            .get_profile_count()
-            .map_err(|_| AppError::DatabaseError)?;
+        let profile_count = db.get_profile_count().map_err(AppError::db)?;
         let show_profile = profile_count > 1;
 
-        let images = db
-            .get_images_by_ids(&[image_id])
-            .map_err(|_| AppError::DatabaseError)?;
+        let images = db.get_images_by_ids(&[image_id]).map_err(AppError::db)?;
 
         let image = images.into_iter().next().ok_or(AppError::NotFound)?;
 
         // Get project and target names
         let all_images = db
             .query_images(None, None, None, None)
-            .map_err(|_| AppError::DatabaseError)?;
+            .map_err(AppError::db)?;
 
         let (_, proj_name, target_name) = all_images
             .into_iter()
@@ -861,7 +853,7 @@ pub async fn update_image_grade(
     Json(request): Json<UpdateGradeRequest>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     let conn = ctx.db();
-    let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+    let conn = conn.lock().map_err(AppError::db)?;
     let db = Database::new(&conn);
 
     let status = match request.status.as_str() {
@@ -872,7 +864,7 @@ pub async fn update_image_grade(
     };
 
     db.update_grading_status(image_id, status, request.reason.as_deref())
-        .map_err(|_| AppError::DatabaseError)?;
+        .map_err(AppError::db)?;
 
     Ok(Json(ApiResponse::success(())))
 }
@@ -884,19 +876,19 @@ fn resolve_image_meta(
     image_id: i32,
 ) -> Result<(crate::models::AcquiredImage, String, String), AppError> {
     let conn = ctx.db();
-    let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+    let conn = conn.lock().map_err(AppError::db)?;
     let db = Database::new(&conn);
 
     let image = db
         .get_images_by_ids(&[image_id])
-        .map_err(|_| AppError::DatabaseError)?
+        .map_err(AppError::db)?
         .into_iter()
         .next()
         .ok_or(AppError::NotFound)?;
 
     let target = db
         .get_targets_by_ids(&[image.target_id])
-        .map_err(|_| AppError::DatabaseError)?
+        .map_err(AppError::db)?
         .into_iter()
         .next()
         .ok_or(AppError::NotFound)?;
@@ -1175,19 +1167,17 @@ pub async fn get_image_stars(
     // Get image metadata from database
     let (image, file_only, target_name) = {
         let conn = ctx.db();
-        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+        let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
 
-        let images = db
-            .get_images_by_ids(&[image_id])
-            .map_err(|_| AppError::DatabaseError)?;
+        let images = db.get_images_by_ids(&[image_id]).map_err(AppError::db)?;
 
         let image = images.into_iter().next().ok_or(AppError::NotFound)?;
 
         // Get target name
         let targets = db
             .get_targets_by_ids(&[image.target_id])
-            .map_err(|_| AppError::DatabaseError)?;
+            .map_err(AppError::db)?;
 
         let target = targets.into_iter().next().ok_or(AppError::NotFound)?;
         let target_name = target.name.clone();
@@ -1392,15 +1382,11 @@ pub async fn post_generation_status(
         HashMap<i32, String>,
     ) = {
         let conn = ctx.db();
-        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+        let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
-        let images = db
-            .get_images_by_ids(&ids)
-            .map_err(|_| AppError::DatabaseError)?;
+        let images = db.get_images_by_ids(&ids).map_err(AppError::db)?;
         let target_ids: Vec<i32> = images.iter().map(|i| i.target_id).collect();
-        let targets = db
-            .get_targets_by_ids(&target_ids)
-            .map_err(|_| AppError::DatabaseError)?;
+        let targets = db.get_targets_by_ids(&target_ids).map_err(AppError::db)?;
         (
             images.into_iter().map(|i| (i.id, i)).collect(),
             targets.into_iter().map(|t| (t.id, t.name)).collect(),
@@ -1530,19 +1516,17 @@ pub async fn get_psf_visualization(
     // Get image metadata from database
     let (image, file_only, target_name) = {
         let conn = ctx.db();
-        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+        let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
 
-        let images = db
-            .get_images_by_ids(&[image_id])
-            .map_err(|_| AppError::DatabaseError)?;
+        let images = db.get_images_by_ids(&[image_id]).map_err(AppError::db)?;
 
         let image = images.into_iter().next().ok_or(AppError::NotFound)?;
 
         // Get target name
         let targets = db
             .get_targets_by_ids(&[image.target_id])
-            .map_err(|_| AppError::DatabaseError)?;
+            .map_err(AppError::db)?;
 
         let target = targets.into_iter().next().ok_or(AppError::NotFound)?;
         let target_name = target.name.clone();
@@ -1674,18 +1658,16 @@ pub async fn get_projects_overview(
     tracing::debug!("📋 Getting projects overview");
 
     let conn = ctx.db();
-    let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+    let conn = conn.lock().map_err(AppError::db)?;
     let db = Database::new(&conn);
 
     // Get all projects with images and profile info
     let projects = db
         .get_projects_with_images_and_profile_info()
-        .map_err(|_| AppError::DatabaseError)?;
+        .map_err(AppError::db)?;
 
     // Get profile count to determine display format
-    let profile_count = db
-        .get_profile_count()
-        .map_err(|_| AppError::DatabaseError)?;
+    let profile_count = db.get_profile_count().map_err(AppError::db)?;
 
     // Get file existence map
     let file_existence_map: std::collections::HashMap<i32, bool> = {
@@ -1701,7 +1683,7 @@ pub async fn get_projects_overview(
         // Get detailed stats for this project
         let stats = db
             .get_project_overview_stats(project.id)
-            .map_err(|_| AppError::DatabaseError)?;
+            .map_err(AppError::db)?;
 
         // Get desired values for this project
         let desired_stats =
@@ -1716,7 +1698,7 @@ pub async fn get_projects_overview(
 
         let target_count = db
             .get_target_count_for_project(project.id)
-            .map_err(|_| AppError::DatabaseError)?;
+            .map_err(AppError::db)?;
 
         // Get basic file statistics (simplified for performance)
         let files_found = if file_existence_map
@@ -1781,13 +1763,13 @@ pub async fn get_targets_overview(
     tracing::debug!("🎯 Getting targets overview");
 
     let conn = ctx.db();
-    let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+    let conn = conn.lock().map_err(AppError::db)?;
     let db = Database::new(&conn);
 
     // Get all targets with project info and stats including desired values
     let targets_data = db
         .get_all_targets_with_desired_stats()
-        .map_err(|_| AppError::DatabaseError)?;
+        .map_err(AppError::db)?;
 
     // Get file existence map
     let file_existence_map: std::collections::HashMap<i32, bool> = {
@@ -1802,23 +1784,23 @@ pub async fn get_targets_overview(
         let (earliest, latest, filters) = {
             let mut stmt = conn.prepare(
                 "SELECT MIN(acquireddate), MAX(acquireddate) FROM acquiredimage WHERE targetId = ?",
-            ).map_err(|_| AppError::DatabaseError)?;
+            ).map_err(AppError::db)?;
 
             let (earliest, latest): (Option<i64>, Option<i64>) = stmt
                 .query_row([target_data.target.id], |row| {
                     Ok((row.get(0)?, row.get(1)?))
                 })
-                .map_err(|_| AppError::DatabaseError)?;
+                .map_err(AppError::db)?;
 
             let mut filter_stmt = conn.prepare(
                 "SELECT DISTINCT filtername FROM acquiredimage WHERE targetId = ? AND filtername IS NOT NULL ORDER BY filtername",
-            ).map_err(|_| AppError::DatabaseError)?;
+            ).map_err(AppError::db)?;
 
             let filters: Vec<String> = filter_stmt
                 .query_map([target_data.target.id], |row| row.get(0))
-                .map_err(|_| AppError::DatabaseError)?
+                .map_err(AppError::db)?
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|_| AppError::DatabaseError)?;
+                .map_err(AppError::db)?;
 
             (earliest, latest, filters)
         };
@@ -1881,12 +1863,10 @@ pub async fn get_overall_stats(
     tracing::debug!("📊 Getting overall statistics");
 
     let conn = ctx.db();
-    let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+    let conn = conn.lock().map_err(AppError::db)?;
     let db = Database::new(&conn);
 
-    let stats = db
-        .get_overall_statistics()
-        .map_err(|_| AppError::DatabaseError)?;
+    let stats = db.get_overall_statistics().map_err(AppError::db)?;
 
     // Get overall desired statistics
     let desired_stats = db
@@ -1964,13 +1944,11 @@ pub async fn analyze_sequence(
     // Fetch images from database
     let (images_data, target_name) = {
         let conn = ctx.db();
-        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+        let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
 
         // Get target name
-        let targets = db
-            .get_targets_by_ids(&[target_id])
-            .map_err(|_| AppError::DatabaseError)?;
+        let targets = db.get_targets_by_ids(&[target_id]).map_err(AppError::db)?;
         let target = targets
             .into_iter()
             .next()
@@ -1980,7 +1958,7 @@ pub async fn analyze_sequence(
         // Query images for this target
         let all_images = db
             .query_images(None, None, None, None)
-            .map_err(|_| AppError::DatabaseError)?;
+            .map_err(AppError::db)?;
 
         let filtered: Vec<_> = all_images
             .into_iter()
@@ -2096,25 +2074,23 @@ pub async fn get_image_quality(
     // Get the target image and its context from database
     let (target_image, all_filter_images, target_name) = {
         let conn = ctx.db();
-        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+        let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
 
-        let images = db
-            .get_images_by_ids(&[image_id])
-            .map_err(|_| AppError::DatabaseError)?;
+        let images = db.get_images_by_ids(&[image_id]).map_err(AppError::db)?;
         let target_image = images.into_iter().next().ok_or(AppError::NotFound)?;
 
         // Get target name
         let targets = db
             .get_targets_by_ids(&[target_image.target_id])
-            .map_err(|_| AppError::DatabaseError)?;
+            .map_err(AppError::db)?;
         let target = targets.into_iter().next().ok_or(AppError::NotFound)?;
         let target_name = target.name.clone();
 
         // Get all images for the same target + filter
         let all_images = db
             .query_images(None, None, None, None)
-            .map_err(|_| AppError::DatabaseError)?;
+            .map_err(AppError::db)?;
 
         let filter_images: Vec<_> = all_images
             .into_iter()
@@ -2353,12 +2329,12 @@ pub async fn start_spatial_scan(
     // Collect this target's images.
     let candidates = {
         let conn = ctx.db();
-        let conn = conn.lock().map_err(|_| AppError::DatabaseError)?;
+        let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
 
         let targets = db
             .get_targets_by_ids(&[req.target_id])
-            .map_err(|_| AppError::DatabaseError)?;
+            .map_err(AppError::db)?;
         let target = targets
             .into_iter()
             .next()
@@ -2367,7 +2343,7 @@ pub async fn start_spatial_scan(
 
         let all_images = db
             .query_images(None, None, None, None)
-            .map_err(|_| AppError::DatabaseError)?;
+            .map_err(AppError::db)?;
 
         all_images
             .into_iter()
@@ -2525,11 +2501,21 @@ pub async fn get_spatial_scan_progress(
 #[derive(Debug)]
 pub enum AppError {
     NotFound,
-    DatabaseError,
+    DatabaseError(String),
     BadRequest(String),
     Forbidden(String),
     InternalError(String),
     NotImplemented,
+}
+
+impl AppError {
+    /// Wrap any database-layer failure, preserving its message —
+    /// `map_err(AppError::db)`. Losing the underlying rusqlite error (as the
+    /// old unit `DatabaseError` did) made lock contention ("database is
+    /// locked") indistinguishable from corruption or I/O failures in the logs.
+    fn db(err: impl std::fmt::Display) -> Self {
+        AppError::DatabaseError(err.to_string())
+    }
 }
 
 impl IntoResponse for AppError {
@@ -2539,9 +2525,13 @@ impl IntoResponse for AppError {
                 tracing::warn!("🔍 Resource not found");
                 (StatusCode::NOT_FOUND, "Resource not found")
             }
-            AppError::DatabaseError => {
-                tracing::error!("💾 Database error occurred");
-                (StatusCode::INTERNAL_SERVER_ERROR, "Database error")
+            AppError::DatabaseError(msg) => {
+                tracing::error!("💾 Database error: {}", msg);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiResponse::<()>::error(format!("Database error: {}", msg))),
+                )
+                    .into_response();
             }
             AppError::BadRequest(msg) => {
                 tracing::warn!("❌ Bad request: {}", msg);

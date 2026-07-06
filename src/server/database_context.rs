@@ -26,6 +26,29 @@ fn db_open_flags() -> OpenFlags {
     OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX
 }
 
+/// How long a connection waits on SQLITE_BUSY before giving up. The scheduler
+/// DB is rollback-journal SQLite, so a write (grade update) needs the
+/// exclusive lock at commit and conflicts with any in-flight read on ANOTHER
+/// connection. We create that contention OURSELVES: the background file-check
+/// refresh runs on its own dedicated connection (so its slow queries never
+/// hold the request mutex), and each of its streaming reads holds a shared
+/// lock for the statement's duration — 30-80s per project on an SMB-mounted
+/// DB. Without a busy handler, a grade written during a refresh surfaces
+/// instantly as "database is locked" → HTTP 500; with one, the writer waits
+/// out the current refresh statement and wins the gap between statements.
+/// Sized to cover the worst observed single-query duration. (External writers
+/// like N.I.N.A. on a network share get the same courtesy.)
+const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The one way to open a scheduler DB connection in the server: flags above +
+/// busy timeout. Every open site (initial, both reopen paths, the refresh
+/// connection) must go through here so none silently loses the busy handler.
+fn open_scheduler_connection(path: &str) -> rusqlite::Result<Connection> {
+    let conn = Connection::open_with_flags(path, db_open_flags())?;
+    conn.busy_timeout(DB_BUSY_TIMEOUT)?;
+    Ok(conn)
+}
+
 /// Identity of the on-disk database file: the `(device, inode)` pair on unix.
 ///
 /// This is deliberately file *identity*, not file *content*. When another
@@ -195,7 +218,7 @@ impl DatabaseContext {
         })?;
         let cache_dir = cache_dir_path.to_string_lossy().into_owned();
 
-        let conn = Connection::open_with_flags(&db_path, db_open_flags())?;
+        let conn = open_scheduler_connection(&db_path)?;
         let fingerprint = fingerprint_path(&db_path);
 
         Ok(Self {
@@ -297,7 +320,7 @@ impl DatabaseContext {
 
         // Open outside the connection/fingerprint locks so a slow open doesn't
         // block queries.
-        match Connection::open_with_flags(&self.database_path, db_open_flags()) {
+        match open_scheduler_connection(&self.database_path) {
             Ok(new_conn) => {
                 *lock_recover(&self.db_connection) = new_conn;
                 *lock_recover(&self.db_fingerprint) = Some(new_fp);
@@ -324,7 +347,7 @@ impl DatabaseContext {
     /// queries are not blocked.
     fn force_reopen(&self) {
         let _reopen = lock_recover(&self.reopen_lock);
-        match Connection::open_with_flags(&self.database_path, db_open_flags()) {
+        match open_scheduler_connection(&self.database_path) {
             Ok(new_conn) => {
                 *lock_recover(&self.db_connection) = new_conn;
                 *lock_recover(&self.db_fingerprint) = fingerprint_path(&self.database_path);
@@ -550,7 +573,7 @@ impl DatabaseContext {
         // lock round-trips) transactions never hold the shared request
         // connection's mutex. API handlers keep answering while this walks the
         // database; two readers coexist at the SQLite level.
-        let refresh_conn = Connection::open_with_flags(&self.database_path, db_open_flags())
+        let refresh_conn = open_scheduler_connection(&self.database_path)
             .map_err(|e| anyhow::anyhow!("Opening refresh connection: {}", e))?;
 
         let projects = {
