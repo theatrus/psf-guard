@@ -14,6 +14,7 @@ use crate::server::state::{FileCheckCache, RefreshProgress, RefreshStage, Refres
 use anyhow::Result;
 use rusqlite::{Connection, OpenFlags};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tokio::sync::Mutex as TokioMutex;
@@ -80,6 +81,16 @@ fn lock_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+struct TreeRebuildInflight {
+    flag: Arc<AtomicBool>,
+}
+
+impl Drop for TreeRebuildInflight {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Whether a rusqlite error is the specific signature of a connection whose
 /// backing file was replaced with different (or non-database) bytes underneath
 /// it. Deliberately narrow: only `SQLITE_CORRUPT` and `SQLITE_NOTADB`, the two
@@ -135,8 +146,8 @@ pub struct DatabaseContext {
     /// Serializes cold directory-tree builds so N concurrent requests on an
     /// empty cache share one filesystem scan instead of starting N.
     tree_build_lock: Arc<Mutex<()>>,
-    /// True while a background (stale-revalidation) tree rebuild is running.
-    tree_rebuild_inflight: Arc<std::sync::atomic::AtomicBool>,
+    /// True while a stale-revalidation/progress tree rebuild is scheduled or running.
+    tree_rebuild_inflight: Arc<AtomicBool>,
     pub refresh_mutex: Arc<TokioMutex<()>>,
     /// Per-DB spatial (occlusion) metrics store + scan progress; persisted
     /// under `cache_dir` as spatial_metrics.json.
@@ -201,7 +212,7 @@ impl DatabaseContext {
             file_check_cache: Arc::new(RwLock::new(FileCheckCache::new())),
             directory_tree_cache: Arc::new(RwLock::new(None)),
             tree_build_lock: Arc::new(Mutex::new(())),
-            tree_rebuild_inflight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tree_rebuild_inflight: Arc::new(AtomicBool::new(false)),
             refresh_mutex: Arc::new(TokioMutex::new(())),
             spatial_metrics: Arc::new(RwLock::new(Default::default())),
         })
@@ -376,22 +387,26 @@ impl DatabaseContext {
     /// Kick a deduplicated background rebuild of the directory tree. No-op if
     /// one is already running.
     fn spawn_directory_tree_rebuild(&self) {
-        use std::sync::atomic::Ordering;
-
-        if self.tree_rebuild_inflight.swap(true, Ordering::SeqCst) {
+        let Some(inflight) = self.try_mark_directory_tree_rebuild() else {
             return;
-        }
+        };
         let ctx = self.clone();
         std::thread::spawn(move || {
-            // Reset the flag even if the scan errors or panics, so a failed
-            // rebuild doesn't pin the stale tree forever.
-            struct Reset(Arc<std::sync::atomic::AtomicBool>);
-            impl Drop for Reset {
-                fn drop(&mut self) {
-                    self.0.store(false, Ordering::SeqCst);
+            let _inflight = inflight;
+            let _build_guard = lock_recover(ctx.tree_build_lock.as_ref());
+            {
+                let cache = ctx.directory_tree_cache.read().unwrap();
+                if let Some(ref tree) = *cache {
+                    if !tree.is_older_than(Duration::from_secs(300)) {
+                        tracing::debug!(
+                            "🌳 Background directory tree rebuild skipped for db={}; another scan refreshed it",
+                            ctx.id
+                        );
+                        return;
+                    }
                 }
             }
-            let _reset = Reset(ctx.tree_rebuild_inflight.clone());
+
             if let Err(e) = ctx.rebuild_directory_tree_internal() {
                 tracing::warn!(
                     "⚠️ Background directory tree rebuild failed for db={}: {}",
@@ -400,6 +415,16 @@ impl DatabaseContext {
                 );
             }
         });
+    }
+
+    fn try_mark_directory_tree_rebuild(&self) -> Option<TreeRebuildInflight> {
+        if self.tree_rebuild_inflight.swap(true, Ordering::SeqCst) {
+            None
+        } else {
+            Some(TreeRebuildInflight {
+                flag: Arc::clone(&self.tree_rebuild_inflight),
+            })
+        }
     }
 
     fn rebuild_directory_tree_internal(&self) -> Result<Arc<DirectoryTree>> {
@@ -451,6 +476,15 @@ impl DatabaseContext {
                     "🌳 Directory tree cache is empty for db={}, building",
                     self.id
                 );
+            }
+        }
+        let _guard = lock_recover(self.tree_build_lock.as_ref());
+        {
+            let cache = self.directory_tree_cache.read().unwrap();
+            if let Some(ref tree) = *cache {
+                if !tree.is_older_than(Duration::from_secs(300)) {
+                    return Ok(Arc::new(tree.clone()));
+                }
             }
         }
         self.rebuild_directory_tree_internal()
@@ -571,6 +605,7 @@ impl DatabaseContext {
             let mut per_target: std::collections::HashMap<i32, (usize, usize)> =
                 std::collections::HashMap::new();
             for (image, _project_name, _target_name) in &images {
+                let entry = per_target.entry(image.target_id).or_insert((0, 0));
                 let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&image.metadata)
                 else {
                     continue;
@@ -582,7 +617,6 @@ impl DatabaseContext {
                     .split(&['\\', '/'][..])
                     .next_back()
                     .unwrap_or(filename_path);
-                let entry = per_target.entry(image.target_id).or_insert((0, 0));
                 if directory_tree.find_file_first(filename).is_some() {
                     entry.0 += 1;
                 } else {
@@ -758,6 +792,8 @@ impl DatabaseContext {
             }
         }
 
+        let _inflight = self.try_mark_directory_tree_rebuild();
+
         tracing::info!(
             "🌳 Building directory tree cache for db={} ({} directories) with progress tracking",
             self.id,
@@ -780,7 +816,19 @@ impl DatabaseContext {
         });
 
         let image_dir_paths = self.image_dir_paths.clone();
-        let tree_result = tokio::task::spawn_blocking(move || {
+        let directory_tree_cache = Arc::clone(&self.directory_tree_cache);
+        let tree_build_lock = Arc::clone(&self.tree_build_lock);
+        let tree_result = tokio::task::spawn_blocking(move || -> Result<(DirectoryTree, bool)> {
+            let _build_guard = lock_recover(tree_build_lock.as_ref());
+            {
+                let cache = directory_tree_cache.read().unwrap();
+                if let Some(ref tree) = *cache {
+                    if !tree.is_older_than(Duration::from_secs(300)) {
+                        return Ok((tree.clone(), false));
+                    }
+                }
+            }
+
             let roots: Vec<&std::path::Path> =
                 image_dir_paths.iter().map(|p| p.as_path()).collect();
 
@@ -793,33 +841,53 @@ impl DatabaseContext {
                     ));
                 };
 
-            crate::directory_tree::DirectoryTree::build_multiple_with_progress(
+            let tree = crate::directory_tree::DirectoryTree::build_multiple_with_progress(
                 &roots,
                 &mut progress_callback,
-            )
+            )?;
+
+            {
+                let mut cache = directory_tree_cache.write().unwrap();
+                *cache = Some(tree.clone());
+            }
+
+            Ok((tree, true))
         })
         .await??;
 
-        {
+        let (tree_result, built_tree) = tree_result;
+
+        if built_tree {
             let mut cache = self.file_check_cache.write().unwrap();
             cache.refresh_progress.complete_directory();
+        } else {
+            tracing::debug!(
+                "🌳 Directory tree cache became fresh while refresh waited for db={}",
+                self.id
+            );
         }
 
         progress_task.abort();
 
         let stats = tree_result.stats();
-        tracing::info!(
-            "✅ Directory tree built for db={} with progress tracking: {} files, {} directories across {} roots (age: {})",
-            self.id,
-            stats.total_files,
-            stats.total_directories,
-            stats.roots.len(),
-            stats.format_age()
-        );
-
-        {
-            let mut cache = self.directory_tree_cache.write().unwrap();
-            *cache = Some(tree_result.clone());
+        if built_tree {
+            tracing::info!(
+                "✅ Directory tree built for db={} with progress tracking: {} files, {} directories across {} roots (age: {})",
+                self.id,
+                stats.total_files,
+                stats.total_directories,
+                stats.roots.len(),
+                stats.format_age()
+            );
+        } else {
+            tracing::debug!(
+                "🌳 Reusing directory tree for db={}: {} files, {} directories across {} roots (age: {})",
+                self.id,
+                stats.total_files,
+                stats.total_directories,
+                stats.roots.len(),
+                stats.format_age()
+            );
         }
 
         Ok(Arc::new(tree_result))
@@ -843,7 +911,7 @@ impl DatabaseContext {
             file_check_cache: Arc::new(RwLock::new(FileCheckCache::new())),
             directory_tree_cache: Arc::new(RwLock::new(None)),
             tree_build_lock: Arc::new(Mutex::new(())),
-            tree_rebuild_inflight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tree_rebuild_inflight: Arc::new(AtomicBool::new(false)),
             refresh_mutex: Arc::new(TokioMutex::new(())),
             spatial_metrics: Arc::new(RwLock::new(Default::default())),
         }
@@ -886,6 +954,51 @@ mod tests {
         conn.execute(
             "INSERT INTO project (Id, name) VALUES (1, ?1)",
             [project_name],
+        )
+        .unwrap();
+    }
+
+    fn make_file_refresh_db(path: &std::path::Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE project (
+                Id INTEGER PRIMARY KEY,
+                profileId TEXT,
+                name TEXT NOT NULL,
+                description TEXT
+            );
+            CREATE TABLE target (
+                Id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                active INTEGER,
+                ra REAL,
+                dec REAL,
+                projectid INTEGER
+            );
+            CREATE TABLE acquiredimage (
+                Id INTEGER PRIMARY KEY,
+                projectId INTEGER,
+                targetId INTEGER,
+                acquireddate INTEGER,
+                filtername TEXT,
+                gradingStatus INTEGER,
+                metadata TEXT,
+                rejectreason TEXT,
+                profileId TEXT
+            );
+            INSERT INTO project (Id, profileId, name, description)
+                VALUES (1, 'default', 'Project', NULL);
+            INSERT INTO target (Id, name, active, ra, dec, projectid)
+                VALUES
+                    (10, 'Has File', 1, NULL, NULL, 1),
+                    (20, 'No Filename', 1, NULL, NULL, 1),
+                    (30, 'Bad Metadata', 1, NULL, NULL, 1);
+            INSERT INTO acquiredimage
+                (Id, projectId, targetId, acquireddate, filtername, gradingStatus, metadata, rejectreason, profileId)
+                VALUES
+                    (100, 1, 10, 1000, 'L', 0, '{\"FileName\":\"/remote/present.fit\"}', NULL, 'default'),
+                    (200, 1, 20, 2000, 'L', 0, '{}', NULL, 'default'),
+                    (300, 1, 30, 3000, 'L', 0, 'not json', NULL, 'default');",
         )
         .unwrap();
     }
@@ -937,6 +1050,27 @@ mod tests {
             dir.join("cache").to_string_lossy().into_owned(),
         )
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn refresh_cache_records_targets_without_usable_filename_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("sched.sqlite");
+        make_file_refresh_db(&db_path);
+        let image_dir = tmp.path().join("images");
+        std::fs::create_dir_all(&image_dir).unwrap();
+        std::fs::write(image_dir.join("present.fit"), b"fits").unwrap();
+        let ctx = build_ctx(tmp.path(), &db_path);
+
+        let (checked, found, missing, _) = ctx.refresh_cache_unified_internal().await.unwrap();
+
+        assert_eq!((checked, found, missing), (4, 2, 2));
+        let cache = ctx.file_check_cache.read().unwrap();
+        assert_eq!(cache.projects_with_files.get(&1), Some(&true));
+        assert_eq!(cache.targets_with_files.len(), 3);
+        assert_eq!(cache.targets_with_files.get(&10), Some(&true));
+        assert_eq!(cache.targets_with_files.get(&20), Some(&false));
+        assert_eq!(cache.targets_with_files.get(&30), Some(&false));
     }
 
     // Unix-only: the proactive reopen this exercises is itself `#[cfg(unix)]`
