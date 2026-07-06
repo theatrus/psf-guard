@@ -90,6 +90,8 @@ export default function ImageDetailView({
     ? { imageId, kind: 'annotated', size: mainSize, maxStars }
     : { imageId, kind: 'preview', size: mainSize };
   const asyncImg = useAsyncImage(dbId, nonPsfSrc, nonPsfDescriptor);
+  const [visibleMainSrc, setVisibleMainSrc] = useState(nonPsfSrc);
+  const [loadedMainSrc, setLoadedMainSrc] = useState<string | null>(null);
 
   // Fetch image details
   const { data: image, isLoading, isFetching } = useQuery({
@@ -220,12 +222,6 @@ export default function ImageDetailView({
       // Switch to original
       imageStateRef.current = 'switching-to-original';
       setUseOriginalImage(true);
-      // Delay state update to allow render
-      setTimeout(() => {
-        if (imageStateRef.current === 'switching-to-original') {
-          imageStateRef.current = 'original';
-        }
-      }, 300);
     }
     // Never switch back from original to large
   }, [zoom, imageId, showStars, showPsf, image, isOriginalLoaded, dbId, maxStars]);
@@ -234,10 +230,16 @@ export default function ImageDetailView({
   useEffect(() => {
     setIsOriginalLoaded(false);
     setUseOriginalImage(false);
+    setVisibleMainSrc(
+      showStars
+        ? apiClient.getAnnotatedUrl(dbId, imageId, 'large', maxStars)
+        : apiClient.getPreviewUrl(dbId, imageId, { size: 'large' })
+    );
+    setLoadedMainSrc(null);
     imageDimensionsRef.current = { width: 0, height: 0 };
     imageStateRef.current = 'large';
     setImageError(false);
-  }, [imageId, showStars]);
+  }, [dbId, imageId, showStars, maxStars]);
 
   // Show loading state only on initial load
   if (!image && isLoading) {
@@ -273,6 +275,11 @@ export default function ImageDetailView({
     if (!timestamp) return 'Unknown';
     return new Date(timestamp * 1000).toLocaleString();
   };
+
+  const hideMainImage =
+    !showPsf &&
+    visibleMainSrc === asyncImg.src &&
+    (asyncImg.state !== 'ready' || loadedMainSrc !== visibleMainSrc);
 
   return (
     <div className="image-detail-overlay" onClick={onClose}>
@@ -336,10 +343,52 @@ export default function ImageDetailView({
                   </div>
                 </div>
               ) : (
+                <>
+                {!showPsf && visibleMainSrc !== asyncImg.src && asyncImg.state !== 'error' && (
+                  <img
+                    className="detail-image-preload"
+                    src={asyncImg.src}
+                    alt=""
+                    aria-hidden="true"
+                    loading="eager"
+                    onError={asyncImg.onError}
+                    onLoad={(e) => {
+                      asyncImg.onLoad();
+
+                      const img = e.currentTarget;
+                      const newWidth = img.naturalWidth;
+                      const newHeight = img.naturalHeight;
+                      const oldWidth = imageDimensionsRef.current.width;
+                      const oldHeight = imageDimensionsRef.current.height;
+                      const dimensionsChanged =
+                        oldWidth > 0 &&
+                        (Math.abs(newWidth - oldWidth) > 10 ||
+                          Math.abs(newHeight - oldHeight) > 10);
+
+                      zoom.setImageDimensions(newWidth, newHeight, useOriginalImage);
+
+                      if (imageStateRef.current === 'switching-to-original') {
+                        if (dimensionsChanged) {
+                          zoom.adjustZoomForNewImage(oldWidth, oldHeight, newWidth, newHeight);
+                        }
+                        imageStateRef.current = 'original';
+                      }
+
+                      imageDimensionsRef.current = { width: newWidth, height: newHeight };
+                      setLoadedMainSrc(asyncImg.src);
+                      setVisibleMainSrc(asyncImg.src);
+                    }}
+                    draggable={false}
+                  />
+                )}
                 <img
                   ref={zoom.imageRef}
                   key={`${imageId}-${showStars ? 'stars' : showPsf ? 'psf' : 'normal'}`}
-                  className={isFetching ? 'loading' : ''}
+                  className={[
+                    'detail-main-image',
+                    isFetching ? 'loading' : null,
+                    hideMainImage ? 'detail-image-hidden' : null,
+                  ].filter(Boolean).join(' ')}
                   src={
                     showPsf
                       ? apiClient.getPsfUrl(dbId, imageId, {
@@ -348,7 +397,7 @@ export default function ImageDetailView({
                           sort_by: 'r2',
                           selection: 'top-n',
                         })
-                      : asyncImg.src
+                      : visibleMainSrc
                   }
                   alt={`${image.target_name} - ${image.filter_name || 'No filter'}`}
                   style={{
@@ -356,7 +405,13 @@ export default function ImageDetailView({
                     cursor: zoom.zoomState.scale > 1 ? 'grab' : 'default',
                     transformOrigin: '0 0',
                   }}
-                  onError={showPsf ? () => setImageError(true) : asyncImg.onError}
+                  onError={
+                    showPsf
+                      ? () => setImageError(true)
+                      : visibleMainSrc === asyncImg.src
+                        ? asyncImg.onError
+                        : undefined
+                  }
                   onLoad={(e) => {
                   // Remove loading class when image loads
                   e.currentTarget.classList.remove('loading');
@@ -364,7 +419,7 @@ export default function ImageDetailView({
                   // Clear PSF loading state / mark the async image ready.
                   if (showPsf) {
                     setPsfImageLoading(false);
-                  } else {
+                  } else if (visibleMainSrc === asyncImg.src) {
                     asyncImg.onLoad();
                   }
 
@@ -380,9 +435,12 @@ export default function ImageDetailView({
                   // Check if dimensions actually changed (indicating size switch)
                   const dimensionsChanged = oldWidth > 0 && (Math.abs(newWidth - oldWidth) > 10 || Math.abs(newHeight - oldHeight) > 10);
                   
-                  if (dimensionsChanged && imageStateRef.current === 'switching-to-original') {
-                    // Adjust zoom to maintain visual continuity
-                    zoom.adjustZoomForNewImage(oldWidth, oldHeight, newWidth, newHeight);
+                  if (imageStateRef.current === 'switching-to-original') {
+                    if (dimensionsChanged) {
+                      // Adjust zoom to maintain visual continuity
+                      zoom.adjustZoomForNewImage(oldWidth, oldHeight, newWidth, newHeight);
+                    }
+                    imageStateRef.current = 'original';
                   } else if (imageDimensionsRef.current.width === 0) {
                     // Only zoom to fit on initial load
                     setTimeout(() => {
@@ -392,9 +450,13 @@ export default function ImageDetailView({
                   
                   // Update stored dimensions
                   imageDimensionsRef.current = { width: newWidth, height: newHeight };
+                  if (!showPsf) {
+                    setLoadedMainSrc(visibleMainSrc);
+                  }
                   }}
                   draggable={false}
                 />
+                </>
               )}
               {!showPsf &&
                 (asyncImg.state === 'generating' || asyncImg.state === 'loading') && (

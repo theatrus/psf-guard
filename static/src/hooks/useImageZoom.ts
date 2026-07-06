@@ -69,7 +69,7 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
   const calculateFitScale = useCallback(() => {
     const container = containerRef.current;
     const image = imageRef.current;
-    
+
     if (!container || !image || !image.naturalWidth || !image.naturalHeight) {
       return 1;
     }
@@ -180,11 +180,20 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
   }, [bounds]);
 
   // Constrain pan offsets to keep image mostly visible
-  const constrainPan = useCallback((offsetX: number, offsetY: number, scale: number): { offsetX: number; offsetY: number } => {
+  const constrainPan = useCallback((
+    offsetX: number,
+    offsetY: number,
+    scale: number,
+    imageWidth?: number,
+    imageHeight?: number
+  ): { offsetX: number; offsetY: number } => {
     const container = containerRef.current;
     const image = imageRef.current;
-    
-    if (!container || !image || !image.naturalWidth || !image.naturalHeight) {
+
+    const naturalWidth = imageWidth ?? image?.naturalWidth;
+    const naturalHeight = imageHeight ?? image?.naturalHeight;
+
+    if (!container || !naturalWidth || !naturalHeight) {
       return { offsetX, offsetY };
     }
 
@@ -192,8 +201,8 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     const containerWidth = containerRect.width;
     const containerHeight = containerRect.height;
     
-    const scaledImageWidth = image.naturalWidth * scale;
-    const scaledImageHeight = image.naturalHeight * scale;
+    const scaledImageWidth = naturalWidth * scale;
+    const scaledImageHeight = naturalHeight * scale;
     
     // Allow a small margin (10% of image size) to pan slightly past edges
     const marginX = scaledImageWidth * 0.1;
@@ -396,8 +405,7 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
   }, []);
   
   // Adjust zoom when switching between different image sizes
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const adjustZoomForNewImage = useCallback((oldWidth: number, oldHeight: number, newWidth: number, _newHeight: number) => {
+  const adjustZoomForNewImage = useCallback((oldWidth: number, oldHeight: number, newWidth: number, newHeight: number) => {
     if (oldWidth === 0 || oldHeight === 0 || !originalDimensionsRef.current) return;
     
     const container = containerRef.current;
@@ -438,7 +446,7 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
       const newOffsetX = viewportCenterX - (newImageX * newScale);
       const newOffsetY = viewportCenterY - (newImageY * newScale);
       
-      const constrained = constrainPan(newOffsetX, newOffsetY, newScale);
+      const constrained = constrainPan(newOffsetX, newOffsetY, newScale, newWidth, newHeight);
       
       return {
         scale: newScale,

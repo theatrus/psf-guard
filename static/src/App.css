@@ -1168,6 +1168,18 @@
   opacity: 0.5;
 }
 
+.detail-image-hidden {
+  opacity: 0 !important;
+  pointer-events: none;
+}
+
+.detail-image-preload {
+  width: 1px !important;
+  height: 1px !important;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .detail-info {
   width: 320px;
   padding: 1.25rem;
