@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../api/client';
@@ -54,6 +54,7 @@ export default function ImageDetailView({
   
   // State machine to prevent feedback loops
   const imageStateRef = useRef<'large' | 'switching-to-original' | 'original'>('large');
+  const mainImageKey = `${dbId}:${imageId}:${showStars ? 'stars' : 'preview'}:${maxStars}`;
 
   // Initialize zoom functionality
   const zoom = useImageZoom({
@@ -83,15 +84,35 @@ export default function ImageDetailView({
   // endpoint and is not queued here). On a cache miss the server returns 202
   // and this drives a "Generating…" indicator, then reloads when ready.
   const mainSize: 'large' | 'original' = useOriginalImage ? 'original' : 'large';
-  const nonPsfSrc = showStars
-    ? apiClient.getAnnotatedUrl(dbId, imageId, mainSize, maxStars)
-    : apiClient.getPreviewUrl(dbId, imageId, { size: mainSize });
+  const largeNonPsfSrc = showStars
+    ? apiClient.getAnnotatedUrl(dbId, imageId, 'large', maxStars)
+    : apiClient.getPreviewUrl(dbId, imageId, { size: 'large' });
+  const originalNonPsfSrc = showStars
+    ? apiClient.getAnnotatedUrl(dbId, imageId, 'original', maxStars)
+    : apiClient.getPreviewUrl(dbId, imageId, { size: 'original' });
+  const nonPsfSrc = mainSize === 'original' ? originalNonPsfSrc : largeNonPsfSrc;
   const nonPsfDescriptor: PreviewDescriptor = showStars
     ? { imageId, kind: 'annotated', size: mainSize, maxStars }
     : { imageId, kind: 'preview', size: mainSize };
   const asyncImg = useAsyncImage(dbId, nonPsfSrc, nonPsfDescriptor);
-  const [visibleMainSrc, setVisibleMainSrc] = useState(nonPsfSrc);
-  const [loadedMainSrc, setLoadedMainSrc] = useState<string | null>(null);
+  const [visibleMainImage, setVisibleMainImage] = useState<{
+    key: string;
+    src: string;
+    loadedSrc: string | null;
+  }>(() => ({
+    key: mainImageKey,
+    src: nonPsfSrc,
+    loadedSrc: null,
+  }));
+  const visibleMainSrc =
+    visibleMainImage.key === mainImageKey ? visibleMainImage.src : nonPsfSrc;
+  const loadedMainSrc =
+    visibleMainImage.key === mainImageKey ? visibleMainImage.loadedSrc : null;
+  const currentMainSrcIsLoaded =
+    visibleMainSrc === loadedMainSrc;
+  const currentNonPsfSources = [largeNonPsfSrc, originalNonPsfSrc];
+  const visibleMainSrcIsCurrent =
+    currentNonPsfSources.includes(visibleMainSrc);
 
   // Fetch image details
   const { data: image, isLoading, isFetching } = useQuery({
@@ -227,19 +248,14 @@ export default function ImageDetailView({
   }, [zoom, imageId, showStars, showPsf, image, isOriginalLoaded, dbId, maxStars]);
   
   // Reset preload state when image changes
-  useEffect(() => {
+  useLayoutEffect(() => {
     setIsOriginalLoaded(false);
     setUseOriginalImage(false);
-    setVisibleMainSrc(
-      showStars
-        ? apiClient.getAnnotatedUrl(dbId, imageId, 'large', maxStars)
-        : apiClient.getPreviewUrl(dbId, imageId, { size: 'large' })
-    );
-    setLoadedMainSrc(null);
+    setVisibleMainImage({ key: mainImageKey, src: largeNonPsfSrc, loadedSrc: null });
     imageDimensionsRef.current = { width: 0, height: 0 };
     imageStateRef.current = 'large';
     setImageError(false);
-  }, [dbId, imageId, showStars, maxStars]);
+  }, [dbId, imageId, showStars, maxStars, mainImageKey, largeNonPsfSrc]);
 
   // Show loading state only on initial load
   if (!image && isLoading) {
@@ -278,8 +294,9 @@ export default function ImageDetailView({
 
   const hideMainImage =
     !showPsf &&
-    visibleMainSrc === asyncImg.src &&
-    (asyncImg.state !== 'ready' || loadedMainSrc !== visibleMainSrc);
+    (!visibleMainSrcIsCurrent ||
+      (visibleMainSrc === asyncImg.src &&
+        (asyncImg.state !== 'ready' || !currentMainSrcIsLoaded)));
 
   return (
     <div className="image-detail-overlay" onClick={onClose}>
@@ -375,8 +392,11 @@ export default function ImageDetailView({
                       }
 
                       imageDimensionsRef.current = { width: newWidth, height: newHeight };
-                      setLoadedMainSrc(asyncImg.src);
-                      setVisibleMainSrc(asyncImg.src);
+                      setVisibleMainImage({
+                        key: mainImageKey,
+                        src: asyncImg.src,
+                        loadedSrc: asyncImg.src,
+                      });
                     }}
                     draggable={false}
                   />
@@ -423,6 +443,10 @@ export default function ImageDetailView({
                     asyncImg.onLoad();
                   }
 
+                  if (!showPsf && !visibleMainSrcIsCurrent) {
+                    return;
+                  }
+
                   const img = e.currentTarget;
                   const newWidth = img.naturalWidth;
                   const newHeight = img.naturalHeight;
@@ -440,18 +464,20 @@ export default function ImageDetailView({
                       // Adjust zoom to maintain visual continuity
                       zoom.adjustZoomForNewImage(oldWidth, oldHeight, newWidth, newHeight);
                     }
-                    imageStateRef.current = 'original';
+                  imageStateRef.current = 'original';
                   } else if (imageDimensionsRef.current.width === 0) {
-                    // Only zoom to fit on initial load
-                    setTimeout(() => {
-                      zoom.zoomToFit();
-                    }, 50);
+                    // Queue fit before revealing the newly loaded image.
+                    zoom.zoomToFit();
                   }
                   
                   // Update stored dimensions
                   imageDimensionsRef.current = { width: newWidth, height: newHeight };
                   if (!showPsf) {
-                    setLoadedMainSrc(visibleMainSrc);
+                    setVisibleMainImage((current) =>
+                      current.key === mainImageKey && current.src === visibleMainSrc
+                        ? { ...current, loadedSrc: visibleMainSrc }
+                        : current
+                    );
                   }
                   }}
                   draggable={false}

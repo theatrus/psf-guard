@@ -1173,6 +1173,11 @@
   pointer-events: none;
 }
 
+.comparison-image-hidden {
+  opacity: 0 !important;
+  pointer-events: none;
+}
+
 .detail-image-preload {
   width: 1px !important;
   height: 1px !important;

@@ -438,9 +438,10 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
       const oldImageY = (viewportCenterY - prevState.offsetY) / prevState.scale;
       
       // Scale the image coordinates by the size change ratio
-      const sizeChangeRatio = newWidth / oldWidth;
-      const newImageX = oldImageX * sizeChangeRatio;
-      const newImageY = oldImageY * sizeChangeRatio;
+      const widthChangeRatio = newWidth / oldWidth;
+      const heightChangeRatio = newHeight / oldHeight;
+      const newImageX = oldImageX * widthChangeRatio;
+      const newImageY = oldImageY * heightChangeRatio;
       
       // Calculate new offsets to keep the same point at the center
       const newOffsetX = viewportCenterX - (newImageX * newScale);

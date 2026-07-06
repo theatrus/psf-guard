@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../api/client';
@@ -43,6 +43,8 @@ export default function ImageComparisonView({
   // Track image loading
   const [leftImageLoaded, setLeftImageLoaded] = useState(false);
   const [rightImageLoaded, setRightImageLoaded] = useState(false);
+  const [loadedLeftSrc, setLoadedLeftSrc] = useState<string | null>(null);
+  const [loadedRightSrc, setLoadedRightSrc] = useState<string | null>(null);
   
   // Track original image preloading
   const [leftOriginalLoaded, setLeftOriginalLoaded] = useState(false);
@@ -139,6 +141,8 @@ export default function ImageComparisonView({
     ? { imageId: rightIdForUrl, kind: 'annotated', size: rightSize, maxStars }
     : { imageId: rightIdForUrl, kind: 'preview', size: rightSize };
   const asyncRight = useAsyncImage(dbId, rightSrc, rightDescriptor);
+  const hideLeftImage = asyncLeft.state !== 'ready' || loadedLeftSrc !== asyncLeft.src;
+  const hideRightImage = asyncRight.state !== 'ready' || loadedRightSrc !== asyncRight.src;
 
   // Capture zoom intent before image change
   useEffect(() => {
@@ -246,11 +250,6 @@ export default function ImageComparisonView({
         if (currentState === 'large' && currentVisualScale > 1.0) {
           leftImageStateRef.current = 'switching-to-original';
           setUseLeftOriginal(true);
-          setTimeout(() => {
-            if (leftImageStateRef.current === 'switching-to-original') {
-              leftImageStateRef.current = 'original';
-            }
-          }, 300);
         }
       });
     }
@@ -260,12 +259,6 @@ export default function ImageComparisonView({
       // Switch to original
       leftImageStateRef.current = 'switching-to-original';
       setUseLeftOriginal(true);
-      // Delay state update to allow render
-      setTimeout(() => {
-        if (leftImageStateRef.current === 'switching-to-original') {
-          leftImageStateRef.current = 'original';
-        }
-      }, 300);
     }
     // Never switch back from original to large
   }, [leftZoom, leftImageId, showStars, leftImage, leftOriginalLoaded, dbId, maxStars]);
@@ -319,11 +312,6 @@ export default function ImageComparisonView({
         if (currentState === 'large' && (currentVisualScale > 1.0 || useLeftOriginal)) {
           rightImageStateRef.current = 'switching-to-original';
           setUseRightOriginal(true);
-          setTimeout(() => {
-            if (rightImageStateRef.current === 'switching-to-original') {
-              rightImageStateRef.current = 'original';
-            }
-          }, 300);
         }
       });
     }
@@ -333,12 +321,6 @@ export default function ImageComparisonView({
       // Switch to original
       rightImageStateRef.current = 'switching-to-original';
       setUseRightOriginal(true);
-      // Delay state update to allow render
-      setTimeout(() => {
-        if (rightImageStateRef.current === 'switching-to-original') {
-          rightImageStateRef.current = 'original';
-        }
-      }, 300);
     }
     // Never switch back from original to large
   }, [
@@ -357,27 +339,24 @@ export default function ImageComparisonView({
     if (useLeftOriginal && !useRightOriginal && rightOriginalLoaded && rightImageStateRef.current !== 'switching-to-original') {
       rightImageStateRef.current = 'switching-to-original';
       setUseRightOriginal(true);
-      setTimeout(() => {
-        if (rightImageStateRef.current === 'switching-to-original') {
-          rightImageStateRef.current = 'original';
-        }
-      }, 300);
     }
   }, [useLeftOriginal, useRightOriginal, rightOriginalLoaded]);
 
   // Reset preload state when images change
-  useEffect(() => {
+  useLayoutEffect(() => {
     setLeftOriginalLoaded(false);
     leftOriginalRef.current = null;
     setUseLeftOriginal(false);
+    setLoadedLeftSrc(null);
     leftDimensionsRef.current = { width: 0, height: 0 };
     leftImageStateRef.current = 'large';
   }, [leftImageId, showStars]);
   
-  useEffect(() => {
+  useLayoutEffect(() => {
     setRightOriginalLoaded(false);
     rightOriginalRef.current = null;
     setUseRightOriginal(false);
+    setLoadedRightSrc(null);
     rightDimensionsRef.current = { width: 0, height: 0 };
     rightImageStateRef.current = 'large';
   }, [rightImageId, showStars]);
@@ -554,46 +533,52 @@ export default function ImageComparisonView({
                   <img
                     ref={leftZoom.imageRef}
                     src={asyncLeft.src}
+                    className={hideLeftImage ? 'comparison-image-hidden' : undefined}
                     alt={`${leftImage.target_name} - ${leftImage.filter_name || 'No filter'}`}
                     onError={asyncLeft.onError}
                     onLoad={(e) => {
-                    asyncLeft.onLoad();
-                    setLeftImageLoaded(true);
+                      asyncLeft.onLoad();
+                      setLeftImageLoaded(true);
+                      setLoadedLeftSrc(asyncLeft.src);
 
-                    const img = e.currentTarget;
-                    const newWidth = img.naturalWidth;
-                    const newHeight = img.naturalHeight;
-                    const oldWidth = leftDimensionsRef.current.width;
-                    const oldHeight = leftDimensionsRef.current.height;
-                    
-                    // Update image dimensions in zoom hook
-                    const isShowingOriginal = useLeftOriginal || (leftOriginalLoaded && targetLeftZoomRef.current !== null && targetLeftZoomRef.current > 1.0);
-                    leftZoom.setImageDimensions(newWidth, newHeight, isShowingOriginal);
-                    
-                    // Check if dimensions actually changed
-                    const dimensionsChanged = oldWidth > 0 && (Math.abs(newWidth - oldWidth) > 10 || Math.abs(newHeight - oldHeight) > 10);
-                    
-                    if (dimensionsChanged) {
-                      const currentVisualScale = leftZoom.getVisualScale();
-                      
-                      // Adjust zoom in two cases:
-                      // 1. Switching to original image (preserve visual scale)
-                      // 2. Loading new regular image with preserved zoom from previous image
-                      if (leftImageStateRef.current === 'switching-to-original' || 
-                          (leftImageStateRef.current === 'large' && currentVisualScale > 1.2)) {
-                        // Adjust zoom to maintain visual continuity
-                        leftZoom.adjustZoomForNewImage(oldWidth, oldHeight, newWidth, newHeight);
+                      const img = e.currentTarget;
+                      const newWidth = img.naturalWidth;
+                      const newHeight = img.naturalHeight;
+                      const oldWidth = leftDimensionsRef.current.width;
+                      const oldHeight = leftDimensionsRef.current.height;
+
+                      // Update image dimensions in zoom hook
+                      const isShowingOriginal = useLeftOriginal || (leftOriginalLoaded && targetLeftZoomRef.current !== null && targetLeftZoomRef.current > 1.0);
+                      leftZoom.setImageDimensions(newWidth, newHeight, isShowingOriginal);
+
+                      // Check if dimensions actually changed
+                      const dimensionsChanged = oldWidth > 0 && (Math.abs(newWidth - oldWidth) > 10 || Math.abs(newHeight - oldHeight) > 10);
+
+                      if (dimensionsChanged) {
+                        const currentVisualScale = leftZoom.getVisualScale();
+
+                        // Adjust zoom in two cases:
+                        // 1. Switching to original image (preserve visual scale)
+                        // 2. Loading new regular image with preserved zoom from previous image
+                        if (leftImageStateRef.current === 'switching-to-original' ||
+                            (leftImageStateRef.current === 'large' && currentVisualScale > 1.2)) {
+                          // Adjust zoom to maintain visual continuity
+                          leftZoom.adjustZoomForNewImage(oldWidth, oldHeight, newWidth, newHeight);
+                        }
                       }
-                    }
-                    
-                    // Update stored dimensions
-                    leftDimensionsRef.current = { width: newWidth, height: newHeight };
-                  }}
-                  style={{
-                    transform: `translate(${leftZoom.zoomState.offsetX}px, ${leftZoom.zoomState.offsetY}px) scale(${leftZoom.zoomState.scale})`,
-                    cursor: leftZoom.zoomState.scale > 1 ? 'grab' : 'default',
-                  }}
-                  draggable={false}
+
+                      if (leftImageStateRef.current === 'switching-to-original') {
+                        leftImageStateRef.current = 'original';
+                      }
+
+                      // Update stored dimensions
+                      leftDimensionsRef.current = { width: newWidth, height: newHeight };
+                    }}
+                    style={{
+                      transform: `translate(${leftZoom.zoomState.offsetX}px, ${leftZoom.zoomState.offsetY}px) scale(${leftZoom.zoomState.scale})`,
+                      cursor: leftZoom.zoomState.scale > 1 ? 'grab' : 'default',
+                    }}
+                    draggable={false}
                   />
                 )}
                 {(asyncLeft.state === 'generating' || asyncLeft.state === 'loading') && (
@@ -716,40 +701,46 @@ export default function ImageComparisonView({
                         <img
                           ref={rightZoom.imageRef}
                           src={asyncRight.src}
-                        alt={`${rightImage.target_name} - ${rightImage.filter_name || 'No filter'}`}
-                        onError={asyncRight.onError}
-                        onLoad={(e) => {
-                        asyncRight.onLoad();
-                        setRightImageLoaded(true);
+                          className={hideRightImage ? 'comparison-image-hidden' : undefined}
+                          alt={`${rightImage.target_name} - ${rightImage.filter_name || 'No filter'}`}
+                          onError={asyncRight.onError}
+                          onLoad={(e) => {
+                            asyncRight.onLoad();
+                            setRightImageLoaded(true);
+                            setLoadedRightSrc(asyncRight.src);
 
-                        const img = e.currentTarget;
-                        const newWidth = img.naturalWidth;
-                        const newHeight = img.naturalHeight;
-                        const oldWidth = rightDimensionsRef.current.width;
-                        const oldHeight = rightDimensionsRef.current.height;
-                        
-                        // Update image dimensions in zoom hook
-                        const isShowingOriginal = useRightOriginal || (rightOriginalLoaded && targetRightZoomRef.current !== null && targetRightZoomRef.current > 1.0);
-                        rightZoom.setImageDimensions(newWidth, newHeight, isShowingOriginal);
-                        
-                        // Check if dimensions actually changed
-                        const dimensionsChanged = oldWidth > 0 && (Math.abs(newWidth - oldWidth) > 10 || Math.abs(newHeight - oldHeight) > 10);
-                        
-                        if (dimensionsChanged) {
-                          const currentVisualScale = rightZoom.getVisualScale();
-                          
-                          // Adjust zoom in two cases:
-                          // 1. Switching to original image (preserve visual scale)
-                          // 2. Loading new regular image with preserved zoom from previous image
-                          if (rightImageStateRef.current === 'switching-to-original' || 
-                              (rightImageStateRef.current === 'large' && currentVisualScale > 1.2)) {
-                            // Adjust zoom to maintain visual continuity
-                            rightZoom.adjustZoomForNewImage(oldWidth, oldHeight, newWidth, newHeight);
-                          }
-                        }
-                        
-                        // Update stored dimensions
-                        rightDimensionsRef.current = { width: newWidth, height: newHeight };
+                            const img = e.currentTarget;
+                            const newWidth = img.naturalWidth;
+                            const newHeight = img.naturalHeight;
+                            const oldWidth = rightDimensionsRef.current.width;
+                            const oldHeight = rightDimensionsRef.current.height;
+
+                            // Update image dimensions in zoom hook
+                            const isShowingOriginal = useRightOriginal || (rightOriginalLoaded && targetRightZoomRef.current !== null && targetRightZoomRef.current > 1.0);
+                            rightZoom.setImageDimensions(newWidth, newHeight, isShowingOriginal);
+
+                            // Check if dimensions actually changed
+                            const dimensionsChanged = oldWidth > 0 && (Math.abs(newWidth - oldWidth) > 10 || Math.abs(newHeight - oldHeight) > 10);
+
+                            if (dimensionsChanged) {
+                              const currentVisualScale = rightZoom.getVisualScale();
+
+                              // Adjust zoom in two cases:
+                              // 1. Switching to original image (preserve visual scale)
+                              // 2. Loading new regular image with preserved zoom from previous image
+                              if (rightImageStateRef.current === 'switching-to-original' ||
+                                  (rightImageStateRef.current === 'large' && currentVisualScale > 1.2)) {
+                                // Adjust zoom to maintain visual continuity
+                                rightZoom.adjustZoomForNewImage(oldWidth, oldHeight, newWidth, newHeight);
+                              }
+                            }
+
+                            if (rightImageStateRef.current === 'switching-to-original') {
+                              rightImageStateRef.current = 'original';
+                            }
+
+                            // Update stored dimensions
+                            rightDimensionsRef.current = { width: newWidth, height: newHeight };
                           }}
                           style={{
                             transform: `translate(${rightZoom.zoomState.offsetX}px, ${rightZoom.zoomState.offsetY}px) scale(${rightZoom.zoomState.scale})`,
