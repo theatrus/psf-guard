@@ -250,7 +250,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
       }
       prevGroupingMode.current = groupingMode;
     }
-  }, [groupingMode, imageGroups.length, setExpandedGroups]); // Depend on length, not content
+  }, [groupingMode, imageGroups, setExpandedGroups]);
 
   // Flatten images for navigation
   const flatImages = useMemo(() => {
@@ -313,7 +313,13 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     setSelectedGroupIndex(newItem.groupIndex);
     setSelectedImageIndex(newItem.indexInGroup);
     setSelectedImageId(newItem.image.id); // Set immediately, don't wait for useEffect
-  }, [flatImages, selectedGroupIndex, selectedImageIndex]);
+  }, [
+    flatImages,
+    selectedGroupIndex,
+    selectedImageIndex,
+    setSelectedGroupIndex,
+    setSelectedImageIndex,
+  ]);
 
   const gradeImage = useCallback(async (status: 'accepted' | 'rejected' | 'pending') => {
     if (!selectedImageId) return;
@@ -384,7 +390,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
       setSelectedImageId(imageId);
       setLastSelectedImageId(imageId);
     }
-  }, [flatImages, lastSelectedImageId, updateParams]);
+  }, [flatImages, lastSelectedImageId, setSelectedImages, updateParams]);
 
   // Batch grading functions
   const gradeBatch = useCallback(async (status: 'accepted' | 'rejected' | 'pending') => {
@@ -399,7 +405,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     } catch (error) {
       console.error('Batch grading failed:', error);
     }
-  }, [selectedImages, grading]);
+  }, [selectedImages, grading, setSelectedImages]);
 
   // Switch to appropriate grouping mode when changing between single/multi-project
   const prevProjectId = useRef(projectId);
@@ -423,10 +429,17 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   }, [projectId, setGroupingMode]);
   
   // Clear date filters when project/target changes to avoid "no results" scenarios
+  const filtersRef = useRef(filters);
+  const updateFiltersRef = useRef(updateFilters);
+  useEffect(() => {
+    filtersRef.current = filters;
+    updateFiltersRef.current = updateFilters;
+  }, [filters, updateFilters]);
+
   useEffect(() => {
     // Only clear dates if they exist, to avoid infinite loops
-    if (filters.dateRange.start || filters.dateRange.end) {
-      updateFilters({
+    if (filtersRef.current.dateRange.start || filtersRef.current.dateRange.end) {
+      updateFiltersRef.current({
         dateStart: '',
         dateEnd: '',
       });
@@ -441,7 +454,14 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   useEffect(() => {
     setSelectedImages(new Set());
     setLastSelectedImageId(null);
-  }, [filters.status, filters.filterName, filters.dateRange.start, filters.dateRange.end, filters.searchTerm]);
+  }, [
+    filters.status,
+    filters.filterName,
+    filters.dateRange.start,
+    filters.dateRange.end,
+    filters.searchTerm,
+    setSelectedImages,
+  ]);
 
   // Keyboard shortcuts
   useHotkeys('k', () => navigateImages('next'), [navigateImages]);

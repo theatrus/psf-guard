@@ -23,7 +23,6 @@ export const isTauriApp = (): boolean => {
 export const getServerUrl = async (): Promise<string> => {
   if (isTauriApp()) {
     try {
-      // @ts-ignore - Tauri API will be available at runtime
       const { invoke } = await import('@tauri-apps/api/core');
       return await invoke('get_server_url');
     } catch (error) {
@@ -80,7 +79,6 @@ export const tauriFileSystem = {
     if (!isTauriApp()) return null;
     
     try {
-      // @ts-ignore - Tauri API will be available at runtime
       const { invoke } = await import('@tauri-apps/api/core');
       return await invoke('pick_database_file');
     } catch (error) {
@@ -94,7 +92,6 @@ export const tauriFileSystem = {
     if (!isTauriApp()) return null;
     
     try {
-      // @ts-ignore - Tauri API will be available at runtime
       const { invoke } = await import('@tauri-apps/api/core');
       return await invoke('pick_image_directory');
     } catch (error) {
@@ -108,7 +105,6 @@ export const tauriFileSystem = {
     if (!isTauriApp()) return null;
     
     try {
-      // @ts-ignore - Tauri API will be available at runtime
       const { invoke } = await import('@tauri-apps/api/core');
       return await invoke('get_default_nina_database_path');
     } catch (error) {
@@ -125,7 +121,6 @@ export const tauriConfig = {
     if (!isTauriApp()) return null;
 
     try {
-      // @ts-ignore - Tauri API will be available at runtime
       const { invoke } = await import('@tauri-apps/api/core');
       return await invoke('get_current_configuration');
     } catch (error) {
@@ -139,7 +134,6 @@ export const tauriConfig = {
     if (!isTauriApp()) return false;
 
     try {
-      // @ts-ignore - Tauri API will be available at runtime
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('save_configuration', { config });
       return true;
@@ -158,7 +152,6 @@ export const tauriConfig = {
     if (!isTauriApp()) return null;
 
     try {
-      // @ts-ignore - Tauri API will be available at runtime
       const { invoke } = await import('@tauri-apps/api/core');
       return await invoke('add_database', { name, dbPath, imageDirs });
     } catch (error) {
@@ -172,7 +165,6 @@ export const tauriConfig = {
     if (!isTauriApp()) return false;
 
     try {
-      // @ts-ignore - Tauri API will be available at runtime
       const { invoke } = await import('@tauri-apps/api/core');
       return await invoke('remove_database', { dbId });
     } catch (error) {
@@ -186,7 +178,6 @@ export const tauriConfig = {
     if (!isTauriApp()) return false;
     
     try {
-      // @ts-ignore - Tauri API will be available at runtime
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('restart_application');
       return true;
@@ -201,7 +192,6 @@ export const tauriConfig = {
     if (!isTauriApp()) return false;
     
     try {
-      // @ts-ignore - Tauri API will be available at runtime
       const { invoke } = await import('@tauri-apps/api/core');
       const result = await invoke('restart_server');
       console.log('Server restart result:', result);
@@ -217,7 +207,6 @@ export const tauriConfig = {
     if (!isTauriApp()) return false;
     
     try {
-      // @ts-ignore - Tauri API will be available at runtime
       const { invoke } = await import('@tauri-apps/api/core');
       return await invoke('is_configuration_valid');
     } catch (error) {

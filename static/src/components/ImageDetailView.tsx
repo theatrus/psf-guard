@@ -228,7 +228,7 @@ export default function ImageDetailView({
       }, 300);
     }
     // Never switch back from original to large
-  }, [zoom, imageId, showStars, showPsf, image, isOriginalLoaded]);
+  }, [zoom, imageId, showStars, showPsf, image, isOriginalLoaded, dbId, maxStars]);
   
   // Reset preload state when image changes
   useEffect(() => {
