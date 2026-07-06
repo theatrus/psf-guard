@@ -1,4 +1,5 @@
 import axios from 'axios';
+import type { AxiosInstance } from 'axios';
 import { getServerUrl } from '../utils/tauri';
 import type {
   ApiResponse,
@@ -26,16 +27,8 @@ import type {
   GenerationStatus,
 } from './types';
 
-// Default API instance (used as fallback)
-const api = axios.create({
-  baseURL: '/api',
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
-
 // Store the initialized API instance and server URL
-let initializedApi: typeof api | null = null;
+let initializedApi: AxiosInstance | null = null;
 let cachedServerUrl: string | null = null;
 
 // Initialize the API client

@@ -78,7 +78,7 @@ export function isMultiProjectMode(mode: GroupingMode): mode is typeof MULTI_PRO
  * Get the next grouping mode in cycle for single-project view
  */
 export function getNextSingleProjectMode(current: GroupingMode): GroupingMode {
-  const currentIndex = SINGLE_PROJECT_MODES.indexOf(current as any);
+  const currentIndex = SINGLE_PROJECT_MODES.indexOf(current);
   const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % SINGLE_PROJECT_MODES.length;
   return SINGLE_PROJECT_MODES[nextIndex];
 }
@@ -87,7 +87,7 @@ export function getNextSingleProjectMode(current: GroupingMode): GroupingMode {
  * Get the next grouping mode in cycle for multi-project view  
  */
 export function getNextMultiProjectMode(current: GroupingMode): GroupingMode {
-  const currentIndex = MULTI_PROJECT_MODES.indexOf(current as any);
+  const currentIndex = MULTI_PROJECT_MODES.indexOf(current);
   const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % MULTI_PROJECT_MODES.length;
   return MULTI_PROJECT_MODES[nextIndex];
 }

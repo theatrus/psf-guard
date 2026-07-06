@@ -3197,7 +3197,13 @@
   text-align: center;
   color: var(--color-text-secondary, #888);
   background: var(--color-bg-primary, #1a1a1a);
-  z-index: 1;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.preview-image-hidden {
+  opacity: 0 !important;
+  pointer-events: none;
 }
 
 .preview-status-label {

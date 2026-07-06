@@ -43,6 +43,19 @@ export default function PreviewImage({
   }, [img.state]);
 
   const pending = img.state === 'loading' || img.state === 'generating';
+  const imageVisible = img.state === 'ready';
+  const imageClassName = [className, !imageVisible ? 'preview-image-hidden' : null]
+    .filter(Boolean)
+    .join(' ');
+  const imageStyle: React.CSSProperties = {
+    ...imgStyle,
+    ...(imageVisible
+      ? {}
+      : {
+          opacity: 0,
+          pointerEvents: 'none',
+        }),
+  };
 
   return (
     <>
@@ -57,16 +70,16 @@ export default function PreviewImage({
       {img.state === 'error' && (fallback ?? <PreviewError />)}
       {/* The img stays in layout (never display:none) so it actually loads —
           a lazy + display:none image has no box and the browser never fetches
-          it, so onError/onLoad would never fire. While pending/error the
-          opaque .preview-status-box above covers it; when ready it shows. */}
+          it, so onError/onLoad would never fire. While pending/error it is
+          transparent and the opaque .preview-status-box above owns the view. */}
       <img
         src={img.src}
         alt={alt}
         loading={loading}
         onLoad={img.onLoad}
         onError={img.onError}
-        className={className}
-        style={imgStyle}
+        className={imageClassName || undefined}
+        style={imageStyle}
       />
     </>
   );

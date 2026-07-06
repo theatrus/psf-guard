@@ -268,7 +268,7 @@ export default function ImageComparisonView({
       }, 300);
     }
     // Never switch back from original to large
-  }, [leftZoom, leftImageId, showStars, leftImage, leftOriginalLoaded]);
+  }, [leftZoom, leftImageId, showStars, leftImage, leftOriginalLoaded, dbId, maxStars]);
   
   // Load original dimensions from metadata if available
   useEffect(() => {
@@ -341,7 +341,16 @@ export default function ImageComparisonView({
       }, 300);
     }
     // Never switch back from original to large
-  }, [rightZoom, rightImageId, showStars, rightImage, rightOriginalLoaded, useLeftOriginal]);
+  }, [
+    rightZoom,
+    rightImageId,
+    showStars,
+    rightImage,
+    rightOriginalLoaded,
+    useLeftOriginal,
+    dbId,
+    maxStars,
+  ]);
   
   // Effect to make right image follow left image's resolution choice
   useEffect(() => {
