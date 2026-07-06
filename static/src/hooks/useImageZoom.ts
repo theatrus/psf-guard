@@ -12,6 +12,18 @@ interface ZoomBounds {
   maxScale: number;
 }
 
+export type ZoomViewMode = 'fit' | 'user';
+
+export interface UseImageZoomOptions extends ZoomBounds {
+  /**
+   * Notified when the view intent changes: 'user' after any explicit zoom or
+   * pan, 'fit' after an explicit fit/reset. Programmatic dimension updates
+   * (applyBitmapDimensions / adjustZoomForNewImage) never fire this, so the
+   * caller can use it to decide whether to preserve the view on image loads.
+   */
+  onViewModeChange?: (mode: ZoomViewMode) => void;
+}
+
 export interface UseImageZoomReturn {
   zoomState: ZoomState;
   containerRef: React.RefObject<HTMLDivElement | null>;
@@ -24,12 +36,15 @@ export interface UseImageZoomReturn {
   zoomIn: () => void;
   zoomOut: () => void;
   zoomToFit: () => void;
+  zoomToFitDimensions: (width: number, height: number) => void;
   zoomTo100: () => void;
   resetZoom: () => void;
   getZoomPercentage: () => number;
   resetInitialization: () => void;
   setZoomState: React.Dispatch<React.SetStateAction<ZoomState>>;
   adjustZoomForNewImage: (oldWidth: number, oldHeight: number, newWidth: number, newHeight: number) => void;
+  applyBitmapDimensions: (width: number, height: number, mode: 'fit' | 'preserve') => void;
+  notifyBitmapDimensions: (width: number, height: number) => void;
   setImageDimensions: (width: number, height: number, isOriginal: boolean) => void;
   getVisualScale: () => number;
   hasOverflow: boolean;
@@ -43,14 +58,15 @@ const DEFAULT_BOUNDS: ZoomBounds = {
 const ZOOM_STEP = 0.1;
 const KEYBOARD_ZOOM_STEP = 0.2;
 
-export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomReturn {
+export function useImageZoom(options: UseImageZoomOptions = DEFAULT_BOUNDS): UseImageZoomReturn {
+  const bounds: ZoomBounds = options;
   const [zoomState, setZoomState] = useState<ZoomState>({
     scale: 1,
     offsetX: 0,
     offsetY: 0,
     visualScale: 1,
   });
-  
+
   // Flag to prevent auto-fit interference with intentional zoom operations
   const intentionalZoomRef = useRef(false);
   const hasInitializedRef = useRef(false);
@@ -60,68 +76,89 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
   const isPanningRef = useRef(false);
   const lastMousePosRef = useRef({ x: 0, y: 0 });
   const initialFitScaleRef = useRef(1);
-  
+
+  // Latest onViewModeChange without forcing callers to memoize it.
+  const onViewModeChangeRef = useRef(options.onViewModeChange);
+  onViewModeChangeRef.current = options.onViewModeChange;
+
+  // Dimensions of the bitmap the CURRENT zoom state (scale/offsets) is
+  // calibrated against. This is the source of truth for pan constraints and
+  // fits — never the live <img>.naturalWidth, which lags the state during a
+  // src swap (large → original) and used to clamp original-image offsets
+  // against the old preview's dimensions, throwing the viewport to the
+  // top-left corner mid-gesture.
+  const stateDimsRef = useRef<{ width: number; height: number } | null>(null);
+
   // Track original image dimensions
   const originalDimensionsRef = useRef<{ width: number; height: number } | null>(null);
   const currentImageIsOriginalRef = useRef(false);
 
-  // Calculate the fit-to-screen scale when image loads
-  const calculateFitScale = useCallback(() => {
+  const calculateFitScaleForDimensions = useCallback((width: number, height: number) => {
     const container = containerRef.current;
-    const image = imageRef.current;
-    
-    if (!container || !image || !image.naturalWidth || !image.naturalHeight) {
+
+    if (!container || !width || !height) {
       return 1;
     }
 
     const containerRect = container.getBoundingClientRect();
     const containerWidth = containerRect.width - 20; // Minimal padding
     const containerHeight = containerRect.height - 20;
-    
-    const scaleX = containerWidth / image.naturalWidth;
-    const scaleY = containerHeight / image.naturalHeight;
+
+    const scaleX = containerWidth / width;
+    const scaleY = containerHeight / height;
     
     // Use the smaller scale to ensure the image fits entirely, but allow scaling up for small images
     return Math.min(scaleX, scaleY);
   }, []);
 
-  // Reset to fit-to-screen when image changes
-  const zoomToFit = useCallback(() => {
+  // Calculate the fit-to-screen scale when image loads
+  const calculateFitScale = useCallback(() => {
     const container = containerRef.current;
     const image = imageRef.current;
-    
+
     if (!container || !image || !image.naturalWidth || !image.naturalHeight) {
+      return 1;
+    }
+
+    return calculateFitScaleForDimensions(image.naturalWidth, image.naturalHeight);
+  }, [calculateFitScaleForDimensions]);
+
+  const zoomToFitDimensions = useCallback((width: number, height: number) => {
+    const container = containerRef.current;
+
+    if (!container || !width || !height) {
       setZoomState({
         scale: 1,
         offsetX: 0,
         offsetY: 0,
+        visualScale: 1,
       });
       return;
     }
 
-    const fitScale = calculateFitScale();
+    const fitScale = calculateFitScaleForDimensions(width, height);
     initialFitScaleRef.current = fitScale;
-    
+    stateDimsRef.current = { width, height };
+
     // Calculate the centered position for the image
     const containerRect = container.getBoundingClientRect();
     const containerWidth = containerRect.width;
     const containerHeight = containerRect.height;
-    
-    const scaledImageWidth = image.naturalWidth * fitScale;
-    const scaledImageHeight = image.naturalHeight * fitScale;
-    
+
+    const scaledImageWidth = width * fitScale;
+    const scaledImageHeight = height * fitScale;
+
     // Calculate offsets to center the image in the container
     const offsetX = (containerWidth - scaledImageWidth) / 2;
     const offsetY = (containerHeight - scaledImageHeight) / 2;
-    
+
     // Calculate visual scale based on original dimensions if available
     let visualScale = fitScale;
     if (originalDimensionsRef.current && !currentImageIsOriginalRef.current) {
-      const currentWidth = image.naturalWidth;
-      const ratio = currentWidth / originalDimensionsRef.current.width;
+      const ratio = width / originalDimensionsRef.current.width;
       visualScale = fitScale * ratio;
     }
-    
+
     setZoomState({
       scale: fitScale,
       offsetX: offsetX,
@@ -131,43 +168,23 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     
     // Mark as initialized when we manually fit
     hasInitializedRef.current = true;
-  }, [calculateFitScale]);
+  }, [calculateFitScaleForDimensions]);
 
-  // Zoom to 100% (actual size)
-  const zoomTo100 = useCallback(() => {
-    // Mark this as an intentional zoom operation
-    intentionalZoomRef.current = true;
-    
-    const container = containerRef.current;
+  // Reset to fit-to-screen when image changes
+  const zoomToFit = useCallback(() => {
+    onViewModeChangeRef.current?.('fit');
+
     const image = imageRef.current;
-    
-    if (!container || !image || !image.naturalWidth || !image.naturalHeight) {
-      setZoomState({
-        scale: 1,
-        offsetX: 0,
-        offsetY: 0,
-      });
-      return;
-    }
+    const width = image?.naturalWidth || stateDimsRef.current?.width || 0;
+    const height = image?.naturalHeight || stateDimsRef.current?.height || 0;
 
-    // Calculate the centered position for 100% zoom
-    const containerRect = container.getBoundingClientRect();
-    const containerWidth = containerRect.width;
-    const containerHeight = containerRect.height;
-    
-    const imageWidth = image.naturalWidth; // 1:1 scale
-    const imageHeight = image.naturalHeight;
-    
-    // Always center at 100% - don't apply constraints here as we want actual 100% zoom
-    const offsetX = (containerWidth - imageWidth) / 2;
-    const offsetY = (containerHeight - imageHeight) / 2;
-    
-    setZoomState({
-      scale: 1,
-      offsetX: offsetX,
-      offsetY: offsetY,
-    });
-  }, []);
+    // No dimensions known yet — keep the current state rather than hard
+    // resetting to a top-left scale-1 view; the 'fit' intent above makes the
+    // next load fit instead.
+    if (!width || !height) return;
+
+    zoomToFitDimensions(width, height);
+  }, [zoomToFitDimensions]);
 
   // Reset zoom (alias for zoomToFit)
   const resetZoom = useCallback(() => {
@@ -180,11 +197,25 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
   }, [bounds]);
 
   // Constrain pan offsets to keep image mostly visible
-  const constrainPan = useCallback((offsetX: number, offsetY: number, scale: number): { offsetX: number; offsetY: number } => {
+  const constrainPan = useCallback((
+    offsetX: number,
+    offsetY: number,
+    scale: number,
+    imageWidth?: number,
+    imageHeight?: number
+  ): { offsetX: number; offsetY: number } => {
     const container = containerRef.current;
     const image = imageRef.current;
-    
-    if (!container || !image || !image.naturalWidth || !image.naturalHeight) {
+
+    // Prefer the dimensions the zoom state is calibrated against over the
+    // live <img> — during a bitmap swap the element still reports the OLD
+    // image's size and would clamp the new state's offsets wrongly.
+    const naturalWidth =
+      imageWidth ?? stateDimsRef.current?.width ?? image?.naturalWidth;
+    const naturalHeight =
+      imageHeight ?? stateDimsRef.current?.height ?? image?.naturalHeight;
+
+    if (!container || !naturalWidth || !naturalHeight) {
       return { offsetX, offsetY };
     }
 
@@ -192,8 +223,8 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     const containerWidth = containerRect.width;
     const containerHeight = containerRect.height;
     
-    const scaledImageWidth = image.naturalWidth * scale;
-    const scaledImageHeight = image.naturalHeight * scale;
+    const scaledImageWidth = naturalWidth * scale;
+    const scaledImageHeight = naturalHeight * scale;
     
     // Allow a small margin (10% of image size) to pan slightly past edges
     const marginX = scaledImageWidth * 0.1;
@@ -221,19 +252,70 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     return { offsetX, offsetY };
   }, []);
 
+  // Zoom to 100% (actual size)
+  const zoomTo100 = useCallback(() => {
+    // Mark this as an intentional zoom operation
+    intentionalZoomRef.current = true;
+    onViewModeChangeRef.current?.('user');
+
+    const container = containerRef.current;
+    const image = imageRef.current;
+    const bitmapWidth =
+      stateDimsRef.current?.width || image?.naturalWidth || 0;
+
+    if (!container || !bitmapWidth) {
+      setZoomState({
+        scale: 1,
+        offsetX: 0,
+        offsetY: 0,
+      });
+      return;
+    }
+
+    // 100% means one ORIGINAL image pixel per screen pixel. When the current
+    // bitmap is a downscaled preview this lands at scale > 1 — exactly what
+    // triggers the swap to the original-resolution artifact.
+    const targetScale = clampScale(
+      originalDimensionsRef.current
+        ? originalDimensionsRef.current.width / bitmapWidth
+        : 1
+    );
+
+    const containerRect = container.getBoundingClientRect();
+    const viewportCenterX = containerRect.width / 2;
+    const viewportCenterY = containerRect.height / 2;
+
+    setZoomState(prevState => {
+      // Keep the image point currently at the viewport center fixed.
+      const imageX = (viewportCenterX - prevState.offsetX) / prevState.scale;
+      const imageY = (viewportCenterY - prevState.offsetY) / prevState.scale;
+      const constrained = constrainPan(
+        viewportCenterX - imageX * targetScale,
+        viewportCenterY - imageY * targetScale,
+        targetScale
+      );
+      return {
+        scale: targetScale,
+        offsetX: constrained.offsetX,
+        offsetY: constrained.offsetY,
+      };
+    });
+  }, [clampScale, constrainPan]);
+
   // Handle mouse wheel zoom
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
-    
+
     const container = containerRef.current;
     if (!container) return;
 
     const rect = container.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
-    
+
     // Mark this as an intentional zoom operation
     intentionalZoomRef.current = true;
+    onViewModeChangeRef.current?.('user');
 
     setZoomState(prevState => {
       const delta = -e.deltaY * 0.01;
@@ -275,6 +357,10 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     const deltaX = e.clientX - lastMousePosRef.current.x;
     const deltaY = e.clientY - lastMousePosRef.current.y;
 
+    if (deltaX !== 0 || deltaY !== 0) {
+      onViewModeChangeRef.current?.('user');
+    }
+
     setZoomState(prevState => {
       const newOffsetX = prevState.offsetX + deltaX;
       const newOffsetY = prevState.offsetY + deltaY;
@@ -299,7 +385,8 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
   const zoomIn = useCallback(() => {
     // Mark this as an intentional zoom operation
     intentionalZoomRef.current = true;
-    
+    onViewModeChangeRef.current?.('user');
+
     setZoomState(prevState => {
       const newScale = clampScale(prevState.scale + KEYBOARD_ZOOM_STEP);
       const constrained = constrainPan(prevState.offsetX, prevState.offsetY, newScale);
@@ -315,7 +402,8 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
   const zoomOut = useCallback(() => {
     // Mark this as an intentional zoom operation
     intentionalZoomRef.current = true;
-    
+    onViewModeChangeRef.current?.('user');
+
     setZoomState(prevState => {
       const newScale = clampScale(prevState.scale - KEYBOARD_ZOOM_STEP);
       const constrained = constrainPan(prevState.offsetX, prevState.offsetY, newScale);
@@ -355,10 +443,16 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     }
   }, [zoomIn, zoomOut, resetZoom, zoomTo100]);
 
-  // Get zoom percentage (visual scale)
+  // Get zoom percentage relative to the ORIGINAL image's pixels: 100% = one
+  // original pixel per screen pixel, whichever bitmap (preview or original)
+  // is currently displayed. This keeps the number stable across bitmap swaps
+  // and across navigation.
   const getZoomPercentage = useCallback((): number => {
-    return Math.round((zoomState.visualScale || zoomState.scale) * 100);
-  }, [zoomState.scale, zoomState.visualScale]);
+    const dims = stateDimsRef.current;
+    const original = originalDimensionsRef.current;
+    const ratio = dims && original ? dims.width / original.width : 1;
+    return Math.round(zoomState.scale * ratio * 100);
+  }, [zoomState.scale]);
   
   // Get visual scale
   const getVisualScale = useCallback((): number => {
@@ -374,11 +468,20 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
   // Set image dimensions and update visual scale
   const setImageDimensions = useCallback((width: number, height: number, isOriginal: boolean) => {
     const isFirstTime = !originalDimensionsRef.current;
-    
-    if (isOriginal && !originalDimensionsRef.current) {
-      originalDimensionsRef.current = { width, height };
+
+    if (isOriginal) {
+      const prev = originalDimensionsRef.current;
+      // Update when meaningfully different so navigating to a target shot on
+      // different gear doesn't keep a stale original size forever.
+      if (
+        !prev ||
+        Math.abs(prev.width - width) > 10 ||
+        Math.abs(prev.height - height) > 10
+      ) {
+        originalDimensionsRef.current = { width, height };
+      }
     }
-    
+
     // Update which image we're currently viewing
     currentImageIsOriginalRef.current = isOriginal;
     
@@ -396,16 +499,20 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
   }, []);
   
   // Adjust zoom when switching between different image sizes
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const adjustZoomForNewImage = useCallback((oldWidth: number, oldHeight: number, newWidth: number, _newHeight: number) => {
-    if (oldWidth === 0 || oldHeight === 0 || !originalDimensionsRef.current) return;
-    
+  const adjustZoomForNewImage = useCallback((oldWidth: number, oldHeight: number, newWidth: number, newHeight: number) => {
+    if (oldWidth === 0 || oldHeight === 0 || newWidth === 0 || newHeight === 0) return;
+
     const container = containerRef.current;
     if (!container) return;
-    
+
     // Determine which image we're NOW viewing (not updated yet)
-    const isNowOriginal = Math.abs(newWidth - originalDimensionsRef.current.width) < 10;
-    
+    const isNowOriginal = originalDimensionsRef.current
+      ? Math.abs(newWidth - originalDimensionsRef.current.width) < 10
+      : currentImageIsOriginalRef.current;
+
+    // The state below is calibrated against the NEW bitmap from here on.
+    stateDimsRef.current = { width: newWidth, height: newHeight };
+
     setZoomState(prevState => {
       // The key insight: we need to maintain the same DISPLAYED pixel size
       // If we were showing a 2000px image at scale 3.0 (displaying 6000px)
@@ -430,15 +537,16 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
       const oldImageY = (viewportCenterY - prevState.offsetY) / prevState.scale;
       
       // Scale the image coordinates by the size change ratio
-      const sizeChangeRatio = newWidth / oldWidth;
-      const newImageX = oldImageX * sizeChangeRatio;
-      const newImageY = oldImageY * sizeChangeRatio;
+      const widthChangeRatio = newWidth / oldWidth;
+      const heightChangeRatio = newHeight / oldHeight;
+      const newImageX = oldImageX * widthChangeRatio;
+      const newImageY = oldImageY * heightChangeRatio;
       
       // Calculate new offsets to keep the same point at the center
       const newOffsetX = viewportCenterX - (newImageX * newScale);
       const newOffsetY = viewportCenterY - (newImageY * newScale);
       
-      const constrained = constrainPan(newOffsetX, newOffsetY, newScale);
+      const constrained = constrainPan(newOffsetX, newOffsetY, newScale, newWidth, newHeight);
       
       return {
         scale: newScale,
@@ -452,6 +560,44 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     currentImageIsOriginalRef.current = isNowOriginal;
   }, [constrainPan]);
 
+  // Report the dimensions of a bitmap that just finished loading into the
+  // <img>. In 'fit' mode the view refits (centered); in 'preserve' mode the
+  // view is kept EXACTLY when the dimensions match the state's calibration
+  // (the arrow-key navigation case) and mapped to the same visual size and
+  // center when they differ (preview ↔ original swaps, cross-size loads).
+  const applyBitmapDimensions = useCallback(
+    (width: number, height: number, mode: 'fit' | 'preserve') => {
+      if (!width || !height) return;
+
+      const prev = stateDimsRef.current;
+      if (mode === 'fit' || !prev) {
+        zoomToFitDimensions(width, height);
+        return;
+      }
+
+      const changed =
+        Math.abs(width - prev.width) > 10 || Math.abs(height - prev.height) > 10;
+      if (changed) {
+        adjustZoomForNewImage(prev.width, prev.height, width, height);
+      } else {
+        stateDimsRef.current = { width, height };
+      }
+    },
+    [zoomToFitDimensions, adjustZoomForNewImage]
+  );
+
+  // The <img> now renders a bitmap of these dimensions — recalibrate pan
+  // constraints and fit fallbacks against it WITHOUT touching the transform.
+  // For callers that keep their own zoom-preservation logic (comparison view)
+  // and don't route loads through applyBitmapDimensions: since constrainPan
+  // prefers stateDimsRef over the live <img>, every loaded bitmap must be
+  // reported through one of these paths or constraints clamp against the
+  // previous image's dimensions.
+  const notifyBitmapDimensions = useCallback((width: number, height: number) => {
+    if (!width || !height) return;
+    stateDimsRef.current = { width, height };
+  }, []);
+
   // Initialize fit scale when component mounts or image changes
   useEffect(() => {
     const container = containerRef.current;
@@ -459,28 +605,15 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     if (container && image && image.complete && image.naturalWidth > 0) {
       const fitScale = calculateFitScale();
       initialFitScaleRef.current = fitScale;
-      
+
       // Only auto-fit if we haven't initialized yet
       if (!hasInitializedRef.current && zoomState.scale === 1 && !intentionalZoomRef.current) {
-        // Visual scale is always based on original dimensions
-        let visualScale = fitScale;
-        if (originalDimensionsRef.current && !currentImageIsOriginalRef.current) {
-          const ratio = image.naturalWidth / originalDimensionsRef.current.width;
-          visualScale = fitScale * ratio;
-        }
-        
-        setZoomState({
-          scale: fitScale,
-          offsetX: 0,
-          offsetY: 0,
-          visualScale: visualScale,
-        });
-        hasInitializedRef.current = true;
+        zoomToFitDimensions(image.naturalWidth, image.naturalHeight);
       }
       // Reset the intentional flag after any potential auto-fit
       intentionalZoomRef.current = false;
     }
-  }, [calculateFitScale, zoomState.scale]);
+  }, [calculateFitScale, zoomToFitDimensions, zoomState.scale]);
 
   // Calculate whether the image overflows the container
   const hasOverflow = (() => {
@@ -511,12 +644,15 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     zoomIn,
     zoomOut,
     zoomToFit,
+    zoomToFitDimensions,
     zoomTo100,
     resetZoom,
     getZoomPercentage,
     resetInitialization,
     setZoomState,
     adjustZoomForNewImage,
+    applyBitmapDimensions,
+    notifyBitmapDimensions,
     setImageDimensions,
     getVisualScale,
     hasOverflow,
