@@ -273,6 +273,24 @@ PNG (the pregen paths in `mod.rs` do the same now).
   zoom transforms), and `ensurePreviewReady` replaces the `new Image()` zoom-
   switch preloads + `useImagePreloader` warming so an uncached 'original'
   actually generates before the zoom swaps to it.
+- **Detail-view zoom model (2026-07)**: `useImageZoom` keeps `stateDimsRef` —
+  the dimensions the transform is *calibrated against* — and constrains pans
+  and fits against that, never the live `<img>.naturalWidth` (which lags a src
+  swap; clamping original-image offsets against the old preview's dims is what
+  threw the viewport to the top-left mid-gesture). `ImageDetailView` tracks a
+  `'fit' | 'user'` view mode via the hook's `onViewModeChange` (wheel / +/- /
+  100% / pan → `'user'`; F / Fit / 0 → `'fit'`; no time-based cooldown
+  heuristics). Every `onLoad` reports through `applyBitmapDimensions(w, h,
+  mode)`: `'fit'` refits centered; `'preserve'` keeps the state EXACTLY when
+  dims are unchanged (arrow-key navigation ⇒ identical scale/offsets/percent)
+  and remaps to the same displayed size + center when they differ (preview ↔
+  original swaps). The original switch triggers on RAW scale (`>0.8` preload,
+  once per image; `>=1.0` swap) — raw `scale > 1` means the current bitmap is
+  upscaled past its native pixels, whichever size is showing. The zoom
+  percentage is relative to the ORIGINAL's pixels (learned from metadata or
+  the first original load; falls back to raw until known). ImageComparisonView
+  keeps its own working preservation logic — the hook API it uses is
+  unchanged, so don't "unify" it into this model without re-testing both.
 
 ### Two-DB sync (2026-06)
 Lives in `src/commands/sync/` (`mod.rs` shared helpers + `grades.rs` + `pull.rs`).

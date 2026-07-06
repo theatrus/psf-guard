@@ -375,6 +375,174 @@ test('detail view keeps the viewport anchored while swapping to original resolut
   }
 });
 
+test('detail view preserves zoom and pan exactly across arrow-key navigation', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+
+  await page.goto(`/#/detail/1?db=${encodeURIComponent(dbId)}&project=1`);
+
+  const container = page.locator('.zoom-container').first();
+  const img = container.locator('img.detail-main-image').first();
+  await expect(img).toBeVisible({ timeout: 15_000 });
+  await page.waitForFunction(
+    (el) => el instanceof HTMLImageElement && el.complete && el.naturalWidth > 0,
+    await img.elementHandle(),
+    { timeout: 30_000 }
+  );
+
+  const box = await container.boundingBox();
+  expect(box).not.toBeNull();
+  const centerX = box!.x + box!.width / 2;
+  const centerY = box!.y + box!.height / 2;
+
+  // Zoom to a target below raw 1.0 so the original-resolution swap stays out
+  // of the picture — this test is about EXACT persistence of the transform.
+  const fitScale = (await readDetailViewportAnchor(page)).scale;
+  const targetScale = Math.min(0.9, fitScale + 0.4);
+  expect(targetScale).toBeGreaterThan(fitScale);
+  await page.mouse.move(centerX, centerY);
+  // handleWheel: newScale = scale - deltaY * 0.001
+  await page.mouse.wheel(0, -(targetScale - fitScale) / 0.001);
+  await page.mouse.down();
+  await page.mouse.move(centerX - 90, centerY - 60, { steps: 5 });
+  await page.mouse.up();
+
+  const before = await readDetailViewportAnchor(page);
+  expect(before.scale).toBeLessThan(1.0);
+  expect(before.scale).toBeGreaterThan(fitScale + 0.01);
+  const beforePercent = await page
+    .locator('.zoom-percentage-compact')
+    .textContent();
+
+  await page.keyboard.press('ArrowRight');
+  await expect(page).toHaveURL(/\/detail\/2/);
+
+  // The main <img> is keyed by image id and REMOUNTS on navigation — an
+  // element handle grabbed now may bind the detached old node, so re-query
+  // the DOM on every poll instead.
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector('.zoom-container img.detail-main-image');
+      return (
+        el instanceof HTMLImageElement &&
+        el.complete &&
+        el.naturalWidth > 0 &&
+        (el.currentSrc || el.src).includes('/images/2/')
+      );
+    },
+    undefined,
+    { timeout: 60_000 }
+  );
+  await expect(img).not.toHaveClass(/detail-image-hidden/, { timeout: 10_000 });
+  await expect(page.locator('.image-loading-overlay')).toHaveCount(0, {
+    timeout: 10_000,
+  });
+
+  const after = await readDetailViewportAnchor(page);
+  expect(after.src).toContain('/images/2/');
+  // Identical bitmap dimensions in the sequence ⇒ the transform must carry
+  // over EXACTLY: same scale, same offsets, same displayed percentage.
+  expect(after.naturalWidth).toBe(before.naturalWidth);
+  expect(after.scale).toBeCloseTo(before.scale, 5);
+  expect(Math.abs(after.offsetX - before.offsetX)).toBeLessThan(0.5);
+  expect(Math.abs(after.offsetY - before.offsetY)).toBeLessThan(0.5);
+  const afterPercent = await page
+    .locator('.zoom-percentage-compact')
+    .textContent();
+  expect(afterPercent).toBe(beforePercent);
+});
+
+test('detail view keeps the anchored region across navigation while zoomed past 100%', async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+
+  await page.goto(`/#/detail/1?db=${encodeURIComponent(dbId)}&project=1`);
+
+  const container = page.locator('.zoom-container').first();
+  const img = container.locator('img.detail-main-image').first();
+  await expect(img).toBeVisible({ timeout: 15_000 });
+  await page.waitForFunction(
+    (el) => el instanceof HTMLImageElement && el.complete && el.naturalWidth > 0,
+    await img.elementHandle(),
+    { timeout: 30_000 }
+  );
+
+  const box = await container.boundingBox();
+  expect(box).not.toBeNull();
+  const centerX = box!.x + box!.width / 2;
+  const centerY = box!.y + box!.height / 2;
+
+  // Zoom well past raw 1.0 and pan off-center; the view should upgrade to
+  // the original-resolution artifact on its own.
+  await page.mouse.move(centerX, centerY);
+  await page.mouse.wheel(0, -1400);
+  await page.mouse.down();
+  await page.mouse.move(centerX - 120, centerY - 80, { steps: 6 });
+  await page.mouse.up();
+
+  await page.waitForFunction(
+    (el) =>
+      el instanceof HTMLImageElement &&
+      el.complete &&
+      el.naturalWidth > 0 &&
+      (el.currentSrc || el.src).includes('size=original'),
+    await img.elementHandle(),
+    { timeout: 60_000 }
+  );
+  await expect(page.locator('.image-loading-overlay')).toHaveCount(0, {
+    timeout: 10_000,
+  });
+
+  const before = await readDetailViewportAnchor(page);
+  const beforeDisplayedWidth = before.scale * before.naturalWidth;
+  const beforePercent = await page
+    .locator('.zoom-percentage-compact')
+    .textContent();
+
+  await page.keyboard.press('ArrowRight');
+  await expect(page).toHaveURL(/\/detail\/2/);
+
+  // The next image must come back at the SAME anchored region and displayed
+  // size, and re-upgrade to its own original-resolution artifact. Re-query
+  // the DOM each poll — the keyed <img> remounts on navigation.
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector('.zoom-container img.detail-main-image');
+      const src = el instanceof HTMLImageElement ? el.currentSrc || el.src : '';
+      return (
+        el instanceof HTMLImageElement &&
+        el.complete &&
+        el.naturalWidth > 0 &&
+        src.includes('/images/2/') &&
+        src.includes('size=original')
+      );
+    },
+    undefined,
+    { timeout: 60_000 }
+  );
+  await expect(page.locator('.image-loading-overlay')).toHaveCount(0, {
+    timeout: 10_000,
+  });
+
+  const after = await readDetailViewportAnchor(page);
+  expect(after.naturalWidth).toBe(before.naturalWidth);
+  const afterDisplayedWidth = after.scale * after.naturalWidth;
+  expect(
+    Math.abs(afterDisplayedWidth - beforeDisplayedWidth) / beforeDisplayedWidth
+  ).toBeLessThan(0.01);
+  expect(Math.abs(after.centerRatioX - before.centerRatioX)).toBeLessThan(0.02);
+  expect(Math.abs(after.centerRatioY - before.centerRatioY)).toBeLessThan(0.02);
+  // No top-left collapse: the anchored region stays away from the corner.
+  expect(after.centerRatioX).toBeGreaterThan(0.1);
+  expect(after.centerRatioY).toBeGreaterThan(0.1);
+  const afterPercent = await page
+    .locator('.zoom-percentage-compact')
+    .textContent();
+  expect(afterPercent).toBe(beforePercent);
+});
+
 test('detail view shows the image after the 202-generating path reloads with a cache-buster', async ({
   page,
 }) => {

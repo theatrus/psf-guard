@@ -49,19 +49,30 @@ export default function ImageDetailView({
   const [imageSize, setImageSize] = useState<'screen' | 'large' | 'original'>('large');
   const [isOriginalLoaded, setIsOriginalLoaded] = useState(false);
   const [useOriginalImage, setUseOriginalImage] = useState(false);
-  const imageDimensionsRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
   const [imageError, setImageError] = useState(false);
-  
+
   // State machine to prevent feedback loops
   const imageStateRef = useRef<'large' | 'switching-to-original' | 'original'>('large');
+  // Guard: request original-resolution generation at most once per image.
+  const originalRequestedRef = useRef(false);
   const mainImageKey = `${dbId}:${imageId}:${showStars ? 'stars' : 'preview'}:${maxStars}`;
+  const mainImageKeyRef = useRef(mainImageKey);
+  mainImageKeyRef.current = mainImageKey;
+
+  // 'fit': the view follows the image (refit whenever a new one loads).
+  // 'user': the user owns the view — zoom percent and position are preserved
+  // exactly across arrow-key navigation and preview↔original bitmap swaps,
+  // until an explicit Fit/reset returns to 'fit'.
+  const viewModeRef = useRef<'fit' | 'user'>('fit');
 
   // Initialize zoom functionality
   const zoom = useImageZoom({
     minScale: 0.1,
     maxScale: 10.0,
+    onViewModeChange: (mode) => {
+      viewModeRef.current = mode;
+    },
   });
-  const resetZoomInitialization = zoom.resetInitialization;
 
   // Check if image has overflow (is larger than container)
   const hasOverflow = zoom.zoomState.scale > 1 || 
@@ -167,47 +178,6 @@ export default function ImageDetailView({
   useHotkeys('1', () => zoom.zoomTo100(), [zoom.zoomTo100]);
   useHotkeys('f', () => zoom.zoomToFit(), [zoom.zoomToFit]);
 
-  // Track zoom state to detect user interactions
-  const previousZoomState = useRef(zoom.zoomState);
-  const lastUserZoomRef = useRef<number>(0);
-  const lastImageIdRef = useRef<number>(imageId);
-  const USER_ZOOM_COOLDOWN = 2000; // 2 seconds
-  
-  // Track user zoom interactions by monitoring zoom state changes
-  useEffect(() => {
-    const currentZoom = zoom.zoomState;
-    const prevZoom = previousZoomState.current;
-    
-    // Check if zoom changed and it wasn't from an image change
-    const zoomChanged = currentZoom.scale !== prevZoom.scale || 
-                       currentZoom.offsetX !== prevZoom.offsetX || 
-                       currentZoom.offsetY !== prevZoom.offsetY;
-    
-    const imageChanged = imageId !== lastImageIdRef.current;
-    
-    // If zoom changed but image didn't change, it was a user interaction
-    if (zoomChanged && !imageChanged) {
-      lastUserZoomRef.current = Date.now();
-    }
-    
-    previousZoomState.current = currentZoom;
-    lastImageIdRef.current = imageId;
-  }, [zoom.zoomState, imageId]);
-
-  // Reset zoom only when image ID changes and user hasn't zoomed recently
-  useEffect(() => {
-    const timeSinceUserZoom = Date.now() - lastUserZoomRef.current;
-    
-    // Only auto-fit if user hasn't zoomed recently
-    if (timeSinceUserZoom > USER_ZOOM_COOLDOWN) {
-      const timer = setTimeout(() => {
-        zoom.zoomToFit();
-      }, 300);
-      
-      return () => clearTimeout(timer);
-    }
-  }, [imageId, zoom.zoomToFit]); // eslint-disable-line react-hooks/exhaustive-deps
-  
   // Load original dimensions from metadata if available
   useEffect(() => {
     // Try different possible field names for image dimensions
@@ -223,17 +193,21 @@ export default function ImageDetailView({
     }
   }, [image, zoom]);
   
-  // Combined effect for image preloading and switching
+  // Combined effect for image preloading and switching. Triggers on the RAW
+  // scale of the displayed bitmap: scale > 1 means the current bitmap is
+  // being magnified past its native pixels (blurry) and the original-
+  // resolution artifact is needed, whichever preview size is showing.
   useEffect(() => {
     if (!image || showPsf) return;
-    
-    const visualScale = zoom.getVisualScale();
+
+    const scale = zoom.zoomState.scale;
     const state = imageStateRef.current;
-    
-    // Preload when visual zoom > 80%. Route through the interactive queue so an
-    // uncached 'original' is actually generated (its 202 is not a failure);
-    // only flip to it once generation completes.
-    if (visualScale > 0.8 && !isOriginalLoaded && state === 'large') {
+
+    // Preload near 1:1. Route through the interactive queue so an uncached
+    // 'original' is actually generated (its 202 is not a failure); only flip
+    // to it once generation completes.
+    if (scale > 0.8 && state === 'large' && !isOriginalLoaded && !originalRequestedRef.current) {
+      originalRequestedRef.current = true;
       const originalUrl = showStars
         ? apiClient.getAnnotatedUrl(dbId, imageId, 'original', maxStars)
         : apiClient.getPreviewUrl(dbId, imageId, { size: 'original' });
@@ -241,35 +215,68 @@ export default function ImageDetailView({
         ? { imageId, kind: 'annotated', size: 'original', maxStars }
         : { imageId, kind: 'preview', size: 'original' };
 
+      const requestedKey = mainImageKey;
       void ensurePreviewReady(dbId, originalUrl, originalDescriptor).then((ok) => {
-        if (ok) setIsOriginalLoaded(true);
+        // With zoom persisting across navigation these requests fire on every
+        // image; ignore resolutions that arrive after we moved on.
+        if (mainImageKeyRef.current !== requestedKey) return;
+        if (ok) {
+          setIsOriginalLoaded(true);
+        } else {
+          // Transient generation failure — clear the guard so the next zoom
+          // change retries instead of leaving this image stuck on the preview.
+          originalRequestedRef.current = false;
+        }
       });
     }
-    
-    // State machine transitions based on visual scale - only switch to original, never back
-    if (state === 'large' && visualScale > 1.0 && isOriginalLoaded) {
+
+    // State machine transitions - only switch to original, never back
+    if (state === 'large' && scale >= 1.0 && isOriginalLoaded) {
       // Switch to original
       imageStateRef.current = 'switching-to-original';
       setUseOriginalImage(true);
     }
     // Never switch back from original to large
-  }, [zoom, imageId, showStars, showPsf, image, isOriginalLoaded, dbId, maxStars]);
+  }, [zoom, imageId, showStars, showPsf, image, isOriginalLoaded, dbId, maxStars, mainImageKey]);
   
-  // Reset preload state when image changes
+  // Reset preload state when image changes. Deliberately does NOT touch the
+  // zoom state: in 'user' view mode the zoom/pan carries over to the next
+  // image (reportBitmapLoaded reconciles it against the incoming bitmap).
   useLayoutEffect(() => {
     setIsOriginalLoaded(false);
     setUseOriginalImage(false);
+    originalRequestedRef.current = false;
     setVisibleMainImage({
       key: mainImageKey,
       src: largeNonPsfSrc,
       baseSrc: largeNonPsfSrc,
       loadedSrc: null,
     });
-    imageDimensionsRef.current = { width: 0, height: 0 };
     imageStateRef.current = 'large';
     setImageError(false);
-    resetZoomInitialization();
-  }, [dbId, imageId, showStars, maxStars, mainImageKey, largeNonPsfSrc, resetZoomInitialization]);
+  }, [dbId, imageId, showStars, maxStars, mainImageKey, largeNonPsfSrc]);
+
+  // A bitmap finished loading into one of the <img> elements. Hand its
+  // dimensions to the zoom hook: fit when the view is in 'fit' mode, keep the
+  // view (exactly, or remapped across a size change) when the user owns it or
+  // when this load is the large→original swap.
+  const reportBitmapLoaded = (img: HTMLImageElement) => {
+    const width = img.naturalWidth;
+    const height = img.naturalHeight;
+    if (!width || !height) return;
+
+    zoom.setImageDimensions(width, height, useOriginalImage);
+
+    const switching = imageStateRef.current === 'switching-to-original';
+    zoom.applyBitmapDimensions(
+      width,
+      height,
+      switching || viewModeRef.current === 'user' ? 'preserve' : 'fit'
+    );
+    if (switching) {
+      imageStateRef.current = 'original';
+    }
+  };
 
   // Show loading state only on initial load
   if (!image && isLoading) {
@@ -385,29 +392,7 @@ export default function ImageDetailView({
                     onError={asyncImg.onError}
                     onLoad={(e) => {
                       asyncImg.onLoad();
-
-                      const img = e.currentTarget;
-                      const newWidth = img.naturalWidth;
-                      const newHeight = img.naturalHeight;
-                      const oldWidth = imageDimensionsRef.current.width;
-                      const oldHeight = imageDimensionsRef.current.height;
-                      const dimensionsChanged =
-                        oldWidth > 0 &&
-                        (Math.abs(newWidth - oldWidth) > 10 ||
-                          Math.abs(newHeight - oldHeight) > 10);
-
-                      zoom.setImageDimensions(newWidth, newHeight, useOriginalImage);
-
-                      if (imageStateRef.current === 'switching-to-original') {
-                        if (dimensionsChanged) {
-                          zoom.adjustZoomForNewImage(oldWidth, oldHeight, newWidth, newHeight);
-                        }
-                        imageStateRef.current = 'original';
-                      } else if (oldWidth === 0) {
-                        zoom.zoomToFitDimensions(newWidth, newHeight);
-                      }
-
-                      imageDimensionsRef.current = { width: newWidth, height: newHeight };
+                      reportBitmapLoaded(e.currentTarget);
                       setVisibleMainImage({
                         key: mainImageKey,
                         src: asyncImg.src,
@@ -449,49 +434,27 @@ export default function ImageDetailView({
                         : undefined
                   }
                   onLoad={(e) => {
-                  // Clear PSF loading state / mark the async image ready.
-                  if (showPsf) {
-                    setPsfImageLoading(false);
-                  } else if (visibleMainSrc === asyncImg.src) {
-                    asyncImg.onLoad();
-                  }
-
-                  if (!showPsf && !visibleMainSrcIsCurrent) {
-                    return;
-                  }
-
-                  const img = e.currentTarget;
-                  const newWidth = img.naturalWidth;
-                  const newHeight = img.naturalHeight;
-                  const oldWidth = imageDimensionsRef.current.width;
-                  const oldHeight = imageDimensionsRef.current.height;
-                  
-                  // Update image dimensions in zoom hook
-                  zoom.setImageDimensions(newWidth, newHeight, useOriginalImage);
-                  
-                  // Check if dimensions actually changed (indicating size switch)
-                  const dimensionsChanged = oldWidth > 0 && (Math.abs(newWidth - oldWidth) > 10 || Math.abs(newHeight - oldHeight) > 10);
-                  
-                  if (imageStateRef.current === 'switching-to-original') {
-                    if (dimensionsChanged) {
-                      // Adjust zoom to maintain visual continuity
-                      zoom.adjustZoomForNewImage(oldWidth, oldHeight, newWidth, newHeight);
+                    // The PSF diagnostic image never feeds the zoom
+                    // calibration — its dimensions are unrelated to the
+                    // preview/original bitmaps.
+                    if (showPsf) {
+                      setPsfImageLoading(false);
+                      return;
                     }
-                    imageStateRef.current = 'original';
-                  } else if (imageDimensionsRef.current.width === 0) {
-                    // Queue fit before revealing the newly loaded image.
-                    zoom.zoomToFitDimensions(newWidth, newHeight);
-                  }
-                  
-                  // Update stored dimensions
-                  imageDimensionsRef.current = { width: newWidth, height: newHeight };
-                  if (!showPsf) {
+
+                    if (visibleMainSrc === asyncImg.src) {
+                      asyncImg.onLoad();
+                    }
+                    if (!visibleMainSrcIsCurrent) {
+                      return;
+                    }
+
+                    reportBitmapLoaded(e.currentTarget);
                     setVisibleMainImage((current) =>
                       current.key === mainImageKey && current.src === visibleMainSrc
                         ? { ...current, loadedSrc: visibleMainSrc }
                         : current
                     );
-                  }
                   }}
                   draggable={false}
                 />
