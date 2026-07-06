@@ -59,7 +59,7 @@ dirs = "6.0"
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_System_SystemInformation"] }
+windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }
 
 [dev-dependencies]
 tempfile = "3.27"
