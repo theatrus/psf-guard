@@ -252,6 +252,17 @@ PNG (the pregen paths in `mod.rs` do the same now).
 - **Cache keys**: `preview_cache_key` / `annotated_cache_key` in `handlers.rs`
   are shared by the artifact handler, the status endpoint, and pregen so all
   address the same file.
+- **Slow-storage isolation (2026-07)**: measured against an SMB-mounted
+  scheduler DB (274MB, journal=delete) where every SQLite transaction pays
+  network lock round-trips (30-80s/query observed). Two rules keep the
+  request path responsive there: (1) the background file-check refresh runs
+  all its queries on a **dedicated connection** (one `get_images_by_project_id`
+  per project, per-target tallies grouped in memory — never the old
+  full-table scan per target), so the shared request-connection mutex is
+  never held by a slow refresh query; (2) `get_directory_tree` **never scans
+  in the request path** when any tree exists — a stale (>5min) tree is served
+  immediately while one deduped background thread revalidates; only a cold
+  start blocks, and concurrent cold callers share a single scan.
 - **Frontend** (`static/src`): optimistic `<img>` + poll-on-error. `hooks/previewPoll.ts`
   is a singleton coordinator that batches pending descriptors (per DB) into one
   `getGenerationStatus` POST every ~800ms; `hooks/useAsyncImage.ts` drives an

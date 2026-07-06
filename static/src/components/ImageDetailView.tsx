@@ -96,24 +96,31 @@ export default function ImageDetailView({
     ? { imageId, kind: 'annotated', size: mainSize, maxStars }
     : { imageId, kind: 'preview', size: mainSize };
   const asyncImg = useAsyncImage(dbId, nonPsfSrc, nonPsfDescriptor);
+  // `src` is what the <img> renders (may carry a `v=` cache-buster after a
+  // generation-triggered reload); `baseSrc` is the stable identity used to
+  // decide whether the visible artifact still belongs to this image/size.
   const [visibleMainImage, setVisibleMainImage] = useState<{
     key: string;
     src: string;
+    baseSrc: string;
     loadedSrc: string | null;
   }>(() => ({
     key: mainImageKey,
     src: nonPsfSrc,
+    baseSrc: nonPsfSrc,
     loadedSrc: null,
   }));
   const visibleMainSrc =
     visibleMainImage.key === mainImageKey ? visibleMainImage.src : nonPsfSrc;
+  const visibleMainBaseSrc =
+    visibleMainImage.key === mainImageKey ? visibleMainImage.baseSrc : nonPsfSrc;
   const loadedMainSrc =
     visibleMainImage.key === mainImageKey ? visibleMainImage.loadedSrc : null;
   const currentMainSrcIsLoaded =
     visibleMainSrc === loadedMainSrc;
   const currentNonPsfSources = [largeNonPsfSrc, originalNonPsfSrc];
   const visibleMainSrcIsCurrent =
-    currentNonPsfSources.includes(visibleMainSrc);
+    currentNonPsfSources.includes(visibleMainBaseSrc);
 
   // Fetch image details
   const { data: image, isLoading } = useQuery({
@@ -252,7 +259,12 @@ export default function ImageDetailView({
   useLayoutEffect(() => {
     setIsOriginalLoaded(false);
     setUseOriginalImage(false);
-    setVisibleMainImage({ key: mainImageKey, src: largeNonPsfSrc, loadedSrc: null });
+    setVisibleMainImage({
+      key: mainImageKey,
+      src: largeNonPsfSrc,
+      baseSrc: largeNonPsfSrc,
+      loadedSrc: null,
+    });
     imageDimensionsRef.current = { width: 0, height: 0 };
     imageStateRef.current = 'large';
     setImageError(false);
@@ -294,11 +306,11 @@ export default function ImageDetailView({
     return new Date(timestamp * 1000).toLocaleString();
   };
 
+  // Hide until the visible src has actually loaded AND still belongs to this
+  // image/size — never show a stale or errored <img> (e.g. one whose original
+  // request 202'd while its regenerated copy loads under a `v=` buster).
   const hideMainImage =
-    !showPsf &&
-    (!visibleMainSrcIsCurrent ||
-      (visibleMainSrc === asyncImg.src &&
-        (asyncImg.state !== 'ready' || !currentMainSrcIsLoaded)));
+    !showPsf && (!visibleMainSrcIsCurrent || !currentMainSrcIsLoaded);
 
   return (
     <div className="image-detail-overlay" onClick={onClose}>
@@ -399,6 +411,7 @@ export default function ImageDetailView({
                       setVisibleMainImage({
                         key: mainImageKey,
                         src: asyncImg.src,
+                        baseSrc: nonPsfSrc,
                         loadedSrc: asyncImg.src,
                       });
                     }}

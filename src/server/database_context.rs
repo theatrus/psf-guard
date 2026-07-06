@@ -132,6 +132,11 @@ pub struct DatabaseContext {
     reopen_lock: Arc<Mutex<()>>,
     pub file_check_cache: Arc<RwLock<FileCheckCache>>,
     pub directory_tree_cache: Arc<RwLock<Option<DirectoryTree>>>,
+    /// Serializes cold directory-tree builds so N concurrent requests on an
+    /// empty cache share one filesystem scan instead of starting N.
+    tree_build_lock: Arc<Mutex<()>>,
+    /// True while a background (stale-revalidation) tree rebuild is running.
+    tree_rebuild_inflight: Arc<std::sync::atomic::AtomicBool>,
     pub refresh_mutex: Arc<TokioMutex<()>>,
     /// Per-DB spatial (occlusion) metrics store + scan progress; persisted
     /// under `cache_dir` as spatial_metrics.json.
@@ -195,6 +200,8 @@ impl DatabaseContext {
             reopen_lock: Arc::new(Mutex::new(())),
             file_check_cache: Arc::new(RwLock::new(FileCheckCache::new())),
             directory_tree_cache: Arc::new(RwLock::new(None)),
+            tree_build_lock: Arc::new(Mutex::new(())),
+            tree_rebuild_inflight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             refresh_mutex: Arc::new(TokioMutex::new(())),
             spatial_metrics: Arc::new(RwLock::new(Default::default())),
         })
@@ -336,16 +343,63 @@ impl DatabaseContext {
         self.image_dir_paths[0].join(relative_path)
     }
 
+    /// Get the directory tree for file lookups. Never lets the request path
+    /// pay for a full filesystem scan when *any* tree exists: a fresh tree is
+    /// served as-is, a stale one is served immediately while one background
+    /// thread revalidates (on a slow network mount a scan can take a minute —
+    /// blocking requests on it starves the UI). Only a cold cache (no tree at
+    /// all) blocks, and then all concurrent callers share a single scan.
     pub fn get_directory_tree(&self) -> Result<Arc<DirectoryTree>> {
         {
             let cache = self.directory_tree_cache.read().unwrap();
             if let Some(ref tree) = *cache {
-                if !tree.is_older_than(Duration::from_secs(300)) {
-                    return Ok(Arc::new(tree.clone()));
+                let stale = tree.is_older_than(Duration::from_secs(300));
+                let tree = Arc::new(tree.clone());
+                if stale {
+                    self.spawn_directory_tree_rebuild();
                 }
+                return Ok(tree);
+            }
+        }
+
+        // Cold cache: one caller scans; the rest wait here and reuse the result.
+        let _guard = lock_recover(&self.tree_build_lock);
+        {
+            let cache = self.directory_tree_cache.read().unwrap();
+            if let Some(ref tree) = *cache {
+                return Ok(Arc::new(tree.clone()));
             }
         }
         self.rebuild_directory_tree_internal()
+    }
+
+    /// Kick a deduplicated background rebuild of the directory tree. No-op if
+    /// one is already running.
+    fn spawn_directory_tree_rebuild(&self) {
+        use std::sync::atomic::Ordering;
+
+        if self.tree_rebuild_inflight.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let ctx = self.clone();
+        std::thread::spawn(move || {
+            // Reset the flag even if the scan errors or panics, so a failed
+            // rebuild doesn't pin the stale tree forever.
+            struct Reset(Arc<std::sync::atomic::AtomicBool>);
+            impl Drop for Reset {
+                fn drop(&mut self) {
+                    self.0.store(false, Ordering::SeqCst);
+                }
+            }
+            let _reset = Reset(ctx.tree_rebuild_inflight.clone());
+            if let Err(e) = ctx.rebuild_directory_tree_internal() {
+                tracing::warn!(
+                    "⚠️ Background directory tree rebuild failed for db={}: {}",
+                    ctx.id,
+                    e
+                );
+            }
+        });
     }
 
     fn rebuild_directory_tree_internal(&self) -> Result<Arc<DirectoryTree>> {
@@ -457,12 +511,16 @@ impl DatabaseContext {
                 .set_stage(RefreshStage::LoadingProjects);
         }
 
+        // All refresh queries run on a dedicated connection so their (possibly
+        // slow — e.g. a network-mounted sqlite where every transaction pays
+        // lock round-trips) transactions never hold the shared request
+        // connection's mutex. API handlers keep answering while this walks the
+        // database; two readers coexist at the SQLite level.
+        let refresh_conn = Connection::open_with_flags(&self.database_path, db_open_flags())
+            .map_err(|e| anyhow::anyhow!("Opening refresh connection: {}", e))?;
+
         let projects = {
-            let conn = self.db();
-            let conn = conn
-                .lock()
-                .map_err(|_| anyhow::anyhow!("Database lock failed"))?;
-            let db = crate::db::Database::new(&conn);
+            let db = crate::db::Database::new(&refresh_conn);
             db.get_projects_with_images()
                 .map_err(|e| anyhow::anyhow!("Failed to get projects: {}", e))?
         };
@@ -477,13 +535,16 @@ impl DatabaseContext {
             projects.len()
         );
 
+        let directory_tree = self.get_directory_tree().map_err(|e| {
+            tracing::error!("Failed to get directory tree cache: {}", e);
+            anyhow::anyhow!("Directory cache error: {}", e)
+        })?;
+
         let mut project_cache_updates = std::collections::HashMap::new();
         let mut target_cache_updates = std::collections::HashMap::new();
         let mut projects_with_files = 0;
         let mut targets_with_files = 0;
         let mut total_targets = 0;
-        let mut _total_files_found = 0;
-        let mut _total_files_missing = 0;
 
         for project in &projects {
             {
@@ -497,51 +558,64 @@ impl DatabaseContext {
                 project.id
             );
 
-            let (project_has_files, project_files_found, project_files_missing) =
-                self.check_project_files_with_details(project.id).await?;
-
-            if project_has_files {
-                projects_with_files += 1;
-            }
-            _total_files_found += project_files_found;
-            _total_files_missing += project_files_missing;
-            project_cache_updates.insert(project.id, project_has_files);
-
-            let project_targets = {
-                let conn = self.db();
-                let conn = conn
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("Database lock failed"))?;
-                let db = crate::db::Database::new(&conn);
-                db.get_targets_with_images(project.id).map_err(|e| {
-                    anyhow::anyhow!("Failed to get targets for project {}: {}", project.id, e)
+            // One query per project; per-target tallies are grouped in memory
+            // so the refresh never rescans the whole image table per target.
+            let images = {
+                let db = crate::db::Database::new(&refresh_conn);
+                db.get_images_by_project_id(project.id).map_err(|e| {
+                    anyhow::anyhow!("Failed to get images for project {}: {}", project.id, e)
                 })?
             };
 
-            {
-                let mut cache = self.file_check_cache.write().unwrap();
-                cache
-                    .refresh_progress
-                    .set_targets_info(project_targets.len());
+            // target_id -> (files found, files missing)
+            let mut per_target: std::collections::HashMap<i32, (usize, usize)> =
+                std::collections::HashMap::new();
+            for (image, _project_name, _target_name) in &images {
+                let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&image.metadata)
+                else {
+                    continue;
+                };
+                let Some(filename_path) = metadata["FileName"].as_str() else {
+                    continue;
+                };
+                let filename = filename_path
+                    .split(&['\\', '/'][..])
+                    .next_back()
+                    .unwrap_or(filename_path);
+                let entry = per_target.entry(image.target_id).or_insert((0, 0));
+                if directory_tree.find_file_first(filename).is_some() {
+                    entry.0 += 1;
+                } else {
+                    entry.1 += 1;
+                }
             }
 
-            total_targets += project_targets.len();
-            for (target, _, _, _) in project_targets {
-                let (target_has_files, target_files_found, target_files_missing) =
-                    self.check_target_files_with_details(target.id).await?;
+            let project_files_found: usize = per_target.values().map(|(f, _)| f).sum();
+            let project_files_missing: usize = per_target.values().map(|(_, m)| m).sum();
+            let project_has_files = project_files_found > 0;
+            if project_has_files {
+                projects_with_files += 1;
+            }
+            project_cache_updates.insert(project.id, project_has_files);
 
+            {
+                let mut cache = self.file_check_cache.write().unwrap();
+                cache.refresh_progress.set_targets_info(per_target.len());
+            }
+
+            total_targets += per_target.len();
+            for (target_id, (found, missing)) in per_target {
+                let target_has_files = found > 0;
                 if target_has_files {
                     targets_with_files += 1;
                 }
-                target_cache_updates.insert(target.id, target_has_files);
+                target_cache_updates.insert(target_id, target_has_files);
 
                 {
                     let mut cache = self.file_check_cache.write().unwrap();
-                    cache.refresh_progress.complete_target(
-                        target_has_files,
-                        target_files_found,
-                        target_files_missing,
-                    );
+                    cache
+                        .refresh_progress
+                        .complete_target(target_has_files, found, missing);
                 }
             }
 
@@ -640,109 +714,6 @@ impl DatabaseContext {
         } else {
             RefreshStatus::InProgressWait
         }
-    }
-
-    async fn check_project_files_with_details(
-        &self,
-        project_id: i32,
-    ) -> Result<(bool, usize, usize), anyhow::Error> {
-        use crate::db::Database;
-
-        let directory_tree = self.get_directory_tree().map_err(|e| {
-            tracing::error!("Failed to get directory tree cache: {}", e);
-            anyhow::anyhow!("Directory cache error: {}", e)
-        })?;
-
-        let all_images = {
-            let conn = self.db();
-            let conn = conn
-                .lock()
-                .map_err(|_| anyhow::anyhow!("Database lock error"))?;
-            let db = Database::new(&conn);
-            db.get_images_by_project_id(project_id)
-                .map_err(|e| anyhow::anyhow!("Database error: {}", e))?
-        };
-
-        if all_images.is_empty() {
-            return Ok((false, 0, 0));
-        }
-
-        let mut files_found = 0;
-        let mut files_missing = 0;
-        let mut has_any_files = false;
-
-        for (image, _project_name, _target_name) in &all_images {
-            if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&image.metadata) {
-                if let Some(filename_path) = metadata["FileName"].as_str() {
-                    let filename = filename_path
-                        .split(&['\\', '/'][..])
-                        .next_back()
-                        .unwrap_or(filename_path);
-
-                    if directory_tree.find_file_first(filename).is_some() {
-                        files_found += 1;
-                        has_any_files = true;
-                    } else {
-                        files_missing += 1;
-                    }
-                }
-            }
-        }
-
-        Ok((has_any_files, files_found, files_missing))
-    }
-
-    async fn check_target_files_with_details(
-        &self,
-        target_id: i32,
-    ) -> Result<(bool, usize, usize), anyhow::Error> {
-        use crate::db::Database;
-
-        let directory_tree = self.get_directory_tree().map_err(|e| {
-            tracing::error!("Failed to get directory tree cache: {}", e);
-            anyhow::anyhow!("Directory cache error: {}", e)
-        })?;
-
-        let all_images = {
-            let conn = self.db();
-            let conn = conn
-                .lock()
-                .map_err(|_| anyhow::anyhow!("Database lock error"))?;
-            let db = Database::new(&conn);
-            db.query_images(None, None, None, None)
-                .map_err(|e| anyhow::anyhow!("Database error: {}", e))?
-                .into_iter()
-                .filter(|(img, _, _)| img.target_id == target_id)
-                .collect::<Vec<_>>()
-        };
-
-        if all_images.is_empty() {
-            return Ok((false, 0, 0));
-        }
-
-        let mut files_found = 0;
-        let mut files_missing = 0;
-        let mut has_any_files = false;
-
-        for (image, _project_name, _target_name) in &all_images {
-            if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&image.metadata) {
-                if let Some(filename_path) = metadata["FileName"].as_str() {
-                    let filename = filename_path
-                        .split(&['\\', '/'][..])
-                        .next_back()
-                        .unwrap_or(filename_path);
-
-                    if directory_tree.find_file_first(filename).is_some() {
-                        files_found += 1;
-                        has_any_files = true;
-                    } else {
-                        files_missing += 1;
-                    }
-                }
-            }
-        }
-
-        Ok((has_any_files, files_found, files_missing))
     }
 
     pub fn get_cache_refresh_progress(&self) -> Option<RefreshProgress> {
@@ -871,6 +842,8 @@ impl DatabaseContext {
             reopen_lock: Arc::new(Mutex::new(())),
             file_check_cache: Arc::new(RwLock::new(FileCheckCache::new())),
             directory_tree_cache: Arc::new(RwLock::new(None)),
+            tree_build_lock: Arc::new(Mutex::new(())),
+            tree_rebuild_inflight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             refresh_mutex: Arc::new(TokioMutex::new(())),
             spatial_metrics: Arc::new(RwLock::new(Default::default())),
         }
@@ -892,6 +865,8 @@ impl Clone for DatabaseContext {
             reopen_lock: self.reopen_lock.clone(),
             file_check_cache: self.file_check_cache.clone(),
             directory_tree_cache: self.directory_tree_cache.clone(),
+            tree_build_lock: self.tree_build_lock.clone(),
+            tree_rebuild_inflight: self.tree_rebuild_inflight.clone(),
             refresh_mutex: self.refresh_mutex.clone(),
             spatial_metrics: self.spatial_metrics.clone(),
         }

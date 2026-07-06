@@ -374,3 +374,63 @@ test('detail view keeps the viewport anchored while swapping to original resolut
     await page.unroute('**/images/1/preview**');
   }
 });
+
+test('detail view shows the image after the 202-generating path reloads with a cache-buster', async ({
+  page,
+}) => {
+  // Force the first large-preview GET to answer 202 exactly like an uncached
+  // artifact, regardless of server cache state. The frontend must ride
+  // generating → status poll → ready → reload with a `v=` cache-buster — and
+  // then actually reveal the image. Regression test: the `v=` reload used to
+  // fail the "is this src current?" identity check (busted URL vs pristine
+  // URL) and the loaded image stayed at opacity 0 with no overlay.
+  let served202 = false;
+  await page.route('**/images/1/preview**', async (route) => {
+    const url = new URL(route.request().url());
+    if (
+      url.searchParams.get('size') !== 'large' ||
+      url.searchParams.has('v') ||
+      served202
+    ) {
+      await route.continue();
+      return;
+    }
+    served202 = true;
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      headers: { 'cache-control': 'no-store' },
+      body: JSON.stringify({
+        success: true,
+        data: { state: 'generating' },
+        error: null,
+      }),
+    });
+  });
+
+  try {
+    await page.goto(`/#/detail/1?db=${encodeURIComponent(dbId)}&project=1`);
+
+    const img = page.locator('.zoom-container img.detail-main-image').first();
+    // The post-ready reload carries the cache-buster and must fully load.
+    await page.waitForFunction(
+      (el) =>
+        el instanceof HTMLImageElement &&
+        el.complete &&
+        el.naturalWidth > 0 &&
+        new URL(el.currentSrc || el.src).searchParams.has('v'),
+      await img.elementHandle(),
+      { timeout: 60_000 }
+    );
+
+    await expect(img).not.toHaveClass(/detail-image-hidden/, {
+      timeout: 10_000,
+    });
+    await expect(img).toHaveCSS('opacity', '1');
+    await expect(page.locator('.image-loading-overlay')).toHaveCount(0, {
+      timeout: 10_000,
+    });
+  } finally {
+    await page.unroute('**/images/1/preview**');
+  }
+});
