@@ -11,7 +11,7 @@
 %global debug_package %{nil}
 
 Name:           psf-guard
-Version:        0.4.0
+Version:        0.4.1
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -115,6 +115,11 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Mon Jul 06 2026 Yann Ramin <github@theatr.us> - 0.4.1-1
+- Update to 0.4.1: detail-view image rendering fixes while navigating and
+  zooming, restored NSIS release uploads, release/CI reliability improvements,
+  README screenshot refreshes, and dependency updates
+
 * Sun Jul 05 2026 Yann Ramin <github@theatr.us> - 0.4.0-1
 - Update to 0.4.0: priority-aware worker pools, async on-demand preview
   generation, occlusion/cloud photometric screening improvements, two-database
