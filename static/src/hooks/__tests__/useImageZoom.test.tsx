@@ -190,6 +190,36 @@ describe('useImageZoom applyBitmapDimensions', () => {
   });
 });
 
+describe('useImageZoom notifyBitmapDimensions', () => {
+  it('recalibrates pan constraints to the loaded bitmap without touching the transform', () => {
+    const { result } = setup();
+
+    act(() => {
+      result.current.applyBitmapDimensions(2000, 1333, 'fit');
+    });
+    act(() => result.current.zoomIn());
+    act(() => result.current.zoomIn());
+    act(() => result.current.zoomIn());
+    const before = result.current.zoomState;
+
+    // Comparison-view preserved-zoom navigation: a LARGER bitmap loads but
+    // nothing adjusts the transform — only the calibration must move over.
+    act(() => {
+      result.current.notifyBitmapDimensions(6000, 3999);
+    });
+
+    expect(result.current.zoomState.scale).toBe(before.scale);
+    expect(result.current.zoomState.offsetX).toBe(before.offsetX);
+    expect(result.current.zoomState.offsetY).toBe(before.offsetY);
+
+    // Pans must now clamp against the 6000px bitmap's bounds; against the
+    // stale 2000px dims this pan would be clamped to ~(-1380, -846).
+    panBy(result, -2500, -1500);
+    expect(result.current.zoomState.offsetX).toBeLessThan(-2000);
+    expect(result.current.zoomState.offsetY).toBeLessThan(-1000);
+  });
+});
+
 describe('useImageZoom view-mode notifications', () => {
   it('reports user intent on zoom/pan and fit intent on zoomToFit', () => {
     const onViewModeChange = vi.fn();

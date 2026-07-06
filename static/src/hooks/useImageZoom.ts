@@ -44,6 +44,7 @@ export interface UseImageZoomReturn {
   setZoomState: React.Dispatch<React.SetStateAction<ZoomState>>;
   adjustZoomForNewImage: (oldWidth: number, oldHeight: number, newWidth: number, newHeight: number) => void;
   applyBitmapDimensions: (width: number, height: number, mode: 'fit' | 'preserve') => void;
+  notifyBitmapDimensions: (width: number, height: number) => void;
   setImageDimensions: (width: number, height: number, isOriginal: boolean) => void;
   getVisualScale: () => number;
   hasOverflow: boolean;
@@ -585,6 +586,18 @@ export function useImageZoom(options: UseImageZoomOptions = DEFAULT_BOUNDS): Use
     [zoomToFitDimensions, adjustZoomForNewImage]
   );
 
+  // The <img> now renders a bitmap of these dimensions — recalibrate pan
+  // constraints and fit fallbacks against it WITHOUT touching the transform.
+  // For callers that keep their own zoom-preservation logic (comparison view)
+  // and don't route loads through applyBitmapDimensions: since constrainPan
+  // prefers stateDimsRef over the live <img>, every loaded bitmap must be
+  // reported through one of these paths or constraints clamp against the
+  // previous image's dimensions.
+  const notifyBitmapDimensions = useCallback((width: number, height: number) => {
+    if (!width || !height) return;
+    stateDimsRef.current = { width, height };
+  }, []);
+
   // Initialize fit scale when component mounts or image changes
   useEffect(() => {
     const container = containerRef.current;
@@ -639,6 +652,7 @@ export function useImageZoom(options: UseImageZoomOptions = DEFAULT_BOUNDS): Use
     setZoomState,
     adjustZoomForNewImage,
     applyBitmapDimensions,
+    notifyBitmapDimensions,
     setImageDimensions,
     getVisualScale,
     hasOverflow,

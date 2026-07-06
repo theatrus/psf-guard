@@ -289,8 +289,12 @@ PNG (the pregen paths in `mod.rs` do the same now).
   upscaled past its native pixels, whichever size is showing. The zoom
   percentage is relative to the ORIGINAL's pixels (learned from metadata or
   the first original load; falls back to raw until known). ImageComparisonView
-  keeps its own working preservation logic — the hook API it uses is
-  unchanged, so don't "unify" it into this model without re-testing both.
+  keeps its own working preservation logic — don't "unify" it into this model
+  without re-testing both — but every loaded bitmap MUST be reported to the
+  hook (comparison calls `notifyBitmapDimensions` in its onLoads; detail goes
+  through `applyBitmapDimensions`): constraints follow `stateDimsRef`, not the
+  live `<img>`, so an unreported load leaves pans clamped against the previous
+  image's dimensions.
 
 ### Two-DB sync (2026-06)
 Lives in `src/commands/sync/` (`mod.rs` shared helpers + `grades.rs` + `pull.rs`).

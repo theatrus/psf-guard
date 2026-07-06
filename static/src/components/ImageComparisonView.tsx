@@ -550,6 +550,10 @@ export default function ImageComparisonView({
                       // Update image dimensions in zoom hook
                       const isShowingOriginal = useLeftOriginal || (leftOriginalLoaded && targetLeftZoomRef.current !== null && targetLeftZoomRef.current > 1.0);
                       leftZoom.setImageDimensions(newWidth, newHeight, isShowingOriginal);
+                      // Recalibrate pan constraints to the loaded bitmap even on
+                      // the paths below that adjust nothing (preserved zoom on a
+                      // new image) — constraints follow stateDims, not the <img>.
+                      leftZoom.notifyBitmapDimensions(newWidth, newHeight);
 
                       // Check if dimensions actually changed
                       const dimensionsChanged = oldWidth > 0 && (Math.abs(newWidth - oldWidth) > 10 || Math.abs(newHeight - oldHeight) > 10);
@@ -718,6 +722,10 @@ export default function ImageComparisonView({
                             // Update image dimensions in zoom hook
                             const isShowingOriginal = useRightOriginal || (rightOriginalLoaded && targetRightZoomRef.current !== null && targetRightZoomRef.current > 1.0);
                             rightZoom.setImageDimensions(newWidth, newHeight, isShowingOriginal);
+                            // Recalibrate pan constraints to the loaded bitmap
+                            // even when nothing below adjusts (preserved zoom on
+                            // a new image) — constraints follow stateDims.
+                            rightZoom.notifyBitmapDimensions(newWidth, newHeight);
 
                             // Check if dimensions actually changed
                             const dimensionsChanged = oldWidth > 0 && (Math.abs(newWidth - oldWidth) > 10 || Math.abs(newHeight - oldHeight) > 10);
