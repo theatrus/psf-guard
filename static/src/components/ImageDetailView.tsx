@@ -61,6 +61,7 @@ export default function ImageDetailView({
     minScale: 0.1,
     maxScale: 10.0,
   });
+  const resetZoomInitialization = zoom.resetInitialization;
 
   // Check if image has overflow (is larger than container)
   const hasOverflow = zoom.zoomState.scale > 1 || 
@@ -115,7 +116,7 @@ export default function ImageDetailView({
     currentNonPsfSources.includes(visibleMainSrc);
 
   // Fetch image details
-  const { data: image, isLoading, isFetching } = useQuery({
+  const { data: image, isLoading } = useQuery({
     queryKey: ['db', dbId, 'image', imageId],
     queryFn: () => apiClient.getImage(dbId, imageId),
     placeholderData: (previousData) => previousData, // Keep showing previous image while loading new one
@@ -255,7 +256,8 @@ export default function ImageDetailView({
     imageDimensionsRef.current = { width: 0, height: 0 };
     imageStateRef.current = 'large';
     setImageError(false);
-  }, [dbId, imageId, showStars, maxStars, mainImageKey, largeNonPsfSrc]);
+    resetZoomInitialization();
+  }, [dbId, imageId, showStars, maxStars, mainImageKey, largeNonPsfSrc, resetZoomInitialization]);
 
   // Show loading state only on initial load
   if (!image && isLoading) {
@@ -389,6 +391,8 @@ export default function ImageDetailView({
                           zoom.adjustZoomForNewImage(oldWidth, oldHeight, newWidth, newHeight);
                         }
                         imageStateRef.current = 'original';
+                      } else if (oldWidth === 0) {
+                        zoom.zoomToFitDimensions(newWidth, newHeight);
                       }
 
                       imageDimensionsRef.current = { width: newWidth, height: newHeight };
@@ -406,7 +410,6 @@ export default function ImageDetailView({
                   key={`${imageId}-${showStars ? 'stars' : showPsf ? 'psf' : 'normal'}`}
                   className={[
                     'detail-main-image',
-                    isFetching ? 'loading' : null,
                     hideMainImage ? 'detail-image-hidden' : null,
                   ].filter(Boolean).join(' ')}
                   src={
@@ -433,9 +436,6 @@ export default function ImageDetailView({
                         : undefined
                   }
                   onLoad={(e) => {
-                  // Remove loading class when image loads
-                  e.currentTarget.classList.remove('loading');
-
                   // Clear PSF loading state / mark the async image ready.
                   if (showPsf) {
                     setPsfImageLoading(false);
@@ -464,10 +464,10 @@ export default function ImageDetailView({
                       // Adjust zoom to maintain visual continuity
                       zoom.adjustZoomForNewImage(oldWidth, oldHeight, newWidth, newHeight);
                     }
-                  imageStateRef.current = 'original';
+                    imageStateRef.current = 'original';
                   } else if (imageDimensionsRef.current.width === 0) {
                     // Queue fit before revealing the newly loaded image.
-                    zoom.zoomToFit();
+                    zoom.zoomToFitDimensions(newWidth, newHeight);
                   }
                   
                   // Update stored dimensions

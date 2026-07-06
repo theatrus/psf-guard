@@ -1164,10 +1164,6 @@
   transform-origin: 0 0 !important;
 }
 
-.detail-image img.loading {
-  opacity: 0.5;
-}
-
 .detail-image-hidden {
   opacity: 0 !important;
   pointer-events: none;

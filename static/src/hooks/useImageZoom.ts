@@ -24,6 +24,7 @@ export interface UseImageZoomReturn {
   zoomIn: () => void;
   zoomOut: () => void;
   zoomToFit: () => void;
+  zoomToFitDimensions: (width: number, height: number) => void;
   zoomTo100: () => void;
   resetZoom: () => void;
   getZoomPercentage: () => number;
@@ -65,6 +66,24 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
   const originalDimensionsRef = useRef<{ width: number; height: number } | null>(null);
   const currentImageIsOriginalRef = useRef(false);
 
+  const calculateFitScaleForDimensions = useCallback((width: number, height: number) => {
+    const container = containerRef.current;
+
+    if (!container || !width || !height) {
+      return 1;
+    }
+
+    const containerRect = container.getBoundingClientRect();
+    const containerWidth = containerRect.width - 20; // Minimal padding
+    const containerHeight = containerRect.height - 20;
+
+    const scaleX = containerWidth / width;
+    const scaleY = containerHeight / height;
+    
+    // Use the smaller scale to ensure the image fits entirely, but allow scaling up for small images
+    return Math.min(scaleX, scaleY);
+  }, []);
+
   // Calculate the fit-to-screen scale when image loads
   const calculateFitScale = useCallback(() => {
     const container = containerRef.current;
@@ -74,54 +93,44 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
       return 1;
     }
 
-    const containerRect = container.getBoundingClientRect();
-    const containerWidth = containerRect.width - 20; // Minimal padding
-    const containerHeight = containerRect.height - 20;
-    
-    const scaleX = containerWidth / image.naturalWidth;
-    const scaleY = containerHeight / image.naturalHeight;
-    
-    // Use the smaller scale to ensure the image fits entirely, but allow scaling up for small images
-    return Math.min(scaleX, scaleY);
-  }, []);
+    return calculateFitScaleForDimensions(image.naturalWidth, image.naturalHeight);
+  }, [calculateFitScaleForDimensions]);
 
-  // Reset to fit-to-screen when image changes
-  const zoomToFit = useCallback(() => {
+  const zoomToFitDimensions = useCallback((width: number, height: number) => {
     const container = containerRef.current;
-    const image = imageRef.current;
-    
-    if (!container || !image || !image.naturalWidth || !image.naturalHeight) {
+
+    if (!container || !width || !height) {
       setZoomState({
         scale: 1,
         offsetX: 0,
         offsetY: 0,
+        visualScale: 1,
       });
       return;
     }
 
-    const fitScale = calculateFitScale();
+    const fitScale = calculateFitScaleForDimensions(width, height);
     initialFitScaleRef.current = fitScale;
-    
+
     // Calculate the centered position for the image
     const containerRect = container.getBoundingClientRect();
     const containerWidth = containerRect.width;
     const containerHeight = containerRect.height;
-    
-    const scaledImageWidth = image.naturalWidth * fitScale;
-    const scaledImageHeight = image.naturalHeight * fitScale;
-    
+
+    const scaledImageWidth = width * fitScale;
+    const scaledImageHeight = height * fitScale;
+
     // Calculate offsets to center the image in the container
     const offsetX = (containerWidth - scaledImageWidth) / 2;
     const offsetY = (containerHeight - scaledImageHeight) / 2;
-    
+
     // Calculate visual scale based on original dimensions if available
     let visualScale = fitScale;
     if (originalDimensionsRef.current && !currentImageIsOriginalRef.current) {
-      const currentWidth = image.naturalWidth;
-      const ratio = currentWidth / originalDimensionsRef.current.width;
+      const ratio = width / originalDimensionsRef.current.width;
       visualScale = fitScale * ratio;
     }
-    
+
     setZoomState({
       scale: fitScale,
       offsetX: offsetX,
@@ -131,7 +140,19 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     
     // Mark as initialized when we manually fit
     hasInitializedRef.current = true;
-  }, [calculateFitScale]);
+  }, [calculateFitScaleForDimensions]);
+
+  // Reset to fit-to-screen when image changes
+  const zoomToFit = useCallback(() => {
+    const image = imageRef.current;
+
+    if (!image || !image.naturalWidth || !image.naturalHeight) {
+      zoomToFitDimensions(0, 0);
+      return;
+    }
+
+    zoomToFitDimensions(image.naturalWidth, image.naturalHeight);
+  }, [zoomToFitDimensions]);
 
   // Zoom to 100% (actual size)
   const zoomTo100 = useCallback(() => {
@@ -520,6 +541,7 @@ export function useImageZoom(bounds: ZoomBounds = DEFAULT_BOUNDS): UseImageZoomR
     zoomIn,
     zoomOut,
     zoomToFit,
+    zoomToFitDimensions,
     zoomTo100,
     resetZoom,
     getZoomPercentage,

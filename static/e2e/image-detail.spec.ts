@@ -47,6 +47,39 @@ async function readDetailViewportAnchor(page: Page) {
   });
 }
 
+async function readDetailFitState(page: Page) {
+  return page.locator('.zoom-container img.detail-main-image').first().evaluate((img) => {
+    const container = img.closest('.zoom-container');
+    if (!(container instanceof HTMLElement)) {
+      throw new Error('Missing zoom container');
+    }
+
+    const image = img as HTMLImageElement;
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(image).transform);
+    const containerRect = container.getBoundingClientRect();
+    const expectedFitScale = Math.min(
+      (containerRect.width - 20) / image.naturalWidth,
+      (containerRect.height - 20) / image.naturalHeight
+    );
+    const renderedCenterX = matrix.e + (image.naturalWidth * matrix.a) / 2;
+    const renderedCenterY = matrix.f + (image.naturalHeight * matrix.d) / 2;
+
+    return {
+      className: image.className,
+      currentSrc: image.currentSrc || image.src,
+      expectedFitScale,
+      naturalHeight: image.naturalHeight,
+      naturalWidth: image.naturalWidth,
+      opacity: getComputedStyle(image).opacity,
+      renderedCenterX,
+      renderedCenterY,
+      scale: matrix.a || 1,
+      viewportCenterX: containerRect.width / 2,
+      viewportCenterY: containerRect.height / 2,
+    };
+  });
+}
+
 test('preview images load with per-DB-nested URLs and render pixels', async ({
   page,
 }) => {
@@ -225,6 +258,16 @@ test('detail view hides the pending image while arrow-key navigation generates i
       timeout: 10_000,
     });
     await expect(img).not.toHaveClass(/detail-image-hidden/);
+    await expect(img).toHaveCSS('opacity', '1', { timeout: 10_000 });
+
+    const fit = await readDetailFitState(page);
+    expect(fit.currentSrc).toContain('/images/2/preview');
+    expect(fit.className).not.toContain('detail-image-hidden');
+    expect(fit.opacity).toBe('1');
+    expect(fit.naturalWidth).toBeGreaterThan(0);
+    expect(Math.abs(fit.scale - fit.expectedFitScale)).toBeLessThan(0.05);
+    expect(Math.abs(fit.renderedCenterX - fit.viewportCenterX)).toBeLessThan(2);
+    expect(Math.abs(fit.renderedCenterY - fit.viewportCenterY)).toBeLessThan(2);
   } finally {
     releaseNextImageResponse();
     await page.unroute('**/images/2/preview**');
