@@ -346,20 +346,13 @@ fn parse_meminfo_kb(rest: &str) -> Option<u64> {
 /// data, so a scan can size its worker pool to the sensor. `None` if the file
 /// or the axes can't be read.
 pub fn probe_frame_pixels(path: &Path) -> Option<usize> {
-    use fitrs::Fits;
-
-    let fits = Fits::open(path).ok()?;
-    let hdu = fits.get(0)?;
-    // fitrs Debug-renders header values as `IntegerNumber(9576)` etc. Same
-    // pattern the rest of the codebase uses to pull numbers from headers.
-    let re =
-        regex::Regex::new(r"(?:FloatingPoint|Integer|RealFloatingNumber|IntegerNumber)\(([^)]+)\)")
-            .ok()?;
+    let headers = seiza_fits::read_header(path).ok()?;
     let axis = |key: &str| -> Option<usize> {
-        let v = hdu.value(key)?;
-        let s = format!("{:?}", v);
-        let caps = re.captures(&s)?;
-        caps[1].trim().parse::<f64>().ok().map(|n| n as usize)
+        headers
+            .iter()
+            .find(|(k, _)| k == key)
+            .and_then(|(_, v)| v.as_i64())
+            .and_then(|n| usize::try_from(n).ok())
     };
     let w = axis("NAXIS1")?;
     let h = axis("NAXIS2")?;

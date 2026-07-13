@@ -1,5 +1,4 @@
 use anyhow::Result;
-use bumpalo::Bump;
 use std::path::Path;
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -34,195 +33,99 @@ pub struct FitsImage {
 impl FitsImage {
     /// Extract temperature from FITS headers
     pub fn extract_temperature(path: &Path) -> Option<f64> {
-        use fitrs::Fits;
-
-        if let Ok(fits) = Fits::open(path) {
-            if let Some(hdu) = fits.get(0) {
-                // Try common temperature header keywords
-                let temp_keywords = [
-                    "CCD-TEMP", "TEMP", "SET-TEMP", "CCD_TEMP", "TEMPERAT", "CCDTEMP",
-                ];
-
-                // Compile regex once outside the loop
-                let number_regex =
-                    regex::Regex::new(r"(?:FloatingPoint|Integer|RealFloatingNumber)\(([^)]+)\)")
-                        .unwrap();
-
-                for keyword in &temp_keywords {
-                    if let Some(value) = hdu.value(keyword) {
-                        // Parse the value as a number
-                        let value_str = format!("{:?}", value);
-                        // Extract numeric value from debug string like "RealFloatingNumber(-10.1)" or "Integer(-10)"
-                        if let Some(captures) = number_regex.captures(&value_str) {
-                            if let Ok(temp) = captures[1].parse::<f64>() {
-                                return Some(temp);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        None
+        let headers = seiza_fits::read_header(path).ok()?;
+        let temp_keywords = [
+            "CCD-TEMP", "TEMP", "SET-TEMP", "CCD_TEMP", "TEMPERAT", "CCDTEMP",
+        ];
+        temp_keywords.iter().find_map(|keyword| {
+            headers
+                .iter()
+                .find(|(k, _)| k == keyword)
+                .and_then(|(_, v)| v.as_f64())
+        })
     }
 
     /// Extract camera model from FITS headers
     pub fn extract_camera_model(path: &Path) -> Option<String> {
-        use fitrs::Fits;
-
-        if let Ok(fits) = Fits::open(path) {
-            if let Some(hdu) = fits.get(0) {
-                // Try common camera/instrument header keywords
-                let camera_keywords = ["INSTRUME", "CAMERA", "DETECTOR", "CCD_NAME", "CCDNAME"];
-
-                // Compile regex once outside the loop - handle both CharacterString and String formats
-                let string_regex =
-                    regex::Regex::new(r#"(?:CharacterString|String)\("([^"]+)"\)"#).unwrap();
-
-                for keyword in &camera_keywords {
-                    if let Some(value) = hdu.value(keyword) {
-                        // Extract string value from debug format
-                        let value_str = format!("{:?}", value);
-                        // Extract string from debug format like "CharacterString(\"ZWO ASI294MC Pro\")"
-                        if let Some(captures) = string_regex.captures(&value_str) {
-                            return Some(captures[1].to_string());
-                        }
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    /// Load FITS image data from file using fitrs
-    pub fn from_file(path: &Path) -> Result<Self> {
-        use fitrs::Fits;
-
-        let fits = Fits::open(path)
-            .map_err(|e| anyhow::anyhow!("Failed to open FITS file {}: {}", path.display(), e))?;
-
-        // Get the primary HDU
-        let hdu = fits
-            .get(0)
-            .ok_or_else(|| anyhow::anyhow!("No HDU found in FITS file"))?;
-
-        // Read the image data using pattern matching
-        let (data_f64, width, height) = match hdu.read_data() {
-            fitrs::FitsData::FloatingPoint32(array) => {
-                let shape = &array.shape;
-                if shape.len() >= 2 {
-                    let width = shape[0];
-                    let height = shape[1];
-                    let data: Vec<f64> = array.data.into_iter().map(|x| x as f64).collect();
-                    (data, width, height)
-                } else {
-                    return Err(anyhow::anyhow!("FITS file does not contain 2D image data"));
-                }
-            }
-            fitrs::FitsData::FloatingPoint64(array) => {
-                let shape = &array.shape;
-                if shape.len() >= 2 {
-                    let width = shape[0];
-                    let height = shape[1];
-                    (array.data, width, height)
-                } else {
-                    return Err(anyhow::anyhow!("FITS file does not contain 2D image data"));
-                }
-            }
-            fitrs::FitsData::IntegersI32(array) => {
-                let shape = &array.shape;
-                if shape.len() >= 2 {
-                    let width = shape[0];
-                    let height = shape[1];
-                    let data: Vec<f64> = array
-                        .data
-                        .into_iter()
-                        .map(|opt| opt.unwrap_or(0) as f64)
-                        .collect();
-                    (data, width, height)
-                } else {
-                    return Err(anyhow::anyhow!("FITS file does not contain 2D image data"));
-                }
-            }
-            fitrs::FitsData::IntegersU32(array) => {
-                let shape = &array.shape;
-                if shape.len() >= 2 {
-                    let width = shape[0];
-                    let height = shape[1];
-                    let data: Vec<f64> = array
-                        .data
-                        .into_iter()
-                        .map(|opt| opt.unwrap_or(0) as f64)
-                        .collect();
-                    (data, width, height)
-                } else {
-                    return Err(anyhow::anyhow!("FITS file does not contain 2D image data"));
-                }
-            }
-            _ => {
-                return Err(anyhow::anyhow!("Unsupported FITS data type"));
-            }
-        };
-
-        // Get total pixels
-        let total_pixels = data_f64.len();
-        if total_pixels == 0 {
-            return Err(anyhow::anyhow!("FITS file contains no image data"));
-        }
-
-        // Verify dimensions match data length
-        if width * height != total_pixels {
-            return Err(anyhow::anyhow!(
-                "Image dimensions {}x{} don't match data length {}",
-                width,
-                height,
-                total_pixels
-            ));
-        }
-
-        // Convert f64 data to u16, scaling to 0-65535 range
-        let min = data_f64.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-        let max = data_f64.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-
-        let scale = if max > min {
-            65535.0 / (max - min)
-        } else {
-            1.0
-        };
-        let data_u16 = if max > min {
-            data_f64
-                .into_iter()
-                .map(|v| ((v - min) * scale).clamp(0.0, 65535.0) as u16)
-                .collect()
-        } else {
-            vec![0u16; total_pixels]
-        };
-
-        Ok(FitsImage {
-            width,
-            height,
-            data: data_u16,
-            raw_min: min,
-            raw_scale: scale,
-            bzero: Self::extract_bzero(path).unwrap_or(0.0),
+        let headers = seiza_fits::read_header(path).ok()?;
+        let camera_keywords = ["INSTRUME", "CAMERA", "DETECTOR", "CCD_NAME", "CCDNAME"];
+        camera_keywords.iter().find_map(|keyword| {
+            headers
+                .iter()
+                .find(|(k, _)| k == keyword)
+                .and_then(|(_, v)| v.as_str())
+                .map(str::to_string)
         })
     }
 
-    /// Extract the BZERO offset from the FITS header (commonly 32768 for
-    /// 16-bit unsigned camera data stored as signed integers).
-    fn extract_bzero(path: &Path) -> Option<f64> {
-        use fitrs::Fits;
+    /// Load FITS image data from file.
+    ///
+    /// Raw one-shot-color mosaics (a `BAYERPAT` header) are debayered and
+    /// collapsed to luminance before any measurement: star metrics (HFR,
+    /// FWHM, eccentricity) on a bare color filter array are distorted by
+    /// the per-channel sampling, and N.I.N.A. itself measures the
+    /// debayered image, so this keeps numbers comparable.
+    pub fn from_file(path: &Path) -> Result<Self> {
+        let fits = seiza_fits::FitsImage::open(path)
+            .map_err(|e| anyhow::anyhow!("Failed to open FITS file {}: {e:?}", path.display()))?;
 
-        let fits = Fits::open(path).ok()?;
-        let hdu = fits.get(0)?;
-        let value = hdu.value("BZERO")?;
-        let value_str = format!("{:?}", value);
-        let number_regex = regex::Regex::new(
-            r"(?:FloatingPoint|Integer|RealFloatingNumber|IntegerNumber)\(([^)]+)\)",
-        )
-        .unwrap();
-        number_regex
-            .captures(&value_str)
-            .and_then(|c| c[1].parse::<f64>().ok())
+        if let Some(rgb) = fits.debayer() {
+            // Luminance of the debayered mosaic, already in physical ADU
+            return Ok(FitsImage {
+                width: rgb.width,
+                height: rgb.height,
+                data: rgb.to_luma_u16(),
+                raw_min: 0.0,
+                raw_scale: 1.0,
+                bzero: 0.0,
+            });
+        }
+
+        let (width, height) = (fits.width, fits.height);
+        match &fits.pixels {
+            // Integer camera data arrives BZERO-folded as physical ADU
+            seiza_fits::Pixels::U16(_) | seiza_fits::Pixels::U8(_) => Ok(FitsImage {
+                width,
+                height,
+                data: fits.to_u16().into_owned(),
+                raw_min: 0.0,
+                raw_scale: 1.0,
+                bzero: 0.0,
+            }),
+            // Float and wide-integer data: min-max rescale into u16 and
+            // keep the mapping so values can go back to physical units
+            _ => {
+                let data_f64: Vec<f64> = match &fits.pixels {
+                    seiza_fits::Pixels::I32(data) => data.iter().map(|&v| v as f64).collect(),
+                    seiza_fits::Pixels::F32(data) => data.iter().map(|&v| v as f64).collect(),
+                    seiza_fits::Pixels::F64(data) => data.clone(),
+                    _ => unreachable!(),
+                };
+                let min = data_f64.iter().copied().fold(f64::INFINITY, f64::min);
+                let max = data_f64.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let scale = if max > min {
+                    65535.0 / (max - min)
+                } else {
+                    1.0
+                };
+                let data = if max > min {
+                    data_f64
+                        .into_iter()
+                        .map(|v| ((v - min) * scale).clamp(0.0, 65535.0) as u16)
+                        .collect()
+                } else {
+                    vec![0u16; width * height]
+                };
+                Ok(FitsImage {
+                    width,
+                    height,
+                    data,
+                    raw_min: min,
+                    raw_scale: scale,
+                    bzero: 0.0,
+                })
+            }
+        }
     }
 
     /// Map a value in stored (rescaled u16) units back to physical ADU.
@@ -239,53 +142,21 @@ impl FitsImage {
         self.calculate_statistics_with_mad()
     }
 
-    /// Calculate statistics including MAD
+    /// Calculate statistics including MAD (single histogram pass)
     pub fn calculate_statistics_with_mad(&self) -> ImageStatistics {
-        // Use arena for temporary allocation
-        let arena = Bump::new();
-        let mut sorted_data = bumpalo::vec![in &arena];
-        sorted_data.extend_from_slice(&self.data);
-        sorted_data.sort();
-
-        let sum: u64 = self.data.iter().map(|&x| x as u64).sum();
-        let mean = sum as f64 / self.data.len() as f64;
-
-        let median = if self.data.len().is_multiple_of(2) {
-            let mid = self.data.len() / 2;
-            (sorted_data[mid - 1] as f64 + sorted_data[mid] as f64) / 2.0
-        } else {
-            sorted_data[self.data.len() / 2] as f64
-        };
-
-        let variance: f64 = self
-            .data
-            .iter()
-            .map(|&x| {
-                let diff = x as f64 - mean;
-                diff * diff
-            })
-            .sum::<f64>()
-            / self.data.len() as f64;
-        let std_dev = variance.sqrt();
-
-        let min = *sorted_data.first().unwrap_or(&0) as f64;
-        let max = *sorted_data.last().unwrap_or(&65535) as f64;
-
-        // Calculate MAD using N.I.N.A.'s histogram-based approach
-        let mad = self.calculate_mad_histogram(median);
-
+        let stats = seiza_fits::statistics_u16(&self.data);
         ImageStatistics {
             width: self.width,
             height: self.height,
-            mean,
-            median,
-            std_dev,
-            min,
-            max,
+            mean: stats.mean,
+            median: stats.median as f64,
+            std_dev: stats.std_dev,
+            min: stats.min as f64,
+            max: stats.max as f64,
             star_count: None,
             hfr: None,
             fwhm: None,
-            mad: Some(mad),
+            mad: Some(stats.mad),
         }
     }
 
@@ -307,67 +178,6 @@ impl FitsImage {
             hfr: None,
             fwhm: None,
             mad: stats.mad,
-        }
-    }
-
-    /// Calculate MAD using N.I.N.A.'s histogram-based approach
-    fn calculate_mad_histogram(&self, median: f64) -> f64 {
-        // Build histogram of pixel values
-        let mut pixel_counts = vec![0u32; 65536];
-        for &val in self.data.iter() {
-            pixel_counts[val as usize] += 1;
-        }
-
-        // Find median values (handling even vs odd length arrays)
-        let median1 = median.floor() as i32;
-        let median2 = median.ceil() as i32;
-
-        // Calculate MAD using N.I.N.A.'s algorithm
-        // MAD = median(|x_i - median|)
-        // Since we're looking for the median of absolute deviations,
-        // we start from the median and step outward symmetrically
-        let mut occurrences = 0u32;
-        let medianlength = self.data.len() as f64 / 2.0;
-        let mut idx_down = median1;
-        let mut idx_up = median2;
-
-        loop {
-            // Count pixels at current deviation distance
-            if idx_down >= 0 && idx_down != idx_up {
-                occurrences += pixel_counts[idx_down as usize] + pixel_counts[idx_up as usize];
-            } else if idx_up < 65536 {
-                occurrences += pixel_counts[idx_up as usize];
-            }
-
-            // Check if we've found the median of deviations
-            if occurrences as f64 > medianlength {
-                // The median absolute deviation is the current distance from median
-                return (idx_up as f64 - median).abs();
-            }
-
-            // Step outward
-            idx_down -= 1;
-            idx_up += 1;
-
-            // Safety check
-            if idx_down < 0 && idx_up >= 65536 {
-                break;
-            }
-        }
-
-        // Fallback to simple MAD calculation
-        let mut deviations: Vec<f64> = self
-            .data
-            .iter()
-            .map(|&x| (x as f64 - median).abs())
-            .collect();
-        deviations.sort_by(|a, b| a.partial_cmp(b).unwrap());
-
-        if deviations.len().is_multiple_of(2) {
-            let mid = deviations.len() / 2;
-            (deviations[mid - 1] + deviations[mid]) / 2.0
-        } else {
-            deviations[deviations.len() / 2]
         }
     }
 }
