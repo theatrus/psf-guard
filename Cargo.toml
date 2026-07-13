@@ -1,6 +1,6 @@
 [package]
 name = "psf-guard"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 # With two bins (psf-guard = GUI/CLI smart binary, psf-guard-cli = console-only
 # CLI), name the default so `cargo run` and tauri-cli pick the app binary, not
