@@ -619,49 +619,22 @@ pub(crate) struct FrameHeaders {
 
 /// Extract filter, exposure and observation time from the FITS header.
 pub(crate) fn extract_headers(path: &Path) -> FrameHeaders {
-    use fitrs::Fits;
-
     let mut out = FrameHeaders::default();
-    let Ok(fits) = Fits::open(path) else {
-        return out;
-    };
-    let Some(hdu) = fits.get(0) else {
+    let Ok(headers) = seiza_fits::read_header(path) else {
         return out;
     };
 
-    let string_regex = regex::Regex::new(r#"CharacterString\("([^"]*)"\)"#).unwrap();
-    let number_regex =
-        regex::Regex::new(r"(?:FloatingPoint|RealFloatingNumber|IntegerNumber|Integer)\(([^)]+)\)")
-            .unwrap();
-
-    let get_string = |keys: &[&str]| -> Option<String> {
-        for key in keys {
-            if let Some(v) = hdu.value(key) {
-                let s = format!("{:?}", v);
-                if let Some(c) = string_regex.captures(&s) {
-                    return Some(c[1].trim().to_string());
-                }
-            }
-        }
-        None
+    let find = |keys: &[&str]| -> Option<&seiza_fits::HeaderValue> {
+        keys.iter()
+            .find_map(|key| headers.iter().find(|(k, _)| k == key).map(|(_, v)| v))
     };
-    let get_number = |keys: &[&str]| -> Option<f64> {
-        for key in keys {
-            if let Some(v) = hdu.value(key) {
-                let s = format!("{:?}", v);
-                if let Some(c) = number_regex.captures(&s) {
-                    if let Ok(n) = c[1].parse::<f64>() {
-                        return Some(n);
-                    }
-                }
-            }
-        }
-        None
-    };
-
-    out.filter = get_string(&["FILTER", "FILTERNAME"]);
-    out.exposure_s = get_number(&["EXPTIME", "EXPOSURE"]);
-    out.timestamp = get_string(&["DATE-OBS", "DATE-LOC"]).and_then(|s| parse_fits_datetime(&s));
+    out.filter = find(&["FILTER", "FILTERNAME"])
+        .and_then(|v| v.as_str())
+        .map(|v| v.trim().to_string());
+    out.exposure_s = find(&["EXPTIME", "EXPOSURE"]).and_then(|v| v.as_f64());
+    out.timestamp = find(&["DATE-OBS", "DATE-LOC"])
+        .and_then(|v| v.as_str())
+        .and_then(parse_fits_datetime);
     out
 }
 

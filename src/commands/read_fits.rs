@@ -1,6 +1,5 @@
 use crate::directory_tree::DirectoryTree;
 use anyhow::Result;
-use fitrs::Fits;
 use serde_json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -150,53 +149,9 @@ pub struct ImageInfo {
     pub dimensions: Vec<usize>,
 }
 
-/// Extract image info from a FITS data array
-fn extract_image_info_from_array<T>(
-    array: &fitrs::FitsDataArray<T>,
-    hdu: &fitrs::Hdu,
-) -> Option<ImageInfo> {
-    let shape = &array.shape;
-    if shape.len() >= 2 {
-        let width = shape[0];
-        let height = shape[1];
-
-        // Try to get bit depth from header
-        let bit_depth = hdu
-            .value("BITPIX")
-            .and_then(|v| {
-                let s = format!("{:?}", v);
-                // Extract number from debug string like "Integer(16)" or "CharacterString(\"16\")"
-                if let Some(start) = s.find(|c: char| c.is_ascii_digit() || c == '-') {
-                    let mut end = start;
-                    while end < s.len() {
-                        let ch = s.chars().nth(end).unwrap();
-                        if ch.is_ascii_digit() || (end == start && ch == '-') {
-                            end += 1;
-                        } else {
-                            break;
-                        }
-                    }
-                    s[start..end].parse().ok()
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(0);
-
-        Some(ImageInfo {
-            width,
-            height,
-            bit_depth,
-            dimensions: shape.clone(),
-        })
-    } else {
-        None
-    }
-}
-
-/// Read metadata from a FITS file using fitrs
+/// Read metadata from a FITS file
 pub fn read_fits_metadata(path: &Path) -> Result<FitsMetadata> {
-    let fits = Fits::open(path)
+    let fits = seiza_fits::FitsImage::open(path)
         .map_err(|e| anyhow::anyhow!("Failed to open FITS file {}: {:?}", path.display(), e))?;
 
     let filename = path
@@ -205,74 +160,35 @@ pub fn read_fits_metadata(path: &Path) -> Result<FitsMetadata> {
         .unwrap_or("unknown")
         .to_string();
 
-    // Read primary HDU
-    let hdu = fits
-        .get(0)
-        .ok_or_else(|| anyhow::anyhow!("No HDU found in FITS file"))?;
-
-    // Extract headers as key-value pairs
+    // Every header card, rendered as clean value text
     let mut primary_header = HashMap::new();
-
-    // Common FITS header keywords to extract
-    let keywords = vec![
-        "SIMPLE",
-        "BITPIX",
-        "NAXIS",
-        "NAXIS1",
-        "NAXIS2",
-        "EXTEND",
-        "OBJECT",
-        "DATE-OBS",
-        "EXPTIME",
-        "FILTER",
-        "TELESCOP",
-        "INSTRUME",
-        "OBSERVER",
-        "GAIN",
-        "CCD-TEMP",
-        "XBINNING",
-        "YBINNING",
-        "FOCALLEN",
-        "FOCUSPOS",
-        "OBJCTRA",
-        "OBJCTDEC",
-        "RA",
-        "DEC",
-        "AIRMASS",
-        "SWCREATE",
-        "HFR",
-        "STARS",
-        "STARSFWHM",
-        "EXTNAME",
-        "OBJNAME",
-        "TARGET",
-        "EXPOSURE",
-        "FILTERNAME",
-        "STARHFR",
-        "MEANHFR",
-        "STARCOUNT",
-        "NSTARS",
-        "FWHM",
-        "MEANFWHM",
-    ];
-
-    // Try to read each keyword from the header
-    for keyword in keywords {
-        if let Some(value) = hdu.value(keyword) {
-            // Convert HeaderValue to string using Debug formatting for now
-            let value_str = format!("{:?}", value);
-            primary_header.insert(keyword.to_string(), value_str);
-        }
+    for (keyword, value) in &fits.headers {
+        let text = match value {
+            seiza_fits::HeaderValue::Logical(v) => v.to_string(),
+            seiza_fits::HeaderValue::Integer(v) => v.to_string(),
+            seiza_fits::HeaderValue::Float(v) => v.to_string(),
+            seiza_fits::HeaderValue::String(v) => v.clone(),
+            seiza_fits::HeaderValue::Raw(v) => v.clone(),
+        };
+        primary_header.insert(keyword.clone(), text);
     }
 
-    // Extract image info from the actual data
-    let image_info = match hdu.read_data() {
-        fitrs::FitsData::FloatingPoint32(array) => extract_image_info_from_array(&array, &hdu),
-        fitrs::FitsData::FloatingPoint64(array) => extract_image_info_from_array(&array, &hdu),
-        fitrs::FitsData::IntegersI32(array) => extract_image_info_from_array(&array, &hdu),
-        fitrs::FitsData::IntegersU32(array) => extract_image_info_from_array(&array, &hdu),
-        _ => None,
-    };
+    let bit_depth = fits
+        .headers
+        .iter()
+        .find(|(k, _)| k == "BITPIX")
+        .and_then(|(_, v)| v.as_i64())
+        .unwrap_or(0) as i32;
+    let mut dimensions = vec![fits.width, fits.height];
+    if fits.planes > 1 {
+        dimensions.push(fits.planes);
+    }
+    let image_info = Some(ImageInfo {
+        width: fits.width,
+        height: fits.height,
+        bit_depth,
+        dimensions,
+    });
 
     let headers = vec![HeaderInfo {
         hdu_index: 0,

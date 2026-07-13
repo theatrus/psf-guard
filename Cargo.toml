@@ -31,7 +31,7 @@ anyhow = "1.0"
 chrono = "0.4"
 regex = "1.12"
 byteorder = "1.5"
-fitrs = "0.5"
+seiza-fits = "0.1.3"
 bumpalo = { version = "3.20", features = ["collections"] }
 image = "0.25"
 imageproc = "0.27"

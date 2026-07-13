@@ -69,17 +69,27 @@ fn get_stretch_map_with_bit_depth(
             midtones_transfer_function(target_histogram_median_pct, normalized_median - shadows);
         let highlights = 1.0;
 
-        eprintln!("Debug MTF: normalized_median={:.4}, normalized_mad={:.4}, shadows={:.4}, midtones={:.4}", 
-                  normalized_median, normalized_mad, shadows, midtones);
-        eprintln!(
+        tracing::debug!(
+            "MTF: normalized_median={:.4}, normalized_mad={:.4}, shadows={:.4}, midtones={:.4}",
+            normalized_median,
+            normalized_mad,
+            shadows,
+            midtones
+        );
+        tracing::debug!(
             "  shadows_clipping={}, scale_factor={}",
-            shadows_clipping, scale_factor
+            shadows_clipping,
+            scale_factor
         );
-        eprintln!(
+        tracing::debug!(
             "  shadows calculation: {} + {} * {} * {} = {}",
-            normalized_median, shadows_clipping, normalized_mad, scale_factor, shadows
+            normalized_median,
+            shadows_clipping,
+            normalized_mad,
+            scale_factor,
+            shadows
         );
-        eprintln!(
+        tracing::debug!(
             "  midtones input: {} - {} = {}",
             normalized_median,
             shadows,
@@ -99,9 +109,13 @@ fn get_stretch_map_with_bit_depth(
 
         // Debug first few values
         if i < 5 || i == 398 || i == 204 || i == 340 {
-            eprintln!(
+            tracing::debug!(
                 "  Stretch map[{}]: normalized={:.6}, input={:.6}, stretched={:.6} -> {}",
-                i, value, input_value, stretched, map[i]
+                i,
+                value,
+                input_value,
+                stretched,
+                map[i]
             );
         }
     }
