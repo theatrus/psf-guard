@@ -546,8 +546,15 @@ test('detail view keeps the anchored region across navigation while zoomed past 
 test('detail view shows the image after the 202-generating path reloads with a cache-buster', async ({
   page,
 }) => {
-  // Force the first large-preview GET to answer 202 exactly like an uncached
-  // artifact, regardless of server cache state. The frontend must ride
+  // This case intentionally permits a 60-second image wait below. Give the
+  // containing test enough headroom when the preview queue is still draining
+  // original-resolution work from the preceding detail tests.
+  test.setTimeout(90_000);
+
+  // Observe the first large-preview GET returning 202 from the real server.
+  // Every test gets a unique DB slug and therefore an uncached artifact. By
+  // forwarding the request rather than fabricating the response, the server
+  // also enqueues the generation job that the frontend will poll. It must ride
   // generating → status poll → ready → reload with a `v=` cache-buster — and
   // then actually reveal the image. Regression test: the `v=` reload used to
   // fail the "is this src current?" identity check (busted URL vs pristine
@@ -563,21 +570,19 @@ test('detail view shows the image after the 202-generating path reloads with a c
       await route.continue();
       return;
     }
-    served202 = true;
-    await route.fulfill({
-      status: 202,
-      contentType: 'application/json',
-      headers: { 'cache-control': 'no-store' },
-      body: JSON.stringify({
-        success: true,
-        data: { state: 'generating' },
-        error: null,
-      }),
-    });
+    const response = await route.fetch();
+    served202 = response.status() === 202;
+    await route.fulfill({ response });
   });
 
   try {
     await page.goto(`/#/detail/1?db=${encodeURIComponent(dbId)}&project=1`);
+    await expect
+      .poll(() => served202, {
+        message: 'fresh detail preview should enqueue with HTTP 202',
+        timeout: 10_000,
+      })
+      .toBe(true);
 
     const img = page.locator('.zoom-container img.detail-main-image').first();
     // The post-ready reload carries the cache-buster and must fully load.
@@ -599,6 +604,8 @@ test('detail view shows the image after the 202-generating path reloads with a c
       timeout: 10_000,
     });
   } finally {
-    await page.unroute('**/images/1/preview**');
+    if (!page.isClosed()) {
+      await page.unroute('**/images/1/preview**');
+    }
   }
 });

@@ -1,4 +1,6 @@
 pub mod accord_imaging;
+pub mod astrometry;
+pub mod astrometry_headers;
 pub mod cli;
 pub mod commands;
 pub mod concurrency;

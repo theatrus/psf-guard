@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { installAstrometryFixture } from './fixtures/astrometry';
 import { ensureAllFixtures } from './fixtures/loader';
 
 /**
@@ -30,6 +31,12 @@ export default async function globalSetup() {
   fs.mkdirSync(path.join(tmpBase, 'cache'), { recursive: true });
   const imagesDir = path.join(tmpBase, 'images');
   fs.mkdirSync(imagesDir, { recursive: true });
+
+  // Install a tiny real SEIZAOB3 catalog for the astrometry contract specs.
+  // The indexed file is mostly empty buckets, so its checked-in gzip/base64
+  // representation stays below 1 KiB while exercising Seiza's actual mapped
+  // catalog reader instead of mocking the capability response.
+  const objectsPath = installAstrometryFixture(tmpBase);
 
   // Resolve / download the real FITS fixtures up front. Each is hashed
   // against the manifest before we trust it.
@@ -103,6 +110,7 @@ export default async function globalSetup() {
   process.env.PSF_GUARD_E2E_TMP = tmpBase;
   process.env.PSF_GUARD_E2E_DB = dbPath;
   process.env.PSF_GUARD_E2E_IMAGES = imagesDir;
+  process.env.PSF_GUARD_E2E_OBJECTS = objectsPath;
   process.env.PSF_GUARD_E2E_ALPHA1 = alpha1;
   process.env.PSF_GUARD_E2E_ALPHA2 = alpha2;
   process.env.PSF_GUARD_E2E_ALPHA3 = alpha3;

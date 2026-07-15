@@ -724,6 +724,7 @@ pub fn main() -> Result<()> {
             let server_port = app_config.get_port();
             let worker_policy = app_config.get_worker_policy();
             let databases = db_registry.databases.clone();
+            let astrometry_config = db_registry.astrometry.clone();
 
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(async {
@@ -737,6 +738,7 @@ pub fn main() -> Result<()> {
                     Some(registry_path),
                     allow_database_management,
                     worker_policy,
+                    astrometry_config,
                 )
                 .await
             })?;

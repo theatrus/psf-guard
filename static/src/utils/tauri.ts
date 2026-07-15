@@ -61,11 +61,24 @@ export interface DbEntry {
   reject_archive?: RejectArchiveOverrides;
 }
 
+// Process-global Seiza catalog paths. Relative filenames resolve below
+// data_dir; omitted filenames use Seiza's canonical bundle names.
+export interface AstrometryConfig {
+  data_dir?: string;
+  objects?: string;
+  stars?: string;
+  star_identifiers?: string;
+  blind_index?: string;
+  transients?: string;
+  minor_bodies?: string;
+}
+
 // Persisted registry of all configured databases (mirrors `DbRegistry`).
 export interface DbRegistry {
   schema_version: number;
   databases: DbEntry[];
   active_db_id?: string | null;
+  astrometry?: AstrometryConfig;
 }
 
 // Backwards-compat alias; existing call sites referenced `TauriConfig`.

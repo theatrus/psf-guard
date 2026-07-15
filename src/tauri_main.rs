@@ -62,12 +62,14 @@ pub fn main() {
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
     let server_databases = initial_registry.databases.clone();
+    let server_astrometry = initial_registry.astrometry.clone();
     let server_config_for_task = server_config.clone();
     let registry_path_for_task = registry_path.clone();
     rt.spawn(async move {
         if let Err(e) = start_server_for_tauri(
             server_port,
             server_databases,
+            server_astrometry,
             server_config_for_task,
             registry_path_for_task,
             shutdown_rx,
@@ -215,6 +217,7 @@ fn find_free_port() -> anyhow::Result<u16> {
 async fn start_server_for_tauri(
     port: u16,
     databases: Vec<DbEntry>,
+    astrometry_config: Option<crate::astrometry::AstrometryConfig>,
     server_config: TauriServerConfig,
     registry_path: PathBuf,
     shutdown_rx: oneshot::Receiver<()>,
@@ -266,6 +269,7 @@ async fn start_server_for_tauri(
         // settings panel can add/remove databases without an extra flag.
         allow_database_management: true,
         worker_policy: config.get_worker_policy(),
+        astrometry_config,
     };
 
     crate::server::run_server_with_shutdown(server_config, shutdown_rx).await
@@ -341,12 +345,10 @@ async fn restart_server(
 ) -> Result<String, String> {
     tracing::info!("🔄 Server restart requested");
 
-    let databases = state
-        .registry
-        .lock()
-        .map_err(|e| e.to_string())?
-        .databases
-        .clone();
+    let (databases, astrometry_config) = {
+        let registry = state.registry.lock().map_err(|e| e.to_string())?;
+        (registry.databases.clone(), registry.astrometry.clone())
+    };
 
     {
         let mut shutdown_guard = state.server_shutdown.lock().unwrap();
@@ -384,6 +386,7 @@ async fn restart_server(
         if let Err(e) = start_server_for_tauri(
             server_port,
             databases,
+            astrometry_config,
             base_clone,
             registry_path,
             shutdown_rx,
