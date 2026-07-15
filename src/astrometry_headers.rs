@@ -54,6 +54,22 @@ pub struct FitsAstrometryHeaders {
     pub focal_length_mm: Option<Provenanced<f64>>,
     pub pixel_size_um: Option<Provenanced<f64>>,
     pub binning_x: Option<Provenanced<f64>>,
+    /// A usable TAN WCS assembled from standard FITS WCS keywords. FITS
+    /// reference pixels are converted from one-based to Seiza's zero-based
+    /// pixel coordinates here, once, so every downstream caller agrees.
+    pub embedded_wcs: Option<Provenanced<FitsWcsHeaders>>,
+}
+
+/// Serializable TAN WCS facts extracted from a FITS primary header.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FitsWcsHeaders {
+    pub crval: [f64; 2],
+    pub crpix: [f64; 2],
+    pub cd: [[f64; 2]; 2],
+    pub ctype: [String; 2],
+    pub cunit: [String; 2],
+    pub radesys: String,
+    pub equinox: f64,
 }
 
 impl FitsAstrometryHeaders {
@@ -89,6 +105,7 @@ impl FitsAstrometryHeaders {
                     binning_x.as_ref(),
                 )
             });
+        let embedded_wcs = embedded_wcs(headers, pixel_scale_arcsec_per_pixel.as_ref());
 
         Self {
             object_name,
@@ -101,6 +118,7 @@ impl FitsAstrometryHeaders {
             focal_length_mm,
             pixel_size_um,
             binning_x,
+            embedded_wcs,
         }
     }
 }
@@ -316,7 +334,199 @@ fn wcs_pixel_scale(headers: &[(String, HeaderValue)]) -> Option<Provenanced<f64>
 }
 
 fn explicit_pixel_scale(headers: &[(String, HeaderValue)]) -> Option<Provenanced<f64>> {
-    find_positive_f64(headers, &["PIXSCALE", "SECPIX", "PIXSCAL1"])
+    find_positive_f64(
+        headers,
+        &[
+            "PIXSCALE", "SCALE", "SECPIX", "SECPIX1", "SECPIX2", "PIXSCAL1",
+        ],
+    )
+}
+
+fn embedded_wcs(
+    headers: &[(String, HeaderValue)],
+    pixel_scale: Option<&Provenanced<f64>>,
+) -> Option<Provenanced<FitsWcsHeaders>> {
+    let crval1 = find_f64(headers, &["CRVAL1"])?;
+    let crval2 = find_f64(headers, &["CRVAL2"])?;
+    if !(0.0..=360.0).contains(&crval1.value) || !(-90.0..=90.0).contains(&crval2.value) {
+        return None;
+    }
+    let crpix1 = find_f64(headers, &["CRPIX1"])?;
+    let crpix2 = find_f64(headers, &["CRPIX2"])?;
+    let ctype1 = find_text(headers, &["CTYPE1"])?;
+    let ctype2 = find_text(headers, &["CTYPE2"])?;
+    if !ctype1.value.to_ascii_uppercase().starts_with("RA")
+        || !ctype2.value.to_ascii_uppercase().starts_with("DEC")
+        || !ctype1.value.to_ascii_uppercase().contains("TAN")
+        || !ctype2.value.to_ascii_uppercase().contains("TAN")
+    {
+        return None;
+    }
+
+    let (cd, mut matrix_sources, matrix_derivation) = wcs_cd_matrix(headers, pixel_scale)?;
+    let cunit1 = find_text(headers, &["CUNIT1"])
+        .unwrap_or_else(|| Provenanced::derived("deg".to_string(), Vec::new(), "FITS default"));
+    let cunit2 = find_text(headers, &["CUNIT2"])
+        .unwrap_or_else(|| Provenanced::derived("deg".to_string(), Vec::new(), "FITS default"));
+    let radesys = find_text(headers, &["RADESYS", "RADECSYS"])
+        .unwrap_or_else(|| Provenanced::derived("ICRS".to_string(), Vec::new(), "default frame"));
+    let equinox = find_f64(headers, &["EQUINOX"])
+        .unwrap_or_else(|| Provenanced::derived(2000.0, Vec::new(), "default equinox"));
+
+    let mut sources = Vec::new();
+    sources.extend(crval1.sources);
+    sources.extend(crval2.sources);
+    sources.extend(crpix1.sources);
+    sources.extend(crpix2.sources);
+    sources.extend(ctype1.sources.clone());
+    sources.extend(ctype2.sources.clone());
+    sources.append(&mut matrix_sources);
+    sources.extend(cunit1.sources.clone());
+    sources.extend(cunit2.sources.clone());
+    sources.extend(radesys.sources.clone());
+    sources.extend(equinox.sources.clone());
+    sources.sort();
+    sources.dedup();
+
+    Some(Provenanced::derived(
+        FitsWcsHeaders {
+            crval: [crval1.value.rem_euclid(360.0), crval2.value],
+            // FITS CRPIX is one-based. Seiza WCS and the browser overlay use
+            // zero-based pixel coordinates.
+            crpix: [crpix1.value - 1.0, crpix2.value - 1.0],
+            cd,
+            ctype: [ctype1.value, ctype2.value],
+            cunit: [cunit1.value, cunit2.value],
+            radesys: radesys.value,
+            equinox: equinox.value,
+        },
+        sources,
+        matrix_derivation,
+    ))
+}
+
+type CdMatrix = ([[f64; 2]; 2], Vec<String>, &'static str);
+
+fn wcs_cd_matrix(
+    headers: &[(String, HeaderValue)],
+    pixel_scale: Option<&Provenanced<f64>>,
+) -> Option<CdMatrix> {
+    let cd11 = find_f64(headers, &["CD1_1"]);
+    let cd12 = find_f64(headers, &["CD1_2"]);
+    let cd21 = find_f64(headers, &["CD2_1"]);
+    let cd22 = find_f64(headers, &["CD2_2"]);
+    if let (Some(cd11), Some(cd12), Some(cd21), Some(cd22)) = (cd11, cd12, cd21, cd22) {
+        let matrix = [[cd11.value, cd12.value], [cd21.value, cd22.value]];
+        if valid_cd(matrix) {
+            return Some((
+                matrix,
+                [cd11, cd12, cd21, cd22]
+                    .into_iter()
+                    .flat_map(|value| value.sources)
+                    .collect(),
+                "direct FITS CD matrix",
+            ));
+        }
+    }
+
+    let cdelt1 = find_f64(headers, &["CDELT1"]);
+    let cdelt2 = find_f64(headers, &["CDELT2"]);
+    if let (Some(cdelt1), Some(cdelt2)) = (cdelt1, cdelt2) {
+        let pc11 = find_f64(headers, &["PC1_1"]);
+        let pc12 = find_f64(headers, &["PC1_2"]);
+        let pc21 = find_f64(headers, &["PC2_1"]);
+        let pc22 = find_f64(headers, &["PC2_2"]);
+        let has_pc = pc11.is_some() || pc12.is_some() || pc21.is_some() || pc22.is_some();
+        if has_pc {
+            let matrix = [
+                [
+                    cdelt1.value * pc11.as_ref().map_or(1.0, |v| v.value),
+                    cdelt1.value * pc12.as_ref().map_or(0.0, |v| v.value),
+                ],
+                [
+                    cdelt2.value * pc21.as_ref().map_or(0.0, |v| v.value),
+                    cdelt2.value * pc22.as_ref().map_or(1.0, |v| v.value),
+                ],
+            ];
+            if valid_cd(matrix) {
+                let mut sources = [cdelt1.sources, cdelt2.sources].concat();
+                for pc in [pc11, pc12, pc21, pc22].into_iter().flatten() {
+                    sources.extend(pc.sources);
+                }
+                return Some((matrix, sources, "FITS PC matrix scaled by CDELT"));
+            }
+        }
+
+        let rotation = find_f64(headers, &["CROTA2", "CROTA1"]);
+        let angle = rotation
+            .as_ref()
+            .map_or(0.0, |value| value.value)
+            .to_radians();
+        let (sin, cos) = angle.sin_cos();
+        let matrix = [
+            [cdelt1.value * cos, -cdelt2.value * sin],
+            [cdelt1.value * sin, cdelt2.value * cos],
+        ];
+        if valid_cd(matrix) {
+            let mut sources = [cdelt1.sources, cdelt2.sources].concat();
+            if let Some(rotation) = rotation {
+                sources.extend(rotation.sources);
+            }
+            return Some((matrix, sources, "legacy FITS CDELT/CROTA matrix"));
+        }
+    }
+
+    // Some acquisition applications write CRVAL/CRPIX/CTYPE plus only a
+    // scale and rotator angle. That is still enough to construct the TAN WCS
+    // they intended, though its provenance remains explicit.
+    let scale = pixel_scale?;
+    let rotation = find_f64(headers, &["ANGLE", "ROTATANG", "OBJCTROT", "CROTA2"]);
+    let rotation_deg = rotation.as_ref().map_or(0.0, |value| value.value);
+    let flipped = find_logical(headers, &["FLIPPED"]).is_some_and(|value| value.value);
+    let radians = rotation_deg.to_radians();
+    let (sin, cos) = radians.sin_cos();
+    let degrees_per_pixel = scale.value / 3600.0;
+    let parity = if flipped { -1.0 } else { 1.0 };
+    let matrix = [
+        [-degrees_per_pixel * parity * cos, degrees_per_pixel * sin],
+        [-degrees_per_pixel * parity * sin, -degrees_per_pixel * cos],
+    ];
+    if !valid_cd(matrix) {
+        return None;
+    }
+    let mut sources = scale.sources.clone();
+    if let Some(rotation) = rotation {
+        sources.extend(rotation.sources);
+    }
+    if let Some(flipped) = find_logical(headers, &["FLIPPED"]) {
+        sources.extend(flipped.sources);
+    }
+    Some((
+        matrix,
+        sources,
+        "TAN matrix from header scale, rotation, and parity",
+    ))
+}
+
+fn find_logical(headers: &[(String, HeaderValue)], names: &[&str]) -> Option<Provenanced<bool>> {
+    let (source, value) = find_header(headers, names)?;
+    let parsed = match value {
+        HeaderValue::Logical(value) => Some(*value),
+        HeaderValue::String(value) | HeaderValue::Raw(value) => {
+            match value.trim().to_ascii_lowercase().as_str() {
+                "true" | "t" | "1" | "yes" => Some(true),
+                "false" | "f" | "0" | "no" => Some(false),
+                _ => None,
+            }
+        }
+        _ => None,
+    }?;
+    Some(Provenanced::direct(parsed, source))
+}
+
+fn valid_cd(matrix: [[f64; 2]; 2]) -> bool {
+    matrix.into_iter().flatten().all(f64::is_finite)
+        && (matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0]).abs() > 1e-15
 }
 
 fn camera_geometry_scale(
@@ -416,5 +626,64 @@ mod tests {
         let expected = 206.265 * 3.76 * 2.0 / 550.0;
         assert!((scale.value - expected).abs() < 1e-10);
         assert_eq!(scale.sources, ["FOCALLEN", "XPIXSZ", "XBINNING"]);
+    }
+
+    #[test]
+    fn builds_legacy_cdelt_crota_wcs_and_converts_crpix_to_zero_based() {
+        let parsed = FitsAstrometryHeaders::from_headers(&headers(&[
+            ("CRVAL1", HeaderValue::Float(10.669674399)),
+            ("CRVAL2", HeaderValue::Float(41.268310106)),
+            ("CRPIX1", HeaderValue::Float(1920.0)),
+            ("CRPIX2", HeaderValue::Float(1080.0)),
+            ("CTYPE1", HeaderValue::String("RA---TAN".into())),
+            ("CTYPE2", HeaderValue::String("DEC--TAN".into())),
+            ("CDELT1", HeaderValue::Float(0.0003820370496)),
+            ("CDELT2", HeaderValue::Float(0.0003820370496)),
+            ("CROTA2", HeaderValue::Float(1.4146201508)),
+            ("RADECSYS", HeaderValue::String("FK5".into())),
+            ("EQUINOX", HeaderValue::Float(2000.0)),
+        ]));
+
+        let wcs = parsed.embedded_wcs.unwrap();
+        assert_eq!(wcs.value.crpix, [1919.0, 1079.0]);
+        assert_eq!(wcs.value.radesys, "FK5");
+        let scale = (wcs.value.cd[0][0] * wcs.value.cd[1][1]
+            - wcs.value.cd[0][1] * wcs.value.cd[1][0])
+            .abs()
+            .sqrt()
+            * 3600.0;
+        assert!((scale - 1.37533337856).abs() < 1e-8);
+        assert_eq!(
+            wcs.derivation.as_deref(),
+            Some("legacy FITS CDELT/CROTA matrix")
+        );
+    }
+
+    #[test]
+    fn constructs_wcs_from_scale_rotation_and_parity_headers() {
+        let parsed = FitsAstrometryHeaders::from_headers(&headers(&[
+            ("CRVAL1", HeaderValue::Float(313.11278835943)),
+            ("CRVAL2", HeaderValue::Float(43.9080204789476)),
+            ("CRPIX1", HeaderValue::Float(4788.0)),
+            ("CRPIX2", HeaderValue::Float(3194.0)),
+            ("CTYPE1", HeaderValue::String("RA---TAN".into())),
+            ("CTYPE2", HeaderValue::String("DEC--TAN".into())),
+            ("PIXSCALE", HeaderValue::Float(1.258)),
+            ("ANGLE", HeaderValue::Float(359.5)),
+            ("FLIPPED", HeaderValue::Logical(true)),
+        ]));
+
+        let wcs = parsed.embedded_wcs.unwrap();
+        assert_eq!(wcs.value.crpix, [4787.0, 3193.0]);
+        let scale = (wcs.value.cd[0][0] * wcs.value.cd[1][1]
+            - wcs.value.cd[0][1] * wcs.value.cd[1][0])
+            .abs()
+            .sqrt()
+            * 3600.0;
+        assert!((scale - 1.258).abs() < 1e-10);
+        assert_eq!(
+            wcs.derivation.as_deref(),
+            Some("TAN matrix from header scale, rotation, and parity")
+        );
     }
 }

@@ -1,6 +1,6 @@
 # Seiza Integration — Design and Implementation Plan
 
-Status: **Phase 0 implemented; managed download and Phase 1 next**
+Status: **Phase 0 complete; first Phase 1 and overlay UI slice implemented**
 Owner: psf-guard maintainers
 Last updated: 2026-07-14
 Baseline: PSF Guard 0.4.2; Seiza 0.4.1; seiza-fits 0.1.4
@@ -36,8 +36,7 @@ FITS hint, and derived solution as separate values with explicit provenance.
 
 ## 3. Seiza 0.4.1 baseline
 
-PSF Guard currently depends on `seiza-fits = 0.1.3`. The integration starts by
-updating to the published 0.4 family:
+PSF Guard now uses the published 0.4 family:
 
 ```toml
 seiza = "0.4.1"
@@ -605,6 +604,13 @@ network-independent.
 
 ### Phase 1 — coordinate-only catalog association
 
+**Initial image-detail slice implemented 2026-07-14.** A header-only per-image
+endpoint now distinguishes embedded footprints, estimated fields, and a
+conservative one-degree nearby-target search. The UI preserves Seiza stable
+IDs and provenance, labels conservative results as nearby rather than in-frame,
+and has end-to-end coverage against a real FITS header and real `SEIZAOB3`
+catalog. Object-search UI and stellar-designation lookup remain.
+
 - Query objects from target coordinates and estimated fields.
 - Add exact/prefix object search for target selection.
 - Add optional stellar designation search from `SEIZASI1`.
@@ -627,6 +633,11 @@ Exit: supported images produce durable, quality-scored WCS solutions without
 blocking the detail page.
 
 ### Phase 3 — overlay and dynamic annotations
+
+**Static embedded-WCS slice implemented 2026-07-14.** Complete FITS WCS (and
+supported scale/rotation/parity headers) now projects catalog objects into the
+shared `AstroOverlay` component in the same pan/zoom container as the raster.
+Persistent solved WCS, layer preferences, export, and dynamic catalogs remain.
 
 - Add `@seiza/astro-overlay` and render its React `AstroOverlay` directly.
 - Keep PSF Guard-specific layer controls, preference storage, zoom/pan layout,

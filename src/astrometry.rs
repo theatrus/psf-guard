@@ -1,5 +1,6 @@
 //! Process-global Seiza catalog configuration, lazy loading, and diagnostics.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -207,6 +208,16 @@ pub enum AstrometryAnalysisStatus {
     Failed,
 }
 
+/// How the object-catalog search region was established. This keeps a
+/// conservative coordinate-only lookup distinct from a known image field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AstrometryCatalogScope {
+    EmbeddedFootprint,
+    EstimatedField,
+    NearbyTarget,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AstrometrySolveMode {
@@ -339,8 +350,8 @@ pub struct PointingResult {
     pub target_edge_margin_px: Option<f64>,
 }
 
-/// Stable top-level per-image response. Phase 1 fills `catalog_hits`; later
-/// phases add the solution and pointing fields without changing the envelope.
+/// Stable top-level per-image response. Header-only analysis fills catalog,
+/// embedded-WCS, and pointing fields; later solving phases keep the envelope.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AstrometryAnalysis {
     pub image_id: i32,
@@ -355,6 +366,10 @@ pub struct AstrometryAnalysis {
     pub solution: Option<AstrometrySolutionResponse>,
     #[serde(default)]
     pub catalog_hits: Vec<CatalogHitResponse>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_scope: Option<AstrometryCatalogScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_radius_deg: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pointing: Option<PointingResult>,
     pub source_fingerprint: AstrometrySourceFingerprint,
@@ -447,6 +462,260 @@ impl AstrometryContext {
             self.config.minor_bodies_path(),
             |path| MinorBodyCatalog::open(path).map_err(|error| error.to_string()),
         )
+    }
+
+    /// Analyze one image from its FITS headers and the configured object
+    /// catalog. This is intentionally header-only: it never decodes pixels or
+    /// launches a plate solve. A complete embedded/header-derived TAN WCS can
+    /// still produce exact overlay geometry; otherwise the result remains a
+    /// coordinate-only catalog association.
+    pub fn analyze_image(
+        &self,
+        image_id: i32,
+        path: &Path,
+        expected_target: Option<(f64, f64)>,
+    ) -> Result<AstrometryAnalysis, String> {
+        use seiza::objects::{ObjectQuery, SkyRegion};
+
+        let fingerprint = source_fingerprint(path)?;
+        let headers = crate::astrometry_headers::FitsAstrometryHeaders::from_path(path)
+            .map_err(|error| format!("failed to read FITS astrometry headers: {error}"))?;
+        let dimensions = headers
+            .width
+            .as_ref()
+            .zip(headers.height.as_ref())
+            .map(|(width, height)| (width.value, height.value));
+
+        let header_center = headers
+            .center_ra_deg
+            .as_ref()
+            .zip(headers.center_dec_deg.as_ref())
+            .map(|(ra, dec)| (ra.value, dec.value));
+        let hint_source = headers
+            .embedded_wcs
+            .as_ref()
+            .map(|wcs| AstrometryCoordinateSource {
+                ra_deg: wcs.value.crval[0],
+                dec_deg: wcs.value.crval[1],
+                source: "fits_wcs".to_string(),
+                header_keywords: wcs.sources.clone(),
+            })
+            .or_else(|| {
+                headers
+                    .center_ra_deg
+                    .as_ref()
+                    .zip(headers.center_dec_deg.as_ref())
+                    .map(|(ra, dec)| AstrometryCoordinateSource {
+                        ra_deg: ra.value,
+                        dec_deg: dec.value,
+                        source: "fits_header".to_string(),
+                        header_keywords: [ra.sources.clone(), dec.sources.clone()].concat(),
+                    })
+            });
+        let expected_source = expected_target.map(|(ra_deg, dec_deg)| AstrometryCoordinateSource {
+            ra_deg,
+            dec_deg,
+            source: "target_scheduler".to_string(),
+            header_keywords: Vec::new(),
+        });
+
+        let embedded = headers.embedded_wcs.as_ref().map(|value| &value.value);
+        let wcs = embedded.map(|value| seiza::Wcs {
+            crval: (value.crval[0], value.crval[1]),
+            crpix: (value.crpix[0], value.crpix[1]),
+            cd: value.cd,
+        });
+        let exact_region =
+            wcs.as_ref()
+                .zip(dimensions)
+                .map(|(wcs, (width, height))| SkyRegion::Polygon {
+                    vertices: wcs.footprint(width, height).to_vec(),
+                });
+        let estimated_region = if exact_region.is_none() {
+            header_center
+                .or(expected_target)
+                .zip(dimensions)
+                .zip(headers.pixel_scale_arcsec_per_pixel.as_ref())
+                .and_then(|(((ra, dec), (width, height)), scale)| {
+                    let width_deg = f64::from(width) * scale.value / 3600.0;
+                    let height_deg = f64::from(height) * scale.value / 3600.0;
+                    let radius_deg = 0.5 * width_deg.hypot(height_deg);
+                    (radius_deg.is_finite() && radius_deg > 0.0).then_some(SkyRegion::Cone {
+                        center: (ra, dec),
+                        radius_deg,
+                    })
+                })
+        } else {
+            None
+        };
+        const DEFAULT_NEARBY_RADIUS_DEG: f64 = 1.0;
+        let nearby_region = if exact_region.is_none() && estimated_region.is_none() {
+            header_center
+                .or(expected_target)
+                .map(|center| SkyRegion::Cone {
+                    center,
+                    radius_deg: DEFAULT_NEARBY_RADIUS_DEG,
+                })
+        } else {
+            None
+        };
+        let region = exact_region
+            .as_ref()
+            .or(estimated_region.as_ref())
+            .or(nearby_region.as_ref());
+        let catalog_scope = if exact_region.is_some() {
+            Some(AstrometryCatalogScope::EmbeddedFootprint)
+        } else if estimated_region.is_some() {
+            Some(AstrometryCatalogScope::EstimatedField)
+        } else if nearby_region.is_some() {
+            Some(AstrometryCatalogScope::NearbyTarget)
+        } else {
+            None
+        };
+        let catalog_radius_deg = match region {
+            Some(SkyRegion::Cone { radius_deg, .. }) => Some(*radius_deg),
+            _ => None,
+        };
+
+        let mut analysis_error = None;
+        let mut hits = Vec::new();
+        let mut catalog_query_succeeded = false;
+        let catalog = match self.object_catalog() {
+            Ok(catalog) => Some(catalog),
+            Err(error) => {
+                analysis_error = Some(format!("object catalog unavailable: {error}"));
+                None
+            }
+        };
+        if let (Some(catalog), Some(region)) = (catalog.as_ref(), region) {
+            let query = ObjectQuery {
+                limit: Some(250),
+                ..ObjectQuery::default()
+            };
+            match catalog.query_region(region, &query) {
+                Ok(found) => {
+                    hits = found;
+                    catalog_query_succeeded = true;
+                }
+                Err(error) => analysis_error = Some(error.to_string()),
+            }
+        } else if region.is_none() && analysis_error.is_none() {
+            analysis_error = Some("image needs coordinates for catalog association".to_string());
+        }
+
+        let catalog_hits = hits
+            .iter()
+            .take(100)
+            .map(catalog_hit_response)
+            .collect::<Vec<_>>();
+        let signature = object_catalog_signature(&self.config);
+        let catalog_version = signature
+            .as_ref()
+            .and_then(|signature| signature.files.first())
+            .map(|file| file.format.clone());
+
+        let solution = match (wcs.as_ref(), embedded, dimensions) {
+            (Some(wcs), Some(embedded), Some((width, height))) => {
+                let prominence = hits
+                    .iter()
+                    .map(|hit| (sky_object_key(&hit.object), hit.predicted_prominence))
+                    .collect::<HashMap<_, _>>();
+                let mut objects = if let Some(catalog) = catalog.as_ref() {
+                    match catalog.objects_in_footprint(wcs, (width, height)) {
+                        Ok(placed) => placed
+                            .into_iter()
+                            .map(|placed| {
+                                let rank = prominence
+                                    .get(&sky_object_key(&placed.object))
+                                    .copied()
+                                    .unwrap_or(0.0);
+                                overlay_object_response(placed, Some(rank))
+                            })
+                            .collect::<Vec<_>>(),
+                        Err(error) => {
+                            analysis_error = Some(error.to_string());
+                            Vec::new()
+                        }
+                    }
+                } else {
+                    Vec::new()
+                };
+                objects.sort_by(|left, right| {
+                    right
+                        .prominence
+                        .unwrap_or(0.0)
+                        .total_cmp(&left.prominence.unwrap_or(0.0))
+                });
+                objects.truncate(500);
+
+                let center = wcs.pixel_to_world(
+                    (f64::from(width) - 1.0) / 2.0,
+                    (f64::from(height) - 1.0) / 2.0,
+                );
+                Some(AstrometrySolutionResponse {
+                    center_ra_deg: center.0,
+                    center_dec_deg: center.1,
+                    pixel_scale_arcsec_per_pixel: wcs.scale_arcsec_per_px(),
+                    matched_stars: 0,
+                    rms_arcsec: 0.0,
+                    image_width: width,
+                    image_height: height,
+                    wcs: WcsResponse {
+                        crval: embedded.crval,
+                        crpix: embedded.crpix,
+                        cd: embedded.cd,
+                        ctype: embedded.ctype.clone(),
+                        cunit: embedded.cunit.clone(),
+                        radesys: embedded.radesys.clone(),
+                        equinox: embedded.equinox,
+                    },
+                    footprint: wcs
+                        .footprint(width, height)
+                        .into_iter()
+                        .map(|(ra, dec)| [ra, dec])
+                        .collect(),
+                    objects,
+                    catalog_version,
+                    capture_time: headers
+                        .capture_time
+                        .as_ref()
+                        .map(|value| value.value.clone()),
+                })
+            }
+            _ => None,
+        };
+
+        let pointing = solution
+            .as_ref()
+            .zip(wcs.as_ref())
+            .zip(expected_target)
+            .map(|((solution, wcs), expected)| pointing_result(solution, wcs, expected));
+        let status = if solution.is_some() {
+            AstrometryAnalysisStatus::Solved
+        } else if catalog_query_succeeded {
+            AstrometryAnalysisStatus::CatalogOnly
+        } else {
+            AstrometryAnalysisStatus::Unavailable
+        };
+
+        Ok(AstrometryAnalysis {
+            image_id,
+            status,
+            mode: solution.as_ref().map(|_| AstrometrySolveMode::EmbeddedWcs),
+            hint_source,
+            expected_source,
+            solution,
+            catalog_hits,
+            catalog_scope,
+            catalog_radius_deg,
+            pointing,
+            source_fingerprint: fingerprint,
+            catalog_signature: signature,
+            computed_at: std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_secs() as i64),
+            error: analysis_error,
+        })
     }
 
     /// Open configured files lazily and report which higher-level features are
@@ -577,6 +846,154 @@ impl AstrometryContext {
             resources,
         }
     }
+}
+
+fn source_fingerprint(path: &Path) -> Result<AstrometrySourceFingerprint, String> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("failed to canonicalize {}: {error}", path.display()))?;
+    let metadata = canonical
+        .metadata()
+        .map_err(|error| format!("failed to stat {}: {error}", canonical.display()))?;
+    let modified_unix_seconds = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |duration| duration.as_secs());
+    Ok(AstrometrySourceFingerprint {
+        canonical_path: canonical.to_string_lossy().into_owned(),
+        size_bytes: metadata.len(),
+        modified_unix_seconds,
+    })
+}
+
+fn object_catalog_signature(config: &AstrometryConfig) -> Option<AstrometryCatalogSignature> {
+    let path = config.objects_path()?;
+    let metadata = path.metadata().ok()?;
+    let modified_unix_seconds = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |duration| duration.as_secs());
+    Some(AstrometryCatalogSignature {
+        bundle_version: None,
+        files: vec![AstrometryCatalogFileSignature {
+            name: "objects".to_string(),
+            path: path.to_string_lossy().into_owned(),
+            format: read_magic(&path).unwrap_or_else(|_| "unknown".to_string()),
+            size_bytes: metadata.len(),
+            modified_unix_seconds,
+            sha256: None,
+        }],
+    })
+}
+
+fn identity(object: &seiza::objects::SkyObject) -> CatalogObjectIdentity {
+    CatalogObjectIdentity {
+        stable_id: object.metadata.id.clone(),
+        source: object.metadata.source.clone(),
+        aliases: object.metadata.aliases.clone(),
+        parent_ids: object.metadata.parent_ids.clone(),
+        alternate_ids: object.metadata.alternate_ids.clone(),
+        alternate_sources: object.metadata.alternate_sources.clone(),
+    }
+}
+
+fn catalog_hit_response(hit: &seiza::objects::ObjectHit) -> CatalogHitResponse {
+    CatalogHitResponse {
+        identity: identity(&hit.object),
+        name: hit.object.name.clone(),
+        common_name: hit.object.common_name.clone(),
+        kind: hit.object.kind.as_str().to_string(),
+        mag: hit.object.mag,
+        major_arcmin: hit.object.major_arcmin,
+        minor_arcmin: hit.object.minor_arcmin,
+        position_angle_deg: hit.object.position_angle_deg,
+        ra_deg: hit.object.ra,
+        dec_deg: hit.object.dec,
+        center_inside: hit.center_inside,
+        extent_only: hit.extent_only,
+        distance_from_center_deg: hit.distance_from_center_deg,
+        predicted_prominence: hit.predicted_prominence,
+    }
+}
+
+fn overlay_object_response(
+    placed: seiza::objects::PlacedObject,
+    prominence: Option<f64>,
+) -> OverlayObjectResponse {
+    OverlayObjectResponse {
+        identity: identity(&placed.object),
+        name: placed.object.name.clone(),
+        common_name: placed.object.common_name.clone(),
+        kind: placed.object.kind.as_str().to_string(),
+        mag: placed.object.mag,
+        x: placed.x,
+        y: placed.y,
+        semi_major_px: placed.semi_major_px,
+        semi_minor_px: placed.semi_minor_px,
+        angle_deg: placed.angle_deg,
+        ra_deg: placed.object.ra,
+        dec_deg: placed.object.dec,
+        prominence,
+        discovered: None,
+        near_capture: None,
+        distance_au: None,
+        direction_pa_deg: None,
+        direction_angle_deg: None,
+    }
+}
+
+fn sky_object_key(object: &seiza::objects::SkyObject) -> String {
+    if object.metadata.id.is_empty() {
+        format!("{}:{:.8}:{:.8}", object.name, object.ra, object.dec)
+    } else {
+        object.metadata.id.clone()
+    }
+}
+
+fn pointing_result(
+    solution: &AstrometrySolutionResponse,
+    wcs: &seiza::Wcs,
+    expected: (f64, f64),
+) -> PointingResult {
+    let delta_ra = (solution.center_ra_deg - expected.0 + 540.0).rem_euclid(360.0) - 180.0;
+    let east_offset_arcsec = delta_ra * expected.1.to_radians().cos() * 3600.0;
+    let north_offset_arcsec = (solution.center_dec_deg - expected.1) * 3600.0;
+    let separation_arcsec = angular_separation_deg(
+        solution.center_ra_deg,
+        solution.center_dec_deg,
+        expected.0,
+        expected.1,
+    ) * 3600.0;
+    let target_pixel = wcs.world_to_pixel(expected.0, expected.1);
+    let edge_margin = target_pixel.map(|(x, y)| {
+        x.min(y)
+            .min(f64::from(solution.image_width) - 1.0 - x)
+            .min(f64::from(solution.image_height) - 1.0 - y)
+    });
+    PointingResult {
+        expected_ra_deg: expected.0,
+        expected_dec_deg: expected.1,
+        east_offset_arcsec,
+        north_offset_arcsec,
+        separation_arcsec,
+        target_in_frame: edge_margin.is_some_and(|margin| margin >= 0.0),
+        target_edge_margin_px: edge_margin,
+    }
+}
+
+fn angular_separation_deg(ra1: f64, dec1: f64, ra2: f64, dec2: f64) -> f64 {
+    let (ra1, dec1, ra2, dec2) = (
+        ra1.to_radians(),
+        dec1.to_radians(),
+        ra2.to_radians(),
+        dec2.to_radians(),
+    );
+    (dec1.sin() * dec2.sin() + dec1.cos() * dec2.cos() * (ra1 - ra2).cos())
+        .clamp(-1.0, 1.0)
+        .acos()
+        .to_degrees()
 }
 
 struct AstrometryValidationGuard<'a> {
@@ -897,6 +1314,8 @@ mod tests {
             }),
             solution: None,
             catalog_hits: Vec::new(),
+            catalog_scope: Some(AstrometryCatalogScope::NearbyTarget),
+            catalog_radius_deg: Some(1.0),
             pointing: None,
             source_fingerprint: AstrometrySourceFingerprint {
                 canonical_path: "/images/frame.fits".to_string(),

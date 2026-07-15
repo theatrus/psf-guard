@@ -25,6 +25,7 @@ import type {
   SpatialScanStatus,
   PreviewDescriptor,
   GenerationStatus,
+  AstrometryAnalysis,
 } from './types';
 
 // Store the initialized API instance and server URL
@@ -181,6 +182,15 @@ export const apiClient = {
       dbPath(dbId, `/images/${imageId}`)
     );
     if (!data.data) throw new Error('Image not found');
+    return data.data;
+  },
+
+  getImageAstrometry: async (dbId: string, imageId: number): Promise<AstrometryAnalysis> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<AstrometryAnalysis>>(
+      dbPath(dbId, `/images/${imageId}/astrometry`)
+    );
+    if (!data.data) throw new Error(data.error || 'Astrometry analysis unavailable');
     return data.data;
   },
 

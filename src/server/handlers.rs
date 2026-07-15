@@ -91,6 +91,38 @@ pub async fn validate_astrometry_catalogs(
     Ok(Json(ApiResponse::success(report)))
 }
 
+/// Header-only catalog association and embedded-WCS overlay geometry for one
+/// image. This stays separate from image metadata so provenance, partial
+/// capability, and later plate-solve results retain a typed contract.
+pub async fn get_image_astrometry(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, image_id)): Path<(String, i32)>,
+) -> Result<Json<ApiResponse<crate::astrometry::AstrometryAnalysis>>, AppError> {
+    let (image, file_only, target_name) = resolve_image_meta(&ctx, image_id)?;
+    let expected_target = {
+        let conn = ctx.db();
+        let conn = conn.lock().map_err(AppError::db)?;
+        let db = Database::new(&conn);
+        db.get_targets_by_ids(&[image.target_id])
+            .map_err(AppError::db)?
+            .into_iter()
+            .next()
+            .and_then(|target| target.ra.zip(target.dec))
+    };
+    let fits_path = find_fits_file(&ctx, &image, &target_name, &file_only)?;
+    let astrometry = Arc::clone(&state.astrometry);
+    let guard = state.begin_interactive_job();
+    let analysis = tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        astrometry.analyze_image(image_id, &fits_path, expected_target)
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("Image astrometry task failed: {error}")))?
+    .map_err(AppError::BadRequest)?;
+    Ok(Json(ApiResponse::success(analysis)))
+}
+
 /// List all configured databases. Used by the frontend to populate the DB
 /// switcher and resolve the default `?db=` value.
 pub async fn list_databases(

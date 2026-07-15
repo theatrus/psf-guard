@@ -1,3 +1,5 @@
+import type { OverlaySolution } from '@seiza/astro-overlay';
+
 export interface Project {
   id: number;
   profile_id: string;
@@ -49,6 +51,72 @@ export interface StarDetectionResponse {
   average_hfr: number;
   average_fwhm: number;
   stars: StarInfo[];
+}
+
+export type AstrometryAnalysisStatus = 'unavailable' | 'catalog_only' | 'solved' | 'failed';
+export type AstrometrySolveMode = 'embedded_wcs' | 'hinted' | 'blind';
+export type AstrometryCatalogScope =
+  | 'embedded_footprint'
+  | 'estimated_field'
+  | 'nearby_target';
+
+export interface AstrometryCoordinateSource {
+  ra_deg: number;
+  dec_deg: number;
+  source: string;
+  header_keywords: string[];
+}
+
+export interface CatalogHit {
+  stable_id: string;
+  source: string;
+  aliases: string[];
+  parent_ids: string[];
+  alternate_ids: string[];
+  alternate_sources: string[];
+  name: string;
+  common_name: string;
+  kind: string;
+  mag: number | null;
+  major_arcmin: number | null;
+  minor_arcmin: number | null;
+  position_angle_deg: number | null;
+  ra_deg: number;
+  dec_deg: number;
+  center_inside: boolean;
+  extent_only: boolean;
+  distance_from_center_deg: number;
+  predicted_prominence: number;
+}
+
+export interface PointingResult {
+  expected_ra_deg: number;
+  expected_dec_deg: number;
+  east_offset_arcsec: number;
+  north_offset_arcsec: number;
+  separation_arcsec: number;
+  target_in_frame: boolean;
+  target_edge_margin_px?: number;
+}
+
+export interface AstrometryAnalysis {
+  image_id: number;
+  status: AstrometryAnalysisStatus;
+  mode?: AstrometrySolveMode;
+  hint_source?: AstrometryCoordinateSource;
+  expected_source?: AstrometryCoordinateSource;
+  solution?: OverlaySolution;
+  catalog_hits: CatalogHit[];
+  catalog_scope?: AstrometryCatalogScope;
+  catalog_radius_deg?: number;
+  pointing?: PointingResult;
+  source_fingerprint: {
+    canonical_path: string;
+    size_bytes: number;
+    modified_unix_seconds: number;
+  };
+  computed_at: number;
+  error?: string;
 }
 
 export interface ApiResponse<T> {

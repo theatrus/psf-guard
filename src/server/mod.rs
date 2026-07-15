@@ -225,6 +225,10 @@ async fn run_server_internal(
         .route("/images", get(handlers::get_images))
         .route("/images/{image_id}", get(handlers::get_image))
         .route(
+            "/images/{image_id}/astrometry",
+            get(handlers::get_image_astrometry),
+        )
+        .route(
             "/images/generation-status",
             post(handlers::post_generation_status),
         )
