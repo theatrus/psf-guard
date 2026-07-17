@@ -1182,10 +1182,182 @@
 }
 
 .detail-info {
-  width: 320px;
+  width: 360px;
   padding: 1.25rem;
   overflow-y: auto;
   background: var(--color-bg-surface);
+}
+
+.detail-astrometry-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  pointer-events: none;
+  overflow: hidden;
+  transition: opacity 0.2s ease-in-out;
+}
+
+.astrometry-section {
+  border-top: 1px solid var(--color-bg-tertiary);
+  padding-top: 1rem;
+}
+
+.astrometry-heading-row,
+.astrometry-list-heading,
+.astrometry-object-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.astrometry-heading-row h3 {
+  margin-bottom: 0;
+}
+
+.astrometry-badge {
+  border: 1px solid var(--color-primary-alpha-30);
+  border-radius: 999px;
+  color: var(--color-primary);
+  background: var(--color-primary-alpha-10);
+  font-size: 0.67rem;
+  font-weight: 600;
+  letter-spacing: 0.035em;
+  padding: 0.22rem 0.48rem;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.astrometry-badge-unavailable,
+.astrometry-badge-failed {
+  border-color: var(--color-bg-input);
+  color: var(--color-text-muted);
+  background: var(--color-bg-elevated);
+}
+
+.astrometry-toggle {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0.85rem 0;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--color-bg-input);
+  border-radius: 6px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-elevated);
+  cursor: pointer;
+  text-align: left;
+}
+
+.astrometry-toggle:hover,
+.astrometry-toggle.active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-alpha-10);
+}
+
+.astrometry-toggle-icon {
+  color: var(--color-primary);
+  font-size: 1.1rem;
+}
+
+.astrometry-toggle-count {
+  min-width: 1.6rem;
+  padding: 0.08rem 0.36rem;
+  border-radius: 999px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.info-section dl.astrometry-facts {
+  grid-template-columns: auto 1fr;
+  gap: 0.35rem 0.75rem;
+  margin-top: 0.85rem;
+}
+
+.astrometry-facts dd {
+  text-align: right;
+}
+
+.target-in-frame {
+  color: var(--color-success-light) !important;
+}
+
+.target-out-of-frame {
+  color: var(--color-error-light) !important;
+}
+
+.astrometry-objects {
+  margin-top: 1rem;
+}
+
+.astrometry-list-heading {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.astrometry-objects ol {
+  list-style: none;
+  margin: 0.45rem 0 0;
+  padding: 0;
+}
+
+.astrometry-objects li {
+  padding: 0.58rem 0;
+  border-top: 1px solid var(--color-bg-tertiary);
+}
+
+.astrometry-object-title > span:first-child {
+  color: var(--color-text-primary);
+  font-size: 0.83rem;
+  font-weight: 600;
+}
+
+.astrometry-object-title > span:last-child:not(:first-child) {
+  overflow: hidden;
+  color: var(--color-primary);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.astrometry-object-meta,
+.astrometry-object-source,
+.astrometry-more,
+.astrometry-message {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+}
+
+.astrometry-object-meta {
+  margin-top: 0.18rem;
+  text-transform: capitalize;
+}
+
+.astrometry-object-source {
+  margin-top: 0.12rem;
+  opacity: 0.75;
+}
+
+.astrometry-more {
+  padding-top: 0.45rem;
+  text-align: center;
+}
+
+.astrometry-message {
+  margin: 0.75rem 0 0;
+  line-height: 1.45;
+}
+
+.astrometry-message-warning {
+  color: var(--color-warning-light);
 }
 
 .info-section {

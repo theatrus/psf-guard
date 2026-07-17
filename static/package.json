@@ -17,6 +17,7 @@
     "tauri:build": "cd .. && cargo tauri build"
   },
   "dependencies": {
+    "@seiza/astro-overlay": "^0.1.1",
     "@tanstack/react-query": "^5.85.5",
     "@tauri-apps/api": "^2.11.0",
     "@types/react-router-dom": "^5.3.3",

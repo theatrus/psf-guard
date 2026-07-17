@@ -58,6 +58,9 @@ pub struct AppState {
     /// PNG generation (see `preview_queue`). Process-global so total concurrent
     /// generation is bounded regardless of how many databases are loaded.
     pub preview_queue: crate::server::preview_queue::PreviewQueue,
+    /// Process-global Seiza catalogs and capability diagnostics. Catalogs are
+    /// shared across databases and opened lazily on first use.
+    pub astrometry: Arc<crate::astrometry::AstrometryContext>,
 }
 
 /// RAII marker that an interactive CPU-heavy job is running. Increments the
@@ -310,6 +313,16 @@ impl AppState {
         cache_dir: String,
         pregeneration_config: PregenerationConfig,
     ) -> Result<Self> {
+        Self::from_databases_with_astrometry(databases, cache_dir, pregeneration_config, None)
+    }
+
+    /// Build state with optional process-global Seiza catalog configuration.
+    pub fn from_databases_with_astrometry(
+        databases: Vec<DbEntry>,
+        cache_dir: String,
+        pregeneration_config: PregenerationConfig,
+        astrometry_config: Option<crate::astrometry::AstrometryConfig>,
+    ) -> Result<Self> {
         let mut map = HashMap::with_capacity(databases.len());
         for entry in databases {
             let ctx = Arc::new(DatabaseContext::new(
@@ -331,6 +344,9 @@ impl AppState {
             worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
+            astrometry: Arc::new(crate::astrometry::AstrometryContext::new(
+                astrometry_config.unwrap_or_default(),
+            )),
         })
     }
 
@@ -433,6 +449,7 @@ impl AppState {
             worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
+            astrometry: Arc::new(crate::astrometry::AstrometryContext::default()),
         }
     }
 }

@@ -47,6 +47,8 @@ pub struct ServerConfig {
     /// Tuning policy for the parallel scans and background pre-generation.
     /// See `concurrency::WorkerPolicy`.
     pub worker_policy: crate::concurrency::WorkerPolicy,
+    /// Process-global Seiza catalog configuration from the shared registry.
+    pub astrometry_config: Option<crate::astrometry::AstrometryConfig>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -60,6 +62,7 @@ pub async fn run_server(
     registry_path: Option<PathBuf>,
     allow_database_management: bool,
     worker_policy: crate::concurrency::WorkerPolicy,
+    astrometry_config: Option<crate::astrometry::AstrometryConfig>,
 ) -> anyhow::Result<()> {
     // Initialize tracing with environment-based filtering (for CLI mode)
     // Set RUST_LOG=debug for debug logs, RUST_LOG=info for info logs, etc.
@@ -84,6 +87,7 @@ pub async fn run_server(
         registry_path,
         allow_database_management,
         worker_policy,
+        astrometry_config,
     };
 
     run_server_internal(config, None).await
@@ -138,10 +142,11 @@ async fn run_server_internal(
     std::fs::create_dir_all(&config.cache_dir)?;
 
     // Create app state
-    let state = match AppState::from_databases(
+    let state = match AppState::from_databases_with_astrometry(
         config.databases.clone(),
         config.cache_dir.clone(),
         config.pregeneration_config.clone(),
+        config.astrometry_config.clone(),
     ) {
         Ok(state) => {
             tracing::info!("✅ Application state initialized successfully");
@@ -220,6 +225,10 @@ async fn run_server_internal(
         .route("/images", get(handlers::get_images))
         .route("/images/{image_id}", get(handlers::get_image))
         .route(
+            "/images/{image_id}/astrometry",
+            get(handlers::get_image_astrometry),
+        )
+        .route(
             "/images/generation-status",
             post(handlers::post_generation_status),
         )
@@ -253,6 +262,14 @@ async fn run_server_internal(
     // Top-level API: global endpoints + nested per-DB routes.
     let api_routes = Router::new()
         .route("/info", get(handlers::get_server_info))
+        .route(
+            "/astrometry/capabilities",
+            get(handlers::get_astrometry_capabilities),
+        )
+        .route(
+            "/astrometry/catalogs/validate",
+            post(handlers::validate_astrometry_catalogs),
+        )
         .route(
             "/databases",
             get(handlers::list_databases).post(handlers::add_database_route),

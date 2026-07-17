@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 import * as os from 'os';
 import * as path from 'path';
+import { installAstrometryFixture } from './e2e/fixtures/astrometry';
 
 const PORT = Number(process.env.PSF_GUARD_E2E_PORT ?? 13099);
 
@@ -9,6 +10,11 @@ const PORT = Number(process.env.PSF_GUARD_E2E_PORT ?? 13099);
 // `psf-guard server` instance at it via --registry / --cache-dir so the test
 // run never touches the user's real config.
 const TMP_BASE = path.join(os.tmpdir(), `psf-guard-e2e-${process.pid}`);
+
+// `webServer` starts before Playwright's global setup. Seed the process-global
+// astrometry registry while evaluating the config so the Rust server sees it
+// during startup; global setup restores the same fixture after its reset.
+installAstrometryFixture(TMP_BASE);
 
 // macOS local dev needs OpenCV's libclang.dylib reachable; CI / Linux usually
 // doesn't. Pass through whatever the parent shell has set; if nothing's set

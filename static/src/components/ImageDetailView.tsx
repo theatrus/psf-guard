@@ -9,6 +9,8 @@ import { useImageZoom } from '../hooks/useImageZoom';
 import { useAsyncImage } from '../hooks/useAsyncImage';
 import { ensurePreviewReady } from '../hooks/previewPoll';
 import UndoRedoToolbar from './UndoRedoToolbar';
+import AstrometryPanel from './AstrometryPanel';
+import { AstroOverlay } from '@seiza/astro-overlay/react';
 
 interface ImageDetailViewProps {
   dbId: string;
@@ -50,6 +52,11 @@ export default function ImageDetailView({
   const [isOriginalLoaded, setIsOriginalLoaded] = useState(false);
   const [useOriginalImage, setUseOriginalImage] = useState(false);
   const [imageError, setImageError] = useState(false);
+  const [showAstrometry, setShowAstrometry] = useState(true);
+  const [displayedBitmapDimensions, setDisplayedBitmapDimensions] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
 
   // State machine to prevent feedback loops
   const imageStateRef = useRef<'large' | 'switching-to-original' | 'original'>('large');
@@ -140,6 +147,16 @@ export default function ImageDetailView({
     placeholderData: (previousData) => previousData, // Keep showing previous image while loading new one
   });
 
+  const {
+    data: astrometry,
+    isLoading: astrometryLoading,
+    error: astrometryError,
+  } = useQuery({
+    queryKey: ['db', dbId, 'image', imageId, 'astrometry'],
+    queryFn: () => apiClient.getImageAstrometry(dbId, imageId),
+    retry: false,
+  });
+
   // Fetch star detection
   const { data: starData, isLoading: starDataLoading } = useQuery({
     queryKey: ['db', dbId, 'stars', imageId],
@@ -162,15 +179,22 @@ export default function ImageDetailView({
   useHotkeys('s', () => {
     setShowStars(s => !s);
     setShowPsf(false); // Turn off PSF when showing stars
+    setShowAstrometry(false);
   }, [showStars]);
   useHotkeys('p', () => {
     const newPsfState = !showPsf;
     setShowPsf(newPsfState);
     setShowStars(false); // Turn off stars when showing PSF
+    setShowAstrometry(false);
     if (newPsfState) {
       setPsfImageLoading(true);
     }
   }, [showPsf]);
+  useHotkeys('o', () => {
+    setShowAstrometry((visible) => !visible);
+    setShowStars(false);
+    setShowPsf(false);
+  }, []);
   useHotkeys('z', () => setImageSize(s => s === 'screen' ? 'large' : 'screen'), []);
   useHotkeys('plus,equal', () => zoom.zoomIn(), [zoom.zoomIn]);
   useHotkeys('minus', () => zoom.zoomOut(), [zoom.zoomOut]);
@@ -254,6 +278,7 @@ export default function ImageDetailView({
     });
     imageStateRef.current = 'large';
     setImageError(false);
+    setDisplayedBitmapDimensions(null);
   }, [dbId, imageId, showStars, maxStars, mainImageKey, largeNonPsfSrc]);
 
   // A bitmap finished loading into one of the <img> elements. Hand its
@@ -264,6 +289,8 @@ export default function ImageDetailView({
     const width = img.naturalWidth;
     const height = img.naturalHeight;
     if (!width || !height) return;
+
+    setDisplayedBitmapDimensions({ width, height });
 
     zoom.setImageDimensions(width, height, useOriginalImage);
 
@@ -458,6 +485,24 @@ export default function ImageDetailView({
                   }}
                   draggable={false}
                 />
+                {!showPsf &&
+                  showAstrometry &&
+                  !hideMainImage &&
+                  displayedBitmapDimensions &&
+                  astrometry?.solution && (
+                    <AstroOverlay
+                      solution={astrometry.solution}
+                      density={0.2}
+                      className="detail-astrometry-overlay"
+                      data-testid="astrometry-overlay"
+                      style={{
+                        width: `${displayedBitmapDimensions.width}px`,
+                        height: `${displayedBitmapDimensions.height}px`,
+                        transform: `translate(${zoom.zoomState.offsetX}px, ${zoom.zoomState.offsetY}px) scale(${zoom.zoomState.scale})`,
+                        transformOrigin: '0 0',
+                      }}
+                    />
+                  )}
                 </>
               )}
               {!showPsf &&
@@ -572,6 +617,18 @@ export default function ImageDetailView({
               )}
             </div>
 
+            <AstrometryPanel
+              analysis={astrometry}
+              isLoading={astrometryLoading}
+              error={astrometryError instanceof Error ? astrometryError.message : undefined}
+              overlayVisible={showAstrometry && !!astrometry?.solution}
+              onToggleOverlay={() => {
+                setShowAstrometry((visible) => !visible);
+                setShowStars(false);
+                setShowPsf(false);
+              }}
+            />
+
             <div className="detail-actions">
               <button 
                 className="action-button accept" 
@@ -618,6 +675,7 @@ export default function ImageDetailView({
                 <span>U Pending</span>
                 <span>S Stars {showStars ? '✓' : ''}</span>
                 <span>P PSF {showPsf ? '✓' : ''}</span>
+                <span>O Sky {showAstrometry && astrometry?.solution ? '✓' : ''}</span>
                 <span>Z Size</span>
                 {grading && <span>⌘Z Undo</span>}
                 {grading && <span>⌘Y Redo</span>}

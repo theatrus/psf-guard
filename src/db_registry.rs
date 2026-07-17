@@ -72,6 +72,11 @@ pub struct DbRegistry {
     /// merged-overview UI ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_db_id: Option<String>,
+    /// Process-global Seiza catalog configuration shared by every database.
+    /// Additive within registry v2: an absent block means astrometry data is
+    /// not configured and every related capability is disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub astrometry: Option<crate::astrometry::AstrometryConfig>,
 }
 
 impl Default for DbRegistry {
@@ -80,6 +85,7 @@ impl Default for DbRegistry {
             schema_version: CURRENT_SCHEMA_VERSION,
             databases: Vec::new(),
             active_db_id: None,
+            astrometry: None,
         }
     }
 }
@@ -398,6 +404,28 @@ mod tests {
         reg.save(&path).unwrap();
         let reloaded = DbRegistry::load_or_init(&path).unwrap();
         assert_eq!(reloaded.databases, reg.databases);
+    }
+
+    #[test]
+    fn round_trips_process_global_astrometry_config() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let reg = DbRegistry {
+            astrometry: Some(crate::astrometry::AstrometryConfig {
+                data_dir: Some("/catalogs/seiza".to_string()),
+                objects: None,
+                stars: Some("stars-lite-tycho2.bin".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        reg.save(&path).unwrap();
+
+        let reloaded = DbRegistry::load_or_init(&path).unwrap();
+        assert_eq!(reloaded.astrometry, reg.astrometry);
+        let serialized = std::fs::read_to_string(path).unwrap();
+        assert!(serialized.contains("\"astrometry\""));
+        assert!(serialized.contains("stars-lite-tycho2.bin"));
     }
 
     #[test]

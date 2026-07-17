@@ -1,0 +1,153 @@
+import { expect, test, type Page } from '@playwright/test';
+import {
+  registerFixtureDb,
+  resetDatabases,
+  waitForCacheReady,
+} from './helpers';
+
+let dbId: string;
+let slugCounter = 0;
+
+async function renderedTransforms(page: Page) {
+  const image = page.locator('.zoom-container img.detail-main-image').first();
+  const overlay = page.getByTestId('astrometry-overlay');
+  return {
+    image: await image.evaluate((element) => getComputedStyle(element).transform),
+    overlay: await overlay.evaluate((element) => getComputedStyle(element).transform),
+  };
+}
+
+test.beforeEach(async ({ request }) => {
+  await resetDatabases(request);
+  slugCounter += 1;
+  const entry = await registerFixtureDb(request, {
+    name: `Astrometry Rig e2e ${slugCounter}`,
+    slug: `astrometry-rig-e2e-${slugCounter}`,
+  });
+  dbId = entry.id;
+  await waitForCacheReady(request, dbId);
+});
+
+test('projects catalog objects from a real embedded FITS WCS without plate solving', async ({
+  request,
+}) => {
+  const response = await request.get(
+    `/api/db/${encodeURIComponent(dbId)}/images/1/astrometry`
+  );
+  expect(response.ok()).toBeTruthy();
+
+  const body = await response.json();
+  expect(body.success).toBe(true);
+  expect(body.data).toMatchObject({
+    image_id: 1,
+    status: 'solved',
+    mode: 'embedded_wcs',
+    catalog_scope: 'embedded_footprint',
+    hint_source: {
+      source: 'fits_wcs',
+    },
+    solution: {
+      image_width: 9576,
+      image_height: 6388,
+      wcs: {
+        ctype: ['RA---TAN', 'DEC--TAN'],
+        cunit: ['deg', 'deg'],
+        radesys: 'ICRS',
+      },
+    },
+    pointing: {
+      target_in_frame: true,
+    },
+  });
+  expect(body.data.catalog_hits).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        stable_id: 'openngc:NGC2632',
+        source: 'OpenNGC',
+        name: 'M 44',
+        common_name: 'Beehive Cluster',
+        kind: 'open-cluster',
+      }),
+    ])
+  );
+  expect(body.data.solution.objects).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        stable_id: 'openngc:NGC2632',
+        name: 'M 44',
+      }),
+    ])
+  );
+  expect(body.data.pointing.separation_arcsec).toBeLessThan(0.01);
+  expect(body.data.source_fingerprint.canonical_path).toMatch(/\.fit(s)?$/i);
+});
+
+test('keeps catalog-only association distinct when a real FITS file has no WCS', async ({
+  request,
+}) => {
+  const response = await request.get(
+    `/api/db/${encodeURIComponent(dbId)}/images/2/astrometry`
+  );
+  expect(response.ok()).toBeTruthy();
+
+  const body = await response.json();
+  expect(body.data).toMatchObject({
+    image_id: 2,
+    status: 'catalog_only',
+    catalog_scope: 'estimated_field',
+    hint_source: { source: 'fits_header' },
+  });
+  expect(body.data.solution).toBeUndefined();
+  expect(body.data.catalog_hits).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ stable_id: 'openngc:NGC2632', name: 'M 44' }),
+    ])
+  );
+});
+
+test('renders the real Seiza solution and keeps the overlay aligned while zooming and panning', async ({
+  page,
+}) => {
+
+  await page.goto(`/#/detail/1?db=${encodeURIComponent(dbId)}&project=1`);
+
+  const overlay = page.getByTestId('astrometry-overlay');
+  await expect(page.getByText('Embedded FITS WCS')).toBeVisible();
+  await expect(page.getByTestId('astrometry-panel').getByText('M 44')).toBeVisible();
+  await expect(overlay).toBeVisible({ timeout: 30_000 });
+  await expect(overlay).toHaveAttribute('data-overlay-version', '1');
+  await expect(overlay.getByText('M 44')).toBeVisible();
+
+  const initial = await renderedTransforms(page);
+  expect(initial.overlay).toBe(initial.image);
+
+  await page.getByTitle('100% (1)').click();
+  await expect
+    .poll(async () => {
+      const current = await renderedTransforms(page);
+      return current.overlay === current.image && current.image !== initial.image;
+    })
+    .toBe(true);
+
+  const zoomed = await renderedTransforms(page);
+  const container = page.locator('.zoom-container');
+  const box = await container.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + box!.width / 2 + 80, box!.y + box!.height / 2 + 50, {
+    steps: 5,
+  });
+  await page.mouse.up();
+  await expect
+    .poll(async () => {
+      const current = await renderedTransforms(page);
+      return current.overlay === current.image && current.image !== zoomed.image;
+    })
+    .toBe(true);
+
+  await page.getByRole('button', { name: /Sky overlay on/ }).click();
+  await expect(overlay).toHaveCount(0);
+  await page.getByRole('button', { name: /Show sky overlay/ }).click();
+  await expect(page.getByTestId('astrometry-overlay')).toBeVisible();
+});
