@@ -48,8 +48,13 @@ jobs:
     - name: Install OpenCV dependencies (macOS)
       if: matrix.os == 'macos-latest'
       run: |
-        brew install opencv
-        echo "OpenCV installed via Homebrew"
+        # opencv-rust 0.99 targets OpenCV 4. Homebrew's unversioned formula now
+        # installs OpenCV 5, whose moved types break binding generation.
+        brew install opencv@4
+        OPENCV_PREFIX="$(brew --prefix opencv@4)"
+        echo "PKG_CONFIG_PATH=${OPENCV_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
+        echo "OPENCV_PKGCONFIG_NAME=opencv4" >> "$GITHUB_ENV"
+        echo "OpenCV 4 installed via Homebrew"
 
         # Set up libclang path for macOS to avoid dyld errors
         # Try both XCode and Command Line Tools paths
@@ -302,7 +307,12 @@ jobs:
     - name: Install system dependencies (macOS)
       if: matrix.os == 'macos-latest'
       run: |
-        brew install opencv
+        # opencv-rust 0.99 targets OpenCV 4. Homebrew's unversioned formula now
+        # installs OpenCV 5, whose moved types break binding generation.
+        brew install opencv@4
+        OPENCV_PREFIX="$(brew --prefix opencv@4)"
+        echo "PKG_CONFIG_PATH=${OPENCV_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
+        echo "OPENCV_PKGCONFIG_NAME=opencv4" >> "$GITHUB_ENV"
 
         # Set up libclang path for macOS to avoid dyld errors
         if [ -d "$(xcode-select --print-path)/Toolchains/XcodeDefault.xctoolchain/usr/lib/" ]; then
