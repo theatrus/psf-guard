@@ -38,8 +38,10 @@ image = "0.25"
 imageproc = "0.27"
 rand = "0.10"
 nalgebra = "0.35"
-# OpenCV integration for advanced computer vision
-opencv = { version = "0.99", optional = true }
+# OpenCV integration for advanced computer vision. Keep the enabled modules
+# aligned with the APIs used in src/: the crate's defaults pull in every
+# contrib module and can require libraries that a system OpenCV omits.
+opencv = { version = "0.99", optional = true, default-features = false, features = ["imgproc", "photo", "ximgproc"] }
 # Web server dependencies
 axum = { version = "0.8", features = ["multipart", "macros"] }
 tokio = { version = "1", features = ["full"] }
