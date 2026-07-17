@@ -105,7 +105,7 @@ impl FitsAstrometryHeaders {
                     binning_x.as_ref(),
                 )
             });
-        let embedded_wcs = embedded_wcs(headers, pixel_scale_arcsec_per_pixel.as_ref());
+        let embedded_wcs = embedded_wcs(headers);
 
         Self {
             object_name,
@@ -342,10 +342,7 @@ fn explicit_pixel_scale(headers: &[(String, HeaderValue)]) -> Option<Provenanced
     )
 }
 
-fn embedded_wcs(
-    headers: &[(String, HeaderValue)],
-    pixel_scale: Option<&Provenanced<f64>>,
-) -> Option<Provenanced<FitsWcsHeaders>> {
+fn embedded_wcs(headers: &[(String, HeaderValue)]) -> Option<Provenanced<FitsWcsHeaders>> {
     let crval1 = find_f64(headers, &["CRVAL1"])?;
     let crval2 = find_f64(headers, &["CRVAL2"])?;
     if !(0.0..=360.0).contains(&crval1.value) || !(-90.0..=90.0).contains(&crval2.value) {
@@ -355,23 +352,37 @@ fn embedded_wcs(
     let crpix2 = find_f64(headers, &["CRPIX2"])?;
     let ctype1 = find_text(headers, &["CTYPE1"])?;
     let ctype2 = find_text(headers, &["CTYPE2"])?;
-    if !ctype1.value.to_ascii_uppercase().starts_with("RA")
-        || !ctype2.value.to_ascii_uppercase().starts_with("DEC")
-        || !ctype1.value.to_ascii_uppercase().contains("TAN")
-        || !ctype2.value.to_ascii_uppercase().contains("TAN")
+    // Seiza's WCS implementation is a linear TAN projection in degrees. Do
+    // not silently accept TAN-SIP/TPV or other distorted projections: their
+    // coefficients would be discarded and the resulting overlay would look
+    // authoritative while being wrong away from the reference pixel.
+    if !ctype1.value.trim().eq_ignore_ascii_case("RA---TAN")
+        || !ctype2.value.trim().eq_ignore_ascii_case("DEC--TAN")
+        || has_distortion_keywords(headers)
     {
         return None;
     }
 
-    let (cd, mut matrix_sources, matrix_derivation) = wcs_cd_matrix(headers, pixel_scale)?;
+    let (cd, mut matrix_sources, matrix_derivation) = wcs_cd_matrix(headers)?;
     let cunit1 = find_text(headers, &["CUNIT1"])
         .unwrap_or_else(|| Provenanced::derived("deg".to_string(), Vec::new(), "FITS default"));
     let cunit2 = find_text(headers, &["CUNIT2"])
         .unwrap_or_else(|| Provenanced::derived("deg".to_string(), Vec::new(), "FITS default"));
+    if !cunit1.value.trim().eq_ignore_ascii_case("deg")
+        || !cunit2.value.trim().eq_ignore_ascii_case("deg")
+    {
+        return None;
+    }
     let radesys = find_text(headers, &["RADESYS", "RADECSYS"])
         .unwrap_or_else(|| Provenanced::derived("ICRS".to_string(), Vec::new(), "default frame"));
+    if !radesys.value.trim().eq_ignore_ascii_case("ICRS") {
+        return None;
+    }
     let equinox = find_f64(headers, &["EQUINOX"])
         .unwrap_or_else(|| Provenanced::derived(2000.0, Vec::new(), "default equinox"));
+    if !equinox.value.is_finite() || (equinox.value - 2000.0).abs() > 1e-9 {
+        return None;
+    }
 
     let mut sources = Vec::new();
     sources.extend(crval1.sources);
@@ -407,10 +418,7 @@ fn embedded_wcs(
 
 type CdMatrix = ([[f64; 2]; 2], Vec<String>, &'static str);
 
-fn wcs_cd_matrix(
-    headers: &[(String, HeaderValue)],
-    pixel_scale: Option<&Provenanced<f64>>,
-) -> Option<CdMatrix> {
+fn wcs_cd_matrix(headers: &[(String, HeaderValue)]) -> Option<CdMatrix> {
     let cd11 = find_f64(headers, &["CD1_1"]);
     let cd12 = find_f64(headers, &["CD1_2"]);
     let cd21 = find_f64(headers, &["CD2_1"]);
@@ -476,52 +484,22 @@ fn wcs_cd_matrix(
         }
     }
 
-    // Some acquisition applications write CRVAL/CRPIX/CTYPE plus only a
-    // scale and rotator angle. That is still enough to construct the TAN WCS
-    // they intended, though its provenance remains explicit.
-    let scale = pixel_scale?;
-    let rotation = find_f64(headers, &["ANGLE", "ROTATANG", "OBJCTROT", "CROTA2"]);
-    let rotation_deg = rotation.as_ref().map_or(0.0, |value| value.value);
-    let flipped = find_logical(headers, &["FLIPPED"]).is_some_and(|value| value.value);
-    let radians = rotation_deg.to_radians();
-    let (sin, cos) = radians.sin_cos();
-    let degrees_per_pixel = scale.value / 3600.0;
-    let parity = if flipped { -1.0 } else { 1.0 };
-    let matrix = [
-        [-degrees_per_pixel * parity * cos, degrees_per_pixel * sin],
-        [-degrees_per_pixel * parity * sin, -degrees_per_pixel * cos],
-    ];
-    if !valid_cd(matrix) {
-        return None;
-    }
-    let mut sources = scale.sources.clone();
-    if let Some(rotation) = rotation {
-        sources.extend(rotation.sources);
-    }
-    if let Some(flipped) = find_logical(headers, &["FLIPPED"]) {
-        sources.extend(flipped.sources);
-    }
-    Some((
-        matrix,
-        sources,
-        "TAN matrix from header scale, rotation, and parity",
-    ))
+    None
 }
 
-fn find_logical(headers: &[(String, HeaderValue)], names: &[&str]) -> Option<Provenanced<bool>> {
-    let (source, value) = find_header(headers, names)?;
-    let parsed = match value {
-        HeaderValue::Logical(value) => Some(*value),
-        HeaderValue::String(value) | HeaderValue::Raw(value) => {
-            match value.trim().to_ascii_lowercase().as_str() {
-                "true" | "t" | "1" | "yes" => Some(true),
-                "false" | "f" | "0" | "no" => Some(false),
-                _ => None,
-            }
-        }
-        _ => None,
-    }?;
-    Some(Provenanced::direct(parsed, source))
+fn has_distortion_keywords(headers: &[(String, HeaderValue)]) -> bool {
+    headers.iter().any(|(name, _)| {
+        let name = name.trim().to_ascii_uppercase();
+        matches!(
+            name.as_str(),
+            "A_ORDER" | "B_ORDER" | "AP_ORDER" | "BP_ORDER"
+        ) || name.starts_with("A_")
+            || name.starts_with("B_")
+            || name.starts_with("AP_")
+            || name.starts_with("BP_")
+            || name.starts_with("PV1_")
+            || name.starts_with("PV2_")
+    })
 }
 
 fn valid_cd(matrix: [[f64; 2]; 2]) -> bool {
@@ -640,13 +618,13 @@ mod tests {
             ("CDELT1", HeaderValue::Float(0.0003820370496)),
             ("CDELT2", HeaderValue::Float(0.0003820370496)),
             ("CROTA2", HeaderValue::Float(1.4146201508)),
-            ("RADECSYS", HeaderValue::String("FK5".into())),
+            ("RADESYS", HeaderValue::String("ICRS".into())),
             ("EQUINOX", HeaderValue::Float(2000.0)),
         ]));
 
         let wcs = parsed.embedded_wcs.unwrap();
         assert_eq!(wcs.value.crpix, [1919.0, 1079.0]);
-        assert_eq!(wcs.value.radesys, "FK5");
+        assert_eq!(wcs.value.radesys, "ICRS");
         let scale = (wcs.value.cd[0][0] * wcs.value.cd[1][1]
             - wcs.value.cd[0][1] * wcs.value.cd[1][0])
             .abs()
@@ -660,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn constructs_wcs_from_scale_rotation_and_parity_headers() {
+    fn rejects_scale_rotation_and_parity_without_a_fits_wcs_matrix() {
         let parsed = FitsAstrometryHeaders::from_headers(&headers(&[
             ("CRVAL1", HeaderValue::Float(313.11278835943)),
             ("CRVAL2", HeaderValue::Float(43.9080204789476)),
@@ -673,17 +651,47 @@ mod tests {
             ("FLIPPED", HeaderValue::Logical(true)),
         ]));
 
-        let wcs = parsed.embedded_wcs.unwrap();
-        assert_eq!(wcs.value.crpix, [4787.0, 3193.0]);
-        let scale = (wcs.value.cd[0][0] * wcs.value.cd[1][1]
-            - wcs.value.cd[0][1] * wcs.value.cd[1][0])
-            .abs()
-            .sqrt()
-            * 3600.0;
-        assert!((scale - 1.258).abs() < 1e-10);
-        assert_eq!(
-            wcs.derivation.as_deref(),
-            Some("TAN matrix from header scale, rotation, and parity")
-        );
+        assert!(parsed.embedded_wcs.is_none());
+        assert_eq!(parsed.pixel_scale_arcsec_per_pixel.unwrap().value, 1.258);
+    }
+
+    #[test]
+    fn rejects_distorted_non_degree_and_non_icrs_wcs() {
+        let base = [
+            ("CRVAL1", HeaderValue::Float(130.1)),
+            ("CRVAL2", HeaderValue::Float(19.6)),
+            ("CRPIX1", HeaderValue::Float(100.0)),
+            ("CRPIX2", HeaderValue::Float(100.0)),
+            ("CD1_1", HeaderValue::Float(-0.0003)),
+            ("CD1_2", HeaderValue::Float(0.0)),
+            ("CD2_1", HeaderValue::Float(0.0)),
+            ("CD2_2", HeaderValue::Float(0.0003)),
+        ];
+
+        for extra in [
+            vec![
+                ("CTYPE1", HeaderValue::String("RA---TAN-SIP".into())),
+                ("CTYPE2", HeaderValue::String("DEC--TAN-SIP".into())),
+                ("A_ORDER", HeaderValue::Integer(2)),
+                ("B_ORDER", HeaderValue::Integer(2)),
+            ],
+            vec![
+                ("CTYPE1", HeaderValue::String("RA---TAN".into())),
+                ("CTYPE2", HeaderValue::String("DEC--TAN".into())),
+                ("CUNIT1", HeaderValue::String("rad".into())),
+                ("CUNIT2", HeaderValue::String("rad".into())),
+            ],
+            vec![
+                ("CTYPE1", HeaderValue::String("RA---TAN".into())),
+                ("CTYPE2", HeaderValue::String("DEC--TAN".into())),
+                ("RADESYS", HeaderValue::String("FK5".into())),
+            ],
+        ] {
+            let mut values = base.to_vec();
+            values.extend(extra);
+            assert!(FitsAstrometryHeaders::from_headers(&headers(&values))
+                .embedded_wcs
+                .is_none());
+        }
     }
 }

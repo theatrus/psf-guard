@@ -13,7 +13,7 @@ test('catalog-only configuration reports the exact usable Seiza capabilities', a
     seiza_fits_version: '0.1.5',
     features: {
       object_association: true,
-      object_name_search: true,
+      object_name_search: false,
       stellar_name_search: false,
       hinted_solve: false,
       blind_solve: false,

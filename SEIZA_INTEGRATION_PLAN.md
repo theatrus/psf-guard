@@ -535,10 +535,14 @@ installation/update time
 installed filename, size, and SHA-256
 ```
 
-Runtime capability checks use the installed files and their wire headers. The
+Runtime resource checks use the installed files and their wire headers. The
 recorded manifest state establishes that the files came from one coherent
 hosted bundle and supplies stable cache signatures. A custom unmanaged
 directory has no bundle version and reports individual file signatures only.
+The API reports this data readiness separately from feature flags: a feature is
+true only when PSF Guard has a shipped execution path for it. Merely installing
+a star catalog or blind index must not advertise a solver that is still in a
+later phase.
 
 Settings report capabilities independently:
 
@@ -634,10 +638,13 @@ blocking the detail page.
 
 ### Phase 3 — overlay and dynamic annotations
 
-**Static embedded-WCS slice implemented 2026-07-14.** Complete FITS WCS (and
-supported scale/rotation/parity headers) now projects catalog objects into the
-shared `AstroOverlay` component in the same pan/zoom container as the raster.
-Persistent solved WCS, layer preferences, export, and dynamic catalogs remain.
+**Static embedded-WCS slice implemented 2026-07-14.** A validated,
+undistorted, degree-based ICRS TAN WCS using a standard FITS CD, PC+CDELT, or
+CDELT+CROTA matrix now projects catalog objects into the shared `AstroOverlay`
+component in the same pan/zoom container as the raster. Distorted projections,
+other units/frames, and scale/rotator guesses remain catalog/solver hints rather
+than exact overlay geometry. Persistent solved WCS, layer preferences, export,
+and dynamic catalogs remain.
 
 - Add `@seiza/astro-overlay` and render its React `AstroOverlay` directly.
 - Keep PSF Guard-specific layer controls, preference storage, zoom/pan layout,

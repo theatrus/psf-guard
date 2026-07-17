@@ -103,7 +103,12 @@ async fn capabilities_and_validation_report_a_configured_object_catalog() {
     );
     assert_eq!(body["data"]["resources"]["objects"]["format"], "SEIZAOB3");
     assert_eq!(body["data"]["features"]["object_association"], true);
+    assert_eq!(body["data"]["features"]["object_name_search"], false);
+    assert_eq!(body["data"]["features"]["stellar_name_search"], false);
     assert_eq!(body["data"]["features"]["hinted_solve"], false);
+    assert_eq!(body["data"]["features"]["blind_solve"], false);
+    assert_eq!(body["data"]["features"]["transient_annotations"], false);
+    assert_eq!(body["data"]["features"]["minor_body_annotations"], false);
 
     let (status, body) = request(
         build_app(state),

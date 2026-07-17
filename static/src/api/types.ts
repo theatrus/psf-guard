@@ -64,7 +64,7 @@ export interface AstrometryCoordinateSource {
   ra_deg: number;
   dec_deg: number;
   source: string;
-  header_keywords: string[];
+  header_keywords?: string[];
 }
 
 export interface CatalogHit {
@@ -114,6 +114,7 @@ export interface AstrometryAnalysis {
     canonical_path: string;
     size_bytes: number;
     modified_unix_seconds: number;
+    modified_subsec_nanos?: number;
   };
   computed_at: number;
   error?: string;

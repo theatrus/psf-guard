@@ -6,7 +6,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::UNIX_EPOCH;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -111,6 +111,8 @@ pub struct AstrometryResourceCapability {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modified_unix_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub modified_subsec_nanos: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
@@ -175,6 +177,8 @@ pub struct AstrometrySourceFingerprint {
     pub canonical_path: String,
     pub size_bytes: u64,
     pub modified_unix_seconds: u64,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub modified_subsec_nanos: u32,
 }
 
 /// Catalog identity used to distinguish WCS validity from refreshable
@@ -195,6 +199,8 @@ pub struct AstrometryCatalogFileSignature {
     pub format: String,
     pub size_bytes: u64,
     pub modified_unix_seconds: u64,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub modified_subsec_nanos: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
 }
@@ -386,18 +392,42 @@ type StarIdentifierCatalog = seiza::star_ids::StarIdentifierCatalog;
 type BlindIndex = seiza::blind::BlindIndex;
 type MinorBodyCatalog = seiza::minor_bodies::MinorBodyCatalog;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResourceFingerprint {
+    canonical_path: PathBuf,
+    size_bytes: u64,
+    modified: SystemTime,
+    header: Vec<u8>,
+}
+
+struct LoadedResource<T> {
+    value: Arc<T>,
+    fingerprint: ResourceFingerprint,
+}
+
+impl<T> Clone for LoadedResource<T> {
+    fn clone(&self) -> Self {
+        Self {
+            value: Arc::clone(&self.value),
+            fingerprint: self.fingerprint.clone(),
+        }
+    }
+}
+
+type ResourceCache<T> = RwLock<Option<LoadedResource<T>>>;
+
 /// Shared, lazily opened Seiza resources. This belongs on `AppState`, not on a
 /// database context, because every configured scheduler database uses the same
 /// sky catalogs.
 pub struct AstrometryContext {
     config: AstrometryConfig,
     validation_running: AtomicBool,
-    objects: RwLock<Option<Arc<ObjectCatalog>>>,
-    stars: RwLock<Option<Arc<TileCatalog>>>,
-    star_identifiers: RwLock<Option<Arc<StarIdentifierCatalog>>>,
-    blind_index: RwLock<Option<Arc<BlindIndex>>>,
-    transients: RwLock<Option<Arc<ObjectCatalog>>>,
-    minor_bodies: RwLock<Option<Arc<MinorBodyCatalog>>>,
+    objects: ResourceCache<ObjectCatalog>,
+    stars: ResourceCache<TileCatalog>,
+    star_identifiers: ResourceCache<StarIdentifierCatalog>,
+    blind_index: ResourceCache<BlindIndex>,
+    transients: ResourceCache<ObjectCatalog>,
+    minor_bodies: ResourceCache<MinorBodyCatalog>,
 }
 
 impl Default for AstrometryContext {
@@ -425,18 +455,45 @@ impl AstrometryContext {
     }
 
     pub fn object_catalog(&self) -> Result<Arc<ObjectCatalog>, String> {
+        self.load_object_catalog().map(|loaded| loaded.value)
+    }
+
+    pub fn star_catalog(&self) -> Result<Arc<TileCatalog>, String> {
+        self.load_star_catalog().map(|loaded| loaded.value)
+    }
+
+    pub fn star_identifier_catalog(&self) -> Result<Arc<StarIdentifierCatalog>, String> {
+        self.load_star_identifier_catalog()
+            .map(|loaded| loaded.value)
+    }
+
+    pub fn blind_index(&self) -> Result<Arc<BlindIndex>, String> {
+        self.load_blind_index().map(|loaded| loaded.value)
+    }
+
+    pub fn transient_catalog(&self) -> Result<Arc<ObjectCatalog>, String> {
+        self.load_transient_catalog().map(|loaded| loaded.value)
+    }
+
+    pub fn minor_body_catalog(&self) -> Result<Arc<MinorBodyCatalog>, String> {
+        self.load_minor_body_catalog().map(|loaded| loaded.value)
+    }
+
+    fn load_object_catalog(&self) -> Result<LoadedResource<ObjectCatalog>, String> {
         load_cached(&self.objects, self.config.objects_path(), |path| {
             ObjectCatalog::open(path).map_err(|error| error.to_string())
         })
     }
 
-    pub fn star_catalog(&self) -> Result<Arc<TileCatalog>, String> {
+    fn load_star_catalog(&self) -> Result<LoadedResource<TileCatalog>, String> {
         load_cached(&self.stars, self.config.stars_path(), |path| {
             TileCatalog::open(path).map_err(|error| error.to_string())
         })
     }
 
-    pub fn star_identifier_catalog(&self) -> Result<Arc<StarIdentifierCatalog>, String> {
+    fn load_star_identifier_catalog(
+        &self,
+    ) -> Result<LoadedResource<StarIdentifierCatalog>, String> {
         load_cached(
             &self.star_identifiers,
             self.config.star_identifiers_path(),
@@ -444,19 +501,19 @@ impl AstrometryContext {
         )
     }
 
-    pub fn blind_index(&self) -> Result<Arc<BlindIndex>, String> {
+    fn load_blind_index(&self) -> Result<LoadedResource<BlindIndex>, String> {
         load_cached(&self.blind_index, self.config.blind_index_path(), |path| {
             BlindIndex::open(path).map_err(|error| error.to_string())
         })
     }
 
-    pub fn transient_catalog(&self) -> Result<Arc<ObjectCatalog>, String> {
+    fn load_transient_catalog(&self) -> Result<LoadedResource<ObjectCatalog>, String> {
         load_cached(&self.transients, self.config.transients_path(), |path| {
             ObjectCatalog::open(path).map_err(|error| error.to_string())
         })
     }
 
-    pub fn minor_body_catalog(&self) -> Result<Arc<MinorBodyCatalog>, String> {
+    fn load_minor_body_catalog(&self) -> Result<LoadedResource<MinorBodyCatalog>, String> {
         load_cached(
             &self.minor_bodies,
             self.config.minor_bodies_path(),
@@ -466,8 +523,8 @@ impl AstrometryContext {
 
     /// Analyze one image from its FITS headers and the configured object
     /// catalog. This is intentionally header-only: it never decodes pixels or
-    /// launches a plate solve. A complete embedded/header-derived TAN WCS can
-    /// still produce exact overlay geometry; otherwise the result remains a
+    /// launches a plate solve. A validated standard embedded TAN WCS can still
+    /// produce exact overlay geometry; otherwise the result remains a
     /// coordinate-only catalog association.
     pub fn analyze_image(
         &self,
@@ -580,11 +637,14 @@ impl AstrometryContext {
         let mut analysis_error = None;
         let mut hits = Vec::new();
         let mut catalog_query_succeeded = false;
-        let catalog = match self.object_catalog() {
-            Ok(catalog) => Some(catalog),
+        let (catalog, signature) = match self.load_object_catalog() {
+            Ok(loaded) => {
+                let signature = object_catalog_signature(&loaded.fingerprint);
+                (Some(loaded.value), Some(signature))
+            }
             Err(error) => {
                 analysis_error = Some(format!("object catalog unavailable: {error}"));
-                None
+                (None, None)
             }
         };
         if let (Some(catalog), Some(region)) = (catalog.as_ref(), region) {
@@ -608,7 +668,6 @@ impl AstrometryContext {
             .take(100)
             .map(catalog_hit_response)
             .collect::<Vec<_>>();
-        let signature = object_catalog_signature(&self.config);
         let catalog_version = signature
             .as_ref()
             .and_then(|signature| signature.files.first())
@@ -718,49 +777,57 @@ impl AstrometryContext {
         })
     }
 
-    /// Open configured files lazily and report which higher-level features are
-    /// usable. This performs only each format's bounded normal open, never an
-    /// exhaustive validation scan.
+    /// Open configured files lazily and report resource readiness separately
+    /// from PSF Guard features that are actually implemented. This performs
+    /// only each format's bounded normal open, never an exhaustive validation
+    /// scan.
     pub fn capabilities(&self) -> AstrometryCapabilities {
         let objects = capability(
             "objects",
             self.config.objects_path(),
-            self.object_catalog().map(|_| ()),
+            self.load_object_catalog().map(|loaded| loaded.fingerprint),
         );
         let stars = capability(
             "stars",
             self.config.stars_path(),
-            self.star_catalog().map(|_| ()),
+            self.load_star_catalog().map(|loaded| loaded.fingerprint),
         );
         let star_identifiers = capability(
             "star_identifiers",
             self.config.star_identifiers_path(),
-            self.star_identifier_catalog().map(|_| ()),
+            self.load_star_identifier_catalog()
+                .map(|loaded| loaded.fingerprint),
         );
         let blind_index = capability(
             "blind_index",
             self.config.blind_index_path(),
-            self.blind_index().map(|_| ()),
+            self.load_blind_index().map(|loaded| loaded.fingerprint),
         );
         let transients = capability(
             "transients",
             self.config.transients_path(),
-            self.transient_catalog().map(|_| ()),
+            self.load_transient_catalog()
+                .map(|loaded| loaded.fingerprint),
         );
         let minor_bodies = capability(
             "minor_bodies",
             self.config.minor_bodies_path(),
-            self.minor_body_catalog().map(|_| ()),
+            self.load_minor_body_catalog()
+                .map(|loaded| loaded.fingerprint),
         );
 
+        // Resource availability is intentionally not enough to enable a
+        // feature flag. Consumers use this object to decide what PSF Guard can
+        // execute today; future search, solve, and dynamic-annotation paths
+        // must opt in only when their API implementation is shipped.
         let features = AstrometryFeatures {
             object_association: objects.available(),
-            object_name_search: objects.available(),
-            stellar_name_search: star_identifiers.available(),
-            hinted_solve: stars.available(),
-            blind_solve: stars.available() && blind_index.available(),
-            transient_annotations: transients.available(),
-            minor_body_annotations: minor_bodies.available(),
+            object_name_search: false,
+            stellar_name_search: false,
+            hinted_solve: false,
+            blind_solve: false,
+            transient_annotations: false,
+            minor_body_annotations: false,
         };
 
         AstrometryCapabilities {
@@ -855,37 +922,30 @@ fn source_fingerprint(path: &Path) -> Result<AstrometrySourceFingerprint, String
     let metadata = canonical
         .metadata()
         .map_err(|error| format!("failed to stat {}: {error}", canonical.display()))?;
-    let modified_unix_seconds = metadata
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map_or(0, |duration| duration.as_secs());
+    let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
+    let (modified_unix_seconds, modified_subsec_nanos) = unix_time_parts(modified);
     Ok(AstrometrySourceFingerprint {
         canonical_path: canonical.to_string_lossy().into_owned(),
         size_bytes: metadata.len(),
         modified_unix_seconds,
+        modified_subsec_nanos,
     })
 }
 
-fn object_catalog_signature(config: &AstrometryConfig) -> Option<AstrometryCatalogSignature> {
-    let path = config.objects_path()?;
-    let metadata = path.metadata().ok()?;
-    let modified_unix_seconds = metadata
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map_or(0, |duration| duration.as_secs());
-    Some(AstrometryCatalogSignature {
+fn object_catalog_signature(fingerprint: &ResourceFingerprint) -> AstrometryCatalogSignature {
+    let (modified_unix_seconds, modified_subsec_nanos) = unix_time_parts(fingerprint.modified);
+    AstrometryCatalogSignature {
         bundle_version: None,
         files: vec![AstrometryCatalogFileSignature {
             name: "objects".to_string(),
-            path: path.to_string_lossy().into_owned(),
-            format: read_magic(&path).unwrap_or_else(|_| "unknown".to_string()),
-            size_bytes: metadata.len(),
+            path: fingerprint.canonical_path.to_string_lossy().into_owned(),
+            format: fingerprint.format(),
+            size_bytes: fingerprint.size_bytes,
             modified_unix_seconds,
+            modified_subsec_nanos,
             sha256: None,
         }],
-    })
+    }
 }
 
 fn identity(object: &seiza::objects::SkyObject) -> CatalogObjectIdentity {
@@ -1007,30 +1067,47 @@ impl Drop for AstrometryValidationGuard<'_> {
 }
 
 fn load_cached<T>(
-    cache: &RwLock<Option<Arc<T>>>,
+    cache: &ResourceCache<T>,
     path: Option<PathBuf>,
     open: impl FnOnce(&Path) -> Result<T, String>,
-) -> Result<Arc<T>, String> {
-    if let Some(value) = cache.read().unwrap().as_ref() {
-        return Ok(Arc::clone(value));
-    }
+) -> Result<LoadedResource<T>, String> {
     let path = path.ok_or_else(|| "resource is not configured".to_string())?;
-    if !path.is_file() {
-        return Err(format!("resource file does not exist: {}", path.display()));
+    let fingerprint = resource_fingerprint(&path)?;
+    if let Some(cached) = cache.read().unwrap().as_ref() {
+        if cached.fingerprint == fingerprint {
+            return Ok(cached.clone());
+        }
     }
+
     let mut guard = cache.write().unwrap();
-    if let Some(value) = guard.as_ref() {
-        return Ok(Arc::clone(value));
+    let fingerprint = resource_fingerprint(&path)?;
+    if let Some(cached) = guard.as_ref() {
+        if cached.fingerprint == fingerprint {
+            return Ok(cached.clone());
+        }
     }
-    let value = Arc::new(open(&path).map_err(|error| format!("{}: {error}", path.display()))?);
-    *guard = Some(Arc::clone(&value));
-    Ok(value)
+
+    let value = Arc::new(
+        open(&fingerprint.canonical_path)
+            .map_err(|error| format!("{}: {error}", fingerprint.canonical_path.display()))?,
+    );
+    let confirmed = resource_fingerprint(&path)?;
+    if confirmed != fingerprint {
+        return Err(format!(
+            "resource changed while it was being opened: {}",
+            path.display()
+        ));
+    }
+
+    let loaded = LoadedResource { value, fingerprint };
+    *guard = Some(loaded.clone());
+    Ok(loaded)
 }
 
 fn capability(
     name: &str,
     path: Option<PathBuf>,
-    opened: Result<(), String>,
+    opened: Result<ResourceFingerprint, String>,
 ) -> AstrometryResourceCapability {
     let Some(path) = path else {
         return AstrometryResourceCapability {
@@ -1040,6 +1117,7 @@ fn capability(
             format: None,
             size_bytes: None,
             modified_unix_seconds: None,
+            modified_subsec_nanos: None,
             error: None,
         };
     };
@@ -1052,36 +1130,95 @@ fn capability(
             format: None,
             size_bytes: None,
             modified_unix_seconds: None,
+            modified_subsec_nanos: None,
             error: Some("configured resource file does not exist".to_string()),
         };
     }
-    let metadata = path.metadata().ok();
-    let size_bytes = metadata.as_ref().map(|metadata| metadata.len());
-    let modified_unix_seconds = metadata
-        .and_then(|metadata| metadata.modified().ok())
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs());
-    let format = read_magic(&path).ok();
     match opened {
-        Ok(()) => AstrometryResourceCapability {
-            name: name.to_string(),
-            status: AstrometryResourceStatus::Available,
-            path: Some(path_string),
-            format,
-            size_bytes,
-            modified_unix_seconds,
-            error: None,
-        },
-        Err(error) => AstrometryResourceCapability {
-            name: name.to_string(),
-            status: AstrometryResourceStatus::Invalid,
-            path: Some(path_string),
-            format,
-            size_bytes,
-            modified_unix_seconds,
-            error: Some(error),
-        },
+        Ok(fingerprint) => {
+            let (modified_unix_seconds, modified_subsec_nanos) =
+                unix_time_parts(fingerprint.modified);
+            AstrometryResourceCapability {
+                name: name.to_string(),
+                status: AstrometryResourceStatus::Available,
+                path: Some(fingerprint.canonical_path.to_string_lossy().into_owned()),
+                format: Some(fingerprint.format()),
+                size_bytes: Some(fingerprint.size_bytes),
+                modified_unix_seconds: Some(modified_unix_seconds),
+                modified_subsec_nanos: Some(modified_subsec_nanos),
+                error: None,
+            }
+        }
+        Err(error) => {
+            let metadata = path.metadata().ok();
+            let size_bytes = metadata.as_ref().map(|metadata| metadata.len());
+            let modified = metadata
+                .and_then(|metadata| metadata.modified().ok())
+                .map(unix_time_parts);
+            AstrometryResourceCapability {
+                name: name.to_string(),
+                status: AstrometryResourceStatus::Invalid,
+                path: Some(path_string),
+                format: read_magic(&path).ok(),
+                size_bytes,
+                modified_unix_seconds: modified.map(|parts| parts.0),
+                modified_subsec_nanos: modified.map(|parts| parts.1),
+                error: Some(error),
+            }
+        }
     }
+}
+
+fn resource_fingerprint(path: &Path) -> Result<ResourceFingerprint, String> {
+    const HEADER_BYTES: usize = 32;
+
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|error| format!("failed to canonicalize {}: {error}", path.display()))?;
+    let metadata = canonical_path
+        .metadata()
+        .map_err(|error| format!("failed to stat {}: {error}", canonical_path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "resource path is not a file: {}",
+            canonical_path.display()
+        ));
+    }
+    let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
+    let mut file = File::open(&canonical_path)
+        .map_err(|error| format!("failed to open {}: {error}", canonical_path.display()))?;
+    let mut bytes = [0u8; HEADER_BYTES];
+    let read = file
+        .read(&mut bytes)
+        .map_err(|error| format!("failed to read {}: {error}", canonical_path.display()))?;
+
+    Ok(ResourceFingerprint {
+        canonical_path,
+        size_bytes: metadata.len(),
+        modified,
+        header: bytes[..read].to_vec(),
+    })
+}
+
+impl ResourceFingerprint {
+    fn format(&self) -> String {
+        let end = self.header.len().min(8);
+        if end == 0 {
+            "unknown".to_string()
+        } else {
+            String::from_utf8_lossy(&self.header[..end]).into_owned()
+        }
+    }
+}
+
+fn unix_time_parts(time: SystemTime) -> (u64, u32) {
+    time.duration_since(UNIX_EPOCH)
+        .map(|duration| (duration.as_secs(), duration.subsec_nanos()))
+        .unwrap_or((0, 0))
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
 }
 
 fn read_magic(path: &Path) -> std::io::Result<String> {
@@ -1220,6 +1357,12 @@ mod tests {
             Some("SEIZAOB3")
         );
         assert!(capabilities.features.object_association);
+        assert!(!capabilities.features.object_name_search);
+        assert!(!capabilities.features.stellar_name_search);
+        assert!(!capabilities.features.hinted_solve);
+        assert!(!capabilities.features.blind_solve);
+        assert!(!capabilities.features.transient_annotations);
+        assert!(!capabilities.features.minor_body_annotations);
 
         let validation = context.try_validate_all().unwrap();
         let objects = validation
@@ -1295,6 +1438,30 @@ mod tests {
     }
 
     #[test]
+    fn cached_resources_reload_when_the_file_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("resource.txt");
+        let cache: ResourceCache<String> = RwLock::new(None);
+        std::fs::write(&path, "first").unwrap();
+
+        let first = load_cached(&cache, Some(path.clone()), |path| {
+            std::fs::read_to_string(path).map_err(|error| error.to_string())
+        })
+        .unwrap();
+        assert_eq!(first.value.as_str(), "first");
+
+        std::fs::write(&path, "replacement with a different size").unwrap();
+        let second = load_cached(&cache, Some(path), |path| {
+            std::fs::read_to_string(path).map_err(|error| error.to_string())
+        })
+        .unwrap();
+
+        assert_eq!(second.value.as_str(), "replacement with a different size");
+        assert!(!Arc::ptr_eq(&first.value, &second.value));
+        assert_ne!(first.fingerprint, second.fingerprint);
+    }
+
+    #[test]
     fn analysis_contract_keeps_hint_expected_and_solution_separate() {
         let analysis = AstrometryAnalysis {
             image_id: 42,
@@ -1321,6 +1488,7 @@ mod tests {
                 canonical_path: "/images/frame.fits".to_string(),
                 size_bytes: 1234,
                 modified_unix_seconds: 5678,
+                modified_subsec_nanos: 9,
             },
             catalog_signature: None,
             computed_at: 9999,

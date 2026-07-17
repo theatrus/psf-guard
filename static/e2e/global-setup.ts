@@ -5,13 +5,74 @@ import * as path from 'path';
 import { installAstrometryFixture } from './fixtures/astrometry';
 import { ensureAllFixtures } from './fixtures/loader';
 
+const FITS_CARD_BYTES = 80;
+const FITS_BLOCK_BYTES = 2880;
+
+function fitsCard(contents: string): Buffer {
+  const encoded = Buffer.from(contents, 'ascii');
+  if (encoded.length > FITS_CARD_BYTES) {
+    throw new Error(`FITS fixture card exceeds 80 bytes: ${contents}`);
+  }
+  return Buffer.from(contents.padEnd(FITS_CARD_BYTES, ' '), 'ascii');
+}
+
+/**
+ * Add a small, standards-based linear ICRS TAN WCS to one copied fixture.
+ * The release fixture has ample padding after END in its second header block,
+ * so this edits header cards only and leaves the real pixel payload unchanged.
+ */
+function installEmbeddedWcs(filePath: string): void {
+  const fd = fs.openSync(filePath, 'r+');
+  try {
+    const header = Buffer.alloc(FITS_BLOCK_BYTES * 4);
+    const bytesRead = fs.readSync(fd, header, 0, header.length, 0);
+    let endOffset = -1;
+    for (let offset = 0; offset + FITS_CARD_BYTES <= bytesRead; offset += FITS_CARD_BYTES) {
+      if (header.toString('ascii', offset, offset + 8).trim() === 'END') {
+        endOffset = offset;
+        break;
+      }
+    }
+    if (endOffset < 0) {
+      throw new Error(`FITS fixture has no END card: ${filePath}`);
+    }
+
+    const cards = [
+      "CTYPE1  = 'RA---TAN'           / Undistorted tangent-plane RA axis",
+      "CTYPE2  = 'DEC--TAN'           / Undistorted tangent-plane Dec axis",
+      "CUNIT1  = 'deg'                / World-coordinate unit",
+      "CUNIT2  = 'deg'                / World-coordinate unit",
+      "RADESYS = 'ICRS'               / Celestial reference frame",
+      'EQUINOX =               2000.0 / Reference equinox',
+      'CRVAL1  =     130.107013851174 / [deg] WCS reference RA',
+      'CRVAL2  =     19.6601508517091 / [deg] WCS reference Dec',
+      'CRPIX1  =               4788.5 / FITS one-based reference pixel',
+      'CRPIX2  =               3194.5 / FITS one-based reference pixel',
+      'CD1_1   =  -0.0004160277777778 / [deg/pixel] Linear WCS matrix',
+      'CD1_2   =                  0.0 / [deg/pixel] Linear WCS matrix',
+      'CD2_1   =                  0.0 / [deg/pixel] Linear WCS matrix',
+      'CD2_2   =   0.0004160277777778 / [deg/pixel] Linear WCS matrix',
+      'END',
+    ].map(fitsCard);
+    const blockEnd = Math.ceil((endOffset + FITS_CARD_BYTES) / FITS_BLOCK_BYTES) * FITS_BLOCK_BYTES;
+    if (endOffset + cards.length * FITS_CARD_BYTES > blockEnd) {
+      throw new Error(`FITS fixture lacks header padding for embedded WCS: ${filePath}`);
+    }
+    cards.forEach((card, index) => card.copy(header, endOffset + index * FITS_CARD_BYTES));
+    header.fill(0x20, endOffset + cards.length * FITS_CARD_BYTES, blockEnd);
+    fs.writeSync(fd, header, 0, blockEnd, 0);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 /**
  * Wipe and recreate the per-PID tmp directory used by the e2e suite. Inside
  * it we drop a fresh SQLite fixture file mimicking the N.I.N.A. scheduler
  * schema (matching `tests/integration_sequence_analysis.rs::create_test_schema`)
  * pre-populated with two projects:
  *
- *   - "Project Alpha" / target "Alpha M65" → 3 images (the B-filter
+ *   - "Project Alpha" / target "Alpha M44" → 3 images (the B-filter
  *     sequence 0028/0029/0030, all on the same night).
  *   - "Project Beta"  / target "Beta Field" → 1 image (the later 0104).
  *
@@ -48,6 +109,7 @@ export default async function globalSetup() {
   for (const name of [alpha1, alpha2, alpha3, beta1]) {
     fs.copyFileSync(fixturePaths[name], path.join(imagesDir, name));
   }
+  installEmbeddedWcs(path.join(imagesDir, alpha1));
 
   const dbPath = path.join(tmpBase, 'scheduler.sqlite');
   const db = new Database(dbPath);
@@ -83,7 +145,7 @@ export default async function globalSetup() {
       (2, 'default', 'Project Beta',  '1 longer-exposure target');
 
     INSERT INTO target (Id, projectId, name, active, ra, dec) VALUES
-      (1, 1, 'Alpha M65',  1, 169.73,  13.09),
+      (1, 1, 'Alpha M44',  1, 130.107013851174,  19.6601508517091),
       (2, 2, 'Beta Field', 1, 230.0,  -10.0);
   `);
 

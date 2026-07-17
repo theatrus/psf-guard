@@ -7,9 +7,11 @@ them as **release attachments on GitHub** and download them on demand.
 
 The suite also contains `objects.bin.gz.b64`, a compressed one-object
 `SEIZAOB3` catalog. Global setup expands it into the isolated astrometry data
-directory and points the test registry at it. This keeps catalog capability
-and validation tests offline while still exercising Seiza's real indexed-file
-reader through the running PSF Guard server.
+directory and points the test registry at it. It also adds a standards-based,
+undistorted ICRS TAN WCS to the copied `0028` fixture's padded FITS header while
+leaving its real pixel payload unchanged. This keeps catalog capability and
+validation tests offline while exercising Seiza's real indexed-file reader and
+the complete FITS-to-overlay path through the running PSF Guard server.
 
 ## Contents
 
@@ -19,7 +21,7 @@ reader through the running PSF Guard server.
 - `loader.ts` — small library that consults the manifest, falls back to a
   local cache directory (default `~/.cache/psf-guard-e2e-fixtures/`), and
   downloads + verifies missing files.
-- `objects.bin.gz.b64` — deterministic M 65 catalog used by the astrometry API
+- `objects.bin.gz.b64` — deterministic M 44 catalog used by the astrometry API
   end-to-end tests; it does not need to be uploaded with the FITS release.
 
 ## Local cache layout
