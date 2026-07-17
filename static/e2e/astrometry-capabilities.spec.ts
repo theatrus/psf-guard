@@ -9,8 +9,8 @@ test('catalog-only configuration reports the exact usable Seiza capabilities', a
   const body = await response.json();
   expect(body.success).toBe(true);
   expect(body.data).toMatchObject({
-    seiza_version: '0.4.1',
-    seiza_fits_version: '0.1.4',
+    seiza_version: '0.5.0',
+    seiza_fits_version: '0.1.5',
     features: {
       object_association: true,
       object_name_search: true,

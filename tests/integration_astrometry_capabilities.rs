@@ -95,8 +95,8 @@ async fn capabilities_and_validation_report_a_configured_object_catalog() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["data"]["seiza_version"], "0.4.1");
-    assert_eq!(body["data"]["seiza_fits_version"], "0.1.4");
+    assert_eq!(body["data"]["seiza_version"], "0.5.0");
+    assert_eq!(body["data"]["seiza_fits_version"], "0.1.5");
     assert_eq!(
         body["data"]["resources"]["objects"]["status"],
         serde_json::to_value(AstrometryResourceStatus::Available).unwrap()

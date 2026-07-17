@@ -2,8 +2,8 @@
 
 Status: **Phase 0 complete; first Phase 1 and overlay UI slice implemented**
 Owner: psf-guard maintainers
-Last updated: 2026-07-14
-Baseline: PSF Guard 0.4.2; Seiza 0.4.1; seiza-fits 0.1.4
+Last updated: 2026-07-16
+Baseline: PSF Guard 0.4.2; Seiza 0.5.0; seiza-fits 0.1.5
 
 ## 1. Goal
 
@@ -34,20 +34,20 @@ FITS hint, and derived solution as separate values with explicit provenance.
 - Do not make pointing classifications affect quality scores or grades until
   thresholds have been validated against real sequences and dithers.
 
-## 3. Seiza 0.4.1 baseline
+## 3. Seiza 0.5.0 baseline
 
-PSF Guard now uses the published 0.4 family:
+PSF Guard now uses the published 0.5 family:
 
 ```toml
-seiza = "0.4.1"
-seiza-fits = "0.1.4"
+seiza = "0.5.0"
+seiza-fits = "0.1.5"
 ```
 
 ### 3.1 Changes that directly improve this integration
 
 #### Streamed FITS decoding
 
-`seiza-fits` 0.1.4 retains the existing `FitsImage::open` API but streams the
+`seiza-fits` 0.1.5 retains the existing `FitsImage::open` API and streams the
 payload into its final typed pixel vector using a bounded conversion buffer.
 PSF Guard already enters `seiza-fits` through `src/image_analysis.rs`, so this
 is an immediate reduction in peak scan memory before solving is added.
@@ -58,7 +58,7 @@ and one OSC frame. No custom compatibility layer is expected.
 
 #### Indexed object catalog v3
 
-Seiza 0.4.1's `SEIZAOB3` object catalog is memory-mapped and contains spatial and
+Seiza 0.5.0's `SEIZAOB3` object catalog is memory-mapped and contains spatial and
 normalized-name indexes. Ordinary cone, footprint, exact-name, and prefix
 queries materialize only returned records instead of eagerly decoding the
 entire catalog.
@@ -97,7 +97,7 @@ review step of back-catalog import instead of adding a second name index.
 
 The optional `SEIZASI1` stellar identifier sidecar resolves identifiers and
 names such as TYC, HIP, HR, HD, SAO, FK5, IAU proper names, variables, and WDS
-designations. In Seiza 0.4.1 it supports exact and prefix lookup, but not a
+designations. In Seiza 0.5.0 it supports exact and prefix lookup, but not a
 spatial cone or footprint query. Therefore:
 
 - use it initially for search, target resolution, and inspecting a known
@@ -108,8 +108,8 @@ spatial cone or footprint query. Therefore:
 
 #### Coherent hosted catalog bundle
 
-Seiza 0.4.1 replaces the split hosted manifests with one complete catalog
-bundle at `/data/v2/manifest.json`. It covers solver tiles, the blind index,
+Seiza 0.5.0 uses one complete catalog bundle at `/data/v2/manifest.json`. It
+covers solver tiles, the blind index,
 stellar identifier sidecar, object and transient catalogs, and minor bodies.
 Local downloads remain flat and retain the canonical filenames.
 
@@ -160,7 +160,7 @@ an overlapping ladder ordered by common astrophotography scales rather than
 numerically. PSF Guard can improve on its sidecar input by deriving the known
 scale from FITS headers and equipment metadata.
 
-Backend adapters must use the Seiza 0.4.1 owned-result and fallible-query APIs.
+Backend adapters must use the Seiza 0.5.0 owned-result and fallible-query APIs.
 This avoids embedding an obsolete compatibility layer just to mirror the two
 downstream applications.
 
@@ -376,7 +376,7 @@ OverlayObject
   optional capture-time fields
 ```
 
-The stable identity/provenance fields are the intentional Seiza 0.4.1 extension
+The stable identity/provenance fields are the intentional Seiza 0.5.0 extension
 to the existing seiza-server response.
 
 Initial routes:
@@ -573,10 +573,10 @@ explicit, singleton, and runs on the blocking pool; ordinary capability checks
 remain bounded. Focused contract tests cover absent/missing/malformed catalogs
 plus legacy-v1 and indexed-v3 object catalogs.
 
-- Bump `seiza-fits` to 0.1.4 and verify streamed decoding through PSF Guard.
-- Add `seiza` 0.4.1.
+- Bump `seiza-fits` to 0.1.5 and verify streamed decoding through PSF Guard.
+- Add `seiza` 0.5.0.
 - Add centralized FITS astrometry-header parsing and provenance.
-- Define shared API types with Seiza 0.4.1 stable object metadata.
+- Define shared API types with Seiza 0.5.0 stable object metadata.
 - Add global catalog configuration, capability reporting, lazy open, and
   explicit validation.
 - Model catalog signatures as hosted bundle version plus per-file hash, or as
@@ -696,7 +696,7 @@ fabricating or mutating a Target Scheduler database.
 
 ### Performance
 
-- Compare `seiza-fits` 0.1.3 and 0.1.4 peak RSS on representative frames.
+- Compare `seiza-fits` 0.1.3 and 0.1.5 peak RSS on representative frames.
 - Confirm one global mmap is reused across multiple configured databases.
 - Measure catalog-only detail latency with a cold and warm page cache.
 - Measure hinted/blind solve throughput under the existing worker policy.

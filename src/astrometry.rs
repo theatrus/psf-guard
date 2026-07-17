@@ -10,8 +10,8 @@ use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 
-pub const SEIZA_VERSION: &str = "0.4.1";
-pub const SEIZA_FITS_VERSION: &str = "0.1.4";
+pub const SEIZA_VERSION: &str = "0.5.0";
+pub const SEIZA_FITS_VERSION: &str = "0.1.5";
 
 const OBJECTS_FILE: &str = "objects.bin";
 const STARS_FILE: &str = "stars-gaia.bin";

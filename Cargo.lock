@@ -4212,15 +4212,6 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "safe_arch"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96b02de82ddbe1b636e6170c21be622223aea188ef2e139be0a5b219ec215323"
-dependencies = [
- "bytemuck",
-]
-
-[[package]]
-name = "safe_arch"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f7caad094bd561859bcd467734a720c3c1f5d1f338995351fefe2190c45efed"
@@ -4296,9 +4287,9 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "seiza"
-version = "0.4.1"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09b3715fccd6fcae8b6be90cd0da5a97107bee1f36433c104bd8bd70c847c3be"
+checksum = "bb37bb0d2c0a73fcc5da33bb35bcde1085d66b5b56e8f81ad3a7ce8d2f4a4002"
 dependencies = [
  "image",
  "memmap2",
@@ -4306,14 +4297,14 @@ dependencies = [
  "rayon",
  "rustc-hash",
  "thiserror 2.0.16",
- "wide 0.7.33",
+ "wide",
 ]
 
 [[package]]
 name = "seiza-fits"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3bd6657a61c3d5d8a789f610fdc1d7a387f74b0299881a09842c17735b0acbc6"
+checksum = "551fa173ed201c5bd4ca5e267ab2d385537232b7d2822804297634910d81a98d"
 dependencies = [
  "multiversion",
 ]
@@ -4603,7 +4594,7 @@ dependencies = [
  "approx",
  "num-complex",
  "num-traits",
- "wide 1.4.0",
+ "wide",
 ]
 
 [[package]]
@@ -6141,22 +6132,12 @@ checksum = "a751b3277700db47d3e574514de2eced5e54dc8a5436a3bf7a0b248b2cee16f3"
 
 [[package]]
 name = "wide"
-version = "0.7.33"
+version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ce5da8ecb62bcd8ec8b7ea19f69a51275e91299be594ea5cc6ef7819e16cd03"
+checksum = "dfdfe6a32973f2d1b268b8895845a8a96cac2f0191e72c27cc929036060dbf89"
 dependencies = [
  "bytemuck",
- "safe_arch 0.7.4",
-]
-
-[[package]]
-name = "wide"
-version = "1.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a7714cd0430a663154667c74da5d09325c2387695bee18b3f7f72825aa3693a"
-dependencies = [
- "bytemuck",
- "safe_arch 1.0.0",
+ "safe_arch",
 ]
 
 [[package]]
