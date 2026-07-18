@@ -6,7 +6,7 @@ import * as zlib from 'zlib';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * Install the tiny real SEIZAOB3 fixture and an isolated catalog-only
+ * Install the tiny real SEIZAOB4 fixture and an isolated catalog-only
  * registry. Playwright config calls this before the web server starts; global
  * setup calls it again after resetting the remainder of the per-run fixture.
  */

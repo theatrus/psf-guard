@@ -1,9 +1,10 @@
 # Seiza Integration — Design and Implementation Plan
 
-Status: **Phase 0 complete; first Phase 1 and overlay UI slice implemented**
+Status: **Phase 0 complete; first Phase 1 and Seiza v4 overlay UI slice implemented**
 Owner: psf-guard maintainers
-Last updated: 2026-07-16
-Baseline: PSF Guard 0.4.2; Seiza 0.5.0; seiza-fits 0.1.5
+Last updated: 2026-07-18
+Baseline: PSF Guard 0.4.2; Seiza 0.7.2; seiza-fits 0.1.6;
+`@seiza/astro-overlay` 0.3.0
 
 ## 1. Goal
 
@@ -34,34 +35,36 @@ FITS hint, and derived solution as separate values with explicit provenance.
 - Do not make pointing classifications affect quality scores or grades until
   thresholds have been validated against real sequences and dithers.
 
-## 3. Seiza 0.5.0 baseline
+## 3. Seiza 0.7.2 baseline
 
-PSF Guard now uses the published 0.5 family:
+PSF Guard pins the current published Rust integration versions:
 
 ```toml
-seiza = "0.5.0"
-seiza-fits = "0.1.5"
+seiza = "=0.7.2"
+seiza-fits = "=0.1.6"
 ```
 
 ### 3.1 Changes that directly improve this integration
 
 #### Streamed FITS decoding
 
-`seiza-fits` 0.1.5 retains the existing `FitsImage::open` API and streams the
+`seiza-fits` 0.1.6 retains the existing `FitsImage::open` API and streams the
 payload into its final typed pixel vector using a bounded conversion buffer.
 PSF Guard already enters `seiza-fits` through `src/image_analysis.rs`, so this
 is an immediate reduction in peak scan memory before solving is added.
 
-The first dependency PR should bump `seiza-fits`, run the existing FITS and
-spatial-scan tests, and profile at least one representative large mono frame
-and one OSC frame. No custom compatibility layer is expected.
+The dependency slice keeps the existing FITS and spatial-scan coverage on the
+new reader. Representative large mono and OSC peak-memory profiling remains a
+separate performance task; no custom compatibility layer is expected.
 
-#### Indexed object catalog v3
+#### Indexed object catalog v4
 
-Seiza 0.5.0's `SEIZAOB3` object catalog is memory-mapped and contains spatial and
-normalized-name indexes. Ordinary cone, footprint, exact-name, and prefix
-queries materialize only returned records instead of eagerly decoding the
-entire catalog.
+Seiza 0.7.2's `SEIZAOB4` object catalog retains the memory-mapped spatial and
+normalized-name indexes and adds source-qualified geometry, including catalog
+outline sets. Ordinary cone, footprint, exact-name, and prefix queries
+materialize only returned records instead of eagerly decoding the entire
+catalog. Legacy `SEIZAOB3` catalogs remain readable but do not contain v4
+outline geometry.
 
 This changes the earlier resource plan:
 
@@ -75,7 +78,7 @@ This changes the earlier resource plan:
 - normal startup performs the lazy bounded open; exhaustive `validate()` is a
   settings/diagnostic action, not a startup requirement.
 
-The PSF Guard API should preserve v3 identity metadata:
+The PSF Guard API preserves v4 identity metadata:
 
 ```text
 id
@@ -97,7 +100,7 @@ review step of back-catalog import instead of adding a second name index.
 
 The optional `SEIZASI1` stellar identifier sidecar resolves identifiers and
 names such as TYC, HIP, HR, HD, SAO, FK5, IAU proper names, variables, and WDS
-designations. In Seiza 0.5.0 it supports exact and prefix lookup, but not a
+designations. In Seiza 0.7.2 it supports exact and prefix lookup, but not a
 spatial cone or footprint query. Therefore:
 
 - use it initially for search, target resolution, and inspecting a known
@@ -108,13 +111,13 @@ spatial cone or footprint query. Therefore:
 
 #### Coherent hosted catalog bundle
 
-Seiza 0.5.0 uses one complete catalog bundle at `/data/v2/manifest.json`. It
+Seiza 0.7.2 uses one complete catalog bundle at `/data/v2/manifest.json`. It
 covers solver tiles, the blind index,
 stellar identifier sidecar, object and transient catalogs, and minor bodies.
 Local downloads remain flat and retain the canonical filenames.
 
 The bundle version and each file's wire format are separate concepts. For
-example, a `SEIZAOB3` object file belongs to the hosted v2 bundle; the `3` is
+example, a `SEIZAOB4` object file belongs to the hosted v2 bundle; the `4` is
 the object file schema, not the bundle version. PSF Guard should expose both
 values in diagnostics rather than deriving one from the other.
 
@@ -137,12 +140,13 @@ validated through their self-describing file headers.
 
 ### 3.2 Relationship to the shared overlay package and existing applications
 
-`@seiza/astro-overlay` 0.1.1 is now the canonical browser overlay geometry and
+`@seiza/astro-overlay` 0.3.0 is now the canonical browser overlay geometry and
 rendering contract. Its core entry point owns WCS transforms, coordinate-grid
-geometry, semantic layers, prominence density, and marker geometry; its React
-entry point supplies the SVG-only `AstroOverlay`; and its export entry point
-serializes/composites the live overlay for PNG output. PSF Guard should consume
-those entry points rather than porting the Seiza-server/Tenrankai SVG code.
+geometry, semantic layers, prominence density, marker geometry, projected v4
+catalog contours, and suggested catalog-aware colors; its React entry point
+supplies the SVG-only `AstroOverlay`; and its export entry point
+serializes/composites the live overlay for PNG output. PSF Guard consumes those
+entry points rather than porting the Seiza-server/Tenrankai SVG code.
 
 PSF Guard still owns HTTP state, progress and errors, toolbar controls,
 preference persistence, the transformed raster/SVG container, and application
@@ -160,7 +164,7 @@ an overlapping ladder ordered by common astrophotography scales rather than
 numerically. PSF Guard can improve on its sidecar input by deriving the known
 scale from FITS headers and equipment metadata.
 
-Backend adapters must use the Seiza 0.5.0 owned-result and fallible-query APIs.
+Backend adapters must use the Seiza 0.7.2 owned-result and fallible-query APIs.
 This avoids embedding an obsolete compatibility layer just to mirror the two
 downstream applications.
 
@@ -365,7 +369,7 @@ OverlayObject
   kind
   mag
   x, y
-  semi_major_px, semi_minor_px, angle_deg
+  semi_major_px, semi_minor_px, angle_deg (nullable)
   source
   aliases
   parent_ids
@@ -373,11 +377,12 @@ OverlayObject
   alternate_sources
   ra_deg, dec_deg
   prominence
+  outlines[] with geometry/source provenance and projected contours
   optional capture-time fields
 ```
 
-The stable identity/provenance fields are the intentional Seiza 0.5.0 extension
-to the existing seiza-server response.
+The stable identity/provenance fields and source-qualified outline metadata
+intentionally mirror the current seiza-server response structure.
 
 Initial routes:
 
@@ -548,7 +553,7 @@ Settings report capabilities independently:
 
 ```text
 object association       objects.bin
-object name search       SEIZAOB3 name index
+object name search       SEIZAOB4 name index
 stellar name search      *.ids.bin
 hinted solve             star catalog
 blind solve              deep star catalog + matching blind index
@@ -570,17 +575,18 @@ v2 files.
 
 ### Phase 0 — dependency and data-contract foundation
 
-**Implemented 2026-07-14.** The dependency bump, normalized header reader,
+**Implemented 2026-07-14; dependency baseline refreshed 2026-07-18.** The
+dependency bump, normalized header reader,
 global lazy catalog context, registry configuration, capability/validation
 routes, and stable response contracts are in place. Exhaustive validation is
 explicit, singleton, and runs on the blocking pool; ordinary capability checks
 remain bounded. Focused contract tests cover absent/missing/malformed catalogs
-plus legacy-v1 and indexed-v3 object catalogs.
+plus legacy-v1, indexed-v3, and extensible-v4 object catalogs.
 
-- Bump `seiza-fits` to 0.1.5 and verify streamed decoding through PSF Guard.
-- Add `seiza` 0.5.0.
+- Bump `seiza-fits` to 0.1.6 and verify streamed decoding through PSF Guard.
+- Add `seiza` 0.7.2.
 - Add centralized FITS astrometry-header parsing and provenance.
-- Define shared API types with Seiza 0.5.0 stable object metadata.
+- Define shared API types with Seiza 0.7.2 stable object metadata.
 - Add global catalog configuration, capability reporting, lazy open, and
   explicit validation.
 - Model catalog signatures as hosted bundle version plus per-file hash, or as
@@ -612,8 +618,8 @@ network-independent.
 endpoint now distinguishes embedded footprints, estimated fields, and a
 conservative one-degree nearby-target search. The UI preserves Seiza stable
 IDs and provenance, labels conservative results as nearby rather than in-frame,
-and has end-to-end coverage against a real FITS header and real `SEIZAOB3`
-catalog. Object-search UI and stellar-designation lookup remain.
+and has end-to-end coverage against a real FITS header and source-qualified
+`SEIZAOB4` catalog. Object-search UI and stellar-designation lookup remain.
 
 - Query objects from target coordinates and estimated fields.
 - Add exact/prefix object search for target selection.
@@ -638,7 +644,8 @@ blocking the detail page.
 
 ### Phase 3 — overlay and dynamic annotations
 
-**Static embedded-WCS slice implemented 2026-07-14.** A validated,
+**Static embedded-WCS slice implemented 2026-07-14; v4 contours and catalog
+colors added 2026-07-18.** A validated,
 undistorted, degree-based ICRS TAN WCS using a standard FITS CD, PC+CDELT, or
 CDELT+CROTA matrix now projects catalog objects into the shared `AstroOverlay`
 component in the same pan/zoom container as the raster. Distorted projections,
@@ -649,7 +656,8 @@ and dynamic catalogs remain.
 - Add `@seiza/astro-overlay` and render its React `AstroOverlay` directly.
 - Keep PSF Guard-specific layer controls, preference storage, zoom/pan layout,
   and annotated-export branding outside the shared component.
-- Project v3 objects using stored WCS.
+- Project v4 catalog outlines using stored WCS while retaining v3 ellipse
+  compatibility.
 - Re-project annotations when their catalog version changes.
 - Add capture-time transient/minor-body layers and coordinate grid as their
   datasets become available.
@@ -703,7 +711,7 @@ fabricating or mutating a Target Scheduler database.
 
 ### Performance
 
-- Compare `seiza-fits` 0.1.3 and 0.1.5 peak RSS on representative frames.
+- Compare `seiza-fits` 0.1.3 and 0.1.6 peak RSS on representative frames.
 - Confirm one global mmap is reused across multiple configured databases.
 - Measure catalog-only detail latency with a cold and warm page cache.
 - Measure hinted/blind solve throughput under the existing worker policy.

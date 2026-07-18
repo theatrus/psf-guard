@@ -10,7 +10,7 @@ import { useAsyncImage } from '../hooks/useAsyncImage';
 import { ensurePreviewReady } from '../hooks/previewPoll';
 import UndoRedoToolbar from './UndoRedoToolbar';
 import AstrometryPanel from './AstrometryPanel';
-import { AstroOverlay } from '@seiza/astro-overlay/react';
+import AstrometryOverlay from './AstrometryOverlay';
 
 interface ImageDetailViewProps {
   dbId: string;
@@ -490,7 +490,7 @@ export default function ImageDetailView({
                   !hideMainImage &&
                   displayedBitmapDimensions &&
                   astrometry?.solution && (
-                    <AstroOverlay
+                    <AstrometryOverlay
                       solution={astrometry.solution}
                       density={0.2}
                       className="detail-astrometry-overlay"
