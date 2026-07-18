@@ -4412,8 +4412,9 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "seiza"
-version = "0.7.3"
-source = "git+https://github.com/theatrus/seiza?rev=184aef6a65e826d7e62c864c7f8de222fec1d3e4#184aef6a65e826d7e62c864c7f8de222fec1d3e4"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ae20be7b2b87b9d5d737f05c3d222818b8d164a2b406675f381386758f44694"
 dependencies = [
  "directories",
  "image",

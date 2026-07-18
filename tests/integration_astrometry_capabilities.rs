@@ -95,7 +95,7 @@ async fn capabilities_and_validation_report_a_partial_data_directory() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["data"]["seiza_version"], "0.7.3");
+    assert_eq!(body["data"]["seiza_version"], "0.8.0");
     assert_eq!(body["data"]["seiza_fits_version"], "0.1.6");
     assert_eq!(
         body["data"]["resources"]["objects"]["status"],

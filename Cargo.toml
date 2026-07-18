@@ -31,9 +31,7 @@ anyhow = "1.0"
 chrono = "0.4"
 regex = "1.12"
 byteorder = "1.5"
-# crates.io's immutable 0.7.3 package omitted `data_paths`; pin the official
-# v0.7.3 tag commit that contains the advertised embedding API.
-seiza = { version = "=0.7.3", git = "https://github.com/theatrus/seiza", rev = "184aef6a65e826d7e62c864c7f8de222fec1d3e4" }
+seiza = "=0.8.0"
 seiza-fits = "=0.1.6"
 bumpalo = { version = "3.20", features = ["collections"] }
 image = "0.25"
