@@ -10,8 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-pub const SEIZA_VERSION: &str = "0.5.0";
-pub const SEIZA_FITS_VERSION: &str = "0.1.5";
+pub const SEIZA_VERSION: &str = "0.7.2";
+pub const SEIZA_FITS_VERSION: &str = "0.1.6";
 
 const OBJECTS_FILE: &str = "objects.bin";
 const STARS_FILE: &str = "stars-gaia.bin";
@@ -256,7 +256,7 @@ pub struct WcsResponse {
     pub equinox: f64,
 }
 
-/// Seiza v3 identity, hierarchy, and provenance carried through PSF Guard APIs.
+/// Seiza object identity, hierarchy, and provenance carried through PSF Guard APIs.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogObjectIdentity {
     pub stable_id: String,
@@ -296,6 +296,22 @@ pub struct CatalogHitResponse {
 /// `@seiza/astro-overlay` so the frontend can render the shared component
 /// without translating the geometry contract.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OverlayContourResponse {
+    pub closed: bool,
+    pub points: Vec<[f64; 2]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OverlayOutlineResponse {
+    pub geometry_id: String,
+    pub source_record_id: String,
+    pub role: String,
+    pub quality: String,
+    pub level: Option<String>,
+    pub contours: Vec<OverlayContourResponse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OverlayObjectResponse {
     #[serde(flatten)]
     pub identity: CatalogObjectIdentity,
@@ -307,7 +323,7 @@ pub struct OverlayObjectResponse {
     pub y: f64,
     pub semi_major_px: f64,
     pub semi_minor_px: f64,
-    pub angle_deg: f64,
+    pub angle_deg: Option<f64>,
     pub ra_deg: f64,
     pub dec_deg: f64,
     /// Ranking value consumed by the shared overlay's density selection.
@@ -323,6 +339,11 @@ pub struct OverlayObjectResponse {
     pub direction_pa_deg: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direction_angle_deg: Option<f64>,
+    /// Pixel-projected Seiza v4 catalog contours. The source-qualified
+    /// geometry metadata stays attached so consumers can distinguish curated
+    /// outlines from estimates and fallback extents.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outlines: Vec<OverlayOutlineResponse>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -581,6 +602,10 @@ impl AstrometryContext {
             crval: (value.crval[0], value.crval[1]),
             crpix: (value.crpix[0], value.crpix[1]),
             cd: value.cd,
+            // The header parser deliberately accepts only undistorted TAN WCS
+            // today. Seiza 0.7 supports SIP, but accepting those FITS headers
+            // requires parsing and validating their coefficient matrices.
+            sip: None,
         });
         let exact_region =
             wcs.as_ref()
@@ -688,7 +713,7 @@ impl AstrometryContext {
                                     .get(&sky_object_key(&placed.object))
                                     .copied()
                                     .unwrap_or(0.0);
-                                overlay_object_response(placed, Some(rank))
+                                overlay_object_response(placed, Some(rank), catalog, wcs)
                             })
                             .collect::<Vec<_>>(),
                         Err(error) => {
@@ -981,7 +1006,10 @@ fn catalog_hit_response(hit: &seiza::objects::ObjectHit) -> CatalogHitResponse {
 fn overlay_object_response(
     placed: seiza::objects::PlacedObject,
     prominence: Option<f64>,
+    catalog: &seiza::objects::ObjectCatalog,
+    wcs: &seiza::Wcs,
 ) -> OverlayObjectResponse {
+    let outlines = projected_outlines(catalog, &placed.object.metadata.id, wcs);
     OverlayObjectResponse {
         identity: identity(&placed.object),
         name: placed.object.name.clone(),
@@ -1001,7 +1029,64 @@ fn overlay_object_response(
         distance_au: None,
         direction_pa_deg: None,
         direction_angle_deg: None,
+        outlines,
     }
+}
+
+fn projected_outlines(
+    catalog: &seiza::objects::ObjectCatalog,
+    canonical_id: &str,
+    wcs: &seiza::Wcs,
+) -> Vec<OverlayOutlineResponse> {
+    use seiza::objects::{GeometryData, GeometryQuality, GeometryRole};
+
+    let Ok(geometries) = catalog.geometries(canonical_id) else {
+        return Vec::new();
+    };
+    geometries
+        .into_iter()
+        .filter_map(|geometry| {
+            let GeometryData::OutlineSet { level, contours } = geometry.data else {
+                return None;
+            };
+            let contours = contours
+                .into_iter()
+                .filter_map(|contour| {
+                    let points = contour
+                        .vertices
+                        .into_iter()
+                        .map(|(ra, dec)| wcs.world_to_pixel(ra, dec).map(|(x, y)| [x, y]))
+                        .collect::<Option<Vec<_>>>()?;
+                    let minimum_points = if contour.closed { 3 } else { 2 };
+                    (points.len() >= minimum_points).then_some(OverlayContourResponse {
+                        closed: contour.closed,
+                        points,
+                    })
+                })
+                .collect::<Vec<_>>();
+            (!contours.is_empty()).then_some(OverlayOutlineResponse {
+                geometry_id: geometry.id,
+                source_record_id: geometry.source_record_id,
+                role: match geometry.role {
+                    GeometryRole::CatalogExtent => "catalog-extent",
+                    GeometryRole::PreferredRender => "preferred-render",
+                    GeometryRole::FallbackExtent => "fallback-extent",
+                    GeometryRole::BrightnessLevel => "brightness-level",
+                    GeometryRole::Component => "component",
+                }
+                .to_string(),
+                quality: match geometry.quality {
+                    GeometryQuality::Catalog => "catalog",
+                    GeometryQuality::Curated => "curated",
+                    GeometryQuality::Estimated => "estimated",
+                    GeometryQuality::Derived => "derived",
+                }
+                .to_string(),
+                level,
+                contours,
+            })
+        })
+        .collect()
 }
 
 fn sky_object_key(object: &seiza::objects::SkyObject) -> String {
@@ -1206,8 +1291,18 @@ impl ResourceFingerprint {
         if end == 0 {
             "unknown".to_string()
         } else {
-            String::from_utf8_lossy(&self.header[..end]).into_owned()
+            format_magic(&self.header[..end])
         }
+    }
+}
+
+fn format_magic(bytes: &[u8]) -> String {
+    if bytes == b"SEIZAOB\0" {
+        // Seiza's extensible object-catalog container uses a stable envelope
+        // magic and reports its public schema generation as v4.
+        "SEIZAOB4".to_string()
+    } else {
+        String::from_utf8_lossy(bytes).into_owned()
     }
 }
 
@@ -1224,7 +1319,7 @@ fn is_zero_u32(value: &u32) -> bool {
 fn read_magic(path: &Path) -> std::io::Result<String> {
     let mut bytes = [0u8; 8];
     File::open(path)?.read_exact(&mut bytes)?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    Ok(format_magic(&bytes))
 }
 
 fn validate_resource(
@@ -1272,7 +1367,10 @@ fn validate_resource(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use seiza::objects::{ObjectCatalog, ObjectKind, ObjectMetadata, SkyObject};
+    use seiza::objects::{
+        GeometryData, GeometryQuality, GeometryRole, ObjectCatalog, ObjectCatalogData,
+        ObjectContour, ObjectDetails, ObjectGeometry, ObjectKind, ObjectMetadata, SkyObject,
+    };
 
     fn test_object() -> SkyObject {
         SkyObject {
@@ -1291,6 +1389,72 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+
+    #[test]
+    fn v4_outlines_project_with_provenance_and_unknown_angle() {
+        let directory = tempfile::tempdir().unwrap();
+        let objects_path = directory.path().join(OBJECTS_FILE);
+        let mut object = test_object();
+        object.kind = ObjectKind::Nebula;
+        object.ra = 10.0;
+        object.dec = 20.0;
+        object.major_arcmin = Some(30.0);
+        object.minor_arcmin = Some(10.0);
+        object.position_angle_deg = None;
+        object.name = "NGC 1".to_string();
+        object.common_name = "Test Nebula".to_string();
+        object.metadata.id = "openngc:NGC1".to_string();
+
+        let mut details = ObjectDetails::from_canonical(&object);
+        details.geometries.push(ObjectGeometry {
+            id: "openngc:NGC1#outline-1".to_string(),
+            source_record_id: "openngc:NGC1".to_string(),
+            role: GeometryRole::BrightnessLevel,
+            quality: GeometryQuality::Catalog,
+            method: "OpenNGC outline".to_string(),
+            evidence: String::new(),
+            data: GeometryData::OutlineSet {
+                level: Some("1".to_string()),
+                contours: vec![ObjectContour {
+                    closed: true,
+                    vertices: vec![(9.99, 19.99), (10.01, 19.99), (10.0, 20.01)],
+                }],
+            },
+        });
+        ObjectCatalog::from_data(ObjectCatalogData {
+            objects: vec![object],
+            details: vec![details],
+            provenance: Default::default(),
+        })
+        .unwrap()
+        .write_to(&objects_path)
+        .unwrap();
+
+        let catalog = ObjectCatalog::open(&objects_path).unwrap();
+        let wcs = seiza::Wcs {
+            crval: (10.0, 20.0),
+            crpix: (100.0, 100.0),
+            cd: [[-0.001, 0.0], [0.0, -0.001]],
+            sip: None,
+        };
+        let placed = catalog
+            .objects_in_footprint(&wcs, (200, 200))
+            .unwrap()
+            .into_iter()
+            .find(|placed| placed.object.metadata.id == "openngc:NGC1")
+            .unwrap();
+        let response = overlay_object_response(placed, Some(0.9), &catalog, &wcs);
+
+        assert_eq!(response.angle_deg, None);
+        assert_eq!(response.outlines.len(), 1);
+        assert_eq!(response.outlines[0].role, "brightness-level");
+        assert_eq!(response.outlines[0].quality, "catalog");
+        assert_eq!(response.outlines[0].level.as_deref(), Some("1"));
+        assert_eq!(response.outlines[0].contours[0].points.len(), 3);
+        let json = serde_json::to_value(response).unwrap();
+        assert!(json["angle_deg"].is_null());
+        assert_eq!(json["outlines"][0]["geometry_id"], "openngc:NGC1#outline-1");
     }
 
     #[test]
@@ -1336,7 +1500,7 @@ mod tests {
     }
 
     #[test]
-    fn indexed_object_catalog_is_available_and_validates() {
+    fn indexed_v4_object_catalog_is_available_and_validates() {
         let directory = tempfile::tempdir().unwrap();
         let objects_path = directory.path().join(OBJECTS_FILE);
         ObjectCatalog::new(vec![test_object()])
@@ -1354,7 +1518,7 @@ mod tests {
         );
         assert_eq!(
             capabilities.resources.objects.format.as_deref(),
-            Some("SEIZAOB3")
+            Some("SEIZAOB4")
         );
         assert!(capabilities.features.object_association);
         assert!(!capabilities.features.object_name_search);
@@ -1373,6 +1537,30 @@ mod tests {
         assert!(objects.validated);
         assert_eq!(objects.status, AstrometryResourceStatus::Available);
         assert!(validation.all_configured_valid);
+    }
+
+    #[test]
+    fn indexed_v3_object_catalog_remains_readable() {
+        let directory = tempfile::tempdir().unwrap();
+        let objects_path = directory.path().join("objects-v3.bin");
+        ObjectCatalog::new(vec![test_object()])
+            .write_v3_to(&objects_path)
+            .unwrap();
+
+        let context = AstrometryContext::new(AstrometryConfig {
+            objects: Some(objects_path.to_string_lossy().into_owned()),
+            ..Default::default()
+        });
+        let capabilities = context.capabilities();
+        assert_eq!(
+            capabilities.resources.objects.status,
+            AstrometryResourceStatus::Available
+        );
+        assert_eq!(
+            capabilities.resources.objects.format.as_deref(),
+            Some("SEIZAOB3")
+        );
+        assert!(context.try_validate_all().unwrap().all_configured_valid);
     }
 
     #[test]

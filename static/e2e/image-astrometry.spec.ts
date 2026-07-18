@@ -75,9 +75,23 @@ test('projects catalog objects from a real embedded FITS WCS without plate solvi
       expect.objectContaining({
         stable_id: 'openngc:NGC2632',
         name: 'M 44',
+        outlines: expect.arrayContaining([
+          expect.objectContaining({
+            geometry_id: 'openngc:NGC2632#e2e-outline',
+            source_record_id: 'openngc:NGC2632',
+            role: 'preferred-render',
+            quality: 'curated',
+            level: 'fixture-boundary',
+          }),
+        ]),
       }),
     ])
   );
+  const m44 = body.data.solution.objects.find(
+    (object: { stable_id: string }) => object.stable_id === 'openngc:NGC2632'
+  );
+  expect(m44.outlines[0].contours[0]).toMatchObject({ closed: true });
+  expect(m44.outlines[0].contours[0].points).toHaveLength(4);
   expect(body.data.pointing.separation_arcsec).toBeLessThan(0.01);
   expect(body.data.source_fingerprint.canonical_path).toMatch(/\.fit(s)?$/i);
 });
@@ -117,6 +131,16 @@ test('renders the real Seiza solution and keeps the overlay aligned while zoomin
   await expect(overlay).toBeVisible({ timeout: 30_000 });
   await expect(overlay).toHaveAttribute('data-overlay-version', '1');
   await expect(overlay.getByText('M 44')).toBeVisible();
+  const m44Outline = overlay.locator(
+    '[data-stable-id="openngc:NGC2632"] .seiza-overlay__marker--outline'
+  );
+  await expect(m44Outline).toHaveAttribute(
+    'data-geometry-id',
+    'openngc:NGC2632#e2e-outline'
+  );
+  await expect(m44Outline).toHaveAttribute('data-outline-level', 'fixture-boundary');
+  await expect(m44Outline).toHaveAttribute('stroke', '#f2ca72');
+  await expect(m44Outline).toHaveAttribute('d', / Z$/);
 
   const initial = await renderedTransforms(page);
   expect(initial.overlay).toBe(initial.image);
