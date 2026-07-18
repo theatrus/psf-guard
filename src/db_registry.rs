@@ -73,8 +73,8 @@ pub struct DbRegistry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_db_id: Option<String>,
     /// Process-global Seiza catalog configuration shared by every database.
-    /// Additive within registry v2: an absent block means astrometry data is
-    /// not configured and every related capability is disabled.
+    /// Additive within registry v2: an absent block lets Seiza search its
+    /// standard environment, executable-adjacent, and platform data paths.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub astrometry: Option<crate::astrometry::AstrometryConfig>,
 }

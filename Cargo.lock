@@ -1054,6 +1054,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "directories"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16f5094c54661b38d03bd7e50df373292118db60b585c08a411c6d840017fe7d"
+dependencies = [
+ "dirs-sys",
+]
+
+[[package]]
 name = "dirs"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4403,10 +4412,10 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "seiza"
-version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da417b380c0918cccf6a93d2452a0113a35fde6b35b786b782f5a26632e141b9"
+version = "0.7.3"
+source = "git+https://github.com/theatrus/seiza?rev=184aef6a65e826d7e62c864c7f8de222fec1d3e4#184aef6a65e826d7e62c864c7f8de222fec1d3e4"
 dependencies = [
+ "directories",
  "image",
  "memmap2",
  "multiversion",

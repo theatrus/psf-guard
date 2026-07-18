@@ -61,8 +61,9 @@ export interface DbEntry {
   reject_archive?: RejectArchiveOverrides;
 }
 
-// Process-global Seiza catalog paths. Relative filenames resolve below
-// data_dir; omitted filenames use Seiza's canonical bundle names.
+// Process-global Seiza catalog paths. data_dir configures a complete bundle;
+// relative overrides resolve below it. Without either, Seiza searches its
+// standard environment, executable-adjacent, and platform data locations.
 export interface AstrometryConfig {
   data_dir?: string;
   objects?: string;

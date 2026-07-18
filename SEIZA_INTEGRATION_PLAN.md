@@ -3,7 +3,7 @@
 Status: **Phase 0 complete; first Phase 1 and Seiza v4 overlay UI slice implemented**
 Owner: psf-guard maintainers
 Last updated: 2026-07-18
-Baseline: PSF Guard 0.4.2; Seiza 0.7.2; seiza-fits 0.1.6;
+Baseline: PSF Guard 0.4.2; Seiza 0.7.3; seiza-fits 0.1.6;
 `@seiza/astro-overlay` 0.3.0
 
 ## 1. Goal
@@ -35,14 +35,19 @@ FITS hint, and derived solution as separate values with explicit provenance.
 - Do not make pointing classifications affect quality scores or grades until
   thresholds have been validated against real sequences and dithers.
 
-## 3. Seiza 0.7.2 baseline
+## 3. Seiza 0.7.3 baseline
 
-PSF Guard pins the current published Rust integration versions:
+PSF Guard pins the current Rust integration versions. The crates.io 0.7.3
+package omitted the release's `data_paths` module, so the Seiza dependency is
+temporarily pinned to the exact official v0.7.3 tag commit:
 
 ```toml
-seiza = "=0.7.2"
+seiza = { version = "=0.7.3", git = "https://github.com/theatrus/seiza", rev = "184aef6a65e826d7e62c864c7f8de222fec1d3e4" }
 seiza-fits = "=0.1.6"
 ```
+
+Return Seiza to a registry pin once a package containing the v0.7.3
+`data_paths` API is published.
 
 ### 3.1 Changes that directly improve this integration
 
@@ -59,7 +64,7 @@ separate performance task; no custom compatibility layer is expected.
 
 #### Indexed object catalog v4
 
-Seiza 0.7.2's `SEIZAOB4` object catalog retains the memory-mapped spatial and
+Seiza 0.7.3's `SEIZAOB4` object catalog retains the memory-mapped spatial and
 normalized-name indexes and adds source-qualified geometry, including catalog
 outline sets. Ordinary cone, footprint, exact-name, and prefix queries
 materialize only returned records instead of eagerly decoding the entire
@@ -100,7 +105,7 @@ review step of back-catalog import instead of adding a second name index.
 
 The optional `SEIZASI1` stellar identifier sidecar resolves identifiers and
 names such as TYC, HIP, HR, HD, SAO, FK5, IAU proper names, variables, and WDS
-designations. In Seiza 0.7.2 it supports exact and prefix lookup, but not a
+designations. In Seiza 0.7.3 it supports exact and prefix lookup, but not a
 spatial cone or footprint query. Therefore:
 
 - use it initially for search, target resolution, and inspecting a known
@@ -111,7 +116,7 @@ spatial cone or footprint query. Therefore:
 
 #### Coherent hosted catalog bundle
 
-Seiza 0.7.2 uses one complete catalog bundle at `/data/v2/manifest.json`. It
+Seiza 0.7.3 uses one complete catalog bundle at `/data/v2/manifest.json`. It
 covers solver tiles, the blind index,
 stellar identifier sidecar, object and transient catalogs, and minor bodies.
 Local downloads remain flat and retain the canonical filenames.
@@ -164,7 +169,7 @@ an overlapping ladder ordered by common astrophotography scales rather than
 numerically. PSF Guard can improve on its sidecar input by deriving the known
 scale from FITS headers and equipment metadata.
 
-Backend adapters must use the Seiza 0.7.2 owned-result and fallible-query APIs.
+Backend adapters must use the Seiza 0.7.3 owned-result and fallible-query APIs.
 This avoids embedding an obsolete compatibility layer just to mirror the two
 downstream applications.
 
@@ -525,11 +530,12 @@ configuration block rather than under each database:
 }
 ```
 
-The paths are optional and resolved relative to `data_dir`. Auto-discover the
-canonical Seiza filenames and environment conventions used by seiza-server,
-then allow explicit overrides. Adding the optional block is backward-
-compatible with the current registry parser; the source-kind migration is
-reserved for registry v3.
+The paths are optional and resolved relative to `data_dir`. Seiza 0.7.3 owns
+bundle filename selection and its standard environment, executable-adjacent,
+and platform data conventions through `seiza::data_paths`; PSF Guard passes
+the one directory through and retains explicit per-resource overrides. Adding
+the optional block is backward-compatible with the current registry parser;
+the source-kind migration is reserved for registry v3.
 
 For a PSF Guard-managed directory, persist installation state beside the data:
 
@@ -584,9 +590,9 @@ remain bounded. Focused contract tests cover absent/missing/malformed catalogs
 plus legacy-v1, indexed-v3, and extensible-v4 object catalogs.
 
 - Bump `seiza-fits` to 0.1.6 and verify streamed decoding through PSF Guard.
-- Add `seiza` 0.7.2.
+- Add `seiza` 0.7.3.
 - Add centralized FITS astrometry-header parsing and provenance.
-- Define shared API types with Seiza 0.7.2 stable object metadata.
+- Define shared API types with Seiza 0.7.3 stable object metadata.
 - Add global catalog configuration, capability reporting, lazy open, and
   explicit validation.
 - Model catalog signatures as hosted bundle version plus per-file hash, or as

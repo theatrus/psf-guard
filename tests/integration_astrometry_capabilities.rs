@@ -66,7 +66,7 @@ fn write_object_catalog(path: &std::path::Path) {
 }
 
 #[tokio::test]
-async fn capabilities_and_validation_report_a_configured_object_catalog() {
+async fn capabilities_and_validation_report_a_partial_data_directory() {
     let directory = tempdir().unwrap();
     let objects_path = directory.path().join("objects.bin");
     write_object_catalog(&objects_path);
@@ -81,7 +81,7 @@ async fn capabilities_and_validation_report_a_configured_object_catalog() {
                 .into_owned(),
             psf_guard::cli::PregenerationConfig::default(),
             Some(AstrometryConfig {
-                objects: Some(objects_path.to_string_lossy().into_owned()),
+                data_dir: Some(directory.path().to_string_lossy().into_owned()),
                 ..Default::default()
             }),
         )
@@ -95,7 +95,7 @@ async fn capabilities_and_validation_report_a_configured_object_catalog() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["data"]["seiza_version"], "0.7.2");
+    assert_eq!(body["data"]["seiza_version"], "0.7.3");
     assert_eq!(body["data"]["seiza_fits_version"], "0.1.6");
     assert_eq!(
         body["data"]["resources"]["objects"]["status"],
@@ -109,6 +109,7 @@ async fn capabilities_and_validation_report_a_configured_object_catalog() {
     assert_eq!(body["data"]["features"]["blind_solve"], false);
     assert_eq!(body["data"]["features"]["transient_annotations"], false);
     assert_eq!(body["data"]["features"]["minor_body_annotations"], false);
+    assert_eq!(body["data"]["resources"]["stars"]["status"], "missing");
 
     let (status, body) = request(
         build_app(state),
@@ -117,7 +118,7 @@ async fn capabilities_and_validation_report_a_configured_object_catalog() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["data"]["all_configured_valid"], true);
+    assert_eq!(body["data"]["all_configured_valid"], false);
     let objects = body["data"]["resources"]
         .as_array()
         .unwrap()
@@ -126,6 +127,14 @@ async fn capabilities_and_validation_report_a_configured_object_catalog() {
         .unwrap();
     assert_eq!(objects["validated"], true);
     assert_eq!(objects["status"], "available");
+    let stars = body["data"]["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|resource| resource["name"] == "stars")
+        .unwrap();
+    assert_eq!(stars["validated"], false);
+    assert_eq!(stars["status"], "missing");
 }
 
 #[tokio::test]
