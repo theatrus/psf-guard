@@ -294,7 +294,8 @@ The web UI's Sequence view has a **Scan Quality** button that runs spatial,
 photometric, and astrometric analysis server-side. It shows solved-center
 scatter, field-relative offsets, quality scores, and Off Target / Pointing
 Jump / Pointing Drift / Unsolved evidence. **Select Recommended** opens a
-per-image review before any rejection is written.
+per-image review before any rejection is written. Stable multi-frame framing
+offsets remain advisory instead of being mistaken for lost tracking.
 
 | Astrometry quality results | Guarded rejection review |
 |:--:|:--:|
