@@ -490,10 +490,11 @@ pub fn split_sessions(timestamps: &[Option<i64>], gap_seconds: i64) -> Vec<Vec<u
     let mut current: Vec<usize> = Vec::new();
     let mut last_ts: Option<i64> = None;
     for (i, ts) in timestamps.iter().enumerate() {
-        if let (Some(t), Some(prev)) = (ts, last_ts) {
-            if t - prev > gap_seconds && !current.is_empty() {
-                sessions.push(std::mem::take(&mut current));
-            }
+        if let (Some(t), Some(prev)) = (ts, last_ts)
+            && t - prev > gap_seconds
+            && !current.is_empty()
+        {
+            sessions.push(std::mem::take(&mut current));
         }
         current.push(i);
         if ts.is_some() {
@@ -736,10 +737,10 @@ fn fit_plane_masked(values: &[f64], cols: usize, rows: usize, mask: Option<&[boo
     for gy in 0..rows {
         for gx in 0..cols {
             let c = gy * cols + gx;
-            if let Some(m) = mask {
-                if !m[c] {
-                    continue;
-                }
+            if let Some(m) = mask
+                && !m[c]
+            {
+                continue;
             }
             let v = values[c];
             let (x, y) = (gx as f64, gy as f64);

@@ -1,6 +1,6 @@
 # Build stage
 # Version should match rust-toolchain.toml
-FROM rust:1.95.0 AS builder
+FROM rust:1.97.1 AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \

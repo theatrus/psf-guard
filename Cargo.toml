@@ -1,7 +1,7 @@
 [package]
 name = "psf-guard"
 version = "0.4.2"
-edition = "2021"
+edition = "2024"
 # With two bins (psf-guard = GUI/CLI smart binary, psf-guard-cli = console-only
 # CLI), name the default so `cargo run` and tauri-cli pick the app binary, not
 # the sidecar. Without this Tauri bundled psf-guard-cli as the app (WiX ICE30 on

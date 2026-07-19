@@ -533,12 +533,11 @@ fn get_database_info(conn: &Connection, filename: &str) -> Result<Option<(i32, f
         // Try to parse the metadata
         if let Ok(metadata) = serde_json::from_str::<ImageMetadata>(&metadata_json) {
             // Check if filename matches
-            if let Some(meta_filename) = metadata.filename {
-                if meta_filename.contains(filename) || filename.contains(&meta_filename) {
-                    if let (Some(stars), Some(hfr)) = (metadata.detected_stars, metadata.hfr) {
-                        return Ok(Some((stars, hfr)));
-                    }
-                }
+            if let Some(meta_filename) = metadata.filename
+                && (meta_filename.contains(filename) || filename.contains(&meta_filename))
+                && let (Some(stars), Some(hfr)) = (metadata.detected_stars, metadata.hfr)
+            {
+                return Ok(Some((stars, hfr)));
             }
         }
     }

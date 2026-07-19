@@ -33,10 +33,10 @@ pub fn show_images(conn: &Connection, ids_str: &str) -> Result<()> {
         println!("Project ID: {}", image.project_id);
         println!("Target ID: {}", image.target_id);
 
-        if let Some(date) = image.acquired_date {
-            if let Some(dt) = chrono::DateTime::from_timestamp(date, 0) {
-                println!("Acquired Date: {}", dt.format("%Y-%m-%d %H:%M:%S"));
-            }
+        if let Some(date) = image.acquired_date
+            && let Some(dt) = chrono::DateTime::from_timestamp(date, 0)
+        {
+            println!("Acquired Date: {}", dt.format("%Y-%m-%d %H:%M:%S"));
         }
 
         println!("Filter: {}", image.filter_name);

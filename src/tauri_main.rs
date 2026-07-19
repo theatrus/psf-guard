@@ -352,10 +352,10 @@ async fn restart_server(
 
     {
         let mut shutdown_guard = state.server_shutdown.lock().unwrap();
-        if let Some(shutdown_tx) = shutdown_guard.take() {
-            if shutdown_tx.send(()).is_err() {
-                tracing::warn!("Failed to send shutdown signal");
-            }
+        if let Some(shutdown_tx) = shutdown_guard.take()
+            && shutdown_tx.send(()).is_err()
+        {
+            tracing::warn!("Failed to send shutdown signal");
         }
     }
 

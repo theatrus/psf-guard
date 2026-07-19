@@ -226,15 +226,15 @@ fn annotate_flagged(
                     .unwrap_or_else(|| "-".into()),
             ),
         ];
-        if let Some(fall) = r.bg_cell_fall_fraction.filter(|&v| v > 0.0) {
-            if let Some(first) = caption.get_mut(1) {
-                first.push_str(&format!(" FALL={:.0}%", fall * 100.0));
-            }
+        if let Some(fall) = r.bg_cell_fall_fraction.filter(|&v| v > 0.0)
+            && let Some(first) = caption.get_mut(1)
+        {
+            first.push_str(&format!(" FALL={:.0}%", fall * 100.0));
         }
-        if let Some(glow) = r.bg_glow_max.filter(|&v| v > 0.0) {
-            if let Some(first) = caption.get_mut(1) {
-                first.push_str(&format!(" GLOW={:.1}%", glow * 100.0));
-            }
+        if let Some(glow) = r.bg_glow_max.filter(|&v| v > 0.0)
+            && let Some(first) = caption.get_mut(1)
+        {
+            first.push_str(&format!(" GLOW={:.1}%", glow * 100.0));
         }
         if let Some(details) = &r.details {
             caption.push(details.chars().take(110).collect());

@@ -40,10 +40,10 @@ pub fn parse_status(s: &str) -> Result<GradingStatus> {
 /// argument as a path to an existing `.sqlite` file. Image directories are
 /// irrelevant for sync, so raw paths need no registry entry.
 pub fn resolve_db_path(registry: Option<&DbRegistry>, arg: &str) -> Result<PathBuf> {
-    if let Some(reg) = registry {
-        if let Some(entry) = reg.find(arg) {
-            return Ok(PathBuf::from(&entry.db_path));
-        }
+    if let Some(reg) = registry
+        && let Some(entry) = reg.find(arg)
+    {
+        return Ok(PathBuf::from(&entry.db_path));
     }
     let path = PathBuf::from(arg);
     if path.is_file() {

@@ -140,10 +140,10 @@ impl Config {
         }
 
         // CLI image directories override config (legacy; server mode ignores this)
-        if let Some(dirs) = image_dirs {
-            if !dirs.is_empty() {
-                self.images = Some(ImagesConfig { directories: dirs });
-            }
+        if let Some(dirs) = image_dirs
+            && !dirs.is_empty()
+        {
+            self.images = Some(ImagesConfig { directories: dirs });
         }
 
         // CLI port overrides config

@@ -45,11 +45,11 @@ impl CacheManager {
             let entry = entry?;
             let path = entry.path();
 
-            if let Ok(age) = self.get_cache_age(&path) {
-                if age > max_age_seconds {
-                    std::fs::remove_file(&path)?;
-                    removed_count += 1;
-                }
+            if let Ok(age) = self.get_cache_age(&path)
+                && age > max_age_seconds
+            {
+                std::fs::remove_file(&path)?;
+                removed_count += 1;
             }
         }
 

@@ -585,25 +585,23 @@ pub fn move_rejects(
         // Already archived? Skip (idempotent re-runs). If the recorded
         // archive_path has gone missing, surface it for manual intervention
         // rather than masking a broken archive as a clean skip.
-        if archive_table_known {
-            if let Some(prior) = get_archive_record_by_guid(conn, guid)? {
-                if std::path::Path::new(&prior.archive_path).exists() {
-                    if options.verbose {
-                        println!("⏭️  {} already archived at {}", guid, prior.archive_path);
-                    }
-                    summary.already_archived += 1;
-                } else {
-                    eprintln!(
-                        "⚠️  Image id={} guid={} has a psf_guard_archive row pointing at \
+        if archive_table_known && let Some(prior) = get_archive_record_by_guid(conn, guid)? {
+            if std::path::Path::new(&prior.archive_path).exists() {
+                if options.verbose {
+                    println!("⏭️  {} already archived at {}", guid, prior.archive_path);
+                }
+                summary.already_archived += 1;
+            } else {
+                eprintln!(
+                    "⚠️  Image id={} guid={} has a psf_guard_archive row pointing at \
                          {} but that file is missing. Leaving the DB row in place; \
                          resolve manually (restore from backup, or delete the row to \
                          re-archive).",
-                        image.id, guid, prior.archive_path
-                    );
-                    summary.missing_archive += 1;
-                }
-                continue;
+                    image.id, guid, prior.archive_path
+                );
+                summary.missing_archive += 1;
             }
+            continue;
         }
 
         // Extract filename from the metadata JSON.
@@ -634,14 +632,12 @@ pub fn move_rejects(
                     break;
                 }
             }
-            if located.is_none() {
-                if let Some(Some(tree)) = trees.get(dir_idx) {
-                    if let Some(path) = tree.find_file_first(&filename) {
-                        if path.exists() {
-                            located = Some((dir.clone(), path.clone()));
-                        }
-                    }
-                }
+            if located.is_none()
+                && let Some(Some(tree)) = trees.get(dir_idx)
+                && let Some(path) = tree.find_file_first(&filename)
+                && path.exists()
+            {
+                located = Some((dir.clone(), path.clone()));
             }
             if located.is_some() {
                 break;

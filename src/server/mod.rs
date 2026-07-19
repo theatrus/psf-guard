@@ -493,10 +493,10 @@ fn probe_pregen_frame_pixels(
 ) -> Option<usize> {
     let tree = ctx.get_directory_tree().ok()?;
     for (_image_id, file_only, _target_name) in images {
-        if let Some(path) = tree.find_file_first(file_only) {
-            if let Some(px) = crate::concurrency::probe_frame_pixels(path) {
-                return Some(px);
-            }
+        if let Some(path) = tree.find_file_first(file_only)
+            && let Some(px) = crate::concurrency::probe_frame_pixels(path)
+        {
+            return Some(px);
         }
     }
     None
@@ -564,16 +564,16 @@ async fn get_all_images_for_pregeneration(
 
     for (image, _project_name, target_name) in images {
         // Extract filename from metadata
-        if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&image.metadata) {
-            if let Some(filename_path) = metadata["FileName"].as_str() {
-                let file_only = filename_path
-                    .split(&['\\', '/'][..])
-                    .next_back()
-                    .unwrap_or(filename_path)
-                    .to_string();
+        if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&image.metadata)
+            && let Some(filename_path) = metadata["FileName"].as_str()
+        {
+            let file_only = filename_path
+                .split(&['\\', '/'][..])
+                .next_back()
+                .unwrap_or(filename_path)
+                .to_string();
 
-                result.push((image.id, file_only, target_name));
-            }
+            result.push((image.id, file_only, target_name));
         }
     }
 
@@ -629,17 +629,17 @@ async fn pregenerate_preview(
     let cache_path = cache_manager.get_cached_path("previews", &cache_key, "png");
 
     // Skip if already cached and not expired
-    if cache_manager.is_cached(&cache_path) {
-        if let Ok(metadata) = tokio::fs::metadata(&cache_path).await {
-            let age = metadata.modified()?.elapsed().unwrap_or_default();
-            if age < state.pregeneration_config.cache_expiry {
-                tracing::trace!(
-                    "⏭️ Skipping pre-generation for image {} ({}): already cached",
-                    image_id,
-                    size
-                );
-                return Ok(false); // Skipped, not generated
-            }
+    if cache_manager.is_cached(&cache_path)
+        && let Ok(metadata) = tokio::fs::metadata(&cache_path).await
+    {
+        let age = metadata.modified()?.elapsed().unwrap_or_default();
+        if age < state.pregeneration_config.cache_expiry {
+            tracing::trace!(
+                "⏭️ Skipping pre-generation for image {} ({}): already cached",
+                image_id,
+                size
+            );
+            return Ok(false); // Skipped, not generated
         }
     }
 
@@ -722,16 +722,16 @@ async fn pregenerate_annotated(
     let cache_path = cache_manager.get_cached_path("annotated", &cache_key, "png");
 
     // Skip if already cached and not expired
-    if cache_manager.is_cached(&cache_path) {
-        if let Ok(metadata) = tokio::fs::metadata(&cache_path).await {
-            let age = metadata.modified()?.elapsed().unwrap_or_default();
-            if age < state.pregeneration_config.cache_expiry {
-                tracing::trace!(
-                    "⏭️ Skipping annotated pre-generation for image {}: already cached",
-                    image_id
-                );
-                return Ok(false); // Skipped, not generated
-            }
+    if cache_manager.is_cached(&cache_path)
+        && let Ok(metadata) = tokio::fs::metadata(&cache_path).await
+    {
+        let age = metadata.modified()?.elapsed().unwrap_or_default();
+        if age < state.pregeneration_config.cache_expiry {
+            tracing::trace!(
+                "⏭️ Skipping annotated pre-generation for image {}: already cached",
+                image_id
+            );
+            return Ok(false); // Skipped, not generated
         }
     }
 

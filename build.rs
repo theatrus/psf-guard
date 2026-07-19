@@ -263,12 +263,11 @@ fn is_dist_newer_than_sources(static_dir: &Path, dist_dir: &Path) -> bool {
     let src_dir = static_dir.join("src");
     if let Ok(entries) = fs::read_dir(&src_dir) {
         for entry in entries.flatten() {
-            if let Ok(metadata) = entry.metadata() {
-                if let Ok(modified) = metadata.modified() {
-                    if modified > dist_time {
-                        return false; // Source is newer, need to rebuild
-                    }
-                }
+            if let Ok(metadata) = entry.metadata()
+                && let Ok(modified) = metadata.modified()
+                && modified > dist_time
+            {
+                return false; // Source is newer, need to rebuild
             }
         }
     }
@@ -282,12 +281,11 @@ fn is_dist_newer_than_sources(static_dir: &Path, dist_dir: &Path) -> bool {
     ];
     for file in &config_files {
         let file_path = static_dir.join(file);
-        if let Ok(metadata) = fs::metadata(&file_path) {
-            if let Ok(modified) = metadata.modified() {
-                if modified > dist_time {
-                    return false; // Config file is newer, need to rebuild
-                }
-            }
+        if let Ok(metadata) = fs::metadata(&file_path)
+            && let Ok(modified) = metadata.modified()
+            && modified > dist_time
+        {
+            return false; // Config file is newer, need to rebuild
         }
     }
 
