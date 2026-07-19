@@ -234,24 +234,45 @@ Design, phases, tracker: [REJECT_ARCHIVE_PLAN.md](./REJECT_ARCHIVE_PLAN.md).
   center/epoch/rotation/ROI plus per-capture SessionId, guiding, pier side,
   and rotator metadata without assuming every TS schema has every column.
   Direct target fields win over metadata fallbacks. Absolute grading abstains
-  for unsupported coordinate epochs.
+  for unsupported coordinate epochs. Request paths that iterate a sequence
+  MUST use `FramingResolver` (one schema probe + one target query per distinct
+  target), never per-image `load()` — per-image PRAGMAs are pathological on
+  SMB-mounted scheduler DBs.
 - **Pixel evidence only**: quality scans call `solve_image_for_quality`, so an
   embedded FITS WCS can support display but never proves the current pixels
-  solve. Structured attempts distinguish deterministic no-match/too-few-star
-  results from decode, resource, cancellation, and internal failures. Only
-  deterministic attempts are persisted as image-quality evidence.
+  solve (for display, embedded WCS stays authoritative; the cached pixel
+  attempt rides along as evidence). Structured attempts distinguish
+  deterministic no-match/too-few-star results from decode, resource,
+  cancellation, and internal failures — classified by which solver stages
+  actually ran, not by error-string matching. A hinted no-match on a rig
+  without a blind index IS deterministic evidence; its cached failure is
+  invalidated (and retried) once a blind index is installed. Only
+  deterministic attempts are persisted as image-quality evidence. The per-DB
+  solve mutex is taken per image, so on-demand solves interleave with a
+  running scan.
 - **Sequence grading**: `AstrometryFrameMetrics` feeds tangent-plane target
   offsets, robust solved-center references, jump detection, and Theil-Sen
-  drift into the existing score. Missing astrometry renormalizes away. A
-  target outside the solved footprint or >=20% of the short field caps score
-  at 0.20; confirmed jump/drift caps it at 0.30. An isolated no-solve is a
-  warning and modest score signal, never an automatic rejection by itself.
+  drift into the existing score. Missing astrometry renormalizes away.
+  OffTarget requires departing from BOTH the intended target (>=20% of the
+  short field) and the segment's own robust cluster — a consistently
+  displaced segment is `StableOffset`: deliberate framing, warned, scored on
+  its residual from the segment center, never auto-rejected (plan §8). A
+  target outside the solved footprint is OffTarget regardless of stability
+  and caps score at 0.20; confirmed jump/drift caps at 0.30. Jumps are
+  detected over runs of consecutive excursions (bounded by well-behaved
+  frames, spanning <half the solves), so a multi-frame tracking loss that
+  recovers flags every affected frame. An isolated no-solve is a warning and
+  modest score signal, never an automatic rejection by itself.
 - **Regrading**: SequenceView exposes Off Target, Unsolved, and Recommended
-  selectors plus a per-image review dialog. `screen-fits --regrade-db` enables
-  fresh solves after the basename+timestamp DB match and uses the same
-  sequence decisions. Off-target/jump/drift or a deterministic no-solve
-  corroborated by cloud/obstruction/tracking evidence receives a specific
-  `[Auto]` reason; operational failures and isolated no-solves do not regrade.
+  selectors plus a per-image review dialog; confirming writes each image's
+  OWN `regrade_reason` (batched per distinct reason), not one collapsed
+  string. `screen-fits --regrade-db` enables fresh solves after the
+  basename+timestamp DB match and uses the same sequence decisions; CSV
+  output carries SolveState/OffsetFieldFraction/RegradeReason columns.
+  Off-target/jump/drift or a deterministic no-solve corroborated by
+  cloud/obstruction/tracking evidence receives a specific `[Auto]` reason;
+  operational failures, isolated no-solves, and stable offsets do not
+  regrade.
 
 ### Worker-pool parallelism policy (2026-07)
 All CPU-bound parallel work is sized through `src/concurrency.rs` instead of

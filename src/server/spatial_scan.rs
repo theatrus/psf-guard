@@ -300,6 +300,13 @@ pub fn begin_astrometry_stage(store: &RwLock<SpatialMetricsStore>, total: usize)
     s.progress.current_file = None;
 }
 
+/// Publish the file about to be solved so progress polling shows the frame
+/// currently occupying the (multi-second) solver, not the last finished one.
+pub fn begin_astrometry_item(store: &RwLock<SpatialMetricsStore>, filename: &str) {
+    let mut s = store.write().unwrap();
+    s.progress.current_file = Some(filename.to_string());
+}
+
 pub fn record_astrometry_result(
     store: &RwLock<SpatialMetricsStore>,
     filename: &str,
@@ -308,7 +315,6 @@ pub fn record_astrometry_result(
     operational_error: Option<String>,
 ) {
     let mut s = store.write().unwrap();
-    s.progress.current_file = Some(filename.to_string());
     s.progress.processed += 1;
     s.progress.astrometry_processed += 1;
     if solved {

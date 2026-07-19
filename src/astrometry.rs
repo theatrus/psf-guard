@@ -876,9 +876,10 @@ impl AstrometryContext {
         })
     }
 
-    /// Return a persisted pixel-derived solution when it still describes the
+    /// Return a persisted pixel-derived attempt when it still describes the
     /// same source file, object catalog, Seiza version, and star catalog.
-    /// Embedded FITS WCS always wins because it is part of the source itself.
+    /// Embedded FITS WCS always wins for the displayed solution because it is
+    /// part of the source itself; the cached attempt rides along as evidence.
     pub fn with_cached_solution(
         &self,
         cache_dir: &Path,
@@ -899,15 +900,6 @@ impl AstrometryContext {
             Ok(loaded) => catalog_file_signature("stars", &loaded.fingerprint),
             Err(_) => return fresh,
         };
-        let blind_matches = match provenance.blind_index.as_ref() {
-            Some(expected) => self
-                .load_blind_index()
-                .map(|loaded| {
-                    catalog_file_signature("blind_index", &loaded.fingerprint) == *expected
-                })
-                .unwrap_or(false),
-            None => true,
-        };
         let solved_pixel = cached.status == AstrometryAnalysisStatus::Solved
             && cached.solution.is_some()
             && cached
@@ -919,6 +911,18 @@ impl AstrometryContext {
             && cached.solve_attempt.as_ref().is_some_and(|attempt| {
                 attempt.cacheable && attempt.outcome != AstrometryAttemptOutcome::Solved
             });
+        let blind_matches = match provenance.blind_index.as_ref() {
+            Some(expected) => self
+                .load_blind_index()
+                .map(|loaded| {
+                    catalog_file_signature("blind_index", &loaded.fingerprint) == *expected
+                })
+                .unwrap_or(false),
+            // A solved entry without a blind fingerprint solved via the hint
+            // alone; the blind index is irrelevant to it. A failure without one
+            // never got a blind attempt, so installing an index must retry it.
+            None => solved_pixel || self.load_blind_index().is_err(),
+        };
         let valid = (solved_pixel || deterministic_failure)
             && cached.image_id == fresh.image_id
             && cached.source_fingerprint == fresh.source_fingerprint
@@ -930,11 +934,16 @@ impl AstrometryContext {
             return fresh;
         }
 
-        if deterministic_failure && fresh.solution.is_some() {
+        if fresh.solution.is_some() {
+            // Embedded WCS stays authoritative for display — it is part of the
+            // source file itself. Attach the cached pixel attempt so callers
+            // still see whether (and how) the current pixels solve.
             let mut merged = fresh;
             merged.solve_attempt = cached.solve_attempt;
             merged.solver_provenance = cached.solver_provenance;
-            merged.error = cached.error;
+            if deterministic_failure {
+                merged.error = cached.error;
+            }
             return merged;
         }
 
@@ -980,6 +989,10 @@ impl AstrometryContext {
             {
                 return None;
             }
+        } else if cached.solution.is_none() && self.load_blind_index().is_ok() {
+            // A failure recorded without a blind attempt must be retried once
+            // a blind index becomes available; it might solve now.
+            return None;
         }
 
         Some(cached)
@@ -1128,8 +1141,8 @@ impl AstrometryContext {
                             return Ok(failed_analysis(
                                 analysis,
                                 AstrometryAttemptOutcome::DecodeError,
-                                format!("{primary_error}; f32 detection failed: {error}"),
-                                solve_modes(hint, scale),
+                                format!("{}; f32 detection failed: {error}", primary_error.message),
+                                primary_error.attempted_modes(),
                                 Some(primary_count),
                                 started,
                                 None,
@@ -1156,20 +1169,20 @@ impl AstrometryContext {
                     }
                     Err(fallback_error) => {
                         let error = format!(
-                            "u8 solve failed: {primary_error}; f32 solve failed: {fallback_error}"
+                            "u8 solve failed: {}; f32 solve failed: {}",
+                            primary_error.message, fallback_error.message
                         );
-                        let resource_failure = error.contains("unavailable");
-                        let outcome = if resource_failure {
-                            AstrometryAttemptOutcome::ResourceUnavailable
-                        } else if primary_count < 8 && fallback_count < 8 {
-                            AstrometryAttemptOutcome::InsufficientStars
-                        } else {
-                            AstrometryAttemptOutcome::NoMatch
-                        };
-                        let blind = (!resource_failure)
+                        let outcome =
+                            classify_solve_failure(&fallback_error, primary_count, fallback_count);
+                        let deterministic =
+                            outcome != AstrometryAttemptOutcome::ResourceUnavailable;
+                        // Fingerprint only resources that actually participated:
+                        // a hinted-only failure records no blind index, and cache
+                        // validation invalidates it once an index is installed.
+                        let blind = (deterministic && fallback_error.blind_attempted)
                             .then(|| self.load_blind_index().ok())
                             .flatten();
-                        let provenance = (!resource_failure).then(|| AstrometrySolverProvenance {
+                        let provenance = deterministic.then(|| AstrometrySolverProvenance {
                             seiza_version: SEIZA_VERSION.to_string(),
                             detection_backend: "mtf_u8+linear_f32".to_string(),
                             star_catalog: catalog_file_signature(
@@ -1184,7 +1197,7 @@ impl AstrometryContext {
                             analysis,
                             outcome,
                             error,
-                            solve_modes(hint, scale),
+                            fallback_error.attempted_modes(),
                             Some(primary_count.max(fallback_count)),
                             started,
                             provenance,
@@ -1216,9 +1229,16 @@ impl AstrometryContext {
                 expected_target,
             },
         );
+        let modes_attempted = match mode {
+            AstrometrySolveMode::Hinted => vec![AstrometrySolveMode::Hinted],
+            _ if hint.is_some() && scale.is_some() => {
+                vec![AstrometrySolveMode::Hinted, AstrometrySolveMode::Blind]
+            }
+            _ => vec![AstrometrySolveMode::Blind],
+        };
         analysis.solve_attempt = Some(AstrometrySolveAttempt {
             outcome: AstrometryAttemptOutcome::Solved,
-            modes_attempted: solve_modes(hint, scale),
+            modes_attempted,
             detected_stars: Some(detected_stars),
             duration_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
             image_quality_evidence: true,
@@ -1240,9 +1260,10 @@ impl AstrometryContext {
             seiza::solve::Solution,
             Option<LoadedResource<BlindIndex>>,
         ),
-        String,
+        SolveStarsFailure,
     > {
         let mut hinted_error = None;
+        let hinted_attempted = hint.is_some() && scale.is_some();
         if let (Some(center), Some(scale_arcsec_px)) = (hint, scale) {
             let solve_hint = seiza::solve::SolveHint {
                 center,
@@ -1259,13 +1280,25 @@ impl AstrometryContext {
             }
         }
 
-        let blind_index = self.load_blind_index().map_err(|error| {
-            if let Some(hinted_error) = hinted_error.as_deref() {
-                format!("hinted solve failed: {hinted_error}; blind index unavailable: {error}")
-            } else {
-                format!("blind index unavailable: {error}")
+        let blind_index = match self.load_blind_index() {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                // The hinted solver may still have run deterministically; only
+                // the blind stage was missing its resource. Report which parts
+                // actually executed so failure classification does not confuse
+                // "pixels did not match" with "nothing could be attempted".
+                let message = if let Some(hinted_error) = hinted_error.as_deref() {
+                    format!("hinted solve failed: {hinted_error}; blind index unavailable: {error}")
+                } else {
+                    format!("blind index unavailable: {error}")
+                };
+                return Err(SolveStarsFailure {
+                    hinted_attempted,
+                    blind_attempted: false,
+                    message,
+                });
             }
-        })?;
+        };
         let mut params = seiza::blind::BlindParams {
             index_mag_limit: blind_index.value.index_mag_limit(),
             max_pattern_deg: blind_index.value.max_pattern_deg(),
@@ -1278,10 +1311,15 @@ impl AstrometryContext {
         seiza::blind::solve_blind(stars, catalog, &blind_index.value, &params, dimensions)
             .map(|solution| (AstrometrySolveMode::Blind, solution, Some(blind_index)))
             .map_err(|error| {
-                if let Some(hinted_error) = hinted_error {
+                let message = if let Some(hinted_error) = hinted_error {
                     format!("hinted solve failed: {hinted_error}; blind solve failed: {error}")
                 } else {
                     format!("blind solve failed: {error}")
+                };
+                SolveStarsFailure {
+                    hinted_attempted,
+                    blind_attempted: true,
+                    message,
                 }
             })
     }
@@ -1623,13 +1661,44 @@ fn wcs_from_response(response: &WcsResponse) -> seiza::Wcs {
     }
 }
 
-fn solve_modes(hint: Option<(f64, f64)>, scale: Option<f64>) -> Vec<AstrometrySolveMode> {
-    let mut modes = Vec::with_capacity(2);
-    if hint.is_some() && scale.is_some() {
-        modes.push(AstrometrySolveMode::Hinted);
+/// A solver failure that records which solve stages actually executed, so the
+/// caller can distinguish deterministic pixel evidence (a solver ran and did
+/// not match) from operational failures (no solver could be attempted).
+#[derive(Debug, Clone)]
+struct SolveStarsFailure {
+    hinted_attempted: bool,
+    blind_attempted: bool,
+    message: String,
+}
+
+impl SolveStarsFailure {
+    fn attempted_modes(&self) -> Vec<AstrometrySolveMode> {
+        let mut modes = Vec::with_capacity(2);
+        if self.hinted_attempted {
+            modes.push(AstrometrySolveMode::Hinted);
+        }
+        if self.blind_attempted {
+            modes.push(AstrometrySolveMode::Blind);
+        }
+        modes
     }
-    modes.push(AstrometrySolveMode::Blind);
-    modes
+}
+
+/// Classify a full (u8 + f32) solve failure. Deterministic no-match evidence
+/// requires that at least one solver stage actually ran against the pixels; a
+/// hinted no-match on a rig without a blind index is still pixel evidence.
+fn classify_solve_failure(
+    failure: &SolveStarsFailure,
+    primary_count: usize,
+    fallback_count: usize,
+) -> AstrometryAttemptOutcome {
+    if !failure.hinted_attempted && !failure.blind_attempted {
+        AstrometryAttemptOutcome::ResourceUnavailable
+    } else if primary_count < 8 && fallback_count < 8 {
+        AstrometryAttemptOutcome::InsufficientStars
+    } else {
+        AstrometryAttemptOutcome::NoMatch
+    }
 }
 
 fn failed_analysis(
@@ -1929,7 +1998,10 @@ fn pointing_result(
     let expected_dec = expected.1.to_radians();
     let denominator = expected_dec.sin() * center_dec.sin()
         + expected_dec.cos() * center_dec.cos() * delta_ra.cos();
-    let (east_offset_arcsec, north_offset_arcsec) = if denominator.abs() > 1e-12 {
+    // A non-positive denominator means the solved center is 90° or more from
+    // the target; the projection is meaningless there, so abstain rather than
+    // report sign-mirrored offsets. The separation below stays correct.
+    let (east_offset_arcsec, north_offset_arcsec) = if denominator > 1e-12 {
         let east = center_dec.cos() * delta_ra.sin() / denominator;
         let north = (expected_dec.cos() * center_dec.sin()
             - expected_dec.sin() * center_dec.cos() * delta_ra.cos())
@@ -2513,6 +2585,43 @@ mod tests {
             Some("SEIZAOB1")
         );
         assert!(context.try_validate_all().unwrap().all_configured_valid);
+    }
+
+    #[test]
+    fn hinted_only_no_match_is_quality_evidence() {
+        // A rig without a blind index still produced deterministic pixel
+        // evidence when the hinted solver ran and did not match.
+        let hinted_only = SolveStarsFailure {
+            hinted_attempted: true,
+            blind_attempted: false,
+            message: "hinted solve failed: no match; blind index unavailable: not configured"
+                .to_string(),
+        };
+        assert_eq!(
+            classify_solve_failure(&hinted_only, 50, 60),
+            AstrometryAttemptOutcome::NoMatch
+        );
+
+        // Nothing could be attempted at all: operational, not evidence.
+        let nothing_ran = SolveStarsFailure {
+            hinted_attempted: false,
+            blind_attempted: false,
+            message: "blind index unavailable: not configured".to_string(),
+        };
+        assert_eq!(
+            classify_solve_failure(&nothing_ran, 50, 60),
+            AstrometryAttemptOutcome::ResourceUnavailable
+        );
+
+        let sparse = SolveStarsFailure {
+            hinted_attempted: true,
+            blind_attempted: true,
+            message: "too few stars".to_string(),
+        };
+        assert_eq!(
+            classify_solve_failure(&sparse, 3, 5),
+            AstrometryAttemptOutcome::InsufficientStars
+        );
     }
 
     #[test]

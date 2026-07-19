@@ -165,19 +165,22 @@ export default function SequenceView() {
   [activeSequence, selectedImages]);
 
   // Batch rejection is deliberately two-step: show the exact per-image
-  // evidence/reason before changing scheduler grades.
+  // evidence/reason before changing scheduler grades. Each image's own reason
+  // is written — the scheduler keeps rejectreason per image, so a mixed batch
+  // must not collapse to one shared string.
   const confirmRejectSelected = useCallback(async () => {
     if (selectedImages.size === 0) return;
-    const reasons = new Set(
-      activeSequence?.images
-        .filter(img => selectedImages.has(img.image_id))
-        .map(img => img.regrade_reason)
-        .filter((reason): reason is string => !!reason) ?? []
-    );
-    const reason = reasons.size === 1
-      ? Array.from(reasons)[0]
-      : '[Auto] Quality analysis - sequence, occlusion, photometry, and astrometry evidence';
-    await grading.gradeBatch(Array.from(selectedImages), 'rejected', reason);
+    const selected = activeSequence?.images.filter(img => selectedImages.has(img.image_id)) ?? [];
+    const byReason = new Map<string, number[]>();
+    for (const img of selected) {
+      const reason = img.regrade_reason ?? 'Quality analysis';
+      const ids = byReason.get(reason);
+      if (ids) ids.push(img.image_id);
+      else byReason.set(reason, [img.image_id]);
+    }
+    for (const [reason, ids] of byReason) {
+      await grading.gradeBatch(ids, 'rejected', reason);
+    }
     setSelectedImages(new Set());
     setShowRejectReview(false);
   }, [selectedImages, activeSequence, grading]);

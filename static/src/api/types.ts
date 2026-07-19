@@ -376,6 +376,8 @@ export interface ImageQualityResult {
     separation_arcsec?: number;
     field_fraction_offset?: number;
     reference_offset_arcsec?: number;
+    /** Residual from the segment's own robust center, as a field fraction. */
+    reference_field_fraction?: number;
     drift_rate_arcsec_per_hour?: number;
     matched_stars?: number;
     rms_arcsec?: number;

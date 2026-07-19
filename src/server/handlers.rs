@@ -2083,11 +2083,14 @@ pub async fn analyze_sequence(
                     && filter_name.as_ref().is_none_or(|f| img.filter_name == *f)
             })
             .collect();
+        let mut resolver =
+            crate::acquisition_context::FramingResolver::new(&conn).map_err(AppError::db)?;
         let expected_by_image = filtered
             .iter()
             .map(|(image, _, _)| {
-                crate::acquisition_context::load(&conn, image)
-                    .map(|context| (image.id, context.expected_for_grading()))
+                resolver
+                    .expected_for_grading(&conn, image)
+                    .map(|expected| (image.id, expected))
             })
             .collect::<Result<std::collections::HashMap<_, _>, _>>()
             .map_err(AppError::db)?;
@@ -2235,11 +2238,14 @@ pub async fn get_image_quality(
                     && img.filter_name == target_image.filter_name
             })
             .collect();
+        let mut resolver =
+            crate::acquisition_context::FramingResolver::new(&conn).map_err(AppError::db)?;
         let expected_by_image = filter_images
             .iter()
             .map(|(image, _, _)| {
-                crate::acquisition_context::load(&conn, image)
-                    .map(|context| (image.id, context.expected_for_grading()))
+                resolver
+                    .expected_for_grading(&conn, image)
+                    .map(|expected| (image.id, expected))
             })
             .collect::<Result<std::collections::HashMap<_, _>, _>>()
             .map_err(AppError::db)?;
@@ -2526,6 +2532,8 @@ pub async fn start_spatial_scan(
             .query_images(None, None, None, None)
             .map_err(AppError::db)?;
 
+        let mut resolver =
+            crate::acquisition_context::FramingResolver::new(&conn).map_err(AppError::db)?;
         let mut candidates = Vec::new();
         for (img, _, _) in all_images.into_iter().filter(|(img, _, _)| {
             img.target_id == req.target_id
@@ -2534,9 +2542,9 @@ pub async fn start_spatial_scan(
                     .as_ref()
                     .is_none_or(|f| img.filter_name == *f)
         }) {
-            let expected = crate::acquisition_context::load(&conn, &img)
-                .map_err(AppError::db)?
-                .expected_for_grading();
+            let expected = resolver
+                .expected_for_grading(&conn, &img)
+                .map_err(AppError::db)?;
             candidates.push((img, target_name.clone(), expected));
         }
         candidates
@@ -2641,7 +2649,11 @@ pub async fn start_spatial_scan(
                     )),
                     Err(_) => {
                         let mut s = ctx_arc.spatial_metrics.write().unwrap();
-                        s.progress.processed += 1;
+                        // The stage total counts only spatial work; advancing
+                        // it for an astrometry-only item would overshoot it.
+                        if *need_spatial {
+                            s.progress.processed += 1;
+                        }
                         s.progress.errors += 1;
                         s.progress.last_error = Some(format!("{}: FITS file not found", file_only));
                     }
@@ -2684,13 +2696,21 @@ pub async fn start_spatial_scan(
                     &ctx_arc.spatial_metrics,
                     astrometry_items.len(),
                 );
-                let _solve_guard = ctx_arc.astrometry_solve_mutex.blocking_lock();
                 for (item, expected, _, _) in astrometry_items {
+                    crate::server::spatial_scan::begin_astrometry_item(
+                        &ctx_arc.spatial_metrics,
+                        &item.filename,
+                    );
+                    // Acquire the per-database solve mutex per image, not for
+                    // the whole stage: a user-triggered on-demand solve must be
+                    // able to interleave with a long-running scan.
+                    let solve_guard = ctx_arc.astrometry_solve_mutex.blocking_lock();
                     let outcome = astrometry.solve_image_for_quality(
                         item.image_id,
                         &item.fits_path,
                         *expected,
                     );
+                    drop(solve_guard);
                     match outcome {
                         Ok(analysis) => {
                             let attempt = analysis.solve_attempt.as_ref();

@@ -62,72 +62,105 @@ impl AcquisitionContext {
     }
 }
 
-pub fn load(conn: &Connection, image: &AcquiredImage) -> rusqlite::Result<AcquisitionContext> {
-    let target_columns = table_columns(conn, "target")?;
-    let project_columns = table_columns(conn, "project")?;
-    let image_columns = table_columns(conn, "acquiredimage")?;
+/// Resolves expected framing for many images with one schema probe and one
+/// target-table query per distinct target. Request paths that iterate a whole
+/// sequence must use this instead of [`load`]: `load` re-probes the schema and
+/// re-reads the target row per call, which is pathological on slow (network
+/// mounted) scheduler databases.
+pub struct FramingResolver {
+    target_query: String,
+    by_target: std::collections::HashMap<i32, Option<ExpectedFraming>>,
+}
 
-    let target_metadata = column(&target_columns, "metadata");
-    let ra = column(&target_columns, "ra");
-    let dec = column(&target_columns, "dec");
-    let epoch = column(&target_columns, "epochcode");
-    let rotation = column(&target_columns, "rotation");
-    let roi = column(&target_columns, "roi");
-    let target_query = format!(
-        "SELECT {}, {}, {}, {}, {}, {} FROM target WHERE Id = ?",
-        ra.unwrap_or("NULL"),
-        dec.unwrap_or("NULL"),
-        epoch.unwrap_or("NULL"),
-        rotation.unwrap_or("NULL"),
-        roi.unwrap_or("NULL"),
-        target_metadata.unwrap_or("NULL")
-    );
-    let target = conn
-        .query_row(&target_query, [image.target_id], |row| {
-            Ok((
-                row.get::<_, Option<f64>>(0)?,
-                row.get::<_, Option<f64>>(1)?,
-                row.get::<_, Option<i32>>(2)?,
-                row.get::<_, Option<f64>>(3)?,
-                row.get::<_, Option<f64>>(4)?,
-                row.get::<_, Option<String>>(5)?,
-            ))
+impl FramingResolver {
+    pub fn new(conn: &Connection) -> rusqlite::Result<Self> {
+        let target_columns = table_columns(conn, "target")?;
+        let target_metadata = column(&target_columns, "metadata");
+        let ra = column(&target_columns, "ra");
+        let dec = column(&target_columns, "dec");
+        let epoch = column(&target_columns, "epochcode");
+        let rotation = column(&target_columns, "rotation");
+        let roi = column(&target_columns, "roi");
+        let target_query = format!(
+            "SELECT {}, {}, {}, {}, {}, {} FROM target WHERE Id = ?",
+            ra.unwrap_or("NULL"),
+            dec.unwrap_or("NULL"),
+            epoch.unwrap_or("NULL"),
+            rotation.unwrap_or("NULL"),
+            roi.unwrap_or("NULL"),
+            target_metadata.unwrap_or("NULL")
+        );
+        Ok(Self {
+            target_query,
+            by_target: std::collections::HashMap::new(),
         })
-        .optional()?;
+    }
 
-    let expected_framing = target.and_then(|(ra, dec, epoch_code, rotation, roi, metadata)| {
-        let direct = ra
-            .zip(dec)
-            .and_then(|(ra_hours, dec_deg)| target_scheduler_coordinates(ra_hours, dec_deg))
-            .map(|(ra_deg, dec_deg)| (ra_deg, dec_deg, "target_scheduler".to_string()));
-        let metadata = metadata
-            .as_deref()
-            .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok());
-        let fallback = metadata.as_ref().and_then(coordinates_from_target_metadata);
-        direct
-            .or(fallback)
-            .map(|(ra_deg, dec_deg, source)| ExpectedFraming {
-                ra_deg,
-                dec_deg,
-                epoch_code,
-                rotation_deg: rotation.or_else(|| {
-                    metadata
-                        .as_ref()
-                        .and_then(|m| number(m, &["Rotation", "rotation"]))
-                }),
-                roi_percent: roi.or_else(|| {
-                    metadata
-                        .as_ref()
-                        .and_then(|m| number(m, &["ROI", "Roi", "roi"]))
-                }),
-                source,
-                grading_eligible: epoch_code.is_none_or(|code| code == 0),
+    fn target_framing(
+        &mut self,
+        conn: &Connection,
+        target_id: i32,
+    ) -> rusqlite::Result<Option<ExpectedFraming>> {
+        if let Some(cached) = self.by_target.get(&target_id) {
+            return Ok(cached.clone());
+        }
+        let target = conn
+            .query_row(&self.target_query, [target_id], |row| {
+                Ok((
+                    row.get::<_, Option<f64>>(0)?,
+                    row.get::<_, Option<f64>>(1)?,
+                    row.get::<_, Option<i32>>(2)?,
+                    row.get::<_, Option<f64>>(3)?,
+                    row.get::<_, Option<f64>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                ))
             })
-    });
+            .optional()?;
+        let framing = target.and_then(|(ra, dec, epoch_code, rotation, roi, metadata)| {
+            let direct = ra
+                .zip(dec)
+                .and_then(|(ra_hours, dec_deg)| target_scheduler_coordinates(ra_hours, dec_deg))
+                .map(|(ra_deg, dec_deg)| (ra_deg, dec_deg, "target_scheduler".to_string()));
+            let metadata = metadata
+                .as_deref()
+                .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok());
+            let fallback = metadata.as_ref().and_then(coordinates_from_target_metadata);
+            direct
+                .or(fallback)
+                .map(|(ra_deg, dec_deg, source)| ExpectedFraming {
+                    ra_deg,
+                    dec_deg,
+                    epoch_code,
+                    rotation_deg: rotation.or_else(|| {
+                        metadata
+                            .as_ref()
+                            .and_then(|m| number(m, &["Rotation", "rotation"]))
+                    }),
+                    roi_percent: roi.or_else(|| {
+                        metadata
+                            .as_ref()
+                            .and_then(|m| number(m, &["ROI", "Roi", "roi"]))
+                    }),
+                    source,
+                    grading_eligible: epoch_code.is_none_or(|code| code == 0),
+                })
+        });
+        self.by_target.insert(target_id, framing.clone());
+        Ok(framing)
+    }
 
-    let image_metadata = serde_json::from_str::<serde_json::Value>(&image.metadata).ok();
-    let expected_framing = expected_framing.or_else(|| {
-        image_metadata
+    pub fn expected_framing(
+        &mut self,
+        conn: &Connection,
+        image: &AcquiredImage,
+    ) -> rusqlite::Result<Option<ExpectedFraming>> {
+        if let Some(framing) = self.target_framing(conn, image.target_id)? {
+            return Ok(Some(framing));
+        }
+        // Capture-level fallback needs only the image's own metadata JSON,
+        // which the caller already holds in memory — no extra queries.
+        Ok(serde_json::from_str::<serde_json::Value>(&image.metadata)
+            .ok()
             .as_ref()
             .and_then(coordinates_from_capture_metadata)
             .map(|(ra_deg, dec_deg, source)| ExpectedFraming {
@@ -138,8 +171,28 @@ pub fn load(conn: &Connection, image: &AcquiredImage) -> rusqlite::Result<Acquis
                 roi_percent: None,
                 source,
                 grading_eligible: true,
-            })
-    });
+            }))
+    }
+
+    pub fn expected_for_grading(
+        &mut self,
+        conn: &Connection,
+        image: &AcquiredImage,
+    ) -> rusqlite::Result<Option<(f64, f64)>> {
+        Ok(self
+            .expected_framing(conn, image)?
+            .filter(|framing| framing.grading_eligible)
+            .map(|framing| (framing.ra_deg, framing.dec_deg)))
+    }
+}
+
+pub fn load(conn: &Connection, image: &AcquiredImage) -> rusqlite::Result<AcquisitionContext> {
+    let project_columns = table_columns(conn, "project")?;
+    let image_columns = table_columns(conn, "acquiredimage")?;
+
+    let mut resolver = FramingResolver::new(conn)?;
+    let expected_framing = resolver.expected_framing(conn, image)?;
+    let image_metadata = serde_json::from_str::<serde_json::Value>(&image.metadata).ok();
     let exposure_id = if let Some(name) = column(&image_columns, "exposureid") {
         conn.query_row(
             &format!("SELECT {name} FROM acquiredimage WHERE Id = ?"),

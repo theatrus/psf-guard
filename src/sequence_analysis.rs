@@ -11,6 +11,9 @@ pub enum IssueCategory {
     WindShake,
     SkyBrightening,
     OffTarget,
+    /// The whole segment is consistently displaced from the intended target.
+    /// Likely deliberate framing: surfaced as a warning, never auto-rejected.
+    StableOffset,
     PointingJump,
     PointingDrift,
     PlateSolveFailed,
@@ -60,6 +63,11 @@ pub struct PointingQuality {
     pub field_fraction_offset: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_offset_arcsec: Option<f64>,
+    /// Residual from the segment's own robust center as a fraction of the
+    /// short field axis. For stable-offset segments this, not the absolute
+    /// target offset, is what pointing scoring uses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_field_fraction: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drift_rate_arcsec_per_hour: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -982,14 +990,10 @@ impl SequenceAnalyzer {
                     .zip(a.field_short_axis_arcsec)
                     .filter(|(_, field)| *field > 0.0)
                     .map(|(separation, field)| separation / field);
+                // Absolute off-target flags are assigned below once the
+                // segment's own cluster is known: a consistently displaced
+                // segment is deliberate framing, not a pointing failure.
                 let mut flags = Vec::new();
-                if use_expected_target
-                    && a.pixel_solved
-                    && (a.target_in_frame == Some(false)
-                        || fraction.is_some_and(|value| value >= 0.20))
-                {
-                    flags.push(IssueCategory::OffTarget);
-                }
                 if a.solve_failed && a.image_quality_evidence {
                     flags.push(IssueCategory::PlateSolveFailed);
                 }
@@ -1008,6 +1012,7 @@ impl SequenceAnalyzer {
                     separation_arcsec: use_expected_target.then_some(a.separation_arcsec).flatten(),
                     field_fraction_offset: fraction,
                     reference_offset_arcsec: None,
+                    reference_field_fraction: None,
                     drift_rate_arcsec_per_hour: None,
                     matched_stars: a.matched_stars,
                     rms_arcsec: a.rms_arcsec,
@@ -1025,6 +1030,28 @@ impl SequenceAnalyzer {
         }
 
         if solved_indices.len() < 3 {
+            // Too few solves to know the segment's own cluster. A target fully
+            // outside the footprint is still unambiguous; a large in-frame
+            // offset could be deliberate framing, so warn instead of flagging.
+            if use_expected_target {
+                for &idx in &solved_indices {
+                    let target_outside = images[idx]
+                        .astrometry
+                        .as_ref()
+                        .and_then(|a| a.target_in_frame)
+                        == Some(false);
+                    if let Some(pointing) = quality[idx].as_mut() {
+                        let far = pointing
+                            .field_fraction_offset
+                            .is_some_and(|fraction| fraction >= 0.20);
+                        if target_outside {
+                            push_issue(&mut pointing.flags, IssueCategory::OffTarget);
+                        } else if far {
+                            push_issue(&mut pointing.flags, IssueCategory::StableOffset);
+                        }
+                    }
+                }
+            }
             return quality;
         }
 
@@ -1058,16 +1085,62 @@ impl SequenceAnalyzer {
         let excursion_threshold = (6.0 * mad).max(0.08 * field).max(30.0);
 
         for (position, &idx) in solved_indices.iter().enumerate() {
+            let target_outside = images[idx]
+                .astrometry
+                .as_ref()
+                .and_then(|a| a.target_in_frame)
+                == Some(false);
             if let Some(pointing) = quality[idx].as_mut() {
                 pointing.reference_offset_arcsec = Some(distances[position]);
-                let previous_good =
-                    position == 0 || distances[position - 1] <= excursion_threshold * 0.5;
-                let next_good = position + 1 == solved_indices.len()
-                    || distances[position + 1] <= excursion_threshold * 0.5;
-                if distances[position] > excursion_threshold && previous_good && next_good {
-                    push_issue(&mut pointing.flags, IssueCategory::PointingJump);
+                if field > 0.0 {
+                    pointing.reference_field_fraction = Some(distances[position] / field);
+                }
+                if use_expected_target {
+                    // Off target requires departing from BOTH the intended
+                    // target and the segment's own cluster. A far offset that
+                    // the whole segment shares is stable (deliberate) framing:
+                    // warn, never auto-reject (plan §8). A target outside the
+                    // solved footprint is unambiguous regardless of stability.
+                    let far = pointing
+                        .field_fraction_offset
+                        .is_some_and(|fraction| fraction >= 0.20);
+                    if target_outside || (far && distances[position] > excursion_threshold) {
+                        push_issue(&mut pointing.flags, IssueCategory::OffTarget);
+                    } else if far {
+                        push_issue(&mut pointing.flags, IssueCategory::StableOffset);
+                    }
                 }
             }
+        }
+
+        // Jump detection over runs of consecutive excursions: tracking can be
+        // lost for several frames before recovering, and each of those frames
+        // is equally rejectable. A run bounded by well-behaved frames (or the
+        // segment edge) that spans less than half the solves is a jump; a
+        // longer displacement is a framing change, left to the stable/drift
+        // logic.
+        let well_behaved = |distance: f64| distance <= excursion_threshold * 0.5;
+        let mut position = 0;
+        while position < distances.len() {
+            if distances[position] <= excursion_threshold {
+                position += 1;
+                continue;
+            }
+            let start = position;
+            let mut end = position;
+            while end + 1 < distances.len() && distances[end + 1] > excursion_threshold {
+                end += 1;
+            }
+            let bounded_before = start == 0 || well_behaved(distances[start - 1]);
+            let bounded_after = end + 1 == distances.len() || well_behaved(distances[end + 1]);
+            if bounded_before && bounded_after && (end - start + 1) * 2 <= distances.len() {
+                for &idx in &solved_indices[start..=end] {
+                    if let Some(pointing) = quality[idx].as_mut() {
+                        push_issue(&mut pointing.flags, IssueCategory::PointingJump);
+                    }
+                }
+            }
+            position = end + 1;
         }
 
         let time_values: Vec<(usize, f64, f64, f64)> = solved_points
@@ -1238,6 +1311,15 @@ impl SequenceAnalyzer {
                             result.quality_score
                         )
                     }),
+                )
+            } else if pointing.flags.contains(&IssueCategory::StableOffset) {
+                (
+                    original_category.or(Some(IssueCategory::StableOffset)),
+                    Some(format!(
+                        "Sequence is consistently offset {:.0}% of the short field dimension from the intended target; likely deliberate framing, not auto-rejected.",
+                        pointing.field_fraction_offset.unwrap_or(0.0) * 100.0
+                    )),
+                    None,
                 )
             } else {
                 (original_category, None, None)
@@ -1652,7 +1734,16 @@ fn push_issue(flags: &mut Vec<IssueCategory>, issue: IssueCategory) {
 
 fn pointing_normalized(pointing: &PointingQuality) -> Option<f64> {
     if pointing.pixel_solved {
-        let fraction = pointing.field_fraction_offset?;
+        // A stable-offset segment is deliberately framed: score its frames on
+        // the residual from the segment's own center, not the target offset,
+        // so consistent framing does not depress the whole sequence.
+        let fraction = if pointing.flags.contains(&IssueCategory::StableOffset) {
+            pointing
+                .reference_field_fraction
+                .or(pointing.field_fraction_offset)?
+        } else {
+            pointing.field_fraction_offset?
+        };
         let base = (1.0 - ((fraction - 0.02) / 0.18)).clamp(0.0, 1.0);
         if pointing.flags.iter().any(|flag| {
             matches!(
@@ -2103,6 +2194,76 @@ mod tests {
         assert!(affected
             .iter()
             .all(|result| result.regrade_reason.is_some()));
+    }
+
+    #[test]
+    fn stable_framing_offset_warns_without_regrade_or_score_cap() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..6)
+            .map(|i| make_full_image(i, i as i64 * 300, 500.0, 2.5, 1000.0, 20.0, 0.4))
+            .collect();
+        // Deliberate framing: every frame is 25% of the field from the target,
+        // target still in frame, and the whole segment agrees.
+        for image in &mut images {
+            image.astrometry = Some(solved_astrometry(500.0, 0.0, 2000.0, true));
+        }
+
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        for result in &sequence.images {
+            assert!(result.flags.contains(&IssueCategory::StableOffset));
+            assert!(!result.flags.contains(&IssueCategory::OffTarget));
+            assert!(
+                result.regrade_reason.is_none(),
+                "stable offsets must never auto-reject"
+            );
+            assert!(result.quality_score > 0.30);
+        }
+        assert_eq!(sequence.summary.out_of_target_count, 0);
+    }
+
+    #[test]
+    fn departure_from_a_stably_offset_segment_is_off_target() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..6)
+            .map(|i| make_full_image(i, i as i64 * 300, 500.0, 2.5, 1000.0, 20.0, 0.4))
+            .collect();
+        for image in &mut images {
+            image.astrometry = Some(solved_astrometry(500.0, 0.0, 2000.0, true));
+        }
+        images[3].astrometry = Some(solved_astrometry(1100.0, 0.0, 2000.0, true));
+
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        let excursion = &sequence.images[3];
+        assert_eq!(excursion.category, Some(IssueCategory::OffTarget));
+        assert!(excursion.regrade_reason.is_some());
+        assert!(excursion.quality_score <= 0.20);
+        assert!(sequence.images[1].regrade_reason.is_none());
+    }
+
+    #[test]
+    fn multi_frame_excursion_that_returns_is_flagged_as_a_jump() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..6)
+            .map(|i| make_full_image(i, i as i64 * 300, 500.0, 2.5, 1000.0, 20.0, 0.4))
+            .collect();
+        let centers = [120.00, 120.00, 120.05, 120.05, 120.00, 120.00];
+        for (image, ra) in images.iter_mut().zip(centers) {
+            image.astrometry = Some(relative_solved_astrometry(ra, 0.0, 2000.0));
+        }
+
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        for idx in [2, 3] {
+            let result = &sequence.images[idx];
+            assert!(
+                result.flags.contains(&IssueCategory::PointingJump),
+                "frame {idx} should be part of the jump run"
+            );
+            assert!(result.regrade_reason.is_some());
+            assert!(result.quality_score <= 0.30);
+        }
+        assert!(!sequence.images[1]
+            .flags
+            .contains(&IssueCategory::PointingJump));
     }
 
     #[test]

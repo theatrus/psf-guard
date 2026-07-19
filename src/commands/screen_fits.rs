@@ -320,6 +320,7 @@ fn enrich_astrometry_for_regrade(
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     let db = Database::new(&conn);
+    let mut resolver = crate::acquisition_context::FramingResolver::new(&conn)?;
     let mut by_basename: HashMap<String, Vec<RegradeAstrometryMatch>> = HashMap::new();
     for (image, _, _) in db.query_images(None, None, None, None)? {
         let Some(filename) = serde_json::from_str::<serde_json::Value>(&image.metadata)
@@ -331,7 +332,7 @@ fn enrich_astrometry_for_regrade(
         let Some(basename) = filename.split(&['\\', '/'][..]).next_back() else {
             continue;
         };
-        let expected = crate::acquisition_context::load(&conn, &image)?.expected_for_grading();
+        let expected = resolver.expected_for_grading(&conn, &image)?;
         by_basename.entry(basename.to_string()).or_default().push((
             image.id,
             image.acquired_date,
@@ -345,23 +346,32 @@ fn enrich_astrometry_for_regrade(
             .and_then(|registry| registry.astrometry.clone())
             .unwrap_or_default(),
     );
-    let mut attempted = 0usize;
-    let total_records = records.len();
-    for record in records {
-        let Some(file) = record.path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        let Some([(image_id, acquired, expected)]) = by_basename.get(file).map(Vec::as_slice)
-        else {
-            continue;
-        };
-        if !matches!((record.timestamp, *acquired), (Some(ours), Some(theirs)) if (ours - theirs).abs() <= MATCH_TOLERANCE_SECS)
-        {
-            continue;
-        }
-        attempted += 1;
-        eprintln!("[astrometry {}/{}] {}", attempted, total_records, file);
-        match astrometry.solve_image_for_quality(*image_id, &record.path, *expected) {
+    // Match first so the progress denominator reflects real solve work, then
+    // solve the unambiguous matches serially (solving is memory-heavy).
+    type MatchedRecord = (usize, i32, Option<(f64, f64)>);
+    let matched: Vec<MatchedRecord> = records
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, record)| {
+            let file = record.path.file_name()?.to_str()?;
+            let [(image_id, acquired, expected)] = by_basename.get(file).map(Vec::as_slice)?
+            else {
+                return None;
+            };
+            matches!((record.timestamp, *acquired), (Some(ours), Some(theirs)) if (ours - theirs).abs() <= MATCH_TOLERANCE_SECS)
+                .then_some((idx, *image_id, *expected))
+        })
+        .collect();
+    let total_matched = matched.len();
+    for (attempted, (idx, image_id, expected)) in matched.into_iter().enumerate() {
+        let record = &mut records[idx];
+        let file = record
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        eprintln!("[astrometry {}/{}] {}", attempted + 1, total_matched, file);
+        match astrometry.solve_image_for_quality(image_id, &record.path, expected) {
             Ok(analysis) => {
                 record.astrometry =
                     crate::sequence_analysis::astrometry_metrics_from_analysis(&analysis);
@@ -934,6 +944,7 @@ fn category_label(category: &Option<IssueCategory>) -> &'static str {
         Some(IssueCategory::WindShake) => "wind",
         Some(IssueCategory::SkyBrightening) => "sky-gradient",
         Some(IssueCategory::OffTarget) => "off-target",
+        Some(IssueCategory::StableOffset) => "stable-offset",
         Some(IssueCategory::PointingJump) => "pointing-jump",
         Some(IssueCategory::PointingDrift) => "pointing-drift",
         Some(IssueCategory::PlateSolveFailed) => "unsolved",
@@ -1023,11 +1034,11 @@ fn truncate_name(name: &str, max: usize) -> String {
 
 fn print_csv(results: &[ScreenResult]) {
     println!(
-        "File,Filter,ExposureS,Timestamp,Stars,AvgHFR,MedianADU,DeadCellFraction,StarUniformity,BgCellSpread,BgCellMaxDev,Transparency,ExtinctionCellFraction,StarCellDropFraction,BgCellRiseFraction,BgCellFallFraction,BgGlowMax,Score,Category,Verdict"
+        "File,Filter,ExposureS,Timestamp,Stars,AvgHFR,MedianADU,DeadCellFraction,StarUniformity,BgCellSpread,BgCellMaxDev,Transparency,ExtinctionCellFraction,StarCellDropFraction,BgCellRiseFraction,BgCellFallFraction,BgGlowMax,Score,Category,Verdict,SolveState,OffsetFieldFraction,RegradeReason"
     );
     for r in results {
         println!(
-            "{},{},{},{},{},{:.3},{:.1},{},{},{:.4},{:.4},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{:.3},{:.1},{},{},{:.4},{:.4},{},{},{},{},{},{},{},{},{},{},{},{}",
             r.file,
             r.filter,
             r.exposure_s.map(|e| e.to_string()).unwrap_or_default(),
@@ -1066,6 +1077,25 @@ fn print_csv(results: &[ScreenResult]) {
                 .unwrap_or_default(),
             category_label(&r.category),
             r.verdict,
+            r.pointing
+                .as_ref()
+                .map(|pointing| if pointing.pixel_solved {
+                    "solved"
+                } else if pointing.solve_failed && pointing.image_quality_evidence {
+                    "unsolved"
+                } else {
+                    "unavailable"
+                })
+                .unwrap_or_default(),
+            r.pointing
+                .as_ref()
+                .and_then(|pointing| pointing.field_fraction_offset)
+                .map(|fraction| format!("{:.3}", fraction))
+                .unwrap_or_default(),
+            r.regrade_reason
+                .as_deref()
+                .map(|reason| format!("\"{}\"", reason.replace('"', "\"\"")))
+                .unwrap_or_default(),
         );
     }
 }
