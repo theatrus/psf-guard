@@ -1818,7 +1818,8 @@ impl AstrometryEvidenceCache {
                 .filter(|entry| entry.cache_file_mtime == mtime)
                 .map(|entry| entry.analysis.clone())
         };
-        let analysis = match cached {
+        let memory_hit = cached.is_some();
+        let mut analysis = match cached {
             Some(analysis) => analysis,
             None => {
                 let analysis = persisted_pixel_analysis(cache_dir, image_id);
@@ -1831,7 +1832,27 @@ impl AstrometryEvidenceCache {
                 );
                 analysis
             }
-        }?;
+        };
+        // Atomic replacement is not guaranteed to produce a distinct mtime
+        // on every filesystem. If the in-memory entry no longer describes the
+        // current FITS source, re-read the durable attempt once even when the
+        // cache-file timestamp appears unchanged. This preserves immediate
+        // source invalidation without letting a same-tick re-solve stay hidden.
+        if memory_hit
+            && analysis
+                .as_ref()
+                .is_none_or(|cached| !source_still_matches(cached))
+        {
+            analysis = persisted_pixel_analysis(cache_dir, image_id);
+            self.entries.write().unwrap().insert(
+                image_id,
+                EvidenceEntry {
+                    cache_file_mtime: mtime,
+                    analysis: analysis.clone(),
+                },
+            );
+        }
+        let analysis = analysis?;
         if !source_still_matches(&analysis) {
             return None;
         }
@@ -2822,6 +2843,11 @@ mod tests {
         let cache = AstrometryEvidenceCache::new();
         let loaded = cache.evidence_for_source(&cache_dir, 7, None).unwrap();
         assert!(loaded.solve_attempt.is_some());
+        let persisted_path = astrometry_cache_path(&cache_dir, 7);
+        let original_cache_mtime = std::fs::metadata(&persisted_path)
+            .unwrap()
+            .modified()
+            .unwrap();
         // Second lookup is served from memory (same mtime).
         assert!(cache.evidence_for_source(&cache_dir, 7, None).is_some());
 
@@ -2830,10 +2856,17 @@ mod tests {
         std::fs::write(&source_path, b"different pixels entirely").unwrap();
         assert!(cache.evidence_for_source(&cache_dir, 7, None).is_none());
 
-        // A fresh persisted attempt (rename bumps the mtime) reloads.
+        // A fresh persisted attempt reloads even when the filesystem reports
+        // the same cache-file mtime for the atomic replacement.
         let mut refreshed = failure.clone();
         refreshed.source_fingerprint = source_fingerprint(&source_path).unwrap();
         persist_pixel_analysis(&cache_dir, &refreshed).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&persisted_path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(original_cache_mtime))
+            .unwrap();
         assert!(cache.evidence_for_source(&cache_dir, 7, None).is_some());
 
         // Deleting the persisted attempt drops the entry.
