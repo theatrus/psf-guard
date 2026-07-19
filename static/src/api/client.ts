@@ -365,7 +365,7 @@ export const apiClient = {
   ): Promise<SpatialScanStatus> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.post<ApiResponse<SpatialScanStatus>>(
-      dbPath(dbId, '/analysis/spatial-scan'),
+      dbPath(dbId, '/analysis/quality-scan'),
       request
     );
     if (!data.data) throw new Error('Failed to start spatial scan');
@@ -375,7 +375,7 @@ export const apiClient = {
   getSpatialScanStatus: async (dbId: string): Promise<SpatialScanStatus> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<SpatialScanStatus>>(
-      dbPath(dbId, '/analysis/spatial-scan')
+      dbPath(dbId, '/analysis/quality-scan')
     );
     if (!data.data) throw new Error('Failed to get spatial scan status');
     return data.data;

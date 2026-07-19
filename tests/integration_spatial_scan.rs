@@ -53,7 +53,8 @@ fn seed_target_with_images(conn: &Connection, n: usize) {
     )
     .unwrap();
     conn.execute(
-        "INSERT INTO target (Id, projectId, name, active) VALUES (1, 1, 'NGC 6820', 1)",
+        "INSERT INTO target (Id, projectId, name, active, ra, dec)
+         VALUES (1, 1, 'NGC 6820', 1, 5.0, 10.0)",
         [],
     )
     .unwrap();
@@ -282,6 +283,97 @@ async fn scanned_metrics_merge_into_sequence_analysis() {
             > 0.9
     );
     assert!(clean["category"].is_null());
+}
+
+#[tokio::test]
+async fn cached_astrometry_reduces_score_and_marks_regrade_reason() {
+    let conn = Connection::open_in_memory().unwrap();
+    create_test_schema(&conn);
+    seed_target_with_images(&conn, 6);
+    let tmp = tempfile::tempdir().unwrap();
+    let astrometry_dir = tmp.path().join("astrometry");
+    std::fs::create_dir_all(&astrometry_dir).unwrap();
+    let source_path = tmp.path().join("frame_0003.fits");
+    std::fs::write(&source_path, b"x").unwrap();
+    let source_path = source_path.canonicalize().unwrap();
+    let source_metadata = std::fs::metadata(&source_path).unwrap();
+    let source_modified = source_metadata
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    let analysis = serde_json::json!({
+        "image_id": 4,
+        "status": "solved",
+        "mode": "hinted",
+        "expected_source": {"ra_deg": 75.0, "dec_deg": 10.0, "source": "target_scheduler"},
+        "solution": {
+            "center_ra_deg": 75.2,
+            "center_dec_deg": 10.0,
+            "pixel_scale_arcsec_per_pixel": 1.0,
+            "matched_stars": 30,
+            "rms_arcsec": 0.8,
+            "image_width": 1000,
+            "image_height": 800,
+            "wcs": {
+                "crval": [75.2, 10.0], "crpix": [500.0, 400.0],
+                "cd": [[-0.0002777778, 0.0], [0.0, 0.0002777778]],
+                "ctype": ["RA---TAN", "DEC--TAN"], "cunit": ["deg", "deg"],
+                "radesys": "ICRS", "equinox": 2000.0
+            },
+            "footprint": [], "objects": []
+        },
+        "catalog_hits": [],
+        "pointing": {
+            "expected_ra_deg": 75.0, "expected_dec_deg": 10.0,
+            "east_offset_arcsec": 709.0, "north_offset_arcsec": 0.0,
+            "separation_arcsec": 709.0, "target_in_frame": false,
+            "target_edge_margin_px": -120.0
+        },
+        "source_fingerprint": {
+            "canonical_path": source_path.to_string_lossy(),
+            "size_bytes": source_metadata.len(),
+            "modified_unix_seconds": source_modified.as_secs(),
+            "modified_subsec_nanos": source_modified.subsec_nanos()
+        },
+        "solver_provenance": {
+            "seiza_version": "0.8.0", "detection_backend": "mtf_u8",
+            "star_catalog": {
+                "name": "stars", "path": "/data/stars.bin", "format": "test",
+                "size_bytes": 1, "modified_unix_seconds": 1
+            }
+        },
+        "solve_attempt": {
+            "outcome": "solved", "modes_attempted": ["hinted"],
+            "detected_stars": 100, "duration_ms": 10,
+            "image_quality_evidence": true, "cacheable": true
+        },
+        "computed_at": 1
+    });
+    std::fs::write(
+        astrometry_dir.join("4.json"),
+        serde_json::to_vec(&analysis).unwrap(),
+    )
+    .unwrap();
+
+    let (app, _state) = create_test_app(conn, tmp.path());
+    let (status, json) = get_json(app.clone(), "/api/db/test/analysis/sequence?target_id=1").await;
+    assert_eq!(status, StatusCode::OK, "body: {json}");
+    let image = &json["data"]["sequences"][0]["images"][3];
+    assert_eq!(image["category"], "off_target");
+    assert!(image["quality_score"].as_f64().unwrap() <= 0.20);
+    assert!(image["regrade_reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("Off target")));
+
+    // A same-name replacement must invalidate the solve evidence rather than
+    // grading a different exposure from stale WCS.
+    std::fs::write(&source_path, b"replacement").unwrap();
+    let (status, json) = get_json(app, "/api/db/test/analysis/sequence?target_id=1").await;
+    assert_eq!(status, StatusCode::OK, "body: {json}");
+    let image = &json["data"]["sequences"][0]["images"][3];
+    assert!(image["pointing"].is_null());
+    assert_ne!(image["category"], "off_target");
 }
 
 #[tokio::test]

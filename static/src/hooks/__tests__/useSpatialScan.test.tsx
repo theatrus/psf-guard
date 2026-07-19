@@ -69,13 +69,13 @@ describe('useSpatialScan', () => {
   it('start() posts the scan request and seeds running progress', async () => {
     let postedBody: unknown = null;
     server.use(
-      http.post('/api/db/:dbId/analysis/spatial-scan', async ({ request }) => {
+      http.post('/api/db/:dbId/analysis/quality-scan', async ({ request }) => {
         postedBody = await request.json();
         return HttpResponse.json(
           scanStatus({ started: true, running: true, total: 12, processed: 0 })
         );
       }),
-      http.get('/api/db/:dbId/analysis/spatial-scan', () =>
+      http.get('/api/db/:dbId/analysis/quality-scan', () =>
         HttpResponse.json(scanStatus({ running: true, total: 12, processed: 3 }))
       )
     );
@@ -98,7 +98,7 @@ describe('useSpatialScan', () => {
     // First poll: running. Later polls: finished.
     let polls = 0;
     server.use(
-      http.get('/api/db/:dbId/analysis/spatial-scan', () => {
+      http.get('/api/db/:dbId/analysis/quality-scan', () => {
         polls += 1;
         return HttpResponse.json(
           scanStatus({ running: polls < 2, total: 5, processed: polls < 2 ? 2 : 5 })

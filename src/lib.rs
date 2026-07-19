@@ -1,4 +1,5 @@
 pub mod accord_imaging;
+pub mod acquisition_context;
 pub mod astrometry;
 pub mod astrometry_headers;
 pub mod cli;

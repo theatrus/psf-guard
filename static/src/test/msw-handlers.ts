@@ -58,10 +58,10 @@ export const handlers = [
   }),
 
   // Spatial (occlusion) scan endpoints
-  http.get('/api/db/:dbId/analysis/spatial-scan', () => {
+  http.get('/api/db/:dbId/analysis/quality-scan', () => {
     return HttpResponse.json(idleSpatialScan);
   }),
-  http.post('/api/db/:dbId/analysis/spatial-scan', () => {
+  http.post('/api/db/:dbId/analysis/quality-scan', () => {
     return HttpResponse.json(idleSpatialScan);
   }),
 

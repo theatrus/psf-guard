@@ -213,7 +213,8 @@ Design, phases, tracker: [REJECT_ARCHIVE_PLAN.md](./REJECT_ARCHIVE_PLAN.md).
   re-scan). Photometry is blind to regions occluded most of a sequence
   (reference presence filter) — that remains the dead-cell metric's job.
 - **Server/UI trigger**: `src/server/spatial_scan.rs` + `POST
-  /api/db/{id}/analysis/spatial-scan` runs the same computation as a
+  /api/db/{id}/analysis/quality-scan` runs spatial/photometric analysis and
+  fresh pixel-derived astrometry as a
   singleton per-DB background task (~8s/frame full-frame) over a target's
   FITS files (paths via `find_fits_file`). Worker count is sized by
   `concurrency::plan_workers` (see the parallelism note below), not a fixed
@@ -223,9 +224,34 @@ Design, phases, tracker: [REJECT_ARCHIVE_PLAN.md](./REJECT_ARCHIVE_PLAN.md).
   by filename change; re-scan skips cached, `force` recomputes).
   `analyze_sequence` + `get_image_quality` merge the stored metrics into
   `ImageMetrics` so the SequenceView gains occlusion classification once a
-  scan has run. Frontend: "Scan Occlusion" button in SequenceView
+  scan has run. `/analysis/spatial-scan` remains a compatibility alias.
+  Frontend: "Scan Quality" button in SequenceView
   (`useSpatialScan` hook, 1s progress poll, auto-invalidates
   sequence-analysis queries when the scan finishes).
+
+### Astrometry quality grading (2026-07)
+- **Acquisition context**: `src/acquisition_context.rs` reads intended target
+  center/epoch/rotation/ROI plus per-capture SessionId, guiding, pier side,
+  and rotator metadata without assuming every TS schema has every column.
+  Direct target fields win over metadata fallbacks. Absolute grading abstains
+  for unsupported coordinate epochs.
+- **Pixel evidence only**: quality scans call `solve_image_for_quality`, so an
+  embedded FITS WCS can support display but never proves the current pixels
+  solve. Structured attempts distinguish deterministic no-match/too-few-star
+  results from decode, resource, cancellation, and internal failures. Only
+  deterministic attempts are persisted as image-quality evidence.
+- **Sequence grading**: `AstrometryFrameMetrics` feeds tangent-plane target
+  offsets, robust solved-center references, jump detection, and Theil-Sen
+  drift into the existing score. Missing astrometry renormalizes away. A
+  target outside the solved footprint or >=20% of the short field caps score
+  at 0.20; confirmed jump/drift caps it at 0.30. An isolated no-solve is a
+  warning and modest score signal, never an automatic rejection by itself.
+- **Regrading**: SequenceView exposes Off Target, Unsolved, and Recommended
+  selectors plus a per-image review dialog. `screen-fits --regrade-db` enables
+  fresh solves after the basename+timestamp DB match and uses the same
+  sequence decisions. Off-target/jump/drift or a deterministic no-solve
+  corroborated by cloud/obstruction/tracking evidence receives a specific
+  `[Auto]` reason; operational failures and isolated no-solves do not regrade.
 
 ### Worker-pool parallelism policy (2026-07)
 All CPU-bound parallel work is sized through `src/concurrency.rs` instead of

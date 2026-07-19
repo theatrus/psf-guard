@@ -10,6 +10,10 @@ pub enum IssueCategory {
     TrackingError,
     WindShake,
     SkyBrightening,
+    OffTarget,
+    PointingJump,
+    PointingDrift,
+    PlateSolveFailed,
     UnknownDegradation,
 }
 
@@ -31,6 +35,103 @@ pub struct NormalizedMetrics {
     /// <= 60% of reference flux). Absolute mapping like spatial_coverage.
     #[serde(default)]
     pub transparency: Option<f64>,
+    /// Absolute pointing quality from a pixel-derived plate solution.
+    #[serde(default)]
+    pub pointing: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PointingQuality {
+    pub pixel_solved: bool,
+    pub solve_failed: bool,
+    pub image_quality_evidence: bool,
+    /// True when offsets use an authoritative intended target. False means
+    /// they use the sequence's first solved center for relative motion only.
+    pub expected_target: bool,
+    #[serde(default)]
+    pub flags: Vec<IssueCategory>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub east_offset_arcsec: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub north_offset_arcsec: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub separation_arcsec: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_fraction_offset: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_offset_arcsec: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drift_rate_arcsec_per_hour: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_stars: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rms_arcsec: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AstrometryFrameMetrics {
+    pub pixel_solved: bool,
+    pub solve_failed: bool,
+    pub image_quality_evidence: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solved_center_ra_deg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solved_center_dec_deg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub east_offset_arcsec: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub north_offset_arcsec: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub separation_arcsec: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_in_frame: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_short_axis_arcsec: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_stars: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rms_arcsec: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+pub fn astrometry_metrics_from_analysis(
+    analysis: &crate::astrometry::AstrometryAnalysis,
+) -> Option<AstrometryFrameMetrics> {
+    use crate::astrometry::{
+        AstrometryAnalysisStatus, AstrometryAttemptOutcome, AstrometrySolveMode,
+    };
+
+    let attempt = analysis.solve_attempt.as_ref()?;
+    let pixel_solved = analysis.status == AstrometryAnalysisStatus::Solved
+        && matches!(
+            analysis.mode,
+            Some(AstrometrySolveMode::Hinted | AstrometrySolveMode::Blind)
+        )
+        && attempt.outcome == AstrometryAttemptOutcome::Solved;
+    let solve_failed = analysis.status == AstrometryAnalysisStatus::Failed
+        && attempt.outcome != AstrometryAttemptOutcome::Solved;
+    let field_short_axis_arcsec = analysis.solution.as_ref().map(|solution| {
+        solution.pixel_scale_arcsec_per_pixel
+            * f64::from(solution.image_width.min(solution.image_height))
+    });
+    Some(AstrometryFrameMetrics {
+        pixel_solved,
+        solve_failed,
+        image_quality_evidence: attempt.image_quality_evidence,
+        solved_center_ra_deg: analysis.solution.as_ref().map(|s| s.center_ra_deg),
+        solved_center_dec_deg: analysis.solution.as_ref().map(|s| s.center_dec_deg),
+        east_offset_arcsec: analysis.pointing.as_ref().map(|p| p.east_offset_arcsec),
+        north_offset_arcsec: analysis.pointing.as_ref().map(|p| p.north_offset_arcsec),
+        separation_arcsec: analysis.pointing.as_ref().map(|p| p.separation_arcsec),
+        target_in_frame: analysis.pointing.as_ref().map(|p| p.target_in_frame),
+        field_short_axis_arcsec,
+        matched_stars: analysis.solution.as_ref().map(|s| s.matched_stars),
+        rms_arcsec: analysis.solution.as_ref().map(|s| s.rms_arcsec),
+        error: analysis.error.clone(),
+    })
 }
 
 /// Quality analysis result for a single image within its sequence context.
@@ -40,7 +141,13 @@ pub struct ImageQualityResult {
     pub quality_score: f64,
     pub temporal_anomaly_score: f64,
     pub category: Option<IssueCategory>,
+    #[serde(default)]
+    pub flags: Vec<IssueCategory>,
     pub normalized_metrics: NormalizedMetrics,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pointing: Option<PointingQuality>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regrade_reason: Option<String>,
     pub details: Option<String>,
 }
 
@@ -65,6 +172,10 @@ pub struct SequenceSummary {
     pub cloud_events_detected: usize,
     pub focus_drift_detected: bool,
     pub tracking_issues_detected: bool,
+    #[serde(default)]
+    pub out_of_target_count: usize,
+    #[serde(default)]
+    pub plate_solve_failed_count: usize,
 }
 
 /// A scored sequence of images sharing the same target, filter, and session.
@@ -86,6 +197,8 @@ pub struct ScoredSequence {
 pub struct ImageMetrics {
     pub image_id: i32,
     pub timestamp: Option<i64>,
+    #[serde(default)]
+    pub session_id: Option<String>,
     pub star_count: Option<f64>,
     pub hfr: Option<f64>,
     pub eccentricity: Option<f64>,
@@ -130,6 +243,9 @@ pub struct ImageMetrics {
     /// temporal baselines can never see.
     #[serde(default)]
     pub bg_glow_max: Option<f64>,
+    /// Pixel-derived astrometry merged from PSF Guard's astrometry cache.
+    #[serde(default)]
+    pub astrometry: Option<AstrometryFrameMetrics>,
 }
 
 /// Configurable weights for composite quality scoring.
@@ -149,6 +265,15 @@ pub struct QualityWeights {
     /// and missing-metric-safe like `spatial`.
     #[serde(default = "default_transparency_quality_weight")]
     pub transparency: f64,
+    /// Weight for absolute pointing quality. Missing astrometry is
+    /// renormalized away, so databases that have not run a quality scan keep
+    /// their historical scores.
+    #[serde(default = "default_pointing_quality_weight")]
+    pub pointing: f64,
+}
+
+fn default_pointing_quality_weight() -> f64 {
+    0.25
 }
 
 fn default_transparency_quality_weight() -> f64 {
@@ -169,6 +294,7 @@ impl Default for QualityWeights {
             background: 0.10,
             spatial: default_spatial_quality_weight(),
             transparency: default_transparency_quality_weight(),
+            pointing: default_pointing_quality_weight(),
         }
     }
 }
@@ -182,7 +308,8 @@ impl QualityWeights {
             + self.snr
             + self.background
             + self.spatial
-            + self.transparency;
+            + self.transparency
+            + self.pointing;
         if sum < 1e-10 {
             return Self::default();
         }
@@ -197,6 +324,7 @@ impl QualityWeights {
             background: self.background / sum,
             spatial: self.spatial / sum,
             transparency: self.transparency / sum,
+            pointing: self.pointing / sum,
         }
     }
 }
@@ -410,7 +538,14 @@ impl SequenceAnalyzer {
                 .unwrap_or(0);
             let curr_ts = img.timestamp.unwrap_or(0);
 
-            if curr_ts - prev_ts > gap_seconds {
+            let explicit_session_changed = current_seq.last().is_some_and(|previous| {
+                previous
+                    .session_id
+                    .as_ref()
+                    .zip(img.session_id.as_ref())
+                    .is_some_and(|(left, right)| left != right)
+            });
+            if explicit_session_changed || curr_ts - prev_ts > gap_seconds {
                 sequences.push(std::mem::take(&mut current_seq));
             }
             current_seq.push(img.clone());
@@ -434,16 +569,19 @@ impl SequenceAnalyzer {
 
         let session_start = images.first().and_then(|i| i.timestamp);
         let session_end = images.last().and_then(|i| i.timestamp);
+        let pointing_quality = self.analyze_pointing(&images);
 
         // If sequence is too short, return with score 1.0 for all images
         if image_count < self.config.min_sequence_length {
-            let results: Vec<ImageQualityResult> = images
+            let mut results: Vec<ImageQualityResult> = images
                 .iter()
-                .map(|img| ImageQualityResult {
+                .enumerate()
+                .map(|(idx, img)| ImageQualityResult {
                     image_id: img.image_id,
-                    quality_score: 1.0,
+                    quality_score: apply_pointing_score(1.0, pointing_quality[idx].as_ref()),
                     temporal_anomaly_score: 0.0,
                     category: None,
+                    flags: Vec::new(),
                     normalized_metrics: NormalizedMetrics {
                         star_count: Some(1.0),
                         hfr: Some(1.0),
@@ -452,10 +590,15 @@ impl SequenceAnalyzer {
                         background: Some(1.0),
                         spatial_coverage: Some(1.0),
                         transparency: Some(1.0),
+                        pointing: pointing_quality[idx].as_ref().and_then(pointing_normalized),
                     },
+                    pointing: pointing_quality[idx].clone(),
+                    regrade_reason: None,
                     details: None,
                 })
                 .collect();
+            self.merge_pointing_issues(&mut results);
+            let summary = self.build_summary(&results);
 
             return ScoredSequence {
                 target_id,
@@ -472,16 +615,7 @@ impl SequenceAnalyzer {
                     best_background: None,
                 },
                 images: results,
-                summary: SequenceSummary {
-                    excellent_count: image_count,
-                    good_count: 0,
-                    fair_count: 0,
-                    poor_count: 0,
-                    bad_count: 0,
-                    cloud_events_detected: 0,
-                    focus_drift_detected: false,
-                    tracking_issues_detected: false,
-                },
+                summary,
             };
         }
 
@@ -518,6 +652,10 @@ impl SequenceAnalyzer {
             .iter()
             .map(|i| i.transparency.map(|t| ((t - 0.6) / 0.4).clamp(0.0, 1.0)))
             .collect();
+        let norm_pointing: Vec<Option<f64>> = pointing_quality
+            .iter()
+            .map(|quality| quality.as_ref().and_then(pointing_normalized))
+            .collect();
 
         // Compute EWMA temporal deviation scores
         let temporal_scores = self.compute_temporal_scores(&images);
@@ -534,6 +672,7 @@ impl SequenceAnalyzer {
             let nb = norm_bg[i];
             let nsp = norm_spatial[i];
             let ntr = norm_transparency[i];
+            let npt = norm_pointing[i];
 
             // Weighted sum using available metrics
             let (score, total_weight) = weighted_sum_available(&[
@@ -544,6 +683,7 @@ impl SequenceAnalyzer {
                 (nb, w.background),
                 (nsp, w.spatial),
                 (ntr, w.transparency),
+                (npt, w.pointing),
             ]);
 
             let quality_score = if total_weight > 0.0 {
@@ -555,13 +695,17 @@ impl SequenceAnalyzer {
             // Apply temporal penalty
             let temporal = temporal_scores[i];
             let penalty = 1.0 - temporal.min(0.5);
-            let final_score = (quality_score * penalty).clamp(0.0, 1.0);
+            let final_score = apply_pointing_score(
+                (quality_score * penalty).clamp(0.0, 1.0),
+                pointing_quality[i].as_ref(),
+            );
 
             results.push(ImageQualityResult {
                 image_id: images[i].image_id,
                 quality_score: final_score,
                 temporal_anomaly_score: temporal,
                 category: None, // Classified below
+                flags: Vec::new(),
                 normalized_metrics: NormalizedMetrics {
                     star_count: ns,
                     hfr: nh,
@@ -570,13 +714,17 @@ impl SequenceAnalyzer {
                     background: nb,
                     spatial_coverage: nsp,
                     transparency: ntr,
+                    pointing: npt,
                 },
+                pointing: pointing_quality[i].clone(),
+                regrade_reason: None,
                 details: None,
             });
         }
 
         // Classify issues
         self.classify_issues(&mut results, &images);
+        self.merge_pointing_issues(&mut results);
 
         // Build reference values
         let reference_values = ReferenceValues {
@@ -778,6 +926,331 @@ impl SequenceAnalyzer {
         }
 
         scores
+    }
+
+    /// Convert per-frame pixel solutions into absolute pointing quality plus
+    /// robust sequence-relative jump/drift evidence.
+    fn analyze_pointing(&self, images: &[ImageMetrics]) -> Vec<Option<PointingQuality>> {
+        let solved_candidates: Vec<usize> = images
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, image)| {
+                image
+                    .astrometry
+                    .as_ref()
+                    .filter(|a| a.pixel_solved)
+                    .map(|_| idx)
+            })
+            .collect();
+        let use_expected_target = !solved_candidates.is_empty()
+            && solved_candidates.iter().all(|&idx| {
+                images[idx].astrometry.as_ref().is_some_and(|a| {
+                    a.east_offset_arcsec.is_some() && a.north_offset_arcsec.is_some()
+                })
+            });
+        let tangent_origin = solved_candidates.iter().find_map(|&idx| {
+            let a = images[idx].astrometry.as_ref()?;
+            Some((a.solved_center_ra_deg?, a.solved_center_dec_deg?))
+        });
+        let solved_points: Vec<(usize, f64, f64)> = solved_candidates
+            .iter()
+            .filter_map(|&idx| {
+                let a = images[idx].astrometry.as_ref()?;
+                let (east, north) = if use_expected_target {
+                    (a.east_offset_arcsec?, a.north_offset_arcsec?)
+                } else {
+                    tangent_plane_offset_arcsec(
+                        tangent_origin?,
+                        (a.solved_center_ra_deg?, a.solved_center_dec_deg?),
+                    )?
+                };
+                Some((idx, east, north))
+            })
+            .collect();
+        let solved_indices = solved_points
+            .iter()
+            .map(|(idx, _, _)| *idx)
+            .collect::<Vec<_>>();
+
+        let mut quality: Vec<Option<PointingQuality>> = images
+            .iter()
+            .map(|image| {
+                let a = image.astrometry.as_ref()?;
+                let fraction = use_expected_target
+                    .then_some(a.separation_arcsec)
+                    .flatten()
+                    .zip(a.field_short_axis_arcsec)
+                    .filter(|(_, field)| *field > 0.0)
+                    .map(|(separation, field)| separation / field);
+                let mut flags = Vec::new();
+                if use_expected_target
+                    && a.pixel_solved
+                    && (a.target_in_frame == Some(false)
+                        || fraction.is_some_and(|value| value >= 0.20))
+                {
+                    flags.push(IssueCategory::OffTarget);
+                }
+                if a.solve_failed && a.image_quality_evidence {
+                    flags.push(IssueCategory::PlateSolveFailed);
+                }
+                Some(PointingQuality {
+                    pixel_solved: a.pixel_solved,
+                    solve_failed: a.solve_failed,
+                    image_quality_evidence: a.image_quality_evidence,
+                    expected_target: use_expected_target && a.pixel_solved,
+                    flags,
+                    east_offset_arcsec: use_expected_target
+                        .then_some(a.east_offset_arcsec)
+                        .flatten(),
+                    north_offset_arcsec: use_expected_target
+                        .then_some(a.north_offset_arcsec)
+                        .flatten(),
+                    separation_arcsec: use_expected_target.then_some(a.separation_arcsec).flatten(),
+                    field_fraction_offset: fraction,
+                    reference_offset_arcsec: None,
+                    drift_rate_arcsec_per_hour: None,
+                    matched_stars: a.matched_stars,
+                    rms_arcsec: a.rms_arcsec,
+                    error: a.error.clone(),
+                })
+            })
+            .collect();
+
+        for &(idx, east, north) in &solved_points {
+            if let Some(pointing) = quality[idx].as_mut() {
+                pointing.east_offset_arcsec = Some(east);
+                pointing.north_offset_arcsec = Some(north);
+                pointing.separation_arcsec = Some(east.hypot(north));
+            }
+        }
+
+        if solved_indices.len() < 3 {
+            return quality;
+        }
+
+        let east = solved_points
+            .iter()
+            .map(|(_, east, _)| *east)
+            .collect::<Vec<_>>();
+        let north = solved_points
+            .iter()
+            .map(|(_, _, north)| *north)
+            .collect::<Vec<_>>();
+        let reference_east = median(&east);
+        let reference_north = median(&north);
+        let distances = solved_points
+            .iter()
+            .map(|(_, east, north)| (*east - reference_east).hypot(*north - reference_north))
+            .collect::<Vec<_>>();
+        let distance_median = median(&distances);
+        let mad = median(
+            &distances
+                .iter()
+                .map(|distance| (distance - distance_median).abs())
+                .collect::<Vec<_>>(),
+        );
+        let field = median(
+            &solved_indices
+                .iter()
+                .filter_map(|&idx| images[idx].astrometry.as_ref()?.field_short_axis_arcsec)
+                .collect::<Vec<_>>(),
+        );
+        let excursion_threshold = (6.0 * mad).max(0.08 * field).max(30.0);
+
+        for (position, &idx) in solved_indices.iter().enumerate() {
+            if let Some(pointing) = quality[idx].as_mut() {
+                pointing.reference_offset_arcsec = Some(distances[position]);
+                let previous_good =
+                    position == 0 || distances[position - 1] <= excursion_threshold * 0.5;
+                let next_good = position + 1 == solved_indices.len()
+                    || distances[position + 1] <= excursion_threshold * 0.5;
+                if distances[position] > excursion_threshold && previous_good && next_good {
+                    push_issue(&mut pointing.flags, IssueCategory::PointingJump);
+                }
+            }
+        }
+
+        let time_values: Vec<(usize, f64, f64, f64)> = solved_points
+            .iter()
+            .filter_map(|&(idx, east, north)| {
+                let timestamp = images[idx].timestamp? as f64;
+                Some((idx, timestamp, east, north))
+            })
+            .collect();
+        if time_values.len() >= 4 {
+            let origin = time_values[0].1;
+            let times_hours = time_values
+                .iter()
+                .map(|(_, timestamp, _, _)| (timestamp - origin) / 3600.0)
+                .collect::<Vec<_>>();
+            let east_values = time_values
+                .iter()
+                .map(|(_, _, east, _)| *east)
+                .collect::<Vec<_>>();
+            let north_values = time_values
+                .iter()
+                .map(|(_, _, _, north)| *north)
+                .collect::<Vec<_>>();
+            let east_slope = theil_sen_slope(&times_hours, &east_values);
+            let north_slope = theil_sen_slope(&times_hours, &north_values);
+            let drift_rate = east_slope.hypot(north_slope);
+            let duration_hours = times_hours.last().copied().unwrap_or(0.0);
+            // Estimate dither/noise after removing the robust trend. Using
+            // scatter around the raw median would let a real monotonic drift
+            // inflate its own threshold until it became undetectable.
+            let east_intercept = median(
+                &east_values
+                    .iter()
+                    .zip(&times_hours)
+                    .map(|(value, hours)| value - east_slope * hours)
+                    .collect::<Vec<_>>(),
+            );
+            let north_intercept = median(
+                &north_values
+                    .iter()
+                    .zip(&times_hours)
+                    .map(|(value, hours)| value - north_slope * hours)
+                    .collect::<Vec<_>>(),
+            );
+            let trend_residuals = east_values
+                .iter()
+                .zip(&north_values)
+                .zip(&times_hours)
+                .map(|((east, north), hours)| {
+                    (east - (east_intercept + east_slope * hours))
+                        .hypot(north - (north_intercept + north_slope * hours))
+                })
+                .collect::<Vec<_>>();
+            let residual_median = median(&trend_residuals);
+            let residual_mad = median(
+                &trend_residuals
+                    .iter()
+                    .map(|residual| (residual - residual_median).abs())
+                    .collect::<Vec<_>>(),
+            );
+            let drift_threshold = (6.0 * residual_mad).max(0.08 * field).max(30.0);
+            if drift_rate * duration_hours > drift_threshold {
+                let first_east = time_values[0].2;
+                let first_north = time_values[0].3;
+                for ((idx, _, east, north), &hours) in time_values.iter().zip(&times_hours) {
+                    let idx = *idx;
+                    if let Some(pointing) = quality[idx].as_mut() {
+                        pointing.drift_rate_arcsec_per_hour = Some(drift_rate);
+                        let from_start = (*east - first_east).hypot(*north - first_north);
+                        if hours > 0.0 && from_start > drift_threshold {
+                            push_issue(&mut pointing.flags, IssueCategory::PointingDrift);
+                        }
+                    }
+                }
+            }
+        }
+
+        quality
+    }
+
+    fn merge_pointing_issues(&self, results: &mut [ImageQualityResult]) {
+        for result in results {
+            if let Some(category) = result.category.clone() {
+                push_issue(&mut result.flags, category);
+            }
+            let Some(pointing) = result.pointing.as_ref() else {
+                continue;
+            };
+            for flag in &pointing.flags {
+                push_issue(&mut result.flags, flag.clone());
+            }
+
+            let original_category = result.category.clone();
+            let (category, astrometry_detail, reason) = if pointing
+                .flags
+                .contains(&IssueCategory::OffTarget)
+            {
+                let fraction = pointing.field_fraction_offset.unwrap_or(0.0) * 100.0;
+                (
+                    Some(IssueCategory::OffTarget),
+                    Some(format!(
+                        "Plate solution places the intended target {:.0}% of the short field dimension from center{}.",
+                        fraction,
+                        if fraction >= 100.0 { " (outside the frame)" } else { "" }
+                    )),
+                    Some(format!(
+                        "[Auto] Astrometry: Off target - score {:.2}; offset {:.0}% of field",
+                        result.quality_score, fraction
+                    )),
+                )
+            } else if pointing.flags.contains(&IssueCategory::PointingJump) {
+                (
+                    Some(IssueCategory::PointingJump),
+                    Some(format!(
+                        "Solved center jumped {:.0} arcsec outside the sequence dither envelope.",
+                        pointing.reference_offset_arcsec.unwrap_or(0.0)
+                    )),
+                    Some(format!(
+                        "[Auto] Astrometry: Tracking lost - score {:.2}; pointing jump {:.0} arcsec",
+                        result.quality_score,
+                        pointing.reference_offset_arcsec.unwrap_or(0.0)
+                    )),
+                )
+            } else if pointing.flags.contains(&IssueCategory::PointingDrift) {
+                (
+                    Some(IssueCategory::PointingDrift),
+                    Some(format!(
+                        "Solved center drifted at {:.0} arcsec/hour beyond the sequence dither envelope.",
+                        pointing.drift_rate_arcsec_per_hour.unwrap_or(0.0)
+                    )),
+                    Some(format!(
+                        "[Auto] Astrometry: Tracking drift - score {:.2}; {:.0} arcsec/hour",
+                        result.quality_score,
+                        pointing.drift_rate_arcsec_per_hour.unwrap_or(0.0)
+                    )),
+                )
+            } else if pointing.flags.contains(&IssueCategory::PlateSolveFailed) {
+                let corroborated = matches!(
+                    original_category,
+                    Some(
+                        IssueCategory::LikelyClouds
+                            | IssueCategory::PossibleObstruction
+                            | IssueCategory::TrackingError
+                            | IssueCategory::WindShake
+                    )
+                );
+                if corroborated {
+                    result.quality_score = result.quality_score.min(0.30);
+                }
+                (
+                    original_category.or(Some(IssueCategory::PlateSolveFailed)),
+                    Some(format!(
+                        "Pixel plate solve failed{}{}.",
+                        if corroborated {
+                            " and the frame has independent quality degradation"
+                        } else {
+                            ""
+                        },
+                        pointing
+                            .error
+                            .as_deref()
+                            .map(|error| format!(": {error}"))
+                            .unwrap_or_default()
+                    )),
+                    corroborated.then(|| {
+                        format!(
+                            "[Auto] Quality: Plate solve failed + image degradation - score {:.2}",
+                            result.quality_score
+                        )
+                    }),
+                )
+            } else {
+                (original_category, None, None)
+            };
+            result.category = category;
+            result.regrade_reason = reason;
+            if let Some(astrometry_detail) = astrometry_detail {
+                result.details = Some(match result.details.take() {
+                    Some(existing) => format!("{astrometry_detail} {existing}"),
+                    None => astrometry_detail,
+                });
+            }
+        }
     }
 
     /// Classify issues for each image based on metric deviations.
@@ -1130,6 +1603,8 @@ impl SequenceAnalyzer {
             cloud_events_detected: 0,
             focus_drift_detected: false,
             tracking_issues_detected: false,
+            out_of_target_count: 0,
+            plate_solve_failed_count: 0,
         };
 
         for r in results {
@@ -1141,16 +1616,128 @@ impl SequenceAnalyzer {
                 _ => summary.bad_count += 1,
             }
 
-            match &r.category {
-                Some(IssueCategory::LikelyClouds) => summary.cloud_events_detected += 1,
-                Some(IssueCategory::FocusDrift) => summary.focus_drift_detected = true,
-                Some(IssueCategory::TrackingError) => summary.tracking_issues_detected = true,
-                _ => {}
+            if r.flags.contains(&IssueCategory::LikelyClouds) {
+                summary.cloud_events_detected += 1;
+            }
+            if r.flags.contains(&IssueCategory::FocusDrift) {
+                summary.focus_drift_detected = true;
+            }
+            if r.flags.iter().any(|flag| {
+                matches!(
+                    flag,
+                    IssueCategory::TrackingError
+                        | IssueCategory::PointingJump
+                        | IssueCategory::PointingDrift
+                )
+            }) {
+                summary.tracking_issues_detected = true;
+            }
+            if r.flags.contains(&IssueCategory::OffTarget) {
+                summary.out_of_target_count += 1;
+            }
+            if r.flags.contains(&IssueCategory::PlateSolveFailed) {
+                summary.plate_solve_failed_count += 1;
             }
         }
 
         summary
     }
+}
+
+fn push_issue(flags: &mut Vec<IssueCategory>, issue: IssueCategory) {
+    if !flags.contains(&issue) {
+        flags.push(issue);
+    }
+}
+
+fn pointing_normalized(pointing: &PointingQuality) -> Option<f64> {
+    if pointing.pixel_solved {
+        let fraction = pointing.field_fraction_offset?;
+        let base = (1.0 - ((fraction - 0.02) / 0.18)).clamp(0.0, 1.0);
+        if pointing.flags.iter().any(|flag| {
+            matches!(
+                flag,
+                IssueCategory::OffTarget
+                    | IssueCategory::PointingJump
+                    | IssueCategory::PointingDrift
+            )
+        }) {
+            Some(base.min(0.10))
+        } else {
+            Some(base)
+        }
+    } else if pointing.solve_failed && pointing.image_quality_evidence {
+        // Failure is weak evidence by itself. It lowers the score modestly
+        // when comparable frames solve, while regrading still requires an
+        // independent quality signal.
+        Some(0.50)
+    } else {
+        None
+    }
+}
+
+fn apply_pointing_score(score: f64, pointing: Option<&PointingQuality>) -> f64 {
+    let Some(pointing) = pointing else {
+        return score;
+    };
+    if pointing.flags.contains(&IssueCategory::OffTarget) {
+        score.min(0.20)
+    } else if pointing.flags.iter().any(|flag| {
+        matches!(
+            flag,
+            IssueCategory::PointingJump | IssueCategory::PointingDrift
+        )
+    }) {
+        score.min(0.30)
+    } else {
+        score
+    }
+}
+
+/// Project a solved sky position into a gnomonic plane centered on `origin`.
+/// This supports relative tracking analysis when no authoritative target
+/// coordinate is available and remains correct across RA=0 and near poles.
+fn tangent_plane_offset_arcsec(origin: (f64, f64), position: (f64, f64)) -> Option<(f64, f64)> {
+    let delta_ra = (position.0 - origin.0).to_radians();
+    let dec = position.1.to_radians();
+    let origin_dec = origin.1.to_radians();
+    let denominator = origin_dec.sin() * dec.sin() + origin_dec.cos() * dec.cos() * delta_ra.cos();
+    if denominator <= 1e-12 {
+        return None;
+    }
+    let radians_to_arcsec = 180.0 / std::f64::consts::PI * 3600.0;
+    let east = dec.cos() * delta_ra.sin() / denominator * radians_to_arcsec;
+    let north = (origin_dec.cos() * dec.sin() - origin_dec.sin() * dec.cos() * delta_ra.cos())
+        / denominator
+        * radians_to_arcsec;
+    (east.is_finite() && north.is_finite()).then_some((east, north))
+}
+
+fn median(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let middle = sorted.len() / 2;
+    if sorted.len().is_multiple_of(2) {
+        (sorted[middle - 1] + sorted[middle]) * 0.5
+    } else {
+        sorted[middle]
+    }
+}
+
+fn theil_sen_slope(times: &[f64], values: &[f64]) -> f64 {
+    let mut slopes = Vec::new();
+    for i in 0..times.len() {
+        for j in (i + 1)..times.len() {
+            let dt = times[j] - times[i];
+            if dt.abs() > f64::EPSILON {
+                slopes.push((values[j] - values[i]) / dt);
+            }
+        }
+    }
+    median(&slopes)
 }
 
 /// Compute the 5th and 95th percentile values from a slice.
@@ -1238,6 +1825,10 @@ pub fn extract_metrics_from_metadata(
     ImageMetrics {
         image_id,
         timestamp,
+        session_id: metadata["SessionId"]
+            .as_str()
+            .or_else(|| metadata["SessionID"].as_str())
+            .map(str::to_string),
         star_count,
         hfr,
         eccentricity,
@@ -1251,6 +1842,7 @@ pub fn extract_metrics_from_metadata(
         bg_cell_rise_fraction: None,
         bg_cell_fall_fraction: None,
         bg_glow_max: None,
+        astrometry: None,
     }
 }
 
@@ -1262,6 +1854,7 @@ mod tests {
         ImageMetrics {
             image_id: id,
             timestamp: Some(ts),
+            session_id: None,
             star_count: Some(stars),
             hfr: Some(hfr),
             eccentricity: None,
@@ -1275,6 +1868,7 @@ mod tests {
             bg_cell_rise_fraction: None,
             bg_cell_fall_fraction: None,
             bg_glow_max: None,
+            astrometry: None,
         }
     }
 
@@ -1290,6 +1884,7 @@ mod tests {
         ImageMetrics {
             image_id: id,
             timestamp: Some(ts),
+            session_id: None,
             star_count: Some(stars),
             hfr: Some(hfr),
             eccentricity: Some(ecc),
@@ -1303,6 +1898,7 @@ mod tests {
             bg_cell_rise_fraction: None,
             bg_cell_fall_fraction: None,
             bg_glow_max: None,
+            astrometry: None,
         }
     }
 
@@ -1317,6 +1913,7 @@ mod tests {
         ImageMetrics {
             image_id: id,
             timestamp: Some(ts),
+            session_id: None,
             star_count: Some(stars),
             hfr: Some(hfr),
             eccentricity: None,
@@ -1330,6 +1927,7 @@ mod tests {
             bg_cell_rise_fraction: None,
             bg_cell_fall_fraction: None,
             bg_glow_max: None,
+            astrometry: None,
         }
     }
 
@@ -1349,6 +1947,169 @@ mod tests {
         m.bg_cell_rise_fraction = Some(bg_cell_rise);
         m.bg_cell_fall_fraction = Some(0.0);
         m
+    }
+
+    fn solved_astrometry(
+        east: f64,
+        north: f64,
+        field: f64,
+        target_in_frame: bool,
+    ) -> AstrometryFrameMetrics {
+        AstrometryFrameMetrics {
+            pixel_solved: true,
+            solve_failed: false,
+            image_quality_evidence: true,
+            solved_center_ra_deg: None,
+            solved_center_dec_deg: None,
+            east_offset_arcsec: Some(east),
+            north_offset_arcsec: Some(north),
+            separation_arcsec: Some(east.hypot(north)),
+            target_in_frame: Some(target_in_frame),
+            field_short_axis_arcsec: Some(field),
+            matched_stars: Some(30),
+            rms_arcsec: Some(0.8),
+            error: None,
+        }
+    }
+
+    fn failed_astrometry() -> AstrometryFrameMetrics {
+        AstrometryFrameMetrics {
+            solve_failed: true,
+            image_quality_evidence: true,
+            error: Some("no matching field".to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn relative_solved_astrometry(ra_deg: f64, dec_deg: f64, field: f64) -> AstrometryFrameMetrics {
+        AstrometryFrameMetrics {
+            pixel_solved: true,
+            image_quality_evidence: true,
+            solved_center_ra_deg: Some(ra_deg),
+            solved_center_dec_deg: Some(dec_deg),
+            field_short_axis_arcsec: Some(field),
+            matched_stars: Some(30),
+            rms_arcsec: Some(0.8),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn out_of_target_solution_reduces_score_and_recommends_regrade() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..6)
+            .map(|i| make_full_image(i, i as i64 * 300, 500.0, 2.5, 1000.0, 20.0, 0.4))
+            .collect();
+        for image in &mut images {
+            image.astrometry = Some(solved_astrometry(10.0, 5.0, 2000.0, true));
+        }
+        images[3].astrometry = Some(solved_astrometry(600.0, 0.0, 2000.0, false));
+
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        let result = &sequence.images[3];
+        assert!(result.quality_score <= 0.20);
+        assert_eq!(result.category, Some(IssueCategory::OffTarget));
+        assert!(result.flags.contains(&IssueCategory::OffTarget));
+        assert!(result
+            .regrade_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("Off target")));
+        assert_eq!(sequence.summary.out_of_target_count, 1);
+    }
+
+    #[test]
+    fn isolated_solve_failure_warns_without_automatic_regrade() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..6)
+            .map(|i| make_full_image(i, i as i64 * 300, 500.0, 2.5, 1000.0, 20.0, 0.4))
+            .collect();
+        for image in &mut images {
+            image.astrometry = Some(solved_astrometry(10.0, 5.0, 2000.0, true));
+        }
+        images[3].astrometry = Some(failed_astrometry());
+
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        let result = &sequence.images[3];
+        assert_eq!(result.category, Some(IssueCategory::PlateSolveFailed));
+        assert!(result.regrade_reason.is_none());
+        assert!(result.quality_score > 0.30);
+    }
+
+    #[test]
+    fn solve_failure_plus_cloud_is_regradeable() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..6)
+            .map(|i| make_photometric_image(i, i as i64 * 300, 1.0, 0.0, 0.0, 0.0))
+            .collect();
+        for image in &mut images {
+            image.astrometry = Some(solved_astrometry(10.0, 5.0, 2000.0, true));
+        }
+        images[3].extinction_cell_fraction = Some(0.12);
+        images[3].astrometry = Some(failed_astrometry());
+
+        let result = &analyzer.analyze(&images, 1, "target", "L")[0].images[3];
+        assert!(result.flags.contains(&IssueCategory::LikelyClouds));
+        assert!(result.flags.contains(&IssueCategory::PlateSolveFailed));
+        assert!(result
+            .regrade_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("Plate solve failed")));
+        assert!(result.quality_score <= 0.30);
+    }
+
+    #[test]
+    fn relative_solved_centers_detect_tracking_jump_without_target_coordinates() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..6)
+            .map(|i| make_full_image(i, i as i64 * 300, 500.0, 2.5, 1000.0, 20.0, 0.4))
+            .collect();
+        let centers = [359.990, 359.991, 0.200, 359.992, 359.991, 359.990];
+        for (image, ra) in images.iter_mut().zip(centers) {
+            image.astrometry = Some(relative_solved_astrometry(ra, 0.0, 2000.0));
+        }
+
+        let result = &analyzer.analyze(&images, 1, "target", "L")[0].images[2];
+        assert!(!result.pointing.as_ref().unwrap().expected_target);
+        assert!(result.flags.contains(&IssueCategory::PointingJump));
+        assert!(result
+            .regrade_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("Tracking lost")));
+        assert!(result.quality_score <= 0.30);
+    }
+
+    #[test]
+    fn detrended_scatter_does_not_hide_progressive_tracking_drift() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..6)
+            .map(|i| make_full_image(i, i as i64 * 600, 500.0, 2.5, 1000.0, 20.0, 0.4))
+            .collect();
+        for (i, image) in images.iter_mut().enumerate() {
+            image.astrometry = Some(relative_solved_astrometry(
+                120.0 + i as f64 * 0.02,
+                10.0,
+                2000.0,
+            ));
+        }
+
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        let affected = sequence
+            .images
+            .iter()
+            .filter(|result| result.flags.contains(&IssueCategory::PointingDrift))
+            .collect::<Vec<_>>();
+        assert!(!affected.is_empty());
+        assert!(affected.iter().all(|result| result.quality_score <= 0.30));
+        assert!(affected
+            .iter()
+            .all(|result| result.regrade_reason.is_some()));
+    }
+
+    #[test]
+    fn tangent_plane_offsets_cross_ra_zero_in_the_short_direction() {
+        let (east, north) = tangent_plane_offset_arcsec((359.99, 0.0), (0.01, 0.0)).unwrap();
+        assert!((east - 72.0).abs() < 0.1, "east offset was {east}");
+        assert!(north.abs() < 1e-6);
     }
 
     #[test]
@@ -1910,6 +2671,7 @@ mod tests {
                 quality_score: 0.95,
                 temporal_anomaly_score: 0.0,
                 category: None,
+                flags: vec![],
                 normalized_metrics: NormalizedMetrics {
                     star_count: Some(1.0),
                     hfr: Some(1.0),
@@ -1918,7 +2680,10 @@ mod tests {
                     background: None,
                     spatial_coverage: None,
                     transparency: None,
+                    pointing: None,
                 },
+                pointing: None,
+                regrade_reason: None,
                 details: None,
             },
             ImageQualityResult {
@@ -1926,6 +2691,7 @@ mod tests {
                 quality_score: 0.75,
                 temporal_anomaly_score: 0.0,
                 category: None,
+                flags: vec![],
                 normalized_metrics: NormalizedMetrics {
                     star_count: Some(0.8),
                     hfr: Some(0.7),
@@ -1934,7 +2700,10 @@ mod tests {
                     background: None,
                     spatial_coverage: None,
                     transparency: None,
+                    pointing: None,
                 },
+                pointing: None,
+                regrade_reason: None,
                 details: None,
             },
             ImageQualityResult {
@@ -1942,6 +2711,7 @@ mod tests {
                 quality_score: 0.25,
                 temporal_anomaly_score: 0.4,
                 category: Some(IssueCategory::LikelyClouds),
+                flags: vec![IssueCategory::LikelyClouds],
                 normalized_metrics: NormalizedMetrics {
                     star_count: Some(0.1),
                     hfr: Some(0.3),
@@ -1950,7 +2720,10 @@ mod tests {
                     background: None,
                     spatial_coverage: None,
                     transparency: None,
+                    pointing: None,
                 },
+                pointing: None,
+                regrade_reason: None,
                 details: Some("Cloud".to_string()),
             },
         ];
@@ -1976,6 +2749,7 @@ mod tests {
                 background: 0.0,
                 spatial: 0.0,
                 transparency: 0.0,
+                pointing: 0.0,
             },
             ..Default::default()
         };
@@ -2014,6 +2788,7 @@ mod tests {
             background: 0.0,
             spatial: 0.0,
             transparency: 0.0,
+            pointing: 0.0,
         };
         let normalized = weights.normalized();
         let sum = normalized.star_count
@@ -2021,7 +2796,9 @@ mod tests {
             + normalized.eccentricity
             + normalized.snr
             + normalized.background
-            + normalized.spatial;
+            + normalized.spatial
+            + normalized.transparency
+            + normalized.pointing;
         assert!(
             (sum - 1.0).abs() < 1e-10,
             "Normalized weights should sum to 1.0, got {}",
@@ -2045,7 +2822,8 @@ mod tests {
             + normalized.snr
             + normalized.background
             + normalized.spatial
-            + normalized.transparency;
+            + normalized.transparency
+            + normalized.pointing;
         assert!((sum - 1.0).abs() < 1e-10, "sum should be 1.0, got {}", sum);
         // star_count : hfr ratio (0.30 : 0.25) preserved
         assert!((normalized.star_count / normalized.hfr - 0.30 / 0.25).abs() < 1e-10);
@@ -2061,6 +2839,7 @@ mod tests {
             background: 0.0,
             spatial: 0.0,
             transparency: 0.0,
+            pointing: 0.0,
         };
         let normalized = weights.normalized();
         let defaults = QualityWeights::default();

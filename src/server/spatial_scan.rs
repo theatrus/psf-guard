@@ -73,12 +73,24 @@ pub const STORED_CATALOG_STARS: usize = 300;
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct SpatialScanProgress {
     pub running: bool,
+    /// `spatial`, `astrometry`, or `complete`.
+    pub stage: String,
     pub target_id: Option<i32>,
     pub filter_name: Option<String>,
     pub total: usize,
     pub processed: usize,
     /// Images skipped because a cached entry already existed.
     pub skipped_cached: usize,
+    #[serde(default)]
+    pub spatial_processed: usize,
+    #[serde(default)]
+    pub astrometry_processed: usize,
+    #[serde(default)]
+    pub solved: usize,
+    #[serde(default)]
+    pub solve_failed: usize,
+    #[serde(default)]
+    pub operational_errors: usize,
     /// Images whose FITS file could not be found or read.
     pub errors: usize,
     pub current_file: Option<String>,
@@ -197,6 +209,7 @@ pub fn try_begin_scan(
     }
     s.progress = SpatialScanProgress {
         running: true,
+        stage: "spatial".to_string(),
         target_id: Some(target_id),
         filter_name,
         total,
@@ -253,6 +266,7 @@ pub fn run_scan(
                 let mut s = store.write().unwrap();
                 s.metrics.insert(item.image_id, entry);
                 s.progress.processed += 1;
+                s.progress.spatial_processed += 1;
             }
             Err(e) => {
                 tracing::warn!(
@@ -264,6 +278,7 @@ pub fn run_scan(
                 let mut s = store.write().unwrap();
                 s.progress.errors += 1;
                 s.progress.processed += 1;
+                s.progress.spatial_processed += 1;
                 s.progress.last_error = Some(format!("{}: {}", item.filename, e));
             }
         }
@@ -275,7 +290,37 @@ pub fn run_scan(
     });
 
     persist(store, cache_dir);
-    finalize_scan(store);
+}
+
+pub fn begin_astrometry_stage(store: &RwLock<SpatialMetricsStore>, total: usize) {
+    let mut s = store.write().unwrap();
+    s.progress.stage = "astrometry".to_string();
+    s.progress.total = total;
+    s.progress.processed = 0;
+    s.progress.current_file = None;
+}
+
+pub fn record_astrometry_result(
+    store: &RwLock<SpatialMetricsStore>,
+    filename: &str,
+    solved: bool,
+    quality_failure: bool,
+    operational_error: Option<String>,
+) {
+    let mut s = store.write().unwrap();
+    s.progress.current_file = Some(filename.to_string());
+    s.progress.processed += 1;
+    s.progress.astrometry_processed += 1;
+    if solved {
+        s.progress.solved += 1;
+    } else if quality_failure {
+        s.progress.solve_failed += 1;
+    }
+    if let Some(error) = operational_error {
+        s.progress.errors += 1;
+        s.progress.operational_errors += 1;
+        s.progress.last_error = Some(format!("{filename}: {error}"));
+    }
 }
 
 /// Mark the scan finished. Split out so callers can guarantee finalization
@@ -283,6 +328,7 @@ pub fn run_scan(
 pub fn finalize_scan(store: &RwLock<SpatialMetricsStore>) {
     let mut s = store.write().unwrap();
     s.progress.running = false;
+    s.progress.stage = "complete".to_string();
     s.progress.current_file = None;
     s.progress.finished_at = Some(chrono::Utc::now().timestamp());
 }

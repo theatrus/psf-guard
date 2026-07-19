@@ -41,6 +41,7 @@ export default function SequenceView() {
   const filterName = searchParams.get('filterName') || undefined;
   const [threshold, setThreshold] = useState(0.5);
   const [selectedImages, setSelectedImages] = useState<Set<number>>(new Set());
+  const [showRejectReview, setShowRejectReview] = useState(false);
   const [activeSequenceIndex, setActiveSequenceIndex] = useState(0);
   const spatialScan = useSpatialScan(dbId, targetId ?? undefined, filterName);
 
@@ -131,12 +132,55 @@ export default function SequenceView() {
     setSelectedImages(ids);
   }, [activeSequence]);
 
-  // Batch reject selected
-  const rejectSelected = useCallback(async () => {
+  const selectAstrometryIssues = useCallback(() => {
+    if (!activeSequence) return;
+    setSelectedImages(new Set(
+      activeSequence.images
+        .filter(img => (img.flags ?? []).some(flag =>
+          flag === 'off_target' || flag === 'pointing_jump' || flag === 'pointing_drift'))
+        .map(img => img.image_id)
+    ));
+  }, [activeSequence]);
+
+  const selectUnsolved = useCallback(() => {
+    if (!activeSequence) return;
+    setSelectedImages(new Set(
+      activeSequence.images
+        .filter(img => img.pointing?.solve_failed && img.pointing.image_quality_evidence)
+        .map(img => img.image_id)
+    ));
+  }, [activeSequence]);
+
+  const selectRecommended = useCallback(() => {
+    if (!activeSequence) return;
+    setSelectedImages(new Set(
+      activeSequence.images
+        .filter(img => !!img.regrade_reason)
+        .map(img => img.image_id)
+    ));
+  }, [activeSequence]);
+
+  const selectedForReview = useMemo(() =>
+    activeSequence?.images.filter(img => selectedImages.has(img.image_id)) ?? [],
+  [activeSequence, selectedImages]);
+
+  // Batch rejection is deliberately two-step: show the exact per-image
+  // evidence/reason before changing scheduler grades.
+  const confirmRejectSelected = useCallback(async () => {
     if (selectedImages.size === 0) return;
-    await grading.gradeBatch(Array.from(selectedImages), 'rejected', 'Quality analysis');
+    const reasons = new Set(
+      activeSequence?.images
+        .filter(img => selectedImages.has(img.image_id))
+        .map(img => img.regrade_reason)
+        .filter((reason): reason is string => !!reason) ?? []
+    );
+    const reason = reasons.size === 1
+      ? Array.from(reasons)[0]
+      : '[Auto] Quality analysis - sequence, occlusion, photometry, and astrometry evidence';
+    await grading.gradeBatch(Array.from(selectedImages), 'rejected', reason);
     setSelectedImages(new Set());
-  }, [selectedImages, grading]);
+    setShowRejectReview(false);
+  }, [selectedImages, activeSequence, grading]);
 
   // Toggle individual image selection
   const toggleImage = useCallback((imageId: number) => {
@@ -238,11 +282,11 @@ export default function SequenceView() {
               className="header-button"
               onClick={() => spatialScan.start(undefined)}
               disabled={spatialScan.isStarting || spatialScan.isRunning}
-              title="Analyze the FITS files on disk for partial occlusion (trees, dome, stray light) that global star counts miss. Takes a few seconds per frame; runs in the background."
+              title="Analyze FITS pixels for occlusion, photometry, plate solutions, target offset, and tracking loss. Runs in the background and reuses cached results."
             >
               {spatialScan.isRunning
-                ? `Scanning ${spatialScan.status?.progress.processed ?? 0}/${spatialScan.status?.progress.total ?? 0}...`
-                : 'Scan Occlusion'}
+                ? `${spatialScan.status?.progress.stage === 'astrometry' ? 'Solving' : 'Scanning'} ${spatialScan.status?.progress.processed ?? 0}/${spatialScan.status?.progress.total ?? 0}...`
+                : 'Scan Quality'}
             </button>
             {spatialScan.isRunning && spatialScan.status?.progress.current_file && (
               <span
@@ -261,7 +305,7 @@ export default function SequenceView() {
                   style={{ color: 'var(--color-warning)', fontSize: '0.8rem' }}
                   title={spatialScan.status.progress.last_error}
                 >
-                  {spatialScan.status.progress.errors} scan errors
+                  {spatialScan.status.progress.errors} quality scan errors
                 </span>
               )}
           </div>
@@ -285,12 +329,21 @@ export default function SequenceView() {
             <button className="header-button" onClick={selectCloudedSequence}>
               Select Clouded
             </button>
+            <button className="header-button" onClick={selectAstrometryIssues}>
+              Select Off Target
+            </button>
+            <button className="header-button" onClick={selectUnsolved}>
+              Select Unsolved
+            </button>
+            <button className="header-button" onClick={selectRecommended}>
+              Select Recommended
+            </button>
             {selectedImages.size > 0 && (
               <>
                 <button
                   className="action-button reject"
                   style={{ padding: '0.4rem 0.8rem', fontSize: '0.85rem' }}
-                  onClick={rejectSelected}
+                  onClick={() => setShowRejectReview(true)}
                 >
                   Reject Selected ({selectedImages.size})
                 </button>
@@ -369,6 +422,12 @@ export default function SequenceView() {
                   {activeSequence.summary.tracking_issues_detected && (
                     <span className="issue-badge tracking">Tracking issues</span>
                   )}
+                  {activeSequence.summary.out_of_target_count > 0 && (
+                    <span className="issue-badge tracking">{activeSequence.summary.out_of_target_count} off target</span>
+                  )}
+                  {activeSequence.summary.plate_solve_failed_count > 0 && (
+                    <span className="issue-badge clouds">{activeSequence.summary.plate_solve_failed_count} unsolved</span>
+                  )}
                 </div>
               </div>
 
@@ -379,6 +438,8 @@ export default function SequenceView() {
                 selectedImages={selectedImages}
                 onToggle={toggleImage}
               />
+
+              <PointingScatter images={activeSequence.images} />
 
               {/* Image strip */}
               <div className="sequence-strip">
@@ -413,6 +474,100 @@ export default function SequenceView() {
           No sequences found for this target. Make sure images have been captured.
         </div>
       )}
+
+      {showRejectReview && (
+        <div
+          role="presentation"
+          onClick={() => setShowRejectReview(false)}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 1000,
+            background: 'rgba(0, 0, 0, 0.65)', display: 'grid', placeItems: 'center',
+            padding: '1rem',
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reject-review-title"
+            onClick={event => event.stopPropagation()}
+            style={{
+              width: 'min(760px, 100%)', maxHeight: '80vh', overflow: 'auto',
+              background: 'var(--color-surface)', color: 'var(--color-text)',
+              border: '1px solid var(--color-border)', borderRadius: '8px', padding: '1rem',
+            }}
+          >
+            <h3 id="reject-review-title">Review {selectedForReview.length} recommended rejection{selectedForReview.length === 1 ? '' : 's'}</h3>
+            <p style={{ color: 'var(--color-text-muted)' }}>
+              Existing rejections remain unchanged. Review the quality score and evidence before writing these grades.
+            </p>
+            <div style={{ display: 'grid', gap: '0.5rem', margin: '1rem 0' }}>
+              {selectedForReview.map(image => (
+                <div key={image.image_id} style={{ borderTop: '1px solid var(--color-border)', paddingTop: '0.5rem' }}>
+                  <strong>Image {image.image_id}</strong> · score {image.quality_score.toFixed(2)}
+                  <div style={{ color: image.regrade_reason ? 'var(--color-error)' : 'var(--color-warning)', fontSize: '0.85rem' }}>
+                    {image.regrade_reason ?? 'Manually selected; no automatic rejection recommendation'}
+                  </div>
+                  {image.details && <div style={{ color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>{image.details}</div>}
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+              <button className="header-button" onClick={() => setShowRejectReview(false)}>Cancel</button>
+              <button className="action-button reject" onClick={confirmRejectSelected} disabled={grading.isLoading}>
+                Confirm rejection ({selectedForReview.length})
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PointingScatter({ images }: { images: ImageQualityResult[] }) {
+  const points = images.flatMap(image => {
+    const east = image.pointing?.east_offset_arcsec;
+    const north = image.pointing?.north_offset_arcsec;
+    return east != null && north != null
+      ? [{ image, east, north }]
+      : [];
+  });
+  if (points.length < 2) return null;
+  const expectedTarget = points.some(point => point.image.pointing?.expected_target);
+
+  const extent = Math.max(
+    30,
+    ...points.flatMap(point => [Math.abs(point.east), Math.abs(point.north)])
+  ) * 1.1;
+  const size = 180;
+  const center = size / 2;
+  const project = (value: number) => center + (value / extent) * (center - 15);
+
+  return (
+    <div className="pointing-scatter" style={{ display: 'flex', gap: '1rem', alignItems: 'center', margin: '0.75rem 0' }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Solved pointing offsets">
+        <rect x="0" y="0" width={size} height={size} fill="var(--color-surface)" rx="6" />
+        <line x1={center} y1="10" x2={center} y2={size - 10} stroke="var(--color-text-muted)" opacity="0.45" />
+        <line x1="10" y1={center} x2={size - 10} y2={center} stroke="var(--color-text-muted)" opacity="0.45" />
+        {points.map(({ image, east, north }) => (
+          <circle
+            key={image.image_id}
+            cx={project(east)}
+            cy={project(-north)}
+            r={(image.flags ?? []).some(flag => flag === 'off_target' || flag === 'pointing_jump' || flag === 'pointing_drift') ? 5 : 3}
+            fill={qualityColor(image.quality_score)}
+          >
+            <title>Image {image.image_id}: E {east.toFixed(0)}″, N {north.toFixed(0)}″</title>
+          </circle>
+        ))}
+        <text x={size - 12} y={center - 4} textAnchor="end" fontSize="9" fill="var(--color-text-muted)">E</text>
+        <text x={center + 4} y="12" fontSize="9" fill="var(--color-text-muted)">N</text>
+      </svg>
+      <div style={{ color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
+        <strong style={{ color: 'var(--color-text)' }}>Solved pointing</strong><br />
+        {expectedTarget ? 'Target' : 'First solved center'} is the crosshair. Range ±{extent.toFixed(0)}″.<br />
+        Large points are off-target, jumps, or drift.
+      </div>
     </div>
   );
 }
@@ -559,6 +714,26 @@ function SequenceImageCard({
               coverage {quality.normalized_metrics.spatial_coverage.toFixed(2)}
             </span>
           )}
+        {quality.pointing?.field_fraction_offset != null && (
+          <span
+            className="sequence-image-pointing"
+            style={{ color: quality.regrade_reason ? 'var(--color-error)' : 'var(--color-text-muted)', fontSize: '0.75rem' }}
+            title={`Solved target offset: ${quality.pointing.separation_arcsec?.toFixed(0) ?? '?'} arcsec`}
+          >
+            offset {(quality.pointing.field_fraction_offset * 100).toFixed(0)}% field
+          </span>
+        )}
+        {quality.pointing?.solve_failed && (
+          <span
+            className="sequence-image-pointing"
+            style={{ color: 'var(--color-warning)', fontSize: '0.75rem' }}
+            title={quality.pointing.error || (quality.pointing.image_quality_evidence
+              ? 'Pixels did not match a field'
+              : 'Plate solver could not make a quality determination')}
+          >
+            {quality.pointing.image_quality_evidence ? 'unsolved' : 'solve unavailable'}
+          </span>
+        )}
         {quality.details && (
           <span className="sequence-image-details" title={quality.details}>
             {quality.details}

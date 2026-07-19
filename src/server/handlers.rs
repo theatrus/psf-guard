@@ -141,16 +141,12 @@ pub async fn solve_image_astrometry(
             )
         };
         if newly_solved
-            && analysis.status == crate::astrometry::AstrometryAnalysisStatus::Solved
-            && matches!(
-                analysis.mode,
-                Some(
-                    crate::astrometry::AstrometrySolveMode::Hinted
-                        | crate::astrometry::AstrometrySolveMode::Blind
-                )
-            )
+            && analysis
+                .solve_attempt
+                .as_ref()
+                .is_some_and(|attempt| attempt.cacheable)
         {
-            crate::astrometry::persist_solved_analysis(&cache_dir, &analysis)?;
+            crate::astrometry::persist_pixel_analysis(&cache_dir, &analysis)?;
         }
         Ok::<_, String>(analysis)
     })
@@ -168,15 +164,9 @@ fn resolve_astrometry_input(
     let expected_target = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
-        let db = Database::new(&conn);
-        db.get_targets_by_ids(&[image.target_id])
+        crate::acquisition_context::load(&conn, &image)
             .map_err(AppError::db)?
-            .into_iter()
-            .next()
-            .and_then(|target| target.ra.zip(target.dec))
-            .and_then(|(ra_hours, dec_deg)| {
-                crate::astrometry::target_scheduler_coordinates(ra_hours, dec_deg)
-            })
+            .expected_for_grading()
     };
     let fits_path = find_fits_file(ctx, &image, &target_name, &file_only)?;
     Ok((fits_path, expected_target))
@@ -2048,6 +2038,7 @@ pub async fn get_overall_stats(
 
 #[axum::debug_handler(state = Arc<AppState>)]
 pub async fn analyze_sequence(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Query(params): Query<crate::server::api::SequenceAnalysisQuery>,
 ) -> Result<Json<ApiResponse<crate::server::api::SequenceAnalysisResponse>>, AppError> {
@@ -2064,9 +2055,10 @@ pub async fn analyze_sequence(
     let weight_snr = params.weight_snr;
     let weight_background = params.weight_background;
     let weight_spatial = params.weight_spatial;
+    let weight_pointing = params.weight_pointing;
 
     // Fetch images from database
-    let (images_data, target_name) = {
+    let (images_data, target_name, expected_by_image) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
@@ -2091,8 +2083,16 @@ pub async fn analyze_sequence(
                     && filter_name.as_ref().is_none_or(|f| img.filter_name == *f)
             })
             .collect();
+        let expected_by_image = filtered
+            .iter()
+            .map(|(image, _, _)| {
+                crate::acquisition_context::load(&conn, image)
+                    .map(|context| (image.id, context.expected_for_grading()))
+            })
+            .collect::<Result<std::collections::HashMap<_, _>, _>>()
+            .map_err(AppError::db)?;
 
-        (filtered, target_name)
+        (filtered, target_name, expected_by_image)
     };
 
     if images_data.is_empty() {
@@ -2105,6 +2105,8 @@ pub async fn analyze_sequence(
     // background scan are merged in when the DB metadata lacks them.
     crate::server::spatial_scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
     let spatial_store = ctx.spatial_metrics.clone();
+    let astrometry_cache_dir = ctx.cache_dir_path.clone();
+    let astrometry = Arc::clone(&state.astrometry);
     let target_name_clone = target_name.clone();
     let result = tokio::task::spawn_blocking(move || {
         let mut config = SequenceAnalyzerConfig::default();
@@ -2118,6 +2120,7 @@ pub async fn analyze_sequence(
             || weight_snr.is_some()
             || weight_background.is_some()
             || weight_spatial.is_some()
+            || weight_pointing.is_some()
         {
             config.quality_weights = QualityWeights {
                 star_count: weight_star_count.unwrap_or(config.quality_weights.star_count),
@@ -2127,6 +2130,7 @@ pub async fn analyze_sequence(
                 background: weight_background.unwrap_or(config.quality_weights.background),
                 spatial: weight_spatial.unwrap_or(config.quality_weights.spatial),
                 transparency: config.quality_weights.transparency,
+                pointing: weight_pointing.unwrap_or(config.quality_weights.pointing),
             };
         }
 
@@ -2142,6 +2146,13 @@ pub async fn analyze_sequence(
             let mut metrics =
                 extract_metrics_from_metadata(img.id, &img.metadata, img.acquired_date);
             merge_spatial_metrics(&mut metrics, &spatial_store, &img.metadata);
+            merge_astrometry_metrics(
+                &mut metrics,
+                &astrometry_cache_dir,
+                &img.metadata,
+                &astrometry,
+                expected_by_image.get(&img.id).copied().flatten(),
+            );
             entries_by_filter
                 .entry(img.filter_name.clone())
                 .or_default()
@@ -2188,6 +2199,7 @@ pub async fn analyze_sequence(
 
 #[axum::debug_handler(state = Arc<AppState>)]
 pub async fn get_image_quality(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,
 ) -> Result<Json<ApiResponse<crate::server::api::ImageQualityContextResponse>>, AppError> {
@@ -2196,7 +2208,7 @@ pub async fn get_image_quality(
     };
 
     // Get the target image and its context from database
-    let (target_image, all_filter_images, target_name) = {
+    let (target_image, all_filter_images, target_name, expected_by_image) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
@@ -2223,8 +2235,16 @@ pub async fn get_image_quality(
                     && img.filter_name == target_image.filter_name
             })
             .collect();
+        let expected_by_image = filter_images
+            .iter()
+            .map(|(image, _, _)| {
+                crate::acquisition_context::load(&conn, image)
+                    .map(|context| (image.id, context.expected_for_grading()))
+            })
+            .collect::<Result<std::collections::HashMap<_, _>, _>>()
+            .map_err(AppError::db)?;
 
-        (target_image, filter_images, target_name)
+        (target_image, filter_images, target_name, expected_by_image)
     };
 
     if all_filter_images.is_empty() {
@@ -2246,6 +2266,8 @@ pub async fn get_image_quality(
     let target_name_clone = target_name.clone();
     crate::server::spatial_scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
     let spatial_store = ctx.spatial_metrics.clone();
+    let astrometry_cache_dir = ctx.cache_dir_path.clone();
+    let astrometry = Arc::clone(&state.astrometry);
 
     let result = tokio::task::spawn_blocking(move || {
         let config = SequenceAnalyzerConfig::default();
@@ -2257,6 +2279,13 @@ pub async fn get_image_quality(
         for (img, _, _) in &all_filter_images {
             let mut m = extract_metrics_from_metadata(img.id, &img.metadata, img.acquired_date);
             merge_spatial_metrics(&mut m, &spatial_store, &img.metadata);
+            merge_astrometry_metrics(
+                &mut m,
+                &astrometry_cache_dir,
+                &img.metadata,
+                &astrometry,
+                expected_by_image.get(&img.id).copied().flatten(),
+            );
             entries.push(stored_entry_for(&spatial_store, img.id, &img.metadata));
             metrics.push(m);
         }
@@ -2435,6 +2464,32 @@ fn merge_spatial_metrics(
     }
 }
 
+fn merge_astrometry_metrics(
+    metrics: &mut crate::sequence_analysis::ImageMetrics,
+    cache_dir: &std::path::Path,
+    metadata_json: &str,
+    astrometry: &crate::astrometry::AstrometryContext,
+    expected_target: Option<(f64, f64)>,
+) {
+    let Some(file_only) = filename_from_metadata(metadata_json) else {
+        return;
+    };
+    let Some(analysis) = astrometry.persisted_pixel_analysis_for_source(
+        cache_dir,
+        metrics.image_id,
+        expected_target,
+    ) else {
+        return;
+    };
+    let cached_file = std::path::Path::new(&analysis.source_fingerprint.canonical_path)
+        .file_name()
+        .and_then(|name| name.to_str());
+    if cached_file != Some(file_only.as_str()) {
+        return;
+    }
+    metrics.astrometry = crate::sequence_analysis::astrometry_metrics_from_analysis(&analysis);
+}
+
 /// POST /api/db/{db_id}/analysis/spatial-scan
 ///
 /// Start a background scan computing spatial occlusion metrics from the FITS
@@ -2450,7 +2505,9 @@ pub async fn start_spatial_scan(
 
     scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
 
-    // Collect this target's images.
+    // Collect this target's images together with schema-adaptive intended
+    // framing. Unsupported coordinate epochs are deliberately omitted from
+    // absolute grading, though the solver may still use FITS hints.
     let candidates = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
@@ -2469,31 +2526,57 @@ pub async fn start_spatial_scan(
             .query_images(None, None, None, None)
             .map_err(AppError::db)?;
 
-        all_images
-            .into_iter()
-            .filter(|(img, _, _)| {
-                img.target_id == req.target_id
-                    && req
-                        .filter_name
-                        .as_ref()
-                        .is_none_or(|f| img.filter_name == *f)
-            })
-            .map(|(img, _, _)| (img, target_name.clone()))
-            .collect::<Vec<_>>()
+        let mut candidates = Vec::new();
+        for (img, _, _) in all_images.into_iter().filter(|(img, _, _)| {
+            img.target_id == req.target_id
+                && req
+                    .filter_name
+                    .as_ref()
+                    .is_none_or(|f| img.filter_name == *f)
+        }) {
+            let expected = crate::acquisition_context::load(&conn, &img)
+                .map_err(AppError::db)?
+                .expected_for_grading();
+            candidates.push((img, target_name.clone(), expected));
+        }
+        candidates
     };
 
-    // Partition into needs-compute vs already-cached.
+    // Keep the union of spatial and astrometry work. One side may already be
+    // cached while the other still needs computation.
     let mut work = Vec::new();
     let mut skipped_cached = 0usize;
-    for (img, target_name) in candidates {
+    let force_spatial = req.force || req.force_spatial;
+    let force_astrometry = req.force || req.force_astrometry;
+    for (img, target_name, expected) in candidates {
         let Some(file_only) = filename_from_metadata(&img.metadata) else {
             continue;
         };
-        if !req.force && scan::valid_entry(&ctx.spatial_metrics, img.id, &file_only).is_some() {
+        let spatial_cached =
+            !force_spatial && scan::valid_entry(&ctx.spatial_metrics, img.id, &file_only).is_some();
+        if spatial_cached {
             skipped_cached += 1;
-            continue;
         }
-        work.push((img, target_name, file_only));
+        let astrometry_cached = !force_astrometry
+            && state
+                .astrometry
+                .validated_persisted_pixel_analysis(&ctx.cache_dir_path, img.id, expected)
+                .is_some_and(|analysis| {
+                    std::path::Path::new(&analysis.source_fingerprint.canonical_path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        == Some(file_only.as_str())
+                });
+        if !spatial_cached || !astrometry_cached {
+            work.push((
+                img,
+                target_name,
+                file_only,
+                expected,
+                !spatial_cached,
+                !astrometry_cached,
+            ));
+        }
     }
 
     if work.is_empty() {
@@ -2509,7 +2592,7 @@ pub async fn start_spatial_scan(
         &ctx.spatial_metrics,
         req.target_id,
         req.filter_name.clone(),
-        work.len(),
+        work.iter().filter(|item| item.4).count(),
         skipped_cached,
     ) {
         let (progress, cached_count) = scan::progress_snapshot(&ctx.spatial_metrics);
@@ -2521,7 +2604,7 @@ pub async fn start_spatial_scan(
     }
 
     tracing::info!(
-        "📐 Spatial scan started for db={} target={} ({} images, {} cached)",
+        "📐 Quality scan started for db={} target={} ({} images, {} spatial cached)",
         ctx.id,
         req.target_id,
         work.len(),
@@ -2531,6 +2614,7 @@ pub async fn start_spatial_scan(
     let ctx_arc = ctx.0.clone();
     let target_id = req.target_id;
     let worker_policy = state.worker_policy();
+    let astrometry = Arc::clone(&state.astrometry);
     // Mark this as an interactive job for its whole lifetime so background
     // pre-generation yields cores + memory to it. Moved into the blocking task
     // and dropped when the scan returns (or panics).
@@ -2543,13 +2627,18 @@ pub async fn start_spatial_scan(
         let scan_body = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Resolve FITS paths first; unresolvable files count as errors.
             let mut items = Vec::with_capacity(work.len());
-            for (img, target_name, file_only) in &work {
+            for (img, target_name, file_only, expected, need_spatial, need_astrometry) in &work {
                 match find_fits_file(&ctx_arc, img, target_name, file_only) {
-                    Ok(path) => items.push(crate::server::spatial_scan::ScanWorkItem {
-                        image_id: img.id,
-                        filename: file_only.clone(),
-                        fits_path: path,
-                    }),
+                    Ok(path) => items.push((
+                        crate::server::spatial_scan::ScanWorkItem {
+                            image_id: img.id,
+                            filename: file_only.clone(),
+                            fits_path: path,
+                        },
+                        *expected,
+                        *need_spatial,
+                        *need_astrometry,
+                    )),
                     Err(_) => {
                         let mut s = ctx_arc.spatial_metrics.write().unwrap();
                         s.progress.processed += 1;
@@ -2558,10 +2647,15 @@ pub async fn start_spatial_scan(
                     }
                 }
             }
+            let spatial_items = items
+                .iter()
+                .filter(|item| item.2)
+                .map(|item| item.0.clone())
+                .collect::<Vec<_>>();
             // Size the worker pool to the machine (configured core ratio) and
             // the sensor (peak memory of one in-flight frame, probed from the
             // first resolvable file). Leaves headroom for request serving.
-            let frame_pixels = items
+            let frame_pixels = spatial_items
                 .first()
                 .and_then(|it| crate::concurrency::probe_frame_pixels(&it.fits_path));
             let budget = crate::concurrency::plan_workers(
@@ -2570,17 +2664,73 @@ pub async fn start_spatial_scan(
                 crate::concurrency::Priority::Interactive,
                 frame_pixels,
             );
-            tracing::info!(
-                "📐 Spatial scan concurrency: {} worker(s) — {}",
-                budget.workers,
-                budget.rationale
-            );
-            crate::server::spatial_scan::run_scan(
-                &ctx_arc.spatial_metrics,
-                &ctx_arc.cache_dir_path,
-                &items,
-                budget.workers,
-            );
+            if !spatial_items.is_empty() {
+                tracing::info!(
+                    "📐 Spatial scan concurrency: {} worker(s) — {}",
+                    budget.workers,
+                    budget.rationale
+                );
+                crate::server::spatial_scan::run_scan(
+                    &ctx_arc.spatial_metrics,
+                    &ctx_arc.cache_dir_path,
+                    &spatial_items,
+                    budget.workers,
+                );
+            }
+
+            let astrometry_items = items.iter().filter(|item| item.3).collect::<Vec<_>>();
+            if !astrometry_items.is_empty() {
+                crate::server::spatial_scan::begin_astrometry_stage(
+                    &ctx_arc.spatial_metrics,
+                    astrometry_items.len(),
+                );
+                let _solve_guard = ctx_arc.astrometry_solve_mutex.blocking_lock();
+                for (item, expected, _, _) in astrometry_items {
+                    let outcome = astrometry.solve_image_for_quality(
+                        item.image_id,
+                        &item.fits_path,
+                        *expected,
+                    );
+                    match outcome {
+                        Ok(analysis) => {
+                            let attempt = analysis.solve_attempt.as_ref();
+                            let solved = attempt.is_some_and(|attempt| {
+                                attempt.outcome
+                                    == crate::astrometry::AstrometryAttemptOutcome::Solved
+                            });
+                            let quality_failure = attempt
+                                .is_some_and(|attempt| attempt.image_quality_evidence && !solved);
+                            let operational_error =
+                                if attempt.is_some_and(|attempt| attempt.cacheable) {
+                                    crate::astrometry::persist_pixel_analysis(
+                                        &ctx_arc.cache_dir_path,
+                                        &analysis,
+                                    )
+                                    .err()
+                                } else if !solved && !quality_failure {
+                                    analysis.error.clone()
+                                } else {
+                                    None
+                                };
+                            crate::server::spatial_scan::record_astrometry_result(
+                                &ctx_arc.spatial_metrics,
+                                &item.filename,
+                                solved,
+                                quality_failure,
+                                operational_error,
+                            );
+                        }
+                        Err(error) => crate::server::spatial_scan::record_astrometry_result(
+                            &ctx_arc.spatial_metrics,
+                            &item.filename,
+                            false,
+                            false,
+                            Some(error),
+                        ),
+                    }
+                }
+            }
+            crate::server::spatial_scan::finalize_scan(&ctx_arc.spatial_metrics);
         }));
         if scan_body.is_err() {
             tracing::error!(
@@ -2591,7 +2741,7 @@ pub async fn start_spatial_scan(
             crate::server::spatial_scan::finalize_scan(&ctx_arc.spatial_metrics);
         } else {
             tracing::info!(
-                "📐 Spatial scan finished for db={} target={}",
+                "📐 Quality scan finished for db={} target={}",
                 ctx_arc.id,
                 target_id
             );

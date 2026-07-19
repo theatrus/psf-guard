@@ -648,8 +648,11 @@ describe('SequenceView: batch operations', () => {
       expect(screen.getByText(/Reject Selected \(2\)/)).toBeInTheDocument();
     });
 
-    // Click reject
+    // Open review, verify that no grade has been written yet, then confirm.
     await user.click(screen.getByText(/Reject Selected \(2\)/));
+    expect(screen.getByRole('dialog', { name: /Review 2 recommended rejections/ })).toBeInTheDocument();
+    expect(gradeRequests).toHaveLength(0);
+    await user.click(screen.getByText(/Confirm rejection \(2\)/));
 
     // Wait for the grade API calls to be made
     await waitFor(() => {

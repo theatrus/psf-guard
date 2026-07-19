@@ -351,6 +351,7 @@ pub struct SequenceAnalysisQuery {
     pub weight_snr: Option<f64>,
     pub weight_background: Option<f64>,
     pub weight_spatial: Option<f64>,
+    pub weight_pointing: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -366,6 +367,10 @@ pub struct SpatialScanRequest {
     /// Recompute images that already have cached metrics.
     #[serde(default)]
     pub force: bool,
+    #[serde(default)]
+    pub force_spatial: bool,
+    #[serde(default)]
+    pub force_astrometry: bool,
 }
 
 /// Status returned by both the scan-start and scan-progress endpoints.
