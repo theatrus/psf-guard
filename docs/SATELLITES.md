@@ -3,24 +3,37 @@
 PSF Guard can identify satellites predicted to cross a solved image during
 its actual exposure. Open an image, find **Satellite tracks**, and choose
 **Identify satellite tracks** (or press `T`). The resulting overlay draws the
-clipped path inside the sensor and labels it with the satellite name and NORAD
-identity supplied by the orbital catalog.
+clipped orbital path inside the sensor, searches the nearby FITS pixels for a
+matching linear trail, and labels the candidate with the satellite name and
+NORAD identity supplied by the orbital catalog.
 
 ## Evidence boundary
 
-Satellite results are orbital predictions, not pixel detections. They answer
-“which cataloged objects should cross this solved footprint between shutter
-open and shutter close?” They do not claim that a streak is present, visible,
-or caused by the labeled object. PSF Guard keeps this evidence separate from:
+Satellite results begin as orbital predictions: “which cataloged objects
+should cross this solved footprint between shutter open and shutter close?”
+PSF Guard then runs a constrained pixel-path alignment around each projected
+track. A match says that a linear brightness feature follows the nearby path;
+it does not prove that the cataloged object caused the feature. PSF Guard keeps
+these evidence types separate from:
 
 - the pixel-derived WCS used to project the path;
 - catalog-only coordinate association;
 - star/PSF, occlusion, cloud, and photometric measurements from pixels.
 
-Every response and persisted result carries
-`association: predicted_not_pixel_detected`, the exact WCS, FITS source
-fingerprint, exposure/site provenance, orbital-element source/state, and the
-Seiza dependency versions used to compute it.
+The dashed risk-colored line is always the unmodified orbital prediction. A
+solid green line is the independently fitted pixel path. Responses distinguish
+`predicted_with_pixel_alignment`, `predicted_pixel_checked`, and
+`predicted_not_pixel_detected`, while retaining the exact WCS, FITS source
+fingerprint, exposure/site provenance, orbital-element source/state, alignment
+version, and Seiza dependency versions used to compute the result.
+
+The matcher downsamples the image once to at most 2,048 pixels on its long
+axis, estimates local noise, and performs a coarse-to-fine matched-filter
+search in a narrow normal corridor around each predicted path. A detection
+requires both at least 2.0 sigma robust line contrast and 65% path continuity.
+The serialized result includes its actual search radius, offsets, angle delta,
+ADU contrast, contrast significance, and continuity. It does not run a
+full-frame line search or invent an identity for an unrelated trail.
 
 ## Required FITS metadata
 
@@ -63,8 +76,8 @@ JSON registry to a local OMM JSON or TLE file. Relative paths resolve below
 
 Per-image results are written atomically to
 `<cache>/<db-slug>/satellites/<image-id>.json`. They are accepted only when
-the FITS fingerprint, exact WCS, Seiza version, and seiza-satellites version
-still match.
+the FITS fingerprint, exact WCS, Seiza version, seiza-satellites version, and
+pixel-alignment version still match.
 
 ## Bright-trail risk and grading
 
@@ -80,50 +93,47 @@ length. It is deliberately not called magnitude: the active catalog does not
 provide a reliable exposure-band brightness model, and attitude/flares can
 change observed brightness.
 
-Possible risk adds `SatelliteTrailRisk` and caps the frame score at 0.75.
-High risk caps the score at 0.35 and proposes a reason such as:
+Possible or high orbital risk adds `SatelliteTrailRisk` and caps the frame
+score at 0.75 for review. Prediction alone never proposes an automatic
+rejection. A high-risk candidate must also have a pixel-aligned trail before
+the score is capped at 0.35 and regrade can propose a reason such as:
 
 ```text
-[Auto] Predicted bright satellite crossing - 1 high-risk track(s), risk 0.82; verify overlay
+[Auto] Pixel-aligned bright satellite trail - 1 high-risk candidate(s), risk 0.82; verify overlay
 ```
 
 The Sequence view still requires the normal per-image review and explicit
 confirmation before writing a rejection. Existing rejected grades are not
 overwritten.
 
-## Real Hercules exposure
+## Real California Nebula exposures
 
-The screenshots below come from the unmodified 60-second B-filter exposure
-`2026-05-21_00-13-14_B_-10.10_60.00s_0054.fits`, not a mocked UI fixture.
-Its headers provide `SITELAT`, `SITELONG`, `SITEELEV`, and
-`DATE-AVG=2026-05-21T07:13:45.3551363`. PSF Guard therefore
-used the header-provided observing site and the centered interval
-`07:13:15.355136–07:14:15.355136 UTC`.
+The screenshots and thresholds were validated on two unmodified 60-second
+G-filter exposures from October 2025, not mocked UI fixtures. Their FITS
+headers provide the observing site, exposure duration, and `DATE-AVG`, so PSF
+Guard uses the header-provided location and centers each shutter interval on
+the recorded midpoint. Historical elements came from the
+[IAU SatChecker archive](https://satchecker.readthedocs.io/en/latest/tools_tle.html)
+near each exposure epoch.
 
-Seiza 0.9 solved the frame with 85 matched stars at 1.73 arcsec RMS. Against a
-configured historical TLE snapshot near the exposure epoch,
-`seiza-satellites 0.1` projected one fully illuminated in-frame crossing:
-**HULIANWANG DIGUI-167 [68659]**. The clipped path is about 7,672 pixels long,
-the minimum range is about 1,174 km, and the heuristic risk is 0.96. That
-produces a high-risk recommendation and a 0.35 quality cap, while the UI keeps
-the claim explicitly labeled as an orbital prediction rather than a detected
-pixel trail.
+For the brighter frame, Seiza 0.9 solved 101 matched stars at 1.90 arcsec RMS.
+`seiza-satellites 0.1` projected four high-risk crossings, but pixel alignment
+found only the two trails visible in the frame: **CZ-4B R/B [48624]** at 55.5
+sigma and **STARLINK-3093 [49141]** at 4.1 sigma. Their fitted paths are about
+26 and 76 sensor pixels from the raw orbital projections. The other two
+predictions have low contrast and continuity and remain prediction-only.
 
-The visible diagonal trail does **not** coincide with the red prediction. A
-line fit puts it roughly 800–1,200 full-resolution pixels away from the
-predicted path. An address-derived site check moved the predicted endpoints by
-only 25–38 pixels: the FITS position was already within about 0.2 km of that
-independent location. This is therefore not a confirmed identification of the
-visible trail. It may reflect orbital-element uncertainty for a recently
-launched object, a different object, or another timing/site input error. The
-frame remains a useful demonstration of the product's intended boundary:
-orbital predictions contribute conservative grading evidence, while the UI
-does not claim a pixel detection or identity match. The named result links to
-an external satellite information page for follow-up.
+The preceding night's fainter frame solved with 102 matched stars at 1.96
+arcsec RMS. Of three predicted crossings, only **STARLINK-5450 [54778]**
+matches the pixels: 5.8 sigma, 99.8% continuity, and roughly a 41-pixel normal
+offset. Both dry-run regrade checks reject the affected image for pixel-aligned
+evidence. Predictions without a pixel match remain warnings. Names continue
+to link to an external satellite information page and remain candidate
+associations rather than asserted identities.
 
 | Solved image and on-demand identifier | Sequence score and recommendation |
 |:--:|:--:|
-| ![Hercules Globular Cluster with a red predicted satellite path offset from the visible trail and a named candidate evidence panel](satellite-hercules-overlay.png) | ![Hercules frame selected in Sequence Analysis with a satellite high-risk badge and score 35](satellite-hercules-sequence.png) |
+| ![California Nebula frame with dashed orbital predictions and solid green pixel-aligned satellite trails](satellite-california-overlay.png) | ![California Nebula frame selected in Sequence Analysis with a pixel-matched satellite rejection recommendation](satellite-california-sequence.png) |
 
 ## Background and CLI behavior
 

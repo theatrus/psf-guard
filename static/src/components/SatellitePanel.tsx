@@ -28,8 +28,14 @@ export default function SatellitePanel({
     <section className="info-section astrometry-section" data-testid="satellite-panel">
       <div className="astrometry-heading-row">
         <h3>Satellite tracks</h3>
-        <span className={`astrometry-badge ${risk?.high_risk_count ? 'satellite-badge-high' : ''}`}>
-          {isLoading ? 'Checking cache…' : analysis ? 'Predicted' : 'On demand'}
+        <span className={`astrometry-badge ${risk?.pixel_aligned_high_risk_count ? 'satellite-badge-high' : ''}`}>
+          {isLoading
+            ? 'Checking cache…'
+            : risk?.pixel_aligned_count
+              ? 'Pixel aligned'
+              : analysis
+                ? 'Predicted'
+                : 'On demand'}
         </span>
       </div>
 
@@ -68,6 +74,8 @@ export default function SatellitePanel({
                 ? `${risk.potentially_bright_count} possible`
                 : 'None predicted'}
           </dd>
+          <dt>Pixel matches</dt>
+          <dd>{risk.pixel_alignment_attempted ? risk.pixel_aligned_count : 'Unavailable'}</dd>
           <dt>Exposure</dt>
           <dd>{analysis.exposure.duration_seconds.toFixed(1)}s</dd>
         </dl>
@@ -90,6 +98,7 @@ export default function SatellitePanel({
             <span>{track.label}</span>
           )}
           <span className={`satellite-risk-${track.risk_level}`}>
+            {track.pixel_alignment?.status === 'detected' ? 'pixel match · ' : 'prediction only · '}
             {track.risk_level} · {Math.round(track.bright_trail_risk * 100)}%
           </span>
         </div>
@@ -97,12 +106,16 @@ export default function SatellitePanel({
 
       {analysis && (
         <p className="astrometry-message">
-          Orbital prediction from {analysis.catalog.state.replaceAll('_', ' ')} elements; it does not claim a trail was detected in the pixels.
+          {risk?.pixel_aligned_count
+            ? `Pixel corridor evidence supports ${risk.pixel_aligned_count} orbital candidate${risk.pixel_aligned_count === 1 ? '' : 's'}; identity remains a candidate association.`
+            : risk?.pixel_alignment_attempted
+              ? 'Orbital prediction only; the pixel corridor check found no matching trail.'
+              : `Orbital prediction from ${analysis.catalog.state.replaceAll('_', ' ')} elements; pixel alignment was unavailable.`}
         </p>
       )}
-      {(error || predictError || analysis?.catalog.warning) && (
+      {(error || predictError || analysis?.pixel_alignment_error || analysis?.catalog.warning) && (
         <p className="astrometry-message astrometry-message-warning">
-          {predictError || error || analysis?.catalog.warning}
+          {predictError || error || analysis?.pixel_alignment_error || analysis?.catalog.warning}
         </p>
       )}
     </section>

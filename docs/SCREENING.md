@@ -55,7 +55,7 @@ problems away.
 | **Background fall** | Dark occluders, cloud shadow | Same, downward: something blocking skyglow reads *darker*, not milky |
 | **Static glow** | Corner haze, lit occluder edges | Cells brighter than the frame's own gradient model — catches problems present from a session's *first* frame, which temporal baselines can never see |
 | **Fresh plate solution** | Off-target frames, pointing jumps/drift, deterministic no-solves | Seiza solves the current pixels; solved centers are compared to the authoritative target, stable framing clusters, and within-segment drift |
-| **Cached satellite prediction** | Potentially bright satellite crossings | A solved WCS plus FITS exposure/site metadata projects cached orbital elements through the shutter-open interval; this is prediction, not pixel detection |
+| **Satellite prediction + pixel alignment** | Potentially bright satellite trails | A solved WCS plus FITS exposure/site metadata projects cached orbital elements through the shutter-open interval, then a bounded matched-filter search tests the nearby pixels; prediction and aligned-path evidence remain separate |
 
 The signals feed a sequence analyzer that scores every frame 0–1 relative to
 its session (same target, filter, and exposure; sessions split on 60-minute
@@ -90,9 +90,10 @@ scatter. Use **Select Clouded**, **Select Off Target**, **Select Unsolved**, or
 review before anything is written.
 
 If orbital elements were previously populated from an image's **Satellite
-tracks** panel, the scan also caches exposure-specific crossings. Possible
-bright tracks warn; high-risk sunlit tracks create a reviewed rejection
-recommendation. The scan itself never refreshes or downloads orbital data.
+tracks** panel, the scan also caches exposure-specific crossings. Potentially
+bright predictions warn; only a high-risk prediction with a matching pixel
+trail creates a reviewed rejection recommendation. The scan itself never
+refreshes or downloads orbital data.
 See [Satellite track prediction](SATELLITES.md).
 
 ## Reading the diagnostics

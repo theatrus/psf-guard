@@ -114,6 +114,12 @@ pub struct SatelliteFrameMetrics {
     pub potentially_bright_count: usize,
     pub high_risk_count: usize,
     pub maximum_bright_trail_risk: f64,
+    #[serde(default)]
+    pub pixel_alignment_attempted: bool,
+    #[serde(default)]
+    pub pixel_aligned_count: usize,
+    #[serde(default)]
+    pub pixel_aligned_high_risk_count: usize,
     pub reject_recommended: bool,
     pub association: String,
 }
@@ -125,6 +131,9 @@ impl From<&crate::satellites::SatelliteAnalysis> for SatelliteFrameMetrics {
             potentially_bright_count: analysis.risk.potentially_bright_count,
             high_risk_count: analysis.risk.high_risk_count,
             maximum_bright_trail_risk: analysis.risk.maximum_bright_trail_risk,
+            pixel_alignment_attempted: analysis.risk.pixel_alignment_attempted,
+            pixel_aligned_count: analysis.risk.pixel_aligned_count,
+            pixel_aligned_high_risk_count: analysis.risk.pixel_aligned_high_risk_count,
             reject_recommended: analysis.risk.reject_recommended,
             association: analysis.association.clone(),
         }
@@ -807,7 +816,7 @@ impl SequenceAnalyzer {
             let Some(satellite) = image.satellite.as_ref() else {
                 continue;
             };
-            if satellite.potentially_bright_count == 0 {
+            if satellite.potentially_bright_count == 0 && satellite.pixel_aligned_count == 0 {
                 continue;
             }
             if !result.flags.contains(&IssueCategory::SatelliteTrailRisk) {
@@ -817,23 +826,35 @@ impl SequenceAnalyzer {
                 .category
                 .get_or_insert(IssueCategory::SatelliteTrailRisk);
 
+            let pixel_evidence = if satellite.pixel_aligned_count > 0 {
+                format!(
+                    "Pixel corridor alignment found {} matching trail(s), including {} high-risk candidate(s).",
+                    satellite.pixel_aligned_count, satellite.pixel_aligned_high_risk_count
+                )
+            } else if satellite.pixel_alignment_attempted {
+                "Pixel corridor alignment found no matching trail.".to_string()
+            } else {
+                "Pixel alignment was unavailable; this remains orbital prediction only.".to_string()
+            };
             let detail = format!(
-                "Predicted satellite crossing: {} track(s), {} potentially bright, {} high risk; maximum heuristic risk {:.2}. This is orbital prediction, not a pixel detection.",
+                "Predicted satellite crossing: {} track(s), {} potentially bright, {} high risk; maximum heuristic risk {:.2}. {}",
                 satellite.predicted_tracks,
                 satellite.potentially_bright_count,
                 satellite.high_risk_count,
                 satellite.maximum_bright_trail_risk,
+                pixel_evidence,
             );
             result.details = Some(match result.details.take() {
                 Some(existing) => format!("{detail} {existing}"),
                 None => detail,
             });
 
-            if satellite.reject_recommended && satellite.high_risk_count > 0 {
+            if satellite.reject_recommended && satellite.pixel_aligned_high_risk_count > 0 {
                 result.quality_score = result.quality_score.min(0.35);
                 let reason = format!(
-                    "[Auto] Predicted bright satellite crossing - {} high-risk track(s), risk {:.2}; verify overlay",
-                    satellite.high_risk_count, satellite.maximum_bright_trail_risk,
+                    "[Auto] Pixel-aligned bright satellite trail - {} high-risk candidate(s), risk {:.2}; verify overlay",
+                    satellite.pixel_aligned_high_risk_count,
+                    satellite.maximum_bright_trail_risk,
                 );
                 result.regrade_reason = Some(match result.regrade_reason.take() {
                     Some(existing) => format!("{existing}; {reason}"),
@@ -3111,7 +3132,7 @@ mod tests {
     }
 
     #[test]
-    fn cached_high_satellite_risk_recommends_reviewed_rejection() {
+    fn pixel_aligned_high_satellite_risk_recommends_reviewed_rejection() {
         let mut images = vec![
             make_image(1, 1000, 100.0, 2.0),
             make_image(2, 1060, 100.0, 2.0),
@@ -3122,8 +3143,11 @@ mod tests {
             potentially_bright_count: 1,
             high_risk_count: 1,
             maximum_bright_trail_risk: 0.82,
+            pixel_alignment_attempted: true,
+            pixel_aligned_count: 1,
+            pixel_aligned_high_risk_count: 1,
             reject_recommended: true,
-            association: "predicted_not_pixel_detected".into(),
+            association: "predicted_with_pixel_alignment".into(),
         });
 
         let result = SequenceAnalyzer::new(SequenceAnalyzerConfig::default())
@@ -3138,11 +3162,11 @@ mod tests {
         assert!(affected
             .regrade_reason
             .as_deref()
-            .is_some_and(|reason| reason.contains("Predicted bright satellite")));
+            .is_some_and(|reason| reason.contains("Pixel-aligned bright satellite")));
         assert!(affected
             .details
             .as_deref()
-            .is_some_and(|details| details.contains("not a pixel detection")));
+            .is_some_and(|details| details.contains("Pixel corridor alignment found 1")));
         assert_eq!(result[0].summary.satellite_risk_count, 1);
     }
 
@@ -3158,8 +3182,11 @@ mod tests {
             potentially_bright_count: 1,
             high_risk_count: 0,
             maximum_bright_trail_risk: 0.42,
+            pixel_alignment_attempted: true,
+            pixel_aligned_count: 0,
+            pixel_aligned_high_risk_count: 0,
             reject_recommended: false,
-            association: "predicted_not_pixel_detected".into(),
+            association: "predicted_pixel_checked".into(),
         });
 
         let result = SequenceAnalyzer::new(SequenceAnalyzerConfig::default())
@@ -3172,6 +3199,42 @@ mod tests {
         assert!(affected.flags.contains(&IssueCategory::SatelliteTrailRisk));
         assert!(affected.quality_score <= 0.75);
         assert!(affected.regrade_reason.is_none());
+    }
+
+    #[test]
+    fn high_satellite_prediction_without_pixel_alignment_does_not_regrade() {
+        let mut images = vec![
+            make_image(1, 1000, 100.0, 2.0),
+            make_image(2, 1060, 100.0, 2.0),
+            make_image(3, 1120, 100.0, 2.0),
+        ];
+        images[1].satellite = Some(SatelliteFrameMetrics {
+            predicted_tracks: 2,
+            potentially_bright_count: 2,
+            high_risk_count: 2,
+            maximum_bright_trail_risk: 0.94,
+            pixel_alignment_attempted: true,
+            pixel_aligned_count: 0,
+            pixel_aligned_high_risk_count: 0,
+            reject_recommended: false,
+            association: "predicted_pixel_checked".into(),
+        });
+
+        let result = SequenceAnalyzer::new(SequenceAnalyzerConfig::default())
+            .analyze(&images, 1, "target", "L");
+        let affected = result[0]
+            .images
+            .iter()
+            .find(|image| image.image_id == 2)
+            .unwrap();
+        assert!(affected.flags.contains(&IssueCategory::SatelliteTrailRisk));
+        assert!(affected.quality_score <= 0.75);
+        assert!(affected.quality_score > 0.35);
+        assert!(affected.regrade_reason.is_none());
+        assert!(affected
+            .details
+            .as_deref()
+            .is_some_and(|details| details.contains("found no matching trail")));
     }
 
     #[test]

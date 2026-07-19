@@ -32,7 +32,10 @@ export default function SatelliteTrackOverlay({
       aria-label={`${analysis.tracks.length} predicted satellite track${analysis.tracks.length === 1 ? '' : 's'}`}
     >
       {analysis.tracks.map((track, trackIndex) => {
-        const first = track.clipped_segments[0]?.[0];
+        const aligned = track.pixel_alignment?.status === 'detected'
+          ? track.pixel_alignment.aligned_segment
+          : undefined;
+        const first = aligned?.[0] ?? track.clipped_segments[0]?.[0];
         const color = trackColor(track);
         return (
           <g key={`${track.norad_id ?? track.label}:${trackIndex}`}>
@@ -44,16 +47,29 @@ export default function SatelliteTrackOverlay({
                 x2={segment[1][0]}
                 y2={segment[1][1]}
                 stroke={color}
-                strokeWidth={track.risk_level === 'high' ? 3 : 2}
-                strokeDasharray={track.risk_level === 'low' ? '6 5' : undefined}
+                strokeWidth={track.risk_level === 'high' ? 2.5 : 2}
+                strokeDasharray={aligned || track.risk_level === 'low' ? '8 6' : undefined}
+                opacity={aligned ? 0.72 : 1}
                 vectorEffect="non-scaling-stroke"
               />
             ))}
+            {aligned && (
+              <line
+                data-testid="pixel-aligned-satellite-track"
+                x1={aligned[0][0]}
+                y1={aligned[0][1]}
+                x2={aligned[1][0]}
+                y2={aligned[1][1]}
+                stroke="#7cff6b"
+                strokeWidth={4}
+                vectorEffect="non-scaling-stroke"
+              />
+            )}
             {first && (
               <text
                 x={first[0] + 7}
                 y={first[1] - 7}
-                fill={color}
+                fill={aligned ? '#7cff6b' : color}
                 stroke="rgba(0,0,0,0.9)"
                 strokeWidth={3}
                 paintOrder="stroke"
@@ -61,7 +77,7 @@ export default function SatelliteTrackOverlay({
                 fontWeight={700}
                 vectorEffect="non-scaling-stroke"
               >
-                {track.label}
+                {track.label}{aligned ? ' · pixel match' : ''}
               </text>
             )}
           </g>

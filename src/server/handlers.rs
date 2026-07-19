@@ -191,7 +191,8 @@ pub async fn get_image_satellites(
 
 /// Ensure a pixel WCS, explicitly refresh/load orbital elements, predict all
 /// clipped tracks during this single exposure, and persist the result for
-/// later sequence grading. This is prediction, not pixel-trail detection.
+/// later sequence grading. Orbital prediction and bounded pixel alignment are
+/// returned as separate evidence.
 pub async fn predict_image_satellites(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,

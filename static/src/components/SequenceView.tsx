@@ -737,18 +737,27 @@ function SequenceImageCard({
             {quality.pointing.image_quality_evidence ? 'unsolved' : 'solve unavailable'}
           </span>
         )}
-        {quality.satellite && quality.satellite.potentially_bright_count > 0 && (
+        {quality.satellite && (quality.satellite.potentially_bright_count > 0
+          || quality.satellite.pixel_aligned_count > 0) && (
           <span
             className="sequence-image-satellite"
             style={{
-              color: quality.satellite.high_risk_count > 0
+              color: quality.satellite.pixel_aligned_high_risk_count > 0
                 ? 'var(--color-error)'
                 : 'var(--color-warning)',
               fontSize: '0.75rem',
             }}
-            title="Orbital prediction only; open the image to inspect the projected track identifiers"
+            title={quality.satellite.pixel_aligned_count > 0
+              ? 'Pixel corridor evidence matches an orbital candidate; open the image to compare the aligned and predicted paths'
+              : 'Orbital prediction only; the pixel corridor check found no matching trail'}
           >
-            satellite {quality.satellite.high_risk_count > 0 ? 'high risk' : 'possible'}
+            satellite {quality.satellite.pixel_aligned_high_risk_count > 0
+              ? 'trail matched'
+              : quality.satellite.pixel_aligned_count > 0
+                ? 'pixel match'
+                : quality.satellite.high_risk_count > 0
+                  ? 'high prediction'
+                  : 'possible'}
           </span>
         )}
         {quality.details && (

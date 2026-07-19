@@ -17,7 +17,8 @@ points at your Target Scheduler database and image folders and gives you:
   known coordinates, solve image pixels with Seiza, and overlay catalog labels,
   outlines, a coordinate grid, and the target offset directly on the frame.
 - **Satellite track identification** — project named satellite crossings over
-  an exposure on demand and surface potentially bright crossings for review.
+  an exposure, align nearby trails in the FITS pixels, and reject only when a
+  potentially bright orbital candidate has matching pixel evidence.
 - **Automatic quality screening** — spatial metrics, cross-frame photometry,
   and pixel-derived plate solutions catch occlusion, clouds, thin veils,
   errant light, off-target frames, and lost tracking, with evidence explaining
@@ -273,10 +274,11 @@ FITS file, relevant catalog, or Seiza version changes.
 Open an image's **Satellite tracks** panel and choose **Identify satellite
 tracks**, or press `T`. PSF Guard ensures the frame has a pixel WCS, loads the
 active satellite elements through `seiza-satellites 0.1`, and projects every
-crossing during the shutter-open interval. The overlay labels tracks by name
-and NORAD identity; selecting a named result opens its external satellite
-information page. Red tracks are high-risk, yellow are possible, and cyan are
-low-risk predictions.
+crossing during the shutter-open interval. It then searches a narrow corridor
+around each prediction for a matching linear trail in the FITS pixels. The
+overlay keeps risk-colored orbital paths dashed and draws detected pixel paths
+in solid green. Labels retain the candidate name and NORAD identity; selecting
+a named result opens its external satellite information page.
 
 The FITS header must contain either explicit UTC exposure bounds, a UTC
 midpoint (`DATE-AVG`) plus duration, or a UTC start plus duration, and an
@@ -288,21 +290,23 @@ already cached, they reuse it and persist per-image predictions under
 `<cache>/<db-slug>/satellites/`.
 
 Bright-trail risk is a conservative geometry/illumination heuristic based on
-sunlight, range, elevation, and path length. It is not an apparent magnitude
-and it is not a pixel detection. A possible crossing warns and lowers the
-score; a high-risk sunlit crossing proposes an `[Auto]` rejection through the
-same per-image confirmation workflow as other quality findings. See
+sunlight, range, elevation, and path length. It is not an apparent magnitude.
+Prediction alone warns and caps the score at 0.75; only a high-risk candidate
+with a pixel-aligned trail can cap the score at 0.35 and propose an `[Auto]`
+rejection through the same per-image confirmation workflow as other quality
+findings. The orbital identity remains a candidate association. See
 **[docs/SATELLITES.md](docs/SATELLITES.md)** for provenance, caching, and
 failure semantics.
 
 | Solved track overlay | Sequence grading recommendation |
 |:--:|:--:|
-| ![Predicted HULIANWANG DIGUI-167 path over a solved Hercules Globular Cluster exposure; the prediction is offset from the visible trail and is not a confirmed identification](docs/satellite-hercules-overlay.png) | ![The same Hercules frame marked as high satellite risk in Sequence Analysis](docs/satellite-hercules-sequence.png) |
+| ![California Nebula exposure with dashed orbital candidates and solid green pixel-aligned satellite trails](docs/satellite-california-overlay.png) | ![The same frame marked for a pixel-aligned bright satellite trail in Sequence Analysis](docs/satellite-california-sequence.png) |
 
-This real frame deliberately shows the evidence boundary: the prediction is
-near, but does not coincide with, the visible trail. Treat the name as a
-candidate and the grading result as conservative risk evidence, not a positive
-pixel identification.
+These real October 2025 frames validate both sides of the evidence boundary:
+visible paths align tens of sensor pixels away from their orbital projections,
+while other in-frame predictions correctly remain prediction-only. Treat the
+name as a candidate association; rejection is based on the pixel-aligned
+bright trail, not catalog presence alone.
 
 ## Quality screening
 

@@ -9,7 +9,7 @@ describe('SatellitePanel', () => {
     const status = {
       orbital_elements_cached: true,
       analysis: {
-        association: 'predicted_not_pixel_detected',
+        association: 'predicted_with_pixel_alignment',
         catalog: { source: 'cache.json', state: 'cached' },
         exposure: { duration_seconds: 120 },
         tracks: [{
@@ -17,12 +17,19 @@ describe('SatellitePanel', () => {
           norad_id: 54321,
           risk_level: 'high',
           bright_trail_risk: 0.81,
+          pixel_alignment: {
+            status: 'detected',
+            aligned_segment: [[0, 10], [100, 20]],
+          },
         }],
         risk: {
           track_count: 1,
           potentially_bright_count: 1,
           high_risk_count: 1,
           maximum_bright_trail_risk: 0.81,
+          pixel_alignment_attempted: true,
+          pixel_aligned_count: 1,
+          pixel_aligned_high_risk_count: 1,
           reject_recommended: true,
         },
       },
@@ -39,7 +46,8 @@ describe('SatellitePanel', () => {
       />
     );
 
-    expect(screen.getByText(/does not claim a trail was detected/i)).toBeInTheDocument();
+    expect(screen.getByText(/identity remains a candidate association/i)).toBeInTheDocument();
+    expect(screen.getByText(/pixel match · high/i)).toBeInTheDocument();
     expect(screen.getByText('1 high')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /STARLINK-1234/ })).toHaveAttribute(
       'href',

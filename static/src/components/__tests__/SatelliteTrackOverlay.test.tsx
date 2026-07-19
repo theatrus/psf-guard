@@ -32,4 +32,29 @@ describe('SatelliteTrackOverlay', () => {
     expect(container.querySelector('line')).toHaveAttribute('stroke', '#ff4d5a');
     expect(getByText('ISS (ZARYA) · NORAD 25544')).toBeInTheDocument();
   });
+
+  it('keeps the orbital prediction and draws pixel alignment separately', () => {
+    const alignedAnalysis = {
+      ...analysis,
+      tracks: [{
+        ...analysis.tracks[0],
+        pixel_alignment: {
+          status: 'detected',
+          aligned_segment: [[14, 25], [184, 145]],
+        },
+      }],
+    } as SatelliteAnalysis;
+    const { container, getByText } = render(
+      <SatelliteTrackOverlay
+        analysis={alignedAnalysis}
+        imageWidth={300}
+        imageHeight={200}
+      />
+    );
+
+    expect(container.querySelectorAll('line')).toHaveLength(3);
+    expect(container.querySelector('[data-testid="pixel-aligned-satellite-track"]'))
+      .toHaveAttribute('stroke', '#7cff6b');
+    expect(getByText(/pixel match/)).toBeInTheDocument();
+  });
 });

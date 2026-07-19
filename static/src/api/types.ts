@@ -137,6 +137,19 @@ export interface AstrometryAnalysis {
 
 export type BrightTrailRiskLevel = 'low' | 'possible' | 'high';
 
+export interface PixelTrailAlignment {
+  status: 'detected' | 'not_detected';
+  aligned_segment?: [[number, number], [number, number]];
+  start_normal_offset_px: number;
+  end_normal_offset_px: number;
+  mean_normal_offset_px: number;
+  angle_delta_deg: number;
+  contrast_adu: number;
+  contrast_sigma: number;
+  continuity: number;
+  search_radius_px: number;
+}
+
 export interface SatelliteTrackPrediction {
   name: string;
   label: string;
@@ -155,13 +168,15 @@ export interface SatelliteTrackPrediction {
   maximum_pixel_rate_px_per_second?: number;
   bright_trail_risk: number;
   risk_level: BrightTrailRiskLevel;
+  pixel_alignment?: PixelTrailAlignment;
 }
 
 export interface SatelliteAnalysis {
   image_id: number;
-  association: 'predicted_not_pixel_detected';
+  association: 'predicted_not_pixel_detected' | 'predicted_pixel_checked' | 'predicted_with_pixel_alignment';
   seiza_version: string;
   seiza_satellites_version: string;
+  pixel_alignment_version: number;
   image_width: number;
   image_height: number;
   exposure: {
@@ -192,8 +207,12 @@ export interface SatelliteAnalysis {
     potentially_bright_count: number;
     high_risk_count: number;
     maximum_bright_trail_risk: number;
+    pixel_alignment_attempted: boolean;
+    pixel_aligned_count: number;
+    pixel_aligned_high_risk_count: number;
     reject_recommended: boolean;
   };
+  pixel_alignment_error?: string;
   computed_at: number;
 }
 
@@ -455,8 +474,11 @@ export interface ImageQualityResult {
     potentially_bright_count: number;
     high_risk_count: number;
     maximum_bright_trail_risk: number;
+    pixel_alignment_attempted: boolean;
+    pixel_aligned_count: number;
+    pixel_aligned_high_risk_count: number;
     reject_recommended: boolean;
-    association: 'predicted_not_pixel_detected';
+    association: 'predicted_not_pixel_detected' | 'predicted_pixel_checked' | 'predicted_with_pixel_alignment';
   };
   regrade_reason?: string;
   details: string | null;

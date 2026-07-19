@@ -1,8 +1,9 @@
 //! Provenance-bearing satellite-track predictions for solved single exposures.
 //!
-//! Predictions are not pixel detections. They are persisted separately from
-//! astrometry and only become grading evidence after the caller has explicitly
-//! populated the orbital-element cache (or configured a local OMM/TLE file).
+//! Orbital predictions and constrained pixel-path alignments are persisted as
+//! separate evidence. They only become grading evidence after the caller has
+//! explicitly populated the orbital-element cache (or configured a local
+//! OMM/TLE file).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -18,6 +19,8 @@ use crate::astrometry::{
     wcs_from_response, AstrometryAnalysis, AstrometrySourceFingerprint, WcsResponse,
 };
 use crate::astrometry_headers::FitsAstrometryHeaders;
+use crate::trail_alignment::{PixelTrailAligner, PixelTrailAlignment, PIXEL_ALIGNMENT_VERSION};
+use crate::FitsImage;
 
 pub const SEIZA_SATELLITES_VERSION: &str = "0.1.0";
 
@@ -252,6 +255,10 @@ pub struct SatelliteTrackPrediction {
     /// apparent magnitude and does not claim a pixel detection.
     pub bright_trail_risk: f64,
     pub risk_level: BrightTrailRiskLevel,
+    /// Pixel evidence fitted inside a bounded corridor around this orbital
+    /// prediction. The predicted segments above remain unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pixel_alignment: Option<PixelTrailAlignment>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -260,6 +267,12 @@ pub struct SatelliteRiskSummary {
     pub potentially_bright_count: usize,
     pub high_risk_count: usize,
     pub maximum_bright_trail_risk: f64,
+    #[serde(default)]
+    pub pixel_alignment_attempted: bool,
+    #[serde(default)]
+    pub pixel_aligned_count: usize,
+    #[serde(default)]
+    pub pixel_aligned_high_risk_count: usize,
     pub reject_recommended: bool,
 }
 
@@ -269,6 +282,8 @@ pub struct SatelliteAnalysis {
     pub association: String,
     pub seiza_version: String,
     pub seiza_satellites_version: String,
+    #[serde(default)]
+    pub pixel_alignment_version: u32,
     pub source_fingerprint: AstrometrySourceFingerprint,
     /// Exact WCS used for projection; also invalidates predictions after a
     /// re-solve even when the FITS file itself did not change.
@@ -282,6 +297,8 @@ pub struct SatelliteAnalysis {
     pub stale_elements: usize,
     pub tracks: Vec<SatelliteTrackPrediction>,
     pub risk: SatelliteRiskSummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pixel_alignment_error: Option<String>,
     pub computed_at: i64,
 }
 
@@ -316,7 +333,7 @@ pub fn predict_tracks(
         )
         .map_err(|error| error.to_string())?;
 
-    let tracks = result
+    let mut tracks = result
         .tracks
         .into_iter()
         .map(|track| {
@@ -376,9 +393,25 @@ pub fn predict_tracks(
                 maximum_pixel_rate_px_per_second: track.maximum_pixel_rate_px_per_second(),
                 bright_trail_risk,
                 risk_level,
+                pixel_alignment: None,
             }
         })
         .collect::<Vec<_>>();
+    let (pixel_alignment_attempted, pixel_alignment_error) = match FitsImage::from_file(path) {
+        Ok(image) => {
+            let aligner = PixelTrailAligner::new(&image);
+            for track in &mut tracks {
+                track.pixel_alignment = Some(aligner.align_track(&track.clipped_segments));
+            }
+            (true, None)
+        }
+        Err(error) => (
+            false,
+            Some(format!(
+                "failed to load FITS pixels for trail alignment: {error}"
+            )),
+        ),
+    };
     let high_risk_count = tracks
         .iter()
         .filter(|track| track.risk_level == BrightTrailRiskLevel::High)
@@ -391,12 +424,39 @@ pub fn predict_tracks(
         .iter()
         .map(|track| track.bright_trail_risk)
         .fold(0.0, f64::max);
+    let pixel_aligned_count = tracks
+        .iter()
+        .filter(|track| {
+            track
+                .pixel_alignment
+                .as_ref()
+                .is_some_and(PixelTrailAlignment::detected)
+        })
+        .count();
+    let pixel_aligned_high_risk_count = tracks
+        .iter()
+        .filter(|track| {
+            track.risk_level == BrightTrailRiskLevel::High
+                && track
+                    .pixel_alignment
+                    .as_ref()
+                    .is_some_and(PixelTrailAlignment::detected)
+        })
+        .count();
+    let association = if pixel_aligned_count > 0 {
+        "predicted_with_pixel_alignment"
+    } else if pixel_alignment_attempted {
+        "predicted_pixel_checked"
+    } else {
+        "predicted_not_pixel_detected"
+    };
 
     Ok(SatelliteAnalysis {
         image_id,
-        association: "predicted_not_pixel_detected".to_string(),
+        association: association.to_string(),
         seiza_version: crate::astrometry::SEIZA_VERSION.to_string(),
         seiza_satellites_version: SEIZA_SATELLITES_VERSION.to_string(),
+        pixel_alignment_version: PIXEL_ALIGNMENT_VERSION,
         source_fingerprint: astrometry.source_fingerprint.clone(),
         astrometry_wcs: solution.wcs.clone(),
         image_width: solution.image_width,
@@ -411,9 +471,13 @@ pub fn predict_tracks(
             potentially_bright_count,
             high_risk_count,
             maximum_bright_trail_risk,
-            reject_recommended: high_risk_count > 0,
+            pixel_alignment_attempted,
+            pixel_aligned_count,
+            pixel_aligned_high_risk_count,
+            reject_recommended: pixel_aligned_high_risk_count > 0,
         },
         tracks,
+        pixel_alignment_error,
         computed_at: unix_now(),
     })
 }
@@ -578,7 +642,8 @@ pub fn persisted_analysis(
         && cached.source_fingerprint == astrometry.source_fingerprint
         && cached.astrometry_wcs == solution.wcs
         && cached.seiza_version == crate::astrometry::SEIZA_VERSION
-        && cached.seiza_satellites_version == SEIZA_SATELLITES_VERSION)
+        && cached.seiza_satellites_version == SEIZA_SATELLITES_VERSION
+        && cached.pixel_alignment_version == PIXEL_ALIGNMENT_VERSION)
         .then_some(cached)
 }
 
