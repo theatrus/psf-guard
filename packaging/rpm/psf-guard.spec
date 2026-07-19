@@ -11,7 +11,7 @@
 %global debug_package %{nil}
 
 Name:           psf-guard
-Version:        0.4.2
+Version:        0.5.0
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -115,6 +115,10 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Sun Jul 19 2026 Yann Ramin <github@theatr.us> - 0.5.0-1
+- Add Seiza plate solving, astrometry overlays and evidence, off-target
+  sequence grading, and astrometry-aware regrading
+
 * Sun Jul 12 2026 Yann Ramin <github@theatr.us> - 0.4.2-1
 - Update to 0.4.2: FITS reading, header parsing, and image statistics now go
   through seiza-fits, substantially speeding up every FITS-backed operation
