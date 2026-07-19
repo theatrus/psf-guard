@@ -1236,7 +1236,8 @@
   background: var(--color-bg-elevated);
 }
 
-.astrometry-toggle {
+.astrometry-toggle,
+.astrometry-solve {
   width: 100%;
   display: grid;
   grid-template-columns: auto 1fr auto;
@@ -1253,9 +1254,19 @@
 }
 
 .astrometry-toggle:hover,
+.astrometry-solve:hover:not(:disabled),
 .astrometry-toggle.active {
   border-color: var(--color-primary);
   background: var(--color-primary-alpha-10);
+}
+
+.astrometry-solve {
+  grid-template-columns: auto 1fr;
+}
+
+.astrometry-solve:disabled {
+  cursor: wait;
+  opacity: 0.72;
 }
 
 .astrometry-toggle-icon {

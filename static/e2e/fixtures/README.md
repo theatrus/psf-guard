@@ -6,13 +6,14 @@ disk. Those FITS files are too large (~117 MB each) to commit, so we host
 them as **release attachments on GitHub** and download them on demand.
 
 The suite also contains `objects.bin.gz.b64`, a compressed one-object
-`SEIZAOB4` catalog with a source-qualified M 44 contour. Global setup expands
-it into the isolated astrometry data directory and points the test registry at
-it. It also adds a standards-based, undistorted ICRS TAN WCS to the copied
-`0028` fixture's padded FITS header while leaving its real pixel payload
-unchanged. This keeps catalog capability and validation tests offline while
-exercising Seiza's real indexed-file reader and the complete v4
-FITS-to-outline-overlay path through the running PSF Guard server.
+`SEIZAOB4` catalog with a source-qualified M 44 contour, and
+`stars.bin.gz.b64`, a deterministic `SEIZAST2` Tycho-2 subset around that
+field. Global setup expands both into the isolated astrometry data directory
+and points the test registry at it. It also adds a standards-based,
+undistorted ICRS TAN WCS to the copied `0028` fixture's padded FITS header
+while leaving its real pixel payload unchanged. The untouched `0029` frame
+has only acquisition coordinates and camera geometry, so the suite exercises
+the real on-demand pixel-solving path as well as embedded-WCS rendering.
 
 ## Contents
 
@@ -24,12 +25,18 @@ FITS-to-outline-overlay path through the running PSF Guard server.
   downloads + verifies missing files.
 - `objects.bin.gz.b64` — deterministic M 44 catalog used by the astrometry API
   end-to-end tests; it does not need to be uploaded with the FITS release.
+- `stars.bin.gz.b64` — small M 44 star-catalog subset used for the real hinted
+  solve; derived from the hosted Seiza Tycho-2 catalog.
 
 Regenerate the catalog fixture from the repository root with:
 
 ```bash
 cargo run --example generate_astrometry_e2e_catalog -- /tmp/objects.bin
 gzip -n -c /tmp/objects.bin | base64 > static/e2e/fixtures/objects.bin.gz.b64
+
+cargo run --example generate_astrometry_e2e_stars -- \
+  /path/to/stars-lite-tycho2.bin /tmp/stars.bin
+gzip -n -c /tmp/stars.bin | base64 > static/e2e/fixtures/stars.bin.gz.b64
 ```
 
 The `-n` flag removes gzip timestamps and filenames so the base64 fixture is

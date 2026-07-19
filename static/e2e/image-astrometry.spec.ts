@@ -117,6 +117,63 @@ test('keeps catalog-only association distinct when a real FITS file has no WCS',
       expect.objectContaining({ stable_id: 'openngc:NGC2632', name: 'M 44' }),
     ])
   );
+
+  const solveResponse = await request.post(
+    `/api/db/${encodeURIComponent(dbId)}/images/2/astrometry`
+  );
+  expect(solveResponse.ok()).toBeTruthy();
+  const solved = await solveResponse.json();
+  expect(solved.data).toMatchObject({
+    image_id: 2,
+    status: 'solved',
+    mode: 'hinted',
+    catalog_scope: 'solved_footprint',
+    solver_provenance: {
+      seiza_version: '0.8.0',
+      detection_backend: 'mtf_u8',
+      star_catalog: { format: 'SEIZAST2' },
+    },
+    pointing: { target_in_frame: true },
+  });
+  expect(solved.data.solution.matched_stars).toBeGreaterThan(100);
+  expect(solved.data.solution.rms_arcsec).toBeLessThan(3);
+  expect(solved.data.solution.objects).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ stable_id: 'openngc:NGC2632', name: 'M 44' }),
+    ])
+  );
+
+  const cachedResponse = await request.get(
+    `/api/db/${encodeURIComponent(dbId)}/images/2/astrometry`
+  );
+  const cached = await cachedResponse.json();
+  expect(cached.data).toMatchObject({ status: 'solved', mode: 'hinted' });
+  expect(cached.data.solution.wcs.crval[0]).toBeCloseTo(
+    solved.data.solution.wcs.crval[0],
+    10
+  );
+  expect(cached.data.solution.matched_stars).toBe(
+    solved.data.solution.matched_stars
+  );
+});
+
+test('solves an ordinary acquisition frame on demand and enables the overlay', async ({
+  page,
+}) => {
+  await page.goto(`/#/detail/2?db=${encodeURIComponent(dbId)}&project=1`);
+
+  await expect(page.getByText('Expected field')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Solve field' })).toBeVisible();
+  await page.keyboard.press('o');
+  await expect(page.getByRole('button', { name: 'Solving field…' })).toBeDisabled();
+  await expect(page.getByText('Hinted solve')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('astrometry-overlay')).toBeVisible();
+  await expect(page.getByTestId('astrometry-overlay').getByText('M 44')).toBeVisible();
+
+  await page.keyboard.press('o');
+  await expect(page.getByTestId('astrometry-overlay')).toHaveCount(0);
+  await page.keyboard.press('o');
+  await expect(page.getByTestId('astrometry-overlay')).toBeVisible();
 });
 
 test('renders the real Seiza solution and keeps the overlay aligned while zooming and panning', async ({

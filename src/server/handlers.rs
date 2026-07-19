@@ -99,7 +99,72 @@ pub async fn get_image_astrometry(
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,
 ) -> Result<Json<ApiResponse<crate::astrometry::AstrometryAnalysis>>, AppError> {
-    let (image, file_only, target_name) = resolve_image_meta(&ctx, image_id)?;
+    let (fits_path, expected_target) = resolve_astrometry_input(&ctx, image_id)?;
+    let cache_dir = ctx.cache_dir_path.clone();
+    let astrometry = Arc::clone(&state.astrometry);
+    let guard = state.begin_interactive_job();
+    let analysis = tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        astrometry
+            .analyze_image(image_id, &fits_path, expected_target)
+            .map(|analysis| astrometry.with_cached_solution(&cache_dir, analysis))
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("Image astrometry task failed: {error}")))?
+    .map_err(AppError::BadRequest)?;
+    Ok(Json(ApiResponse::success(analysis)))
+}
+
+/// Decode pixels and run Seiza's hinted solver with a blind fallback. The
+/// successful WCS is persisted in the per-database cache and immediately
+/// returned in the same contract consumed by the shared overlay component.
+pub async fn solve_image_astrometry(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, image_id)): Path<(String, i32)>,
+) -> Result<Json<ApiResponse<crate::astrometry::AstrometryAnalysis>>, AppError> {
+    let _solve_guard = ctx.astrometry_solve_mutex.lock().await;
+    let (fits_path, expected_target) = resolve_astrometry_input(&ctx, image_id)?;
+    let cache_dir = ctx.cache_dir_path.clone();
+    let astrometry = Arc::clone(&state.astrometry);
+    let guard = state.begin_interactive_job();
+    let analysis = tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        let fresh = astrometry.analyze_image(image_id, &fits_path, expected_target)?;
+        let cached = astrometry.with_cached_solution(&cache_dir, fresh);
+        let (analysis, newly_solved) = if cached.solution.is_some() {
+            (cached, false)
+        } else {
+            (
+                astrometry.solve_image(image_id, &fits_path, expected_target)?,
+                true,
+            )
+        };
+        if newly_solved
+            && analysis.status == crate::astrometry::AstrometryAnalysisStatus::Solved
+            && matches!(
+                analysis.mode,
+                Some(
+                    crate::astrometry::AstrometrySolveMode::Hinted
+                        | crate::astrometry::AstrometrySolveMode::Blind
+                )
+            )
+        {
+            crate::astrometry::persist_solved_analysis(&cache_dir, &analysis)?;
+        }
+        Ok::<_, String>(analysis)
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("Plate solve task failed: {error}")))?
+    .map_err(AppError::BadRequest)?;
+    Ok(Json(ApiResponse::success(analysis)))
+}
+
+fn resolve_astrometry_input(
+    ctx: &DatabaseContext,
+    image_id: i32,
+) -> Result<(PathBuf, Option<(f64, f64)>), AppError> {
+    let (image, file_only, target_name) = resolve_image_meta(ctx, image_id)?;
     let expected_target = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
@@ -109,18 +174,12 @@ pub async fn get_image_astrometry(
             .into_iter()
             .next()
             .and_then(|target| target.ra.zip(target.dec))
+            .and_then(|(ra_hours, dec_deg)| {
+                crate::astrometry::target_scheduler_coordinates(ra_hours, dec_deg)
+            })
     };
-    let fits_path = find_fits_file(&ctx, &image, &target_name, &file_only)?;
-    let astrometry = Arc::clone(&state.astrometry);
-    let guard = state.begin_interactive_job();
-    let analysis = tokio::task::spawn_blocking(move || {
-        let _guard = guard;
-        astrometry.analyze_image(image_id, &fits_path, expected_target)
-    })
-    .await
-    .map_err(|error| AppError::InternalError(format!("Image astrometry task failed: {error}")))?
-    .map_err(AppError::BadRequest)?;
-    Ok(Json(ApiResponse::success(analysis)))
+    let fits_path = find_fits_file(ctx, &image, &target_name, &file_only)?;
+    Ok((fits_path, expected_target))
 }
 
 /// List all configured databases. Used by the frontend to populate the DB

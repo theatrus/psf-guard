@@ -172,6 +172,10 @@ pub struct DatabaseContext {
     /// True while a stale-revalidation/progress tree rebuild is scheduled or running.
     tree_rebuild_inflight: Arc<AtomicBool>,
     pub refresh_mutex: Arc<TokioMutex<()>>,
+    /// Serializes memory-heavy on-demand plate solves within one database.
+    /// A waiting duplicate re-checks the persistent cache before decoding
+    /// pixels, so rapid clicks share the first completed solution.
+    pub astrometry_solve_mutex: Arc<TokioMutex<()>>,
     /// Per-DB spatial (occlusion) metrics store + scan progress; persisted
     /// under `cache_dir` as spatial_metrics.json.
     pub spatial_metrics: crate::server::spatial_scan::SharedSpatialStore,
@@ -237,6 +241,7 @@ impl DatabaseContext {
             tree_build_lock: Arc::new(Mutex::new(())),
             tree_rebuild_inflight: Arc::new(AtomicBool::new(false)),
             refresh_mutex: Arc::new(TokioMutex::new(())),
+            astrometry_solve_mutex: Arc::new(TokioMutex::new(())),
             spatial_metrics: Arc::new(RwLock::new(Default::default())),
         })
     }
@@ -936,6 +941,7 @@ impl DatabaseContext {
             tree_build_lock: Arc::new(Mutex::new(())),
             tree_rebuild_inflight: Arc::new(AtomicBool::new(false)),
             refresh_mutex: Arc::new(TokioMutex::new(())),
+            astrometry_solve_mutex: Arc::new(TokioMutex::new(())),
             spatial_metrics: Arc::new(RwLock::new(Default::default())),
         }
     }
@@ -959,6 +965,7 @@ impl Clone for DatabaseContext {
             tree_build_lock: self.tree_build_lock.clone(),
             tree_rebuild_inflight: self.tree_rebuild_inflight.clone(),
             refresh_mutex: self.refresh_mutex.clone(),
+            astrometry_solve_mutex: self.astrometry_solve_mutex.clone(),
             spatial_metrics: self.spatial_metrics.clone(),
         }
     }

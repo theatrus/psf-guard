@@ -194,6 +194,15 @@ export const apiClient = {
     return data.data;
   },
 
+  solveImageAstrometry: async (dbId: string, imageId: number): Promise<AstrometryAnalysis> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<AstrometryAnalysis>>(
+      dbPath(dbId, `/images/${imageId}/astrometry`)
+    );
+    if (!data.data) throw new Error(data.error || 'Plate solve failed');
+    return data.data;
+  },
+
   updateImageGrade: async (
     dbId: string,
     imageId: number,

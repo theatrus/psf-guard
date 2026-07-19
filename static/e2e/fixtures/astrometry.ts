@@ -21,6 +21,13 @@ export function installAstrometryFixture(tmpBase: string): string {
     objectsPath,
     zlib.gunzipSync(Buffer.from(encodedCatalog, 'base64'))
   );
+  const encodedStars = fs
+    .readFileSync(path.join(__dirname, 'stars.bin.gz.b64'), 'utf8')
+    .trim();
+  fs.writeFileSync(
+    path.join(astrometryDir, 'stars-lite-tycho2.bin'),
+    zlib.gunzipSync(Buffer.from(encodedStars, 'base64'))
+  );
 
   fs.writeFileSync(
     path.join(tmpBase, 'registry.json'),

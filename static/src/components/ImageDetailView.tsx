@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../api/client';
 import { GradingStatus } from '../api/types';
@@ -44,6 +44,7 @@ export default function ImageDetailView({
   adjacentImageIds,
   grading,
 }: ImageDetailViewProps) {
+  const queryClient = useQueryClient();
   const [showStars, setShowStars] = useState(false);
   const [showPsf, setShowPsf] = useState(false);
   const [psfImageLoading, setPsfImageLoading] = useState(false);
@@ -157,6 +158,24 @@ export default function ImageDetailView({
     retry: false,
   });
 
+  const solveAstrometry = useMutation({
+    mutationFn: (scope: { dbId: string; imageId: number }) =>
+      apiClient.solveImageAstrometry(scope.dbId, scope.imageId),
+    onSuccess: (analysis, scope) => {
+      queryClient.setQueryData(
+        ['db', scope.dbId, 'image', scope.imageId, 'astrometry'],
+        analysis
+      );
+      if (analysis.solution && scope.dbId === dbId && scope.imageId === imageId) {
+        setShowAstrometry(true);
+        setShowStars(false);
+        setShowPsf(false);
+      }
+    },
+  });
+  const solveMatchesCurrent = solveAstrometry.variables?.dbId === dbId
+    && solveAstrometry.variables?.imageId === imageId;
+
   // Fetch star detection
   const { data: starData, isLoading: starDataLoading } = useQuery({
     queryKey: ['db', dbId, 'stars', imageId],
@@ -191,10 +210,14 @@ export default function ImageDetailView({
     }
   }, [showPsf]);
   useHotkeys('o', () => {
-    setShowAstrometry((visible) => !visible);
-    setShowStars(false);
-    setShowPsf(false);
-  }, []);
+    if (astrometry?.solution) {
+      setShowAstrometry((visible) => !visible);
+      setShowStars(false);
+      setShowPsf(false);
+    } else if (!(solveMatchesCurrent && solveAstrometry.isPending)) {
+      solveAstrometry.mutate({ dbId, imageId });
+    }
+  }, [astrometry?.solution, solveAstrometry.isPending, solveMatchesCurrent]);
   useHotkeys('z', () => setImageSize(s => s === 'screen' ? 'large' : 'screen'), []);
   useHotkeys('plus,equal', () => zoom.zoomIn(), [zoom.zoomIn]);
   useHotkeys('minus', () => zoom.zoomOut(), [zoom.zoomOut]);
@@ -621,12 +644,17 @@ export default function ImageDetailView({
               analysis={astrometry}
               isLoading={astrometryLoading}
               error={astrometryError instanceof Error ? astrometryError.message : undefined}
+              solveError={solveMatchesCurrent && solveAstrometry.error instanceof Error
+                ? solveAstrometry.error.message
+                : undefined}
+              isSolving={solveMatchesCurrent && solveAstrometry.isPending}
               overlayVisible={showAstrometry && !!astrometry?.solution}
               onToggleOverlay={() => {
                 setShowAstrometry((visible) => !visible);
                 setShowStars(false);
                 setShowPsf(false);
               }}
+              onSolve={() => solveAstrometry.mutate({ dbId, imageId })}
             />
 
             <div className="detail-actions">

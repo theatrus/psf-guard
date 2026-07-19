@@ -145,8 +145,8 @@ export default async function globalSetup() {
       (2, 'default', 'Project Beta',  '1 longer-exposure target');
 
     INSERT INTO target (Id, projectId, name, active, ra, dec) VALUES
-      (1, 1, 'Alpha M44',  1, 130.107013851174,  19.6601508517091),
-      (2, 2, 'Beta Field', 1, 230.0,  -10.0);
+      (1, 1, 'Alpha M44',  1, 8.6738009234116,  19.6601508517091),
+      (2, 2, 'Beta Field', 1, 15.3333333333333, -10.0);
   `);
 
   // Use the filenames' embedded ISO date prefix for acquireddate so the

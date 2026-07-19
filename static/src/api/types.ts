@@ -57,6 +57,7 @@ export type AstrometryAnalysisStatus = 'unavailable' | 'catalog_only' | 'solved'
 export type AstrometrySolveMode = 'embedded_wcs' | 'hinted' | 'blind';
 export type AstrometryCatalogScope =
   | 'embedded_footprint'
+  | 'solved_footprint'
   | 'estimated_field'
   | 'nearby_target';
 
@@ -110,6 +111,12 @@ export interface AstrometryAnalysis {
   catalog_scope?: AstrometryCatalogScope;
   catalog_radius_deg?: number;
   pointing?: PointingResult;
+  solver_provenance?: {
+    seiza_version: string;
+    detection_backend: string;
+    star_catalog: { name: string; path: string; format: string; size_bytes: number };
+    blind_index?: { name: string; path: string; format: string; size_bytes: number };
+  };
   source_fingerprint: {
     canonical_path: string;
     size_bytes: number;

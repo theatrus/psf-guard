@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -231,6 +231,7 @@ pub enum AstrometryAnalysisStatus {
 #[serde(rename_all = "snake_case")]
 pub enum AstrometryCatalogScope {
     EmbeddedFootprint,
+    SolvedFootprint,
     EstimatedField,
     NearbyTarget,
 }
@@ -376,6 +377,18 @@ pub struct AstrometrySolutionResponse {
     pub capture_time: Option<String>,
 }
 
+/// Reproducibility details for a pixel-derived plate solution. Object-catalog
+/// provenance remains in `catalog_signature`; this records the solver inputs
+/// that established the WCS itself.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AstrometrySolverProvenance {
+    pub seiza_version: String,
+    pub detection_backend: String,
+    pub star_catalog: AstrometryCatalogFileSignature,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blind_index: Option<AstrometryCatalogFileSignature>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PointingResult {
     pub expected_ra_deg: f64,
@@ -413,9 +426,26 @@ pub struct AstrometryAnalysis {
     pub source_fingerprint: AstrometrySourceFingerprint,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_signature: Option<AstrometryCatalogSignature>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver_provenance: Option<AstrometrySolverProvenance>,
     pub computed_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// Target Scheduler stores right ascension as decimal hours, while every
+/// Seiza and overlay contract uses ICRS degrees. Keep the conversion at the
+/// database boundary so a value such as `16.7` can never be mistaken for
+/// sixteen degrees by pointing/drift analysis.
+pub fn target_scheduler_coordinates(ra_hours: f64, dec_deg: f64) -> Option<(f64, f64)> {
+    if !ra_hours.is_finite()
+        || !dec_deg.is_finite()
+        || !(0.0..=24.0).contains(&ra_hours)
+        || !(-90.0..=90.0).contains(&dec_deg)
+    {
+        return None;
+    }
+    Some(((ra_hours * 15.0).rem_euclid(360.0), dec_deg))
 }
 
 type ObjectCatalog = seiza::objects::ObjectCatalog;
@@ -806,11 +836,305 @@ impl AstrometryContext {
             pointing,
             source_fingerprint: fingerprint,
             catalog_signature: signature,
+            solver_provenance: None,
             computed_at: std::time::SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |duration| duration.as_secs() as i64),
             error: analysis_error,
         })
+    }
+
+    /// Return a persisted pixel-derived solution when it still describes the
+    /// same source file, object catalog, Seiza version, and star catalog.
+    /// Embedded FITS WCS always wins because it is part of the source itself.
+    pub fn with_cached_solution(
+        &self,
+        cache_dir: &Path,
+        fresh: AstrometryAnalysis,
+    ) -> AstrometryAnalysis {
+        if fresh.solution.is_some() {
+            return fresh;
+        }
+        let path = astrometry_cache_path(cache_dir, fresh.image_id);
+        let Ok(bytes) = std::fs::read(&path) else {
+            return fresh;
+        };
+        let Ok(mut cached) = serde_json::from_slice::<AstrometryAnalysis>(&bytes) else {
+            tracing::warn!("Ignoring unreadable astrometry cache {}", path.display());
+            return fresh;
+        };
+        let Some(provenance) = cached.solver_provenance.as_ref() else {
+            return fresh;
+        };
+        let current_stars = match self.load_star_catalog() {
+            Ok(loaded) => catalog_file_signature("stars", &loaded.fingerprint),
+            Err(_) => return fresh,
+        };
+        let valid = cached.status == AstrometryAnalysisStatus::Solved
+            && cached.image_id == fresh.image_id
+            && matches!(
+                cached.mode,
+                Some(AstrometrySolveMode::Hinted | AstrometrySolveMode::Blind)
+            )
+            && cached.solution.is_some()
+            && cached.source_fingerprint == fresh.source_fingerprint
+            && cached.catalog_signature == fresh.catalog_signature
+            && provenance.seiza_version == SEIZA_VERSION
+            && provenance.star_catalog == current_stars;
+        if !valid {
+            return fresh;
+        }
+
+        cached.image_id = fresh.image_id;
+        cached.hint_source = fresh.hint_source;
+        cached.expected_source = fresh.expected_source;
+        cached.source_fingerprint = fresh.source_fingerprint;
+        cached.catalog_signature = fresh.catalog_signature;
+        cached.pointing = cached
+            .solution
+            .as_ref()
+            .zip(cached.expected_source.as_ref())
+            .map(|(solution, expected)| {
+                let wcs = wcs_from_response(&solution.wcs);
+                pointing_result(solution, &wcs, (expected.ra_deg, expected.dec_deg))
+            });
+        cached
+    }
+
+    /// Decode an ordinary acquisition FITS image, detect stars, run a hinted
+    /// solve when coordinates and scale are available, then fall back to the
+    /// configured blind index. A compact MTF/u8 detection pass is attempted
+    /// first; linear f32 detection is the compatibility fallback used by the
+    /// Seiza CLI for difficult fields.
+    pub fn solve_image(
+        &self,
+        image_id: i32,
+        path: &Path,
+        expected_target: Option<(f64, f64)>,
+    ) -> Result<AstrometryAnalysis, String> {
+        let mut analysis = self.analyze_image(image_id, path, expected_target)?;
+        if analysis.solution.is_some() {
+            return Ok(analysis);
+        }
+
+        let headers = crate::astrometry_headers::FitsAstrometryHeaders::from_path(path)
+            .map_err(|error| format!("failed to read FITS astrometry headers: {error}"))?;
+        let hint = analysis
+            .hint_source
+            .as_ref()
+            .or(analysis.expected_source.as_ref())
+            .map(|source| (source.ra_deg, source.dec_deg));
+        let scale = headers
+            .pixel_scale_arcsec_per_pixel
+            .as_ref()
+            .map(|value| value.value);
+        let stars_catalog = match self.load_star_catalog() {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                return Ok(failed_analysis(
+                    analysis,
+                    format!("star catalog unavailable: {error}"),
+                ));
+            }
+        };
+
+        let (primary_stars, mut dimensions) = match detect_fits_stars(path, DetectionPass::MtfU8) {
+            Ok(result) => result,
+            Err(error) => return Ok(failed_analysis(analysis, error)),
+        };
+        let primary = self.try_solve_stars(
+            &primary_stars,
+            &stars_catalog.value,
+            hint,
+            scale,
+            dimensions,
+        );
+        let (mode, solved, blind_index, detection_backend) = match primary {
+            Ok((mode, solved, blind_index)) => (mode, solved, blind_index, "mtf_u8".to_string()),
+            Err(primary_error) => {
+                let (fallback_stars, fallback_dimensions) =
+                    match detect_fits_stars(path, DetectionPass::LinearF32) {
+                        Ok(result) => result,
+                        Err(error) => {
+                            return Ok(failed_analysis(
+                                analysis,
+                                format!("{primary_error}; f32 detection failed: {error}"),
+                            ));
+                        }
+                    };
+                match self.try_solve_stars(
+                    &fallback_stars,
+                    &stars_catalog.value,
+                    hint,
+                    scale,
+                    fallback_dimensions,
+                ) {
+                    Ok((mode, solved, blind_index)) => {
+                        dimensions = fallback_dimensions;
+                        (mode, solved, blind_index, "linear_f32".to_string())
+                    }
+                    Err(fallback_error) => {
+                        return Ok(failed_analysis(
+                            analysis,
+                            format!(
+                                "u8 solve failed: {primary_error}; f32 solve failed: {fallback_error}"
+                            ),
+                        ));
+                    }
+                }
+            }
+        };
+
+        let provenance = AstrometrySolverProvenance {
+            seiza_version: SEIZA_VERSION.to_string(),
+            detection_backend,
+            star_catalog: catalog_file_signature("stars", &stars_catalog.fingerprint),
+            blind_index: blind_index
+                .as_ref()
+                .map(|loaded| catalog_file_signature("blind_index", &loaded.fingerprint)),
+        };
+        self.apply_pixel_solution(
+            &mut analysis,
+            &solved,
+            dimensions,
+            PixelSolutionMetadata {
+                mode,
+                provenance,
+                capture_time: headers
+                    .capture_time
+                    .as_ref()
+                    .map(|value| value.value.clone()),
+                expected_target,
+            },
+        );
+        Ok(analysis)
+    }
+
+    fn try_solve_stars(
+        &self,
+        stars: &[seiza::DetectedStar],
+        catalog: &TileCatalog,
+        hint: Option<(f64, f64)>,
+        scale: Option<f64>,
+        dimensions: (u32, u32),
+    ) -> Result<
+        (
+            AstrometrySolveMode,
+            seiza::solve::Solution,
+            Option<LoadedResource<BlindIndex>>,
+        ),
+        String,
+    > {
+        let mut hinted_error = None;
+        if let (Some(center), Some(scale_arcsec_px)) = (hint, scale) {
+            let solve_hint = seiza::solve::SolveHint {
+                center,
+                radius_deg: 2.0,
+                scale_arcsec_px,
+                scale_tolerance: 0.25,
+                sip_order: 0,
+            };
+            match seiza::solve::solve(stars, catalog, &solve_hint, dimensions) {
+                Ok(solution) => {
+                    return Ok((AstrometrySolveMode::Hinted, solution, None));
+                }
+                Err(error) => hinted_error = Some(error.to_string()),
+            }
+        }
+
+        let blind_index = self.load_blind_index().map_err(|error| {
+            if let Some(hinted_error) = hinted_error.as_deref() {
+                format!("hinted solve failed: {hinted_error}; blind index unavailable: {error}")
+            } else {
+                format!("blind index unavailable: {error}")
+            }
+        })?;
+        let mut params = seiza::blind::BlindParams {
+            index_mag_limit: blind_index.value.index_mag_limit(),
+            max_pattern_deg: blind_index.value.max_pattern_deg(),
+            ..Default::default()
+        };
+        if let Some(scale) = scale {
+            params.min_scale_arcsec_px = (scale * 0.5).max(0.01);
+            params.max_scale_arcsec_px = scale * 1.5;
+        }
+        seiza::blind::solve_blind(stars, catalog, &blind_index.value, &params, dimensions)
+            .map(|solution| (AstrometrySolveMode::Blind, solution, Some(blind_index)))
+            .map_err(|error| {
+                if let Some(hinted_error) = hinted_error {
+                    format!("hinted solve failed: {hinted_error}; blind solve failed: {error}")
+                } else {
+                    format!("blind solve failed: {error}")
+                }
+            })
+    }
+
+    fn apply_pixel_solution(
+        &self,
+        analysis: &mut AstrometryAnalysis,
+        solved: &seiza::solve::Solution,
+        dimensions: (u32, u32),
+        metadata: PixelSolutionMetadata,
+    ) {
+        use seiza::objects::{ObjectQuery, SkyRegion};
+
+        let mut hits = Vec::new();
+        let mut annotation_error = None;
+        let catalog = match self.load_object_catalog() {
+            Ok(catalog) => Some(catalog),
+            Err(error) => {
+                annotation_error = Some(format!("object catalog unavailable: {error}"));
+                None
+            }
+        };
+        if let Some(catalog) = catalog.as_ref() {
+            let region = SkyRegion::Polygon {
+                vertices: solved.wcs.footprint(dimensions.0, dimensions.1).to_vec(),
+            };
+            match catalog.value.query_region(
+                &region,
+                &ObjectQuery {
+                    limit: Some(250),
+                    ..ObjectQuery::default()
+                },
+            ) {
+                Ok(found) => {
+                    hits = found;
+                    analysis.catalog_hits =
+                        hits.iter().take(100).map(catalog_hit_response).collect();
+                }
+                Err(error) => annotation_error = Some(error.to_string()),
+            }
+            analysis.catalog_signature = Some(object_catalog_signature(&catalog.fingerprint));
+        }
+        let catalog_version = analysis
+            .catalog_signature
+            .as_ref()
+            .and_then(|signature| signature.files.first())
+            .map(|file| file.format.clone());
+        let solution = solution_response(
+            &solved.wcs,
+            dimensions,
+            solved.matched_stars,
+            solved.rms_arcsec,
+            SolutionProjection {
+                catalog: catalog.as_ref().map(|loaded| loaded.value.as_ref()),
+                hits: &hits,
+                catalog_version,
+                capture_time: metadata.capture_time,
+            },
+        );
+        analysis.pointing = metadata
+            .expected_target
+            .map(|expected| pointing_result(&solution, &solved.wcs, expected));
+        analysis.solution = Some(solution);
+        analysis.status = AstrometryAnalysisStatus::Solved;
+        analysis.mode = Some(metadata.mode);
+        analysis.catalog_scope = Some(AstrometryCatalogScope::SolvedFootprint);
+        analysis.catalog_radius_deg = None;
+        analysis.solver_provenance = Some(metadata.provenance);
+        analysis.computed_at = unix_now();
+        analysis.error = annotation_error;
     }
 
     /// Open configured files lazily and report resource readiness separately
@@ -852,16 +1176,15 @@ impl AstrometryContext {
                 .map(|loaded| loaded.fingerprint),
         );
 
-        // Resource availability is intentionally not enough to enable a
-        // feature flag. Consumers use this object to decide what PSF Guard can
-        // execute today; future search, solve, and dynamic-annotation paths
-        // must opt in only when their API implementation is shipped.
+        // Feature flags describe executable PSF Guard paths, not merely files
+        // found on disk. Hinted solving needs the star tiles; blind solving
+        // additionally needs the compatible pattern index.
         let features = AstrometryFeatures {
             object_association: objects.available(),
             object_name_search: false,
             stellar_name_search: false,
-            hinted_solve: false,
-            blind_solve: false,
+            hinted_solve: stars.available(),
+            blind_solve: stars.available() && blind_index.available(),
             transient_annotations: false,
             minor_body_annotations: false,
         };
@@ -951,6 +1274,200 @@ impl AstrometryContext {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum DetectionPass {
+    MtfU8,
+    LinearF32,
+}
+
+struct PixelSolutionMetadata {
+    mode: AstrometrySolveMode,
+    provenance: AstrometrySolverProvenance,
+    capture_time: Option<String>,
+    expected_target: Option<(f64, f64)>,
+}
+
+struct SolutionProjection<'a> {
+    catalog: Option<&'a ObjectCatalog>,
+    hits: &'a [seiza::objects::ObjectHit],
+    catalog_version: Option<String>,
+    capture_time: Option<String>,
+}
+
+fn detect_fits_stars(
+    path: &Path,
+    pass: DetectionPass,
+) -> Result<(Vec<seiza::DetectedStar>, (u32, u32)), String> {
+    let fits = seiza_fits::FitsImage::open(path)
+        .map_err(|error| format!("failed to decode FITS pixels: {error}"))?;
+    let width = u32::try_from(fits.width)
+        .map_err(|_| "FITS width exceeds supported dimensions".to_string())?;
+    let height = u32::try_from(fits.height)
+        .map_err(|_| "FITS height exceeds supported dimensions".to_string())?;
+    let config = seiza::DetectConfig {
+        backend: match pass {
+            DetectionPass::MtfU8 => seiza::DetectBackend::U8,
+            DetectionPass::LinearF32 => seiza::DetectBackend::F32,
+        },
+        max_stars: 300,
+        ..Default::default()
+    };
+    let stars = match pass {
+        DetectionPass::MtfU8 => {
+            let pixels = fits.stretch_to_u8(&seiza_fits::StretchParams::default());
+            drop(fits);
+            let image = image::GrayImage::from_raw(width, height, pixels)
+                .ok_or_else(|| "FITS dimensions do not match decoded pixels".to_string())?;
+            seiza::detect_stars(&image::DynamicImage::ImageLuma8(image), &config)
+        }
+        DetectionPass::LinearF32 => {
+            let pixels = fits.to_luma_f32();
+            drop(fits);
+            seiza::detect_stars_luma_f32(&pixels, width, height, &config)
+        }
+    };
+    Ok((stars, (width, height)))
+}
+
+fn solution_response(
+    wcs: &seiza::Wcs,
+    dimensions: (u32, u32),
+    matched_stars: usize,
+    rms_arcsec: f64,
+    projection: SolutionProjection<'_>,
+) -> AstrometrySolutionResponse {
+    let prominence = projection
+        .hits
+        .iter()
+        .map(|hit| (sky_object_key(&hit.object), hit.predicted_prominence))
+        .collect::<HashMap<_, _>>();
+    let mut objects = if let Some(catalog) = projection.catalog {
+        catalog
+            .objects_in_footprint(wcs, dimensions)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|placed| {
+                let rank = prominence
+                    .get(&sky_object_key(&placed.object))
+                    .copied()
+                    .unwrap_or(0.0);
+                overlay_object_response(placed, Some(rank), catalog, wcs)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    objects.sort_by(|left, right| {
+        right
+            .prominence
+            .unwrap_or(0.0)
+            .total_cmp(&left.prominence.unwrap_or(0.0))
+    });
+    objects.truncate(500);
+
+    let center = wcs.pixel_to_world(
+        (f64::from(dimensions.0) - 1.0) / 2.0,
+        (f64::from(dimensions.1) - 1.0) / 2.0,
+    );
+    AstrometrySolutionResponse {
+        center_ra_deg: center.0,
+        center_dec_deg: center.1,
+        pixel_scale_arcsec_per_pixel: wcs.scale_arcsec_per_px(),
+        matched_stars,
+        rms_arcsec,
+        image_width: dimensions.0,
+        image_height: dimensions.1,
+        wcs: WcsResponse {
+            crval: [wcs.crval.0, wcs.crval.1],
+            crpix: [wcs.crpix.0, wcs.crpix.1],
+            cd: wcs.cd,
+            ctype: ["RA---TAN".to_string(), "DEC--TAN".to_string()],
+            cunit: ["deg".to_string(), "deg".to_string()],
+            radesys: "ICRS".to_string(),
+            equinox: 2000.0,
+        },
+        footprint: wcs
+            .footprint(dimensions.0, dimensions.1)
+            .into_iter()
+            .map(|(ra, dec)| [ra, dec])
+            .collect(),
+        objects,
+        catalog_version: projection.catalog_version,
+        capture_time: projection.capture_time,
+    }
+}
+
+fn wcs_from_response(response: &WcsResponse) -> seiza::Wcs {
+    seiza::Wcs {
+        crval: (response.crval[0], response.crval[1]),
+        crpix: (response.crpix[0], response.crpix[1]),
+        cd: response.cd,
+        sip: None,
+    }
+}
+
+fn failed_analysis(mut analysis: AstrometryAnalysis, error: String) -> AstrometryAnalysis {
+    analysis.status = AstrometryAnalysisStatus::Failed;
+    analysis.mode = None;
+    analysis.solution = None;
+    analysis.pointing = None;
+    analysis.solver_provenance = None;
+    analysis.computed_at = unix_now();
+    analysis.error = Some(error);
+    analysis
+}
+
+fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs() as i64)
+}
+
+fn astrometry_cache_path(cache_dir: &Path, image_id: i32) -> PathBuf {
+    cache_dir
+        .join("astrometry")
+        .join(format!("{image_id}.json"))
+}
+
+/// Persist a successful pixel-derived solution below the per-database cache
+/// directory. Embedded WCS is already durable in the FITS file and is not
+/// duplicated here.
+pub fn persist_solved_analysis(
+    cache_dir: &Path,
+    analysis: &AstrometryAnalysis,
+) -> Result<(), String> {
+    if analysis.status != AstrometryAnalysisStatus::Solved
+        || !matches!(
+            analysis.mode,
+            Some(AstrometrySolveMode::Hinted | AstrometrySolveMode::Blind)
+        )
+        || analysis.solution.is_none()
+    {
+        return Err("only pixel-derived solved analyses can be persisted".to_string());
+    }
+    static CACHE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let path = astrometry_cache_path(cache_dir, analysis.image_id);
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("invalid astrometry cache path {}", path.display()))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+    let temporary = path.with_extension(format!(
+        "json.tmp.{}.{}",
+        std::process::id(),
+        CACHE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let bytes = serde_json::to_vec(analysis)
+        .map_err(|error| format!("failed to serialize astrometry solution: {error}"))?;
+    let result = std::fs::write(&temporary, bytes)
+        .and_then(|_| std::fs::rename(&temporary, &path))
+        .map_err(|error| format!("failed to persist {}: {error}", path.display()));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
 fn source_fingerprint(path: &Path) -> Result<AstrometrySourceFingerprint, String> {
     let canonical = path
         .canonicalize()
@@ -969,18 +1486,25 @@ fn source_fingerprint(path: &Path) -> Result<AstrometrySourceFingerprint, String
 }
 
 fn object_catalog_signature(fingerprint: &ResourceFingerprint) -> AstrometryCatalogSignature {
-    let (modified_unix_seconds, modified_subsec_nanos) = unix_time_parts(fingerprint.modified);
     AstrometryCatalogSignature {
         bundle_version: None,
-        files: vec![AstrometryCatalogFileSignature {
-            name: "objects".to_string(),
-            path: fingerprint.canonical_path.to_string_lossy().into_owned(),
-            format: fingerprint.format(),
-            size_bytes: fingerprint.size_bytes,
-            modified_unix_seconds,
-            modified_subsec_nanos,
-            sha256: None,
-        }],
+        files: vec![catalog_file_signature("objects", fingerprint)],
+    }
+}
+
+fn catalog_file_signature(
+    name: &str,
+    fingerprint: &ResourceFingerprint,
+) -> AstrometryCatalogFileSignature {
+    let (modified_unix_seconds, modified_subsec_nanos) = unix_time_parts(fingerprint.modified);
+    AstrometryCatalogFileSignature {
+        name: name.to_string(),
+        path: fingerprint.canonical_path.to_string_lossy().into_owned(),
+        format: fingerprint.format(),
+        size_bytes: fingerprint.size_bytes,
+        modified_unix_seconds,
+        modified_subsec_nanos,
+        sha256: None,
     }
 }
 
@@ -1784,6 +2308,7 @@ mod tests {
                 modified_subsec_nanos: 9,
             },
             catalog_signature: None,
+            solver_provenance: None,
             computed_at: 9999,
             error: None,
         };
@@ -1793,5 +2318,15 @@ mod tests {
         assert_eq!(json["hint_source"]["source"], "fits_header");
         assert_eq!(json["expected_source"]["source"], "target_scheduler");
         assert!(json.get("solution").is_none());
+    }
+
+    #[test]
+    fn target_scheduler_ra_hours_are_converted_at_the_boundary() {
+        let (ra_deg, dec_deg) = target_scheduler_coordinates(16.694898333333335, 36.46131943888889)
+            .expect("valid Target Scheduler coordinates");
+        assert!((ra_deg - 250.423475).abs() < 1e-9);
+        assert!((dec_deg - 36.46131943888889).abs() < 1e-12);
+        assert_eq!(target_scheduler_coordinates(24.0, 0.0), Some((0.0, 0.0)));
+        assert_eq!(target_scheduler_coordinates(25.0, 0.0), None);
     }
 }

@@ -63,6 +63,29 @@ the platform config location (`<config>/psf-guard/config.json` by default).
 
 Implementation tracker and design rationale: [MULTI_DB_PLAN.md](./MULTI_DB_PLAN.md).
 
+### Seiza astrometry and sky overlays (2026-07)
+- **Header/catalog path**: `GET /api/db/{db_id}/images/{image_id}/astrometry`
+  reads only FITS headers, performs coordinate-only object association, and
+  returns embedded TAN WCS geometry when present. It also reloads a valid
+  persisted pixel-derived solution.
+- **On-demand solve**: `POST` to the same endpoint decodes pixels, detects
+  stars with Seiza's MTF/u8 path (linear f32 fallback), tries a 2° hinted
+  solve when FITS/mount coordinates and scale exist, then uses the blind index
+  when installed. One memory-heavy solve runs per database at a time.
+- **Persistence**: hinted/blind results are written atomically below
+  `<cache_root>/<db_slug>/astrometry/<image_id>.json`. Source-file,
+  object-catalog, Seiza-version, and star-catalog fingerprints invalidate
+  stale entries; embedded WCS remains authoritative.
+- **Coordinates**: Target Scheduler stores RA in decimal hours. Convert it to
+  ICRS degrees at the astrometry boundary before computing target offsets or
+  drift.
+- **Frontend**: coordinate-only results expose `Solve field`; `O` starts the
+  solve when needed and otherwise toggles the `@seiza/astro-overlay` renderer.
+  Successful solves automatically enable the overlay.
+- **Tests**: `static/e2e/image-astrometry.spec.ts` uses an untouched real FITS
+  acquisition frame plus a checked-in Tycho-2 subset to require a real solve,
+  persistent reload, rendered object overlay, and keyboard toggling.
+
 ### Out-of-tree reject archive (2026-05)
 - **Command**: `psf-guard move-rejects --db <slug>` (multi-DB-aware via the
   registry). Moves files marked `gradingStatus = 2` to
