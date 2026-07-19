@@ -13,6 +13,9 @@ points at your Target Scheduler database and image folders and gives you:
 
 - **A fast visual grader** — web UI or desktop app with auto-stretched
   previews, zoom/pan, side-by-side comparison, batch operations, and undo.
+- **Sky context and on-demand plate solving** — identify expected objects from
+  known coordinates, solve image pixels with Seiza, and overlay catalog labels,
+  outlines, a coordinate grid, and the target offset directly on the frame.
 - **Automatic quality screening** — grid-based spatial metrics and cross-frame
   differential photometry that catch occlusion, small clouds, thin veils, and
   errant light, with annotated diagnostic images explaining every verdict.
@@ -179,6 +182,88 @@ Grades are written straight to the Target Scheduler database, so the
 scheduler's acquired-image counts stay accurate and rejected frames get
 re-shot.
 
+## Sky context, plate solving, and overlays
+
+Open an image and the **Sky context** panel immediately reads its FITS headers
+and Target Scheduler coordinates. With `objects.bin` installed, PSF Guard can
+list catalog objects expected near those coordinates without decoding pixels
+or running a solver. Treat that initial list as pointing context, not proof
+that each object is visible in the image.
+
+![A Seiza-solved Cocoon Nebula frame with coordinate grid, catalog labels and outlines](docs/sky-context.jpg)
+
+When the FITS file already contains a supported TAN WCS, the exact overlay is
+available immediately. Otherwise choose **Solve field** or press `O`. PSF Guard
+detects stars in the image, tries a fast hinted solve from the FITS/mount
+coordinates and pixel scale, then falls back to the blind index when one is
+installed. A successful solve turns the overlay on and reports the solved
+center, scale, solve mode, and target offset. Once a solution exists, `O`
+toggles the overlay instead of solving again.
+
+### Install the Seiza catalogs
+
+PSF Guard embeds Seiza 0.8.0's solver but does not bundle its multi-gigabyte
+catalog data. Install the `seiza` CLI from the
+[Seiza releases](https://github.com/theatrus/seiza/releases) or with
+`cargo install seiza-cli --version 0.8.0`, then download a bundle once:
+
+```bash
+# Recommended: choose a bundle interactively and install it in Seiza's
+# platform-standard catalog directory.
+seiza setup
+
+# Or download the complete prebuilt bundle to a directory you control.
+seiza download-data prebuilt --output /path/to/seiza-data
+```
+
+Catalog downloads are versioned and SHA-256 verified. PSF Guard uses Seiza's
+standard discovery, so data installed by `seiza setup` is found automatically.
+You can instead set `SEIZA_CATALOG_DIR` to the downloaded directory, or merge
+this top-level fragment into PSF Guard's JSON registry:
+
+```json
+"astrometry": {
+  "data_dir": "/path/to/seiza-data"
+}
+```
+
+The registry is `%APPDATA%\psf-guard\config.json` on Windows,
+`~/Library/Application Support/psf-guard/config.json` on macOS, and
+`~/.config/psf-guard/config.json` on Linux. Keep the existing `databases`
+entries and restart PSF Guard after changing the catalog location.
+
+For Docker, mount the same directory read-only and point Seiza at the mount:
+
+```bash
+docker run -d -p 3000:3000 \
+  -e SEIZA_CATALOG_DIR=/catalogs \
+  -v /path/to/seiza-data:/catalogs:ro \
+  -v /path/to/schedulerdb.sqlite:/data/database.sqlite \
+  -v /path/to/images:/images:ro \
+  ghcr.io/theatrus/psf-guard:latest
+```
+
+The prebuilt bundle includes everything. If you install individual files,
+their roles are distinct:
+
+| File | Enables |
+|------|---------|
+| `objects.bin` | Coordinate-only object association plus solved labels and catalog outlines |
+| `stars-lite-tycho2.bin`, `stars-gaia.bin`, or `stars-deep-gaia17.bin` | Hinted plate solving; Seiza selects the deepest installed catalog |
+| `blind-gaia16.idx` | Blind fallback when the pointing hint is absent or stale |
+
+Check what the running process discovered before troubleshooting an image:
+
+```bash
+curl http://localhost:3000/api/astrometry/capabilities
+curl -X POST http://localhost:3000/api/astrometry/catalogs/validate
+```
+
+The validation call intentionally reads every configured catalog and can take
+time. Hinted/blind solutions are cached per database under
+`<cache>/<db-slug>/astrometry/`; PSF Guard invalidates them when the source
+FITS file, relevant catalog, or Seiza version changes.
+
 ## Quality screening
 
 Screen light frames for occlusion, clouds, veils, and stray light — the
@@ -320,9 +405,11 @@ The default N.I.N.A. scheduler database on Windows lives at
 
 ### Seiza catalogs and plate solving
 
-PSF Guard uses Seiza's standard catalog discovery. A complete catalog bundle
-can also be selected explicitly with the top-level `astrometry.data_dir` in
-the JSON registry:
+See [Sky context, plate solving, and overlays](#sky-context-plate-solving-and-overlays)
+for installation, Docker setup, resource roles, and UI usage. PSF Guard uses
+Seiza's standard catalog discovery; a complete catalog bundle can also be
+selected explicitly with the top-level `astrometry.data_dir` in the JSON
+registry:
 
 ```json
 {
