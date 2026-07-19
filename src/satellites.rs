@@ -433,10 +433,6 @@ fn single_exposure(
         "satellite prediction needs FITS site coordinates (SITELAT/SITELONG or OBSGEO-B/OBSGEO-L)"
             .to_string()
     })?;
-    let start = headers.capture_time.as_ref().ok_or_else(|| {
-        "satellite prediction needs a FITS shutter-open time (DATE-BEG or DATE-OBS)".to_string()
-    })?;
-    let start_utc = UtcTimestamp::parse(&start.value).map_err(|error| error.to_string())?;
     let observer_location = ObserverLocation::geodetic(
         observer.value.latitude_deg,
         observer.value.longitude_deg,
@@ -444,8 +440,11 @@ fn single_exposure(
     )
     .map_err(|error| error.to_string())?;
 
-    let (exposure, provenance, mut keywords) = if let Some(end) = headers.exposure_end_time.as_ref()
-    {
+    let (exposure, provenance, mut keywords) = if let (Some(start), Some(end)) = (
+        headers.capture_time.as_ref(),
+        headers.exposure_end_time.as_ref(),
+    ) {
+        let start_utc = UtcTimestamp::parse(&start.value).map_err(|error| error.to_string())?;
         let end_utc = UtcTimestamp::parse(&end.value).map_err(|error| error.to_string())?;
         let exposure = SingleExposure::new(
             start_utc,
@@ -457,7 +456,33 @@ fn single_exposure(
         let mut keywords = start.sources.clone();
         keywords.extend(end.sources.clone());
         (exposure, "fits_bounds", keywords)
+    } else if let (Some(midpoint), Some(duration)) = (
+        headers.exposure_mid_time.as_ref(),
+        headers.exposure_seconds.as_ref(),
+    ) {
+        let midpoint_utc =
+            UtcTimestamp::parse(&midpoint.value).map_err(|error| error.to_string())?;
+        let half_duration = duration.value / 2.0;
+        let exposure = SingleExposure::new(
+            midpoint_utc
+                .add_seconds(-half_duration)
+                .map_err(|error| error.to_string())?,
+            midpoint_utc
+                .add_seconds(half_duration)
+                .map_err(|error| error.to_string())?,
+            observer_location,
+            ExposureProvenance::FitsDateObsAndExposure,
+        )
+        .map_err(|error| error.to_string())?;
+        let mut keywords = midpoint.sources.clone();
+        keywords.extend(duration.sources.clone());
+        (exposure, "fits_date_avg_and_exposure", keywords)
     } else {
+        let start = headers.capture_time.as_ref().ok_or_else(|| {
+            "satellite prediction needs FITS exposure timing (DATE-BEG/DATE-OBS or DATE-AVG)"
+                .to_string()
+        })?;
+        let start_utc = UtcTimestamp::parse(&start.value).map_err(|error| error.to_string())?;
         let duration = headers.exposure_seconds.as_ref().ok_or_else(|| {
             "satellite prediction needs FITS EXPTIME/EXPOSURE when DATE-END is absent".to_string()
         })?;
@@ -566,6 +591,7 @@ fn unix_now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use seiza_fits::HeaderValue;
 
     #[test]
     fn risk_requires_sunlight_and_favors_close_long_tracks() {
@@ -574,5 +600,32 @@ mod tests {
         let distant = bright_trail_risk(1.0, 30_000.0, 70.0, 500.0);
         assert!(close > 0.9);
         assert!(distant < close);
+    }
+
+    #[test]
+    fn date_avg_centers_the_exposure_when_no_explicit_end_exists() {
+        let headers = FitsAstrometryHeaders::from_headers(&[
+            (
+                "DATE-OBS".to_string(),
+                HeaderValue::String("2026-05-21T07:13:14.8423096".into()),
+            ),
+            (
+                "DATE-AVG".to_string(),
+                HeaderValue::String("2026-05-21T07:13:45.3551363".into()),
+            ),
+            ("EXPTIME".to_string(), HeaderValue::Float(60.0)),
+            ("SITELAT".to_string(), HeaderValue::Float(35.0)),
+            ("SITELONG".to_string(), HeaderValue::Float(-105.0)),
+            ("SITEELEV".to_string(), HeaderValue::Float(100.0)),
+        ]);
+
+        let (_, context) = single_exposure(&headers).unwrap();
+        assert_eq!(context.provenance, "fits_date_avg_and_exposure");
+        assert_eq!(context.start_utc, "2026-05-21T07:13:15.355136Z");
+        assert_eq!(context.end_utc, "2026-05-21T07:14:15.355136Z");
+        assert_eq!(
+            context.header_keywords,
+            ["DATE-AVG", "EXPTIME", "SITEELEV", "SITELAT", "SITELONG"]
+        );
     }
 }

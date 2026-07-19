@@ -1223,11 +1223,21 @@
   font-size: 0.72rem;
 }
 
-.satellite-track-fact > span:first-child {
+.satellite-track-fact > :first-child {
   overflow: hidden;
   color: var(--color-text-primary);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.satellite-info-link {
+  text-decoration-color: var(--color-primary);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+.satellite-info-link:hover {
+  color: var(--color-primary);
 }
 
 .satellite-risk-high {

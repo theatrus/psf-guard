@@ -274,13 +274,15 @@ Open an image's **Satellite tracks** panel and choose **Identify satellite
 tracks**, or press `T`. PSF Guard ensures the frame has a pixel WCS, loads the
 active satellite elements through `seiza-satellites 0.1`, and projects every
 crossing during the shutter-open interval. The overlay labels tracks by name
-and NORAD identity; red tracks are high-risk, yellow are possible, and cyan
-are low-risk predictions.
+and NORAD identity; selecting a named result opens its external satellite
+information page. Red tracks are high-risk, yellow are possible, and cyan are
+low-risk predictions.
 
-The FITS header must contain a UTC start plus either an end time or exposure
-duration, and an observing site (`SITELAT`/`SITELONG`, `OBSGEO-B`/`OBSGEO-L`,
-or their documented aliases). On-demand prediction is the only workflow that
-may refresh CelesTrak's active-satellite data. The quality scan and
+The FITS header must contain either explicit UTC exposure bounds, a UTC
+midpoint (`DATE-AVG`) plus duration, or a UTC start plus duration, and an
+observing site (`SITELAT`/`SITELONG`, `OBSGEO-B`/`OBSGEO-L`, or their
+documented aliases). On-demand prediction is the only workflow that may
+refresh CelesTrak's active-satellite data. The quality scan and
 `screen-fits --regrade-db` never download orbital data: when a snapshot is
 already cached, they reuse it and persist per-image predictions under
 `<cache>/<db-slug>/satellites/`.
@@ -292,6 +294,15 @@ score; a high-risk sunlit crossing proposes an `[Auto]` rejection through the
 same per-image confirmation workflow as other quality findings. See
 **[docs/SATELLITES.md](docs/SATELLITES.md)** for provenance, caching, and
 failure semantics.
+
+| Solved track overlay | Sequence grading recommendation |
+|:--:|:--:|
+| ![Predicted HULIANWANG DIGUI-167 path over a solved Hercules Globular Cluster exposure; the prediction is offset from the visible trail and is not a confirmed identification](docs/satellite-hercules-overlay.png) | ![The same Hercules frame marked as high satellite risk in Sequence Analysis](docs/satellite-hercules-sequence.png) |
+
+This real frame deliberately shows the evidence boundary: the prediction is
+near, but does not coincide with, the visible trail. Treat the name as a
+candidate and the grading result as conservative risk evidence, not a positive
+pixel identification.
 
 ## Quality screening
 

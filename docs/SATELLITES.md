@@ -28,8 +28,11 @@ Prediction requires all three inputs:
 
 1. A solved pixel WCS. The on-demand action will run the existing hinted/blind
    solver if no valid solution is cached.
-2. UTC shutter timing: `DATE-BEG`, `DATE-OBS`, or `DATEOBS`, plus either
-   `DATE-END`/`DATEEND` or `EXPTIME`/`EXPOSURE`.
+2. UTC shutter timing, in precedence order: explicit `DATE-BEG`/`DATE-OBS`
+   through `DATE-END`; `DATE-AVG` plus `EXPTIME`/`EXPOSURE`; or a start time
+   plus `EXPTIME`/`EXPOSURE`. Using `DATE-AVG` centers the interval on the
+   writer's measured midpoint, avoiding assumptions about whether a filename
+   timestamp represents shutter open or readout completion.
 3. Observer latitude and longitude: `SITELAT`/`SITELONG`, `LAT-OBS`/
    `LONG-OBS`, or `OBSGEO-B`/`OBSGEO-L`. Altitude comes from `SITEELEV`,
    `SITEELEVATION`, `ALT-OBS`, or `OBSGEO-H`; missing altitude safely defaults
@@ -87,6 +90,40 @@ High risk caps the score at 0.35 and proposes a reason such as:
 The Sequence view still requires the normal per-image review and explicit
 confirmation before writing a rejection. Existing rejected grades are not
 overwritten.
+
+## Real Hercules exposure
+
+The screenshots below come from the unmodified 60-second B-filter exposure
+`2026-05-21_00-13-14_B_-10.10_60.00s_0054.fits`, not a mocked UI fixture.
+Its headers provide `SITELAT`, `SITELONG`, `SITEELEV`, and
+`DATE-AVG=2026-05-21T07:13:45.3551363`. PSF Guard therefore
+used the header-provided observing site and the centered interval
+`07:13:15.355136–07:14:15.355136 UTC`.
+
+Seiza 0.9 solved the frame with 85 matched stars at 1.73 arcsec RMS. Against a
+configured historical TLE snapshot near the exposure epoch,
+`seiza-satellites 0.1` projected one fully illuminated in-frame crossing:
+**HULIANWANG DIGUI-167 [68659]**. The clipped path is about 7,672 pixels long,
+the minimum range is about 1,174 km, and the heuristic risk is 0.96. That
+produces a high-risk recommendation and a 0.35 quality cap, while the UI keeps
+the claim explicitly labeled as an orbital prediction rather than a detected
+pixel trail.
+
+The visible diagonal trail does **not** coincide with the red prediction. A
+line fit puts it roughly 800–1,200 full-resolution pixels away from the
+predicted path. An address-derived site check moved the predicted endpoints by
+only 25–38 pixels: the FITS position was already within about 0.2 km of that
+independent location. This is therefore not a confirmed identification of the
+visible trail. It may reflect orbital-element uncertainty for a recently
+launched object, a different object, or another timing/site input error. The
+frame remains a useful demonstration of the product's intended boundary:
+orbital predictions contribute conservative grading evidence, while the UI
+does not claim a pixel detection or identity match. The named result links to
+an external satellite information page for follow-up.
+
+| Solved image and on-demand identifier | Sequence score and recommendation |
+|:--:|:--:|
+| ![Hercules Globular Cluster with a red predicted satellite path offset from the visible trail and a named candidate evidence panel](satellite-hercules-overlay.png) | ![Hercules frame selected in Sequence Analysis with a satellite high-risk badge and score 35](satellite-hercules-sequence.png) |
 
 ## Background and CLI behavior
 

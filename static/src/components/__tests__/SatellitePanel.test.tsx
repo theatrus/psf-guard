@@ -41,6 +41,11 @@ describe('SatellitePanel', () => {
 
     expect(screen.getByText(/does not claim a trail was detected/i)).toBeInTheDocument();
     expect(screen.getByText('1 high')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /STARLINK-1234/ })).toHaveAttribute(
+      'href',
+      'https://www.n2yo.com/satellite/?s=54321'
+    );
+    expect(screen.getByRole('link', { name: /STARLINK-1234/ })).toHaveAttribute('target', '_blank');
     fireEvent.click(screen.getByRole('button', { name: /Track identifiers on/ }));
     expect(onToggleOverlay).toHaveBeenCalledOnce();
   });

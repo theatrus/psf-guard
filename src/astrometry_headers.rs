@@ -51,6 +51,8 @@ pub struct FitsAstrometryHeaders {
     pub width: Option<Provenanced<u32>>,
     pub height: Option<Provenanced<u32>>,
     pub capture_time: Option<Provenanced<String>>,
+    /// Exposure midpoint timestamp when the FITS writer provides one.
+    pub exposure_mid_time: Option<Provenanced<String>>,
     /// Explicit shutter-close timestamp when present.
     pub exposure_end_time: Option<Provenanced<String>>,
     /// Exposure duration in seconds.
@@ -96,6 +98,7 @@ impl FitsAstrometryHeaders {
     pub fn from_headers(headers: &[(String, HeaderValue)]) -> Self {
         let object_name = find_text(headers, &["OBJECT"]);
         let capture_time = find_text(headers, &["DATE-BEG", "DATE-OBS", "DATEOBS"]);
+        let exposure_mid_time = find_text(headers, &["DATE-AVG", "DATEAVG"]);
         let exposure_end_time = find_text(headers, &["DATE-END", "DATEEND"]);
         let exposure_seconds = find_positive_f64(headers, &["EXPTIME", "EXPOSURE"]);
         let width = find_u32(headers, &["NAXIS1"]);
@@ -132,6 +135,7 @@ impl FitsAstrometryHeaders {
             width,
             height,
             capture_time,
+            exposure_mid_time,
             exposure_end_time,
             exposure_seconds,
             observer,
@@ -649,6 +653,18 @@ mod tests {
         assert!((observer.value.longitude_deg + 118.25).abs() < 1e-10);
         assert_eq!(observer.value.altitude_m, 1234.0);
         assert_eq!(observer.sources, ["SITELAT", "SITELONG", "SITEELEV"]);
+    }
+
+    #[test]
+    fn normalizes_exposure_midpoint_with_provenance() {
+        let parsed = FitsAstrometryHeaders::from_headers(&headers(&[(
+            "DATE-AVG",
+            HeaderValue::String("2026-05-21T07:13:45.3551363".into()),
+        )]));
+
+        let midpoint = parsed.exposure_mid_time.unwrap();
+        assert_eq!(midpoint.value, "2026-05-21T07:13:45.3551363");
+        assert_eq!(midpoint.sources, ["DATE-AVG"]);
     }
 
     #[test]

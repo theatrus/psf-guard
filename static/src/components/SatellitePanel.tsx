@@ -75,7 +75,20 @@ export default function SatellitePanel({
 
       {analysis?.tracks.slice(0, 6).map((track) => (
         <div className="satellite-track-fact" key={`${track.norad_id ?? track.label}`}>
-          <span>{track.label}</span>
+          {track.norad_id ? (
+            <a
+              className="satellite-info-link"
+              href={`https://www.n2yo.com/satellite/?s=${encodeURIComponent(track.norad_id)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={`View NORAD ${track.norad_id} satellite information`}
+            >
+              {track.label}
+              <span aria-hidden="true"> ↗</span>
+            </a>
+          ) : (
+            <span>{track.label}</span>
+          )}
           <span className={`satellite-risk-${track.risk_level}`}>
             {track.risk_level} · {Math.round(track.bright_trail_risk * 100)}%
           </span>
