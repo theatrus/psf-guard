@@ -1,5 +1,8 @@
 //! Screen a directory of FITS light frames for occlusion, clouds and stray
-//! light without needing a scheduler database.
+//! light without needing a scheduler database. With `--regrade-db`, fresh
+//! pixel-derived plate solutions also contribute off-target, pointing-jump,
+//! tracking-drift, and corroborated no-solve evidence to the shared sequence
+//! grader before any writes are proposed.
 //!
 //! Per frame: star detection (positions included), grid-based spatial metrics
 //! (dead-cell fraction, background spread) and image statistics in physical
@@ -19,7 +22,7 @@ use crate::photometry::{
     PhotometryConfig,
 };
 use crate::sequence_analysis::{
-    ImageMetrics, IssueCategory, SequenceAnalyzer, SequenceAnalyzerConfig,
+    AstrometryFrameMetrics, ImageMetrics, IssueCategory, SequenceAnalyzer, SequenceAnalyzerConfig,
 };
 use crate::spatial_analysis::{compute_spatial_metrics, PixelCalibration, SpatialAnalysisConfig};
 use anyhow::Result;
@@ -27,6 +30,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+
+/// Maximum |DATE-OBS - acquireddate| for matching a raw FITS file to a TS row.
+const MATCH_TOLERANCE_SECS: i64 = 600;
+type RegradeAstrometryMatch = (i32, Option<i64>, Option<(f64, f64)>);
 
 #[derive(Debug, Clone)]
 pub struct ScreenOptions {
@@ -37,7 +44,8 @@ pub struct ScreenOptions {
     pub threads: Option<usize>,
     pub session_gap_minutes: u64,
     /// Registry slug or path of a scheduler DB to write `[Auto]` rejections
-    /// into for frames with a REJECT verdict (matched by FITS basename).
+    /// into for frames with a REJECT verdict (matched by FITS basename and
+    /// capture time). This also enables fresh astrometry quality analysis.
     pub regrade_db: Option<String>,
     /// Report what the regrade would change without writing.
     pub dry_run: bool,
@@ -69,6 +77,7 @@ struct FrameRecord {
     bg_cell_medians: Vec<f64>,
     bg_glow_max: f64,
     bg_glow_cells: Vec<bool>,
+    astrometry: Option<AstrometryFrameMetrics>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -113,6 +122,9 @@ struct ScreenResult {
     bg_glow_max: Option<f64>,
     quality_score: Option<f64>,
     category: Option<IssueCategory>,
+    flags: Vec<IssueCategory>,
+    pointing: Option<crate::sequence_analysis::PointingQuality>,
+    regrade_reason: Option<String>,
     details: Option<String>,
     verdict: Verdict,
 }
@@ -139,6 +151,9 @@ pub fn screen_fits(path: &str, options: &ScreenOptions) -> Result<()> {
         (a.timestamp.unwrap_or(0), a.path.as_path())
             .cmp(&(b.timestamp.unwrap_or(0), b.path.as_path()))
     });
+    if options.regrade_db.is_some() {
+        enrich_astrometry_for_regrade(&mut records, options)?;
+    }
     let (results, signals_by_idx) = score_records(&records, options);
 
     // Sort for output: filter, then timestamp.
@@ -277,6 +292,96 @@ fn annotate_flagged(
     Ok(())
 }
 
+/// When `--regrade-db` is active, solve the screened files against the
+/// intended Target Scheduler target before scoring. The same conservative
+/// basename + timestamp match used by the write-back path prevents an
+/// unrelated directory from acquiring another target's coordinates.
+fn enrich_astrometry_for_regrade(
+    records: &mut [FrameRecord],
+    options: &ScreenOptions,
+) -> Result<()> {
+    use crate::commands::sync::resolve_db_path;
+    use crate::db::Database;
+    use crate::db_registry::DbRegistry;
+    use rusqlite::Connection;
+
+    let Some(db_arg) = options.regrade_db.as_deref() else {
+        return Ok(());
+    };
+    let registry = match &options.registry {
+        Some(path) => DbRegistry::load_or_init(Path::new(path)).ok(),
+        None => DbRegistry::default_path()
+            .ok()
+            .and_then(|path| DbRegistry::load_or_init(&path).ok()),
+    };
+    let db_path = resolve_db_path(registry.as_ref(), db_arg)?;
+    let conn = Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let db = Database::new(&conn);
+    let mut resolver = crate::acquisition_context::FramingResolver::new(&conn)?;
+    let mut by_basename: HashMap<String, Vec<RegradeAstrometryMatch>> = HashMap::new();
+    for (image, _, _) in db.query_images(None, None, None, None)? {
+        let Some(filename) = serde_json::from_str::<serde_json::Value>(&image.metadata)
+            .ok()
+            .and_then(|metadata| metadata["FileName"].as_str().map(str::to_string))
+        else {
+            continue;
+        };
+        let Some(basename) = filename.split(&['\\', '/'][..]).next_back() else {
+            continue;
+        };
+        let expected = resolver.expected_for_grading(&conn, &image)?;
+        by_basename.entry(basename.to_string()).or_default().push((
+            image.id,
+            image.acquired_date,
+            expected,
+        ));
+    }
+
+    let astrometry = crate::astrometry::AstrometryContext::new(
+        registry
+            .as_ref()
+            .and_then(|registry| registry.astrometry.clone())
+            .unwrap_or_default(),
+    );
+    // Match first so the progress denominator reflects real solve work, then
+    // solve the unambiguous matches serially (solving is memory-heavy).
+    type MatchedRecord = (usize, i32, Option<(f64, f64)>);
+    let matched: Vec<MatchedRecord> = records
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, record)| {
+            let file = record.path.file_name()?.to_str()?;
+            let [(image_id, acquired, expected)] = by_basename.get(file).map(Vec::as_slice)?
+            else {
+                return None;
+            };
+            matches!((record.timestamp, *acquired), (Some(ours), Some(theirs)) if (ours - theirs).abs() <= MATCH_TOLERANCE_SECS)
+                .then_some((idx, *image_id, *expected))
+        })
+        .collect();
+    let total_matched = matched.len();
+    for (attempted, (idx, image_id, expected)) in matched.into_iter().enumerate() {
+        let record = &mut records[idx];
+        let file = record
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        eprintln!("[astrometry {}/{}] {}", attempted + 1, total_matched, file);
+        match astrometry.solve_image_for_quality(image_id, &record.path, expected) {
+            Ok(analysis) => {
+                record.astrometry =
+                    crate::sequence_analysis::astrometry_metrics_from_analysis(&analysis);
+            }
+            Err(error) => eprintln!("  Astrometry unavailable for {file}: {error}"),
+        }
+    }
+    Ok(())
+}
+
 /// Write `[Auto]` rejections for REJECT verdicts into a scheduler DB,
 /// matching frames by FITS basename. Frames already rejected in the DB are
 /// left untouched (manual and prior auto rejections are preserved); Pending
@@ -338,8 +443,6 @@ fn apply_regrade(results: &[ScreenResult], db_arg: &str, options: &ScreenOptions
     // seconds written by N.I.N.A. for the same capture (observed skew ~1s);
     // 10 minutes absorbs exposure-length/save-time differences while
     // rejecting same-basename rows from other sessions.
-    const MATCH_TOLERANCE_SECS: i64 = 600;
-
     let mut updates: Vec<(i32, GradingStatus, Option<String>)> = Vec::new();
     let mut unmatched = 0usize;
     let mut ambiguous = 0usize;
@@ -379,19 +482,21 @@ fn apply_regrade(results: &[ScreenResult], db_arg: &str, options: &ScreenOptions
             already_rejected += 1;
             continue;
         }
-        let reason = format!(
-            "[Auto] {} - score {:.2}{}",
-            match &r.category {
-                Some(IssueCategory::PossibleObstruction) => "Obstruction",
-                Some(IssueCategory::LikelyClouds) => "Clouds",
-                _ => "Screening",
-            },
-            r.quality_score.unwrap_or(0.0),
-            r.details
-                .as_deref()
-                .map(|d| format!("; {}", d))
-                .unwrap_or_default(),
-        );
+        let reason = r.regrade_reason.clone().unwrap_or_else(|| {
+            format!(
+                "[Auto] {} - score {:.2}{}",
+                match &r.category {
+                    Some(IssueCategory::PossibleObstruction) => "Obstruction",
+                    Some(IssueCategory::LikelyClouds) => "Clouds",
+                    _ => "Screening",
+                },
+                r.quality_score.unwrap_or(0.0),
+                r.details
+                    .as_deref()
+                    .map(|d| format!("; {}", d))
+                    .unwrap_or_default(),
+            )
+        });
         updates.push((id, GradingStatus::Rejected, Some(reason)));
     }
 
@@ -545,6 +650,7 @@ fn analyze_one_frame(path: &Path, options: &ScreenOptions) -> Result<FrameRecord
         bg_cell_medians: spatial.bg_cell_medians,
         bg_glow_max: spatial.bg_glow_max,
         bg_glow_cells: spatial.bg_glow_cells,
+        astrometry: None,
     })
 }
 
@@ -709,6 +815,9 @@ fn score_records(
                 bg_glow_max: (r.bg_glow_max > 0.0).then_some(r.bg_glow_max),
                 quality_score: None,
                 category: None,
+                flags: Vec::new(),
+                pointing: None,
+                regrade_reason: None,
                 details: None,
                 verdict: Verdict::Ok,
             })
@@ -754,6 +863,7 @@ fn score_records(
                 ImageMetrics {
                     image_id: idx as i32,
                     timestamp: r.timestamp,
+                    session_id: None,
                     star_count: Some(r.star_count as f64),
                     hfr: (r.avg_hfr > 0.0).then_some(r.avg_hfr),
                     eccentricity: None,
@@ -767,6 +877,7 @@ fn score_records(
                     bg_cell_rise_fraction: sig.and_then(|s| s.bg_cell_rise_fraction),
                     bg_cell_fall_fraction: sig.and_then(|s| s.bg_cell_fall_fraction),
                     bg_glow_max: (r.bg_glow_max > 0.0).then_some(r.bg_glow_max),
+                    astrometry: r.astrometry.clone(),
                 }
             })
             .collect();
@@ -787,8 +898,16 @@ fn score_records(
                 if let Some(res) = results[idx].as_mut() {
                     res.quality_score = Some(img.quality_score);
                     res.category = img.category.clone();
+                    res.flags = img.flags.clone();
+                    res.pointing = img.pointing.clone();
+                    res.regrade_reason = img.regrade_reason.clone();
                     res.details = img.details.clone();
-                    res.verdict = verdict_for(&img.quality_score, &img.category, options);
+                    res.verdict = verdict_for(
+                        &img.quality_score,
+                        &img.category,
+                        img.regrade_reason.as_deref(),
+                        options,
+                    );
                 }
             }
         }
@@ -797,12 +916,17 @@ fn score_records(
     (results.into_iter().flatten().collect(), signals_by_idx)
 }
 
-fn verdict_for(score: &f64, category: &Option<IssueCategory>, options: &ScreenOptions) -> Verdict {
+fn verdict_for(
+    score: &f64,
+    category: &Option<IssueCategory>,
+    regrade_reason: Option<&str>,
+    options: &ScreenOptions,
+) -> Verdict {
     let rejectable = matches!(
         category,
         Some(IssueCategory::PossibleObstruction) | Some(IssueCategory::LikelyClouds)
     );
-    if *score < options.min_score || rejectable {
+    if *score < options.min_score || rejectable || regrade_reason.is_some() {
         Verdict::Reject
     } else if category.is_some() || *score < options.min_score + 0.15 {
         Verdict::Warn
@@ -819,6 +943,11 @@ fn category_label(category: &Option<IssueCategory>) -> &'static str {
         Some(IssueCategory::TrackingError) => "tracking",
         Some(IssueCategory::WindShake) => "wind",
         Some(IssueCategory::SkyBrightening) => "sky-gradient",
+        Some(IssueCategory::OffTarget) => "off-target",
+        Some(IssueCategory::StableOffset) => "stable-offset",
+        Some(IssueCategory::PointingJump) => "pointing-jump",
+        Some(IssueCategory::PointingDrift) => "pointing-drift",
+        Some(IssueCategory::PlateSolveFailed) => "unsolved",
         Some(IssueCategory::UnknownDegradation) => "unknown",
         None => "-",
     }
@@ -905,11 +1034,11 @@ fn truncate_name(name: &str, max: usize) -> String {
 
 fn print_csv(results: &[ScreenResult]) {
     println!(
-        "File,Filter,ExposureS,Timestamp,Stars,AvgHFR,MedianADU,DeadCellFraction,StarUniformity,BgCellSpread,BgCellMaxDev,Transparency,ExtinctionCellFraction,StarCellDropFraction,BgCellRiseFraction,BgCellFallFraction,BgGlowMax,Score,Category,Verdict"
+        "File,Filter,ExposureS,Timestamp,Stars,AvgHFR,MedianADU,DeadCellFraction,StarUniformity,BgCellSpread,BgCellMaxDev,Transparency,ExtinctionCellFraction,StarCellDropFraction,BgCellRiseFraction,BgCellFallFraction,BgGlowMax,Score,Category,Verdict,SolveState,OffsetFieldFraction,RegradeReason"
     );
     for r in results {
         println!(
-            "{},{},{},{},{},{:.3},{:.1},{},{},{:.4},{:.4},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{:.3},{:.1},{},{},{:.4},{:.4},{},{},{},{},{},{},{},{},{},{},{},{}",
             r.file,
             r.filter,
             r.exposure_s.map(|e| e.to_string()).unwrap_or_default(),
@@ -948,6 +1077,25 @@ fn print_csv(results: &[ScreenResult]) {
                 .unwrap_or_default(),
             category_label(&r.category),
             r.verdict,
+            r.pointing
+                .as_ref()
+                .map(|pointing| if pointing.pixel_solved {
+                    "solved"
+                } else if pointing.solve_failed && pointing.image_quality_evidence {
+                    "unsolved"
+                } else {
+                    "unavailable"
+                })
+                .unwrap_or_default(),
+            r.pointing
+                .as_ref()
+                .and_then(|pointing| pointing.field_fraction_offset)
+                .map(|fraction| format!("{:.3}", fraction))
+                .unwrap_or_default(),
+            r.regrade_reason
+                .as_deref()
+                .map(|reason| format!("\"{}\"", reason.replace('"', "\"\"")))
+                .unwrap_or_default(),
         );
     }
 }
@@ -998,18 +1146,32 @@ mod tests {
             registry: None,
             annotate_dir: None,
         };
-        assert_eq!(verdict_for(&0.9, &None, &options), Verdict::Ok);
-        assert_eq!(verdict_for(&0.2, &None, &options), Verdict::Reject);
+        assert_eq!(verdict_for(&0.9, &None, None, &options), Verdict::Ok);
+        assert_eq!(verdict_for(&0.2, &None, None, &options), Verdict::Reject);
         assert_eq!(
-            verdict_for(&0.9, &Some(IssueCategory::PossibleObstruction), &options),
+            verdict_for(
+                &0.9,
+                &Some(IssueCategory::PossibleObstruction),
+                None,
+                &options
+            ),
             Verdict::Reject,
             "occlusion rejects regardless of composite score"
         );
         assert_eq!(
-            verdict_for(&0.8, &Some(IssueCategory::SkyBrightening), &options),
+            verdict_for(&0.8, &Some(IssueCategory::SkyBrightening), None, &options),
             Verdict::Warn,
             "gradients are recoverable: warn, not reject"
         );
-        assert_eq!(verdict_for(&0.45, &None, &options), Verdict::Warn);
+        assert_eq!(verdict_for(&0.45, &None, None, &options), Verdict::Warn);
+        assert_eq!(
+            verdict_for(
+                &0.9,
+                &Some(IssueCategory::OffTarget),
+                Some("off target"),
+                &options
+            ),
+            Verdict::Reject
+        );
     }
 }

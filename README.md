@@ -16,9 +16,10 @@ points at your Target Scheduler database and image folders and gives you:
 - **Sky context and on-demand plate solving** — identify expected objects from
   known coordinates, solve image pixels with Seiza, and overlay catalog labels,
   outlines, a coordinate grid, and the target offset directly on the frame.
-- **Automatic quality screening** — grid-based spatial metrics and cross-frame
-  differential photometry that catch occlusion, small clouds, thin veils, and
-  errant light, with annotated diagnostic images explaining every verdict.
+- **Automatic quality screening** — spatial metrics, cross-frame photometry,
+  and pixel-derived plate solutions catch occlusion, clouds, thin veils,
+  errant light, off-target frames, and lost tracking, with evidence explaining
+  every verdict.
 - **Scheduler write-back** — every grade lands in the Target Scheduler
   database, so the scheduler knows to re-capture what you rejected.
 - **Safe reject archival** — move rejected frames (and their sidecars) out of
@@ -43,10 +44,10 @@ It runs as a desktop app (Windows/macOS/Linux), a self-hosted web server
 | ![Overview](docs/overview.png) | ![Grid](docs/image_grid.jpg) | ![Compare](docs/compare.jpg) |
 | Project statistics and progress tracking | Grid view with filtering and batch operations | Synchronized zoom and detailed comparison |
 
-| Sequence Analysis & Quality Screening | Star Detection | PSF Fitting |
+| Sequence Analysis & Astrometry Quality | Star Detection | PSF Fitting |
 |:--:|:--:|:--:|
-| ![Sequence Analysis](docs/sequence-analysis.png) | ![Annotated Stars](docs/annotated-stars.jpg) | ![PSF Visualization](docs/psf-visualization.jpg) |
-| Per-frame quality scores, cloud/occlusion classification, one-click occlusion scanning | HocusFocus inspired detection with annotated output (`annotate-stars`) | Observed / fitted / residual grids with Moffat & Gaussian models (`visualize-psf-multi`) |
+| ![Sequence Analysis](docs/sequence-quality-astrometry.png) | ![Annotated Stars](docs/annotated-stars.jpg) | ![PSF Visualization](docs/psf-visualization.jpg) |
+| Per-frame scores, cloud/occlusion screening, solved-center scatter, and off-target/tracking flags | HocusFocus inspired detection with annotated output (`annotate-stars`) | Observed / fitted / residual grids with Moffat & Gaussian models (`visualize-psf-multi`) |
 
 ## Installation
 
@@ -266,9 +267,11 @@ FITS file, relevant catalog, or Seiza version changes.
 
 ## Quality screening
 
-Screen light frames for occlusion, clouds, veils, and stray light — the
-failure modes that ruin integrations but pass star-count/HFR grading. No
-database needed; write-back into the scheduler DB is optional.
+Screen light frames for occlusion, clouds, veils, stray light, off-target
+pointing, and tracking loss — failure modes that ruin integrations but pass
+star-count/HFR grading. No database is needed for spatial/photometric
+screening. Supplying `--regrade-db` also loads the intended TS target and runs
+fresh Seiza pixel solves before the shared sequence grader.
 
 ```bash
 # Screen a night, get per-frame verdicts (OK / WARN / REJECT)
@@ -287,9 +290,20 @@ psf-guard move-rejects --db my-db
 |:--:|:--:|
 | ![Occlusion onset](docs/screening-onset.jpg) | ![Veiled field](docs/screening-veil.jpg) |
 
-The web UI's Sequence view has a **Scan Occlusion** button that runs the same
-analysis server-side in the background and badges affected frames with their
-classification.
+The web UI's Sequence view has a **Scan Quality** button that runs spatial,
+photometric, and astrometric analysis server-side. It shows solved-center
+scatter, field-relative offsets, quality scores, and Off Target / Pointing
+Jump / Pointing Drift / Unsolved evidence. **Select Recommended** opens a
+per-image review before any rejection is written. Stable multi-frame framing
+offsets remain advisory instead of being mistaken for lost tracking.
+
+| Astrometry quality results | Guarded rejection review |
+|:--:|:--:|
+| ![Quality scan with one off-target frame](docs/sequence-quality-astrometry.png) | ![Review proposed astrometry rejection](docs/sequence-quality-review.png) |
+
+Astrometry grading details, target-source precedence, failure semantics,
+score caps, cache safety, and CLI behavior:
+**[docs/ASTROMETRY_QUALITY.md](docs/ASTROMETRY_QUALITY.md)**.
 
 Full documentation — the detection stack, annotated diagnostic examples,
 tuning, and safety properties: **[docs/SCREENING.md](docs/SCREENING.md)**.
@@ -344,7 +358,7 @@ psf-guard server --config psf-guard.toml            # TOML for server knobs
 psf-guard server --registry /tmp/scratch.json <db> <dirs...>  # throwaway session
 psf-guard server --host 127.0.0.1 <db> <dirs...>    # localhost only (default binds 0.0.0.0)
 
-# Quality screening (see docs/SCREENING.md)
+# Quality screening; --regrade-db also enables astrometry quality analysis
 psf-guard screen-fits ./lights --annotate ./diagnostics
 psf-guard screen-fits ./lights --regrade-db my-db --dry-run
 psf-guard screen-fits ./lights --format json         # or table, csv

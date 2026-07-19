@@ -1,6 +1,6 @@
 # Seiza Integration — Design and Implementation Plan
 
-Status: **Phase 0 complete; first Phase 1 and Seiza v4 overlay UI slice implemented**
+Status: **Astrometry overlay and quality-grading slices implemented**
 Owner: psf-guard maintainers
 Last updated: 2026-07-18
 Baseline: PSF Guard 0.4.2; Seiza 0.8.0; seiza-fits 0.1.6;
@@ -32,8 +32,10 @@ FITS hint, and derived solution as separate values with explicit provenance.
 - Do not load or duplicate large catalogs once per configured database.
 - Do not let a future PSF Guard-owned FITS catalog participate in N.I.N.A.-
   specific grade sync or reject-archive commands.
-- Do not make pointing classifications affect quality scores or grades until
-  thresholds have been validated against real sequences and dithers.
+- Only pixel-derived solutions may affect quality. Confirmed off-target,
+  pointing-jump, and tracking-drift evidence reduces the sequence score and
+  can recommend a grade; isolated no-solves and operational solver failures do
+  not automatically reject an image.
 
 ## 3. Seiza 0.8.0 baseline
 
@@ -422,6 +424,10 @@ Selection and layer preferences should use stable IDs and explicit `source`
 values. They must not infer a layer from the display name.
 
 ## 8. Sequence pointing analysis
+
+The focused implementation and grading design now lives in
+[`ASTROMETRY_QUALITY_PLAN.md`](./ASTROMETRY_QUALITY_PLAN.md). This section
+retains the high-level Seiza integration intent.
 
 For every solved image compute:
 

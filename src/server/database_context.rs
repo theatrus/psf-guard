@@ -176,6 +176,9 @@ pub struct DatabaseContext {
     /// A waiting duplicate re-checks the persistent cache before decoding
     /// pixels, so rapid clicks share the first completed solution.
     pub astrometry_solve_mutex: Arc<TokioMutex<()>>,
+    /// In-memory view of the persisted astrometry evidence, so sequence
+    /// requests do not re-read and re-parse one JSON per frame per request.
+    pub astrometry_evidence: Arc<crate::astrometry::AstrometryEvidenceCache>,
     /// Per-DB spatial (occlusion) metrics store + scan progress; persisted
     /// under `cache_dir` as spatial_metrics.json.
     pub spatial_metrics: crate::server::spatial_scan::SharedSpatialStore,
@@ -242,6 +245,7 @@ impl DatabaseContext {
             tree_rebuild_inflight: Arc::new(AtomicBool::new(false)),
             refresh_mutex: Arc::new(TokioMutex::new(())),
             astrometry_solve_mutex: Arc::new(TokioMutex::new(())),
+            astrometry_evidence: Arc::new(crate::astrometry::AstrometryEvidenceCache::new()),
             spatial_metrics: Arc::new(RwLock::new(Default::default())),
         })
     }
@@ -942,6 +946,7 @@ impl DatabaseContext {
             tree_rebuild_inflight: Arc::new(AtomicBool::new(false)),
             refresh_mutex: Arc::new(TokioMutex::new(())),
             astrometry_solve_mutex: Arc::new(TokioMutex::new(())),
+            astrometry_evidence: Arc::new(crate::astrometry::AstrometryEvidenceCache::new()),
             spatial_metrics: Arc::new(RwLock::new(Default::default())),
         }
     }
@@ -966,6 +971,7 @@ impl Clone for DatabaseContext {
             tree_rebuild_inflight: self.tree_rebuild_inflight.clone(),
             refresh_mutex: self.refresh_mutex.clone(),
             astrometry_solve_mutex: self.astrometry_solve_mutex.clone(),
+            astrometry_evidence: self.astrometry_evidence.clone(),
             spatial_metrics: self.spatial_metrics.clone(),
         }
     }

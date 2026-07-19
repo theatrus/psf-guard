@@ -6,7 +6,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -244,6 +244,35 @@ pub enum AstrometrySolveMode {
     Blind,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AstrometryAttemptOutcome {
+    Solved,
+    NoMatch,
+    InsufficientStars,
+    DecodeError,
+    UnsupportedImage,
+    ResourceUnavailable,
+    Cancelled,
+    InternalError,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AstrometrySolveAttempt {
+    pub outcome: AstrometryAttemptOutcome,
+    #[serde(default)]
+    pub modes_attempted: Vec<AstrometrySolveMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detected_stars: Option<usize>,
+    pub duration_ms: u64,
+    /// True only when the pixels decoded and the configured solver had the
+    /// resources needed to make a quality-relevant determination.
+    pub image_quality_evidence: bool,
+    /// Deterministic outcomes may be reused until a source/resource
+    /// fingerprint changes. Operational failures are always retried.
+    pub cacheable: bool,
+}
+
 /// A celestial coordinate plus the source that gave it its semantic role.
 /// Keeping hint and expected coordinates separate prevents a derived center
 /// from silently replacing the Target Scheduler target.
@@ -393,8 +422,13 @@ pub struct AstrometrySolverProvenance {
 pub struct PointingResult {
     pub expected_ra_deg: f64,
     pub expected_dec_deg: f64,
-    pub east_offset_arcsec: f64,
-    pub north_offset_arcsec: f64,
+    /// Tangent-plane offsets are undefined when the solved center is 90° or
+    /// more from the intended target. Keep that abstention JSON-safe instead
+    /// of encoding it as a non-finite float.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub east_offset_arcsec: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub north_offset_arcsec: Option<f64>,
     pub separation_arcsec: f64,
     pub target_in_frame: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -428,6 +462,8 @@ pub struct AstrometryAnalysis {
     pub catalog_signature: Option<AstrometryCatalogSignature>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solver_provenance: Option<AstrometrySolverProvenance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solve_attempt: Option<AstrometrySolveAttempt>,
     pub computed_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -837,6 +873,7 @@ impl AstrometryContext {
             source_fingerprint: fingerprint,
             catalog_signature: signature,
             solver_provenance: None,
+            solve_attempt: None,
             computed_at: std::time::SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |duration| duration.as_secs() as i64),
@@ -844,17 +881,15 @@ impl AstrometryContext {
         })
     }
 
-    /// Return a persisted pixel-derived solution when it still describes the
+    /// Return a persisted pixel-derived attempt when it still describes the
     /// same source file, object catalog, Seiza version, and star catalog.
-    /// Embedded FITS WCS always wins because it is part of the source itself.
+    /// Embedded FITS WCS always wins for the displayed solution because it is
+    /// part of the source itself; the cached attempt rides along as evidence.
     pub fn with_cached_solution(
         &self,
         cache_dir: &Path,
         fresh: AstrometryAnalysis,
     ) -> AstrometryAnalysis {
-        if fresh.solution.is_some() {
-            return fresh;
-        }
         let path = astrometry_cache_path(cache_dir, fresh.image_id);
         let Ok(bytes) = std::fs::read(&path) else {
             return fresh;
@@ -870,19 +905,51 @@ impl AstrometryContext {
             Ok(loaded) => catalog_file_signature("stars", &loaded.fingerprint),
             Err(_) => return fresh,
         };
-        let valid = cached.status == AstrometryAnalysisStatus::Solved
-            && cached.image_id == fresh.image_id
-            && matches!(
-                cached.mode,
-                Some(AstrometrySolveMode::Hinted | AstrometrySolveMode::Blind)
-            )
+        let solved_pixel = cached.status == AstrometryAnalysisStatus::Solved
             && cached.solution.is_some()
+            && cached
+                .solve_attempt
+                .as_ref()
+                .is_some_and(|attempt| attempt.outcome == AstrometryAttemptOutcome::Solved);
+        let deterministic_failure = cached.status == AstrometryAnalysisStatus::Failed
+            && cached.solution.is_none()
+            && cached.solve_attempt.as_ref().is_some_and(|attempt| {
+                attempt.cacheable && attempt.outcome != AstrometryAttemptOutcome::Solved
+            });
+        let blind_matches = match provenance.blind_index.as_ref() {
+            Some(expected) => self
+                .load_blind_index()
+                .map(|loaded| {
+                    catalog_file_signature("blind_index", &loaded.fingerprint) == *expected
+                })
+                .unwrap_or(false),
+            // A solved entry without a blind fingerprint solved via the hint
+            // alone; the blind index is irrelevant to it. A failure without one
+            // never got a blind attempt, so installing an index must retry it.
+            None => solved_pixel || self.load_blind_index().is_err(),
+        };
+        let valid = (solved_pixel || deterministic_failure)
+            && cached.image_id == fresh.image_id
             && cached.source_fingerprint == fresh.source_fingerprint
             && cached.catalog_signature == fresh.catalog_signature
             && provenance.seiza_version == SEIZA_VERSION
-            && provenance.star_catalog == current_stars;
+            && provenance.star_catalog == current_stars
+            && blind_matches;
         if !valid {
             return fresh;
+        }
+
+        if fresh.solution.is_some() {
+            // Embedded WCS stays authoritative for display — it is part of the
+            // source file itself. Attach the cached pixel attempt so callers
+            // still see whether (and how) the current pixels solve.
+            let mut merged = fresh;
+            merged.solve_attempt = cached.solve_attempt;
+            merged.solver_provenance = cached.solver_provenance;
+            if deterministic_failure {
+                merged.error = cached.error;
+            }
+            return merged;
         }
 
         cached.image_id = fresh.image_id;
@@ -901,6 +968,58 @@ impl AstrometryContext {
         cached
     }
 
+    /// Load grading evidence only when its source file and solver resources
+    /// still match the persisted fingerprints. The intended target is applied
+    /// at read time so a scheduler framing correction cannot leave stale
+    /// absolute offsets in sequence grading.
+    pub fn validated_persisted_pixel_analysis(
+        &self,
+        cache_dir: &Path,
+        image_id: i32,
+        expected_target: Option<(f64, f64)>,
+    ) -> Option<AstrometryAnalysis> {
+        let cached =
+            self.persisted_pixel_analysis_for_source(cache_dir, image_id, expected_target)?;
+        let provenance = cached.solver_provenance.as_ref()?;
+        if provenance.seiza_version != SEIZA_VERSION {
+            return None;
+        }
+        let current_stars = self.load_star_catalog().ok()?;
+        if catalog_file_signature("stars", &current_stars.fingerprint) != provenance.star_catalog {
+            return None;
+        }
+        if let Some(expected_blind) = provenance.blind_index.as_ref() {
+            let current_blind = self.load_blind_index().ok()?;
+            if catalog_file_signature("blind_index", &current_blind.fingerprint) != *expected_blind
+            {
+                return None;
+            }
+        } else if cached.solution.is_none() && self.load_blind_index().is_ok() {
+            // A failure recorded without a blind attempt must be retried once
+            // a blind index becomes available; it might solve now.
+            return None;
+        }
+
+        Some(cached)
+    }
+
+    /// Load persisted pixel evidence when the exact source file is unchanged,
+    /// refreshing target-relative pointing from the current scheduler fields.
+    /// Resource fingerprints are checked by the quality-scan cache decision;
+    /// ordinary sequence reads stay lightweight and source-safe.
+    pub fn persisted_pixel_analysis_for_source(
+        &self,
+        cache_dir: &Path,
+        image_id: i32,
+        expected_target: Option<(f64, f64)>,
+    ) -> Option<AstrometryAnalysis> {
+        let cached = persisted_pixel_analysis(cache_dir, image_id)?;
+        if !source_still_matches(&cached) {
+            return None;
+        }
+        Some(apply_expected_target(cached, expected_target))
+    }
+
     /// Decode an ordinary acquisition FITS image, detect stars, run a hinted
     /// solve when coordinates and scale are available, then fall back to the
     /// configured blind index. A compact MTF/u8 detection pass is attempted
@@ -912,9 +1031,37 @@ impl AstrometryContext {
         path: &Path,
         expected_target: Option<(f64, f64)>,
     ) -> Result<AstrometryAnalysis, String> {
+        self.solve_image_with_policy(image_id, path, expected_target, false)
+    }
+
+    /// Run a fresh pixel solve even when the FITS file carries embedded WCS.
+    /// Sequence grading needs evidence from the current pixels; embedded WCS
+    /// alone may describe an earlier processing step or stale header.
+    pub fn solve_image_for_quality(
+        &self,
+        image_id: i32,
+        path: &Path,
+        expected_target: Option<(f64, f64)>,
+    ) -> Result<AstrometryAnalysis, String> {
+        self.solve_image_with_policy(image_id, path, expected_target, true)
+    }
+
+    fn solve_image_with_policy(
+        &self,
+        image_id: i32,
+        path: &Path,
+        expected_target: Option<(f64, f64)>,
+        force_pixels: bool,
+    ) -> Result<AstrometryAnalysis, String> {
+        let started = Instant::now();
         let mut analysis = self.analyze_image(image_id, path, expected_target)?;
-        if analysis.solution.is_some() {
+        if analysis.solution.is_some() && !force_pixels {
             return Ok(analysis);
+        }
+        if force_pixels {
+            analysis.solution = None;
+            analysis.pointing = None;
+            analysis.mode = None;
         }
 
         let headers = crate::astrometry_headers::FitsAstrometryHeaders::from_path(path)
@@ -933,15 +1080,31 @@ impl AstrometryContext {
             Err(error) => {
                 return Ok(failed_analysis(
                     analysis,
+                    AstrometryAttemptOutcome::ResourceUnavailable,
                     format!("star catalog unavailable: {error}"),
+                    Vec::new(),
+                    None,
+                    started,
+                    None,
                 ));
             }
         };
 
         let (primary_stars, mut dimensions) = match detect_fits_stars(path, DetectionPass::MtfU8) {
             Ok(result) => result,
-            Err(error) => return Ok(failed_analysis(analysis, error)),
+            Err(error) => {
+                return Ok(failed_analysis(
+                    analysis,
+                    AstrometryAttemptOutcome::DecodeError,
+                    error,
+                    Vec::new(),
+                    None,
+                    started,
+                    None,
+                ));
+            }
         };
+        let primary_count = primary_stars.len();
         let primary = self.try_solve_stars(
             &primary_stars,
             &stars_catalog.value,
@@ -949,8 +1112,14 @@ impl AstrometryContext {
             scale,
             dimensions,
         );
-        let (mode, solved, blind_index, detection_backend) = match primary {
-            Ok((mode, solved, blind_index)) => (mode, solved, blind_index, "mtf_u8".to_string()),
+        let (mode, solved, blind_index, detection_backend, detected_stars) = match primary {
+            Ok((mode, solved, blind_index)) => (
+                mode,
+                solved,
+                blind_index,
+                "mtf_u8".to_string(),
+                primary_count,
+            ),
             Err(primary_error) => {
                 let (fallback_stars, fallback_dimensions) =
                     match detect_fits_stars(path, DetectionPass::LinearF32) {
@@ -958,10 +1127,16 @@ impl AstrometryContext {
                         Err(error) => {
                             return Ok(failed_analysis(
                                 analysis,
-                                format!("{primary_error}; f32 detection failed: {error}"),
+                                AstrometryAttemptOutcome::DecodeError,
+                                format!("{}; f32 detection failed: {error}", primary_error.message),
+                                primary_error.attempted_modes(),
+                                Some(primary_count),
+                                started,
+                                None,
                             ));
                         }
                     };
+                let fallback_count = fallback_stars.len();
                 match self.try_solve_stars(
                     &fallback_stars,
                     &stars_catalog.value,
@@ -971,14 +1146,48 @@ impl AstrometryContext {
                 ) {
                     Ok((mode, solved, blind_index)) => {
                         dimensions = fallback_dimensions;
-                        (mode, solved, blind_index, "linear_f32".to_string())
+                        (
+                            mode,
+                            solved,
+                            blind_index,
+                            "linear_f32".to_string(),
+                            fallback_count,
+                        )
                     }
                     Err(fallback_error) => {
+                        let error = format!(
+                            "u8 solve failed: {}; f32 solve failed: {}",
+                            primary_error.message, fallback_error.message
+                        );
+                        let outcome =
+                            classify_solve_failure(&fallback_error, primary_count, fallback_count);
+                        let deterministic =
+                            outcome != AstrometryAttemptOutcome::ResourceUnavailable;
+                        // Fingerprint only resources that actually participated:
+                        // a hinted-only failure records no blind index, and cache
+                        // validation invalidates it once an index is installed.
+                        let blind = (deterministic && fallback_error.blind_attempted)
+                            .then(|| self.load_blind_index().ok())
+                            .flatten();
+                        let provenance = deterministic.then(|| AstrometrySolverProvenance {
+                            seiza_version: SEIZA_VERSION.to_string(),
+                            detection_backend: "mtf_u8+linear_f32".to_string(),
+                            star_catalog: catalog_file_signature(
+                                "stars",
+                                &stars_catalog.fingerprint,
+                            ),
+                            blind_index: blind.as_ref().map(|loaded| {
+                                catalog_file_signature("blind_index", &loaded.fingerprint)
+                            }),
+                        });
                         return Ok(failed_analysis(
                             analysis,
-                            format!(
-                                "u8 solve failed: {primary_error}; f32 solve failed: {fallback_error}"
-                            ),
+                            outcome,
+                            error,
+                            fallback_error.attempted_modes(),
+                            Some(primary_count.max(fallback_count)),
+                            started,
+                            provenance,
                         ));
                     }
                 }
@@ -1007,6 +1216,21 @@ impl AstrometryContext {
                 expected_target,
             },
         );
+        let modes_attempted = match mode {
+            AstrometrySolveMode::Hinted => vec![AstrometrySolveMode::Hinted],
+            _ if hint.is_some() && scale.is_some() => {
+                vec![AstrometrySolveMode::Hinted, AstrometrySolveMode::Blind]
+            }
+            _ => vec![AstrometrySolveMode::Blind],
+        };
+        analysis.solve_attempt = Some(AstrometrySolveAttempt {
+            outcome: AstrometryAttemptOutcome::Solved,
+            modes_attempted,
+            detected_stars: Some(detected_stars),
+            duration_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+            image_quality_evidence: true,
+            cacheable: true,
+        });
         Ok(analysis)
     }
 
@@ -1023,9 +1247,10 @@ impl AstrometryContext {
             seiza::solve::Solution,
             Option<LoadedResource<BlindIndex>>,
         ),
-        String,
+        SolveStarsFailure,
     > {
         let mut hinted_error = None;
+        let hinted_attempted = hint.is_some() && scale.is_some();
         if let (Some(center), Some(scale_arcsec_px)) = (hint, scale) {
             let solve_hint = seiza::solve::SolveHint {
                 center,
@@ -1042,13 +1267,25 @@ impl AstrometryContext {
             }
         }
 
-        let blind_index = self.load_blind_index().map_err(|error| {
-            if let Some(hinted_error) = hinted_error.as_deref() {
-                format!("hinted solve failed: {hinted_error}; blind index unavailable: {error}")
-            } else {
-                format!("blind index unavailable: {error}")
+        let blind_index = match self.load_blind_index() {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                // The hinted solver may still have run deterministically; only
+                // the blind stage was missing its resource. Report which parts
+                // actually executed so failure classification does not confuse
+                // "pixels did not match" with "nothing could be attempted".
+                let message = if let Some(hinted_error) = hinted_error.as_deref() {
+                    format!("hinted solve failed: {hinted_error}; blind index unavailable: {error}")
+                } else {
+                    format!("blind index unavailable: {error}")
+                };
+                return Err(SolveStarsFailure {
+                    hinted_attempted,
+                    blind_attempted: false,
+                    message,
+                });
             }
-        })?;
+        };
         let mut params = seiza::blind::BlindParams {
             index_mag_limit: blind_index.value.index_mag_limit(),
             max_pattern_deg: blind_index.value.max_pattern_deg(),
@@ -1061,10 +1298,15 @@ impl AstrometryContext {
         seiza::blind::solve_blind(stars, catalog, &blind_index.value, &params, dimensions)
             .map(|solution| (AstrometrySolveMode::Blind, solution, Some(blind_index)))
             .map_err(|error| {
-                if let Some(hinted_error) = hinted_error {
+                let message = if let Some(hinted_error) = hinted_error {
                     format!("hinted solve failed: {hinted_error}; blind solve failed: {error}")
                 } else {
                     format!("blind solve failed: {error}")
+                };
+                SolveStarsFailure {
+                    hinted_attempted,
+                    blind_attempted: true,
+                    message,
                 }
             })
     }
@@ -1406,12 +1648,72 @@ fn wcs_from_response(response: &WcsResponse) -> seiza::Wcs {
     }
 }
 
-fn failed_analysis(mut analysis: AstrometryAnalysis, error: String) -> AstrometryAnalysis {
+/// A solver failure that records which solve stages actually executed, so the
+/// caller can distinguish deterministic pixel evidence (a solver ran and did
+/// not match) from operational failures (no solver could be attempted).
+#[derive(Debug, Clone)]
+struct SolveStarsFailure {
+    hinted_attempted: bool,
+    blind_attempted: bool,
+    message: String,
+}
+
+impl SolveStarsFailure {
+    fn attempted_modes(&self) -> Vec<AstrometrySolveMode> {
+        let mut modes = Vec::with_capacity(2);
+        if self.hinted_attempted {
+            modes.push(AstrometrySolveMode::Hinted);
+        }
+        if self.blind_attempted {
+            modes.push(AstrometrySolveMode::Blind);
+        }
+        modes
+    }
+}
+
+/// Classify a full (u8 + f32) solve failure. Deterministic no-match evidence
+/// requires that at least one solver stage actually ran against the pixels; a
+/// hinted no-match on a rig without a blind index is still pixel evidence.
+fn classify_solve_failure(
+    failure: &SolveStarsFailure,
+    primary_count: usize,
+    fallback_count: usize,
+) -> AstrometryAttemptOutcome {
+    if !failure.hinted_attempted && !failure.blind_attempted {
+        AstrometryAttemptOutcome::ResourceUnavailable
+    } else if primary_count < 8 && fallback_count < 8 {
+        AstrometryAttemptOutcome::InsufficientStars
+    } else {
+        AstrometryAttemptOutcome::NoMatch
+    }
+}
+
+fn failed_analysis(
+    mut analysis: AstrometryAnalysis,
+    outcome: AstrometryAttemptOutcome,
+    error: String,
+    modes_attempted: Vec<AstrometrySolveMode>,
+    detected_stars: Option<usize>,
+    started: Instant,
+    provenance: Option<AstrometrySolverProvenance>,
+) -> AstrometryAnalysis {
     analysis.status = AstrometryAnalysisStatus::Failed;
     analysis.mode = None;
     analysis.solution = None;
     analysis.pointing = None;
-    analysis.solver_provenance = None;
+    analysis.solver_provenance = provenance;
+    let image_quality_evidence = matches!(
+        outcome,
+        AstrometryAttemptOutcome::NoMatch | AstrometryAttemptOutcome::InsufficientStars
+    );
+    analysis.solve_attempt = Some(AstrometrySolveAttempt {
+        outcome,
+        modes_attempted,
+        detected_stars,
+        duration_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+        image_quality_evidence,
+        cacheable: image_quality_evidence && analysis.solver_provenance.is_some(),
+    });
     analysis.computed_at = unix_now();
     analysis.error = Some(error);
     analysis
@@ -1429,21 +1731,163 @@ fn astrometry_cache_path(cache_dir: &Path, image_id: i32) -> PathBuf {
         .join(format!("{image_id}.json"))
 }
 
-/// Persist a successful pixel-derived solution below the per-database cache
-/// directory. Embedded WCS is already durable in the FITS file and is not
-/// duplicated here.
-pub fn persist_solved_analysis(
+/// Read the last durable pixel-derived attempt for sequence analysis. Cache
+/// validity is established by the quality scan before persistence; callers
+/// still verify the acquired-image filename against the source fingerprint.
+pub fn persisted_pixel_analysis(cache_dir: &Path, image_id: i32) -> Option<AstrometryAnalysis> {
+    let bytes = std::fs::read(astrometry_cache_path(cache_dir, image_id)).ok()?;
+    let analysis: AstrometryAnalysis = serde_json::from_slice(&bytes).ok()?;
+    analysis
+        .solve_attempt
+        .as_ref()?
+        .cacheable
+        .then_some(analysis)
+}
+
+/// True when the FITS file named in the persisted fingerprint is unchanged.
+fn source_still_matches(cached: &AstrometryAnalysis) -> bool {
+    source_fingerprint(Path::new(&cached.source_fingerprint.canonical_path))
+        .is_ok_and(|current| current == cached.source_fingerprint)
+}
+
+/// Refresh target-relative pointing from the caller's current scheduler
+/// fields, so a framing correction never leaves stale absolute offsets in
+/// grading output.
+fn apply_expected_target(
+    mut cached: AstrometryAnalysis,
+    expected_target: Option<(f64, f64)>,
+) -> AstrometryAnalysis {
+    cached.expected_source = expected_target.map(|(ra_deg, dec_deg)| AstrometryCoordinateSource {
+        ra_deg,
+        dec_deg,
+        source: "target_scheduler".to_string(),
+        header_keywords: Vec::new(),
+    });
+    cached.pointing = cached
+        .solution
+        .as_ref()
+        .zip(expected_target)
+        .map(|(solution, expected)| {
+            let wcs = wcs_from_response(&solution.wcs);
+            pointing_result(solution, &wcs, expected)
+        });
+    cached
+}
+
+/// Per-database in-memory view of the persisted astrometry evidence, for the
+/// request paths that merge per-frame evidence into every sequence-analysis
+/// response. Parsed JSON is cached keyed by the cache file's mtime, so a
+/// request over N frames costs N stats instead of N reads + JSON parses; a
+/// fresh solve (temp-file + rename) bumps the mtime and reloads the entry.
+/// The FITS source fingerprint is still verified on every lookup — a replaced
+/// acquisition file must invalidate its evidence immediately, not after a TTL.
+#[derive(Default)]
+pub struct AstrometryEvidenceCache {
+    entries: RwLock<std::collections::HashMap<i32, EvidenceEntry>>,
+}
+
+struct EvidenceEntry {
+    cache_file_mtime: SystemTime,
+    /// `None` records that the persisted file exists but holds no cacheable
+    /// attempt, so it is not re-parsed until the file changes.
+    analysis: Option<AstrometryAnalysis>,
+}
+
+impl AstrometryEvidenceCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Cached equivalent of
+    /// [`AstrometryContext::persisted_pixel_analysis_for_source`].
+    pub fn evidence_for_source(
+        &self,
+        cache_dir: &Path,
+        image_id: i32,
+        expected_target: Option<(f64, f64)>,
+    ) -> Option<AstrometryAnalysis> {
+        let path = astrometry_cache_path(cache_dir, image_id);
+        let Ok(mtime) = std::fs::metadata(&path).and_then(|meta| meta.modified()) else {
+            self.entries.write().unwrap().remove(&image_id);
+            return None;
+        };
+        let cached = {
+            let entries = self.entries.read().unwrap();
+            entries
+                .get(&image_id)
+                .filter(|entry| entry.cache_file_mtime == mtime)
+                .map(|entry| entry.analysis.clone())
+        };
+        let memory_hit = cached.is_some();
+        let mut analysis = match cached {
+            Some(analysis) => analysis,
+            None => {
+                let analysis = persisted_pixel_analysis(cache_dir, image_id);
+                self.entries.write().unwrap().insert(
+                    image_id,
+                    EvidenceEntry {
+                        cache_file_mtime: mtime,
+                        analysis: analysis.clone(),
+                    },
+                );
+                analysis
+            }
+        };
+        // Atomic replacement is not guaranteed to produce a distinct mtime
+        // on every filesystem. If the in-memory entry no longer describes the
+        // current FITS source, re-read the durable attempt once even when the
+        // cache-file timestamp appears unchanged. This preserves immediate
+        // source invalidation without letting a same-tick re-solve stay hidden.
+        if memory_hit
+            && analysis
+                .as_ref()
+                .is_none_or(|cached| !source_still_matches(cached))
+        {
+            analysis = persisted_pixel_analysis(cache_dir, image_id);
+            self.entries.write().unwrap().insert(
+                image_id,
+                EvidenceEntry {
+                    cache_file_mtime: mtime,
+                    analysis: analysis.clone(),
+                },
+            );
+        }
+        let analysis = analysis?;
+        if !source_still_matches(&analysis) {
+            return None;
+        }
+        Some(apply_expected_target(analysis, expected_target))
+    }
+}
+
+/// Persist a pixel-derived solve attempt below the per-database cache. Both
+/// successful solutions and deterministic image-quality failures are durable;
+/// operational/resource failures are deliberately retried.
+pub fn persist_pixel_analysis(
     cache_dir: &Path,
     analysis: &AstrometryAnalysis,
 ) -> Result<(), String> {
-    if analysis.status != AstrometryAnalysisStatus::Solved
-        || !matches!(
+    let solved = analysis.status == AstrometryAnalysisStatus::Solved
+        && matches!(
             analysis.mode,
             Some(AstrometrySolveMode::Hinted | AstrometrySolveMode::Blind)
         )
-        || analysis.solution.is_none()
-    {
-        return Err("only pixel-derived solved analyses can be persisted".to_string());
+        && analysis.solution.is_some()
+        && analysis
+            .solve_attempt
+            .as_ref()
+            .is_some_and(|attempt| attempt.outcome == AstrometryAttemptOutcome::Solved);
+    let deterministic_failure = analysis.status == AstrometryAnalysisStatus::Failed
+        && analysis.solution.is_none()
+        && analysis
+            .solve_attempt
+            .as_ref()
+            .is_some_and(|attempt| attempt.cacheable && attempt.image_quality_evidence);
+    if !solved && !deterministic_failure {
+        return Err(
+            "only pixel solutions and deterministic image-quality failures can be persisted"
+                .to_string(),
+        );
     }
     static CACHE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
     let path = astrometry_cache_path(cache_dir, analysis.image_id);
@@ -1466,6 +1910,18 @@ pub fn persist_solved_analysis(
         let _ = std::fs::remove_file(&temporary);
     }
     result
+}
+
+/// Compatibility wrapper retained for callers/tests that explicitly persist
+/// successful solutions.
+pub fn persist_solved_analysis(
+    cache_dir: &Path,
+    analysis: &AstrometryAnalysis,
+) -> Result<(), String> {
+    if analysis.status != AstrometryAnalysisStatus::Solved {
+        return Err("analysis is not solved".to_string());
+    }
+    persist_pixel_analysis(cache_dir, analysis)
 }
 
 fn source_fingerprint(path: &Path) -> Result<AstrometrySourceFingerprint, String> {
@@ -1637,9 +2093,30 @@ fn pointing_result(
     wcs: &seiza::Wcs,
     expected: (f64, f64),
 ) -> PointingResult {
-    let delta_ra = (solution.center_ra_deg - expected.0 + 540.0).rem_euclid(360.0) - 180.0;
-    let east_offset_arcsec = delta_ra * expected.1.to_radians().cos() * 3600.0;
-    let north_offset_arcsec = (solution.center_dec_deg - expected.1) * 3600.0;
+    // Gnomonic tangent-plane projection centered on the intended target. This
+    // remains well behaved across RA=0 and near the celestial poles, unlike a
+    // raw delta-RA*cos(dec) approximation.
+    let delta_ra = (solution.center_ra_deg - expected.0).to_radians();
+    let center_dec = solution.center_dec_deg.to_radians();
+    let expected_dec = expected.1.to_radians();
+    let denominator = expected_dec.sin() * center_dec.sin()
+        + expected_dec.cos() * center_dec.cos() * delta_ra.cos();
+    // A non-positive denominator means the solved center is 90° or more from
+    // the target; the projection is meaningless there, so abstain rather than
+    // report sign-mirrored offsets. The separation below stays correct.
+    let (east_offset_arcsec, north_offset_arcsec) = if denominator > 1e-12 {
+        let east = center_dec.cos() * delta_ra.sin() / denominator;
+        let north = (expected_dec.cos() * center_dec.sin()
+            - expected_dec.sin() * center_dec.cos() * delta_ra.cos())
+            / denominator;
+        let radians_to_arcsec = 180.0 / std::f64::consts::PI * 3600.0;
+        (
+            Some(east * radians_to_arcsec),
+            Some(north * radians_to_arcsec),
+        )
+    } else {
+        (None, None)
+    };
     let separation_arcsec = angular_separation_deg(
         solution.center_ra_deg,
         solution.center_dec_deg,
@@ -2217,6 +2694,43 @@ mod tests {
     }
 
     #[test]
+    fn hinted_only_no_match_is_quality_evidence() {
+        // A rig without a blind index still produced deterministic pixel
+        // evidence when the hinted solver ran and did not match.
+        let hinted_only = SolveStarsFailure {
+            hinted_attempted: true,
+            blind_attempted: false,
+            message: "hinted solve failed: no match; blind index unavailable: not configured"
+                .to_string(),
+        };
+        assert_eq!(
+            classify_solve_failure(&hinted_only, 50, 60),
+            AstrometryAttemptOutcome::NoMatch
+        );
+
+        // Nothing could be attempted at all: operational, not evidence.
+        let nothing_ran = SolveStarsFailure {
+            hinted_attempted: false,
+            blind_attempted: false,
+            message: "blind index unavailable: not configured".to_string(),
+        };
+        assert_eq!(
+            classify_solve_failure(&nothing_ran, 50, 60),
+            AstrometryAttemptOutcome::ResourceUnavailable
+        );
+
+        let sparse = SolveStarsFailure {
+            hinted_attempted: true,
+            blind_attempted: true,
+            message: "too few stars".to_string(),
+        };
+        assert_eq!(
+            classify_solve_failure(&sparse, 3, 5),
+            AstrometryAttemptOutcome::InsufficientStars
+        );
+    }
+
+    #[test]
     fn malformed_object_catalog_is_reported_as_invalid() {
         let directory = tempfile::tempdir().unwrap();
         let objects_path = directory.path().join("objects.bin");
@@ -2279,6 +2793,88 @@ mod tests {
     }
 
     #[test]
+    fn evidence_cache_follows_persisted_and_source_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache_dir = directory.path().join("cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let source_path = directory.path().join("frame.fits");
+        std::fs::write(&source_path, b"pixels").unwrap();
+
+        let failure = AstrometryAnalysis {
+            image_id: 7,
+            status: AstrometryAnalysisStatus::Failed,
+            mode: None,
+            hint_source: None,
+            expected_source: None,
+            solution: None,
+            catalog_hits: Vec::new(),
+            catalog_scope: None,
+            catalog_radius_deg: None,
+            pointing: None,
+            source_fingerprint: source_fingerprint(&source_path).unwrap(),
+            catalog_signature: None,
+            solver_provenance: Some(AstrometrySolverProvenance {
+                seiza_version: SEIZA_VERSION.to_string(),
+                detection_backend: "mtf_u8+linear_f32".to_string(),
+                star_catalog: AstrometryCatalogFileSignature {
+                    name: "stars".to_string(),
+                    path: "/data/stars.bin".to_string(),
+                    format: "test".to_string(),
+                    size_bytes: 1,
+                    modified_unix_seconds: 1,
+                    modified_subsec_nanos: 0,
+                    sha256: None,
+                },
+                blind_index: None,
+            }),
+            solve_attempt: Some(AstrometrySolveAttempt {
+                outcome: AstrometryAttemptOutcome::NoMatch,
+                modes_attempted: vec![AstrometrySolveMode::Hinted],
+                detected_stars: Some(40),
+                duration_ms: 5,
+                image_quality_evidence: true,
+                cacheable: true,
+            }),
+            computed_at: 1,
+            error: Some("no match".to_string()),
+        };
+        persist_pixel_analysis(&cache_dir, &failure).unwrap();
+
+        let cache = AstrometryEvidenceCache::new();
+        let loaded = cache.evidence_for_source(&cache_dir, 7, None).unwrap();
+        assert!(loaded.solve_attempt.is_some());
+        let persisted_path = astrometry_cache_path(&cache_dir, 7);
+        let original_cache_mtime = std::fs::metadata(&persisted_path)
+            .unwrap()
+            .modified()
+            .unwrap();
+        // Second lookup is served from memory (same mtime).
+        assert!(cache.evidence_for_source(&cache_dir, 7, None).is_some());
+
+        // Replacing the source file invalidates immediately — no TTL window in
+        // which a different exposure could inherit the old evidence.
+        std::fs::write(&source_path, b"different pixels entirely").unwrap();
+        assert!(cache.evidence_for_source(&cache_dir, 7, None).is_none());
+
+        // A fresh persisted attempt reloads even when the filesystem reports
+        // the same cache-file mtime for the atomic replacement.
+        let mut refreshed = failure.clone();
+        refreshed.source_fingerprint = source_fingerprint(&source_path).unwrap();
+        persist_pixel_analysis(&cache_dir, &refreshed).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&persisted_path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(original_cache_mtime))
+            .unwrap();
+        assert!(cache.evidence_for_source(&cache_dir, 7, None).is_some());
+
+        // Deleting the persisted attempt drops the entry.
+        std::fs::remove_file(astrometry_cache_path(&cache_dir, 7)).unwrap();
+        assert!(cache.evidence_for_source(&cache_dir, 7, None).is_none());
+    }
+
+    #[test]
     fn analysis_contract_keeps_hint_expected_and_solution_separate() {
         let analysis = AstrometryAnalysis {
             image_id: 42,
@@ -2309,6 +2905,7 @@ mod tests {
             },
             catalog_signature: None,
             solver_provenance: None,
+            solve_attempt: None,
             computed_at: 9999,
             error: None,
         };
@@ -2318,6 +2915,48 @@ mod tests {
         assert_eq!(json["hint_source"]["source"], "fits_header");
         assert_eq!(json["expected_source"]["source"], "target_scheduler");
         assert!(json.get("solution").is_none());
+    }
+
+    #[test]
+    fn opposite_hemisphere_pointing_abstention_round_trips_through_json() {
+        let wcs = seiza::Wcs {
+            crval: (180.0, 0.0),
+            crpix: (49.5, 49.5),
+            cd: [[-0.001, 0.0], [0.0, 0.001]],
+            sip: None,
+        };
+        let solution = AstrometrySolutionResponse {
+            center_ra_deg: 180.0,
+            center_dec_deg: 0.0,
+            pixel_scale_arcsec_per_pixel: 3.6,
+            matched_stars: 30,
+            rms_arcsec: 0.8,
+            image_width: 100,
+            image_height: 100,
+            wcs: WcsResponse {
+                crval: [180.0, 0.0],
+                crpix: [49.5, 49.5],
+                cd: [[-0.001, 0.0], [0.0, 0.001]],
+                ctype: ["RA---TAN".to_string(), "DEC--TAN".to_string()],
+                cunit: ["deg".to_string(), "deg".to_string()],
+                radesys: "ICRS".to_string(),
+                equinox: 2000.0,
+            },
+            footprint: Vec::new(),
+            objects: Vec::new(),
+            catalog_version: None,
+            capture_time: None,
+        };
+
+        let pointing = pointing_result(&solution, &wcs, (0.0, 0.0));
+        assert!(pointing.east_offset_arcsec.is_none());
+        assert!(pointing.north_offset_arcsec.is_none());
+        assert!(pointing.separation_arcsec > 600_000.0);
+
+        let json = serde_json::to_vec(&pointing).unwrap();
+        let round_trip: PointingResult = serde_json::from_slice(&json).unwrap();
+        assert!(round_trip.east_offset_arcsec.is_none());
+        assert!(round_trip.north_offset_arcsec.is_none());
     }
 
     #[test]

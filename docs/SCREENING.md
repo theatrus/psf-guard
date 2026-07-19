@@ -1,4 +1,4 @@
-# Quality Screening: Occlusion, Clouds & Stray Light
+# Quality Screening: Image Conditions & Astrometry
 
 PSF Guard can automatically screen light frames for problems that ruin
 integrations but slip past conventional grading: trees or a dome edge
@@ -6,6 +6,12 @@ occluding part of the field, small clouds passing through, thin veils that
 dim the whole frame, errant light, and static glow at the field edge. Every
 verdict can be rendered as an annotated diagnostic image showing exactly
 which part of the frame drove the decision.
+
+When the scan has Target Scheduler context, fresh pixel-derived plate
+solutions also catch images captured away from the intended field, pointing
+jumps, tracking drift, and deterministic solve failures. See
+[Astrometry quality grading](ASTROMETRY_QUALITY.md) for target provenance,
+failure semantics, score caps, and the guarded regrade workflow.
 
 All detections are classical statistics — no machine learning, no training
 data, no network access. Thresholds were calibrated against real sessions
@@ -45,6 +51,7 @@ problems away.
 | **Background rise** | Errant light (headlights, flashlights) | Per-cell background vs the cell's own history, after subtracting the frame's gradient (robust plane fit) |
 | **Background fall** | Dark occluders, cloud shadow | Same, downward: something blocking skyglow reads *darker*, not milky |
 | **Static glow** | Corner haze, lit occluder edges | Cells brighter than the frame's own gradient model — catches problems present from a session's *first* frame, which temporal baselines can never see |
+| **Fresh plate solution** | Off-target frames, pointing jumps/drift, deterministic no-solves | Seiza solves the current pixels; solved centers are compared to the authoritative target, stable framing clusters, and within-segment drift |
 
 The signals feed a sequence analyzer that scores every frame 0–1 relative to
 its session (same target, filter, and exposure; sessions split on 60-minute
@@ -61,7 +68,7 @@ psf-guard screen-fits "/path/to/2026-06-30/LIGHT"
 # Render an annotated diagnostic PNG for every WARN/REJECT frame
 psf-guard screen-fits "/path/to/LIGHT" --annotate /tmp/diagnostics
 
-# Write [Auto] rejections into the Target Scheduler database
+# Add target-aware astrometry and propose/write supported [Auto] rejections
 # (dry-run first; frames matched by filename AND capture timestamp)
 psf-guard screen-fits "/path/to/LIGHT" --regrade-db my-db-slug --dry-run
 psf-guard screen-fits "/path/to/LIGHT" --regrade-db my-db-slug
@@ -70,12 +77,13 @@ psf-guard screen-fits "/path/to/LIGHT" --regrade-db my-db-slug
 psf-guard move-rejects --db my-db-slug
 ```
 
-From the **web UI**: open a target's Sequence view and press **Scan
-Occlusion**. The scan runs server-side in the background (progress shown
-live), results persist across restarts, and the sequence analysis picks up
-the occlusion/photometric signals automatically — coverage badges and
-classifications appear on the affected frames, and "Select Clouded" bulk-
-selects flagged runs for rejection.
+From the **web UI**: open a target's Sequence view and press **Scan Quality**.
+The scan runs spatial/photometric screening and fresh plate solves in the
+background (progress shown live), and results persist across restarts. The
+sequence analysis shows coverage badges, classifications, and solved-center
+scatter. Use **Select Clouded**, **Select Off Target**, **Select Unsolved**, or
+**Select Recommended**; rejecting a recommendation always opens a per-image
+review before anything is written.
 
 ## Reading the diagnostics
 
@@ -159,6 +167,13 @@ Safety properties worth knowing:
 - **Regrade matching is double-keyed**: filename *and* capture timestamp
   (±10 min) must agree, so screening the wrong directory can never regrade
   the wrong row. Already-Rejected rows are never touched.
+- **Fresh pixels are authoritative**: embedded FITS WCS and coordinate-only
+  catalog association are never grading evidence. A quality scan plate-solves
+  the current pixels, and cache reuse is fingerprinted against the FITS and
+  solver resources.
+- **No-solve abstention**: a deterministic isolated solve failure lowers the
+  score but is not automatically rejected without independent degradation.
+  Missing catalogs, decode failures, and other operational errors abstain.
 - **Bounded baselines**: a run of anomalous frames longer than
   `baseline_freeze_max_frames` (default 15) is accepted as a new steady
   state, so a permanent condition change (moonrise, light dome) cannot

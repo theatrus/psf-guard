@@ -297,9 +297,11 @@ pub enum Commands {
         #[arg(long, default_value = "60")]
         session_gap: u64,
 
-        /// Write [Auto] rejections for REJECT verdicts into this scheduler DB
-        /// (registry slug or path to a .sqlite file); frames are matched by
-        /// FITS filename. Already-rejected frames are left untouched.
+        /// Plate solve frames, then write [Auto] rejections for corroborated
+        /// quality or pointing failures into this scheduler DB (registry slug
+        /// or path to a .sqlite file). Frames are matched by FITS filename and
+        /// capture time. Isolated no-solves and operational failures are not
+        /// rejected; already-rejected frames are left untouched.
         #[arg(long)]
         regrade_db: Option<String>,
 

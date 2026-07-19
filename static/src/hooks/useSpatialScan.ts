@@ -4,7 +4,8 @@ import { apiClient } from '../api/client';
 import type { SpatialScanStatus } from '../api/types';
 
 /**
- * Trigger and monitor the server-side spatial (occlusion) metrics scan.
+ * Trigger and monitor the server-side quality scan (spatial metrics plus
+ * pixel-derived astrometry).
  *
  * The scan reads every FITS file of the target and runs star detection, so it
  * takes seconds per frame; the server runs it in the background and this hook
@@ -20,7 +21,7 @@ export function useSpatialScan(
   const queryClient = useQueryClient();
 
   const statusQuery = useQuery<SpatialScanStatus>({
-    queryKey: ['db', dbId, 'spatial-scan'],
+    queryKey: ['db', dbId, 'quality-scan'],
     queryFn: () => apiClient.getSpatialScanStatus(dbId!),
     enabled: !!dbId,
     refetchInterval: (query) => (query.state.data?.progress.running ? 1000 : false),
@@ -49,7 +50,7 @@ export function useSpatialScan(
       }),
     onSuccess: (status) => {
       // Seed the poll query so refetchInterval kicks in immediately.
-      queryClient.setQueryData(['db', dbId, 'spatial-scan'], status);
+      queryClient.setQueryData(['db', dbId, 'quality-scan'], status);
       if (!status.started && !status.progress.running) {
         // Nothing needed computing; metrics may still be newly relevant.
         queryClient.invalidateQueries({ queryKey: ['db', dbId, 'sequence-analysis'] });

@@ -93,8 +93,8 @@ export interface CatalogHit {
 export interface PointingResult {
   expected_ra_deg: number;
   expected_dec_deg: number;
-  east_offset_arcsec: number;
-  north_offset_arcsec: number;
+  east_offset_arcsec?: number;
+  north_offset_arcsec?: number;
   separation_arcsec: number;
   target_in_frame: boolean;
   target_edge_margin_px?: number;
@@ -116,6 +116,14 @@ export interface AstrometryAnalysis {
     detection_backend: string;
     star_catalog: { name: string; path: string; format: string; size_bytes: number };
     blind_index?: { name: string; path: string; format: string; size_bytes: number };
+  };
+  solve_attempt?: {
+    outcome: 'solved' | 'no_match' | 'insufficient_stars' | 'decode_error' | 'unsupported_image' | 'resource_unavailable' | 'cancelled' | 'internal_error';
+    modes_attempted: AstrometrySolveMode[];
+    detected_stars?: number;
+    duration_ms: number;
+    image_quality_evidence: boolean;
+    cacheable: boolean;
   };
   source_fingerprint: {
     canonical_path: string;
@@ -314,6 +322,8 @@ export interface SequenceAnalysisRequest {
   weight_eccentricity?: number;
   weight_snr?: number;
   weight_background?: number;
+  weight_spatial?: number;
+  weight_pointing?: number;
 }
 
 export interface SequenceAnalysisResponse {
@@ -337,6 +347,7 @@ export interface ImageQualityResult {
   quality_score: number;
   temporal_anomaly_score: number;
   category: string | null;
+  flags?: string[];
   normalized_metrics: {
     star_count: number | null;
     hfr: number | null;
@@ -351,17 +362,44 @@ export interface ImageQualityResult {
      * flux, 0 = <=60% of the sequence reference). Populated after a spatial
      * scan; null otherwise. Optional for older servers. */
     transparency?: number | null;
+    /** Pixel-derived pointing score. Missing until a quality scan runs. */
+    pointing?: number | null;
   };
+  pointing?: {
+    pixel_solved: boolean;
+    solve_failed: boolean;
+    image_quality_evidence: boolean;
+    expected_target: boolean;
+    flags: string[];
+    east_offset_arcsec?: number;
+    north_offset_arcsec?: number;
+    separation_arcsec?: number;
+    field_fraction_offset?: number;
+    reference_offset_arcsec?: number;
+    /** Residual from the segment's own robust center, as a field fraction. */
+    reference_field_fraction?: number;
+    drift_rate_arcsec_per_hour?: number;
+    matched_stars?: number;
+    rms_arcsec?: number;
+    error?: string;
+  };
+  regrade_reason?: string;
   details: string | null;
 }
 
 export interface SpatialScanProgress {
   running: boolean;
+  stage: string;
   target_id: number | null;
   filter_name: string | null;
   total: number;
   processed: number;
   skipped_cached: number;
+  spatial_processed: number;
+  astrometry_processed: number;
+  solved: number;
+  solve_failed: number;
+  operational_errors: number;
   errors: number;
   current_file: string | null;
   started_at: number | null;
@@ -381,6 +419,8 @@ export interface SpatialScanRequest {
   target_id: number;
   filter_name?: string;
   force?: boolean;
+  force_spatial?: boolean;
+  force_astrometry?: boolean;
 }
 
 export interface SequenceSummary {
@@ -392,6 +432,8 @@ export interface SequenceSummary {
   cloud_events_detected: number;
   focus_drift_detected: boolean;
   tracking_issues_detected: boolean;
+  out_of_target_count: number;
+  plate_solve_failed_count: number;
 }
 
 export interface ReferenceValues {

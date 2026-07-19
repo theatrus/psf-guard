@@ -257,6 +257,10 @@ async fn run_server_internal(
         .route(
             "/analysis/spatial-scan",
             post(handlers::start_spatial_scan).get(handlers::get_spatial_scan_progress),
+        )
+        .route(
+            "/analysis/quality-scan",
+            post(handlers::start_spatial_scan).get(handlers::get_spatial_scan_progress),
         );
 
     // Top-level API: global endpoints + nested per-DB routes.
