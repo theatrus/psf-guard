@@ -422,8 +422,13 @@ pub struct AstrometrySolverProvenance {
 pub struct PointingResult {
     pub expected_ra_deg: f64,
     pub expected_dec_deg: f64,
-    pub east_offset_arcsec: f64,
-    pub north_offset_arcsec: f64,
+    /// Tangent-plane offsets are undefined when the solved center is 90° or
+    /// more from the intended target. Keep that abstention JSON-safe instead
+    /// of encoding it as a non-finite float.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub east_offset_arcsec: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub north_offset_arcsec: Option<f64>,
     pub separation_arcsec: f64,
     pub target_in_frame: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2084,9 +2089,12 @@ fn pointing_result(
             - expected_dec.sin() * center_dec.cos() * delta_ra.cos())
             / denominator;
         let radians_to_arcsec = 180.0 / std::f64::consts::PI * 3600.0;
-        (east * radians_to_arcsec, north * radians_to_arcsec)
+        (
+            Some(east * radians_to_arcsec),
+            Some(north * radians_to_arcsec),
+        )
     } else {
-        (f64::NAN, f64::NAN)
+        (None, None)
     };
     let separation_arcsec = angular_separation_deg(
         solution.center_ra_deg,
@@ -2874,6 +2882,48 @@ mod tests {
         assert_eq!(json["hint_source"]["source"], "fits_header");
         assert_eq!(json["expected_source"]["source"], "target_scheduler");
         assert!(json.get("solution").is_none());
+    }
+
+    #[test]
+    fn opposite_hemisphere_pointing_abstention_round_trips_through_json() {
+        let wcs = seiza::Wcs {
+            crval: (180.0, 0.0),
+            crpix: (49.5, 49.5),
+            cd: [[-0.001, 0.0], [0.0, 0.001]],
+            sip: None,
+        };
+        let solution = AstrometrySolutionResponse {
+            center_ra_deg: 180.0,
+            center_dec_deg: 0.0,
+            pixel_scale_arcsec_per_pixel: 3.6,
+            matched_stars: 30,
+            rms_arcsec: 0.8,
+            image_width: 100,
+            image_height: 100,
+            wcs: WcsResponse {
+                crval: [180.0, 0.0],
+                crpix: [49.5, 49.5],
+                cd: [[-0.001, 0.0], [0.0, 0.001]],
+                ctype: ["RA---TAN".to_string(), "DEC--TAN".to_string()],
+                cunit: ["deg".to_string(), "deg".to_string()],
+                radesys: "ICRS".to_string(),
+                equinox: 2000.0,
+            },
+            footprint: Vec::new(),
+            objects: Vec::new(),
+            catalog_version: None,
+            capture_time: None,
+        };
+
+        let pointing = pointing_result(&solution, &wcs, (0.0, 0.0));
+        assert!(pointing.east_offset_arcsec.is_none());
+        assert!(pointing.north_offset_arcsec.is_none());
+        assert!(pointing.separation_arcsec > 600_000.0);
+
+        let json = serde_json::to_vec(&pointing).unwrap();
+        let round_trip: PointingResult = serde_json::from_slice(&json).unwrap();
+        assert!(round_trip.east_offset_arcsec.is_none());
+        assert!(round_trip.north_offset_arcsec.is_none());
     }
 
     #[test]

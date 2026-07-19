@@ -93,8 +93,8 @@ export interface CatalogHit {
 export interface PointingResult {
   expected_ra_deg: number;
   expected_dec_deg: number;
-  east_offset_arcsec: number;
-  north_offset_arcsec: number;
+  east_offset_arcsec?: number;
+  north_offset_arcsec?: number;
   separation_arcsec: number;
   target_in_frame: boolean;
   target_edge_margin_px?: number;

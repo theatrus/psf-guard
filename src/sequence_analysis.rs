@@ -131,8 +131,14 @@ pub fn astrometry_metrics_from_analysis(
         image_quality_evidence: attempt.image_quality_evidence,
         solved_center_ra_deg: analysis.solution.as_ref().map(|s| s.center_ra_deg),
         solved_center_dec_deg: analysis.solution.as_ref().map(|s| s.center_dec_deg),
-        east_offset_arcsec: analysis.pointing.as_ref().map(|p| p.east_offset_arcsec),
-        north_offset_arcsec: analysis.pointing.as_ref().map(|p| p.north_offset_arcsec),
+        east_offset_arcsec: analysis
+            .pointing
+            .as_ref()
+            .and_then(|p| p.east_offset_arcsec),
+        north_offset_arcsec: analysis
+            .pointing
+            .as_ref()
+            .and_then(|p| p.north_offset_arcsec),
         separation_arcsec: analysis.pointing.as_ref().map(|p| p.separation_arcsec),
         target_in_frame: analysis.pointing.as_ref().map(|p| p.target_in_frame),
         field_short_axis_arcsec,
@@ -950,11 +956,12 @@ impl SequenceAnalyzer {
                     .map(|_| idx)
             })
             .collect();
-        let use_expected_target = !solved_candidates.is_empty()
+        let has_expected_target = !solved_candidates.is_empty()
             && solved_candidates.iter().all(|&idx| {
-                images[idx].astrometry.as_ref().is_some_and(|a| {
-                    a.east_offset_arcsec.is_some() && a.north_offset_arcsec.is_some()
-                })
+                images[idx]
+                    .astrometry
+                    .as_ref()
+                    .is_some_and(|a| a.separation_arcsec.is_some())
             });
         let tangent_origin = solved_candidates.iter().find_map(|&idx| {
             let a = images[idx].astrometry.as_ref()?;
@@ -964,7 +971,7 @@ impl SequenceAnalyzer {
             .iter()
             .filter_map(|&idx| {
                 let a = images[idx].astrometry.as_ref()?;
-                let (east, north) = if use_expected_target {
+                let (east, north) = if has_expected_target {
                     (a.east_offset_arcsec?, a.north_offset_arcsec?)
                 } else {
                     tangent_plane_offset_arcsec(
@@ -984,7 +991,7 @@ impl SequenceAnalyzer {
             .iter()
             .map(|image| {
                 let a = image.astrometry.as_ref()?;
-                let fraction = use_expected_target
+                let fraction = has_expected_target
                     .then_some(a.separation_arcsec)
                     .flatten()
                     .zip(a.field_short_axis_arcsec)
@@ -994,6 +1001,9 @@ impl SequenceAnalyzer {
                 // segment's own cluster is known: a consistently displaced
                 // segment is deliberate framing, not a pointing failure.
                 let mut flags = Vec::new();
+                if a.pixel_solved && a.target_in_frame == Some(false) {
+                    flags.push(IssueCategory::OffTarget);
+                }
                 if a.solve_failed && a.image_quality_evidence {
                     flags.push(IssueCategory::PlateSolveFailed);
                 }
@@ -1001,15 +1011,15 @@ impl SequenceAnalyzer {
                     pixel_solved: a.pixel_solved,
                     solve_failed: a.solve_failed,
                     image_quality_evidence: a.image_quality_evidence,
-                    expected_target: use_expected_target && a.pixel_solved,
+                    expected_target: has_expected_target && a.pixel_solved,
                     flags,
-                    east_offset_arcsec: use_expected_target
+                    east_offset_arcsec: has_expected_target
                         .then_some(a.east_offset_arcsec)
                         .flatten(),
-                    north_offset_arcsec: use_expected_target
+                    north_offset_arcsec: has_expected_target
                         .then_some(a.north_offset_arcsec)
                         .flatten(),
-                    separation_arcsec: use_expected_target.then_some(a.separation_arcsec).flatten(),
+                    separation_arcsec: has_expected_target.then_some(a.separation_arcsec).flatten(),
                     field_fraction_offset: fraction,
                     reference_offset_arcsec: None,
                     reference_field_fraction: None,
@@ -1033,7 +1043,7 @@ impl SequenceAnalyzer {
             // Too few solves to know the segment's own cluster. A target fully
             // outside the footprint is still unambiguous; a large in-frame
             // offset could be deliberate framing, so warn instead of flagging.
-            if use_expected_target {
+            if has_expected_target {
                 for &idx in &solved_indices {
                     let target_outside = images[idx]
                         .astrometry
@@ -1055,34 +1065,76 @@ impl SequenceAnalyzer {
             return quality;
         }
 
-        let east = solved_points
-            .iter()
-            .map(|(_, east, _)| *east)
-            .collect::<Vec<_>>();
-        let north = solved_points
-            .iter()
-            .map(|(_, _, north)| *north)
-            .collect::<Vec<_>>();
-        let reference_east = median(&east);
-        let reference_north = median(&north);
-        let distances = solved_points
-            .iter()
-            .map(|(_, east, north)| (*east - reference_east).hypot(*north - reference_north))
-            .collect::<Vec<_>>();
-        let distance_median = median(&distances);
-        let mad = median(
-            &distances
-                .iter()
-                .map(|distance| (distance - distance_median).abs())
-                .collect::<Vec<_>>(),
-        );
         let field = median(
             &solved_indices
                 .iter()
                 .filter_map(|&idx| images[idx].astrometry.as_ref()?.field_short_axis_arcsec)
                 .collect::<Vec<_>>(),
         );
-        let excursion_threshold = (6.0 * mad).max(0.08 * field).max(30.0);
+
+        // Discover stable framing clusters before measuring residuals. A
+        // single global median turns an intentional mid-session composition
+        // change into an outlier cluster and can auto-reject every frame in
+        // the second composition. Single-link clustering keeps gradual drift
+        // connected while separating genuine step changes.
+        let cluster_threshold = (0.08 * field).max(30.0);
+        let cluster_labels = pointing_cluster_labels(&solved_points, cluster_threshold);
+        let cluster_count = cluster_labels
+            .iter()
+            .copied()
+            .max()
+            .map_or(0, |label| label + 1);
+        let mut cluster_east = vec![Vec::new(); cluster_count];
+        let mut cluster_north = vec![Vec::new(); cluster_count];
+        for ((_, east, north), &label) in solved_points.iter().zip(&cluster_labels) {
+            cluster_east[label].push(*east);
+            cluster_north[label].push(*north);
+        }
+        let cluster_centers = cluster_east
+            .iter()
+            .zip(&cluster_north)
+            .map(|(east, north)| (median(east), median(north)))
+            .collect::<Vec<_>>();
+        let distances = solved_points
+            .iter()
+            .zip(&cluster_labels)
+            .map(|((_, east, north), &label)| {
+                let center = cluster_centers[label];
+                (*east - center.0).hypot(*north - center.1)
+            })
+            .collect::<Vec<_>>();
+
+        // Build contiguous runs of cluster membership. A run that leaves a
+        // cluster and returns to that same cluster is a tracking excursion;
+        // any other run with at least three solves is enough evidence for a
+        // stable deliberate framing segment, including A -> B -> C mosaics.
+        let mut runs = Vec::new();
+        let mut position_to_run = vec![0usize; cluster_labels.len()];
+        let mut start = 0usize;
+        while start < cluster_labels.len() {
+            let label = cluster_labels[start];
+            let mut end = start;
+            while end + 1 < cluster_labels.len() && cluster_labels[end + 1] == label {
+                end += 1;
+            }
+            let run_idx = runs.len();
+            for entry in &mut position_to_run[start..=end] {
+                *entry = run_idx;
+            }
+            runs.push((start, end, label));
+            start = end + 1;
+        }
+        let mut jump_run = vec![false; runs.len()];
+        let mut stable_run = vec![false; runs.len()];
+        for (run_idx, &(start, end, label)) in runs.iter().enumerate() {
+            let returns_to_same_cluster = start > 0
+                && end + 1 < cluster_labels.len()
+                && cluster_labels[start - 1] == cluster_labels[end + 1]
+                && cluster_labels[start - 1] != label;
+            let run_len = end - start + 1;
+            jump_run[run_idx] = returns_to_same_cluster && run_len * 2 < solved_points.len();
+            stable_run[run_idx] = run_len >= 3 && !returns_to_same_cluster;
+        }
 
         for (position, &idx) in solved_indices.iter().enumerate() {
             let target_outside = images[idx]
@@ -1095,16 +1147,15 @@ impl SequenceAnalyzer {
                 if field > 0.0 {
                     pointing.reference_field_fraction = Some(distances[position] / field);
                 }
-                if use_expected_target {
-                    // Off target requires departing from BOTH the intended
-                    // target and the segment's own cluster. A far offset that
-                    // the whole segment shares is stable (deliberate) framing:
-                    // warn, never auto-reject (plan §8). A target outside the
-                    // solved footprint is unambiguous regardless of stability.
+                if has_expected_target {
+                    // A target outside the solved footprint is unambiguous.
+                    // Otherwise a far but stable framing run is advisory; a
+                    // short/unclustered departure remains rejectable.
                     let far = pointing
                         .field_fraction_offset
                         .is_some_and(|fraction| fraction >= 0.20);
-                    if target_outside || (far && distances[position] > excursion_threshold) {
+                    let run_idx = position_to_run[position];
+                    if target_outside || (far && !stable_run[run_idx]) {
                         push_issue(&mut pointing.flags, IssueCategory::OffTarget);
                     } else if far {
                         push_issue(&mut pointing.flags, IssueCategory::StableOffset);
@@ -1113,44 +1164,32 @@ impl SequenceAnalyzer {
             }
         }
 
-        // Jump detection over runs of consecutive excursions: tracking can be
-        // lost for several frames before recovering, and each of those frames
-        // is equally rejectable. A run bounded by well-behaved frames (or the
-        // segment edge) that spans less than half the solves is a jump; a
-        // longer displacement is a framing change, left to the stable/drift
-        // logic.
-        let well_behaved = |distance: f64| distance <= excursion_threshold * 0.5;
-        let mut position = 0;
-        while position < distances.len() {
-            if distances[position] <= excursion_threshold {
-                position += 1;
-                continue;
-            }
-            let start = position;
-            let mut end = position;
-            while end + 1 < distances.len() && distances[end + 1] > excursion_threshold {
-                end += 1;
-            }
-            let bounded_before = start == 0 || well_behaved(distances[start - 1]);
-            let bounded_after = end + 1 == distances.len() || well_behaved(distances[end + 1]);
-            if bounded_before && bounded_after && (end - start + 1) * 2 <= distances.len() {
+        for (run_idx, &(start, end, _)) in runs.iter().enumerate() {
+            if jump_run[run_idx] {
                 for &idx in &solved_indices[start..=end] {
                     if let Some(pointing) = quality[idx].as_mut() {
                         push_issue(&mut pointing.flags, IssueCategory::PointingJump);
                     }
                 }
             }
-            position = end + 1;
         }
 
-        let time_values: Vec<(usize, f64, f64, f64)> = solved_points
-            .iter()
-            .filter_map(|&(idx, east, north)| {
-                let timestamp = images[idx].timestamp? as f64;
-                Some((idx, timestamp, east, north))
-            })
-            .collect();
-        if time_values.len() >= 4 {
+        // Fit drift within each contiguous framing segment. A step between
+        // stable compositions must not manufacture a session-wide slope.
+        for (run_idx, &(start, end, _)) in runs.iter().enumerate() {
+            if jump_run[run_idx] {
+                continue;
+            }
+            let time_values: Vec<(usize, f64, f64, f64)> = solved_points[start..=end]
+                .iter()
+                .filter_map(|&(idx, east, north)| {
+                    let timestamp = images[idx].timestamp? as f64;
+                    Some((idx, timestamp, east, north))
+                })
+                .collect();
+            if time_values.len() < 4 {
+                continue;
+            }
             let origin = time_values[0].1;
             let times_hours = time_values
                 .iter()
@@ -1785,6 +1824,42 @@ fn apply_pointing_score(score: f64, pointing: Option<&PointingQuality>) -> f64 {
     }
 }
 
+/// Group solved centers by spatial connectivity. Single-link clustering is
+/// intentional: a gradual tracking drift remains one cluster through its
+/// short consecutive steps, while a discrete framing change forms another.
+fn pointing_cluster_labels(points: &[(usize, f64, f64)], threshold_arcsec: f64) -> Vec<usize> {
+    fn find(parent: &mut [usize], value: usize) -> usize {
+        if parent[value] != value {
+            parent[value] = find(parent, parent[value]);
+        }
+        parent[value]
+    }
+
+    let mut parent = (0..points.len()).collect::<Vec<_>>();
+    for left in 0..points.len() {
+        for right in (left + 1)..points.len() {
+            let distance =
+                (points[left].1 - points[right].1).hypot(points[left].2 - points[right].2);
+            if distance <= threshold_arcsec {
+                let left_root = find(&mut parent, left);
+                let right_root = find(&mut parent, right);
+                if left_root != right_root {
+                    parent[right_root] = left_root;
+                }
+            }
+        }
+    }
+
+    let mut labels = std::collections::HashMap::new();
+    (0..points.len())
+        .map(|position| {
+            let root = find(&mut parent, position);
+            let next = labels.len();
+            *labels.entry(root).or_insert(next)
+        })
+        .collect()
+}
+
 /// Project a solved sky position into a gnomonic plane centered on `origin`.
 /// This supports relative tracking analysis when no authoritative target
 /// coordinate is available and remains correct across RA=0 and near poles.
@@ -2109,6 +2184,27 @@ mod tests {
     }
 
     #[test]
+    fn opposite_hemisphere_solution_remains_off_target_without_plane_offsets() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..6)
+            .map(|i| make_full_image(i, i as i64 * 300, 500.0, 2.5, 1000.0, 20.0, 0.4))
+            .collect();
+        for image in &mut images {
+            image.astrometry = Some(solved_astrometry(10.0, 5.0, 2000.0, true));
+        }
+        let mut far = solved_astrometry(0.0, 0.0, 2000.0, false);
+        far.east_offset_arcsec = None;
+        far.north_offset_arcsec = None;
+        far.separation_arcsec = Some(648_000.0);
+        images[3].astrometry = Some(far);
+
+        let result = &analyzer.analyze(&images, 1, "target", "L")[0].images[3];
+        assert!(result.flags.contains(&IssueCategory::OffTarget));
+        assert!(result.regrade_reason.is_some());
+        assert!(result.quality_score <= 0.20);
+    }
+
+    #[test]
     fn isolated_solve_failure_warns_without_automatic_regrade() {
         let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
         let mut images: Vec<_> = (0..6)
@@ -2216,6 +2312,31 @@ mod tests {
                 result.regrade_reason.is_none(),
                 "stable offsets must never auto-reject"
             );
+            assert!(result.quality_score > 0.30);
+        }
+        assert_eq!(sequence.summary.out_of_target_count, 0);
+    }
+
+    #[test]
+    fn deliberate_mid_session_reframing_forms_two_stable_clusters() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..6)
+            .map(|i| make_full_image(i, i as i64 * 300, 500.0, 2.5, 1000.0, 20.0, 0.4))
+            .collect();
+        for image in &mut images[..3] {
+            image.astrometry = Some(solved_astrometry(10.0, 0.0, 2000.0, true));
+        }
+        // A deliberate second composition, 25% of the field from target.
+        for image in &mut images[3..] {
+            image.astrometry = Some(solved_astrometry(500.0, 0.0, 2000.0, true));
+        }
+
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        for result in &sequence.images[3..] {
+            assert!(result.flags.contains(&IssueCategory::StableOffset));
+            assert!(!result.flags.contains(&IssueCategory::OffTarget));
+            assert!(!result.flags.contains(&IssueCategory::PointingDrift));
+            assert!(result.regrade_reason.is_none());
             assert!(result.quality_score > 0.30);
         }
         assert_eq!(sequence.summary.out_of_target_count, 0);
