@@ -159,6 +159,11 @@ grading progress), an image grid, and a comparison mode:
 - **Smart loading**: fast previews first, full resolution on zoom; previews
   generate on demand in the background, so a fresh install is browsable
   immediately.
+- **Sky context and plate solving**: coordinate-only catalog matches appear
+  immediately. Choose **Solve field** (or press `O`) to run Seiza against the
+  image pixels; PSF Guard tries the FITS/mount hint first, falls back to the
+  blind index when installed, persists the WCS per database, and enables the
+  shared object overlay.
 - **Undo/redo** for every grading action.
 
 | Key | Action | Key | Action |
@@ -166,7 +171,8 @@ grading progress), an image grid, and a comparison mode:
 | K / → | Next image | A | Accept |
 | J / ← | Previous | X | Reject |
 | C | Compare | U | Unmark |
-| S | Stars overlay | + / − | Zoom |
+| S | Stars overlay | O | Solve / sky overlay |
+| P | PSF view | + / − | Zoom |
 | Ctrl+Z | Undo | Ctrl+Y | Redo |
 
 Grades are written straight to the Target Scheduler database, so the
@@ -312,6 +318,26 @@ that shouldn't touch your real config, pass `--registry /tmp/scratch.json`.
 The default N.I.N.A. scheduler database on Windows lives at
 `%LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite`.
 
+### Seiza catalogs and plate solving
+
+PSF Guard uses Seiza's standard catalog discovery. A complete catalog bundle
+can also be selected explicitly with the top-level `astrometry.data_dir` in
+the JSON registry:
+
+```json
+{
+  "schema_version": 2,
+  "databases": [],
+  "astrometry": { "data_dir": "/var/lib/psf-guard/catalog" }
+}
+```
+
+`objects.bin` enables coordinate-only object association. A star tile catalog
+enables hinted solving; the blind pattern index adds fallback solving when the
+pointing hint is absent or stale. Successful pixel-derived solutions live at
+`<cache>/<db-slug>/astrometry/<image-id>.json` and are invalidated when the
+source FITS file or relevant catalog changes.
+
 ### Server knobs: the TOML
 
 ```bash
@@ -362,6 +388,10 @@ curl -X PUT localhost:3000/api/db/my-db/images/123/grade \
 # Fetch processed images
 curl "localhost:3000/api/db/my-db/images/123/preview?size=large" -o preview.png
 curl "localhost:3000/api/db/my-db/images/123/annotated" -o stars.png
+
+# Read header/catalog context, then plate-solve pixels on demand
+curl "localhost:3000/api/db/my-db/images/123/astrometry"
+curl -X POST "localhost:3000/api/db/my-db/images/123/astrometry"
 ```
 
 ## Known limitations

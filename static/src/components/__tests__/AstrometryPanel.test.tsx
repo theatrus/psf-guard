@@ -70,8 +70,10 @@ describe('AstrometryPanel', () => {
       <AstrometryPanel
         analysis={solved}
         isLoading={false}
+        isSolving={false}
         overlayVisible={true}
         onToggleOverlay={onToggle}
+        onSolve={vi.fn()}
       />
     );
 
@@ -83,7 +85,8 @@ describe('AstrometryPanel', () => {
     expect(onToggle).toHaveBeenCalledOnce();
   });
 
-  it('labels coordinate-only results without offering a pixel overlay', () => {
+  it('labels coordinate-only results and offers an on-demand plate solve', () => {
+    const onSolve = vi.fn();
     render(
       <AstrometryPanel
         analysis={{
@@ -101,14 +104,17 @@ describe('AstrometryPanel', () => {
           },
         }}
         isLoading={false}
+        isSolving={false}
         overlayVisible={false}
         onToggleOverlay={vi.fn()}
+        onSolve={onSolve}
       />
     );
 
     expect(screen.getByText('Nearby catalog')).toBeInTheDocument();
     expect(screen.getByText('Objects near target')).toBeInTheDocument();
     expect(screen.getByText('Within 1.0° · field size unknown')).toBeInTheDocument();
-    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Solve field' }));
+    expect(onSolve).toHaveBeenCalledOnce();
   });
 });

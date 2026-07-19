@@ -15,7 +15,7 @@ test('partial data directory reports usable and missing Seiza resources', async 
       object_association: true,
       object_name_search: false,
       stellar_name_search: false,
-      hinted_solve: false,
+      hinted_solve: true,
       blind_solve: false,
       transient_annotations: false,
       minor_body_annotations: false,
@@ -26,7 +26,7 @@ test('partial data directory reports usable and missing Seiza resources', async 
         status: 'available',
         format: 'SEIZAOB4',
       },
-      stars: { status: 'missing' },
+      stars: { status: 'available', format: 'SEIZAST2' },
       star_identifiers: { status: 'missing' },
       blind_index: { status: 'missing' },
       transients: { status: 'missing' },
@@ -59,10 +59,15 @@ test('explicit validation opens and exhaustively validates the installed catalog
   });
   expect(
     resources
-      .filter((resource) => resource.name !== 'objects')
+      .filter((resource) => !['objects', 'stars'].includes(resource.name))
       .every(
         (resource) =>
           resource.status === 'missing' && resource.validated === false
       )
   ).toBe(true);
+  expect(resources.find((resource) => resource.name === 'stars')).toMatchObject({
+    name: 'stars',
+    status: 'available',
+    validated: true,
+  });
 });

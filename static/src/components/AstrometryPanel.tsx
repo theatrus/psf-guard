@@ -4,8 +4,11 @@ interface AstrometryPanelProps {
   analysis?: AstrometryAnalysis;
   isLoading: boolean;
   error?: string;
+  solveError?: string;
+  isSolving: boolean;
   overlayVisible: boolean;
   onToggleOverlay: () => void;
+  onSolve: () => void;
 }
 
 function formatRa(raDeg: number): string {
@@ -44,8 +47,11 @@ export default function AstrometryPanel({
   analysis,
   isLoading,
   error,
+  solveError,
+  isSolving,
   overlayVisible,
   onToggleOverlay,
+  onSolve,
 }: AstrometryPanelProps) {
   if (isLoading) {
     return (
@@ -69,7 +75,11 @@ export default function AstrometryPanel({
 
   const solution = analysis.solution;
   const badge = solution
-    ? 'Embedded FITS WCS'
+    ? analysis.mode === 'hinted'
+      ? 'Hinted solve'
+      : analysis.mode === 'blind'
+        ? 'Blind solve'
+        : 'Embedded FITS WCS'
     : analysis.catalog_scope === 'nearby_target'
       ? 'Nearby catalog'
     : analysis.status === 'catalog_only'
@@ -101,6 +111,22 @@ export default function AstrometryPanel({
           <span className="astrometry-toggle-icon" aria-hidden="true">◎</span>
           {overlayVisible ? 'Sky overlay on' : 'Show sky overlay'}
           <span className="astrometry-toggle-count">{solution.objects?.length ?? 0}</span>
+        </button>
+      )}
+
+      {!solution && (
+        <button
+          type="button"
+          className="astrometry-solve"
+          disabled={isSolving}
+          onClick={onSolve}
+        >
+          <span className="astrometry-toggle-icon" aria-hidden="true">◎</span>
+          {isSolving
+            ? 'Solving field…'
+            : analysis.status === 'failed'
+              ? 'Retry plate solve'
+              : 'Solve field'}
         </button>
       )}
 
@@ -159,8 +185,10 @@ export default function AstrometryPanel({
         </div>
       )}
 
-      {analysis.error && (
-        <p className="astrometry-message astrometry-message-warning">{analysis.error}</p>
+      {(solveError || analysis.error) && (
+        <p className="astrometry-message astrometry-message-warning">
+          {solveError || analysis.error}
+        </p>
       )}
     </section>
   );
