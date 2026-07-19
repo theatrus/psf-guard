@@ -6,7 +6,7 @@ import * as zlib from 'zlib';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * Install the tiny real SEIZAOB4 fixture and an isolated catalog-only
+ * Install the tiny real SEIZAOB4 fixture and an isolated partial-bundle
  * registry. Playwright config calls this before the web server starts; global
  * setup calls it again after resetting the remainder of the per-run fixture.
  */
@@ -28,7 +28,7 @@ export function installAstrometryFixture(tmpBase: string): string {
       {
         schema_version: 2,
         databases: [],
-        astrometry: { objects: objectsPath },
+        astrometry: { data_dir: astrometryDir },
       },
       null,
       2

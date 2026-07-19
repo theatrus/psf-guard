@@ -10,22 +10,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-pub const SEIZA_VERSION: &str = "0.7.2";
+pub const SEIZA_VERSION: &str = "0.8.0";
 pub const SEIZA_FITS_VERSION: &str = "0.1.6";
 
-const OBJECTS_FILE: &str = "objects.bin";
-const STARS_FILE: &str = "stars-gaia.bin";
-const STAR_IDENTIFIERS_FILE: &str = "stars-lite-tycho2.ids.bin";
-const BLIND_INDEX_FILE: &str = "blind-gaia16.idx";
-const TRANSIENTS_FILE: &str = "transients.bin";
-const MINOR_BODIES_FILE: &str = "minor-bodies.bin";
+pub type AstrometryResourcePath = Result<Option<PathBuf>, seiza::data_paths::DataPathError>;
 
 /// Process-global paths to Seiza's offline data files.
 ///
-/// An explicit relative filename is resolved below `data_dir`. When a field is
-/// absent but `data_dir` is present, the canonical Seiza bundle filename is
-/// auto-discovered. With neither a directory nor an explicit path, that
-/// capability is not configured.
+/// `data_dir` is enough to configure an entire Seiza bundle. Explicit resource
+/// paths override it, with relative paths resolved below the directory. When
+/// neither is set, Seiza's standard environment, executable-adjacent, and
+/// platform data locations are searched.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AstrometryConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -45,47 +40,63 @@ pub struct AstrometryConfig {
 }
 
 impl AstrometryConfig {
-    fn resolve(&self, explicit: &Option<String>, canonical: &str) -> Option<PathBuf> {
-        match explicit {
+    fn resolver_input(&self, explicit: &Option<String>) -> Option<PathBuf> {
+        let data_dir = self
+            .data_dir
+            .as_deref()
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from);
+        match explicit.as_deref().filter(|path| !path.is_empty()) {
             Some(path) => {
                 let path = PathBuf::from(path);
                 if path.is_absolute() {
                     Some(path)
-                } else if let Some(data_dir) = &self.data_dir {
-                    Some(PathBuf::from(data_dir).join(path))
+                } else if let Some(data_dir) = data_dir {
+                    Some(data_dir.join(path))
                 } else {
                     Some(path)
                 }
             }
-            None => self
-                .data_dir
-                .as_ref()
-                .map(|directory| PathBuf::from(directory).join(canonical)),
+            None => data_dir,
         }
     }
 
-    pub fn objects_path(&self) -> Option<PathBuf> {
-        self.resolve(&self.objects, OBJECTS_FILE)
+    fn resolve_required(
+        &self,
+        explicit: &Option<String>,
+        resolve: impl FnOnce(Option<&Path>) -> Result<PathBuf, seiza::data_paths::DataPathError>,
+    ) -> AstrometryResourcePath {
+        let input = self.resolver_input(explicit);
+        match resolve(input.as_deref()) {
+            Ok(path) => Ok(Some(path)),
+            Err(seiza::data_paths::DataPathError::NoDefault { .. }) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
-    pub fn stars_path(&self) -> Option<PathBuf> {
-        self.resolve(&self.stars, STARS_FILE)
+    pub fn objects_path(&self) -> AstrometryResourcePath {
+        self.resolve_required(&self.objects, seiza::data_paths::objects)
     }
 
-    pub fn star_identifiers_path(&self) -> Option<PathBuf> {
-        self.resolve(&self.star_identifiers, STAR_IDENTIFIERS_FILE)
+    pub fn stars_path(&self) -> AstrometryResourcePath {
+        self.resolve_required(&self.stars, seiza::data_paths::star_data)
     }
 
-    pub fn blind_index_path(&self) -> Option<PathBuf> {
-        self.resolve(&self.blind_index, BLIND_INDEX_FILE)
+    pub fn star_identifiers_path(&self) -> AstrometryResourcePath {
+        self.resolve_required(&self.star_identifiers, seiza::data_paths::star_identifiers)
     }
 
-    pub fn transients_path(&self) -> Option<PathBuf> {
-        self.resolve(&self.transients, TRANSIENTS_FILE)
+    pub fn blind_index_path(&self) -> AstrometryResourcePath {
+        let input = self.resolver_input(&self.blind_index);
+        seiza::data_paths::blind_index(input.as_deref())
     }
 
-    pub fn minor_bodies_path(&self) -> Option<PathBuf> {
-        self.resolve(&self.minor_bodies, MINOR_BODIES_FILE)
+    pub fn transients_path(&self) -> AstrometryResourcePath {
+        self.resolve_required(&self.transients, seiza::data_paths::transients)
+    }
+
+    pub fn minor_bodies_path(&self) -> AstrometryResourcePath {
+        self.resolve_required(&self.minor_bodies, seiza::data_paths::minor_bodies)
     }
 }
 
@@ -1153,10 +1164,12 @@ impl Drop for AstrometryValidationGuard<'_> {
 
 fn load_cached<T>(
     cache: &ResourceCache<T>,
-    path: Option<PathBuf>,
+    path: AstrometryResourcePath,
     open: impl FnOnce(&Path) -> Result<T, String>,
 ) -> Result<LoadedResource<T>, String> {
-    let path = path.ok_or_else(|| "resource is not configured".to_string())?;
+    let path = path
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "resource is not configured".to_string())?;
     let fingerprint = resource_fingerprint(&path)?;
     if let Some(cached) = cache.read().unwrap().as_ref() {
         if cached.fingerprint == fingerprint {
@@ -1191,20 +1204,35 @@ fn load_cached<T>(
 
 fn capability(
     name: &str,
-    path: Option<PathBuf>,
+    path: AstrometryResourcePath,
     opened: Result<ResourceFingerprint, String>,
 ) -> AstrometryResourceCapability {
-    let Some(path) = path else {
-        return AstrometryResourceCapability {
-            name: name.to_string(),
-            status: AstrometryResourceStatus::NotConfigured,
-            path: None,
-            format: None,
-            size_bytes: None,
-            modified_unix_seconds: None,
-            modified_subsec_nanos: None,
-            error: None,
-        };
+    let path = match path {
+        Ok(Some(path)) => path,
+        Ok(None) => {
+            return AstrometryResourceCapability {
+                name: name.to_string(),
+                status: AstrometryResourceStatus::NotConfigured,
+                path: None,
+                format: None,
+                size_bytes: None,
+                modified_unix_seconds: None,
+                modified_subsec_nanos: None,
+                error: None,
+            };
+        }
+        Err(error) => {
+            return AstrometryResourceCapability {
+                name: name.to_string(),
+                status: AstrometryResourceStatus::Missing,
+                path: data_path_error_path(&error),
+                format: None,
+                size_bytes: None,
+                modified_unix_seconds: None,
+                modified_subsec_nanos: None,
+                error: Some(error.to_string()),
+            };
+        }
     };
     let path_string = path.to_string_lossy().into_owned();
     if !path.is_file() {
@@ -1251,6 +1279,17 @@ fn capability(
                 error: Some(error),
             }
         }
+    }
+}
+
+fn data_path_error_path(error: &seiza::data_paths::DataPathError) -> Option<String> {
+    use seiza::data_paths::DataPathError;
+
+    match error {
+        DataPathError::NotFoundInDirectory { path, .. }
+        | DataPathError::Missing { path, .. }
+        | DataPathError::EnvVar { path, .. } => Some(path.to_string_lossy().into_owned()),
+        _ => None,
     }
 }
 
@@ -1324,17 +1363,29 @@ fn read_magic(path: &Path) -> std::io::Result<String> {
 
 fn validate_resource(
     name: &str,
-    path: Option<PathBuf>,
+    path: AstrometryResourcePath,
     validate: impl FnOnce() -> Result<(), String>,
 ) -> AstrometryResourceValidation {
-    let Some(path) = path else {
-        return AstrometryResourceValidation {
-            name: name.to_string(),
-            status: AstrometryResourceStatus::NotConfigured,
-            path: None,
-            validated: false,
-            error: None,
-        };
+    let path = match path {
+        Ok(Some(path)) => path,
+        Ok(None) => {
+            return AstrometryResourceValidation {
+                name: name.to_string(),
+                status: AstrometryResourceStatus::NotConfigured,
+                path: None,
+                validated: false,
+                error: None,
+            };
+        }
+        Err(error) => {
+            return AstrometryResourceValidation {
+                name: name.to_string(),
+                status: AstrometryResourceStatus::Missing,
+                path: data_path_error_path(&error),
+                validated: false,
+                error: Some(error.to_string()),
+            };
+        }
     };
     let path_string = path.to_string_lossy().into_owned();
     if !path.is_file() {
@@ -1394,7 +1445,7 @@ mod tests {
     #[test]
     fn v4_outlines_project_with_provenance_and_unknown_angle() {
         let directory = tempfile::tempdir().unwrap();
-        let objects_path = directory.path().join(OBJECTS_FILE);
+        let objects_path = directory.path().join("objects.bin");
         let mut object = test_object();
         object.kind = ObjectKind::Nebula;
         object.ra = 10.0;
@@ -1458,29 +1509,83 @@ mod tests {
     }
 
     #[test]
-    fn canonical_paths_resolve_below_data_dir() {
+    fn seiza_resolvers_select_bundle_resources_below_data_dir() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("objects.bin"), b"objects").unwrap();
+        std::fs::write(directory.path().join("stars-lite-tycho2.bin"), b"lite").unwrap();
+        std::fs::write(directory.path().join("stars-gaia.bin"), b"gaia").unwrap();
+        std::fs::write(directory.path().join("custom-blind.idx"), b"index").unwrap();
+        std::fs::write(
+            directory.path().join("stars-lite-tycho2.ids.bin"),
+            b"identifiers",
+        )
+        .unwrap();
+        std::fs::write(directory.path().join("transients.bin"), b"transients").unwrap();
+        std::fs::write(directory.path().join("minor-bodies.bin"), b"minor bodies").unwrap();
+
         let config = AstrometryConfig {
-            data_dir: Some("/catalogs".to_string()),
-            objects: None,
+            data_dir: Some(directory.path().to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.objects_path().unwrap().unwrap(),
+            directory.path().join("objects.bin")
+        );
+        assert_eq!(
+            config.stars_path().unwrap().unwrap(),
+            directory.path().join("stars-gaia.bin"),
+            "Seiza should select the deepest catalog in the directory"
+        );
+        assert_eq!(
+            config.blind_index_path().unwrap().unwrap(),
+            directory.path().join("custom-blind.idx")
+        );
+        assert_eq!(
+            config.star_identifiers_path().unwrap().unwrap(),
+            directory.path().join("stars-lite-tycho2.ids.bin")
+        );
+        assert_eq!(
+            config.transients_path().unwrap().unwrap(),
+            directory.path().join("transients.bin")
+        );
+        assert_eq!(
+            config.minor_bodies_path().unwrap().unwrap(),
+            directory.path().join("minor-bodies.bin")
+        );
+
+        std::fs::write(directory.path().join("custom-stars.bin"), b"custom").unwrap();
+        let overridden = AstrometryConfig {
+            data_dir: config.data_dir.clone(),
             stars: Some("custom-stars.bin".to_string()),
             ..Default::default()
         };
         assert_eq!(
-            config.objects_path().unwrap(),
-            PathBuf::from("/catalogs/objects.bin")
-        );
-        assert_eq!(
-            config.stars_path().unwrap(),
-            PathBuf::from("/catalogs/custom-stars.bin")
+            overridden.stars_path().unwrap().unwrap(),
+            directory.path().join("custom-stars.bin"),
+            "relative overrides remain relative to data_dir"
         );
     }
 
     #[test]
-    fn no_configuration_reports_no_capabilities() {
-        let capabilities = AstrometryContext::default().capabilities();
+    fn missing_data_directory_is_reported_as_missing() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("missing-catalogs");
+        let capabilities = AstrometryContext::new(AstrometryConfig {
+            data_dir: Some(missing.to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .capabilities();
         assert_eq!(
             capabilities.resources.objects.status,
-            AstrometryResourceStatus::NotConfigured
+            AstrometryResourceStatus::Missing
+        );
+        assert_eq!(
+            capabilities.resources.objects.path.as_deref(),
+            Some(missing.to_string_lossy().as_ref())
+        );
+        assert!(
+            capabilities.resources.objects.error.is_some(),
+            "the upstream resolver error should remain visible"
         );
         assert!(!capabilities.features.object_association);
         assert!(!capabilities.features.hinted_solve);
@@ -1502,7 +1607,7 @@ mod tests {
     #[test]
     fn indexed_v4_object_catalog_is_available_and_validates() {
         let directory = tempfile::tempdir().unwrap();
-        let objects_path = directory.path().join(OBJECTS_FILE);
+        let objects_path = directory.path().join("objects.bin");
         ObjectCatalog::new(vec![test_object()])
             .write_to(&objects_path)
             .unwrap();
@@ -1590,7 +1695,7 @@ mod tests {
     #[test]
     fn malformed_object_catalog_is_reported_as_invalid() {
         let directory = tempfile::tempdir().unwrap();
-        let objects_path = directory.path().join(OBJECTS_FILE);
+        let objects_path = directory.path().join("objects.bin");
         std::fs::write(&objects_path, b"not a seiza catalog").unwrap();
 
         let context = AstrometryContext::new(AstrometryConfig {
@@ -1632,14 +1737,14 @@ mod tests {
         let cache: ResourceCache<String> = RwLock::new(None);
         std::fs::write(&path, "first").unwrap();
 
-        let first = load_cached(&cache, Some(path.clone()), |path| {
+        let first = load_cached(&cache, Ok(Some(path.clone())), |path| {
             std::fs::read_to_string(path).map_err(|error| error.to_string())
         })
         .unwrap();
         assert_eq!(first.value.as_str(), "first");
 
         std::fs::write(&path, "replacement with a different size").unwrap();
-        let second = load_cached(&cache, Some(path), |path| {
+        let second = load_cached(&cache, Ok(Some(path)), |path| {
             std::fs::read_to_string(path).map_err(|error| error.to_string())
         })
         .unwrap();

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('catalog-only configuration reports the exact usable Seiza capabilities', async ({
+test('partial data directory reports usable and missing Seiza resources', async ({
   request,
 }) => {
   const response = await request.get('/api/astrometry/capabilities');
@@ -9,7 +9,7 @@ test('catalog-only configuration reports the exact usable Seiza capabilities', a
   const body = await response.json();
   expect(body.success).toBe(true);
   expect(body.data).toMatchObject({
-    seiza_version: '0.7.2',
+    seiza_version: '0.8.0',
     seiza_fits_version: '0.1.6',
     features: {
       object_association: true,
@@ -26,11 +26,11 @@ test('catalog-only configuration reports the exact usable Seiza capabilities', a
         status: 'available',
         format: 'SEIZAOB4',
       },
-      stars: { status: 'not_configured' },
-      star_identifiers: { status: 'not_configured' },
-      blind_index: { status: 'not_configured' },
-      transients: { status: 'not_configured' },
-      minor_bodies: { status: 'not_configured' },
+      stars: { status: 'missing' },
+      star_identifiers: { status: 'missing' },
+      blind_index: { status: 'missing' },
+      transients: { status: 'missing' },
+      minor_bodies: { status: 'missing' },
     },
   });
   expect(body.data.resources.objects.path).toMatch(/objects\.bin$/);
@@ -45,7 +45,7 @@ test('explicit validation opens and exhaustively validates the installed catalog
 
   const body = await response.json();
   expect(body.success).toBe(true);
-  expect(body.data.all_configured_valid).toBe(true);
+  expect(body.data.all_configured_valid).toBe(false);
 
   const resources = body.data.resources as Array<{
     name: string;
@@ -62,7 +62,7 @@ test('explicit validation opens and exhaustively validates the installed catalog
       .filter((resource) => resource.name !== 'objects')
       .every(
         (resource) =>
-          resource.status === 'not_configured' && resource.validated === false
+          resource.status === 'missing' && resource.validated === false
       )
   ).toBe(true);
 });
