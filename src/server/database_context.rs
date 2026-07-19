@@ -419,14 +419,14 @@ impl DatabaseContext {
             let _build_guard = lock_recover(ctx.tree_build_lock.as_ref());
             {
                 let cache = ctx.directory_tree_cache.read().unwrap();
-                if let Some(ref tree) = *cache {
-                    if !tree.is_older_than(Duration::from_secs(300)) {
-                        tracing::debug!(
-                            "🌳 Background directory tree rebuild skipped for db={}; another scan refreshed it",
-                            ctx.id
-                        );
-                        return;
-                    }
+                if let Some(ref tree) = *cache
+                    && !tree.is_older_than(Duration::from_secs(300))
+                {
+                    tracing::debug!(
+                        "🌳 Background directory tree rebuild skipped for db={}; another scan refreshed it",
+                        ctx.id
+                    );
+                    return;
                 }
             }
 
@@ -504,10 +504,10 @@ impl DatabaseContext {
         let _guard = lock_recover(self.tree_build_lock.as_ref());
         {
             let cache = self.directory_tree_cache.read().unwrap();
-            if let Some(ref tree) = *cache {
-                if !tree.is_older_than(Duration::from_secs(300)) {
-                    return Ok(Arc::new(tree.clone()));
-                }
+            if let Some(ref tree) = *cache
+                && !tree.is_older_than(Duration::from_secs(300))
+            {
+                return Ok(Arc::new(tree.clone()));
             }
         }
         self.rebuild_directory_tree_internal()
@@ -807,11 +807,11 @@ impl DatabaseContext {
     async fn refresh_directory_tree_with_progress(&self) -> Result<Arc<DirectoryTree>> {
         {
             let cache = self.directory_tree_cache.read().unwrap();
-            if let Some(ref tree) = *cache {
-                if !tree.is_older_than(Duration::from_secs(300)) {
-                    tracing::debug!("🌳 Directory tree cache is fresh, skipping rebuild");
-                    return Ok(Arc::new(tree.clone()));
-                }
+            if let Some(ref tree) = *cache
+                && !tree.is_older_than(Duration::from_secs(300))
+            {
+                tracing::debug!("🌳 Directory tree cache is fresh, skipping rebuild");
+                return Ok(Arc::new(tree.clone()));
             }
         }
 
@@ -845,10 +845,10 @@ impl DatabaseContext {
             let _build_guard = lock_recover(tree_build_lock.as_ref());
             {
                 let cache = directory_tree_cache.read().unwrap();
-                if let Some(ref tree) = *cache {
-                    if !tree.is_older_than(Duration::from_secs(300)) {
-                        return Ok((tree.clone(), false));
-                    }
+                if let Some(ref tree) = *cache
+                    && !tree.is_older_than(Duration::from_secs(300))
+                {
+                    return Ok((tree.clone(), false));
                 }
             }
 

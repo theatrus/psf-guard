@@ -1171,18 +1171,18 @@ fn load_cached<T>(
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "resource is not configured".to_string())?;
     let fingerprint = resource_fingerprint(&path)?;
-    if let Some(cached) = cache.read().unwrap().as_ref() {
-        if cached.fingerprint == fingerprint {
-            return Ok(cached.clone());
-        }
+    if let Some(cached) = cache.read().unwrap().as_ref()
+        && cached.fingerprint == fingerprint
+    {
+        return Ok(cached.clone());
     }
 
     let mut guard = cache.write().unwrap();
     let fingerprint = resource_fingerprint(&path)?;
-    if let Some(cached) = guard.as_ref() {
-        if cached.fingerprint == fingerprint {
-            return Ok(cached.clone());
-        }
+    if let Some(cached) = guard.as_ref()
+        && cached.fingerprint == fingerprint
+    {
+        return Ok(cached.clone());
     }
 
     let value = Arc::new(

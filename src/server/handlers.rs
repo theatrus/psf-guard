@@ -880,11 +880,11 @@ pub async fn get_image(
     };
 
     // Merge statistics into metadata if available
-    if let (Some(stats), Some(metadata_obj)) = (fits_stats, metadata.as_object_mut()) {
-        if let Some(stats_obj) = stats.as_object() {
-            for (key, value) in stats_obj {
-                metadata_obj.insert(key.clone(), value.clone());
-            }
+    if let (Some(stats), Some(metadata_obj)) = (fits_stats, metadata.as_object_mut())
+        && let Some(stats_obj) = stats.as_object()
+    {
+        for (key, value) in stats_obj {
+            metadata_obj.insert(key.clone(), value.clone());
         }
     }
 

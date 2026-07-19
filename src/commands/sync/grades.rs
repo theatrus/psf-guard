@@ -134,10 +134,10 @@ pub fn sync_grades(
         let mut stmt = src.prepare("SELECT guid FROM acquiredimage")?;
         let mut rows = stmt.query([])?;
         while let Some(r) = rows.next()? {
-            if let Some(g) = r.get::<_, Option<String>>(0)? {
-                if !g.is_empty() {
-                    *counts.entry(g).or_insert(0) += 1;
-                }
+            if let Some(g) = r.get::<_, Option<String>>(0)?
+                && !g.is_empty()
+            {
+                *counts.entry(g).or_insert(0) += 1;
             }
         }
         counts

@@ -62,22 +62,22 @@ pub async fn serve_embedded_file(uri: Uri) -> impl IntoResponse {
         response_builder.body(body).unwrap().into_response()
     } else {
         // For SPA, fall back to index.html for non-API routes
-        if !path.starts_with("api/") {
-            if let Some(index_file) = STATIC_DIR.get_file("index.html") {
-                let mut headers = HeaderMap::new();
-                headers.insert(
-                    header::CONTENT_TYPE,
-                    HeaderValue::from_static("text/html; charset=utf-8"),
-                );
-                headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        if !path.starts_with("api/")
+            && let Some(index_file) = STATIC_DIR.get_file("index.html")
+        {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/html; charset=utf-8"),
+            );
+            headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
 
-                let body = Body::from(index_file.contents());
-                return Response::builder()
-                    .status(StatusCode::OK)
-                    .body(body)
-                    .unwrap()
-                    .into_response();
-            }
+            let body = Body::from(index_file.contents());
+            return Response::builder()
+                .status(StatusCode::OK)
+                .body(body)
+                .unwrap()
+                .into_response();
         }
 
         // Return 404 for missing files

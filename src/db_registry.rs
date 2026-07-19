@@ -194,12 +194,11 @@ impl DbRegistry {
             if entry.db_path == db_path {
                 return Some(entry);
             }
-            if let Some(target) = &canon_target {
-                if let Ok(canon_entry) = std::fs::canonicalize(&entry.db_path) {
-                    if canon_entry == *target {
-                        return Some(entry);
-                    }
-                }
+            if let Some(target) = &canon_target
+                && let Ok(canon_entry) = std::fs::canonicalize(&entry.db_path)
+                && canon_entry == *target
+            {
+                return Some(entry);
             }
         }
         None
@@ -330,10 +329,10 @@ impl DbRegistry {
             dedup.push(entry);
         }
         self.databases = dedup;
-        if let Some(active) = &self.active_db_id {
-            if !self.databases.iter().any(|d| d.id == *active) {
-                self.active_db_id = None;
-            }
+        if let Some(active) = &self.active_db_id
+            && !self.databases.iter().any(|d| d.id == *active)
+        {
+            self.active_db_id = None;
         }
         Ok(())
     }

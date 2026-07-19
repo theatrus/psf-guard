@@ -277,15 +277,15 @@ fn select_custom(
         .into_iter()
         .filter(|s| {
             // HFR filter
-            if let Some(min) = min_hfr {
-                if s.hfr < min {
-                    return false;
-                }
+            if let Some(min) = min_hfr
+                && s.hfr < min
+            {
+                return false;
             }
-            if let Some(max) = max_hfr {
-                if s.hfr > max {
-                    return false;
-                }
+            if let Some(max) = max_hfr
+                && s.hfr > max
+            {
+                return false;
             }
 
             // R² filter

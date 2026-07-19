@@ -155,10 +155,10 @@ fn source_dup_guids(src: &Connection, table: &str) -> Result<HashSet<String>> {
     let mut stmt = src.prepare(&format!("SELECT guid FROM {}", table))?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
-        if let Some(g) = r.get::<_, Option<String>>(0)? {
-            if !g.is_empty() {
-                *counts.entry(g).or_insert(0) += 1;
-            }
+        if let Some(g) = r.get::<_, Option<String>>(0)?
+            && !g.is_empty()
+        {
+            *counts.entry(g).or_insert(0) += 1;
         }
     }
     Ok(counts
@@ -192,16 +192,16 @@ fn dest_guid_map(
         let vals: Vec<Value> = (0..n)
             .map(|i| row.get::<_, Value>(i + 1))
             .collect::<rusqlite::Result<_>>()?;
-        if let Value::Text(g) = &vals[guid_w] {
-            if !g.is_empty() {
-                if dups.contains(g) {
-                    continue;
-                }
-                if map.remove(g).is_some() {
-                    dups.insert(g.clone());
-                } else {
-                    map.insert(g.clone(), (dest_id, vals));
-                }
+        if let Value::Text(g) = &vals[guid_w]
+            && !g.is_empty()
+        {
+            if dups.contains(g) {
+                continue;
+            }
+            if map.remove(g).is_some() {
+                dups.insert(g.clone());
+            } else {
+                map.insert(g.clone(), (dest_id, vals));
             }
         }
     }
@@ -308,10 +308,10 @@ fn upsert_guid_table(
             Some(n) => n,
             None => continue,
         };
-        if let Some(allowed) = allowed_src_ids {
-            if !allowed.contains(&src_id) {
-                continue;
-            }
+        if let Some(allowed) = allowed_src_ids
+            && !allowed.contains(&src_id)
+        {
+            continue;
         }
         let guid = match &all_vals[guid_pos] {
             Value::Text(g) if !g.is_empty() => g.clone(),
@@ -468,10 +468,10 @@ fn upsert_acquired_images(
         }
         // exposureId is a soft reference to exposureplan.Id; if unmatched, write
         // 0 (the "no plan" sentinel) — never retain the source id.
-        if let Some(p) = expo_w {
-            if let Value::Integer(src_plan) = write_values[p] {
-                write_values[p] = Value::Integer(plan_map.get(&src_plan).copied().unwrap_or(0));
-            }
+        if let Some(p) = expo_w
+            && let Value::Integer(src_plan) = write_values[p]
+        {
+            write_values[p] = Value::Integer(plan_map.get(&src_plan).copied().unwrap_or(0));
         }
 
         match dest_map.get(&guid) {
@@ -651,10 +651,10 @@ fn child_ids(
     while let Some(r) = rows.next()? {
         let id: i64 = r.get(0)?;
         let fk: Option<i64> = r.get(1)?;
-        if let Some(fk) = fk {
-            if parents.contains(&fk) {
-                set.insert(id);
-            }
+        if let Some(fk) = fk
+            && parents.contains(&fk)
+        {
+            set.insert(id);
         }
     }
     Ok(set)
