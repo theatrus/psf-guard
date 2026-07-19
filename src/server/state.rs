@@ -61,6 +61,9 @@ pub struct AppState {
     /// Process-global Seiza catalogs and capability diagnostics. Catalogs are
     /// shared across databases and opened lazily on first use.
     pub astrometry: Arc<crate::astrometry::AstrometryContext>,
+    /// Process-global orbital-element cache and satellite predictor. Network
+    /// refresh is explicit; sequence grading consumes cached predictions only.
+    pub satellites: Arc<crate::satellites::SatelliteContext>,
 }
 
 /// RAII marker that an interactive CPU-heavy job is running. Increments the
@@ -323,6 +326,12 @@ impl AppState {
         pregeneration_config: PregenerationConfig,
         astrometry_config: Option<crate::astrometry::AstrometryConfig>,
     ) -> Result<Self> {
+        let astrometry_config = astrometry_config.unwrap_or_default();
+        let satellites = crate::satellites::SatelliteContext::new(
+            PathBuf::from(&cache_dir).join("satellites"),
+            astrometry_config.satellite_elements_path(),
+        )
+        .map_err(anyhow::Error::msg)?;
         let mut map = HashMap::with_capacity(databases.len());
         for entry in databases {
             let ctx = Arc::new(DatabaseContext::new(
@@ -344,9 +353,8 @@ impl AppState {
             worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
-            astrometry: Arc::new(crate::astrometry::AstrometryContext::new(
-                astrometry_config.unwrap_or_default(),
-            )),
+            astrometry: Arc::new(crate::astrometry::AstrometryContext::new(astrometry_config)),
+            satellites: Arc::new(satellites),
         })
     }
 
@@ -450,6 +458,13 @@ impl AppState {
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
             astrometry: Arc::new(crate::astrometry::AstrometryContext::default()),
+            satellites: Arc::new(
+                crate::satellites::SatelliteContext::new(
+                    PathBuf::from("/tmp/psf-guard-test/satellites"),
+                    None,
+                )
+                .expect("test satellite context"),
+            ),
         }
     }
 }

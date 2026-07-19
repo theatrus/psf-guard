@@ -156,6 +156,114 @@ pub async fn solve_image_astrometry(
     Ok(Json(ApiResponse::success(analysis)))
 }
 
+/// Return a source- and WCS-validated cached satellite prediction without
+/// refreshing orbital elements or performing propagation.
+pub async fn get_image_satellites(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, image_id)): Path<(String, i32)>,
+) -> Result<Json<ApiResponse<crate::satellites::SatelliteAnalysisStatus>>, AppError> {
+    let (fits_path, expected_target) = resolve_astrometry_input(&ctx, image_id)?;
+    let cache_dir = ctx.cache_dir_path.clone();
+    let astrometry = Arc::clone(&state.astrometry);
+    let guard = state.begin_interactive_job();
+    let analysis = tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        astrometry
+            .analyze_image(image_id, &fits_path, expected_target)
+            .map(|analysis| astrometry.with_cached_solution(&cache_dir, analysis))
+            .map(|astrometry| {
+                crate::satellites::persisted_analysis(&cache_dir, image_id, &astrometry)
+            })
+    })
+    .await
+    .map_err(|error| {
+        AppError::InternalError(format!("Satellite cache validation task failed: {error}"))
+    })?
+    .map_err(AppError::BadRequest)?;
+    Ok(Json(ApiResponse::success(
+        crate::satellites::SatelliteAnalysisStatus {
+            analysis,
+            orbital_elements_cached: state.satellites.has_cached_elements(),
+        },
+    )))
+}
+
+/// Ensure a pixel WCS, explicitly refresh/load orbital elements, predict all
+/// clipped tracks during this single exposure, and persist the result for
+/// later sequence grading. This is prediction, not pixel-trail detection.
+pub async fn predict_image_satellites(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, image_id)): Path<(String, i32)>,
+) -> Result<Json<ApiResponse<crate::satellites::SatelliteAnalysis>>, AppError> {
+    let (fits_path, expected_target) = resolve_astrometry_input(&ctx, image_id)?;
+    let cache_dir = ctx.cache_dir_path.clone();
+    let astrometry = Arc::clone(&state.astrometry);
+    let guard = state.begin_interactive_job();
+    let validation_path = fits_path.clone();
+    tokio::task::spawn_blocking(move || crate::satellites::validate_exposure(&validation_path))
+        .await
+        .map_err(|error| {
+            AppError::InternalError(format!("Satellite exposure validation failed: {error}"))
+        })?
+        .map_err(AppError::BadRequest)?;
+    let astrometry_analysis = {
+        let _solve_guard = ctx.astrometry_solve_mutex.lock().await;
+        let solve_path = fits_path.clone();
+        let solve_cache = cache_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            let fresh = astrometry.analyze_image(image_id, &solve_path, expected_target)?;
+            let cached = astrometry.with_cached_solution(&solve_cache, fresh);
+            let (analysis, newly_solved) = if cached.solution.is_some() {
+                (cached, false)
+            } else {
+                (
+                    astrometry.solve_image(image_id, &solve_path, expected_target)?,
+                    true,
+                )
+            };
+            if newly_solved
+                && analysis
+                    .solve_attempt
+                    .as_ref()
+                    .is_some_and(|attempt| attempt.cacheable)
+            {
+                crate::astrometry::persist_pixel_analysis(&solve_cache, &analysis)?;
+            }
+            Ok::<_, String>(analysis)
+        })
+        .await
+        .map_err(|error| {
+            AppError::InternalError(format!("Satellite plate solve task failed: {error}"))
+        })?
+        .map_err(AppError::BadRequest)?
+    };
+
+    let snapshot = state
+        .satellites
+        .refresh_active()
+        .await
+        .map_err(AppError::BadRequest)?;
+    let prediction_path = fits_path;
+    let prediction_cache = cache_dir;
+    let prediction = tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        let analysis = crate::satellites::predict_tracks(
+            image_id,
+            &prediction_path,
+            &astrometry_analysis,
+            &snapshot,
+        )?;
+        crate::satellites::persist_analysis(&prediction_cache, &analysis)?;
+        Ok::<_, String>(analysis)
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("Satellite prediction task failed: {error}")))?
+    .map_err(AppError::BadRequest)?;
+    Ok(Json(ApiResponse::success(prediction)))
+}
+
 fn resolve_astrometry_input(
     ctx: &DatabaseContext,
     image_id: i32,
@@ -2489,6 +2597,10 @@ fn merge_astrometry_metrics(
         return;
     }
     metrics.astrometry = crate::sequence_analysis::astrometry_metrics_from_analysis(&analysis);
+    metrics.satellite =
+        crate::satellites::persisted_analysis(cache_dir, metrics.image_id, &analysis)
+            .as_ref()
+            .map(crate::sequence_analysis::SatelliteFrameMetrics::from);
 }
 
 /// POST /api/db/{db_id}/analysis/spatial-scan
@@ -2505,6 +2617,19 @@ pub async fn start_spatial_scan(
     use crate::server::spatial_scan as scan;
 
     scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
+
+    // A quality scan never performs network I/O. If orbital elements were
+    // previously downloaded by the on-demand action (or explicitly
+    // configured), reuse that snapshot to predict tracks while each frame's
+    // solved WCS is already in hand.
+    let satellite_context = Arc::clone(&state.satellites);
+    let satellite_snapshot = tokio::task::spawn_blocking(move || satellite_context.cached_only())
+        .await
+        .map_err(|error| AppError::InternalError(format!("Satellite cache task failed: {error}")))?
+        .unwrap_or_else(|error| {
+            tracing::warn!("Ignoring unavailable cached satellite elements: {error}");
+            None
+        });
 
     // Collect this target's images together with schema-adaptive intended
     // framing. Unsupported coordinate epochs are deliberately omitted from
@@ -2560,17 +2685,28 @@ pub async fn start_spatial_scan(
         if spatial_cached {
             skipped_cached += 1;
         }
-        let astrometry_cached = !force_astrometry
-            && state
-                .astrometry
-                .validated_persisted_pixel_analysis(&ctx.cache_dir_path, img.id, expected)
-                .is_some_and(|analysis| {
-                    std::path::Path::new(&analysis.source_fingerprint.canonical_path)
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        == Some(file_only.as_str())
-                });
-        if !spatial_cached || !astrometry_cached {
+        let cached_astrometry = (!force_astrometry)
+            .then(|| {
+                state.astrometry.validated_persisted_pixel_analysis(
+                    &ctx.cache_dir_path,
+                    img.id,
+                    expected,
+                )
+            })
+            .flatten()
+            .filter(|analysis| {
+                std::path::Path::new(&analysis.source_fingerprint.canonical_path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    == Some(file_only.as_str())
+            });
+        let astrometry_cached = cached_astrometry.is_some();
+        let satellite_cached = satellite_snapshot.is_none()
+            || cached_astrometry.as_ref().is_some_and(|analysis| {
+                crate::satellites::persisted_analysis(&ctx.cache_dir_path, img.id, analysis)
+                    .is_some()
+            });
+        if !spatial_cached || !astrometry_cached || !satellite_cached {
             work.push((
                 img,
                 target_name,
@@ -2578,6 +2714,7 @@ pub async fn start_spatial_scan(
                 expected,
                 !spatial_cached,
                 !astrometry_cached,
+                !satellite_cached,
             ));
         }
     }
@@ -2630,7 +2767,16 @@ pub async fn start_spatial_scan(
         let scan_body = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Resolve FITS paths first; unresolvable files count as errors.
             let mut items = Vec::with_capacity(work.len());
-            for (img, target_name, file_only, expected, need_spatial, need_astrometry) in &work {
+            for (
+                img,
+                target_name,
+                file_only,
+                expected,
+                need_spatial,
+                need_astrometry,
+                need_satellite,
+            ) in &work
+            {
                 match find_fits_file(&ctx_arc, img, target_name, file_only) {
                     Ok(path) => items.push((
                         crate::server::spatial_scan::ScanWorkItem {
@@ -2641,6 +2787,7 @@ pub async fn start_spatial_scan(
                         *expected,
                         *need_spatial,
                         *need_astrometry,
+                        *need_satellite,
                     )),
                     Err(_) => {
                         let mut s = ctx_arc.spatial_metrics.write().unwrap();
@@ -2685,13 +2832,16 @@ pub async fn start_spatial_scan(
                 );
             }
 
-            let astrometry_items = items.iter().filter(|item| item.3).collect::<Vec<_>>();
+            let astrometry_items = items
+                .iter()
+                .filter(|item| item.3 || item.4)
+                .collect::<Vec<_>>();
             if !astrometry_items.is_empty() {
                 crate::server::spatial_scan::begin_astrometry_stage(
                     &ctx_arc.spatial_metrics,
                     astrometry_items.len(),
                 );
-                for (item, expected, _, _) in astrometry_items {
+                for (item, expected, _, need_astrometry, need_satellite) in astrometry_items {
                     crate::server::spatial_scan::begin_astrometry_item(
                         &ctx_arc.spatial_metrics,
                         &item.filename,
@@ -2699,13 +2849,24 @@ pub async fn start_spatial_scan(
                     // Acquire the per-database solve mutex per image, not for
                     // the whole stage: a user-triggered on-demand solve must be
                     // able to interleave with a long-running scan.
-                    let solve_guard = ctx_arc.astrometry_solve_mutex.blocking_lock();
-                    let outcome = astrometry.solve_image_for_quality(
-                        item.image_id,
-                        &item.fits_path,
-                        *expected,
-                    );
-                    drop(solve_guard);
+                    let outcome = if *need_astrometry {
+                        let solve_guard = ctx_arc.astrometry_solve_mutex.blocking_lock();
+                        let outcome = astrometry.solve_image_for_quality(
+                            item.image_id,
+                            &item.fits_path,
+                            *expected,
+                        );
+                        drop(solve_guard);
+                        outcome
+                    } else {
+                        astrometry
+                            .validated_persisted_pixel_analysis(
+                                &ctx_arc.cache_dir_path,
+                                item.image_id,
+                                *expected,
+                            )
+                            .ok_or_else(|| "cached plate solution became unavailable".to_string())
+                    };
                     match outcome {
                         Ok(analysis) => {
                             let attempt = analysis.solve_attempt.as_ref();
@@ -2727,6 +2888,28 @@ pub async fn start_spatial_scan(
                                 } else {
                                     None
                                 };
+                            if *need_satellite
+                                && solved
+                                && let Some(snapshot) = satellite_snapshot.as_ref()
+                                && let Err(error) = crate::satellites::predict_tracks(
+                                    item.image_id,
+                                    &item.fits_path,
+                                    &analysis,
+                                    snapshot,
+                                )
+                                .and_then(|prediction| {
+                                    crate::satellites::persist_analysis(
+                                        &ctx_arc.cache_dir_path,
+                                        &prediction,
+                                    )
+                                })
+                            {
+                                tracing::warn!(
+                                    "Satellite prediction unavailable for {}: {}",
+                                    item.filename,
+                                    error
+                                );
+                            }
                             crate::server::spatial_scan::record_astrometry_result(
                                 &ctx_arc.spatial_metrics,
                                 &item.filename,

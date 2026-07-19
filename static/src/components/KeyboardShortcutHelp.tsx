@@ -25,6 +25,7 @@ export default function KeyboardShortcutHelp({ onClose }: KeyboardShortcutHelpPr
       { key: 'S', description: 'Toggle star detection overlay' },
       { key: 'P', description: 'Toggle PSF residual visualization' },
       { key: 'O', description: 'Solve if needed, then toggle sky overlay' },
+      { key: 'T', description: 'Predict if needed, then toggle satellite tracks' },
       { key: 'Z', description: 'Toggle image size' },
       { key: 'C', description: 'Open comparison view (side-by-side)' },
       { key: 'G', description: 'Cycle grouping mode (Filter → Date → Both)' },

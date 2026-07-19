@@ -51,6 +51,8 @@ pub struct ScreenOptions {
     pub dry_run: bool,
     /// Registry override for resolving `regrade_db` slugs.
     pub registry: Option<String>,
+    /// Server cache root used for cached orbital elements and per-DB results.
+    pub cache_dir: String,
     /// Directory to write annotated diagnostic PNGs for WARN/REJECT frames.
     pub annotate_dir: Option<String>,
 }
@@ -78,6 +80,7 @@ struct FrameRecord {
     bg_glow_max: f64,
     bg_glow_cells: Vec<bool>,
     astrometry: Option<AstrometryFrameMetrics>,
+    satellite: Option<crate::sequence_analysis::SatelliteFrameMetrics>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -124,6 +127,7 @@ struct ScreenResult {
     category: Option<IssueCategory>,
     flags: Vec<IssueCategory>,
     pointing: Option<crate::sequence_analysis::PointingQuality>,
+    satellite: Option<crate::sequence_analysis::SatelliteFrameMetrics>,
     regrade_reason: Option<String>,
     details: Option<String>,
     verdict: Verdict,
@@ -340,12 +344,29 @@ fn enrich_astrometry_for_regrade(
         ));
     }
 
-    let astrometry = crate::astrometry::AstrometryContext::new(
-        registry
-            .as_ref()
-            .and_then(|registry| registry.astrometry.clone())
-            .unwrap_or_default(),
-    );
+    let astrometry_config = registry
+        .as_ref()
+        .and_then(|registry| registry.astrometry.clone())
+        .unwrap_or_default();
+    let astrometry = crate::astrometry::AstrometryContext::new(astrometry_config.clone());
+    let satellite_context = crate::satellites::SatelliteContext::new(
+        Path::new(&options.cache_dir).join("satellites"),
+        astrometry_config.satellite_elements_path(),
+    )
+    .map_err(anyhow::Error::msg)?;
+    let satellite_snapshot = satellite_context
+        .cached_only()
+        .map_err(anyhow::Error::msg)?;
+    let database_slug = registry
+        .as_ref()
+        .and_then(|registry| {
+            registry
+                .find(db_arg)
+                .or_else(|| registry.find_by_path(&db_path.to_string_lossy()))
+        })
+        .map(|entry| entry.id.clone())
+        .unwrap_or_else(|| crate::server::slug::compute_default_slug(&db_path.to_string_lossy()));
+    let prediction_cache = Path::new(&options.cache_dir).join(database_slug);
     // Match first so the progress denominator reflects real solve work, then
     // solve the unambiguous matches serially (solving is memory-heavy).
     type MatchedRecord = (usize, i32, Option<(f64, f64)>);
@@ -375,6 +396,28 @@ fn enrich_astrometry_for_regrade(
             Ok(analysis) => {
                 record.astrometry =
                     crate::sequence_analysis::astrometry_metrics_from_analysis(&analysis);
+                if let Some(snapshot) = satellite_snapshot.as_ref() {
+                    match crate::satellites::predict_tracks(
+                        image_id,
+                        &record.path,
+                        &analysis,
+                        snapshot,
+                    ) {
+                        Ok(prediction) => {
+                            record.satellite = Some(
+                                crate::sequence_analysis::SatelliteFrameMetrics::from(&prediction),
+                            );
+                            if let Err(error) =
+                                crate::satellites::persist_analysis(&prediction_cache, &prediction)
+                            {
+                                eprintln!("  Satellite cache write failed for {file}: {error}");
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("  Satellite prediction unavailable for {file}: {error}")
+                        }
+                    }
+                }
             }
             Err(error) => eprintln!("  Astrometry unavailable for {file}: {error}"),
         }
@@ -651,6 +694,7 @@ fn analyze_one_frame(path: &Path, options: &ScreenOptions) -> Result<FrameRecord
         bg_glow_max: spatial.bg_glow_max,
         bg_glow_cells: spatial.bg_glow_cells,
         astrometry: None,
+        satellite: None,
     })
 }
 
@@ -817,6 +861,7 @@ fn score_records(
                 category: None,
                 flags: Vec::new(),
                 pointing: None,
+                satellite: None,
                 regrade_reason: None,
                 details: None,
                 verdict: Verdict::Ok,
@@ -878,6 +923,7 @@ fn score_records(
                     bg_cell_fall_fraction: sig.and_then(|s| s.bg_cell_fall_fraction),
                     bg_glow_max: (r.bg_glow_max > 0.0).then_some(r.bg_glow_max),
                     astrometry: r.astrometry.clone(),
+                    satellite: r.satellite.clone(),
                 }
             })
             .collect();
@@ -900,6 +946,7 @@ fn score_records(
                     res.category = img.category.clone();
                     res.flags = img.flags.clone();
                     res.pointing = img.pointing.clone();
+                    res.satellite = img.satellite.clone();
                     res.regrade_reason = img.regrade_reason.clone();
                     res.details = img.details.clone();
                     res.verdict = verdict_for(
@@ -948,6 +995,7 @@ fn category_label(category: &Option<IssueCategory>) -> &'static str {
         Some(IssueCategory::PointingJump) => "pointing-jump",
         Some(IssueCategory::PointingDrift) => "pointing-drift",
         Some(IssueCategory::PlateSolveFailed) => "unsolved",
+        Some(IssueCategory::SatelliteTrailRisk) => "satellite-risk",
         Some(IssueCategory::UnknownDegradation) => "unknown",
         None => "-",
     }
@@ -1144,6 +1192,7 @@ mod tests {
             regrade_db: None,
             dry_run: false,
             registry: None,
+            cache_dir: "./cache".into(),
             annotate_dir: None,
         };
         assert_eq!(verdict_for(&0.9, &None, None, &options), Verdict::Ok);

@@ -737,6 +737,20 @@ function SequenceImageCard({
             {quality.pointing.image_quality_evidence ? 'unsolved' : 'solve unavailable'}
           </span>
         )}
+        {quality.satellite && quality.satellite.potentially_bright_count > 0 && (
+          <span
+            className="sequence-image-satellite"
+            style={{
+              color: quality.satellite.high_risk_count > 0
+                ? 'var(--color-error)'
+                : 'var(--color-warning)',
+              fontSize: '0.75rem',
+            }}
+            title="Orbital prediction only; open the image to inspect the projected track identifiers"
+          >
+            satellite {quality.satellite.high_risk_count > 0 ? 'high risk' : 'possible'}
+          </span>
+        )}
         {quality.details && (
           <span className="sequence-image-details" title={quality.details}>
             {quality.details}

@@ -11,6 +11,8 @@ import { ensurePreviewReady } from '../hooks/previewPoll';
 import UndoRedoToolbar from './UndoRedoToolbar';
 import AstrometryPanel from './AstrometryPanel';
 import AstrometryOverlay from './AstrometryOverlay';
+import SatellitePanel from './SatellitePanel';
+import SatelliteTrackOverlay from './SatelliteTrackOverlay';
 
 interface ImageDetailViewProps {
   dbId: string;
@@ -54,6 +56,7 @@ export default function ImageDetailView({
   const [useOriginalImage, setUseOriginalImage] = useState(false);
   const [imageError, setImageError] = useState(false);
   const [showAstrometry, setShowAstrometry] = useState(true);
+  const [showSatellites, setShowSatellites] = useState(false);
   const [displayedBitmapDimensions, setDisplayedBitmapDimensions] = useState<{
     width: number;
     height: number;
@@ -176,6 +179,37 @@ export default function ImageDetailView({
   const solveMatchesCurrent = solveAstrometry.variables?.dbId === dbId
     && solveAstrometry.variables?.imageId === imageId;
 
+  const {
+    data: satelliteStatus,
+    isLoading: satellitesLoading,
+    error: satellitesError,
+  } = useQuery({
+    queryKey: ['db', dbId, 'image', imageId, 'satellites'],
+    queryFn: () => apiClient.getImageSatellites(dbId, imageId),
+    retry: false,
+  });
+
+  const predictSatellites = useMutation({
+    mutationFn: (scope: { dbId: string; imageId: number }) =>
+      apiClient.predictImageSatellites(scope.dbId, scope.imageId),
+    onSuccess: (analysis, scope) => {
+      queryClient.setQueryData(
+        ['db', scope.dbId, 'image', scope.imageId, 'satellites'],
+        { analysis, orbital_elements_cached: true }
+      );
+      void queryClient.invalidateQueries({
+        queryKey: ['db', scope.dbId, 'image', scope.imageId, 'astrometry'],
+      });
+      if (scope.dbId === dbId && scope.imageId === imageId) {
+        setShowSatellites(true);
+        setShowStars(false);
+        setShowPsf(false);
+      }
+    },
+  });
+  const satellitePredictionMatchesCurrent = predictSatellites.variables?.dbId === dbId
+    && predictSatellites.variables?.imageId === imageId;
+
   // Fetch star detection
   const { data: starData, isLoading: starDataLoading } = useQuery({
     queryKey: ['db', dbId, 'stars', imageId],
@@ -199,12 +233,14 @@ export default function ImageDetailView({
     setShowStars(s => !s);
     setShowPsf(false); // Turn off PSF when showing stars
     setShowAstrometry(false);
+    setShowSatellites(false);
   }, [showStars]);
   useHotkeys('p', () => {
     const newPsfState = !showPsf;
     setShowPsf(newPsfState);
     setShowStars(false); // Turn off stars when showing PSF
     setShowAstrometry(false);
+    setShowSatellites(false);
     if (newPsfState) {
       setPsfImageLoading(true);
     }
@@ -218,6 +254,15 @@ export default function ImageDetailView({
       solveAstrometry.mutate({ dbId, imageId });
     }
   }, [astrometry?.solution, solveAstrometry.isPending, solveMatchesCurrent]);
+  useHotkeys('t', () => {
+    if (satelliteStatus?.analysis) {
+      setShowSatellites((visible) => !visible);
+      setShowStars(false);
+      setShowPsf(false);
+    } else if (!(satellitePredictionMatchesCurrent && predictSatellites.isPending)) {
+      predictSatellites.mutate({ dbId, imageId });
+    }
+  }, [satelliteStatus?.analysis, satellitePredictionMatchesCurrent, predictSatellites.isPending]);
   useHotkeys('z', () => setImageSize(s => s === 'screen' ? 'large' : 'screen'), []);
   useHotkeys('plus,equal', () => zoom.zoomIn(), [zoom.zoomIn]);
   useHotkeys('minus', () => zoom.zoomOut(), [zoom.zoomOut]);
@@ -526,6 +571,24 @@ export default function ImageDetailView({
                       }}
                     />
                   )}
+                {!showPsf &&
+                  showSatellites &&
+                  !hideMainImage &&
+                  displayedBitmapDimensions &&
+                  satelliteStatus?.analysis && (
+                    <SatelliteTrackOverlay
+                      analysis={satelliteStatus.analysis}
+                      imageWidth={satelliteStatus.analysis.image_width}
+                      imageHeight={satelliteStatus.analysis.image_height}
+                      className="detail-satellite-overlay"
+                      style={{
+                        width: `${displayedBitmapDimensions.width}px`,
+                        height: `${displayedBitmapDimensions.height}px`,
+                        transform: `translate(${zoom.zoomState.offsetX}px, ${zoom.zoomState.offsetY}px) scale(${zoom.zoomState.scale})`,
+                        transformOrigin: '0 0',
+                      }}
+                    />
+                  )}
                 </>
               )}
               {!showPsf &&
@@ -655,6 +718,23 @@ export default function ImageDetailView({
                 setShowPsf(false);
               }}
               onSolve={() => solveAstrometry.mutate({ dbId, imageId })}
+            />
+
+            <SatellitePanel
+              status={satelliteStatus}
+              isLoading={satellitesLoading}
+              error={satellitesError instanceof Error ? satellitesError.message : undefined}
+              predictError={satellitePredictionMatchesCurrent && predictSatellites.error instanceof Error
+                ? predictSatellites.error.message
+                : undefined}
+              isPredicting={satellitePredictionMatchesCurrent && predictSatellites.isPending}
+              overlayVisible={showSatellites && !!satelliteStatus?.analysis}
+              onToggleOverlay={() => {
+                setShowSatellites((visible) => !visible);
+                setShowStars(false);
+                setShowPsf(false);
+              }}
+              onPredict={() => predictSatellites.mutate({ dbId, imageId })}
             />
 
             <div className="detail-actions">

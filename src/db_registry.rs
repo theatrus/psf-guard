@@ -414,6 +414,7 @@ mod tests {
                 data_dir: Some("/catalogs/seiza".to_string()),
                 objects: None,
                 stars: Some("stars-lite-tycho2.bin".to_string()),
+                satellite_elements: Some("active-satellites.json".to_string()),
                 ..Default::default()
             }),
             ..Default::default()
@@ -425,6 +426,7 @@ mod tests {
         let serialized = std::fs::read_to_string(path).unwrap();
         assert!(serialized.contains("\"astrometry\""));
         assert!(serialized.contains("stars-lite-tycho2.bin"));
+        assert!(serialized.contains("active-satellites.json"));
     }
 
     #[test]

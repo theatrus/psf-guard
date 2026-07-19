@@ -2,8 +2,8 @@
 
 Status: **Astrometry overlay and quality-grading slices implemented**
 Owner: psf-guard maintainers
-Last updated: 2026-07-18
-Baseline: PSF Guard 0.4.2; Seiza 0.8.0; seiza-fits 0.1.6;
+Last updated: 2026-07-19
+Baseline: PSF Guard 0.5.0; Seiza 0.9.0; seiza-fits 0.1.6;
 `@seiza/astro-overlay` 0.3.0
 
 ## 1. Goal
@@ -37,14 +37,14 @@ FITS hint, and derived solution as separate values with explicit provenance.
   can recommend a grade; isolated no-solves and operational solver failures do
   not automatically reject an image.
 
-## 3. Seiza 0.8.0 baseline
+## 3. Seiza 0.9.0 baseline
 
-PSF Guard pins the current published Rust integration versions. Seiza 0.8.0
+PSF Guard pins the current published Rust integration versions. Seiza 0.9.0
 includes the `data_paths` module in its crates.io package, so the dependency
 uses the registry again rather than the temporary v0.7.3 Git revision pin:
 
 ```toml
-seiza = "=0.8.0"
+seiza = "=0.9.0"
 seiza-fits = "=0.1.6"
 ```
 
@@ -63,7 +63,7 @@ separate performance task; no custom compatibility layer is expected.
 
 #### Indexed object catalog v4
 
-Seiza 0.8.0's `SEIZAOB4` object catalog retains the memory-mapped spatial and
+Seiza 0.9.0's `SEIZAOB4` object catalog retains the memory-mapped spatial and
 normalized-name indexes and adds source-qualified geometry, including catalog
 outline sets. Ordinary cone, footprint, exact-name, and prefix queries
 materialize only returned records instead of eagerly decoding the entire
@@ -104,7 +104,7 @@ review step of back-catalog import instead of adding a second name index.
 
 The optional `SEIZASI1` stellar identifier sidecar resolves identifiers and
 names such as TYC, HIP, HR, HD, SAO, FK5, IAU proper names, variables, and WDS
-designations. In Seiza 0.8.0 it supports exact and prefix lookup, but not a
+designations. In Seiza 0.9.0 it supports exact and prefix lookup, but not a
 spatial cone or footprint query. Therefore:
 
 - use it initially for search, target resolution, and inspecting a known
@@ -115,7 +115,7 @@ spatial cone or footprint query. Therefore:
 
 #### Coherent hosted catalog bundle
 
-Seiza 0.8.0 uses one complete catalog bundle at `/data/v2/manifest.json`. It
+Seiza 0.9.0 uses one complete catalog bundle at `/data/v2/manifest.json`. It
 covers solver tiles, the blind index,
 stellar identifier sidecar, object and transient catalogs, and minor bodies.
 Local downloads remain flat and retain the canonical filenames.
@@ -168,7 +168,7 @@ an overlapping ladder ordered by common astrophotography scales rather than
 numerically. PSF Guard can improve on its sidecar input by deriving the known
 scale from FITS headers and equipment metadata.
 
-Backend adapters must use the Seiza 0.8.0 owned-result and fallible-query APIs.
+Backend adapters must use the Seiza 0.9.0 owned-result and fallible-query APIs.
 This avoids embedding an obsolete compatibility layer just to mirror the two
 downstream applications.
 
@@ -533,7 +533,7 @@ configuration block rather than under each database:
 }
 ```
 
-The paths are optional and resolved relative to `data_dir`. Seiza 0.8.0 owns
+The paths are optional and resolved relative to `data_dir`. Seiza 0.9.0 owns
 bundle filename selection and its standard environment, executable-adjacent,
 and platform data conventions through `seiza::data_paths`; PSF Guard passes
 the one directory through and retains explicit per-resource overrides. Adding
@@ -593,9 +593,9 @@ remain bounded. Focused contract tests cover absent/missing/malformed catalogs
 plus legacy-v1, indexed-v3, and extensible-v4 object catalogs.
 
 - Bump `seiza-fits` to 0.1.6 and verify streamed decoding through PSF Guard.
-- Add `seiza` 0.8.0.
+- Add `seiza` 0.9.0.
 - Add centralized FITS astrometry-header parsing and provenance.
-- Define shared API types with Seiza 0.8.0 stable object metadata.
+- Define shared API types with Seiza 0.9.0 stable object metadata.
 - Add global catalog configuration, capability reporting, lazy open, and
   explicit validation.
 - Model catalog signatures as hosted bundle version plus per-file hash, or as

@@ -86,6 +86,23 @@ Implementation tracker and design rationale: [MULTI_DB_PLAN.md](./MULTI_DB_PLAN.
   acquisition frame plus a checked-in Tycho-2 subset to require a real solve,
   persistent reload, rendered object overlay, and keyboard toggling.
 
+### Satellite track prediction (2026-07)
+- **Boundary**: `src/satellites.rs` uses Seiza 0.9 and
+  `seiza-satellites 0.1` to predict named orbital crossings through one solved
+  exposure. `association = predicted_not_pixel_detected` is intentional:
+  never present a catalog prediction as a trail found in image pixels.
+- **Inputs**: a solved WCS, UTC shutter bounds (`DATE-BEG`/`DATE-OBS` plus
+  `DATE-END` or `EXPTIME`), and a topocentric site from FITS headers.
+- **Network/cache**: only `POST /api/db/{id}/images/{image_id}/satellites`
+  may refresh CelesTrak. Quality scans and CLI regrading use `cached_only()`
+  and never download. Shared elements live at `<cache>/satellites`; per-image
+  predictions live at `<cache>/<db>/satellites/<image_id>.json` and are
+  invalidated by source fingerprint, exact WCS, or dependency version.
+- **UI/grading**: `T` predicts or toggles labeled track geometry. Possible
+  bright risk warns/caps score at 0.75; high risk caps at 0.35 and supplies a
+  reviewed `[Auto]` rejection reason. Risk is an illumination/range/elevation/
+  path-length heuristic, not apparent magnitude or pixel evidence.
+
 ### Out-of-tree reject archive (2026-05)
 - **Command**: `psf-guard move-rejects --db <slug>` (multi-DB-aware via the
   registry). Moves files marked `gradingStatus = 2` to
@@ -488,6 +505,8 @@ GET    /api/db/{db_id}/stats/overall
 GET    /api/db/{db_id}/images?project_id=X&target_id=Y
 PUT    /api/db/{db_id}/images/{id}/grade
 GET    /api/db/{db_id}/images/{id}/preview?size=screen|large|original
+GET    /api/db/{db_id}/images/{id}/satellites       # cached prediction/status only
+POST   /api/db/{db_id}/images/{id}/satellites       # solve + explicit element refresh/predict
 PUT    /api/db/{db_id}/refresh-cache
 PUT    /api/db/{db_id}/refresh-directory-cache
 GET    /api/db/{db_id}/cache-progress    # polling (1s); aggregated indicator

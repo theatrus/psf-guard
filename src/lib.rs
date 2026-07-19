@@ -24,6 +24,7 @@ pub mod opencv_utils;
 pub mod opencv_wavelets;
 pub mod photometry;
 pub mod psf_fitting;
+pub mod satellites;
 pub mod sequence_analysis;
 pub mod server;
 pub mod spatial_analysis;

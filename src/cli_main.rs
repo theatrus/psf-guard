@@ -270,6 +270,7 @@ pub fn main() -> Result<()> {
             regrade_db,
             dry_run,
             registry,
+            cache_dir,
             annotate,
             verbose,
         } => {
@@ -284,6 +285,7 @@ pub fn main() -> Result<()> {
                 regrade_db,
                 dry_run,
                 registry,
+                cache_dir,
                 annotate_dir: annotate,
             };
             screen_fits(&path, &options)?;

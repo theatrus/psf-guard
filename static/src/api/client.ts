@@ -26,6 +26,8 @@ import type {
   PreviewDescriptor,
   GenerationStatus,
   AstrometryAnalysis,
+  SatelliteAnalysis,
+  SatelliteAnalysisStatus,
 } from './types';
 
 // Store the initialized API instance and server URL
@@ -200,6 +202,24 @@ export const apiClient = {
       dbPath(dbId, `/images/${imageId}/astrometry`)
     );
     if (!data.data) throw new Error(data.error || 'Plate solve failed');
+    return data.data;
+  },
+
+  getImageSatellites: async (dbId: string, imageId: number): Promise<SatelliteAnalysisStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<SatelliteAnalysisStatus>>(
+      dbPath(dbId, `/images/${imageId}/satellites`)
+    );
+    if (!data.data) throw new Error(data.error || 'Satellite analysis unavailable');
+    return data.data;
+  },
+
+  predictImageSatellites: async (dbId: string, imageId: number): Promise<SatelliteAnalysis> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<SatelliteAnalysis>>(
+      dbPath(dbId, `/images/${imageId}/satellites`)
+    );
+    if (!data.data) throw new Error(data.error || 'Satellite prediction failed');
     return data.data;
   },
 

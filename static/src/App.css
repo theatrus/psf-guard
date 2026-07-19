@@ -1198,6 +1198,50 @@
   transition: opacity 0.2s ease-in-out;
 }
 
+.detail-satellite-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.satellite-badge-high {
+  border-color: var(--color-error-light);
+  color: var(--color-error-light);
+  background: var(--color-error-alpha-10);
+}
+
+.satellite-track-fact {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.42rem 0;
+  border-top: 1px solid var(--color-bg-tertiary);
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+}
+
+.satellite-track-fact > span:first-child {
+  overflow: hidden;
+  color: var(--color-text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.satellite-risk-high {
+  color: var(--color-error-light) !important;
+}
+
+.satellite-risk-possible {
+  color: var(--color-warning-light);
+}
+
+.satellite-risk-low {
+  color: var(--color-primary);
+}
+
 .astrometry-section {
   border-top: 1px solid var(--color-bg-tertiary);
   padding-top: 1rem;

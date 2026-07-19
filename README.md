@@ -16,6 +16,8 @@ points at your Target Scheduler database and image folders and gives you:
 - **Sky context and on-demand plate solving** — identify expected objects from
   known coordinates, solve image pixels with Seiza, and overlay catalog labels,
   outlines, a coordinate grid, and the target offset directly on the frame.
+- **Satellite track identification** — project named satellite crossings over
+  an exposure on demand and surface potentially bright crossings for review.
 - **Automatic quality screening** — spatial metrics, cross-frame photometry,
   and pixel-derived plate solutions catch occlusion, clouds, thin veils,
   errant light, off-target frames, and lost tracking, with evidence explaining
@@ -176,8 +178,9 @@ grading progress), an image grid, and a comparison mode:
 | J / ← | Previous | X | Reject |
 | C | Compare | U | Unmark |
 | S | Stars overlay | O | Solve / sky overlay |
-| P | PSF view | + / − | Zoom |
-| Ctrl+Z | Undo | Ctrl+Y | Redo |
+| T | Predict / satellite tracks | P | PSF view |
+| + / − | Zoom | Ctrl+Z | Undo |
+| Ctrl+Y | Redo | | |
 
 Grades are written straight to the Target Scheduler database, so the
 scheduler's acquired-image counts stay accurate and rejected frames get
@@ -203,10 +206,10 @@ toggles the overlay instead of solving again.
 
 ### Install the Seiza catalogs
 
-PSF Guard embeds Seiza 0.8.0's solver but does not bundle its multi-gigabyte
+PSF Guard embeds Seiza 0.9.0's solver but does not bundle its multi-gigabyte
 catalog data. Install the `seiza` CLI from the
 [Seiza releases](https://github.com/theatrus/seiza/releases) or with
-`cargo install seiza-cli --version 0.8.0`, then download a bundle once:
+`cargo install seiza-cli --version 0.9.0`, then download a bundle once:
 
 ```bash
 # Recommended: choose a bundle interactively and install it in Seiza's
@@ -265,13 +268,39 @@ time. Hinted/blind solutions are cached per database under
 `<cache>/<db-slug>/astrometry/`; PSF Guard invalidates them when the source
 FITS file, relevant catalog, or Seiza version changes.
 
+### Satellite track identifiers and bright-trail risk
+
+Open an image's **Satellite tracks** panel and choose **Identify satellite
+tracks**, or press `T`. PSF Guard ensures the frame has a pixel WCS, loads the
+active satellite elements through `seiza-satellites 0.1`, and projects every
+crossing during the shutter-open interval. The overlay labels tracks by name
+and NORAD identity; red tracks are high-risk, yellow are possible, and cyan
+are low-risk predictions.
+
+The FITS header must contain a UTC start plus either an end time or exposure
+duration, and an observing site (`SITELAT`/`SITELONG`, `OBSGEO-B`/`OBSGEO-L`,
+or their documented aliases). On-demand prediction is the only workflow that
+may refresh CelesTrak's active-satellite data. The quality scan and
+`screen-fits --regrade-db` never download orbital data: when a snapshot is
+already cached, they reuse it and persist per-image predictions under
+`<cache>/<db-slug>/satellites/`.
+
+Bright-trail risk is a conservative geometry/illumination heuristic based on
+sunlight, range, elevation, and path length. It is not an apparent magnitude
+and it is not a pixel detection. A possible crossing warns and lowers the
+score; a high-risk sunlit crossing proposes an `[Auto]` rejection through the
+same per-image confirmation workflow as other quality findings. See
+**[docs/SATELLITES.md](docs/SATELLITES.md)** for provenance, caching, and
+failure semantics.
+
 ## Quality screening
 
 Screen light frames for occlusion, clouds, veils, stray light, off-target
 pointing, and tracking loss — failure modes that ruin integrations but pass
 star-count/HFR grading. No database is needed for spatial/photometric
-screening. Supplying `--regrade-db` also loads the intended TS target and runs
-fresh Seiza pixel solves before the shared sequence grader.
+screening. Supplying `--regrade-db` also loads the intended TS target, runs
+fresh Seiza pixel solves, and—when orbital elements are already cached—adds
+satellite crossing risk before the shared sequence grader.
 
 ```bash
 # Screen a night, get per-frame verdicts (OK / WARN / REJECT)
@@ -493,6 +522,10 @@ curl "localhost:3000/api/db/my-db/images/123/annotated" -o stars.png
 # Read header/catalog context, then plate-solve pixels on demand
 curl "localhost:3000/api/db/my-db/images/123/astrometry"
 curl -X POST "localhost:3000/api/db/my-db/images/123/astrometry"
+
+# Read a cached satellite prediction, or explicitly refresh/predict on demand
+curl "localhost:3000/api/db/my-db/images/123/satellites"
+curl -X POST "localhost:3000/api/db/my-db/images/123/satellites"
 ```
 
 ## Known limitations

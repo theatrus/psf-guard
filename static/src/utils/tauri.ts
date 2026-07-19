@@ -72,6 +72,7 @@ export interface AstrometryConfig {
   blind_index?: string;
   transients?: string;
   minor_bodies?: string;
+  satellite_elements?: string;
 }
 
 // Persisted registry of all configured databases (mirrors `DbRegistry`).

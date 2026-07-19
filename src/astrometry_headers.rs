@@ -51,6 +51,12 @@ pub struct FitsAstrometryHeaders {
     pub width: Option<Provenanced<u32>>,
     pub height: Option<Provenanced<u32>>,
     pub capture_time: Option<Provenanced<String>>,
+    /// Explicit shutter-close timestamp when present.
+    pub exposure_end_time: Option<Provenanced<String>>,
+    /// Exposure duration in seconds.
+    pub exposure_seconds: Option<Provenanced<f64>>,
+    /// Topocentric observing site needed for satellite propagation.
+    pub observer: Option<Provenanced<FitsObserverLocation>>,
     pub focal_length_mm: Option<Provenanced<f64>>,
     pub pixel_size_um: Option<Provenanced<f64>>,
     pub binning_x: Option<Provenanced<f64>>,
@@ -58,6 +64,14 @@ pub struct FitsAstrometryHeaders {
     /// reference pixels are converted from one-based to Seiza's zero-based
     /// pixel coordinates here, once, so every downstream caller agrees.
     pub embedded_wcs: Option<Provenanced<FitsWcsHeaders>>,
+}
+
+/// Geodetic observing site from FITS headers. Longitude is east-positive.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FitsObserverLocation {
+    pub latitude_deg: f64,
+    pub longitude_deg: f64,
+    pub altitude_m: f64,
 }
 
 /// Serializable TAN WCS facts extracted from a FITS primary header.
@@ -81,7 +95,9 @@ impl FitsAstrometryHeaders {
     /// Normalize an already-parsed FITS header.
     pub fn from_headers(headers: &[(String, HeaderValue)]) -> Self {
         let object_name = find_text(headers, &["OBJECT"]);
-        let capture_time = find_text(headers, &["DATE-OBS", "DATEOBS"]);
+        let capture_time = find_text(headers, &["DATE-BEG", "DATE-OBS", "DATEOBS"]);
+        let exposure_end_time = find_text(headers, &["DATE-END", "DATEEND"]);
+        let exposure_seconds = find_positive_f64(headers, &["EXPTIME", "EXPOSURE"]);
         let width = find_u32(headers, &["NAXIS1"]);
         let height = find_u32(headers, &["NAXIS2"]);
         let focal_length_mm = find_positive_f64(headers, &["FOCALLEN", "FOCAL"]);
@@ -106,6 +122,7 @@ impl FitsAstrometryHeaders {
                 )
             });
         let embedded_wcs = embedded_wcs(headers);
+        let observer = fits_observer(headers);
 
         Self {
             object_name,
@@ -115,12 +132,65 @@ impl FitsAstrometryHeaders {
             width,
             height,
             capture_time,
+            exposure_end_time,
+            exposure_seconds,
+            observer,
             focal_length_mm,
             pixel_size_um,
             binning_x,
             embedded_wcs,
         }
     }
+}
+
+fn fits_observer(headers: &[(String, HeaderValue)]) -> Option<Provenanced<FitsObserverLocation>> {
+    let latitude = find_coordinate(headers, &["SITELAT", "LAT-OBS", "OBSGEO-B"], parse_dec_deg)?;
+    let longitude = find_coordinate(
+        headers,
+        &["SITELONG", "SITELON", "LONG-OBS", "OBSGEO-L"],
+        parse_longitude_deg,
+    )?;
+    let altitude = find_f64(
+        headers,
+        &["SITEELEV", "SITEELEVATION", "ALT-OBS", "OBSGEO-H"],
+    );
+    let mut sources = latitude.sources;
+    sources.extend(longitude.sources);
+    let altitude_m = altitude.as_ref().map_or(0.0, |value| value.value);
+    if let Some(altitude) = altitude {
+        sources.extend(altitude.sources);
+    }
+    Some(Provenanced::derived(
+        FitsObserverLocation {
+            latitude_deg: latitude.value,
+            longitude_deg: longitude.value,
+            altitude_m,
+        },
+        sources,
+        "geodetic observing site; missing altitude defaults to 0 m",
+    ))
+}
+
+fn parse_longitude_deg(input: &str) -> Option<f64> {
+    let value = input.trim();
+    if let Ok(degrees) = value.parse::<f64>() {
+        return (degrees.is_finite() && (-360.0..=360.0).contains(&degrees))
+            .then(|| ((degrees + 180.0).rem_euclid(360.0)) - 180.0);
+    }
+    let parts = sexagesimal_parts(value)?;
+    if parts.major > 360.0 {
+        return None;
+    }
+    let magnitude = parts.major + parts.minutes / 60.0 + parts.seconds / 3600.0;
+    if magnitude > 360.0 {
+        return None;
+    }
+    let degrees = if parts.negative {
+        -magnitude
+    } else {
+        magnitude
+    };
+    Some(((degrees + 180.0).rem_euclid(360.0)) - 180.0)
 }
 
 fn find_header<'a>(
@@ -552,6 +622,48 @@ mod tests {
         assert!((parse_dec_deg("+43° 57′ 00″").unwrap() - 43.95).abs() < 1e-10);
         assert_eq!(parse_dec_deg("91"), None);
         assert_eq!(parse_ra_deg("25:00:00"), None);
+    }
+
+    #[test]
+    fn normalizes_exposure_bounds_and_observer_with_provenance() {
+        let parsed = FitsAstrometryHeaders::from_headers(&headers(&[
+            (
+                "DATE-BEG",
+                HeaderValue::String("2026-07-19T05:12:00.000Z".into()),
+            ),
+            (
+                "DATE-END",
+                HeaderValue::String("2026-07-19T05:13:30.000Z".into()),
+            ),
+            ("EXPTIME", HeaderValue::Float(90.0)),
+            ("SITELAT", HeaderValue::String("+34:12:00".into())),
+            ("SITELONG", HeaderValue::Float(241.75)),
+            ("SITEELEV", HeaderValue::Float(1234.0)),
+        ]));
+
+        assert_eq!(parsed.capture_time.unwrap().sources, ["DATE-BEG"]);
+        assert_eq!(parsed.exposure_end_time.unwrap().sources, ["DATE-END"]);
+        assert_eq!(parsed.exposure_seconds.unwrap().value, 90.0);
+        let observer = parsed.observer.unwrap();
+        assert!((observer.value.latitude_deg - 34.2).abs() < 1e-10);
+        assert!((observer.value.longitude_deg + 118.25).abs() < 1e-10);
+        assert_eq!(observer.value.altitude_m, 1234.0);
+        assert_eq!(observer.sources, ["SITELAT", "SITELONG", "SITEELEV"]);
+    }
+
+    #[test]
+    fn observer_defaults_missing_altitude_but_requires_both_coordinates() {
+        let parsed = FitsAstrometryHeaders::from_headers(&headers(&[
+            ("OBSGEO-B", HeaderValue::Float(-31.2)),
+            ("OBSGEO-L", HeaderValue::Float(149.1)),
+        ]));
+        let observer = parsed.observer.unwrap();
+        assert_eq!(observer.value.altitude_m, 0.0);
+        assert_eq!(observer.sources, ["OBSGEO-B", "OBSGEO-L"]);
+
+        let missing_longitude =
+            FitsAstrometryHeaders::from_headers(&headers(&[("SITELAT", HeaderValue::Float(34.0))]));
+        assert!(missing_longitude.observer.is_none());
     }
 
     #[test]
