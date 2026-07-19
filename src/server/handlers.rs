@@ -2038,7 +2038,6 @@ pub async fn get_overall_stats(
 
 #[axum::debug_handler(state = Arc<AppState>)]
 pub async fn analyze_sequence(
-    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Query(params): Query<crate::server::api::SequenceAnalysisQuery>,
 ) -> Result<Json<ApiResponse<crate::server::api::SequenceAnalysisResponse>>, AppError> {
@@ -2109,7 +2108,7 @@ pub async fn analyze_sequence(
     crate::server::spatial_scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
     let spatial_store = ctx.spatial_metrics.clone();
     let astrometry_cache_dir = ctx.cache_dir_path.clone();
-    let astrometry = Arc::clone(&state.astrometry);
+    let astrometry_evidence = ctx.astrometry_evidence.clone();
     let target_name_clone = target_name.clone();
     let result = tokio::task::spawn_blocking(move || {
         let mut config = SequenceAnalyzerConfig::default();
@@ -2153,7 +2152,7 @@ pub async fn analyze_sequence(
                 &mut metrics,
                 &astrometry_cache_dir,
                 &img.metadata,
-                &astrometry,
+                &astrometry_evidence,
                 expected_by_image.get(&img.id).copied().flatten(),
             );
             entries_by_filter
@@ -2202,7 +2201,6 @@ pub async fn analyze_sequence(
 
 #[axum::debug_handler(state = Arc<AppState>)]
 pub async fn get_image_quality(
-    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,
 ) -> Result<Json<ApiResponse<crate::server::api::ImageQualityContextResponse>>, AppError> {
@@ -2273,7 +2271,7 @@ pub async fn get_image_quality(
     crate::server::spatial_scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
     let spatial_store = ctx.spatial_metrics.clone();
     let astrometry_cache_dir = ctx.cache_dir_path.clone();
-    let astrometry = Arc::clone(&state.astrometry);
+    let astrometry_evidence = ctx.astrometry_evidence.clone();
 
     let result = tokio::task::spawn_blocking(move || {
         let config = SequenceAnalyzerConfig::default();
@@ -2289,7 +2287,7 @@ pub async fn get_image_quality(
                 &mut m,
                 &astrometry_cache_dir,
                 &img.metadata,
-                &astrometry,
+                &astrometry_evidence,
                 expected_by_image.get(&img.id).copied().flatten(),
             );
             entries.push(stored_entry_for(&spatial_store, img.id, &img.metadata));
@@ -2474,17 +2472,14 @@ fn merge_astrometry_metrics(
     metrics: &mut crate::sequence_analysis::ImageMetrics,
     cache_dir: &std::path::Path,
     metadata_json: &str,
-    astrometry: &crate::astrometry::AstrometryContext,
+    evidence: &crate::astrometry::AstrometryEvidenceCache,
     expected_target: Option<(f64, f64)>,
 ) {
     let Some(file_only) = filename_from_metadata(metadata_json) else {
         return;
     };
-    let Some(analysis) = astrometry.persisted_pixel_analysis_for_source(
-        cache_dir,
-        metrics.image_id,
-        expected_target,
-    ) else {
+    let Some(analysis) = evidence.evidence_for_source(cache_dir, metrics.image_id, expected_target)
+    else {
         return;
     };
     let cached_file = std::path::Path::new(&analysis.source_fingerprint.canonical_path)

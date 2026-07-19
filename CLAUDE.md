@@ -249,7 +249,11 @@ Design, phases, tracker: [REJECT_ARCHIVE_PLAN.md](./REJECT_ARCHIVE_PLAN.md).
   invalidated (and retried) once a blind index is installed. Only
   deterministic attempts are persisted as image-quality evidence. The per-DB
   solve mutex is taken per image, so on-demand solves interleave with a
-  running scan.
+  running scan. Sequence requests read evidence through the per-DB
+  `AstrometryEvidenceCache` (parsed JSON keyed by cache-file mtime — N stats
+  instead of N parses per request); the FITS source fingerprint is still
+  verified on every lookup so a replaced acquisition file invalidates its
+  evidence immediately.
 - **Sequence grading**: `AstrometryFrameMetrics` feeds tangent-plane target
   offsets, robust solved-center references, jump detection, and Theil-Sen
   drift into the existing score. Missing astrometry renormalizes away.

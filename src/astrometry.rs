@@ -1008,29 +1008,11 @@ impl AstrometryContext {
         image_id: i32,
         expected_target: Option<(f64, f64)>,
     ) -> Option<AstrometryAnalysis> {
-        let mut cached = persisted_pixel_analysis(cache_dir, image_id)?;
-        let current_source =
-            source_fingerprint(Path::new(&cached.source_fingerprint.canonical_path)).ok()?;
-        if current_source != cached.source_fingerprint {
+        let cached = persisted_pixel_analysis(cache_dir, image_id)?;
+        if !source_still_matches(&cached) {
             return None;
         }
-        cached.expected_source =
-            expected_target.map(|(ra_deg, dec_deg)| AstrometryCoordinateSource {
-                ra_deg,
-                dec_deg,
-                source: "target_scheduler".to_string(),
-                header_keywords: Vec::new(),
-            });
-        cached.pointing =
-            cached
-                .solution
-                .as_ref()
-                .zip(expected_target)
-                .map(|(solution, expected)| {
-                    let wcs = wcs_from_response(&solution.wcs);
-                    pointing_result(solution, &wcs, expected)
-                });
-        Some(cached)
+        Some(apply_expected_target(cached, expected_target))
     }
 
     /// Decode an ordinary acquisition FITS image, detect stars, run a hinted
@@ -1755,6 +1737,101 @@ pub fn persisted_pixel_analysis(cache_dir: &Path, image_id: i32) -> Option<Astro
         .as_ref()?
         .cacheable
         .then_some(analysis)
+}
+
+/// True when the FITS file named in the persisted fingerprint is unchanged.
+fn source_still_matches(cached: &AstrometryAnalysis) -> bool {
+    source_fingerprint(Path::new(&cached.source_fingerprint.canonical_path))
+        .is_ok_and(|current| current == cached.source_fingerprint)
+}
+
+/// Refresh target-relative pointing from the caller's current scheduler
+/// fields, so a framing correction never leaves stale absolute offsets in
+/// grading output.
+fn apply_expected_target(
+    mut cached: AstrometryAnalysis,
+    expected_target: Option<(f64, f64)>,
+) -> AstrometryAnalysis {
+    cached.expected_source = expected_target.map(|(ra_deg, dec_deg)| AstrometryCoordinateSource {
+        ra_deg,
+        dec_deg,
+        source: "target_scheduler".to_string(),
+        header_keywords: Vec::new(),
+    });
+    cached.pointing = cached
+        .solution
+        .as_ref()
+        .zip(expected_target)
+        .map(|(solution, expected)| {
+            let wcs = wcs_from_response(&solution.wcs);
+            pointing_result(solution, &wcs, expected)
+        });
+    cached
+}
+
+/// Per-database in-memory view of the persisted astrometry evidence, for the
+/// request paths that merge per-frame evidence into every sequence-analysis
+/// response. Parsed JSON is cached keyed by the cache file's mtime, so a
+/// request over N frames costs N stats instead of N reads + JSON parses; a
+/// fresh solve (temp-file + rename) bumps the mtime and reloads the entry.
+/// The FITS source fingerprint is still verified on every lookup — a replaced
+/// acquisition file must invalidate its evidence immediately, not after a TTL.
+#[derive(Default)]
+pub struct AstrometryEvidenceCache {
+    entries: RwLock<std::collections::HashMap<i32, EvidenceEntry>>,
+}
+
+struct EvidenceEntry {
+    cache_file_mtime: SystemTime,
+    /// `None` records that the persisted file exists but holds no cacheable
+    /// attempt, so it is not re-parsed until the file changes.
+    analysis: Option<AstrometryAnalysis>,
+}
+
+impl AstrometryEvidenceCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Cached equivalent of
+    /// [`AstrometryContext::persisted_pixel_analysis_for_source`].
+    pub fn evidence_for_source(
+        &self,
+        cache_dir: &Path,
+        image_id: i32,
+        expected_target: Option<(f64, f64)>,
+    ) -> Option<AstrometryAnalysis> {
+        let path = astrometry_cache_path(cache_dir, image_id);
+        let Ok(mtime) = std::fs::metadata(&path).and_then(|meta| meta.modified()) else {
+            self.entries.write().unwrap().remove(&image_id);
+            return None;
+        };
+        let cached = {
+            let entries = self.entries.read().unwrap();
+            entries
+                .get(&image_id)
+                .filter(|entry| entry.cache_file_mtime == mtime)
+                .map(|entry| entry.analysis.clone())
+        };
+        let analysis = match cached {
+            Some(analysis) => analysis,
+            None => {
+                let analysis = persisted_pixel_analysis(cache_dir, image_id);
+                self.entries.write().unwrap().insert(
+                    image_id,
+                    EvidenceEntry {
+                        cache_file_mtime: mtime,
+                        analysis: analysis.clone(),
+                    },
+                );
+                analysis
+            }
+        }?;
+        if !source_still_matches(&analysis) {
+            return None;
+        }
+        Some(apply_expected_target(analysis, expected_target))
+    }
 }
 
 /// Persist a pixel-derived solve attempt below the per-database cache. Both
@@ -2684,6 +2761,76 @@ mod tests {
         assert_eq!(second.value.as_str(), "replacement with a different size");
         assert!(!Arc::ptr_eq(&first.value, &second.value));
         assert_ne!(first.fingerprint, second.fingerprint);
+    }
+
+    #[test]
+    fn evidence_cache_follows_persisted_and_source_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache_dir = directory.path().join("cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let source_path = directory.path().join("frame.fits");
+        std::fs::write(&source_path, b"pixels").unwrap();
+
+        let failure = AstrometryAnalysis {
+            image_id: 7,
+            status: AstrometryAnalysisStatus::Failed,
+            mode: None,
+            hint_source: None,
+            expected_source: None,
+            solution: None,
+            catalog_hits: Vec::new(),
+            catalog_scope: None,
+            catalog_radius_deg: None,
+            pointing: None,
+            source_fingerprint: source_fingerprint(&source_path).unwrap(),
+            catalog_signature: None,
+            solver_provenance: Some(AstrometrySolverProvenance {
+                seiza_version: SEIZA_VERSION.to_string(),
+                detection_backend: "mtf_u8+linear_f32".to_string(),
+                star_catalog: AstrometryCatalogFileSignature {
+                    name: "stars".to_string(),
+                    path: "/data/stars.bin".to_string(),
+                    format: "test".to_string(),
+                    size_bytes: 1,
+                    modified_unix_seconds: 1,
+                    modified_subsec_nanos: 0,
+                    sha256: None,
+                },
+                blind_index: None,
+            }),
+            solve_attempt: Some(AstrometrySolveAttempt {
+                outcome: AstrometryAttemptOutcome::NoMatch,
+                modes_attempted: vec![AstrometrySolveMode::Hinted],
+                detected_stars: Some(40),
+                duration_ms: 5,
+                image_quality_evidence: true,
+                cacheable: true,
+            }),
+            computed_at: 1,
+            error: Some("no match".to_string()),
+        };
+        persist_pixel_analysis(&cache_dir, &failure).unwrap();
+
+        let cache = AstrometryEvidenceCache::new();
+        let loaded = cache.evidence_for_source(&cache_dir, 7, None).unwrap();
+        assert!(loaded.solve_attempt.is_some());
+        // Second lookup is served from memory (same mtime).
+        assert!(cache.evidence_for_source(&cache_dir, 7, None).is_some());
+
+        // Replacing the source file invalidates immediately — no TTL window in
+        // which a different exposure could inherit the old evidence.
+        std::fs::write(&source_path, b"different pixels entirely").unwrap();
+        assert!(cache.evidence_for_source(&cache_dir, 7, None).is_none());
+
+        // A fresh persisted attempt (rename bumps the mtime) reloads.
+        let mut refreshed = failure.clone();
+        refreshed.source_fingerprint = source_fingerprint(&source_path).unwrap();
+        persist_pixel_analysis(&cache_dir, &refreshed).unwrap();
+        assert!(cache.evidence_for_source(&cache_dir, 7, None).is_some());
+
+        // Deleting the persisted attempt drops the entry.
+        std::fs::remove_file(astrometry_cache_path(&cache_dir, 7)).unwrap();
+        assert!(cache.evidence_for_source(&cache_dir, 7, None).is_none());
     }
 
     #[test]
