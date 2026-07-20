@@ -283,9 +283,9 @@ export default function SequenceView() {
             </button>
             <button
               className="header-button"
-              onClick={() => spatialScan.start(undefined)}
+              onClick={(event) => spatialScan.start(event.shiftKey || undefined)}
               disabled={spatialScan.isStarting || spatialScan.isRunning}
-              title="Analyze FITS pixels for occlusion, photometry, plate solutions, target offset, and tracking loss. Runs in the background and reuses cached results."
+              title="Analyze FITS pixels for occlusion, photometry, plate solutions, target offset, tracking loss, and satellite trails. Shift-click to recompute all cached evidence from the current catalogs."
             >
               {spatialScan.isRunning
                 ? `${spatialScan.status?.progress.stage === 'astrometry' ? 'Solving' : 'Scanning'} ${spatialScan.status?.progress.processed ?? 0}/${spatialScan.status?.progress.total ?? 0}...`

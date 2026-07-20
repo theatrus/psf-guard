@@ -23,6 +23,13 @@ export default function SatellitePanel({
 }: SatellitePanelProps) {
   const analysis = status?.analysis;
   const risk = analysis?.risk;
+  const providerLabel = analysis?.catalog.provider === 'celes_trak_active'
+    ? 'CelesTrak active'
+    : analysis?.catalog.provider === 'seiza_mirror'
+      ? 'Seiza mirror'
+      : analysis?.catalog.provider === 'iau_sat_checker'
+        ? 'IAU SatChecker'
+        : undefined;
 
   return (
     <section className="info-section astrometry-section" data-testid="satellite-panel">
@@ -78,6 +85,18 @@ export default function SatellitePanel({
           <dd>{risk.pixel_alignment_attempted ? risk.pixel_aligned_count : 'Unavailable'}</dd>
           <dt>Exposure</dt>
           <dd>{analysis.exposure.duration_seconds.toFixed(1)}s</dd>
+          {providerLabel && (
+            <>
+              <dt>Element source</dt>
+              <dd>{providerLabel}</dd>
+            </>
+          )}
+          {analysis.catalog.query_epoch && (
+            <>
+              <dt>Elements for</dt>
+              <dd>{new Date(analysis.catalog.query_epoch).toLocaleString()}</dd>
+            </>
+          )}
         </dl>
       )}
 

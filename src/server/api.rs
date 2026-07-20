@@ -364,13 +364,15 @@ pub struct SequenceAnalysisResponse {
 pub struct SpatialScanRequest {
     pub target_id: i32,
     pub filter_name: Option<String>,
-    /// Recompute images that already have cached metrics.
+    /// Recompute all cached quality evidence, including satellite predictions.
     #[serde(default)]
     pub force: bool,
     #[serde(default)]
     pub force_spatial: bool,
     #[serde(default)]
     pub force_astrometry: bool,
+    #[serde(default)]
+    pub force_satellites: bool,
 }
 
 /// Status returned by both the scan-start and scan-progress endpoints.

@@ -207,10 +207,10 @@ toggles the overlay instead of solving again.
 
 ### Install the Seiza catalogs
 
-PSF Guard embeds Seiza 0.10.0's solver but does not bundle its multi-gigabyte
+PSF Guard embeds Seiza 0.11.1's solver but does not bundle its multi-gigabyte
 catalog data. Install the `seiza` CLI from the
 [Seiza releases](https://github.com/theatrus/seiza/releases) or with
-`cargo install seiza-cli --version 0.10.0`, then download a bundle once:
+`cargo install seiza-cli --version 0.11.1`, then download a bundle once:
 
 ```bash
 # Recommended: choose a bundle interactively and install it in Seiza's
@@ -273,23 +273,29 @@ FITS file, relevant catalog, or Seiza version changes.
 
 Open an image's **Satellite tracks** panel and choose **Identify satellite
 tracks**, or press `T`. PSF Guard ensures the frame has a pixel WCS, loads the
-active satellite elements through `seiza-satellites 0.2`, and projects every
-crossing during the shutter-open interval. It then searches a narrow corridor
-around each prediction for a matching linear trail in the FITS pixels. The
-overlay keeps risk-colored orbital paths dashed and draws detected pixel paths
-in solid green. Labels retain the candidate name and NORAD identity; selecting
-a named result opens its external satellite information page.
+appropriate satellite elements through the resolver in `seiza-satellites`,
+and projects every crossing during the shutter-open interval. Recent exposures
+use CelesTrak's active catalog. Historical exposures use a nearby durable cache
+entry, the Seiza rolling mirror, or the public IAU SatChecker fallback. PSF
+Guard does not reproduce that provider policy. It then searches a narrow
+corridor around each prediction for a matching linear trail in the FITS
+pixels. The overlay keeps risk-colored orbital paths dashed and draws detected
+pixel paths in solid green. Labels retain the candidate name and NORAD
+identity; selecting a named result opens its external satellite information
+page.
 
 The FITS header must contain either explicit UTC exposure bounds, a UTC
 midpoint (`DATE-AVG`) plus duration, or a UTC start plus duration, and an
 observing site (`SITELAT`/`SITELONG`, `OBSGEO-B`/`OBSGEO-L`, or their
-documented aliases). On-demand prediction is the only workflow that may
-refresh CelesTrak's active-satellite data. The quality scan and
-`screen-fits --regrade-db` never download orbital data: when a snapshot is
-already cached, they select the retained snapshot closest to each exposure and
-persist per-image predictions under `<cache>/<db-slug>/satellites/`. Timestamped
-snapshots remain available for historical re-tracing up to a 5 GiB default
-cache bound, and each result records the exact orbital-payload fingerprint.
+documented aliases). Both on-demand prediction and the user-triggered server
+quality scan may refresh CelesTrak data or resolve historical data from the
+Seiza mirror/IAU fallback. Merely viewing Sequence Analysis and running
+`screen-fits --regrade-db` never download orbital data. The latter reuses a
+suitable cached snapshot when one exists and otherwise abstains. Per-image
+predictions persist under `<cache>/<db-slug>/satellites/`. Current and
+historical snapshots share the same 5 GiB default cache bound, and each result
+records the provider and exact orbital-payload fingerprint. Historical results
+also record the requested catalog epoch separately from download time.
 
 Bright-trail risk is a conservative geometry/illumination heuristic based on
 sunlight, range, elevation, and path length. It is not an apparent magnitude.

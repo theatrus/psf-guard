@@ -243,7 +243,7 @@ pub async fn predict_image_satellites(
 
     state
         .satellites
-        .refresh_active()
+        .load_for_exposure(&fits_path)
         .await
         .map_err(AppError::BadRequest)?;
     let satellite_context = Arc::clone(&state.satellites);
@@ -2623,12 +2623,10 @@ pub async fn start_spatial_scan(
 
     scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
 
-    // A quality scan never performs network I/O. If orbital elements were
-    // previously downloaded by the on-demand action (or explicitly
-    // configured), reuse that snapshot to predict tracks while each frame's
-    // solved WCS is already in hand.
+    // This is an explicit user-triggered background action, so it may seed the
+    // durable orbital cache for an exposure. Read-only sequence queries and
+    // CLI regrading remain cache-only.
     let satellite_context = Arc::clone(&state.satellites);
-    let satellite_cache_available = satellite_context.has_cached_elements();
 
     // Collect this target's images together with schema-adaptive intended
     // framing. Unsupported coordinate epochs are deliberately omitted from
@@ -2669,12 +2667,13 @@ pub async fn start_spatial_scan(
         candidates
     };
 
-    // Keep the union of spatial and astrometry work. One side may already be
-    // cached while the other still needs computation.
+    // Keep the union of spatial, astrometry, and satellite work. One side may
+    // already be cached while another still needs computation.
     let mut work = Vec::new();
     let mut skipped_cached = 0usize;
     let force_spatial = req.force || req.force_spatial;
     let force_astrometry = req.force || req.force_astrometry;
+    let force_satellites = req.force || req.force_satellites;
     for (img, target_name, expected) in candidates {
         let Some(file_only) = filename_from_metadata(&img.metadata) else {
             continue;
@@ -2700,8 +2699,8 @@ pub async fn start_spatial_scan(
                     == Some(file_only.as_str())
             });
         let astrometry_cached = cached_astrometry.is_some();
-        let satellite_cached = !satellite_cache_available
-            || cached_astrometry.as_ref().is_some_and(|analysis| {
+        let satellite_cached = !force_satellites
+            && cached_astrometry.as_ref().is_some_and(|analysis| {
                 crate::satellites::persisted_analysis(&ctx.cache_dir_path, img.id, analysis)
                     .is_some()
             });
@@ -2754,6 +2753,7 @@ pub async fn start_spatial_scan(
     let target_id = req.target_id;
     let worker_policy = state.worker_policy();
     let astrometry = Arc::clone(&state.astrometry);
+    let runtime_handle = tokio::runtime::Handle::current();
     // Mark this as an interactive job for its whole lifetime so background
     // pre-generation yields cores + memory to it. Moved into the blocking task
     // and dropped when the scan returns (or panics).
@@ -2888,8 +2888,10 @@ pub async fn start_spatial_scan(
                                     None
                                 };
                             if *need_satellite && solved {
-                                match satellite_context.cached_for_exposure(&item.fits_path) {
-                                    Ok(Some(snapshot)) => {
+                                match runtime_handle
+                                    .block_on(satellite_context.load_for_exposure(&item.fits_path))
+                                {
+                                    Ok(snapshot) => {
                                         if let Err(error) = crate::satellites::predict_tracks(
                                             item.image_id,
                                             &item.fits_path,
@@ -2909,9 +2911,8 @@ pub async fn start_spatial_scan(
                                             );
                                         }
                                     }
-                                    Ok(None) => {}
                                     Err(error) => tracing::warn!(
-                                        "Cached satellite elements unavailable for {}: {}",
+                                        "Satellite elements unavailable for {}: {}",
                                         item.filename,
                                         error
                                     ),

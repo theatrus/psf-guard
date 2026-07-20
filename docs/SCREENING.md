@@ -89,11 +89,11 @@ scatter. Use **Select Clouded**, **Select Off Target**, **Select Unsolved**, or
 **Select Recommended**; rejecting a recommendation always opens a per-image
 review before anything is written.
 
-If orbital elements were previously populated from an image's **Satellite
-tracks** panel, the scan also caches exposure-specific crossings. Potentially
-bright predictions warn; only a high-risk prediction with a matching pixel
-trail creates a reviewed rejection recommendation. The scan itself never
-refreshes or downloads orbital data.
+The user-triggered scan resolves and durably caches suitable orbital elements
+for each exposure, then caches exposure-specific crossings. Potentially bright
+predictions warn; only a high-risk prediction with a matching pixel trail
+creates a reviewed rejection recommendation. Merely opening Sequence Analysis
+does not download anything, and CLI regrading remains cache-only.
 See [Satellite track prediction](SATELLITES.md).
 
 ## Reading the diagnostics

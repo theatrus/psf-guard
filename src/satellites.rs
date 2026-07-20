@@ -14,9 +14,9 @@ use seiza_satellites::trail_alignment::{
     PIXEL_TRAIL_ALIGNMENT_VERSION,
 };
 use seiza_satellites::{
-    BrightTrailRiskLevel, BrightTrailRiskOptions, CacheState, CelesTrakLoad, CelesTrakSource,
-    ExposureProvenance, ObserverLocation, SatelliteCatalog, SingleExposure, TrackOptions,
-    UtcTimestamp,
+    BrightTrailRiskLevel, BrightTrailRiskOptions, CacheState, ExposureProvenance, ObserverLocation,
+    OrbitalCatalogLoad, OrbitalCatalogProvider, OrbitalCatalogSource, SatelliteCatalog,
+    SingleExposure, TrackOptions, UtcTimestamp,
 };
 use serde::{Deserialize, Serialize};
 
@@ -26,7 +26,7 @@ use crate::astrometry::{
 use crate::astrometry_headers::FitsAstrometryHeaders;
 use crate::FitsImage;
 
-pub const SEIZA_SATELLITES_VERSION: &str = "0.2.0";
+pub const SEIZA_SATELLITES_VERSION: &str = "0.3.1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -41,6 +41,8 @@ pub enum SatelliteCatalogState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SatelliteCatalogProvenance {
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<OrbitalCatalogProvider>,
     pub state: SatelliteCatalogState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_path: Option<String>,
@@ -50,6 +52,10 @@ pub struct SatelliteCatalogProvenance {
     pub modified_unix_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retrieved_at: Option<String>,
+    /// Epoch requested from a historical catalog service. This is distinct
+    /// from the time at which the response was downloaded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_epoch: Option<String>,
     /// Exact identity of the orbital-element payload, independent of its
     /// filename or retrieval timestamp.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -65,17 +71,18 @@ pub struct SatelliteCatalogSnapshot {
 }
 
 /// Shared orbital-element source. The network is touched only by
-/// [`refresh_active`](Self::refresh_active), which is called by the explicit
-/// on-demand endpoint. Sequence grading uses [`cached_only`](Self::cached_only).
+/// [`load_for_exposure`](Self::load_for_exposure), which is called by explicit
+/// user-triggered server work. Provider selection belongs to
+/// `seiza-satellites`; CLI regrading remains cache-only.
 pub struct SatelliteContext {
-    source: CelesTrakSource,
+    source: OrbitalCatalogSource,
     configured_elements: Option<PathBuf>,
     refresh_mutex: tokio::sync::Mutex<()>,
 }
 
 impl SatelliteContext {
     pub fn new(cache_dir: PathBuf, configured_elements: Option<PathBuf>) -> Result<Self, String> {
-        let source = CelesTrakSource::new(cache_dir).map_err(|error| error.to_string())?;
+        let source = OrbitalCatalogSource::new(cache_dir).map_err(|error| error.to_string())?;
         Ok(Self {
             source,
             configured_elements,
@@ -91,52 +98,32 @@ impl SatelliteContext {
         self.configured_elements
             .as_deref()
             .is_some_and(Path::is_file)
-            || self
-                .source
-                .cached_snapshots()
-                .is_ok_and(|snapshots| !snapshots.is_empty())
+            || self.source.has_cached_catalogs().unwrap_or(false)
     }
 
-    /// Load a configured historical file, or refresh the shared CelesTrak
-    /// active-satellite snapshot. This is the only network-capable path.
-    pub async fn refresh_active(&self) -> Result<SatelliteCatalogSnapshot, String> {
+    /// Load a configured file or resolve orbital elements appropriate to this
+    /// exposure. This is the only network-capable path; provider choice and
+    /// durable retention are delegated to `seiza-satellites`.
+    pub async fn load_for_exposure(&self, path: &Path) -> Result<SatelliteCatalogSnapshot, String> {
         let _guard = self.refresh_mutex.lock().await;
         if let Some(path) = self.configured_elements.as_deref() {
             return load_local_catalog(path, SatelliteCatalogState::Configured, None);
         }
+        let headers = FitsAstrometryHeaders::from_path(path)
+            .map_err(|error| format!("failed to read FITS exposure headers: {error}"))?;
+        let (exposure, _) = single_exposure(&headers)?;
 
         let load = self
             .source
-            .load_active()
+            .load_for_exposure(&exposure)
             .await
             .map_err(|error| error.to_string())?;
-        let state = match load.state {
-            CacheState::Fresh => SatelliteCatalogState::Fresh,
-            CacheState::Downloaded => SatelliteCatalogState::Downloaded,
-            CacheState::StaleFallback => SatelliteCatalogState::StaleFallback,
-            CacheState::Cached => SatelliteCatalogState::Cached,
-        };
-        Ok(snapshot_from_celestrak_load(load, state))
-    }
-
-    /// Return orbital elements without downloading. A configured file wins;
-    /// otherwise use Seiza's newest valid cached snapshot. Cache discovery,
-    /// validation, locking, and size-bound pruning belong to the dependency.
-    pub fn cached_only(&self) -> Result<Option<SatelliteCatalogSnapshot>, String> {
-        if let Some(path) = self.configured_elements.as_deref() {
-            return load_local_catalog(path, SatelliteCatalogState::Configured, None).map(Some);
-        }
-        self.source
-            .load_cached()
-            .map_err(|error| error.to_string())
-            .map(|load| {
-                load.map(|load| snapshot_from_celestrak_load(load, SatelliteCatalogState::Cached))
-            })
+        Ok(snapshot_from_orbital_load(load))
     }
 
     /// Return the durable cached snapshot closest to this exposure without
     /// downloading. This keeps historical regrades reproducible as newer
-    /// CelesTrak snapshots accumulate.
+    /// orbital snapshots accumulate.
     pub fn cached_for_exposure(
         &self,
         path: &Path,
@@ -148,28 +135,30 @@ impl SatelliteContext {
             .map_err(|error| format!("failed to read FITS exposure headers: {error}"))?;
         let (exposure, _) = single_exposure(&headers)?;
         self.source
-            .load_cached_for(exposure.midpoint())
+            .load_cached_for_exposure(&exposure)
             .map_err(|error| error.to_string())
-            .map(|load| {
-                load.map(|load| snapshot_from_celestrak_load(load, SatelliteCatalogState::Cached))
-            })
+            .map(|load| load.map(snapshot_from_orbital_load))
     }
 }
 
-fn snapshot_from_celestrak_load(
-    load: CelesTrakLoad,
-    state: SatelliteCatalogState,
-) -> SatelliteCatalogSnapshot {
+fn snapshot_from_orbital_load(load: OrbitalCatalogLoad) -> SatelliteCatalogSnapshot {
     let content_sha256 = load.catalog.fingerprint().content_sha256;
     let (size_bytes, modified_unix_seconds) = file_identity(&load.cache_path);
     SatelliteCatalogSnapshot {
         provenance: SatelliteCatalogProvenance {
             source: load.catalog.source().to_string(),
-            state,
+            provider: Some(load.snapshot.provider),
+            state: match load.state {
+                CacheState::Downloaded => SatelliteCatalogState::Downloaded,
+                CacheState::Cached => SatelliteCatalogState::Cached,
+                CacheState::Fresh => SatelliteCatalogState::Fresh,
+                CacheState::StaleFallback => SatelliteCatalogState::StaleFallback,
+            },
             cache_path: Some(load.cache_path.display().to_string()),
             size_bytes,
             modified_unix_seconds,
             retrieved_at: load.catalog.retrieved_at().map(UtcTimestamp::to_rfc3339),
+            query_epoch: load.snapshot.query_time.map(UtcTimestamp::to_rfc3339),
             content_sha256,
             warning: load.warning,
         },
@@ -195,11 +184,13 @@ fn load_local_catalog(
     Ok(SatelliteCatalogSnapshot {
         provenance: SatelliteCatalogProvenance {
             source: path.display().to_string(),
+            provider: None,
             state,
             cache_path: Some(path.display().to_string()),
             size_bytes,
             modified_unix_seconds,
             retrieved_at: retrieved_at.map(UtcTimestamp::to_rfc3339),
+            query_epoch: None,
             content_sha256,
             warning: None,
         },

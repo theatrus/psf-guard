@@ -7,6 +7,9 @@ clipped orbital path inside the sensor, searches the nearby FITS pixels for a
 matching linear trail, and labels the candidate with the satellite name and
 NORAD identity supplied by the orbital catalog.
 
+The current integration uses `seiza 0.11.1`, `seiza-fits 0.1.6`, and
+`seiza-satellites 0.3.1`.
+
 ## Evidence boundary
 
 Satellite results begin as orbital predictions: “which cataloged objects
@@ -61,15 +64,28 @@ abstain; it does not turn missing evidence into a clean-frame claim.
 
 ## Orbital-element cache
 
-The explicit on-demand action loads CelesTrak's active-satellite catalog via
-`seiza-satellites`. A fresh local snapshot is reused; when refresh is needed,
-that action may download a new timestamped snapshot and may fall back to stale
-cached data according to the library's cache policy. Snapshots are retained
-for historical re-tracing until the shared cache reaches its 5 GiB default
-upper bound; then the oldest snapshots are pruned while the newest is always
-kept. Cache-only quality scans and regrades select the retained snapshot whose
-retrieval time is closest to each exposure. Shared orbital data lives under
-`<cache>/satellites/`, with locking and pruning handled by the dependency.
+The explicit **Show tracks** action and server **Scan Quality** action choose
+the orbital source from the exposure time through
+`seiza-satellites::OrbitalCatalogSource`; PSF Guard does not own a parallel age
+cutoff or provider list. Recent images use CelesTrak's active-satellite
+catalog. Historical images try a nearby durable cache entry, the
+content-addressed Seiza rolling mirror, and finally the public IAU SatChecker
+endpoint `/tools/tles-at-epoch/?epoch=<julian-date>&format=txt`, using the
+shutter midpoint. A nearby validated historical response is reused for the
+same observing night rather than issuing another large query.
+
+Current and historical responses share one durable cache. They remain
+available for re-tracing until that cache reaches its 5 GiB default upper
+bound; then the oldest downloads are pruned while the newest is always kept.
+Historical provenance records the provider, requested epoch, and download time.
+The server quality scan may populate a missing snapshot because it is an
+explicit background action. Read-only sequence requests and CLI regrades never
+call either network service.
+Shared orbital data lives under `<cache>/satellites/`, with retrieval, locking,
+validation, and pruning handled by `seiza-satellites`.
+The mirror schema, twice-daily publisher, S3 transaction, retention, and
+backfill procedure are documented in the
+[Seiza satellite mirror runbook](https://github.com/theatrus/seiza/blob/main/docs/SATELLITE_MIRROR.md).
 
 For reproducible or offline work, set `astrometry.satellite_elements` in the
 JSON registry to a local OMM JSON or TLE file. Relative paths resolve below
@@ -86,7 +102,11 @@ Per-image results are written atomically to
 `<cache>/<db-slug>/satellites/<image-id>.json`. They carry the exact orbital
 payload SHA-256 and are accepted only when the FITS fingerprint, exact WCS,
 Seiza version, seiza-satellites version, and pixel-alignment version still
-match.
+match. A normal quality scan reuses that evidence. Shift-click **Scan Quality**
+to recompute all cached quality evidence, including every satellite prediction,
+against the orbital snapshot the current cache now prefers. This forced scan is
+allowed to refresh or download orbital data when the Seiza resolver needs it.
+API clients can force only this part with `{"force_satellites":true}`.
 
 ## Bright-trail risk and grading
 
@@ -125,8 +145,9 @@ the recorded midpoint. Historical elements came from the
 [IAU SatChecker archive](https://satchecker.readthedocs.io/en/latest/tools_tle.html)
 near each exposure epoch.
 
-For the brighter frame, Seiza 0.10 solved 101 matched stars at 1.90 arcsec RMS.
-`seiza-satellites 0.2` projected four high-risk crossings, but pixel alignment
+These recorded reference metrics were produced with Seiza 0.10 and
+`seiza-satellites 0.2`. The brighter frame solved 101 matched stars at 1.90
+arcsec RMS. Four high-risk crossings were projected, but pixel alignment
 found only the two trails visible in the frame: **CZ-4B R/B [48624]** at 57.8
 sigma and **STARLINK-3093 [49141]** at 4.2 sigma. Their fitted paths are about
 30 and 76 sensor pixels from the raw orbital projections, with more than 98%
@@ -147,10 +168,15 @@ associations rather than asserted identities.
 
 ## Background and CLI behavior
 
-Quality scans and `screen-fits --regrade-db` are cache-only consumers: they
-never download orbital data. If a configured or previously downloaded
-snapshot exists, they compute and persist exposure predictions alongside the
-fresh plate solution. Otherwise satellite grading simply abstains.
+The server's user-triggered **Scan Quality** action seeds missing current or
+historical orbital snapshots, then computes and persists exposure predictions
+alongside each plate solution. Merely opening Sequence Analysis remains
+read-only and never causes a download.
+
+`screen-fits --regrade-db` is still a cache-only consumer. If a configured or
+previously downloaded snapshot exists, it uses it; otherwise satellite grading
+abstains. This keeps unattended CLI regrades deterministic and prevents a
+directory scan from unexpectedly performing network work.
 
 When CLI and server share the default `./cache`, no extra option is needed. If
 the server uses another cache root, give `screen-fits` the same path:

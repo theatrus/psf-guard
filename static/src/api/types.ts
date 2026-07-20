@@ -198,11 +198,13 @@ export interface SatelliteAnalysis {
   };
   catalog: {
     source: string;
+    provider?: 'celes_trak_active' | 'seiza_mirror' | 'iau_sat_checker';
     state: 'configured' | 'fresh' | 'downloaded' | 'stale_fallback' | 'cached';
     cache_path?: string;
     size_bytes?: number;
     modified_unix_seconds?: number;
     retrieved_at?: string;
+    query_epoch?: string;
     content_sha256?: string;
     warning?: string;
   };
@@ -526,6 +528,7 @@ export interface SpatialScanRequest {
   force?: boolean;
   force_spatial?: boolean;
   force_astrometry?: boolean;
+  force_satellites?: boolean;
 }
 
 export interface SequenceSummary {
