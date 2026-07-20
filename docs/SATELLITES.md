@@ -8,7 +8,7 @@ matching linear trail, and labels the candidate with the satellite name and
 NORAD identity supplied by the orbital catalog.
 
 The current integration uses `seiza 0.11.2`, `seiza-fits 0.1.6`, and
-`seiza-satellites 0.4.0`.
+`seiza-satellites 0.4.1`.
 
 ## Evidence boundary
 

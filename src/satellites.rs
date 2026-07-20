@@ -26,7 +26,7 @@ use crate::astrometry::{
 use crate::astrometry_headers::FitsAstrometryHeaders;
 use crate::FitsImage;
 
-pub const SEIZA_SATELLITES_VERSION: &str = "0.4.0";
+pub const SEIZA_SATELLITES_VERSION: &str = "0.4.1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -103,20 +103,17 @@ impl SatelliteContext {
     /// Load a configured file or resolve orbital elements appropriate to this
     /// exposure. This is the only network-capable path; provider choice and
     /// durable retention are delegated to `seiza-satellites`.
-    pub async fn load_for_exposure(
-        self: Arc<Self>,
-        path: PathBuf,
-    ) -> Result<SatelliteCatalogSnapshot, String> {
+    pub async fn load_for_exposure(&self, path: &Path) -> Result<SatelliteCatalogSnapshot, String> {
         if let Some(path) = self.configured_elements.as_deref() {
             return load_local_catalog(path, SatelliteCatalogState::Configured, None);
         }
-        let headers = FitsAstrometryHeaders::from_path(&path)
+        let headers = FitsAstrometryHeaders::from_path(path)
             .map_err(|error| format!("failed to read FITS exposure headers: {error}"))?;
         let (exposure, _) = single_exposure(&headers)?;
 
         let load = self
             .source
-            .load_at(exposure.midpoint())
+            .load_for_exposure(&exposure)
             .await
             .map_err(|error| error.to_string())?;
         Ok(snapshot_from_orbital_load(load))

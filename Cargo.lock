@@ -1119,7 +1119,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2887,7 +2887,7 @@ dependencies = [
  "png 0.18.0",
  "serde",
  "thiserror 2.0.16",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4022,7 +4022,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4535,7 +4535,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4723,9 +4723,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-satellites"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "012cbba788bd95bd9a846500ed48312b8b75698ea5b080e1cbd3b076944a2ee6"
+checksum = "4ebec6e24911c969ddba9f55d8b527773217f539f53007ae74f87886658e54a3"
 dependencies = [
  "directories",
  "fs2",
@@ -5642,7 +5642,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6138,7 +6138,7 @@ dependencies = [
  "png 0.18.0",
  "serde",
  "thiserror 2.0.16",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
