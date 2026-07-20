@@ -207,10 +207,10 @@ toggles the overlay instead of solving again.
 
 ### Install the Seiza catalogs
 
-PSF Guard embeds Seiza 0.9.0's solver but does not bundle its multi-gigabyte
+PSF Guard embeds Seiza 0.10.0's solver but does not bundle its multi-gigabyte
 catalog data. Install the `seiza` CLI from the
 [Seiza releases](https://github.com/theatrus/seiza/releases) or with
-`cargo install seiza-cli --version 0.9.0`, then download a bundle once:
+`cargo install seiza-cli --version 0.10.0`, then download a bundle once:
 
 ```bash
 # Recommended: choose a bundle interactively and install it in Seiza's
@@ -273,7 +273,7 @@ FITS file, relevant catalog, or Seiza version changes.
 
 Open an image's **Satellite tracks** panel and choose **Identify satellite
 tracks**, or press `T`. PSF Guard ensures the frame has a pixel WCS, loads the
-active satellite elements through `seiza-satellites 0.1`, and projects every
+active satellite elements through `seiza-satellites 0.2`, and projects every
 crossing during the shutter-open interval. It then searches a narrow corridor
 around each prediction for a matching linear trail in the FITS pixels. The
 overlay keeps risk-colored orbital paths dashed and draws detected pixel paths

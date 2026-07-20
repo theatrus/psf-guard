@@ -125,8 +125,8 @@ the recorded midpoint. Historical elements came from the
 [IAU SatChecker archive](https://satchecker.readthedocs.io/en/latest/tools_tle.html)
 near each exposure epoch.
 
-For the brighter frame, Seiza 0.9 solved 101 matched stars at 1.90 arcsec RMS.
-`seiza-satellites 0.1` projected four high-risk crossings, but pixel alignment
+For the brighter frame, Seiza 0.10 solved 101 matched stars at 1.90 arcsec RMS.
+`seiza-satellites 0.2` projected four high-risk crossings, but pixel alignment
 found only the two trails visible in the frame: **CZ-4B R/B [48624]** at 57.8
 sigma and **STARLINK-3093 [49141]** at 4.2 sigma. Their fitted paths are about
 30 and 76 sensor pixels from the raw orbital projections, with more than 98%

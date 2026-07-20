@@ -15,8 +15,8 @@ use seiza_satellites::trail_alignment::{
 };
 use seiza_satellites::{
     BrightTrailRiskLevel, BrightTrailRiskOptions, CacheState, CelesTrakLoad, CelesTrakSource,
-    ExposureProvenance, ObserverLocation, PixelPoint, PixelSegment, SatelliteCatalog,
-    SingleExposure, TrackOptions, UtcTimestamp,
+    ExposureProvenance, ObserverLocation, SatelliteCatalog, SingleExposure, TrackOptions,
+    UtcTimestamp,
 };
 use serde::{Deserialize, Serialize};
 
@@ -26,7 +26,7 @@ use crate::astrometry::{
 use crate::astrometry_headers::FitsAstrometryHeaders;
 use crate::FitsImage;
 
-pub const SEIZA_SATELLITES_VERSION: &str = "0.1.0";
+pub const SEIZA_SATELLITES_VERSION: &str = "0.2.0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -334,23 +334,48 @@ pub fn predict_tracks(
         )
         .map_err(|error| error.to_string())?;
 
-    let mut tracks = result
+    let (pixel_aligner, pixel_alignment_attempted, pixel_alignment_error) =
+        match FitsImage::from_file(path) {
+            Ok(image) => match PixelTrailAligner::from_u16(
+                image.width,
+                image.height,
+                &image.data,
+                image.raw_scale.recip(),
+                PixelTrailAlignmentConfig::default(),
+            ) {
+                Ok(aligner) => (Some(aligner), true, None),
+                Err(error) => (
+                    None,
+                    false,
+                    Some(format!("failed to initialize trail alignment: {error}")),
+                ),
+            },
+            Err(error) => (
+                None,
+                false,
+                Some(format!(
+                    "failed to load FITS pixels for trail alignment: {error}"
+                )),
+            ),
+        };
+    let result = result.into_analysis(&BrightTrailRiskOptions::default(), pixel_aligner.as_ref());
+    let tracks = result
         .tracks
         .into_iter()
         .map(|track| {
-            let risk = track.bright_trail_risk(&BrightTrailRiskOptions::default());
+            let risk = track.bright_trail_risk;
             SatelliteTrackPrediction {
                 name: track.identity.name.clone(),
                 label: track.identity.display_label(),
                 norad_id: track.identity.norad_id,
-                cospar_id: track.identity.cospar_id.clone(),
+                cospar_id: track.identity.cospar_id,
                 association: "predicted".to_string(),
                 element_epoch_utc: track.element_epoch_utc.to_rfc3339(),
                 element_age_seconds: track.element_age_seconds,
                 sample_interval_seconds: track.sample_interval_seconds,
                 clipped_segments: track
                     .clipped_segments
-                    .iter()
+                    .into_iter()
                     .map(|segment| {
                         [
                             [segment.start.x, segment.start.y],
@@ -363,54 +388,14 @@ pub fn predict_tracks(
                 minimum_range_km: risk.minimum_range_km,
                 maximum_sunlight_fraction: risk.maximum_sunlight_fraction,
                 maximum_apparent_rate_arcsec_per_second: track
-                    .maximum_apparent_rate_arcsec_per_second(),
-                maximum_pixel_rate_px_per_second: track.maximum_pixel_rate_px_per_second(),
+                    .maximum_apparent_rate_arcsec_per_second,
+                maximum_pixel_rate_px_per_second: track.maximum_pixel_rate_px_per_second,
                 bright_trail_risk: risk.score,
                 risk_level: risk.level,
-                pixel_alignment: None,
+                pixel_alignment: track.pixel_alignment,
             }
         })
         .collect::<Vec<_>>();
-    let (pixel_alignment_attempted, pixel_alignment_error) = match FitsImage::from_file(path) {
-        Ok(image) => match PixelTrailAligner::from_u16(
-            image.width,
-            image.height,
-            &image.data,
-            image.raw_scale.recip(),
-            PixelTrailAlignmentConfig::default(),
-        ) {
-            Ok(aligner) => {
-                for track in &mut tracks {
-                    let segments = track
-                        .clipped_segments
-                        .iter()
-                        .map(|segment| PixelSegment {
-                            start: PixelPoint {
-                                x: segment[0][0],
-                                y: segment[0][1],
-                            },
-                            end: PixelPoint {
-                                x: segment[1][0],
-                                y: segment[1][1],
-                            },
-                        })
-                        .collect::<Vec<_>>();
-                    track.pixel_alignment = Some(aligner.align_track(&segments));
-                }
-                (true, None)
-            }
-            Err(error) => (
-                false,
-                Some(format!("failed to initialize trail alignment: {error}")),
-            ),
-        },
-        Err(error) => (
-            false,
-            Some(format!(
-                "failed to load FITS pixels for trail alignment: {error}"
-            )),
-        ),
-    };
     let high_risk_count = tracks
         .iter()
         .filter(|track| track.risk_level == BrightTrailRiskLevel::High)

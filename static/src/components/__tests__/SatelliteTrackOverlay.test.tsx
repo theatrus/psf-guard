@@ -28,8 +28,9 @@ describe('SatelliteTrackOverlay', () => {
     );
 
     expect(container.querySelector('svg')).toHaveAttribute('viewBox', '0 0 300 200');
-    expect(container.querySelectorAll('line')).toHaveLength(2);
-    expect(container.querySelector('line')).toHaveAttribute('stroke', '#ff4d5a');
+    expect(container.querySelectorAll('[data-outline-role="predicted-track"]')).toHaveLength(2);
+    expect(container.querySelector('[data-outline-role="predicted-track"]'))
+      .toHaveAttribute('stroke', 'var(--seiza-overlay-satellite-high-color, #ff4d5a)');
     expect(getByText('ISS (ZARYA) · NORAD 25544')).toBeInTheDocument();
   });
 
@@ -55,10 +56,10 @@ describe('SatelliteTrackOverlay', () => {
       />
     );
 
-    expect(container.querySelectorAll('line')).toHaveLength(4);
-    expect(container.querySelectorAll('[data-testid="pixel-aligned-satellite-track"]')).toHaveLength(2);
-    expect(container.querySelector('[data-testid="pixel-aligned-satellite-track"]'))
-      .toHaveAttribute('stroke', '#7cff6b');
+    expect(container.querySelectorAll('[data-outline-role]')).toHaveLength(4);
+    expect(container.querySelectorAll('[data-outline-role="pixel-aligned-track"]')).toHaveLength(2);
+    expect(container.querySelector('[data-outline-role="pixel-aligned-track"]'))
+      .toHaveAttribute('stroke', 'var(--seiza-overlay-satellite-aligned-color, #7cff6b)');
     expect(getByText(/pixel match/)).toBeInTheDocument();
   });
 });
