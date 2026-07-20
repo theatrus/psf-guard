@@ -26,7 +26,7 @@ use crate::astrometry::{
 use crate::astrometry_headers::FitsAstrometryHeaders;
 use crate::FitsImage;
 
-pub const SEIZA_SATELLITES_VERSION: &str = "0.2.0";
+pub const SEIZA_SATELLITES_VERSION: &str = "0.3.0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

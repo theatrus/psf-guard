@@ -4674,8 +4674,9 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "seiza"
-version = "0.10.0"
-source = "git+https://github.com/theatrus/seiza.git?rev=5299dd23d6d2cf3d4b5f0782bbc7949aca837e73#5299dd23d6d2cf3d4b5f0782bbc7949aca837e73"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd3883b769cc60cbd4de66a26105333ac081c31295ae1ae11663251c392c88ce"
 dependencies = [
  "directories",
  "image",
@@ -4702,8 +4703,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-satellites"
-version = "0.2.0"
-source = "git+https://github.com/theatrus/seiza.git?rev=5299dd23d6d2cf3d4b5f0782bbc7949aca837e73#5299dd23d6d2cf3d4b5f0782bbc7949aca837e73"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7874481df8b4534220a875077ead798ec2025fdacbb6d8085da4ac154d943ae0"
 dependencies = [
  "directories",
  "fs2",
