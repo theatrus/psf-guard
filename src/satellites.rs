@@ -26,7 +26,7 @@ use crate::astrometry::{
 use crate::astrometry_headers::FitsAstrometryHeaders;
 use crate::FitsImage;
 
-pub const SEIZA_SATELLITES_VERSION: &str = "0.3.0";
+pub const SEIZA_SATELLITES_VERSION: &str = "0.3.1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -71,9 +71,9 @@ pub struct SatelliteCatalogSnapshot {
 }
 
 /// Shared orbital-element source. The network is touched only by
-/// [`load_for_exposure`](Self::load_for_exposure), which is called by the
-/// explicit on-demand endpoint. Provider selection belongs to
-/// `seiza-satellites`; sequence grading remains cache-only.
+/// [`load_for_exposure`](Self::load_for_exposure), which is called by explicit
+/// user-triggered server work. Provider selection belongs to
+/// `seiza-satellites`; CLI regrading remains cache-only.
 pub struct SatelliteContext {
     source: OrbitalCatalogSource,
     configured_elements: Option<PathBuf>,

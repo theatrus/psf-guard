@@ -84,13 +84,13 @@ describe('useSpatialScan', () => {
     const { result } = renderHook(() => useSpatialScan('test', 42, 'R'), { wrapper });
 
     act(() => {
-      result.current.start(undefined);
+      result.current.start(true);
     });
 
     await waitFor(() => {
       expect(result.current.isRunning).toBe(true);
     });
-    expect(postedBody).toMatchObject({ target_id: 42, filter_name: 'R' });
+    expect(postedBody).toMatchObject({ target_id: 42, filter_name: 'R', force: true });
     expect(result.current.status?.progress.total).toBe(12);
   });
 

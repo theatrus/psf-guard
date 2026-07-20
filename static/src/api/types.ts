@@ -528,6 +528,7 @@ export interface SpatialScanRequest {
   force?: boolean;
   force_spatial?: boolean;
   force_astrometry?: boolean;
+  force_satellites?: boolean;
 }
 
 export interface SequenceSummary {

@@ -207,10 +207,10 @@ toggles the overlay instead of solving again.
 
 ### Install the Seiza catalogs
 
-PSF Guard embeds Seiza 0.11.0's solver but does not bundle its multi-gigabyte
+PSF Guard embeds Seiza 0.11.1's solver but does not bundle its multi-gigabyte
 catalog data. Install the `seiza` CLI from the
 [Seiza releases](https://github.com/theatrus/seiza/releases) or with
-`cargo install seiza-cli --version 0.11.0`, then download a bundle once:
+`cargo install seiza-cli --version 0.11.1`, then download a bundle once:
 
 ```bash
 # Recommended: choose a bundle interactively and install it in Seiza's
@@ -287,14 +287,15 @@ page.
 The FITS header must contain either explicit UTC exposure bounds, a UTC
 midpoint (`DATE-AVG`) plus duration, or a UTC start plus duration, and an
 observing site (`SITELAT`/`SITELONG`, `OBSGEO-B`/`OBSGEO-L`, or their
-documented aliases). On-demand prediction is the only workflow that may
-refresh CelesTrak data or resolve historical data from the Seiza mirror/IAU
-fallback. The quality scan and `screen-fits --regrade-db` never download
-orbital data: when a suitable snapshot is already cached, they reuse it and
-persist per-image predictions under `<cache>/<db-slug>/satellites/`. Current
-and historical snapshots share the same 5 GiB default cache bound, and each
-result records the provider and exact orbital-payload fingerprint. Historical
-results also record the requested catalog epoch separately from download time.
+documented aliases). Both on-demand prediction and the user-triggered server
+quality scan may refresh CelesTrak data or resolve historical data from the
+Seiza mirror/IAU fallback. Merely viewing Sequence Analysis and running
+`screen-fits --regrade-db` never download orbital data. The latter reuses a
+suitable cached snapshot when one exists and otherwise abstains. Per-image
+predictions persist under `<cache>/<db-slug>/satellites/`. Current and
+historical snapshots share the same 5 GiB default cache bound, and each result
+records the provider and exact orbital-payload fingerprint. Historical results
+also record the requested catalog epoch separately from download time.
 
 Bright-trail risk is a conservative geometry/illumination heuristic based on
 sunlight, range, elevation, and path length. It is not an apparent magnitude.

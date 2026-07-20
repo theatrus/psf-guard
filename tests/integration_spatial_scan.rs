@@ -337,7 +337,7 @@ async fn cached_astrometry_reduces_score_and_marks_regrade_reason() {
             "modified_subsec_nanos": source_modified.subsec_nanos()
         },
         "solver_provenance": {
-            "seiza_version": "0.10.0", "detection_backend": "mtf_u8",
+            "seiza_version": "0.11.1", "detection_backend": "mtf_u8",
             "star_catalog": {
                 "name": "stars", "path": "/data/stars.bin", "format": "test",
                 "size_bytes": 1, "modified_unix_seconds": 1

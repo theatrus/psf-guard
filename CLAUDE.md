@@ -87,20 +87,21 @@ Implementation tracker and design rationale: [MULTI_DB_PLAN.md](./MULTI_DB_PLAN.
   persistent reload, rendered object overlay, and keyboard toggling.
 
 ### Satellite track prediction (2026-07)
-- **Boundary**: `src/satellites.rs` uses Seiza 0.10 and
-  `seiza-satellites 0.2` to predict named orbital crossings through one solved
+- **Boundary**: `src/satellites.rs` uses Seiza 0.11.1 and
+  `seiza-satellites 0.3.1` to predict named orbital crossings through one solved
   exposure. `association = predicted_not_pixel_detected` is intentional:
   never present a catalog prediction as a trail found in image pixels.
 - **Inputs**: a solved WCS, UTC shutter bounds (`DATE-BEG`/`DATE-OBS` plus
   `DATE-END` or `EXPTIME`), and a topocentric site from FITS headers.
-- **Network/cache**: only `POST /api/db/{id}/images/{image_id}/satellites`
-  may refresh CelesTrak. Quality scans and CLI regrading use
-  `cached_for_exposure()` and never download: Seiza selects the durable
-  timestamped snapshot nearest each shutter interval. Shared elements live at
-  `<cache>/satellites`, persist up to the dependency's 5 GiB default bound,
-  and carry a payload SHA-256 into each result. Per-image predictions live at
-  `<cache>/<db>/satellites/<image_id>.json` and are invalidated by source
-  fingerprint, exact WCS, or dependency/alignment version.
+- **Network/cache**: explicit user-triggered server actions — per-image
+  `POST /api/db/{id}/images/{image_id}/satellites` and **Scan Quality** — may
+  resolve and durably cache current or historical elements. Read-only sequence
+  requests and CLI regrading use `cached_for_exposure()` and never download.
+  Seiza selects the timestamped snapshot nearest each shutter interval. Shared
+  elements live at `<cache>/satellites`, persist up to the dependency's 5 GiB
+  default bound, and carry a payload SHA-256 into each result. Per-image
+  predictions live at `<cache>/<db>/satellites/<image_id>.json` and are
+  invalidated by source fingerprint, exact WCS, or dependency/alignment version.
 - **Pixel evidence**: use `seiza_satellites::trail_alignment`; do not recreate
   the matcher in PSF Guard. It evaluates the complete clipped polyline in
   physical ADU and distinguishes `not_detected` from `not_evaluated` when less

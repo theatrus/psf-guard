@@ -4,8 +4,8 @@ import { apiClient } from '../api/client';
 import type { SpatialScanStatus } from '../api/types';
 
 /**
- * Trigger and monitor the server-side quality scan (spatial metrics plus
- * pixel-derived astrometry).
+ * Trigger and monitor the server-side quality scan (spatial metrics,
+ * pixel-derived astrometry, and cached satellite catalogs).
  *
  * The scan reads every FITS file of the target and runs star detection, so it
  * takes seconds per frame; the server runs it in the background and this hook
