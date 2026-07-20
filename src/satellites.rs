@@ -26,7 +26,7 @@ use crate::astrometry::{
 use crate::astrometry_headers::FitsAstrometryHeaders;
 use crate::FitsImage;
 
-pub const SEIZA_SATELLITES_VERSION: &str = "0.3.1";
+pub const SEIZA_SATELLITES_VERSION: &str = "0.4.1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -73,11 +73,11 @@ pub struct SatelliteCatalogSnapshot {
 /// Shared orbital-element source. The network is touched only by
 /// [`load_for_exposure`](Self::load_for_exposure), which is called by explicit
 /// user-triggered server work. Provider selection belongs to
-/// `seiza-satellites`; CLI regrading remains cache-only.
+/// `seiza-satellites`; its shared advisory lock serializes cache publication,
+/// while CLI regrading remains cache-only.
 pub struct SatelliteContext {
     source: OrbitalCatalogSource,
     configured_elements: Option<PathBuf>,
-    refresh_mutex: tokio::sync::Mutex<()>,
 }
 
 impl SatelliteContext {
@@ -86,7 +86,6 @@ impl SatelliteContext {
         Ok(Self {
             source,
             configured_elements,
-            refresh_mutex: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -105,7 +104,6 @@ impl SatelliteContext {
     /// exposure. This is the only network-capable path; provider choice and
     /// durable retention are delegated to `seiza-satellites`.
     pub async fn load_for_exposure(&self, path: &Path) -> Result<SatelliteCatalogSnapshot, String> {
-        let _guard = self.refresh_mutex.lock().await;
         if let Some(path) = self.configured_elements.as_deref() {
             return load_local_catalog(path, SatelliteCatalogState::Configured, None);
         }
