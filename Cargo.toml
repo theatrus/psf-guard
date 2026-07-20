@@ -31,9 +31,9 @@ anyhow = "1.0"
 chrono = "0.4"
 regex = "1.12"
 byteorder = "1.5"
-seiza = "0.10.0"
+seiza = { git = "https://github.com/theatrus/seiza.git", rev = "5299dd23d6d2cf3d4b5f0782bbc7949aca837e73" }
 seiza-fits = "=0.1.6"
-seiza-satellites = { version = "0.2.0", features = ["serde"] }
+seiza-satellites = { git = "https://github.com/theatrus/seiza.git", rev = "5299dd23d6d2cf3d4b5f0782bbc7949aca837e73", features = ["serde"] }
 bumpalo = { version = "3.20", features = ["collections"] }
 image = "0.25"
 imageproc = "0.27"

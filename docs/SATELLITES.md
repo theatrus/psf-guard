@@ -61,15 +61,25 @@ abstain; it does not turn missing evidence into a clean-frame claim.
 
 ## Orbital-element cache
 
-The explicit on-demand action loads CelesTrak's active-satellite catalog via
-`seiza-satellites`. A fresh local snapshot is reused; when refresh is needed,
-that action may download a new timestamped snapshot and may fall back to stale
-cached data according to the library's cache policy. Snapshots are retained
-for historical re-tracing until the shared cache reaches its 5 GiB default
-upper bound; then the oldest snapshots are pruned while the newest is always
-kept. Cache-only quality scans and regrades select the retained snapshot whose
-retrieval time is closest to each exposure. Shared orbital data lives under
-`<cache>/satellites/`, with locking and pruning handled by the dependency.
+The explicit on-demand action chooses the orbital source from the exposure
+time through `seiza-satellites::OrbitalCatalogSource`; PSF Guard does not own a
+parallel age cutoff or provider list. Recent images use CelesTrak's active-
+satellite catalog. Historical images try a nearby durable cache entry, the
+content-addressed Seiza rolling mirror, and finally the public IAU SatChecker
+endpoint `/tools/tles-at-epoch/?epoch=<julian-date>&format=txt`, using the
+shutter midpoint. A nearby validated historical response is reused for the
+same observing night rather than issuing another large query.
+
+Current and historical responses share one durable cache. They remain
+available for re-tracing until that cache reaches its 5 GiB default upper
+bound; then the oldest downloads are pruned while the newest is always kept.
+Historical provenance records the provider, requested epoch, and download time.
+Cache-only quality scans and regrades never call either network service.
+Shared orbital data lives under `<cache>/satellites/`, with retrieval, locking,
+validation, and pruning handled by `seiza-satellites`.
+The mirror schema, twice-daily publisher, S3 transaction, retention, and
+backfill procedure are documented in the
+[Seiza satellite mirror runbook](https://github.com/theatrus/seiza/blob/main/docs/SATELLITE_MIRROR.md).
 
 For reproducible or offline work, set `astrometry.satellite_elements` in the
 JSON registry to a local OMM JSON or TLE file. Relative paths resolve below

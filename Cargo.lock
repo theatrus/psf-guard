@@ -4675,8 +4675,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "seiza"
 version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cd7998989f2c11becf073e3bd1e33b9973f31fead3eb060c5caf472077086fd"
+source = "git+https://github.com/theatrus/seiza.git?rev=5299dd23d6d2cf3d4b5f0782bbc7949aca837e73#5299dd23d6d2cf3d4b5f0782bbc7949aca837e73"
 dependencies = [
  "directories",
  "image",
@@ -4704,8 +4703,7 @@ dependencies = [
 [[package]]
 name = "seiza-satellites"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "860d73841db0a90882d490b9b14c129482952a39178e3ee1e33812633c79f963"
+source = "git+https://github.com/theatrus/seiza.git?rev=5299dd23d6d2cf3d4b5f0782bbc7949aca837e73#5299dd23d6d2cf3d4b5f0782bbc7949aca837e73"
 dependencies = [
  "directories",
  "fs2",
@@ -4713,6 +4711,7 @@ dependencies = [
  "satkit",
  "seiza",
  "serde",
+ "serde_json",
  "sha2 0.11.0",
  "thiserror 2.0.16",
  "tokio",

@@ -243,7 +243,7 @@ pub async fn predict_image_satellites(
 
     state
         .satellites
-        .refresh_active()
+        .load_for_exposure(&fits_path)
         .await
         .map_err(AppError::BadRequest)?;
     let satellite_context = Arc::clone(&state.satellites);

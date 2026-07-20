@@ -76,4 +76,48 @@ describe('SatellitePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /Identify satellite tracks/ }));
     expect(onPredict).toHaveBeenCalledOnce();
   });
+
+  it('shows the requested epoch for a historical catalog response', () => {
+    const status = {
+      orbital_elements_cached: true,
+      analysis: {
+        association: 'predicted_not_pixel_detected',
+        catalog: {
+          source: 'https://satchecker.cps.iau.org/tools/tles-at-epoch/',
+          provider: 'seiza_mirror',
+          state: 'downloaded',
+          query_epoch: '2025-10-18T12:52:12.790Z',
+        },
+        exposure: { duration_seconds: 60 },
+        tracks: [],
+        risk: {
+          track_count: 0,
+          potentially_bright_count: 0,
+          high_risk_count: 0,
+          maximum_bright_trail_risk: 0,
+          pixel_alignment_attempted: true,
+          pixel_aligned_count: 0,
+          pixel_aligned_high_risk_count: 0,
+          reject_recommended: false,
+        },
+      },
+    } as unknown as SatelliteAnalysisStatus;
+
+    render(
+      <SatellitePanel
+        status={status}
+        isLoading={false}
+        isPredicting={false}
+        overlayVisible={false}
+        onToggleOverlay={vi.fn()}
+        onPredict={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Elements for')).toBeInTheDocument();
+    expect(screen.getByText('Element source')).toBeInTheDocument();
+    expect(screen.getByText('Seiza mirror')).toBeInTheDocument();
+    expect(screen.getByText(new Date('2025-10-18T12:52:12.790Z').toLocaleString()))
+      .toBeInTheDocument();
+  });
 });
