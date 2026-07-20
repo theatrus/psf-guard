@@ -31,7 +31,7 @@ anyhow = "1.0"
 chrono = "0.4"
 regex = "1.12"
 byteorder = "1.5"
-seiza = "0.10.0"
+seiza = "0.11.1"
 seiza-fits = "=0.1.6"
 seiza-satellites = { version = "0.2.0", features = ["serde"] }
 bumpalo = { version = "3.20", features = ["collections"] }
