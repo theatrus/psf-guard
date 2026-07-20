@@ -145,7 +145,7 @@ export interface PixelTrailSegment {
 export interface PixelTrailAlignment {
   status: 'detected' | 'not_detected' | 'not_evaluated';
   not_evaluated_reason?: 'empty_path' | 'too_short' | 'insufficient_coverage';
-  aligned_segments: PixelTrailSegment[];
+  aligned_segments?: PixelTrailSegment[];
   start_normal_offset_px: number;
   end_normal_offset_px: number;
   mean_normal_offset_px: number;

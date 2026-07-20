@@ -62,4 +62,27 @@ describe('SatelliteTrackOverlay', () => {
       .toHaveAttribute('stroke', 'var(--seiza-overlay-satellite-aligned-color, #7cff6b)');
     expect(getByText(/pixel match/)).toBeInTheDocument();
   });
+
+  it('renders a non-detection when the API omits empty aligned segments', () => {
+    const checkedAnalysis = {
+      ...analysis,
+      tracks: [{
+        ...analysis.tracks[0],
+        pixel_alignment: {
+          status: 'not_detected',
+        },
+      }],
+    } as SatelliteAnalysis;
+
+    const { container } = render(
+      <SatelliteTrackOverlay
+        analysis={checkedAnalysis}
+        imageWidth={300}
+        imageHeight={200}
+      />
+    );
+
+    expect(container.querySelectorAll('[data-outline-role="predicted-track"]')).toHaveLength(2);
+    expect(container.querySelectorAll('[data-outline-role="pixel-aligned-track"]')).toHaveLength(0);
+  });
 });

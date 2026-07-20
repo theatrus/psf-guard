@@ -29,7 +29,7 @@ export default function SatelliteTrackOverlay({
     segments: track.clipped_segments.map(([start, end]) => ({ start, end })),
     pixelAlignment: track.pixel_alignment == null ? undefined : {
       status: track.pixel_alignment.status,
-      segments: track.pixel_alignment.aligned_segments.map((segment) => ({
+      segments: track.pixel_alignment.aligned_segments?.map((segment) => ({
         start: [segment.start.x, segment.start.y],
         end: [segment.end.x, segment.end.y],
       })),
