@@ -210,7 +210,7 @@ pub async fn predict_image_satellites(
         })?
         .map_err(AppError::BadRequest)?;
     let astrometry_analysis = {
-        let _solve_guard = ctx.astrometry_solve_mutex.lock().await;
+        let _solve_guard = Arc::clone(&ctx.astrometry_solve_mutex).lock_owned().await;
         let solve_path = fits_path.clone();
         let solve_cache = cache_dir.clone();
         tokio::task::spawn_blocking(move || {
@@ -241,11 +241,18 @@ pub async fn predict_image_satellites(
         .map_err(AppError::BadRequest)?
     };
 
-    state
-        .satellites
-        .load_for_exposure(&fits_path)
-        .await
-        .map_err(AppError::BadRequest)?;
+    let catalog_context = Arc::clone(&state.satellites);
+    let catalog_path = fits_path.clone();
+    let runtime_handle = tokio::runtime::Handle::current();
+    // Keep the provider cascade's borrowed response internals out of Axum's
+    // higher-ranked `Send` check. I/O still runs on the current Tokio runtime;
+    // the blocking worker only owns and drives that future to completion.
+    tokio::task::spawn_blocking(move || {
+        runtime_handle.block_on(catalog_context.load_for_exposure(catalog_path))
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("Satellite catalog task failed: {error}")))?
+    .map_err(AppError::BadRequest)?;
     let satellite_context = Arc::clone(&state.satellites);
     let prediction_path = fits_path;
     let prediction_cache = cache_dir;
@@ -2888,9 +2895,10 @@ pub async fn start_spatial_scan(
                                     None
                                 };
                             if *need_satellite && solved {
-                                match runtime_handle
-                                    .block_on(satellite_context.load_for_exposure(&item.fits_path))
-                                {
+                                match runtime_handle.block_on(
+                                    Arc::clone(&satellite_context)
+                                        .load_for_exposure(item.fits_path.clone()),
+                                ) {
                                     Ok(snapshot) => {
                                         if let Err(error) = crate::satellites::predict_tracks(
                                             item.image_id,

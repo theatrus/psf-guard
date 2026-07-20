@@ -207,10 +207,10 @@ toggles the overlay instead of solving again.
 
 ### Install the Seiza catalogs
 
-PSF Guard embeds Seiza 0.11.1's solver but does not bundle its multi-gigabyte
+PSF Guard embeds Seiza 0.11.2's solver but does not bundle its multi-gigabyte
 catalog data. Install the `seiza` CLI from the
 [Seiza releases](https://github.com/theatrus/seiza/releases) or with
-`cargo install seiza-cli --version 0.11.1`, then download a bundle once:
+`cargo install seiza-cli --version 0.11.2`, then download a bundle once:
 
 ```bash
 # Recommended: choose a bundle interactively and install it in Seiza's
