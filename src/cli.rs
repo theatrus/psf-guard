@@ -266,7 +266,7 @@ pub enum Commands {
         verbose: bool,
     },
 
-    /// Screen FITS light frames for occlusion, clouds and stray light
+    /// Screen FITS frames for occlusion, clouds, pointing and cached satellite risk
     ScreenFits {
         /// Path to a FITS file or directory (searched recursively)
         path: String,
@@ -297,11 +297,12 @@ pub enum Commands {
         #[arg(long, default_value = "60")]
         session_gap: u64,
 
-        /// Plate solve frames, then write [Auto] rejections for corroborated
-        /// quality or pointing failures into this scheduler DB (registry slug
-        /// or path to a .sqlite file). Frames are matched by FITS filename and
-        /// capture time. Isolated no-solves and operational failures are not
-        /// rejected; already-rejected frames are left untouched.
+        /// Plate solve frames, add cached satellite risk, then write [Auto]
+        /// rejections for supported quality/pointing findings into this
+        /// scheduler DB (registry slug or path to a .sqlite file). Frames are
+        /// matched by FITS filename and capture time. Isolated no-solves and
+        /// operational failures are not rejected; already-rejected frames are
+        /// left untouched.
         #[arg(long)]
         regrade_db: Option<String>,
 
@@ -313,6 +314,11 @@ pub enum Commands {
         /// platform config location)
         #[arg(long)]
         registry: Option<String>,
+
+        /// Cache root used by the server (for cached orbital elements and
+        /// per-database satellite predictions)
+        #[arg(long, default_value = "./cache")]
+        cache_dir: String,
 
         /// Write annotated diagnostic PNGs for WARN/REJECT frames into this
         /// directory (grid overlay showing which cells drove the verdict)

@@ -129,7 +129,7 @@ test('keeps catalog-only association distinct when a real FITS file has no WCS',
     mode: 'hinted',
     catalog_scope: 'solved_footprint',
     solver_provenance: {
-      seiza_version: '0.8.0',
+      seiza_version: '0.10.0',
       detection_backend: 'mtf_u8',
       star_catalog: { format: 'SEIZAST2' },
     },

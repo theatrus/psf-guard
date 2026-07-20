@@ -17,6 +17,9 @@ pub enum IssueCategory {
     PointingJump,
     PointingDrift,
     PlateSolveFailed,
+    /// A solved single exposure has a predicted sunlit satellite crossing.
+    /// This is orbital prediction evidence, not a pixel-trail detection.
+    SatelliteTrailRisk,
     UnknownDegradation,
 }
 
@@ -105,6 +108,38 @@ pub struct AstrometryFrameMetrics {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SatelliteFrameMetrics {
+    pub predicted_tracks: usize,
+    pub potentially_bright_count: usize,
+    pub high_risk_count: usize,
+    pub maximum_bright_trail_risk: f64,
+    #[serde(default)]
+    pub pixel_alignment_attempted: bool,
+    #[serde(default)]
+    pub pixel_aligned_count: usize,
+    #[serde(default)]
+    pub pixel_aligned_high_risk_count: usize,
+    pub reject_recommended: bool,
+    pub association: String,
+}
+
+impl From<&crate::satellites::SatelliteAnalysis> for SatelliteFrameMetrics {
+    fn from(analysis: &crate::satellites::SatelliteAnalysis) -> Self {
+        Self {
+            predicted_tracks: analysis.risk.track_count,
+            potentially_bright_count: analysis.risk.potentially_bright_count,
+            high_risk_count: analysis.risk.high_risk_count,
+            maximum_bright_trail_risk: analysis.risk.maximum_bright_trail_risk,
+            pixel_alignment_attempted: analysis.risk.pixel_alignment_attempted,
+            pixel_aligned_count: analysis.risk.pixel_aligned_count,
+            pixel_aligned_high_risk_count: analysis.risk.pixel_aligned_high_risk_count,
+            reject_recommended: analysis.risk.reject_recommended,
+            association: analysis.association.clone(),
+        }
+    }
+}
+
 pub fn astrometry_metrics_from_analysis(
     analysis: &crate::astrometry::AstrometryAnalysis,
 ) -> Option<AstrometryFrameMetrics> {
@@ -161,6 +196,8 @@ pub struct ImageQualityResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pointing: Option<PointingQuality>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub satellite: Option<SatelliteFrameMetrics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regrade_reason: Option<String>,
     pub details: Option<String>,
 }
@@ -190,6 +227,8 @@ pub struct SequenceSummary {
     pub out_of_target_count: usize,
     #[serde(default)]
     pub plate_solve_failed_count: usize,
+    #[serde(default)]
+    pub satellite_risk_count: usize,
 }
 
 /// A scored sequence of images sharing the same target, filter, and session.
@@ -260,6 +299,9 @@ pub struct ImageMetrics {
     /// Pixel-derived astrometry merged from PSF Guard's astrometry cache.
     #[serde(default)]
     pub astrometry: Option<AstrometryFrameMetrics>,
+    /// Cached orbital prediction for this exact source file and WCS.
+    #[serde(default)]
+    pub satellite: Option<SatelliteFrameMetrics>,
 }
 
 /// Configurable weights for composite quality scoring.
@@ -607,11 +649,13 @@ impl SequenceAnalyzer {
                         pointing: pointing_quality[idx].as_ref().and_then(pointing_normalized),
                     },
                     pointing: pointing_quality[idx].clone(),
+                    satellite: img.satellite.clone(),
                     regrade_reason: None,
                     details: None,
                 })
                 .collect();
             self.merge_pointing_issues(&mut results);
+            self.merge_satellite_issues(&mut results, &images);
             let summary = self.build_summary(&results);
 
             return ScoredSequence {
@@ -731,6 +775,7 @@ impl SequenceAnalyzer {
                     pointing: npt,
                 },
                 pointing: pointing_quality[i].clone(),
+                satellite: images[i].satellite.clone(),
                 regrade_reason: None,
                 details: None,
             });
@@ -739,6 +784,7 @@ impl SequenceAnalyzer {
         // Classify issues
         self.classify_issues(&mut results, &images);
         self.merge_pointing_issues(&mut results);
+        self.merge_satellite_issues(&mut results, &images);
 
         // Build reference values
         let reference_values = ReferenceValues {
@@ -762,6 +808,61 @@ impl SequenceAnalyzer {
             reference_values,
             images: results,
             summary,
+        }
+    }
+
+    fn merge_satellite_issues(&self, results: &mut [ImageQualityResult], images: &[ImageMetrics]) {
+        for (result, image) in results.iter_mut().zip(images) {
+            let Some(satellite) = image.satellite.as_ref() else {
+                continue;
+            };
+            if satellite.potentially_bright_count == 0 && satellite.pixel_aligned_count == 0 {
+                continue;
+            }
+            if !result.flags.contains(&IssueCategory::SatelliteTrailRisk) {
+                result.flags.push(IssueCategory::SatelliteTrailRisk);
+            }
+            result
+                .category
+                .get_or_insert(IssueCategory::SatelliteTrailRisk);
+
+            let pixel_evidence = if satellite.pixel_aligned_count > 0 {
+                format!(
+                    "Pixel corridor alignment found {} matching trail(s), including {} high-risk candidate(s).",
+                    satellite.pixel_aligned_count, satellite.pixel_aligned_high_risk_count
+                )
+            } else if satellite.pixel_alignment_attempted {
+                "Pixel corridor alignment found no matching trail.".to_string()
+            } else {
+                "Pixel alignment was unavailable; this remains orbital prediction only.".to_string()
+            };
+            let detail = format!(
+                "Predicted satellite crossing: {} track(s), {} potentially bright, {} high risk; maximum heuristic risk {:.2}. {}",
+                satellite.predicted_tracks,
+                satellite.potentially_bright_count,
+                satellite.high_risk_count,
+                satellite.maximum_bright_trail_risk,
+                pixel_evidence,
+            );
+            result.details = Some(match result.details.take() {
+                Some(existing) => format!("{detail} {existing}"),
+                None => detail,
+            });
+
+            if satellite.reject_recommended && satellite.pixel_aligned_high_risk_count > 0 {
+                result.quality_score = result.quality_score.min(0.35);
+                let reason = format!(
+                    "[Auto] Pixel-aligned bright satellite trail - {} high-risk candidate(s), risk {:.2}; verify overlay",
+                    satellite.pixel_aligned_high_risk_count,
+                    satellite.maximum_bright_trail_risk,
+                );
+                result.regrade_reason = Some(match result.regrade_reason.take() {
+                    Some(existing) => format!("{existing}; {reason}"),
+                    None => reason,
+                });
+            } else {
+                result.quality_score = result.quality_score.min(0.75);
+            }
         }
     }
 
@@ -1726,6 +1827,7 @@ impl SequenceAnalyzer {
             tracking_issues_detected: false,
             out_of_target_count: 0,
             plate_solve_failed_count: 0,
+            satellite_risk_count: 0,
         };
 
         for r in results {
@@ -1758,6 +1860,9 @@ impl SequenceAnalyzer {
             }
             if r.flags.contains(&IssueCategory::PlateSolveFailed) {
                 summary.plate_solve_failed_count += 1;
+            }
+            if r.flags.contains(&IssueCategory::SatelliteTrailRisk) {
+                summary.satellite_risk_count += 1;
             }
         }
 
@@ -2009,6 +2114,7 @@ pub fn extract_metrics_from_metadata(
         bg_cell_fall_fraction: None,
         bg_glow_max: None,
         astrometry: None,
+        satellite: None,
     }
 }
 
@@ -2035,6 +2141,7 @@ mod tests {
             bg_cell_fall_fraction: None,
             bg_glow_max: None,
             astrometry: None,
+            satellite: None,
         }
     }
 
@@ -2065,6 +2172,7 @@ mod tests {
             bg_cell_fall_fraction: None,
             bg_glow_max: None,
             astrometry: None,
+            satellite: None,
         }
     }
 
@@ -2094,6 +2202,7 @@ mod tests {
             bg_cell_fall_fraction: None,
             bg_glow_max: None,
             astrometry: None,
+            satellite: None,
         }
     }
 
@@ -2965,6 +3074,7 @@ mod tests {
                     pointing: None,
                 },
                 pointing: None,
+                satellite: None,
                 regrade_reason: None,
                 details: None,
             },
@@ -2985,6 +3095,7 @@ mod tests {
                     pointing: None,
                 },
                 pointing: None,
+                satellite: None,
                 regrade_reason: None,
                 details: None,
             },
@@ -3005,6 +3116,7 @@ mod tests {
                     pointing: None,
                 },
                 pointing: None,
+                satellite: None,
                 regrade_reason: None,
                 details: Some("Cloud".to_string()),
             },
@@ -3017,6 +3129,112 @@ mod tests {
         assert_eq!(summary.good_count, 1);
         assert_eq!(summary.bad_count, 1);
         assert_eq!(summary.cloud_events_detected, 1);
+    }
+
+    #[test]
+    fn pixel_aligned_high_satellite_risk_recommends_reviewed_rejection() {
+        let mut images = vec![
+            make_image(1, 1000, 100.0, 2.0),
+            make_image(2, 1060, 100.0, 2.0),
+            make_image(3, 1120, 100.0, 2.0),
+        ];
+        images[1].satellite = Some(SatelliteFrameMetrics {
+            predicted_tracks: 2,
+            potentially_bright_count: 1,
+            high_risk_count: 1,
+            maximum_bright_trail_risk: 0.82,
+            pixel_alignment_attempted: true,
+            pixel_aligned_count: 1,
+            pixel_aligned_high_risk_count: 1,
+            reject_recommended: true,
+            association: "predicted_with_pixel_alignment".into(),
+        });
+
+        let result = SequenceAnalyzer::new(SequenceAnalyzerConfig::default())
+            .analyze(&images, 1, "target", "L");
+        let affected = result
+            .iter()
+            .flat_map(|sequence| &sequence.images)
+            .find(|image| image.image_id == 2)
+            .unwrap();
+        assert!(affected.flags.contains(&IssueCategory::SatelliteTrailRisk));
+        assert!(affected.quality_score <= 0.35);
+        assert!(affected
+            .regrade_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("Pixel-aligned bright satellite")));
+        assert!(affected
+            .details
+            .as_deref()
+            .is_some_and(|details| details.contains("Pixel corridor alignment found 1")));
+        assert_eq!(result[0].summary.satellite_risk_count, 1);
+    }
+
+    #[test]
+    fn possible_satellite_risk_warns_without_regrade() {
+        let mut images = vec![
+            make_image(1, 1000, 100.0, 2.0),
+            make_image(2, 1060, 100.0, 2.0),
+            make_image(3, 1120, 100.0, 2.0),
+        ];
+        images[1].satellite = Some(SatelliteFrameMetrics {
+            predicted_tracks: 1,
+            potentially_bright_count: 1,
+            high_risk_count: 0,
+            maximum_bright_trail_risk: 0.42,
+            pixel_alignment_attempted: true,
+            pixel_aligned_count: 0,
+            pixel_aligned_high_risk_count: 0,
+            reject_recommended: false,
+            association: "predicted_pixel_checked".into(),
+        });
+
+        let result = SequenceAnalyzer::new(SequenceAnalyzerConfig::default())
+            .analyze(&images, 1, "target", "L");
+        let affected = result[0]
+            .images
+            .iter()
+            .find(|image| image.image_id == 2)
+            .unwrap();
+        assert!(affected.flags.contains(&IssueCategory::SatelliteTrailRisk));
+        assert!(affected.quality_score <= 0.75);
+        assert!(affected.regrade_reason.is_none());
+    }
+
+    #[test]
+    fn high_satellite_prediction_without_pixel_alignment_does_not_regrade() {
+        let mut images = vec![
+            make_image(1, 1000, 100.0, 2.0),
+            make_image(2, 1060, 100.0, 2.0),
+            make_image(3, 1120, 100.0, 2.0),
+        ];
+        images[1].satellite = Some(SatelliteFrameMetrics {
+            predicted_tracks: 2,
+            potentially_bright_count: 2,
+            high_risk_count: 2,
+            maximum_bright_trail_risk: 0.94,
+            pixel_alignment_attempted: true,
+            pixel_aligned_count: 0,
+            pixel_aligned_high_risk_count: 0,
+            reject_recommended: false,
+            association: "predicted_pixel_checked".into(),
+        });
+
+        let result = SequenceAnalyzer::new(SequenceAnalyzerConfig::default())
+            .analyze(&images, 1, "target", "L");
+        let affected = result[0]
+            .images
+            .iter()
+            .find(|image| image.image_id == 2)
+            .unwrap();
+        assert!(affected.flags.contains(&IssueCategory::SatelliteTrailRisk));
+        assert!(affected.quality_score <= 0.75);
+        assert!(affected.quality_score > 0.35);
+        assert!(affected.regrade_reason.is_none());
+        assert!(affected
+            .details
+            .as_deref()
+            .is_some_and(|details| details.contains("found no matching trail")));
     }
 
     #[test]

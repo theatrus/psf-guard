@@ -135,6 +135,100 @@ export interface AstrometryAnalysis {
   error?: string;
 }
 
+export type BrightTrailRiskLevel = 'low' | 'possible' | 'high';
+
+export interface PixelTrailSegment {
+  start: { x: number; y: number };
+  end: { x: number; y: number };
+}
+
+export interface PixelTrailAlignment {
+  status: 'detected' | 'not_detected' | 'not_evaluated';
+  not_evaluated_reason?: 'empty_path' | 'too_short' | 'insufficient_coverage';
+  aligned_segments?: PixelTrailSegment[];
+  start_normal_offset_px: number;
+  end_normal_offset_px: number;
+  mean_normal_offset_px: number;
+  angle_delta_deg: number;
+  contrast_adu: number;
+  contrast_sigma: number;
+  continuity: number;
+  coverage: number;
+  search_radius_px: number;
+}
+
+export interface SatelliteTrackPrediction {
+  name: string;
+  label: string;
+  norad_id?: number;
+  cospar_id?: string;
+  association: 'predicted';
+  element_epoch_utc: string;
+  element_age_seconds: number;
+  sample_interval_seconds: number;
+  clipped_segments: [[number, number], [number, number]][];
+  clipped_length_px: number;
+  maximum_elevation_deg: number;
+  minimum_range_km: number;
+  maximum_sunlight_fraction: number;
+  maximum_apparent_rate_arcsec_per_second?: number;
+  maximum_pixel_rate_px_per_second?: number;
+  bright_trail_risk: number;
+  risk_level: BrightTrailRiskLevel;
+  pixel_alignment?: PixelTrailAlignment;
+}
+
+export interface SatelliteAnalysis {
+  image_id: number;
+  association: 'predicted_not_pixel_detected' | 'predicted_pixel_checked' | 'predicted_with_pixel_alignment';
+  seiza_version: string;
+  seiza_satellites_version: string;
+  pixel_alignment_version: number;
+  image_width: number;
+  image_height: number;
+  exposure: {
+    start_utc: string;
+    end_utc: string;
+    duration_seconds: number;
+    latitude_deg: number;
+    longitude_deg: number;
+    altitude_m: number;
+    provenance: string;
+    header_keywords: string[];
+  };
+  catalog: {
+    source: string;
+    state: 'configured' | 'fresh' | 'downloaded' | 'stale_fallback' | 'cached';
+    cache_path?: string;
+    size_bytes?: number;
+    modified_unix_seconds?: number;
+    retrieved_at?: string;
+    content_sha256?: string;
+    warning?: string;
+  };
+  elements_considered: number;
+  propagation_failures: number;
+  stale_elements: number;
+  tracks: SatelliteTrackPrediction[];
+  risk: {
+    track_count: number;
+    potentially_bright_count: number;
+    high_risk_count: number;
+    maximum_bright_trail_risk: number;
+    pixel_alignment_attempted: boolean;
+    pixel_aligned_count: number;
+    pixel_aligned_high_risk_count: number;
+    reject_recommended: boolean;
+  };
+  pixel_alignment_error?: string;
+  computed_at: number;
+}
+
+export interface SatelliteAnalysisStatus {
+  analysis?: SatelliteAnalysis;
+  orbital_elements_cached: boolean;
+}
+
 export interface ApiResponse<T> {
   success: boolean;
   data?: T;
@@ -383,6 +477,17 @@ export interface ImageQualityResult {
     rms_arcsec?: number;
     error?: string;
   };
+  satellite?: {
+    predicted_tracks: number;
+    potentially_bright_count: number;
+    high_risk_count: number;
+    maximum_bright_trail_risk: number;
+    pixel_alignment_attempted: boolean;
+    pixel_aligned_count: number;
+    pixel_aligned_high_risk_count: number;
+    reject_recommended: boolean;
+    association: 'predicted_not_pixel_detected' | 'predicted_pixel_checked' | 'predicted_with_pixel_alignment';
+  };
   regrade_reason?: string;
   details: string | null;
 }
@@ -434,6 +539,7 @@ export interface SequenceSummary {
   tracking_issues_detected: boolean;
   out_of_target_count: number;
   plate_solve_failed_count: number;
+  satellite_risk_count: number;
 }
 
 export interface ReferenceValues {

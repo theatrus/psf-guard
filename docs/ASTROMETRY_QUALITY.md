@@ -80,7 +80,9 @@ undo/redo stack. Reasons are specific and auditable, for example:
 `screen-fits` remains database-free unless `--regrade-db` is supplied. With a
 database, it first matches each raw FITS frame by **basename and capture time
 (within 10 minutes)**, loads that image's intended target, runs fresh pixel
-solves, and feeds the results through the same sequence grader used by the UI.
+solves, adds satellite predictions when orbital elements already exist in the
+selected cache root, and feeds the results through the same sequence grader
+used by the UI.
 
 ```bash
 # Inspect proposed writes first
@@ -89,6 +91,10 @@ psf-guard screen-fits /path/to/lights --regrade-db my-db --dry-run
 # Apply supported recommendations; already-rejected rows are untouched
 psf-guard screen-fits /path/to/lights --regrade-db my-db
 ```
+
+If the server uses a non-default cache root, pass the same location with
+`--cache-dir`. CLI regrading never downloads orbital elements; it abstains
+from satellite grading when no configured or cached snapshot exists.
 
 An isolated deterministic no-solve is reported and lowers its score, but is
 not written as a rejection. Off-target/jump/drift recommendations and no-solves

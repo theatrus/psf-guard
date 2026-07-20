@@ -229,6 +229,10 @@ async fn run_server_internal(
             get(handlers::get_image_astrometry).post(handlers::solve_image_astrometry),
         )
         .route(
+            "/images/{image_id}/satellites",
+            get(handlers::get_image_satellites).post(handlers::predict_image_satellites),
+        )
+        .route(
             "/images/generation-status",
             post(handlers::post_generation_status),
         )

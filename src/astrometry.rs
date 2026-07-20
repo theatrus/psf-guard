@@ -10,7 +10,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-pub const SEIZA_VERSION: &str = "0.8.0";
+pub const SEIZA_VERSION: &str = "0.10.0";
 pub const SEIZA_FITS_VERSION: &str = "0.1.6";
 
 pub type AstrometryResourcePath = Result<Option<PathBuf>, seiza::data_paths::DataPathError>;
@@ -37,6 +37,11 @@ pub struct AstrometryConfig {
     pub transients: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minor_bodies: Option<String>,
+    /// Optional local OMM JSON or TLE file. Relative paths are resolved below
+    /// `data_dir`. When absent, on-demand satellite analysis uses the shared
+    /// CelesTrak cache.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub satellite_elements: Option<String>,
 }
 
 impl AstrometryConfig {
@@ -97,6 +102,21 @@ impl AstrometryConfig {
 
     pub fn minor_bodies_path(&self) -> AstrometryResourcePath {
         self.resolve_required(&self.minor_bodies, seiza::data_paths::minor_bodies)
+    }
+
+    pub fn satellite_elements_path(&self) -> Option<PathBuf> {
+        let path = self
+            .satellite_elements
+            .as_deref()
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)?;
+        if path.is_absolute() {
+            Some(path)
+        } else if let Some(data_dir) = self.data_dir.as_deref().filter(|path| !path.is_empty()) {
+            Some(PathBuf::from(data_dir).join(path))
+        } else {
+            Some(path)
+        }
     }
 }
 
@@ -1639,7 +1659,7 @@ fn solution_response(
     }
 }
 
-fn wcs_from_response(response: &WcsResponse) -> seiza::Wcs {
+pub(crate) fn wcs_from_response(response: &WcsResponse) -> seiza::Wcs {
     seiza::Wcs {
         crval: (response.crval[0], response.crval[1]),
         crpix: (response.crpix[0], response.crpix[1]),
@@ -2553,6 +2573,11 @@ mod tests {
             config.minor_bodies_path().unwrap().unwrap(),
             directory.path().join("minor-bodies.bin")
         );
+        assert_eq!(
+            config.satellite_elements_path(),
+            None,
+            "a catalog data directory alone must not be mistaken for an orbital-element file"
+        );
 
         std::fs::write(directory.path().join("custom-stars.bin"), b"custom").unwrap();
         let overridden = AstrometryConfig {
@@ -2564,6 +2589,15 @@ mod tests {
             overridden.stars_path().unwrap().unwrap(),
             directory.path().join("custom-stars.bin"),
             "relative overrides remain relative to data_dir"
+        );
+        let satellites = AstrometryConfig {
+            data_dir: config.data_dir.clone(),
+            satellite_elements: Some("active.json".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            satellites.satellite_elements_path().unwrap(),
+            directory.path().join("active.json")
         );
     }
 
