@@ -40,7 +40,10 @@ describe('SatelliteTrackOverlay', () => {
         ...analysis.tracks[0],
         pixel_alignment: {
           status: 'detected',
-          aligned_segment: [[14, 25], [184, 145]],
+          aligned_segments: [
+            { start: { x: 14, y: 25 }, end: { x: 100, y: 120 } },
+            { start: { x: 100, y: 120 }, end: { x: 184, y: 145 } },
+          ],
         },
       }],
     } as SatelliteAnalysis;
@@ -52,7 +55,8 @@ describe('SatelliteTrackOverlay', () => {
       />
     );
 
-    expect(container.querySelectorAll('line')).toHaveLength(3);
+    expect(container.querySelectorAll('line')).toHaveLength(4);
+    expect(container.querySelectorAll('[data-testid="pixel-aligned-satellite-track"]')).toHaveLength(2);
     expect(container.querySelector('[data-testid="pixel-aligned-satellite-track"]'))
       .toHaveAttribute('stroke', '#7cff6b');
     expect(getByText(/pixel match/)).toBeInTheDocument();

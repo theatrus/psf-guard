@@ -94,10 +94,17 @@ Implementation tracker and design rationale: [MULTI_DB_PLAN.md](./MULTI_DB_PLAN.
 - **Inputs**: a solved WCS, UTC shutter bounds (`DATE-BEG`/`DATE-OBS` plus
   `DATE-END` or `EXPTIME`), and a topocentric site from FITS headers.
 - **Network/cache**: only `POST /api/db/{id}/images/{image_id}/satellites`
-  may refresh CelesTrak. Quality scans and CLI regrading use `cached_only()`
-  and never download. Shared elements live at `<cache>/satellites`; per-image
-  predictions live at `<cache>/<db>/satellites/<image_id>.json` and are
-  invalidated by source fingerprint, exact WCS, or dependency version.
+  may refresh CelesTrak. Quality scans and CLI regrading use
+  `cached_for_exposure()` and never download: Seiza selects the durable
+  timestamped snapshot nearest each shutter interval. Shared elements live at
+  `<cache>/satellites`, persist up to the dependency's 5 GiB default bound,
+  and carry a payload SHA-256 into each result. Per-image predictions live at
+  `<cache>/<db>/satellites/<image_id>.json` and are invalidated by source
+  fingerprint, exact WCS, or dependency/alignment version.
+- **Pixel evidence**: use `seiza_satellites::trail_alignment`; do not recreate
+  the matcher in PSF Guard. It evaluates the complete clipped polyline in
+  physical ADU and distinguishes `not_detected` from `not_evaluated` when less
+  than half the path has usable sideband coverage.
 - **UI/grading**: `T` predicts or toggles labeled track geometry. Possible
   bright risk warns/caps score at 0.75; high risk caps at 0.35 and supplies a
   reviewed `[Auto]` rejection reason. Risk is an illumination/range/elevation/

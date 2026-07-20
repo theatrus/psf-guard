@@ -28,7 +28,6 @@ pub mod satellites;
 pub mod sequence_analysis;
 pub mod server;
 pub mod spatial_analysis;
-pub mod trail_alignment;
 pub mod utils;
 
 // Main entry points

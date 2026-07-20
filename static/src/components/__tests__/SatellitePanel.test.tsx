@@ -19,7 +19,10 @@ describe('SatellitePanel', () => {
           bright_trail_risk: 0.81,
           pixel_alignment: {
             status: 'detected',
-            aligned_segment: [[0, 10], [100, 20]],
+            aligned_segments: [{
+              start: { x: 0, y: 10 },
+              end: { x: 100, y: 20 },
+            }],
           },
         }],
         risk: {

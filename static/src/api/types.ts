@@ -137,9 +137,15 @@ export interface AstrometryAnalysis {
 
 export type BrightTrailRiskLevel = 'low' | 'possible' | 'high';
 
+export interface PixelTrailSegment {
+  start: { x: number; y: number };
+  end: { x: number; y: number };
+}
+
 export interface PixelTrailAlignment {
-  status: 'detected' | 'not_detected';
-  aligned_segment?: [[number, number], [number, number]];
+  status: 'detected' | 'not_detected' | 'not_evaluated';
+  not_evaluated_reason?: 'empty_path' | 'too_short' | 'insufficient_coverage';
+  aligned_segments: PixelTrailSegment[];
   start_normal_offset_px: number;
   end_normal_offset_px: number;
   mean_normal_offset_px: number;
@@ -147,6 +153,7 @@ export interface PixelTrailAlignment {
   contrast_adu: number;
   contrast_sigma: number;
   continuity: number;
+  coverage: number;
   search_radius_px: number;
 }
 
@@ -196,6 +203,7 @@ export interface SatelliteAnalysis {
     size_bytes?: number;
     modified_unix_seconds?: number;
     retrieved_at?: string;
+    content_sha256?: string;
     warning?: string;
   };
   elements_considered: number;

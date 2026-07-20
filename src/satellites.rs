@@ -6,11 +6,16 @@
 //! OMM/TLE file).
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use seiza_satellites::trail_alignment::{
+    PixelTrailAligner, PixelTrailAlignment, PixelTrailAlignmentConfig,
+    PIXEL_TRAIL_ALIGNMENT_VERSION,
+};
 use seiza_satellites::{
-    CacheState, CelesTrakSource, ExposureProvenance, ObserverLocation, SatelliteCatalog,
+    BrightTrailRiskLevel, BrightTrailRiskOptions, CacheState, CelesTrakLoad, CelesTrakSource,
+    ExposureProvenance, ObserverLocation, PixelPoint, PixelSegment, SatelliteCatalog,
     SingleExposure, TrackOptions, UtcTimestamp,
 };
 use serde::{Deserialize, Serialize};
@@ -19,7 +24,6 @@ use crate::astrometry::{
     wcs_from_response, AstrometryAnalysis, AstrometrySourceFingerprint, WcsResponse,
 };
 use crate::astrometry_headers::FitsAstrometryHeaders;
-use crate::trail_alignment::{PixelTrailAligner, PixelTrailAlignment, PIXEL_ALIGNMENT_VERSION};
 use crate::FitsImage;
 
 pub const SEIZA_SATELLITES_VERSION: &str = "0.1.0";
@@ -46,6 +50,10 @@ pub struct SatelliteCatalogProvenance {
     pub modified_unix_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retrieved_at: Option<String>,
+    /// Exact identity of the orbital-element payload, independent of its
+    /// filename or retrieval timestamp.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub content_sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
 }
@@ -62,7 +70,6 @@ pub struct SatelliteCatalogSnapshot {
 pub struct SatelliteContext {
     source: CelesTrakSource,
     configured_elements: Option<PathBuf>,
-    loaded: RwLock<Option<SatelliteCatalogSnapshot>>,
     refresh_mutex: tokio::sync::Mutex<()>,
 }
 
@@ -72,7 +79,6 @@ impl SatelliteContext {
         Ok(Self {
             source,
             configured_elements,
-            loaded: RwLock::new(None),
             refresh_mutex: tokio::sync::Mutex::new(()),
         })
     }
@@ -85,12 +91,10 @@ impl SatelliteContext {
         self.configured_elements
             .as_deref()
             .is_some_and(Path::is_file)
-            || self.loaded.read().unwrap().is_some()
-            || std::fs::read_dir(self.source.cache_dir()).is_ok_and(|entries| {
-                entries.filter_map(Result::ok).any(|entry| {
-                    entry.path().extension().and_then(|value| value.to_str()) == Some("json")
-                })
-            })
+            || self
+                .source
+                .cached_snapshots()
+                .is_ok_and(|snapshots| !snapshots.is_empty())
     }
 
     /// Load a configured historical file, or refresh the shared CelesTrak
@@ -98,9 +102,7 @@ impl SatelliteContext {
     pub async fn refresh_active(&self) -> Result<SatelliteCatalogSnapshot, String> {
         let _guard = self.refresh_mutex.lock().await;
         if let Some(path) = self.configured_elements.as_deref() {
-            let snapshot = load_local_catalog(path, SatelliteCatalogState::Configured, None)?;
-            *self.loaded.write().unwrap() = Some(snapshot.clone());
-            return Ok(snapshot);
+            return load_local_catalog(path, SatelliteCatalogState::Configured, None);
         }
 
         let load = self
@@ -112,61 +114,66 @@ impl SatelliteContext {
             CacheState::Fresh => SatelliteCatalogState::Fresh,
             CacheState::Downloaded => SatelliteCatalogState::Downloaded,
             CacheState::StaleFallback => SatelliteCatalogState::StaleFallback,
+            CacheState::Cached => SatelliteCatalogState::Cached,
         };
-        let (size_bytes, modified_unix_seconds) = file_identity(&load.cache_path);
-        let snapshot = SatelliteCatalogSnapshot {
-            provenance: SatelliteCatalogProvenance {
-                source: load.catalog.source().to_string(),
-                state,
-                cache_path: Some(load.cache_path.display().to_string()),
-                size_bytes,
-                modified_unix_seconds,
-                retrieved_at: load.catalog.retrieved_at().map(UtcTimestamp::to_rfc3339),
-                warning: load.warning,
-            },
-            catalog: Arc::new(load.catalog),
-        };
-        *self.loaded.write().unwrap() = Some(snapshot.clone());
-        Ok(snapshot)
+        Ok(snapshot_from_celestrak_load(load, state))
     }
 
     /// Return orbital elements without downloading. A configured file wins;
-    /// otherwise reuse memory or the newest valid JSON snapshot in the shared
-    /// CelesTrak cache directory.
+    /// otherwise use Seiza's newest valid cached snapshot. Cache discovery,
+    /// validation, locking, and size-bound pruning belong to the dependency.
     pub fn cached_only(&self) -> Result<Option<SatelliteCatalogSnapshot>, String> {
         if let Some(path) = self.configured_elements.as_deref() {
-            let snapshot = load_local_catalog(path, SatelliteCatalogState::Configured, None)?;
-            *self.loaded.write().unwrap() = Some(snapshot.clone());
-            return Ok(Some(snapshot));
+            return load_local_catalog(path, SatelliteCatalogState::Configured, None).map(Some);
         }
-        if let Some(snapshot) = self.loaded.read().unwrap().clone() {
-            return Ok(Some(snapshot));
-        }
-
-        let mut candidates = std::fs::read_dir(self.source.cache_dir())
-            .map(|entries| {
-                entries
-                    .filter_map(Result::ok)
-                    .filter(|entry| {
-                        entry.path().extension().and_then(|value| value.to_str()) == Some("json")
-                    })
-                    .filter_map(|entry| {
-                        let modified = entry.metadata().ok()?.modified().ok()?;
-                        Some((modified, entry.path()))
-                    })
-                    .collect::<Vec<_>>()
+        self.source
+            .load_cached()
+            .map_err(|error| error.to_string())
+            .map(|load| {
+                load.map(|load| snapshot_from_celestrak_load(load, SatelliteCatalogState::Cached))
             })
-            .unwrap_or_default();
-        candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
-        for (modified, path) in candidates {
-            if let Ok(snapshot) =
-                load_local_catalog(&path, SatelliteCatalogState::Cached, Some(modified))
-            {
-                *self.loaded.write().unwrap() = Some(snapshot.clone());
-                return Ok(Some(snapshot));
-            }
+    }
+
+    /// Return the durable cached snapshot closest to this exposure without
+    /// downloading. This keeps historical regrades reproducible as newer
+    /// CelesTrak snapshots accumulate.
+    pub fn cached_for_exposure(
+        &self,
+        path: &Path,
+    ) -> Result<Option<SatelliteCatalogSnapshot>, String> {
+        if let Some(path) = self.configured_elements.as_deref() {
+            return load_local_catalog(path, SatelliteCatalogState::Configured, None).map(Some);
         }
-        Ok(None)
+        let headers = FitsAstrometryHeaders::from_path(path)
+            .map_err(|error| format!("failed to read FITS exposure headers: {error}"))?;
+        let (exposure, _) = single_exposure(&headers)?;
+        self.source
+            .load_cached_for(exposure.midpoint())
+            .map_err(|error| error.to_string())
+            .map(|load| {
+                load.map(|load| snapshot_from_celestrak_load(load, SatelliteCatalogState::Cached))
+            })
+    }
+}
+
+fn snapshot_from_celestrak_load(
+    load: CelesTrakLoad,
+    state: SatelliteCatalogState,
+) -> SatelliteCatalogSnapshot {
+    let content_sha256 = load.catalog.fingerprint().content_sha256;
+    let (size_bytes, modified_unix_seconds) = file_identity(&load.cache_path);
+    SatelliteCatalogSnapshot {
+        provenance: SatelliteCatalogProvenance {
+            source: load.catalog.source().to_string(),
+            state,
+            cache_path: Some(load.cache_path.display().to_string()),
+            size_bytes,
+            modified_unix_seconds,
+            retrieved_at: load.catalog.retrieved_at().map(UtcTimestamp::to_rfc3339),
+            content_sha256,
+            warning: load.warning,
+        },
+        catalog: Arc::new(load.catalog),
     }
 }
 
@@ -183,6 +190,7 @@ fn load_local_catalog(
     if let Some(retrieved_at) = retrieved_at {
         catalog = catalog.with_retrieved_at(retrieved_at);
     }
+    let content_sha256 = catalog.fingerprint().content_sha256;
     let (size_bytes, modified_unix_seconds) = file_identity(path);
     Ok(SatelliteCatalogSnapshot {
         provenance: SatelliteCatalogProvenance {
@@ -192,6 +200,7 @@ fn load_local_catalog(
             size_bytes,
             modified_unix_seconds,
             retrieved_at: retrieved_at.map(UtcTimestamp::to_rfc3339),
+            content_sha256,
             warning: None,
         },
         catalog: Arc::new(catalog),
@@ -220,14 +229,6 @@ pub struct SatelliteExposureContext {
     pub altitude_m: f64,
     pub provenance: String,
     pub header_keywords: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BrightTrailRiskLevel {
-    Low,
-    Possible,
-    High,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -337,34 +338,7 @@ pub fn predict_tracks(
         .tracks
         .into_iter()
         .map(|track| {
-            let clipped_length_px = track.clipped_length_px();
-            let maximum_elevation_deg = track.maximum_elevation_deg();
-            let maximum_sunlight_fraction = track.maximum_sunlight_fraction();
-            let minimum_range_km = track
-                .samples
-                .iter()
-                .map(|sample| sample.range_km)
-                .fold(f64::INFINITY, f64::min);
-            let bright_trail_risk = bright_trail_risk(
-                maximum_sunlight_fraction,
-                minimum_range_km,
-                maximum_elevation_deg,
-                clipped_length_px,
-            );
-            let risk_level = if bright_trail_risk >= 0.55
-                && maximum_sunlight_fraction >= 0.5
-                && minimum_range_km <= 4_000.0
-                && clipped_length_px >= 10.0
-            {
-                BrightTrailRiskLevel::High
-            } else if maximum_sunlight_fraction >= 0.2
-                && minimum_range_km <= 10_000.0
-                && clipped_length_px >= 2.0
-            {
-                BrightTrailRiskLevel::Possible
-            } else {
-                BrightTrailRiskLevel::Low
-            };
+            let risk = track.bright_trail_risk(&BrightTrailRiskOptions::default());
             SatelliteTrackPrediction {
                 name: track.identity.name.clone(),
                 label: track.identity.display_label(),
@@ -384,27 +358,52 @@ pub fn predict_tracks(
                         ]
                     })
                     .collect(),
-                clipped_length_px,
-                maximum_elevation_deg,
-                minimum_range_km,
-                maximum_sunlight_fraction,
+                clipped_length_px: risk.clipped_length_px,
+                maximum_elevation_deg: risk.maximum_elevation_deg,
+                minimum_range_km: risk.minimum_range_km,
+                maximum_sunlight_fraction: risk.maximum_sunlight_fraction,
                 maximum_apparent_rate_arcsec_per_second: track
                     .maximum_apparent_rate_arcsec_per_second(),
                 maximum_pixel_rate_px_per_second: track.maximum_pixel_rate_px_per_second(),
-                bright_trail_risk,
-                risk_level,
+                bright_trail_risk: risk.score,
+                risk_level: risk.level,
                 pixel_alignment: None,
             }
         })
         .collect::<Vec<_>>();
     let (pixel_alignment_attempted, pixel_alignment_error) = match FitsImage::from_file(path) {
-        Ok(image) => {
-            let aligner = PixelTrailAligner::new(&image);
-            for track in &mut tracks {
-                track.pixel_alignment = Some(aligner.align_track(&track.clipped_segments));
+        Ok(image) => match PixelTrailAligner::from_u16(
+            image.width,
+            image.height,
+            &image.data,
+            image.raw_scale.recip(),
+            PixelTrailAlignmentConfig::default(),
+        ) {
+            Ok(aligner) => {
+                for track in &mut tracks {
+                    let segments = track
+                        .clipped_segments
+                        .iter()
+                        .map(|segment| PixelSegment {
+                            start: PixelPoint {
+                                x: segment[0][0],
+                                y: segment[0][1],
+                            },
+                            end: PixelPoint {
+                                x: segment[1][0],
+                                y: segment[1][1],
+                            },
+                        })
+                        .collect::<Vec<_>>();
+                    track.pixel_alignment = Some(aligner.align_track(&segments));
+                }
+                (true, None)
             }
-            (true, None)
-        }
+            Err(error) => (
+                false,
+                Some(format!("failed to initialize trail alignment: {error}")),
+            ),
+        },
         Err(error) => (
             false,
             Some(format!(
@@ -456,7 +455,7 @@ pub fn predict_tracks(
         association: association.to_string(),
         seiza_version: crate::astrometry::SEIZA_VERSION.to_string(),
         seiza_satellites_version: SEIZA_SATELLITES_VERSION.to_string(),
-        pixel_alignment_version: PIXEL_ALIGNMENT_VERSION,
+        pixel_alignment_version: PIXEL_TRAIL_ALIGNMENT_VERSION,
         source_fingerprint: astrometry.source_fingerprint.clone(),
         astrometry_wcs: solution.wcs.clone(),
         image_width: solution.image_width,
@@ -577,28 +576,6 @@ fn single_exposure(
     Ok((exposure, context))
 }
 
-fn bright_trail_risk(
-    sunlight_fraction: f64,
-    range_km: f64,
-    elevation_deg: f64,
-    clipped_length_px: f64,
-) -> f64 {
-    if !sunlight_fraction.is_finite()
-        || !range_km.is_finite()
-        || !elevation_deg.is_finite()
-        || !clipped_length_px.is_finite()
-        || sunlight_fraction <= 0.0
-    {
-        return 0.0;
-    }
-    let range_factor = (1.0 - ((range_km - 500.0) / 9_500.0)).clamp(0.0, 1.0);
-    let elevation_factor = (elevation_deg / 60.0).clamp(0.0, 1.0);
-    let path_factor = (clipped_length_px / 100.0).clamp(0.0, 1.0);
-    (sunlight_fraction.clamp(0.0, 1.0)
-        * (0.60 * range_factor + 0.20 * elevation_factor + 0.20 * path_factor))
-        .clamp(0.0, 1.0)
-}
-
 fn cache_path(cache_dir: &Path, image_id: i32) -> PathBuf {
     cache_dir
         .join("satellites")
@@ -643,7 +620,7 @@ pub fn persisted_analysis(
         && cached.astrometry_wcs == solution.wcs
         && cached.seiza_version == crate::astrometry::SEIZA_VERSION
         && cached.seiza_satellites_version == SEIZA_SATELLITES_VERSION
-        && cached.pixel_alignment_version == PIXEL_ALIGNMENT_VERSION)
+        && cached.pixel_alignment_version == PIXEL_TRAIL_ALIGNMENT_VERSION)
         .then_some(cached)
 }
 
@@ -657,15 +634,6 @@ fn unix_now() -> i64 {
 mod tests {
     use super::*;
     use seiza_fits::HeaderValue;
-
-    #[test]
-    fn risk_requires_sunlight_and_favors_close_long_tracks() {
-        assert_eq!(bright_trail_risk(0.0, 500.0, 80.0, 1000.0), 0.0);
-        let close = bright_trail_risk(1.0, 600.0, 70.0, 500.0);
-        let distant = bright_trail_risk(1.0, 30_000.0, 70.0, 500.0);
-        assert!(close > 0.9);
-        assert!(distant < close);
-    }
 
     #[test]
     fn date_avg_centers_the_exposure_when_no_explicit_end_exists() {

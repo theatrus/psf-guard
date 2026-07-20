@@ -286,8 +286,10 @@ observing site (`SITELAT`/`SITELONG`, `OBSGEO-B`/`OBSGEO-L`, or their
 documented aliases). On-demand prediction is the only workflow that may
 refresh CelesTrak's active-satellite data. The quality scan and
 `screen-fits --regrade-db` never download orbital data: when a snapshot is
-already cached, they reuse it and persist per-image predictions under
-`<cache>/<db-slug>/satellites/`.
+already cached, they select the retained snapshot closest to each exposure and
+persist per-image predictions under `<cache>/<db-slug>/satellites/`. Timestamped
+snapshots remain available for historical re-tracing up to a 5 GiB default
+cache bound, and each result records the exact orbital-payload fingerprint.
 
 Bright-trail risk is a conservative geometry/illumination heuristic based on
 sunlight, range, elevation, and path length. It is not an apparent magnitude.

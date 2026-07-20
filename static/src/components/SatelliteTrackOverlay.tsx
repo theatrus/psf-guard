@@ -33,9 +33,11 @@ export default function SatelliteTrackOverlay({
     >
       {analysis.tracks.map((track, trackIndex) => {
         const aligned = track.pixel_alignment?.status === 'detected'
-          ? track.pixel_alignment.aligned_segment
+          ? track.pixel_alignment.aligned_segments
           : undefined;
-        const first = aligned?.[0] ?? track.clipped_segments[0]?.[0];
+        const first = aligned?.[0]?.start
+          ? [aligned[0].start.x, aligned[0].start.y]
+          : track.clipped_segments[0]?.[0];
         const color = trackColor(track);
         return (
           <g key={`${track.norad_id ?? track.label}:${trackIndex}`}>
@@ -53,18 +55,19 @@ export default function SatelliteTrackOverlay({
                 vectorEffect="non-scaling-stroke"
               />
             ))}
-            {aligned && (
+            {aligned?.map((segment, segmentIndex) => (
               <line
+                key={`aligned:${segmentIndex}`}
                 data-testid="pixel-aligned-satellite-track"
-                x1={aligned[0][0]}
-                y1={aligned[0][1]}
-                x2={aligned[1][0]}
-                y2={aligned[1][1]}
+                x1={segment.start.x}
+                y1={segment.start.y}
+                x2={segment.end.x}
+                y2={segment.end.y}
                 stroke="#7cff6b"
                 strokeWidth={4}
                 vectorEffect="non-scaling-stroke"
               />
-            )}
+            ))}
             {first && (
               <text
                 x={first[0] + 7}

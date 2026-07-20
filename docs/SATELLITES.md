@@ -27,13 +27,17 @@ solid green line is the independently fitted pixel path. Responses distinguish
 fingerprint, exposure/site provenance, orbital-element source/state, alignment
 version, and Seiza dependency versions used to compute the result.
 
-The matcher downsamples the image once to at most 2,048 pixels on its long
-axis, estimates local noise, and performs a coarse-to-fine matched-filter
-search in a narrow normal corridor around each predicted path. A detection
-requires both at least 2.0 sigma robust line contrast and 65% path continuity.
-The serialized result includes its actual search radius, offsets, angle delta,
-ADU contrast, contrast significance, and continuity. It does not run a
-full-frame line search or invent an identity for an unrelated trail.
+The shared `seiza-satellites` matcher downsamples the image once to at most
+2,048 pixels on its long axis, estimates local noise, and performs a
+coarse-to-fine matched-filter search in a narrow normal corridor around the
+full clipped prediction polyline. A detection requires at least 2.0 sigma
+robust line contrast, 65% path continuity, and 50% usable sample coverage.
+Tracks without enough in-frame sideband evidence return `not_evaluated`
+instead of being treated as a clean non-detection. The serialized result
+includes its actual search radius, offsets, angle delta, physical-ADU
+contrast, contrast significance, continuity, coverage, and aligned polyline
+segments. It does not run a full-frame line search or invent an identity for
+an unrelated trail.
 
 ## Required FITS metadata
 
@@ -59,9 +63,13 @@ abstain; it does not turn missing evidence into a clean-frame claim.
 
 The explicit on-demand action loads CelesTrak's active-satellite catalog via
 `seiza-satellites`. A fresh local snapshot is reused; when refresh is needed,
-that action may download a new snapshot and may fall back to stale cached data
-according to the library's cache policy. Shared orbital data lives under
-`<cache>/satellites/`.
+that action may download a new timestamped snapshot and may fall back to stale
+cached data according to the library's cache policy. Snapshots are retained
+for historical re-tracing until the shared cache reaches its 5 GiB default
+upper bound; then the oldest snapshots are pruned while the newest is always
+kept. Cache-only quality scans and regrades select the retained snapshot whose
+retrieval time is closest to each exposure. Shared orbital data lives under
+`<cache>/satellites/`, with locking and pruning handled by the dependency.
 
 For reproducible or offline work, set `astrometry.satellite_elements` in the
 JSON registry to a local OMM JSON or TLE file. Relative paths resolve below
@@ -75,9 +83,10 @@ JSON registry to a local OMM JSON or TLE file. Relative paths resolve below
 ```
 
 Per-image results are written atomically to
-`<cache>/<db-slug>/satellites/<image-id>.json`. They are accepted only when
-the FITS fingerprint, exact WCS, Seiza version, seiza-satellites version, and
-pixel-alignment version still match.
+`<cache>/<db-slug>/satellites/<image-id>.json`. They carry the exact orbital
+payload SHA-256 and are accepted only when the FITS fingerprint, exact WCS,
+Seiza version, seiza-satellites version, and pixel-alignment version still
+match.
 
 ## Bright-trail risk and grading
 
@@ -118,14 +127,15 @@ near each exposure epoch.
 
 For the brighter frame, Seiza 0.9 solved 101 matched stars at 1.90 arcsec RMS.
 `seiza-satellites 0.1` projected four high-risk crossings, but pixel alignment
-found only the two trails visible in the frame: **CZ-4B R/B [48624]** at 55.5
-sigma and **STARLINK-3093 [49141]** at 4.1 sigma. Their fitted paths are about
-26 and 76 sensor pixels from the raw orbital projections. The other two
+found only the two trails visible in the frame: **CZ-4B R/B [48624]** at 57.8
+sigma and **STARLINK-3093 [49141]** at 4.2 sigma. Their fitted paths are about
+30 and 76 sensor pixels from the raw orbital projections, with more than 98%
+usable-path coverage. The other two
 predictions have low contrast and continuity and remain prediction-only.
 
 The preceding night's fainter frame solved with 102 matched stars at 1.96
 arcsec RMS. Of three predicted crossings, only **STARLINK-5450 [54778]**
-matches the pixels: 5.8 sigma, 99.8% continuity, and roughly a 41-pixel normal
+matches the pixels: 5.8 sigma, 99.7% continuity, and roughly a 43-pixel normal
 offset. Both dry-run regrade checks reject the affected image for pixel-aligned
 evidence. Predictions without a pixel match remain warnings. Names continue
 to link to an external satellite information page and remain candidate

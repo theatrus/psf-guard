@@ -98,7 +98,11 @@ export default function SatellitePanel({
             <span>{track.label}</span>
           )}
           <span className={`satellite-risk-${track.risk_level}`}>
-            {track.pixel_alignment?.status === 'detected' ? 'pixel match · ' : 'prediction only · '}
+            {track.pixel_alignment?.status === 'detected'
+              ? 'pixel match · '
+              : track.pixel_alignment?.status === 'not_evaluated'
+                ? 'pixel check unavailable · '
+                : 'prediction only · '}
             {track.risk_level} · {Math.round(track.bright_trail_risk * 100)}%
           </span>
         </div>

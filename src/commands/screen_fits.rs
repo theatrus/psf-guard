@@ -354,9 +354,6 @@ fn enrich_astrometry_for_regrade(
         astrometry_config.satellite_elements_path(),
     )
     .map_err(anyhow::Error::msg)?;
-    let satellite_snapshot = satellite_context
-        .cached_only()
-        .map_err(anyhow::Error::msg)?;
     let database_slug = registry
         .as_ref()
         .and_then(|registry| {
@@ -396,26 +393,34 @@ fn enrich_astrometry_for_regrade(
             Ok(analysis) => {
                 record.astrometry =
                     crate::sequence_analysis::astrometry_metrics_from_analysis(&analysis);
-                if let Some(snapshot) = satellite_snapshot.as_ref() {
-                    match crate::satellites::predict_tracks(
-                        image_id,
-                        &record.path,
-                        &analysis,
-                        snapshot,
-                    ) {
-                        Ok(prediction) => {
-                            record.satellite = Some(
-                                crate::sequence_analysis::SatelliteFrameMetrics::from(&prediction),
-                            );
-                            if let Err(error) =
-                                crate::satellites::persist_analysis(&prediction_cache, &prediction)
-                            {
-                                eprintln!("  Satellite cache write failed for {file}: {error}");
+                match satellite_context.cached_for_exposure(&record.path) {
+                    Ok(Some(snapshot)) => {
+                        match crate::satellites::predict_tracks(
+                            image_id,
+                            &record.path,
+                            &analysis,
+                            &snapshot,
+                        ) {
+                            Ok(prediction) => {
+                                record.satellite =
+                                    Some(crate::sequence_analysis::SatelliteFrameMetrics::from(
+                                        &prediction,
+                                    ));
+                                if let Err(error) = crate::satellites::persist_analysis(
+                                    &prediction_cache,
+                                    &prediction,
+                                ) {
+                                    eprintln!("  Satellite cache write failed for {file}: {error}");
+                                }
+                            }
+                            Err(error) => {
+                                eprintln!("  Satellite prediction unavailable for {file}: {error}")
                             }
                         }
-                        Err(error) => {
-                            eprintln!("  Satellite prediction unavailable for {file}: {error}")
-                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        eprintln!("  Cached satellite elements unavailable for {file}: {error}")
                     }
                 }
             }

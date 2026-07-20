@@ -241,15 +241,19 @@ pub async fn predict_image_satellites(
         .map_err(AppError::BadRequest)?
     };
 
-    let snapshot = state
+    state
         .satellites
         .refresh_active()
         .await
         .map_err(AppError::BadRequest)?;
+    let satellite_context = Arc::clone(&state.satellites);
     let prediction_path = fits_path;
     let prediction_cache = cache_dir;
     let prediction = tokio::task::spawn_blocking(move || {
         let _guard = guard;
+        let snapshot = satellite_context
+            .cached_for_exposure(&prediction_path)?
+            .ok_or_else(|| "no cached satellite elements are available".to_string())?;
         let analysis = crate::satellites::predict_tracks(
             image_id,
             &prediction_path,
@@ -2624,13 +2628,7 @@ pub async fn start_spatial_scan(
     // configured), reuse that snapshot to predict tracks while each frame's
     // solved WCS is already in hand.
     let satellite_context = Arc::clone(&state.satellites);
-    let satellite_snapshot = tokio::task::spawn_blocking(move || satellite_context.cached_only())
-        .await
-        .map_err(|error| AppError::InternalError(format!("Satellite cache task failed: {error}")))?
-        .unwrap_or_else(|error| {
-            tracing::warn!("Ignoring unavailable cached satellite elements: {error}");
-            None
-        });
+    let satellite_cache_available = satellite_context.has_cached_elements();
 
     // Collect this target's images together with schema-adaptive intended
     // framing. Unsupported coordinate epochs are deliberately omitted from
@@ -2702,7 +2700,7 @@ pub async fn start_spatial_scan(
                     == Some(file_only.as_str())
             });
         let astrometry_cached = cached_astrometry.is_some();
-        let satellite_cached = satellite_snapshot.is_none()
+        let satellite_cached = !satellite_cache_available
             || cached_astrometry.as_ref().is_some_and(|analysis| {
                 crate::satellites::persisted_analysis(&ctx.cache_dir_path, img.id, analysis)
                     .is_some()
@@ -2889,27 +2887,35 @@ pub async fn start_spatial_scan(
                                 } else {
                                     None
                                 };
-                            if *need_satellite
-                                && solved
-                                && let Some(snapshot) = satellite_snapshot.as_ref()
-                                && let Err(error) = crate::satellites::predict_tracks(
-                                    item.image_id,
-                                    &item.fits_path,
-                                    &analysis,
-                                    snapshot,
-                                )
-                                .and_then(|prediction| {
-                                    crate::satellites::persist_analysis(
-                                        &ctx_arc.cache_dir_path,
-                                        &prediction,
-                                    )
-                                })
-                            {
-                                tracing::warn!(
-                                    "Satellite prediction unavailable for {}: {}",
-                                    item.filename,
-                                    error
-                                );
+                            if *need_satellite && solved {
+                                match satellite_context.cached_for_exposure(&item.fits_path) {
+                                    Ok(Some(snapshot)) => {
+                                        if let Err(error) = crate::satellites::predict_tracks(
+                                            item.image_id,
+                                            &item.fits_path,
+                                            &analysis,
+                                            &snapshot,
+                                        )
+                                        .and_then(|prediction| {
+                                            crate::satellites::persist_analysis(
+                                                &ctx_arc.cache_dir_path,
+                                                &prediction,
+                                            )
+                                        }) {
+                                            tracing::warn!(
+                                                "Satellite prediction unavailable for {}: {}",
+                                                item.filename,
+                                                error
+                                            );
+                                        }
+                                    }
+                                    Ok(None) => {}
+                                    Err(error) => tracing::warn!(
+                                        "Cached satellite elements unavailable for {}: {}",
+                                        item.filename,
+                                        error
+                                    ),
+                                }
                             }
                             crate::server::spatial_scan::record_astrometry_result(
                                 &ctx_arc.spatial_metrics,
