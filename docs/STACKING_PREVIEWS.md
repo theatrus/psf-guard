@@ -167,14 +167,24 @@ applying the same pipeline restores its prior artifact. Artifacts from before
 background extraction are rebuilt with the new additive default; a current
 artifact whose extraction was explicitly disabled keeps that choice.
 
-![LRGB and selectable Foraxx narrowband previews built from cached channel stacks](stack-color-previews.png)
+| Standard SHO | Foraxx SHO |
+|:--:|:--:|
+| ![Real Golf of Mexico standard SHO preview built from cached H-alpha, OIII, and SII stacks](stack-narrowband-sho-real.jpg) | ![Real Golf of Mexico Foraxx SHO preview built from the same cached channel stacks](stack-color-real-previews.jpg) |
 
-The expanded RGB card shows the complete phase ledger plus independent R, G,
-B, and output stretch lanes. Each lane can add, remove, and reorder stages;
+Both previews above come from the same six accepted Golf of Mexico
+acquisitions: two each in H-alpha, OIII, and SII. Switching palettes reuses the
+three registered mono artifacts; it does not repeat their integrations.
+
+The expanded color card shows the complete phase ledger plus independent input
+and output stretch lanes. Each lane can add, remove, and reorder stages;
 **Apply processing stack** creates a new content-addressed preview while
 **Revert edits** restores the last rendered configuration.
 
-![RGB background extraction, fit diagnostics, phase progress, and ordered stretch editor](stack-color-processing.png)
+![Real Golf of Mexico narrowband background extraction diagnostics and ordered stretch editor](stack-background-real.jpg)
+
+This real Foraxx SHO run retained 73 of 96 H-alpha samples, 78 of 96 OIII
+samples, and 95 of 96 SII samples. The rejected locations contain excess noise
+or nebular structure that should not influence the fitted sky surface.
 
 Color cards retain the compact loading/status strip directly below the image.
 Its determinate total covers source loading, one background fit and one

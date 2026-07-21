@@ -89,22 +89,23 @@ This real M44 example was built from three B-channel acquisitions. Each input's
 quality exclusion, registration match count, residual, and admission decision
 is retained with the cached linear FITS result.
 
-### Combine real RGB and narrowband channel stacks
+### Combine real narrowband channel stacks
 
-![Real RGB and Foraxx SHO previews of Caldwell 33 built from PSF Guard channel stacks](docs/stack-color-real-previews.jpg)
+![Real Golf of Mexico Foraxx SHO preview built from PSF Guard channel stacks](docs/stack-color-real-previews.jpg)
 
-These are real Caldwell 33 (Veil Nebula) quick-look previews from twelve
-accepted Ultracat acquisitions: two each in R, G, B, Ha, OIII, and SII. The
-same six channel stacks produce both the natural RGB result and the selected
-Foraxx SHO palette; palette changes do not rebuild the linear integrations.
+This real Golf of Mexico quick-look preview uses six accepted Ultracat
+acquisitions: two each in H-alpha, OIII, and SII. The same three linear channel
+stacks can be recombined as standard SHO, Foraxx SHO, or any other compatible
+narrowband palette without rebuilding the integrations.
 
-<img src="docs/stack-background-real.jpg" width="570" alt="Background extraction controls and fit diagnostics from the real Caldwell 33 RGB preview">
+<img src="docs/stack-background-real.jpg" width="720" alt="Background extraction controls and per-channel fit diagnostics from the real Golf of Mexico narrowband preview">
 
 Color previews fit and subtract each input channel's background before
 cross-filter registration. The UI exposes the resolved fit evidence, editable
 background model, per-input and output stretch stacks, complete phase progress,
-full-size inspection, and a downloadable processed RGB FITS file. This real RGB
-run accepted 91, 92, and 96 of 96 candidate background samples in R, G, and B.
+full-size inspection, and a downloadable processed RGB FITS file. This real
+narrowband run accepted 73 of 96 H-alpha samples, 78 of 96 OIII samples, and 95
+of 96 SII samples while rejecting noisy or source-contaminated fit locations.
 See the **[stack preview guide](docs/STACKING_PREVIEWS.md)** for the full
 workflow and cache behavior.
 
