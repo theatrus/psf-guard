@@ -78,6 +78,48 @@ as an input to a separate processing workflow.
 
 ![Frame-by-frame stack admission details](stack-preview-decisions.png)
 
+## Color previews from channel stacks
+
+Once one target has completed mono stacks for **L/R/G/B** or **H-alpha/OIII**,
+the grid adds a **Combine channel stacks** section. Color generation is a
+separate on-demand job: rebuilding or changing a color palette never changes
+the mono integrations or their admission evidence.
+
+- **LRGB** requires one unambiguous Luminance, Red, Green, and Blue stack.
+  Luminance supplies the output luminance while Seiza retains the RGB
+  chromaticity.
+- **Narrowband** requires H-alpha and OIII. HOO and Foraxx HOO are then
+  available. Adding SII enables SHO, SOH, HSO, HOS, OSH, OHS, and Foraxx SHO.
+- The palette picker is part of the cache key. Previously generated palettes
+  remain available, and selecting another palette builds or restores its own
+  artifact.
+
+PSF Guard recognizes the ordinary short and long filter names (`L`, `Red`,
+`Ha`, `H-alpha`, `OIII`, `SII`, `O3`, and `S2`) plus descriptive names such as
+`Red`, `H-alpha`, and `OIII` as distinct tokens in vendor labels. It
+deliberately does not guess when two stacks map to the same role or when a
+multi-band filter name is ambiguous. Rename the Target Scheduler filters to
+make those roles explicit before building color.
+
+Each non-reference stack is registered to L for LRGB or H-alpha for
+narrowband, using the same bounded Seiza star/similarity registration used by
+the Seiza color CLI. Seiza independently percentile-normalizes the channels
+for a useful quick look, then performs the selected composition. Direct LRGB,
+HOO, and three-filter palettes remain linear-light; their PNG receives a
+display-only stretch. Foraxx works on display-prepared channels, so its PNG is
+not stretched a second time. The RGB floating-point FITS records `COLORSPC`,
+`SEIZACLR`, and `SEIZATRF` (`LINEAR` or `DISPLAY`) and preserves supported WCS
+cards from the reference stack.
+
+![LRGB and selectable Foraxx narrowband previews built from cached channel stacks](stack-color-previews.png)
+
+Color cards retain the compact loading/status strip while channels are read,
+registered, composed, and rendered. **Inspect** opens the same native-size
+pan/zoom inspector as a mono stack. **FITS** downloads the full RGB result for
+further processing. A color result is marked **Out of date**—but remains
+viewable—when any source channel stack is rebuilt, a cached artifact goes
+missing, or the Seiza/color-processing cache version changes.
+
 ## Output, caching, and invalidation
 
 Each group produces a display-stretched PNG no larger than 2400 pixels on its
@@ -102,6 +144,12 @@ Artifacts live below the database cache directory:
   group-1-original.png
   group-1.fits
 <cache>/<database>/stack-previews/latest-project-<project-id>.json
+<cache>/<database>/stack-previews/color/<color-job-id>/
+  manifest.json
+  preview.png
+  preview-original.png
+  color.fits
+<cache>/<database>/stack-previews/color/latest-project-<project-id>.json
 ```
 
 The content-addressed job ID includes the database/project, exact ordered
@@ -120,15 +168,16 @@ output.
 - No bias, dark, or flat masters are applied in this first version.
 - The retained FITS is still an uncalibrated preview integration, not a final
   science product.
-- Channels remain separate. There is no LRGB/SHO combination, mosaic, drizzle,
-  or cross-target integration.
+- Color is a visual channel combination, not photometric or
+  spectrophotometric calibration. There is no gradient removal, custom mixing
+  matrix UI, star removal, mosaic, drizzle, or cross-target integration.
 - Satellite predictions and image-detail overlays are not applied to a stack.
   They describe individual shutter intervals, while one preview represents
   several exposures.
 
 ## HTTP API
 
-The grid uses five per-database endpoints:
+The grid uses these per-database endpoints:
 
 ```text
 POST /api/db/{db}/projects/{project}/stack-previews
@@ -136,9 +185,18 @@ GET  /api/db/{db}/projects/{project}/stack-previews/latest
 GET  /api/db/{db}/projects/{project}/stack-previews/{job}
 GET  /api/db/{db}/stack-previews/{job}/{group}/preview[?size=screen|original]
 GET  /api/db/{db}/stack-previews/{job}/{group}/fits
+GET  /api/db/{db}/projects/{project}/stack-previews/color
+POST /api/db/{db}/projects/{project}/stack-previews/color
+GET  /api/db/{db}/projects/{project}/stack-previews/color/{job}
+GET  /api/db/{db}/stack-previews/color/{job}/preview[?size=screen|original]
+GET  /api/db/{db}/stack-previews/color/{job}/fits
 ```
 
 The POST body is `{ "image_ids": [...], "accepted_only": false, "force":
 false }`. Status responses contain the group counters, captured image/grade
 snapshot, and complete per-frame decision records used by the UI. The latest
 endpoint returns the durable last-successful result for each target/channel.
+The color catalog reports role/palette availability and durable results. Its
+POST body is `{ "target_id": 42, "kind": "lrgb", "force": false }` or
+`{ "target_id": 42, "kind": "narrowband", "palette": "foraxx-hoo",
+"force": false }`.

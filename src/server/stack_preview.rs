@@ -5,6 +5,8 @@
 //! and ordered accumulation. Jobs are process-global and run one at a time so
 //! a multi-database server cannot multiply the stacker's full-frame buffers.
 
+pub mod color;
+
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -38,7 +40,7 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-pub const SEIZA_STACKING_VERSION: &str = "0.1.0-git-065af44";
+pub const SEIZA_STACKING_VERSION: &str = "0.1.0-git-e01e5e2";
 /// Bump whenever stack admission, rendering, or persisted artifact semantics
 /// change. This deliberately versions PSF Guard policy separately from Seiza.
 const STACK_PREVIEW_CACHE_VERSION: u32 = 4;
@@ -172,6 +174,7 @@ pub struct LatestStackPreviews {
 
 pub struct StackPreviewManager {
     jobs: Mutex<HashMap<String, StackPreviewJob>>,
+    color_jobs: Mutex<HashMap<String, color::StackColorJob>>,
     latest_write: Mutex<()>,
     permit: Arc<Semaphore>,
 }
@@ -180,6 +183,7 @@ impl StackPreviewManager {
     pub fn new() -> Self {
         Self {
             jobs: Mutex::new(HashMap::new()),
+            color_jobs: Mutex::new(HashMap::new()),
             latest_write: Mutex::new(()),
             permit: Arc::new(Semaphore::new(1)),
         }

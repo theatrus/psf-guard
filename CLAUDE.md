@@ -111,6 +111,28 @@ Implementation tracker and design rationale: [MULTI_DB_PLAN.md](./MULTI_DB_PLAN.
   reviewed `[Auto]` rejection reason. Risk is an illumination/range/elevation/
   path-length heuristic, not apparent magnitude or pixel evidence.
 
+### Stack previews and color composition (2026-07)
+- **Mono stacks**: `src/server/stack_preview.rs` builds project-scoped,
+  per-target/filter uncalibrated integrations with `seiza-stacking`. The latest
+  successful result for each channel is durable below
+  `<cache>/<db>/stack-previews/`; channel rebuilds do not replace sibling
+  results. Selection policy excludes scheduler rejects and current sequence
+  regrade recommendations before Seiza registration/admission.
+- **Color add-on**: `src/server/stack_preview/color.rs` discovers unambiguous
+  L/R/G/B and Ha/OIII/SII roles from the durable mono stacks. On-demand LRGB
+  and narrowband jobs share the mono stacker's process-global permit, register
+  filters onto L or Ha, and call Seiza's `combine_lrgb` /
+  `combine_narrowband`. Available palettes are SHO/SOH/HSO/HOS/OSH/OHS/HOO
+  plus Foraxx-SHO/HOO; SII-free targets expose only HOO variants.
+- **Artifacts/provenance**: color cache keys include exact source job/revision,
+  target, palette, policy, and Seiza revision. Outputs are screen/native PNG,
+  RGB f32 FITS, and a manifest below `stack-previews/color/<job>/`; the FITS
+  records `SEIZACLR` and linear-vs-display transfer semantics. Rebuilt source
+  channels mark remembered color results stale without hiding them.
+- **Frontend**: `StackColorPreviewPanel` sits above the two-wide mono-card grid,
+  exposes palette/build/rebuild controls, retains live phase/channel progress,
+  and reuses the full-size pan/zoom inspector and FITS download workflow.
+
 ### Out-of-tree reject archive (2026-05)
 - **Command**: `psf-guard move-rejects --db <slug>` (multi-DB-aware via the
   registry). Moves files marked `gradingStatus = 2` to

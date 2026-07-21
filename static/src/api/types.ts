@@ -353,6 +353,77 @@ export interface LatestStackPreviews {
   groups: LatestStackPreviewGroup[];
 }
 
+export type StackColorRole = 'luminance' | 'red' | 'green' | 'blue' | 'ha' | 'oiii' | 'sii';
+export type StackColorKind = 'lrgb' | 'narrowband';
+export type StackNarrowbandPalette =
+  | 'sho'
+  | 'soh'
+  | 'hso'
+  | 'hos'
+  | 'osh'
+  | 'ohs'
+  | 'hoo'
+  | 'foraxx-sho'
+  | 'foraxx-hoo';
+
+export interface StackColorSource {
+  role: StackColorRole;
+  filter_name: string;
+  job_id: string;
+  group_index: number;
+  artifact_revision: string;
+  accepted_frames: number;
+}
+
+export interface StackColorJob {
+  schema_version: number;
+  job_id: string;
+  database_id: string;
+  project_id: number;
+  target_id: number;
+  target_name: string;
+  kind: StackColorKind;
+  palette: StackNarrowbandPalette | null;
+  label: string;
+  state: StackJobState;
+  phase: string;
+  processed_channels: number;
+  total_channels: number;
+  created_unix_seconds: number;
+  artifact_revision: string;
+  cache_version: number;
+  stacking_version: string;
+  sources: StackColorSource[];
+  preview_url: string;
+  fits_url: string;
+  error: string | null;
+  outdated: boolean;
+  outdated_reason: string | null;
+}
+
+export interface StackColorAvailableRole {
+  role: StackColorRole;
+  filter_name: string;
+}
+
+export interface StackColorTargetAvailability {
+  target_id: number;
+  target_name: string;
+  available_roles: StackColorAvailableRole[];
+  ambiguous_roles: StackColorRole[];
+  unmapped_filters: string[];
+  lrgb_available: boolean;
+  narrowband_palettes: StackNarrowbandPalette[];
+}
+
+export interface StackColorCatalog {
+  schema_version: number;
+  database_id: string;
+  project_id: number;
+  targets: StackColorTargetAvailability[];
+  jobs: StackColorJob[];
+}
+
 export interface ServerInfo {
   version: string;
   cache_directory: string;
