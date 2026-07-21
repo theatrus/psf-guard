@@ -34,6 +34,10 @@ byteorder = "1.5"
 seiza = "0.11.2"
 seiza-fits = "=0.1.6"
 seiza-satellites = { version = "0.4.1", features = ["serde"] }
+# Temporary commit pin until Seiza PR #49 publishes seiza-stacking 0.1.0.
+seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "18aa9b802ac357fa0afd7e12b339322b83fa473a" }
+sha2 = "0.11"
+rayon = "1"
 bumpalo = { version = "3.20", features = ["collections"] }
 image = "0.25"
 imageproc = "0.27"
@@ -46,6 +50,7 @@ opencv = { version = "0.99", optional = true, default-features = false, features
 # Web server dependencies
 axum = { version = "0.8", features = ["multipart", "macros"] }
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.7", features = ["fs", "trace", "cors"] }
 tracing = "0.1"
@@ -94,3 +99,12 @@ overflow-checks = false
 
 [build-dependencies]
 tauri-build = { version = "2.6.2", features = [] }
+
+# Interim source unification for the unreleased seiza-stacking crate. Its
+# workspace path dependencies otherwise introduce second copies of these
+# released crates from Git, which cargo vendor cannot represent alongside the
+# crates.io packages with the same name and version. Remove this patch when
+# seiza-stacking is published.
+[patch.crates-io]
+seiza = { git = "https://github.com/theatrus/seiza", rev = "18aa9b802ac357fa0afd7e12b339322b83fa473a" }
+seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "18aa9b802ac357fa0afd7e12b339322b83fa473a" }

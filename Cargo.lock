@@ -1119,7 +1119,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2887,7 +2887,7 @@ dependencies = [
  "png 0.18.0",
  "serde",
  "thiserror 2.0.16",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3916,18 +3916,22 @@ dependencies = [
  "nalgebra",
  "opencv",
  "rand 0.10.2",
+ "rayon",
  "regex",
  "rusqlite",
  "seiza",
  "seiza-fits",
  "seiza-satellites",
+ "seiza-stacking",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tempfile",
  "tokio",
+ "tokio-util",
  "toml_edit 0.25.13+spec-1.1.0",
  "tower",
  "tower-http 0.7.0",
@@ -4022,7 +4026,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4535,7 +4539,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4676,8 +4680,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "seiza"
 version = "0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd14e5e6e43bd886cd1405b264bad730e473f20f5398ec5bd262aad6ae2cfff2"
+source = "git+https://github.com/theatrus/seiza?rev=18aa9b802ac357fa0afd7e12b339322b83fa473a#18aa9b802ac357fa0afd7e12b339322b83fa473a"
 dependencies = [
  "directories",
  "image",
@@ -4715,10 +4718,10 @@ dependencies = [
 [[package]]
 name = "seiza-fits"
 version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd232cf5c230d3749cbe753b982f4e8ba02dd263b08bff7ebcc840a4dd73faec"
+source = "git+https://github.com/theatrus/seiza?rev=18aa9b802ac357fa0afd7e12b339322b83fa473a#18aa9b802ac357fa0afd7e12b339322b83fa473a"
 dependencies = [
  "multiversion",
+ "tempfile",
 ]
 
 [[package]]
@@ -4738,6 +4741,17 @@ dependencies = [
  "sha2 0.11.0",
  "thiserror 2.0.16",
  "tokio",
+]
+
+[[package]]
+name = "seiza-stacking"
+version = "0.1.0"
+source = "git+https://github.com/theatrus/seiza?rev=18aa9b802ac357fa0afd7e12b339322b83fa473a#18aa9b802ac357fa0afd7e12b339322b83fa473a"
+dependencies = [
+ "rayon",
+ "seiza",
+ "seiza-fits",
+ "thiserror 2.0.16",
 ]
 
 [[package]]
@@ -5653,7 +5667,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6149,7 +6163,7 @@ dependencies = [
  "png 0.18.0",
  "serde",
  "thiserror 2.0.16",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

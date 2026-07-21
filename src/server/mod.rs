@@ -7,6 +7,7 @@ pub mod handlers;
 pub mod preview_queue;
 pub mod slug;
 pub mod spatial_scan;
+pub mod stack_preview;
 pub mod state;
 pub mod static_file_service;
 
@@ -221,6 +222,22 @@ async fn run_server_internal(
         .route(
             "/projects/{project_id}/targets",
             get(handlers::list_targets),
+        )
+        .route(
+            "/projects/{project_id}/stack-previews",
+            post(stack_preview::start_stack_previews),
+        )
+        .route(
+            "/projects/{project_id}/stack-previews/{job_id}",
+            get(stack_preview::get_stack_preview_job),
+        )
+        .route(
+            "/stack-previews/{job_id}/{group_index}/preview",
+            get(stack_preview::get_stack_preview_image),
+        )
+        .route(
+            "/stack-previews/{job_id}/{group_index}/fits",
+            get(stack_preview::download_stack_preview_fits),
         )
         .route("/images", get(handlers::get_images))
         .route("/images/{image_id}", get(handlers::get_image))

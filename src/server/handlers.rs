@@ -2450,7 +2450,7 @@ pub async fn get_image_quality(
 // ---------------- Spatial (occlusion) metrics scan ----------------
 
 /// Extract the FITS basename from an acquiredimage metadata JSON blob.
-fn filename_from_metadata(metadata_json: &str) -> Option<String> {
+pub(crate) fn filename_from_metadata(metadata_json: &str) -> Option<String> {
     let metadata: serde_json::Value = serde_json::from_str(metadata_json).ok()?;
     let filename = metadata["FileName"].as_str()?;
     filename
@@ -2460,7 +2460,7 @@ fn filename_from_metadata(metadata_json: &str) -> Option<String> {
 }
 
 /// Fetch the filename-validated stored scan entry for an image, if any.
-fn stored_entry_for(
+pub(crate) fn stored_entry_for(
     store: &crate::server::spatial_scan::SharedSpatialStore,
     image_id: i32,
     metadata_json: &str,
@@ -2475,7 +2475,7 @@ fn stored_entry_for(
 /// frames without a stored scan entry contribute empty inputs and receive no
 /// signals. Frames are bucketed by exposure (flux ratios are only meaningful
 /// within one exposure length) and split into sessions before the pass.
-fn merge_photometric_signals(
+pub(crate) fn merge_photometric_signals(
     metrics: &mut [crate::sequence_analysis::ImageMetrics],
     entries: &[Option<crate::server::spatial_scan::StoredSpatialMetrics>],
     session_gap_minutes: u64,
@@ -2555,7 +2555,7 @@ fn merge_photometric_signals(
 
 /// Fill spatial metric fields from the per-DB scan store when the DB
 /// metadata did not provide them (N.I.N.A. never does).
-fn merge_spatial_metrics(
+pub(crate) fn merge_spatial_metrics(
     metrics: &mut crate::sequence_analysis::ImageMetrics,
     store: &crate::server::spatial_scan::SharedSpatialStore,
     metadata_json: &str,
@@ -2581,7 +2581,7 @@ fn merge_spatial_metrics(
     }
 }
 
-fn merge_astrometry_metrics(
+pub(crate) fn merge_astrometry_metrics(
     metrics: &mut crate::sequence_analysis::ImageMetrics,
     cache_dir: &std::path::Path,
     metadata_json: &str,
@@ -2993,7 +2993,7 @@ impl AppError {
     /// `map_err(AppError::db)`. Losing the underlying rusqlite error (as the
     /// old unit `DatabaseError` did) made lock contention ("database is
     /// locked") indistinguishable from corruption or I/O failures in the logs.
-    fn db(err: impl std::fmt::Display) -> Self {
+    pub(crate) fn db(err: impl std::fmt::Display) -> Self {
         AppError::DatabaseError(err.to_string())
     }
 }

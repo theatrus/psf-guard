@@ -10,12 +10,12 @@
 #   2. Build the embedded React frontend (npm ci && npm run build) so that
 #      `static/dist` exists -- build.rs is then skipped at rpm build time via
 #      PSF_GUARD_SKIP_FRONTEND_BUILD=1.
-#   3. Vendor all Cargo dependencies (`cargo vendor`) so the offline build has
-#      every crate locally.
+#   3. Vendor all Cargo dependencies (`cargo vendor`) and preserve its complete
+#      source-replacement config so the offline build has every source locally.
 #
 # Outputs two sources into --outdir (default: ~/rpmbuild/SOURCES):
 #   psf-guard-<version>.tar.gz         (Source0: source + prebuilt static/dist)
-#   psf-guard-<version>-vendor.tar.xz  (Source1: vendored crates -> ./vendor)
+#   psf-guard-<version>-vendor.tar.xz  (Source1: ./vendor + Cargo source config)
 #
 # Usage:
 #   scripts/make-rpm-sources.sh [--ref <git-ref>] [--outdir <dir>] [--version <v>]
@@ -87,14 +87,16 @@ tar -C "$WORK" --owner=0 --group=0 --numeric-owner \
 echo ">> Vendoring Cargo dependencies"
 (
     cd "$SRC"
-    # Vendor into ./vendor; spec extracts this at the source root and points
-    # .cargo/config.toml at it. Suppress the config snippet on stdout.
-    cargo vendor --locked vendor >/dev/null
+    # Preserve Cargo's complete source-replacement config alongside the
+    # vendored crates. In addition to crates.io it includes any pinned Git
+    # sources, allowing the RPM build to remain fully offline.
+    mkdir -p .cargo
+    cargo vendor --locked vendor >.cargo/config.toml
 )
 
 echo ">> Writing Source1: ${PREFIX}-vendor.tar.xz"
 tar -C "$SRC" --owner=0 --group=0 --numeric-owner \
-    -cJf "${OUTDIR}/${PREFIX}-vendor.tar.xz" vendor
+    -cJf "${OUTDIR}/${PREFIX}-vendor.tar.xz" vendor .cargo/config.toml
 
 echo
 echo "Done. Sources in ${OUTDIR}:"
