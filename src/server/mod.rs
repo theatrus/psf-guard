@@ -232,6 +232,15 @@ async fn run_server_internal(
             get(stack_preview::get_latest_stack_previews),
         )
         .route(
+            "/projects/{project_id}/stack-previews/color",
+            get(stack_preview::color::get_stack_color_catalog)
+                .post(stack_preview::color::start_stack_color),
+        )
+        .route(
+            "/projects/{project_id}/stack-previews/color/{job_id}",
+            get(stack_preview::color::get_stack_color_job),
+        )
+        .route(
             "/projects/{project_id}/stack-previews/{job_id}",
             get(stack_preview::get_stack_preview_job),
         )
@@ -242,6 +251,14 @@ async fn run_server_internal(
         .route(
             "/stack-previews/{job_id}/{group_index}/fits",
             get(stack_preview::download_stack_preview_fits),
+        )
+        .route(
+            "/stack-previews/color/{job_id}/preview",
+            get(stack_preview::color::get_stack_color_image),
+        )
+        .route(
+            "/stack-previews/color/{job_id}/fits",
+            get(stack_preview::color::download_stack_color_fits),
         )
         .route("/images", get(handlers::get_images))
         .route("/images/{image_id}", get(handlers::get_image))

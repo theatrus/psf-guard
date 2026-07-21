@@ -10,6 +10,7 @@ import type {
   StackPreviewJob,
 } from '../api/types';
 import StackPreviewInspector from './StackPreviewInspector';
+import StackColorPreviewPanel from './StackColorPreviewPanel';
 
 type StackCandidateImage = Pick<
   Image,
@@ -264,6 +265,23 @@ export default function StackPreviewPanel({
         ) !== null
       : false;
   }).length;
+  const outdatedTargetIds = useMemo(() => {
+    const targetIds = new Set<number>();
+    for (const entry of latest.data?.groups ?? []) {
+      const key = channelKey(entry.group.target_id, entry.group.filter_name);
+      if (
+        staleReason(
+          currentChannels.get(key),
+          entry.group.input_images,
+          entry.accepted_only,
+          acceptedOnly
+        )
+      ) {
+        targetIds.add(entry.group.target_id);
+      }
+    }
+    return targetIds;
+  }, [acceptedOnly, currentChannels, latest.data]);
 
   return (
     <>
@@ -321,6 +339,14 @@ export default function StackPreviewPanel({
           </div>
         )}
         {activeJob?.error && <div className="stack-preview-message error">{activeJob.error}</div>}
+
+        <StackColorPreviewPanel
+          dbId={dbId}
+          projectId={projectId}
+          sourceRevision={latest.data?.updated_unix_seconds ?? 0}
+          channelBuildRunning={running}
+          outdatedTargetIds={outdatedTargetIds}
+        />
 
         {displayKeys.length > 0 && (
           <div
@@ -552,10 +578,28 @@ export default function StackPreviewPanel({
       </section>
       {inspector && (
         <StackPreviewInspector
-          dbId={dbId}
-          jobId={inspector.jobId}
-          artifactRevision={inspector.artifactRevision}
-          group={inspector.group}
+          eyebrow="Full-resolution integration"
+          title={inspector.group.target_name}
+          label={inspector.group.filter_name || 'No filter'}
+          summary={[
+            `${inspector.group.accepted_frames} frames`,
+            `${Math.round(inspector.group.total_exposure_seconds)} s`,
+          ]}
+          imageUrl={apiClient.getStackPreviewUrl(
+            dbId,
+            inspector.jobId,
+            inspector.group.index,
+            inspector.artifactRevision,
+            'original'
+          )}
+          fitsUrl={apiClient.getStackFitsUrl(
+            dbId,
+            inspector.jobId,
+            inspector.group.index,
+            inspector.artifactRevision
+          )}
+          imageAlt={`Full-resolution stack for ${inspector.group.target_name} ${inspector.group.filter_name || 'No filter'}`}
+          downloadLabel="Download linear FITS"
           onClose={() => setInspector(null)}
         />
       )}
