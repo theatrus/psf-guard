@@ -382,6 +382,27 @@ export type StackStretchModel =
 export interface StackStretchRequest {
   model: StackStretchModel;
   color_strategy: StackStretchColorStrategy;
+  deconvolution?: StackDeconvolutionConfig | null;
+}
+
+export interface StackDeconvolutionConfig {
+  psf_fwhm_pixels: number;
+  iterations: number;
+  amount: number;
+  noise_fraction: number;
+  max_correction: number;
+}
+
+export interface StackDeconvolutionChannelDiagnostics {
+  input_flux: number;
+  output_flux: number;
+  input_peak: number;
+  output_peak: number;
+}
+
+export interface StackDeconvolutionResult {
+  config: StackDeconvolutionConfig;
+  channels: StackDeconvolutionChannelDiagnostics[];
 }
 
 export interface StackStretchStatistics {
@@ -396,6 +417,7 @@ export interface StackStretchPreview {
   schema_version: number;
   stretch_id: string;
   stretch_version: string;
+  deconvolution_version: string | null;
   config: StackStretchRequest & { max_analysis_samples: number };
   resolved_plan: unknown;
   source_transfer: 'linear' | 'display_referred';
@@ -403,8 +425,10 @@ export interface StackStretchPreview {
   linked_statistics: StackStretchStatistics;
   channel_statistics: Array<StackStretchStatistics | null>;
   luminance_statistics: StackStretchStatistics | null;
+  deconvolution: StackDeconvolutionResult | null;
   preview_url: string;
   original_preview_url: string;
+  fits_url: string | null;
 }
 
 export type StackColorRole = 'luminance' | 'red' | 'green' | 'blue' | 'ha' | 'oiii' | 'sii';
@@ -431,6 +455,7 @@ export interface StackColorSource {
 
 export interface StackColorProcessing {
   background_extraction: StackBackgroundExtraction | null;
+  input_deconvolutions: Partial<Record<StackColorRole, StackDeconvolutionConfig>>;
   input_stretches: Partial<Record<StackColorRole, StackStretchRequest[]>>;
   output_stretches: StackStretchRequest[];
 }
@@ -487,6 +512,7 @@ export type StackColorProgressPhase =
   | 'loading_sources'
   | 'background_preparation'
   | 'registering_sources'
+  | 'deconvolving_inputs'
   | 'normalizing_inputs'
   | 'stretching_inputs'
   | 'composing_color'
@@ -534,9 +560,11 @@ export interface StackColorJob {
   cache_version: number;
   stacking_version: string;
   background_version: string;
+  deconvolution_version: string;
   sources: StackColorSource[];
   processing: StackColorProcessing | null;
   resolved_input_stretches: Partial<Record<StackColorRole, unknown[]>>;
+  resolved_input_deconvolutions: Partial<Record<StackColorRole, StackDeconvolutionResult>>;
   resolved_output_stretches: unknown[];
   resolved_backgrounds: Partial<Record<StackColorRole, StackBackgroundFit>>;
   preview_url: string;

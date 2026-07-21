@@ -43,6 +43,7 @@ const STACK_COLOR_CACHE_VERSION: u32 = 4;
 const SEIZA_BACKGROUND_VERSION: &str = "0.1.0-git-d6b8dfc";
 const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
 const COLOR_BYTES_PER_PIXEL: u64 = 64;
+const COLOR_DECONVOLUTION_BYTES_PER_PIXEL: u64 = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -156,6 +157,11 @@ pub struct StackColorProcessing {
     /// independently before cross-channel registration.
     #[serde(default)]
     pub background_extraction: Option<StackBackgroundExtraction>,
+    /// Optional deconvolution of selected registered linear input channels,
+    /// before display normalization. Empty by default: color previews never
+    /// restore pixels unless the user explicitly enables a role.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub input_deconvolutions: BTreeMap<StackColorRole, super::stretch::StackDeconvolutionRequest>,
     /// Ordered display stretches applied independently after registration and
     /// robust normalization of each physical input channel.
     #[serde(default)]
@@ -189,6 +195,7 @@ pub enum StackColorProgressPhase {
     LoadingSources,
     BackgroundPreparation,
     RegisteringSources,
+    DeconvolvingInputs,
     NormalizingInputs,
     StretchingInputs,
     ComposingColor,
@@ -252,11 +259,16 @@ pub struct StackColorJob {
     pub stacking_version: String,
     #[serde(default)]
     pub background_version: String,
+    #[serde(default)]
+    pub deconvolution_version: String,
     pub sources: Vec<StackColorSource>,
     #[serde(default)]
     pub processing: Option<StackColorProcessing>,
     #[serde(default)]
     pub resolved_input_stretches: BTreeMap<StackColorRole, Vec<serde_json::Value>>,
+    #[serde(default)]
+    pub resolved_input_deconvolutions:
+        BTreeMap<StackColorRole, super::stretch::StackDeconvolutionResult>,
     #[serde(default)]
     pub resolved_output_stretches: Vec<serde_json::Value>,
     #[serde(default)]
@@ -334,6 +346,9 @@ fn color_progress(
     let output_stages = processing
         .map(|processing| processing.output_stretches.len())
         .unwrap_or(0);
+    let deconvolution_units = processing
+        .map(|processing| processing.input_deconvolutions.len())
+        .unwrap_or(0);
     let background_units = if processing
         .and_then(|processing| processing.background_extraction.as_ref())
         .is_some()
@@ -357,6 +372,11 @@ fn color_progress(
             StackColorProgressPhase::RegisteringSources,
             "Registering source stacks",
             channel_count,
+        ),
+        (
+            StackColorProgressPhase::DeconvolvingInputs,
+            "Deconvolving input channels",
+            deconvolution_units,
         ),
         (
             StackColorProgressPhase::NormalizingInputs,
@@ -769,6 +789,35 @@ fn validate_request(request: &StackColorRequest) -> Result<(), AppError> {
                     composition_label(request.kind, request.palette)
                 )));
             }
+            if let Some(error) = processing
+                .input_deconvolutions
+                .values()
+                .find_map(|request| request.validate().err())
+            {
+                return Err(AppError::BadRequest(error));
+            }
+            if let Some(role) = processing
+                .input_deconvolutions
+                .keys()
+                .find(|role| !required.contains(role))
+            {
+                return Err(AppError::BadRequest(format!(
+                    "{} is not an input to {}",
+                    role.label(),
+                    composition_label(request.kind, request.palette)
+                )));
+            }
+            if processing
+                .input_stretches
+                .values()
+                .flatten()
+                .chain(processing.output_stretches.iter())
+                .any(|stage| stage.deconvolution.is_some())
+            {
+                return Err(AppError::BadRequest(
+                    "Color deconvolution must be configured per linear input channel".into(),
+                ));
+            }
             if processing.input_stretches.values().flatten().any(|stage| {
                 stage.color_strategy == seiza_stretch::ColorStrategy::LuminancePreserving
             }) {
@@ -834,6 +883,13 @@ fn prepare_color_job(
     hasher.update(STACK_COLOR_CACHE_VERSION.to_le_bytes());
     hasher.update(SEIZA_STACKING_VERSION.as_bytes());
     hasher.update(SEIZA_BACKGROUND_VERSION.as_bytes());
+    if request
+        .processing
+        .as_ref()
+        .is_some_and(|processing| !processing.input_deconvolutions.is_empty())
+    {
+        hasher.update(super::stretch::SEIZA_DECONVOLUTION_VERSION.as_bytes());
+    }
     hasher.update(serde_json::to_vec(&request.processing).map_err(|error| {
         AppError::InternalError(format!(
             "Failed to encode color processing options: {error}"
@@ -874,9 +930,16 @@ fn prepare_color_job(
             cache_version: STACK_COLOR_CACHE_VERSION,
             stacking_version: SEIZA_STACKING_VERSION.into(),
             background_version: SEIZA_BACKGROUND_VERSION.into(),
+            deconvolution_version: request
+                .processing
+                .as_ref()
+                .filter(|processing| !processing.input_deconvolutions.is_empty())
+                .map(|_| super::stretch::SEIZA_DECONVOLUTION_VERSION.into())
+                .unwrap_or_default(),
             sources,
             processing: request.processing.clone(),
             resolved_input_stretches: BTreeMap::new(),
+            resolved_input_deconvolutions: BTreeMap::new(),
             resolved_output_stretches: Vec::new(),
             resolved_backgrounds: BTreeMap::new(),
             preview_url: format!(
@@ -1079,7 +1142,17 @@ fn compose_color(
     let mut reference = load_source_frame(cache_root, reference_source)?;
     progress.advance(StackColorProgressPhase::LoadingSources, 1);
     let pixels = reference.image.pixel_count();
-    let estimate = (pixels as u64).saturating_mul(COLOR_BYTES_PER_PIXEL);
+    let bytes_per_pixel = COLOR_BYTES_PER_PIXEL
+        + if job
+            .processing
+            .as_ref()
+            .is_some_and(|processing| !processing.input_deconvolutions.is_empty())
+        {
+            COLOR_DECONVOLUTION_BYTES_PER_PIXEL
+        } else {
+            0
+        };
+    let estimate = (pixels as u64).saturating_mul(bytes_per_pixel);
     let policy = state.worker_policy();
     if let Some(available) = crate::concurrency::available_memory_bytes()
         && estimate > (available as f64 * policy.memory_budget_fraction) as u64
@@ -1263,6 +1336,42 @@ fn compose_color(
         progress.finish(StackColorProgressPhase::RegisteringSources);
 
         let options = if let Some(processing) = &job.processing {
+            if processing.input_deconvolutions.is_empty() {
+                progress.skip(
+                    StackColorProgressPhase::DeconvolvingInputs,
+                    "Input deconvolution skipped (disabled)",
+                );
+            } else {
+                for source in &job.sources {
+                    let Some(request) = processing.input_deconvolutions.get(&source.role).copied()
+                    else {
+                        continue;
+                    };
+                    progress.begin(
+                        StackColorProgressPhase::DeconvolvingInputs,
+                        format!("Deconvolving {}", source.role.label()),
+                        Some(source.role),
+                        None,
+                    );
+                    let image = images.remove(&source.role).ok_or_else(|| {
+                        format!("{} registered image is missing", source.role.label())
+                    })?;
+                    let role_label = source.role.label();
+                    let (restored, result) = super::stretch::apply_deconvolution(&image, request)
+                        .map_err(|error| {
+                        format!("Failed to deconvolve {role_label}: {error}")
+                    })?;
+                    images.insert(source.role, restored);
+                    state.stack_previews.update_color(&job.job_id, |current| {
+                        current
+                            .resolved_input_deconvolutions
+                            .insert(source.role, result);
+                    });
+                    progress.advance(StackColorProgressPhase::DeconvolvingInputs, 1);
+                }
+                progress.finish(StackColorProgressPhase::DeconvolvingInputs);
+            }
+
             progress.begin(
                 StackColorProgressPhase::NormalizingInputs,
                 "Normalizing input channels",
@@ -1362,6 +1471,10 @@ fn compose_color(
                 "Preparing legacy quick-look normalization",
                 None,
                 None,
+            );
+            progress.skip(
+                StackColorProgressPhase::DeconvolvingInputs,
+                "Input deconvolution skipped (legacy quick look)",
             );
             progress.skip(
                 StackColorProgressPhase::StretchingInputs,
@@ -1813,6 +1926,11 @@ fn color_job_outdated_reason(
     if job.cache_version != STACK_COLOR_CACHE_VERSION
         || job.stacking_version != SEIZA_STACKING_VERSION
         || job.background_version != SEIZA_BACKGROUND_VERSION
+        || (job
+            .processing
+            .as_ref()
+            .is_some_and(|processing| !processing.input_deconvolutions.is_empty())
+            && job.deconvolution_version != super::stretch::SEIZA_DECONVOLUTION_VERSION)
     {
         return Some("the color processing version changed".into());
     }
@@ -2101,12 +2219,17 @@ mod tests {
                 config: BackgroundConfig::default(),
                 correction_mode: CorrectionMode::Subtract,
             }),
+            input_deconvolutions: BTreeMap::from([(
+                StackColorRole::Red,
+                super::super::stretch::StackDeconvolutionRequest::default(),
+            )]),
             input_stretches: BTreeMap::from([
                 (
                     StackColorRole::Red,
                     vec![super::super::stretch::StackStretchRequest {
                         model: seiza_stretch::StretchModel::Identity,
                         color_strategy: seiza_stretch::ColorStrategy::Linked,
+                        deconvolution: None,
                     }],
                 ),
                 (
@@ -2115,10 +2238,12 @@ mod tests {
                         super::super::stretch::StackStretchRequest {
                             model: seiza_stretch::StretchModel::Identity,
                             color_strategy: seiza_stretch::ColorStrategy::Linked,
+                            deconvolution: None,
                         },
                         super::super::stretch::StackStretchRequest {
                             model: seiza_stretch::StretchModel::Identity,
                             color_strategy: seiza_stretch::ColorStrategy::Linked,
+                            deconvolution: None,
                         },
                     ],
                 ),
@@ -2126,13 +2251,14 @@ mod tests {
             output_stretches: vec![super::super::stretch::StackStretchRequest {
                 model: seiza_stretch::StretchModel::Identity,
                 color_strategy: seiza_stretch::ColorStrategy::Linked,
+                deconvolution: None,
             }],
         };
 
         let progress = color_progress(3, Some(&processing));
 
-        assert_eq!(progress.phases.len(), 11);
-        assert_eq!(progress.total_units, 24);
+        assert_eq!(progress.phases.len(), 12);
+        assert_eq!(progress.total_units, 25);
         assert_eq!(
             progress
                 .phases
@@ -2146,6 +2272,9 @@ mod tests {
             phase.phase == StackColorProgressPhase::BackgroundPreparation && phase.total_units == 6
         }));
         assert!(progress.phases.iter().any(|phase| {
+            phase.phase == StackColorProgressPhase::DeconvolvingInputs && phase.total_units == 1
+        }));
+        assert!(progress.phases.iter().any(|phase| {
             phase.phase == StackColorProgressPhase::RenderingOriginal && phase.total_units == 1
         }));
         assert!(progress.phases.iter().any(|phase| {
@@ -2154,5 +2283,13 @@ mod tests {
         assert!(progress.phases.iter().any(|phase| {
             phase.phase == StackColorProgressPhase::PublishingArtifacts && phase.total_units == 1
         }));
+    }
+
+    #[test]
+    fn disabled_deconvolution_keeps_legacy_processing_serialization() {
+        let processing = StackColorProcessing::default();
+        let encoded = serde_json::to_value(processing).unwrap();
+
+        assert!(encoded.get("input_deconvolutions").is_none());
     }
 }

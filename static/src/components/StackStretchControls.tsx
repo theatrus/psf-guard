@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import type { StackStretchPreview, StackStretchRequest } from '../api/types';
 import StackStretchStageEditor from './StackStretchStageEditor';
+import StackDeconvolutionControls from './StackDeconvolutionControls';
+import { validateDeconvolution } from './stackDeconvolution';
 import {
   defaultStretchRequest,
   stretchModelLabels,
@@ -45,6 +47,11 @@ export default function StackStretchControls({
       setError('Enter a finite value for every stretch parameter');
       return;
     }
+    const deconvolutionError = validateDeconvolution(request.deconvolution);
+    if (deconvolutionError) {
+      setError(deconvolutionError);
+      return;
+    }
     setPending(true);
     setError(null);
     try {
@@ -59,12 +66,22 @@ export default function StackStretchControls({
   return (
     <details className="stack-stretch-controls">
       <summary>
-        <span>Display stretch</span>
+        <span>View processing</span>
         <small>{applied
-          ? `${stretchModelLabels[applied.config.model.type]} applied`
-          : 'Default'}</small>
+          ? `${applied.deconvolution ? `${applied.deconvolution.config.psf_fwhm_pixels}px deconv · ` : ''}${stretchModelLabels[applied.config.model.type]} applied`
+          : 'Deconvolution off · default stretch'}</small>
       </summary>
       <div className="stack-stretch-body">
+        <StackDeconvolutionControls
+          label={label}
+          config={request.deconvolution}
+          result={applied?.deconvolution ?? undefined}
+          disabled={disabled || pending || displayReferred}
+          onChange={(deconvolution) => setRequest((current) => ({
+            ...current,
+            deconvolution,
+          }))}
+        />
         <StackStretchStageEditor
           label={label}
           channels={channels}
@@ -89,10 +106,10 @@ export default function StackStretchControls({
         {error && <div className="stack-stretch-error" role="alert">{error}</div>}
         <div className="stack-stretch-actions">
           <button type="button" disabled={disabled || pending} onClick={submit}>
-            {pending ? 'Applying…' : 'Apply stretch'}
+            {pending ? 'Applying…' : 'Apply processing'}
           </button>
           <button type="button" disabled={disabled || pending || !applied} onClick={revert}>
-            Revert stretch
+            Revert processing
           </button>
         </div>
       </div>

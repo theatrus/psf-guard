@@ -1,4 +1,5 @@
-//! Reversible display-stretch variants rendered from cached linear stack FITS.
+//! Reversible deconvolution and display-stretch variants rendered from cached
+//! linear stack FITS.
 
 use super::{
     save_png_atomic, validate_job_id, StackPreviewImageQuery, StackPreviewImageSize,
@@ -8,14 +9,16 @@ use axum::{
     body::Body,
     extract::{Path, Query},
     http::{
-        header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE},
+        header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
         StatusCode,
     },
     response::Response,
     Json,
 };
 use rayon::ThreadPoolBuilder;
-use seiza_stacking::{FitsFrame, LinearImage};
+use seiza_deconvolution::{deconvolve, DeconvolutionConfig};
+use seiza_fits::{HeaderValue, WriteHeaderCard};
+use seiza_stacking::{write_processed_image_fits_f32, FitsFrame, LinearImage};
 use seiza_stretch::{
     ColorStrategy, RobustStatistics, StretchAnalysis, StretchConfig, StretchModel, StretchParams,
     StretchPlan,
@@ -35,15 +38,77 @@ use crate::server::state::AppState;
 const STRETCH_CACHE_VERSION: u32 = 2;
 const STRETCH_ANALYSIS_SAMPLES: usize = 200_000;
 const STRETCH_BYTES_PER_SAMPLE: u64 = 16;
+const DECONVOLUTION_BYTES_PER_SAMPLE: u64 = 40;
 const LINEAR_BLACK_PERCENTILE: f64 = 0.001;
 const LINEAR_WHITE_PERCENTILE: f64 = 0.999;
 pub(super) const SEIZA_STRETCH_VERSION: &str = "0.1.0-git-d6b8dfc";
+pub(super) const SEIZA_DECONVOLUTION_VERSION: &str = "0.1.0-git-491c031";
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+pub struct StackDeconvolutionRequest {
+    pub psf_fwhm_pixels: f32,
+    pub iterations: usize,
+    pub amount: f32,
+    pub noise_fraction: f32,
+    pub max_correction: f32,
+}
+
+impl Default for StackDeconvolutionRequest {
+    fn default() -> Self {
+        let config = DeconvolutionConfig::conservative(3.1);
+        Self {
+            psf_fwhm_pixels: config.psf_fwhm_pixels,
+            iterations: config.iterations,
+            amount: config.amount,
+            noise_fraction: config.noise_fraction,
+            max_correction: config.max_correction,
+        }
+    }
+}
+
+impl StackDeconvolutionRequest {
+    fn config(self) -> DeconvolutionConfig {
+        DeconvolutionConfig {
+            psf_fwhm_pixels: self.psf_fwhm_pixels,
+            iterations: self.iterations,
+            amount: self.amount,
+            noise_fraction: self.noise_fraction,
+            max_correction: self.max_correction,
+        }
+    }
+
+    pub(super) fn validate(self) -> Result<(), String> {
+        // The crate owns the authoritative parameter constraints. A constant
+        // one-pixel image exits before restoration but only after validation.
+        deconvolve(&[0.0], 1, 1, 1, &self.config())
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+pub struct StackDeconvolutionChannelDiagnostics {
+    pub input_flux: f64,
+    pub output_flux: f64,
+    pub input_peak: f32,
+    pub output_peak: f32,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StackDeconvolutionResult {
+    pub config: StackDeconvolutionRequest,
+    pub channels: Vec<StackDeconvolutionChannelDiagnostics>,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StackStretchRequest {
     pub model: StretchModel,
     #[serde(default)]
     pub color_strategy: ColorStrategy,
+    /// Optional linear-light restoration. Omitted by default so existing and
+    /// newly created previews retain their original pixels unless requested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deconvolution: Option<StackDeconvolutionRequest>,
 }
 
 impl StackStretchRequest {
@@ -68,6 +133,8 @@ pub struct StackStretchPreview {
     pub schema_version: u32,
     pub stretch_id: String,
     pub stretch_version: String,
+    #[serde(default)]
+    pub deconvolution_version: Option<String>,
     pub config: StretchConfig,
     pub resolved_plan: serde_json::Value,
     pub source_transfer: StackStretchSourceTransfer,
@@ -75,8 +142,12 @@ pub struct StackStretchPreview {
     pub linked_statistics: RobustStatistics,
     pub channel_statistics: Vec<Option<RobustStatistics>>,
     pub luminance_statistics: Option<RobustStatistics>,
+    #[serde(default)]
+    pub deconvolution: Option<StackDeconvolutionResult>,
     pub preview_url: String,
     pub original_preview_url: String,
+    #[serde(default)]
+    pub fits_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -259,7 +330,11 @@ pub(super) async fn apply_to_fits(
     source_path: PathBuf,
     request: StackStretchRequest,
 ) -> Result<StackStretchPreview, AppError> {
+    if let Some(deconvolution) = request.deconvolution {
+        deconvolution.validate().map_err(AppError::BadRequest)?;
+    }
     let config = request.config();
+    let deconvolution = request.deconvolution;
     let encoded = serde_json::to_vec(&config).map_err(|error| {
         AppError::InternalError(format!("Failed to encode stretch request: {error}"))
     })?;
@@ -270,6 +345,13 @@ pub(super) async fn apply_to_fits(
     hasher.update(STRETCH_CACHE_VERSION.to_le_bytes());
     hasher.update(SEIZA_STRETCH_VERSION.as_bytes());
     hasher.update(&encoded);
+    if let Some(deconvolution) = deconvolution {
+        hasher.update(b"deconvolution");
+        hasher.update(SEIZA_DECONVOLUTION_VERSION.as_bytes());
+        hasher.update(serde_json::to_vec(&deconvolution).map_err(|error| {
+            AppError::InternalError(format!("Failed to encode deconvolution request: {error}"))
+        })?);
+    }
     let mut stretch_id = String::with_capacity(64);
     for byte in hasher.finalize() {
         write!(&mut stretch_id, "{byte:02x}").expect("writing to a String cannot fail");
@@ -277,7 +359,7 @@ pub(super) async fn apply_to_fits(
     let manifest_path = stretch_manifest_path(&cache_root, &stretch_id);
     if let Ok(bytes) = std::fs::read(&manifest_path)
         && let Ok(cached) = serde_json::from_slice::<StackStretchPreview>(&bytes)
-        && stretch_artifacts_exist(&cache_root, &stretch_id)
+        && stretch_artifacts_exist(&cache_root, &stretch_id, &cached)
     {
         return Ok(cached);
     }
@@ -289,7 +371,7 @@ pub(super) async fn apply_to_fits(
         .map_err(|_| AppError::InternalError("Stack preview processor is unavailable".into()))?;
     if let Ok(bytes) = std::fs::read(&manifest_path)
         && let Ok(cached) = serde_json::from_slice::<StackStretchPreview>(&bytes)
-        && stretch_artifacts_exist(&cache_root, &stretch_id)
+        && stretch_artifacts_exist(&cache_root, &stretch_id, &cached)
     {
         return Ok(cached);
     }
@@ -305,6 +387,7 @@ pub(super) async fn apply_to_fits(
             &id_for_render,
             &source_path,
             &config,
+            deconvolution,
         )
     })
     .await
@@ -312,9 +395,13 @@ pub(super) async fn apply_to_fits(
     .map_err(AppError::BadRequest)?;
 
     let response = StackStretchPreview {
-        schema_version: 1,
+        schema_version: 2,
         stretch_id: stretch_id.clone(),
         stretch_version: SEIZA_STRETCH_VERSION.into(),
+        deconvolution_version: rendered
+            .deconvolution
+            .as_ref()
+            .map(|_| SEIZA_DECONVOLUTION_VERSION.into()),
         config: rendered.config,
         resolved_plan: rendered.resolved_plan,
         source_transfer: rendered.source_transfer,
@@ -322,10 +409,13 @@ pub(super) async fn apply_to_fits(
         linked_statistics: rendered.linked_statistics,
         channel_statistics: rendered.channel_statistics,
         luminance_statistics: rendered.luminance_statistics,
+        deconvolution: rendered.deconvolution,
         preview_url: format!("/api/db/{database_id}/stack-previews/stretch/{stretch_id}/preview"),
         original_preview_url: format!(
             "/api/db/{database_id}/stack-previews/stretch/{stretch_id}/preview?size=original"
         ),
+        fits_url: deconvolution
+            .map(|_| format!("/api/db/{database_id}/stack-previews/stretch/{stretch_id}/fits")),
     };
     write_json_atomic(&manifest_path, &response).map_err(AppError::InternalError)?;
     Ok(response)
@@ -339,6 +429,7 @@ struct RenderedVariant {
     linked_statistics: RobustStatistics,
     channel_statistics: Vec<Option<RobustStatistics>>,
     luminance_statistics: Option<RobustStatistics>,
+    deconvolution: Option<StackDeconvolutionResult>,
 }
 
 fn render_fits_variant(
@@ -347,10 +438,16 @@ fn render_fits_variant(
     stretch_id: &str,
     source_path: &FsPath,
     config: &StretchConfig,
+    deconvolution_request: Option<StackDeconvolutionRequest>,
 ) -> Result<RenderedVariant, String> {
     let frame = FitsFrame::open(source_path).map_err(|error| error.to_string())?;
     let samples = frame.image.data.len();
-    let estimate = (samples as u64).saturating_mul(STRETCH_BYTES_PER_SAMPLE);
+    let bytes_per_sample = if deconvolution_request.is_some() {
+        DECONVOLUTION_BYTES_PER_SAMPLE
+    } else {
+        STRETCH_BYTES_PER_SAMPLE
+    };
+    let estimate = (samples as u64).saturating_mul(bytes_per_sample);
     let policy = state.worker_policy();
     if let Some(available) = crate::concurrency::available_memory_bytes()
         && estimate > (available as f64 * policy.memory_budget_fraction) as u64
@@ -390,8 +487,34 @@ fn render_fits_variant(
         config.max_analysis_samples,
     )
     .map_err(|error| error.to_string())?;
+    if deconvolution_request.is_some()
+        && source_transfer == StackStretchSourceTransfer::DisplayReferred
+    {
+        return Err("Deconvolution requires a linear-light stack source".into());
+    }
+    let (processed, deconvolution) = if let Some(request) = deconvolution_request {
+        let (processed, result) = pool.install(|| apply_deconvolution(&frame.image, request))?;
+        let fits = stretch_fits_path(cache_root, stretch_id);
+        let parent = fits
+            .parent()
+            .ok_or_else(|| "Processed stack FITS path has no parent".to_string())?;
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        let temporary = fits.with_extension(format!("{}.tmp.fits", std::process::id()));
+        write_processed_image_fits_f32(
+            &temporary,
+            &processed,
+            &frame.headers,
+            &deconvolution_cards(request),
+        )
+        .map_err(|error| error.to_string())?;
+        std::fs::rename(&temporary, &fits).map_err(|error| error.to_string())?;
+        (Some(processed), Some(result))
+    } else {
+        (None, None)
+    };
+    let linear = processed.as_ref().unwrap_or(&frame.image);
     let normalized = if source_transfer == StackStretchSourceTransfer::Linear {
-        Some(normalize_linear_image(&frame.image)?)
+        Some(normalize_linear_image(linear)?)
     } else {
         None
     };
@@ -399,7 +522,7 @@ fn render_fits_variant(
     let prepared = normalized
         .as_ref()
         .map(|(image, _)| image)
-        .unwrap_or(&frame.image);
+        .unwrap_or(linear);
     let screen = stretch_preview_path(cache_root, stretch_id);
     let original = stretch_original_preview_path(cache_root, stretch_id);
     let render = pool.install(|| {
@@ -413,7 +536,72 @@ fn render_fits_variant(
         linked_statistics: source_analysis.linked_statistics(),
         channel_statistics: source_analysis.channel_statistics(),
         luminance_statistics: source_analysis.luminance_statistics(),
+        deconvolution,
     })
+}
+
+pub(super) fn apply_deconvolution(
+    image: &LinearImage,
+    request: StackDeconvolutionRequest,
+) -> Result<(LinearImage, StackDeconvolutionResult), String> {
+    let result = deconvolve(
+        &image.data,
+        image.width,
+        image.height,
+        image.channels,
+        &request.config(),
+    )
+    .map_err(|error| error.to_string())?;
+    let diagnostics = result
+        .channels
+        .iter()
+        .map(|channel| StackDeconvolutionChannelDiagnostics {
+            input_flux: channel.input_flux,
+            output_flux: channel.output_flux,
+            input_peak: channel.input_peak,
+            output_peak: channel.output_peak,
+        })
+        .collect();
+    let restored = LinearImage::new(image.width, image.height, image.channels, result.data)
+        .map_err(|error| error.to_string())?;
+    Ok((
+        restored,
+        StackDeconvolutionResult {
+            config: request,
+            channels: diagnostics,
+        },
+    ))
+}
+
+fn deconvolution_cards(request: StackDeconvolutionRequest) -> Vec<WriteHeaderCard> {
+    vec![
+        WriteHeaderCard::new("SEIZADC", HeaderValue::String("RL-GAUSS".into()))
+            .with_comment("Seiza deconvolution method"),
+        WriteHeaderCard::new("SEIZATRF", HeaderValue::String("LINEAR".into()))
+            .with_comment("linear sample transfer"),
+        WriteHeaderCard::new(
+            "DCFWHM",
+            HeaderValue::Float(f64::from(request.psf_fwhm_pixels)),
+        )
+        .with_comment("Gaussian PSF FWHM in pixels"),
+        WriteHeaderCard::new(
+            "DCITER",
+            HeaderValue::Integer(i64::try_from(request.iterations).unwrap_or(i64::MAX)),
+        )
+        .with_comment("Richardson-Lucy iterations"),
+        WriteHeaderCard::new("DCAMT", HeaderValue::Float(f64::from(request.amount)))
+            .with_comment("restored estimate blend"),
+        WriteHeaderCard::new(
+            "DCNOISE",
+            HeaderValue::Float(f64::from(request.noise_fraction)),
+        )
+        .with_comment("channel-relative damping floor"),
+        WriteHeaderCard::new(
+            "DCMAXCOR",
+            HeaderValue::Float(f64::from(request.max_correction)),
+        )
+        .with_comment("per-iteration correction limit"),
+    ]
 }
 
 pub async fn get_stack_stretch_image(
@@ -447,6 +635,38 @@ pub async fn get_stack_stretch_image(
         })
 }
 
+pub async fn download_stack_stretch_fits(
+    ctx: DbContext,
+    Path((_db_id, stretch_id)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    validate_job_id(&stretch_id)?;
+    let path = stretch_fits_path(&ctx.cache_dir_path, &stretch_id);
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|_| AppError::NotFound)?;
+    let length = file
+        .metadata()
+        .await
+        .map_err(|error| {
+            AppError::InternalError(format!("Failed to stat processed FITS: {error}"))
+        })?
+        .len();
+    let filename = format!("psf-guard-deconvolved-{}.fits", &stretch_id[..12]);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/fits")
+        .header(CONTENT_LENGTH, length)
+        .header(
+            CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{filename}\""),
+        )
+        .header(CACHE_CONTROL, "private, max-age=31536000, immutable")
+        .body(Body::from_stream(ReaderStream::new(file)))
+        .map_err(|error| {
+            AppError::InternalError(format!("Failed to build processed FITS response: {error}"))
+        })
+}
+
 fn stretch_dir(cache_root: &FsPath, stretch_id: &str) -> PathBuf {
     cache_root
         .join("stack-previews")
@@ -466,9 +686,18 @@ fn stretch_original_preview_path(cache_root: &FsPath, stretch_id: &str) -> PathB
     stretch_dir(cache_root, stretch_id).join("preview-original.png")
 }
 
-fn stretch_artifacts_exist(cache_root: &FsPath, stretch_id: &str) -> bool {
+fn stretch_fits_path(cache_root: &FsPath, stretch_id: &str) -> PathBuf {
+    stretch_dir(cache_root, stretch_id).join("deconvolved.fits")
+}
+
+fn stretch_artifacts_exist(
+    cache_root: &FsPath,
+    stretch_id: &str,
+    manifest: &StackStretchPreview,
+) -> bool {
     stretch_preview_path(cache_root, stretch_id).is_file()
         && stretch_original_preview_path(cache_root, stretch_id).is_file()
+        && (manifest.fits_url.is_none() || stretch_fits_path(cache_root, stretch_id).is_file())
 }
 
 fn write_json_atomic(path: &FsPath, value: &impl Serialize) -> Result<(), String> {
@@ -567,8 +796,66 @@ mod tests {
         ];
 
         for request in requests {
-            serde_json::from_value::<StackStretchRequest>(request).unwrap();
+            let parsed = serde_json::from_value::<StackStretchRequest>(request).unwrap();
+            assert_eq!(parsed.deconvolution, None);
+            assert!(serde_json::to_value(&parsed)
+                .unwrap()
+                .get("deconvolution")
+                .is_none());
         }
+
+        let request = serde_json::json!({
+            "model": {"type": "auto-mtf", "target_median": 0.2, "shadows_clip": -2.8},
+            "color_strategy": "linked",
+            "deconvolution": {
+                "psf_fwhm_pixels": 3.1,
+                "iterations": 4,
+                "amount": 0.35,
+                "noise_fraction": 0.001,
+                "max_correction": 2.0
+            }
+        });
+        let parsed = serde_json::from_value::<StackStretchRequest>(request).unwrap();
+        assert_eq!(
+            parsed.deconvolution,
+            Some(StackDeconvolutionRequest::default())
+        );
+    }
+
+    #[test]
+    fn opt_in_deconvolution_sharpens_a_linear_star_without_mutating_source() {
+        let size = 31;
+        let center = size / 2;
+        let sigma = 3.1_f32 / 2.354_82;
+        let pixels = (0..size * size)
+            .map(|index| {
+                let x = index % size;
+                let y = index / size;
+                let radius_squared = ((x as isize - center as isize).pow(2)
+                    + (y as isize - center as isize).pow(2))
+                    as f32;
+                (-0.5 * radius_squared / sigma.powi(2)).exp()
+            })
+            .collect::<Vec<_>>();
+        let image = LinearImage::new(size, size, 1, pixels.clone()).unwrap();
+
+        let (restored, result) =
+            apply_deconvolution(&image, StackDeconvolutionRequest::default()).unwrap();
+
+        assert_eq!(image.data, pixels);
+        assert!(restored.data[center * size + center] > image.data[center * size + center]);
+        assert_eq!(result.channels.len(), 1);
+        assert!(result.channels[0].output_peak > result.channels[0].input_peak);
+    }
+
+    #[test]
+    fn deconvolution_uses_upstream_parameter_validation() {
+        let invalid = StackDeconvolutionRequest {
+            iterations: 0,
+            ..StackDeconvolutionRequest::default()
+        };
+
+        assert!(invalid.validate().unwrap_err().contains("iterations"));
     }
 
     #[test]

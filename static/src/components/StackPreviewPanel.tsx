@@ -628,14 +628,17 @@ export default function StackPreviewPanel({
               inspector.artifactRevision,
               'original'
             )}
-          fitsUrl={apiClient.getStackFitsUrl(
-            dbId,
-            inspector.jobId,
-            inspector.group.index,
-            inspector.artifactRevision
-          )}
+          fitsUrl={stretches[artifactStretchKey(inspector)]?.fits_url ??
+            apiClient.getStackFitsUrl(
+              dbId,
+              inspector.jobId,
+              inspector.group.index,
+              inspector.artifactRevision
+            )}
           imageAlt={`Full-resolution stack for ${inspector.group.target_name} ${inspector.group.filter_name || 'No filter'}`}
-          downloadLabel="Download linear FITS"
+          downloadLabel={stretches[artifactStretchKey(inspector)]?.fits_url
+            ? 'Download deconvolved linear FITS'
+            : 'Download linear FITS'}
           onClose={() => setInspector(null)}
         />
       )}

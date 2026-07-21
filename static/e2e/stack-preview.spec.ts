@@ -186,12 +186,17 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   const defaultPreviewSrc = await preview.getAttribute('src');
   const stretchControls = panel.locator('.stack-preview-card .stack-stretch-controls');
   await stretchControls.locator('summary').click();
+  await expect(stretchControls.getByRole('checkbox', { name: 'Deconvolution' }))
+    .not.toBeChecked();
+  await expect(stretchControls).toContainText('this is off unless enabled');
+  await stretchControls.getByRole('checkbox', { name: 'Deconvolution' }).check();
+  await stretchControls.getByRole('spinbutton', { name: 'Deconvolution Iterations' }).fill('1');
   await stretchControls.getByRole('spinbutton', { name: 'Alpha M44 B Target median' }).fill('0.25');
-  await stretchControls.getByRole('button', { name: 'Apply stretch' }).click();
+  await stretchControls.getByRole('button', { name: 'Apply processing' }).click();
   await expect.poll(() => preview.getAttribute('src')).toMatch(
     /\/stack-previews\/stretch\/[a-f0-9]{64}\/preview$/
   );
-  await expect(stretchControls).toContainText('Auto MTF applied');
+  await expect(stretchControls).toContainText('3.1px deconv · Auto MTF applied');
   if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
     const docs = path.resolve(process.cwd(), '..', 'docs');
     fs.mkdirSync(docs, { recursive: true });
@@ -228,6 +233,23 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   expect(fullSizeHead.status()).toBe(200);
   expect(fullSizeHead.headers()['content-type']).toContain('image/png');
 
+  const deconvolvedFits = inspector.getByRole('link', {
+    name: 'Download deconvolved linear FITS',
+  });
+  const deconvolvedFitsHref = await deconvolvedFits.getAttribute('href');
+  expect(deconvolvedFitsHref).toMatch(
+    /\/stack-previews\/stretch\/[a-f0-9]{64}\/fits$/
+  );
+  const deconvolvedResponse = await page.request.get(deconvolvedFitsHref!);
+  expect(deconvolvedResponse.status()).toBe(200);
+  const deconvolvedHeader = (await deconvolvedResponse.body())
+    .subarray(0, 2880)
+    .toString('ascii');
+  expect(deconvolvedHeader).toContain('SEIZADC');
+  expect(deconvolvedHeader).toContain('RL-GAUSS');
+  expect(deconvolvedHeader).toContain('DCFWHM');
+  expect(deconvolvedHeader).toContain('DCITER');
+
   await inspector.getByRole('button', { name: '100%' }).click();
   await expect(inspector.locator('.zoom-percentage-compact')).toHaveText('100%');
   const transformBeforePan = await fullSizeImage.evaluate((image) => image.style.transform);
@@ -254,9 +276,9 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
 
   await page.keyboard.press('Escape');
   await expect(inspector).toHaveCount(0);
-  await stretchControls.getByRole('button', { name: 'Revert stretch' }).click();
+  await stretchControls.getByRole('button', { name: 'Revert processing' }).click();
   await expect(preview).toHaveAttribute('src', defaultPreviewSrc!);
-  await expect(stretchControls).toContainText('Default');
+  await expect(stretchControls).toContainText('Deconvolution off');
 
   const jobId = fitsHref!.match(/\/stack-previews\/([a-f0-9]{64})\/0\/fits/)![1];
   const fitsPath = path.join(
@@ -421,6 +443,12 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
     .toContainText('1 stage');
   await expect(rgbProcessing.getByRole('region', { name: 'B input stretch stack' }))
     .toContainText('1 stage');
+  const redLane = rgbProcessing.getByRole('region', { name: 'R input stretch stack' });
+  const redDeconvolution = redLane.getByRole('region', { name: 'R input deconvolution' });
+  await expect(redDeconvolution.getByRole('checkbox', { name: 'Deconvolution' }))
+    .not.toBeChecked();
+  await redDeconvolution.getByRole('checkbox', { name: 'Deconvolution' }).check();
+  await redDeconvolution.getByRole('spinbutton', { name: 'Deconvolution Iterations' }).fill('2');
   const outputLane = rgbProcessing.getByRole('region', { name: 'RGB output stretch stack' });
   await outputLane.getByRole('button', { name: 'Add stage' }).click();
   await outputLane.getByRole('combobox', { name: 'RGB output stage 1 stretch color strategy' })
@@ -432,10 +460,10 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
     'data-stack-color-state', 'completed', { timeout: 90_000 }
   );
   await expect.poll(() => rgbImage.getAttribute('src')).not.toBe(defaultRgbSrc);
-  await expect(rgbCard.locator('.stack-preview-progress')).toContainText('24/24 steps');
+  await expect(rgbCard.locator('.stack-preview-progress')).toContainText('25/25 steps');
   const phaseDetails = rgbCard.locator('.stack-color-phase-details');
   await phaseDetails.locator('summary').click();
-  await expect(phaseDetails.locator('li')).toHaveCount(11);
+  await expect(phaseDetails.locator('li')).toHaveCount(12);
   await expect(phaseDetails.locator('li[data-phase="background_preparation"]'))
     .toHaveAttribute('data-phase-state', 'completed');
   await expect(phaseDetails.locator('li[data-phase="background_preparation"]'))
@@ -444,6 +472,10 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
     .toHaveAttribute('data-phase-state', 'completed');
   await expect(phaseDetails.locator('li[data-phase="stretching_output"]'))
     .toContainText('Applied output stretch 1/1');
+  await expect(phaseDetails.locator('li[data-phase="deconvolving_inputs"]'))
+    .toHaveAttribute('data-phase-state', 'completed');
+  await expect(phaseDetails.locator('li[data-phase="deconvolving_inputs"]'))
+    .toContainText('Deconvolving R');
 
   await lrgbButton.click();
   await expect(lrgbCard.locator('.stack-preview-progress')).toHaveAttribute(

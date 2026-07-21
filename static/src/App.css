@@ -3348,6 +3348,70 @@
   font-size: 0.54rem;
 }
 
+.stack-deconvolution-controls {
+  min-width: 0;
+  padding: 0.52rem;
+  border: 1px solid var(--color-bg-tertiary);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-bg-primary) 90%, var(--color-primary));
+}
+
+.stack-deconvolution-controls > header,
+.stack-deconvolution-controls > header label {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+}
+
+.stack-deconvolution-controls > header {
+  justify-content: space-between;
+  color: var(--color-primary);
+  font-size: 0.68rem;
+}
+
+.stack-deconvolution-controls > header input {
+  accent-color: var(--color-primary);
+}
+
+.stack-deconvolution-controls > header span,
+.stack-deconvolution-controls > p {
+  color: var(--color-text-muted);
+  font-size: 0.59rem;
+}
+
+.stack-deconvolution-controls > p {
+  margin: 0.35rem 0 0;
+}
+
+.stack-deconvolution-fields {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(75px, 1fr));
+  gap: 0.42rem;
+  margin-top: 0.5rem;
+}
+
+.stack-deconvolution-diagnostics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+
+.stack-deconvolution-diagnostics span {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.3rem 0.38rem;
+  color: var(--color-text-secondary);
+  border-left: 2px solid var(--color-success);
+  background: var(--color-bg-secondary);
+  font-size: 0.58rem;
+}
+
+.stack-deconvolution-diagnostics small {
+  color: var(--color-text-muted);
+  font-size: 0.54rem;
+}
+
 .stack-color-stage-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3374,6 +3438,14 @@
   margin-bottom: 0.4rem;
   color: var(--color-primary);
   font-size: 0.68rem;
+}
+
+.stack-color-stage-lane > .stack-deconvolution-controls {
+  margin-bottom: 0.42rem;
+}
+
+.stack-color-stage-lane .stack-deconvolution-fields {
+  grid-template-columns: repeat(2, minmax(75px, 1fr));
 }
 
 .stack-color-stage-lane > header span,
@@ -3435,6 +3507,10 @@
   }
 
   .stack-background-fields {
+    grid-template-columns: repeat(2, minmax(90px, 1fr));
+  }
+
+  .stack-deconvolution-fields {
     grid-template-columns: repeat(2, minmax(90px, 1fr));
   }
 }

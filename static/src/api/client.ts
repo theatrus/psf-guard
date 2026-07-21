@@ -91,8 +91,11 @@ const withServerUrl = (path: string): string => `${getCachedServerUrl()}${path}`
 
 const normalizeStretchPreview = (preview: StackStretchPreview): StackStretchPreview => ({
   ...preview,
+  deconvolution_version: preview.deconvolution_version ?? null,
+  deconvolution: preview.deconvolution ?? null,
   preview_url: withServerUrl(preview.preview_url),
   original_preview_url: withServerUrl(preview.original_preview_url),
+  fits_url: preview.fits_url ? withServerUrl(preview.fits_url) : null,
 });
 
 const stackStretchError = (cause: unknown, fallback: string): Error => {
