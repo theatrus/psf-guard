@@ -31,8 +31,10 @@ points at your Target Scheduler database and image folders and gives you:
   parameterized Seiza display stretches, or download the cached linear FITS
   integration. When the required channel stacks exist, combine them into
   cached RGB, LRGB, or selectable SHO/HOO/Foraxx color previews with
-  independently editable ordered input/output stretch stacks, phase-complete
-  progress, and full-resolution processed RGB FITS output.
+  independent Seiza background extraction before registration, editable
+  additive or multiplicative correction controls, ordered input/output stretch
+  stacks, phase-complete progress, and full-resolution processed RGB FITS
+  output.
 - **Scheduler write-back** — every grade lands in the Target Scheduler
   database, so the scheduler knows to re-capture what you rejected.
 - **Safe reject archival** — move rejected frames (and their sidecars) out of
@@ -50,27 +52,62 @@ It runs as a desktop app (Windows/macOS/Linux), a self-hosted web server
 > projects, captured images, and grades — between machines. It's careful
 > (dry-run flags everywhere), but it's also young software.
 
-## Screenshots
+## Features in practice
+
+The sky images below come from real FITS acquisitions, not generated demo
+fields. They are deliberately shown as quick-look data: PSF Guard is for
+finding problems, making grading decisions, and checking an integration before
+committing hours to a full calibration and processing workflow.
+
+### Review and grade a night quickly
 
 | Overview Dashboard | Image Grid | Side-by-Side Comparison |
 |:--:|:--:|:--:|
 | ![Overview](docs/overview.png) | ![Grid](docs/image_grid.jpg) | ![Compare](docs/compare.jpg) |
 | Project statistics and progress tracking | Grid view with filtering and batch operations | Synchronized zoom and detailed comparison |
 
+### See the evidence behind a quality decision
+
 | Sequence Analysis & Astrometry Quality | Star Detection | PSF Fitting |
 |:--:|:--:|:--:|
 | ![Sequence Analysis](docs/sequence-quality-astrometry.png) | ![Annotated Stars](docs/annotated-stars.jpg) | ![PSF Visualization](docs/psf-visualization.jpg) |
-| Per-frame scores, cloud/occlusion screening, solved-center scatter, and off-target/tracking flags | HocusFocus inspired detection with annotated output (`annotate-stars`) | Observed / fitted / residual grids with Moffat & Gaussian models (`visualize-psf-multi`) |
+| Per-frame scores, cloud/occlusion screening, solved-center scatter, and off-target/tracking flags | HocusFocus-inspired detection with annotated output (`annotate-stars`) | Observed / fitted / residual grids with Moffat & Gaussian models (`visualize-psf-multi`) |
+
+The sequence analyzer brings global image statistics, spatial and photometric
+screening, pixel-derived plate solves, and cached satellite evidence into a
+per-frame score. Recommendations remain reviewable before PSF Guard writes a
+grade back to Target Scheduler.
+
+### Preview a stack without leaving the grader
 
 | Stack Preview | Full-size Inspection | Stack Admission Decisions |
 |:--:|:--:|:--:|
 | ![A three-frame B-channel project stack preview](docs/stack-preview.png) | ![Native-resolution stack inspection](docs/stack-preview-inspection.png) | ![Per-frame Seiza registration and admission details](docs/stack-preview-decisions.png) |
 | Uncalibrated, on-demand integration grouped by exact target and channel | Familiar zoom, pan, fit, and one-pixel-per-pixel controls | Quality exclusions, reference choice, matches, registration RMS, and rejection reasons |
 
-| RGB, LRGB, and Narrowband Color Previews | Ordered Color Processing Stacks |
-|:--:|:--:|
-| ![LRGB and selectable Foraxx narrowband previews](docs/stack-color-previews.png) | ![Per-input and output stretch stack editor](docs/stack-color-processing.png) |
-| Cross-filter registration, palette selection, durable source-aware caching, full-size inspection, and RGB FITS download | Per-input and output stretch passes with a complete phase ledger and resolved-plan provenance |
+This real M44 example was built from three B-channel acquisitions. Each input's
+quality exclusion, registration match count, residual, and admission decision
+is retained with the cached linear FITS result.
+
+### Combine real narrowband channel stacks
+
+![Real Golf of Mexico Foraxx SHO preview built from PSF Guard channel stacks](docs/stack-color-real-previews.jpg)
+
+This real Golf of Mexico quick-look preview uses six accepted Ultracat
+acquisitions: two each in H-alpha, OIII, and SII. The same three linear channel
+stacks can be recombined as standard SHO, Foraxx SHO, or any other compatible
+narrowband palette without rebuilding the integrations.
+
+<img src="docs/stack-background-real.jpg" width="720" alt="Background extraction controls and per-channel fit diagnostics from the real Golf of Mexico narrowband preview">
+
+Color previews fit and subtract each input channel's background before
+cross-filter registration. The UI exposes the resolved fit evidence, editable
+background model, per-input and output stretch stacks, complete phase progress,
+full-size inspection, and a downloadable processed RGB FITS file. This real
+narrowband run accepted 73 of 96 H-alpha samples, 78 of 96 OIII samples, and 95
+of 96 SII samples while rejecting noisy or source-contaminated fit locations.
+See the **[stack preview guide](docs/STACKING_PREVIEWS.md)** for the full
+workflow and cache behavior.
 
 ## Installation
 

@@ -430,8 +430,49 @@ export interface StackColorSource {
 }
 
 export interface StackColorProcessing {
+  background_extraction: StackBackgroundExtraction | null;
   input_stretches: Partial<Record<StackColorRole, StackStretchRequest[]>>;
   output_stretches: StackStretchRequest[];
+}
+
+export interface StackBackgroundConfig {
+  model: { kind: 'polynomial'; degree: number; ridge: number };
+  samples_per_axis: number;
+  sample_radius: number | null;
+  search_steps: number;
+  sample_rejection_sigma: number;
+  fit_rejection_sigma: number;
+  fit_rejection_iterations: number;
+  border_fraction: number;
+}
+
+export interface StackBackgroundExtraction {
+  config: StackBackgroundConfig;
+  correction_mode: 'subtract' | 'divide';
+}
+
+export interface StackBackgroundFit {
+  width: number;
+  height: number;
+  channels: number;
+  model: { kind: 'polynomial'; degree: number; coefficients: number[][] };
+  reference: number[];
+  samples: Array<{
+    x: number;
+    y: number;
+    values: number[];
+    dispersion: number;
+    weight: number;
+    status: 'accepted' | 'rejected_noise' | 'rejected_residual';
+  }>;
+  diagnostics: {
+    candidate_samples: number;
+    accepted_samples: number;
+    rejected_noise: number;
+    rejected_residual: number;
+    rejection_iterations: number;
+    sample_radius: number;
+  };
 }
 
 export type StackColorProgressState =
@@ -492,10 +533,12 @@ export interface StackColorJob {
   artifact_revision: string;
   cache_version: number;
   stacking_version: string;
+  background_version: string;
   sources: StackColorSource[];
   processing: StackColorProcessing | null;
   resolved_input_stretches: Partial<Record<StackColorRole, unknown[]>>;
   resolved_output_stretches: unknown[];
+  resolved_backgrounds: Partial<Record<StackColorRole, StackBackgroundFit>>;
   preview_url: string;
   fits_url: string;
   error: string | null;

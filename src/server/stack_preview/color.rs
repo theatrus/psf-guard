@@ -19,6 +19,7 @@ use axum::{
     Json,
 };
 use rayon::ThreadPoolBuilder;
+use seiza_background::{BackgroundConfig, BackgroundFit, CorrectionMode};
 use seiza_stacking::{
     combine_lrgb, combine_narrowband, combine_rgb, resample_to_reference, write_color_fits_f32,
     ColorComposition, ColorNormalization, ColorOptions, ColorTransfer, FitsFrame, ForaxxOptions,
@@ -38,7 +39,8 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-const STACK_COLOR_CACHE_VERSION: u32 = 3;
+const STACK_COLOR_CACHE_VERSION: u32 = 4;
+const SEIZA_BACKGROUND_VERSION: &str = "0.1.0-git-d6b8dfc";
 const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
 const COLOR_BYTES_PER_PIXEL: u64 = 64;
 
@@ -150,6 +152,10 @@ pub struct StackColorRequest {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StackColorProcessing {
+    /// Optional smooth background correction applied to each linear channel
+    /// independently before cross-channel registration.
+    #[serde(default)]
+    pub background_extraction: Option<StackBackgroundExtraction>,
     /// Ordered display stretches applied independently after registration and
     /// robust normalization of each physical input channel.
     #[serde(default)]
@@ -157,6 +163,13 @@ pub struct StackColorProcessing {
     /// Ordered display stretches applied to the composed RGB result.
     #[serde(default)]
     pub output_stretches: Vec<super::stretch::StackStretchRequest>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StackBackgroundExtraction {
+    pub config: BackgroundConfig,
+    #[serde(default)]
+    pub correction_mode: CorrectionMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,6 +250,8 @@ pub struct StackColorJob {
     pub artifact_revision: String,
     pub cache_version: u32,
     pub stacking_version: String,
+    #[serde(default)]
+    pub background_version: String,
     pub sources: Vec<StackColorSource>,
     #[serde(default)]
     pub processing: Option<StackColorProcessing>,
@@ -244,6 +259,8 @@ pub struct StackColorJob {
     pub resolved_input_stretches: BTreeMap<StackColorRole, Vec<serde_json::Value>>,
     #[serde(default)]
     pub resolved_output_stretches: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub resolved_backgrounds: BTreeMap<StackColorRole, BackgroundFit>,
     pub preview_url: String,
     pub fits_url: String,
     pub error: Option<String>,
@@ -317,6 +334,14 @@ fn color_progress(
     let output_stages = processing
         .map(|processing| processing.output_stretches.len())
         .unwrap_or(0);
+    let background_units = if processing
+        .and_then(|processing| processing.background_extraction.as_ref())
+        .is_some()
+    {
+        channel_count.saturating_mul(2)
+    } else {
+        channel_count
+    };
     let definitions = [
         (
             StackColorProgressPhase::LoadingSources,
@@ -326,7 +351,7 @@ fn color_progress(
         (
             StackColorProgressPhase::BackgroundPreparation,
             "Background preparation",
-            channel_count,
+            background_units,
         ),
         (
             StackColorProgressPhase::RegisteringSources,
@@ -808,6 +833,7 @@ fn prepare_color_job(
     hasher.update(label.as_bytes());
     hasher.update(STACK_COLOR_CACHE_VERSION.to_le_bytes());
     hasher.update(SEIZA_STACKING_VERSION.as_bytes());
+    hasher.update(SEIZA_BACKGROUND_VERSION.as_bytes());
     hasher.update(serde_json::to_vec(&request.processing).map_err(|error| {
         AppError::InternalError(format!(
             "Failed to encode color processing options: {error}"
@@ -847,10 +873,12 @@ fn prepare_color_job(
             artifact_revision: artifact_revision.clone(),
             cache_version: STACK_COLOR_CACHE_VERSION,
             stacking_version: SEIZA_STACKING_VERSION.into(),
+            background_version: SEIZA_BACKGROUND_VERSION.into(),
             sources,
             processing: request.processing.clone(),
             resolved_input_stretches: BTreeMap::new(),
             resolved_output_stretches: Vec::new(),
+            resolved_backgrounds: BTreeMap::new(),
             preview_url: format!(
                 "/api/db/{}/stack-previews/color/{job_id}/preview?v={artifact_revision}",
                 ctx.id
@@ -1048,7 +1076,7 @@ fn compose_color(
         Some(reference_role),
         None,
     );
-    let reference = load_source_frame(cache_root, reference_source)?;
+    let mut reference = load_source_frame(cache_root, reference_source)?;
     progress.advance(StackColorProgressPhase::LoadingSources, 1);
     let pixels = reference.image.pixel_count();
     let estimate = (pixels as u64).saturating_mul(COLOR_BYTES_PER_PIXEL);
@@ -1099,13 +1127,64 @@ fn compose_color(
     }
     progress.finish(StackColorProgressPhase::LoadingSources);
 
-    // The forthcoming background-extraction integration occupies this exact
-    // pipeline boundary. Keeping it explicit makes skipped work visible and
-    // prevents later progress totals from silently changing shape.
-    progress.skip(
-        StackColorProgressPhase::BackgroundPreparation,
-        "Background preparation skipped (not configured)",
-    );
+    if let Some(extraction) = job
+        .processing
+        .as_ref()
+        .and_then(|processing| processing.background_extraction.as_ref())
+    {
+        pool.install(|| {
+            for source in &job.sources {
+                let frame = if source.role == reference_role {
+                    &mut reference
+                } else {
+                    frames
+                        .get_mut(&source.role)
+                        .ok_or_else(|| format!("{} source was not loaded", source.role.label()))?
+                };
+                progress.begin(
+                    StackColorProgressPhase::BackgroundPreparation,
+                    format!("Fitting {} background", source.role.label()),
+                    Some(source.role),
+                    None,
+                );
+                let fit = seiza_background::fit_background(
+                    &frame.image.data,
+                    frame.image.width,
+                    frame.image.height,
+                    frame.image.channels,
+                    &extraction.config,
+                )
+                .map_err(|error| {
+                    format!("Failed to fit {} background: {error}", source.role.label())
+                })?;
+                progress.advance(StackColorProgressPhase::BackgroundPreparation, 1);
+                progress.begin(
+                    StackColorProgressPhase::BackgroundPreparation,
+                    format!("Correcting {} background", source.role.label()),
+                    Some(source.role),
+                    None,
+                );
+                fit.correct_in_place(&mut frame.image.data, extraction.correction_mode)
+                    .map_err(|error| {
+                        format!(
+                            "Failed to correct {} background: {error}",
+                            source.role.label()
+                        )
+                    })?;
+                progress.advance(StackColorProgressPhase::BackgroundPreparation, 1);
+                state.stack_previews.update_color(&job.job_id, |current| {
+                    current.resolved_backgrounds.insert(source.role, fit);
+                });
+            }
+            Ok::<(), String>(())
+        })?;
+        progress.finish(StackColorProgressPhase::BackgroundPreparation);
+    } else {
+        progress.skip(
+            StackColorProgressPhase::BackgroundPreparation,
+            "Background preparation skipped (disabled)",
+        );
+    }
 
     pool.install(|| {
         let reference_headers = reference.headers;
@@ -1733,6 +1812,7 @@ fn color_job_outdated_reason(
 ) -> Option<String> {
     if job.cache_version != STACK_COLOR_CACHE_VERSION
         || job.stacking_version != SEIZA_STACKING_VERSION
+        || job.background_version != SEIZA_BACKGROUND_VERSION
     {
         return Some("the color processing version changed".into());
     }
@@ -2017,6 +2097,10 @@ mod tests {
     #[test]
     fn progress_ledger_accounts_for_every_pipeline_phase() {
         let processing = StackColorProcessing {
+            background_extraction: Some(StackBackgroundExtraction {
+                config: BackgroundConfig::default(),
+                correction_mode: CorrectionMode::Subtract,
+            }),
             input_stretches: BTreeMap::from([
                 (
                     StackColorRole::Red,
@@ -2048,7 +2132,7 @@ mod tests {
         let progress = color_progress(3, Some(&processing));
 
         assert_eq!(progress.phases.len(), 11);
-        assert_eq!(progress.total_units, 21);
+        assert_eq!(progress.total_units, 24);
         assert_eq!(
             progress
                 .phases
@@ -2059,7 +2143,7 @@ mod tests {
             3
         );
         assert!(progress.phases.iter().any(|phase| {
-            phase.phase == StackColorProgressPhase::BackgroundPreparation && phase.total_units == 3
+            phase.phase == StackColorProgressPhase::BackgroundPreparation && phase.total_units == 6
         }));
         assert!(progress.phases.iter().any(|phase| {
             phase.phase == StackColorProgressPhase::RenderingOriginal && phase.total_units == 1
