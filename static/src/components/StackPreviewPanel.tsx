@@ -376,7 +376,7 @@ export default function StackPreviewPanel({
                     key={key}
                   >
                     <header>
-                      <div>
+                      <div className="stack-preview-card-title">
                         <h3>{targetName}</h3>
                         <span className="stack-preview-channel">{filterName || 'No filter'}</span>
                       </div>
@@ -385,8 +385,19 @@ export default function StackPreviewPanel({
                           {activeGroup?.state ?? group?.state ?? 'not built'}
                         </span>
                         {artifact && (
+                          <button
+                            className="stack-preview-card-action"
+                            type="button"
+                            aria-label="Inspect full size"
+                            title="Inspect full size"
+                            onClick={() => setInspector(artifact)}
+                          >
+                            Inspect
+                          </button>
+                        )}
+                        {artifact && (
                           <a
-                            className="stack-preview-download"
+                            className="stack-preview-card-action"
                             href={apiClient.getStackFitsUrl(
                               dbId,
                               artifact.jobId,
@@ -394,22 +405,26 @@ export default function StackPreviewPanel({
                               artifact.artifactRevision
                             )}
                             download
+                            aria-label="Download linear FITS"
+                            title="Download linear FITS"
                           >
-                            Download linear FITS
+                            FITS
                           </a>
                         )}
                         {current && (
                           <button
-                            className="stack-preview-channel-build"
+                            className="stack-preview-card-action"
                             type="button"
                             disabled={running || !canBuildChannel}
+                            aria-label={artifact ? 'Rebuild channel' : 'Build channel'}
+                            title={artifact ? 'Rebuild channel' : 'Build channel'}
                             onClick={() => beginChannel(current, Boolean(artifact))}
                           >
                             {groupBusy || (startPending && startVariables?.operationKey === key)
-                              ? 'Building channel…'
+                              ? 'Building…'
                               : artifact
-                                ? 'Rebuild channel'
-                                : 'Build channel'}
+                                ? 'Rebuild'
+                                : 'Build'}
                           </button>
                         )}
                       </div>
@@ -428,13 +443,6 @@ export default function StackPreviewPanel({
                           )}
                           alt={`${targetName} ${filterName} uncalibrated stack preview`}
                         />
-                        <button
-                          className="stack-preview-inspect"
-                          type="button"
-                          onClick={() => setInspector(artifact)}
-                        >
-                          Inspect full size
-                        </button>
                       </div>
                     )}
                     {!artifact && groupBusy && (

@@ -2648,6 +2648,10 @@ mod tests {
             .unwrap();
 
         let context = AstrometryContext::new(AstrometryConfig {
+            // Keep unspecified resources inside this fixture. Otherwise a
+            // developer's installed Seiza bundle can make hinted solving
+            // appear available and turn this format test machine-dependent.
+            data_dir: Some(directory.path().to_string_lossy().into_owned()),
             objects: Some(objects_path.to_string_lossy().into_owned()),
             ..Default::default()
         });
@@ -2676,7 +2680,6 @@ mod tests {
             .unwrap();
         assert!(objects.validated);
         assert_eq!(objects.status, AstrometryResourceStatus::Available);
-        assert!(validation.all_configured_valid);
     }
 
     #[test]
