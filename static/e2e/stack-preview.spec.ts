@@ -395,7 +395,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await expect(rgbCard.locator('.stack-preview-progress')).toHaveAttribute(
     'data-stack-color-state', 'completed', { timeout: 90_000 }
   );
-  await expect(rgbCard.locator('.stack-preview-progress')).toContainText('20/20 steps');
+  await expect(rgbCard.locator('.stack-preview-progress')).toContainText('23/23 steps');
   await expect(rgbCard.getByRole('img', { name: /RGB color stack preview/i })).toBeVisible();
   const rgbFits = rgbCard.getByRole('link', { name: 'Download RGB FITS' });
   const rgbResponse = await page.request.get((await rgbFits.getAttribute('href'))!);
@@ -409,6 +409,12 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   const defaultRgbSrc = await rgbImage.getAttribute('src');
   const rgbProcessing = rgbCard.locator('.stack-color-processing');
   await rgbProcessing.locator('summary').click();
+  const backgroundControls = rgbProcessing.getByRole('region', { name: 'Background extraction' });
+  await expect(backgroundControls.getByRole('checkbox', { name: 'Background extraction' }))
+    .toBeChecked();
+  await expect(backgroundControls.getByLabel('Background fit diagnostics')).toContainText('samples');
+  await backgroundControls.getByRole('spinbutton', { name: 'Background Polynomial degree' })
+    .fill('1');
   await expect(rgbProcessing.getByRole('region', { name: 'R input stretch stack' }))
     .toContainText('1 stage');
   await expect(rgbProcessing.getByRole('region', { name: 'G input stretch stack' }))
@@ -426,12 +432,14 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
     'data-stack-color-state', 'completed', { timeout: 90_000 }
   );
   await expect.poll(() => rgbImage.getAttribute('src')).not.toBe(defaultRgbSrc);
-  await expect(rgbCard.locator('.stack-preview-progress')).toContainText('21/21 steps');
+  await expect(rgbCard.locator('.stack-preview-progress')).toContainText('24/24 steps');
   const phaseDetails = rgbCard.locator('.stack-color-phase-details');
   await phaseDetails.locator('summary').click();
   await expect(phaseDetails.locator('li')).toHaveCount(11);
-  await expect(phaseDetails.locator('li[data-phase-state="skipped"]'))
-    .toContainText('Background preparation skipped');
+  await expect(phaseDetails.locator('li[data-phase="background_preparation"]'))
+    .toHaveAttribute('data-phase-state', 'completed');
+  await expect(phaseDetails.locator('li[data-phase="background_preparation"]'))
+    .toContainText('Correcting B background');
   await expect(phaseDetails.locator('li[data-phase="stretching_output"]'))
     .toHaveAttribute('data-phase-state', 'completed');
   await expect(phaseDetails.locator('li[data-phase="stretching_output"]'))
@@ -441,7 +449,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await expect(lrgbCard.locator('.stack-preview-progress')).toHaveAttribute(
     'data-stack-color-state', 'completed', { timeout: 90_000 }
   );
-  await expect(lrgbCard.locator('.stack-preview-progress')).toContainText('25/25 steps');
+  await expect(lrgbCard.locator('.stack-preview-progress')).toContainText('29/29 steps');
   const lrgbImage = lrgbCard.getByRole('img', { name: /LRGB color stack preview/i });
   await expect(lrgbImage).toBeVisible();
   const lrgbFits = lrgbCard.getByRole('link', { name: 'Download LRGB RGB FITS' });
@@ -472,7 +480,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await expect(narrowbandCard.locator('.stack-preview-progress')).toHaveAttribute(
     'data-stack-color-state', 'completed', { timeout: 90_000 }
   );
-  await expect(narrowbandCard.locator('.stack-preview-progress')).toContainText('15/15 steps');
+  await expect(narrowbandCard.locator('.stack-preview-progress')).toContainText('17/17 steps');
   await expect(
     narrowbandCard.getByRole('img', { name: /Foraxx HOO color stack preview/i })
   ).toBeVisible();

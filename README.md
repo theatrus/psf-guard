@@ -31,8 +31,10 @@ points at your Target Scheduler database and image folders and gives you:
   parameterized Seiza display stretches, or download the cached linear FITS
   integration. When the required channel stacks exist, combine them into
   cached RGB, LRGB, or selectable SHO/HOO/Foraxx color previews with
-  independently editable ordered input/output stretch stacks, phase-complete
-  progress, and full-resolution processed RGB FITS output.
+  independent Seiza background extraction before registration, editable
+  additive or multiplicative correction controls, ordered input/output stretch
+  stacks, phase-complete progress, and full-resolution processed RGB FITS
+  output.
 - **Scheduler write-back** — every grade lands in the Target Scheduler
   database, so the scheduler knows to re-capture what you rejected.
 - **Safe reject archival** — move rejected frames (and their sidecars) out of
@@ -69,8 +71,8 @@ It runs as a desktop app (Windows/macOS/Linux), a self-hosted web server
 
 | RGB, LRGB, and Narrowband Color Previews | Ordered Color Processing Stacks |
 |:--:|:--:|
-| ![LRGB and selectable Foraxx narrowband previews](docs/stack-color-previews.png) | ![Per-input and output stretch stack editor](docs/stack-color-processing.png) |
-| Cross-filter registration, palette selection, durable source-aware caching, full-size inspection, and RGB FITS download | Per-input and output stretch passes with a complete phase ledger and resolved-plan provenance |
+| ![LRGB and selectable Foraxx narrowband previews](docs/stack-color-previews.png) | ![Background extraction and ordered stretch editor](docs/stack-color-processing.png) |
+| Per-channel background extraction, cross-filter registration, palette selection, durable source-aware caching, full-size inspection, and RGB FITS download | Editable background fitting plus per-input and output stretch passes with a complete phase ledger and resolved-plan provenance |
 
 ## Installation
 

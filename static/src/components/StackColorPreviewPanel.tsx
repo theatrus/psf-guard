@@ -11,7 +11,9 @@ import type {
 } from '../api/types';
 import StackPreviewInspector from './StackPreviewInspector';
 import StackColorProcessingControls from './StackColorProcessingControls';
-import { defaultColorProcessing } from './stackColorProcessing';
+import {
+  processingForColorBuild,
+} from './stackColorProcessing';
 
 interface StackColorPreviewPanelProps {
   dbId: string;
@@ -290,6 +292,7 @@ function ColorCard({
         label={`${target.target_name} ${label}`}
         roles={requiredRoles(kind, palette)}
         applied={artifact?.processing ?? null}
+        backgrounds={artifact?.resolved_backgrounds ?? {}}
         disabled={busy || unavailable}
         onApply={onProcessingApply}
       />
@@ -454,7 +457,7 @@ export default function StackColorPreviewPanel({
                     kind,
                     force: Boolean(artifact && !artifact.outdated),
                     operationKey: key,
-                    processing: artifact?.processing ?? defaultColorProcessing(requiredRoles(kind)),
+                    processing: processingForColorBuild(artifact, requiredRoles(kind)),
                   })}
                   onInspect={setInspector}
                   onProcessingApply={(processing) => startColor({
@@ -506,8 +509,8 @@ export default function StackColorPreviewPanel({
                   palette,
                   force: Boolean(artifact && !artifact.outdated),
                   operationKey: key,
-                  processing: artifact?.processing ?? defaultColorProcessing(
-                    requiredRoles('narrowband', palette)
+                  processing: processingForColorBuild(
+                    artifact, requiredRoles('narrowband', palette)
                   ),
                 })}
                 onInspect={setInspector}

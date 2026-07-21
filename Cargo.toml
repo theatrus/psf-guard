@@ -34,10 +34,11 @@ byteorder = "1.5"
 seiza = "0.11.2"
 seiza-fits = "=0.1.6"
 seiza-satellites = { version = "0.4.1", features = ["serde"] }
-# Temporary pins to Seiza main for stacking, color composition, and interactive
-# display stretching until seiza-stacking and seiza-stretch are published.
+# Temporary pins to Seiza main for stacking, color composition, background
+# extraction, and interactive stretching until these support crates are published.
 seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "d6b8dfc706923f673a379ead51a5be74149ccfb3" }
 seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "d6b8dfc706923f673a379ead51a5be74149ccfb3" }
+seiza-background = { git = "https://github.com/theatrus/seiza", rev = "d6b8dfc706923f673a379ead51a5be74149ccfb3" }
 sha2 = "0.11"
 rayon = "1"
 bumpalo = { version = "3.20", features = ["collections"] }
