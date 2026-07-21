@@ -10,7 +10,11 @@ for a calibrated science or final-processing workflow.
 
 ## Build a preview
 
-Open one project in the image grid and choose **Build stack previews**.
+Open one project in the image grid and choose **Build stack previews** to build
+every current target/channel group, or **Build channel** on one card to test
+only that group. Once a result exists, the corresponding actions become
+**Rebuild current set** and **Rebuild channel**. An individual rebuild replaces
+only that channel's remembered result; the other channel cards remain intact.
 
 - A multi-selection of two or more images is the input when one exists.
 - Otherwise the current visible set is used, including the status, channel,
@@ -24,6 +28,16 @@ The build runs in the background and the panel polls its status. Different
 target/channel groups are processed sequentially. Only one stacking job runs
 in the PSF Guard process at a time, even when the server hosts multiple
 databases, so full-frame accumulator buffers cannot multiply unexpectedly.
+Cards are capped at two columns on wide displays so the inspection preview does
+not become excessively wide.
+
+PSF Guard remembers the last successful preview for every target/channel in the
+project cache and restores those cards after navigation, page reload, or server
+restart. Each card retains the exact input image IDs and scheduler grades used
+to build it. The card is marked **Out of date**—without hiding the usable older
+preview—when the current filter/selection changes the image set, an image is
+accepted/rejected/pended, or the **Accepted only** policy changes. A failed
+rebuild never replaces the last successful result.
 
 ## Frame selection and admission
 
@@ -87,16 +101,19 @@ Artifacts live below the database cache directory:
   group-1.png
   group-1-original.png
   group-1.fits
+<cache>/<database>/stack-previews/latest-project-<project-id>.json
 ```
 
 The content-addressed job ID includes the database/project, exact ordered
 inputs and grouping, grades, quality scores and regrade reasons, source path
 fingerprints, an explicit PSF Guard cache-policy version, Seiza stacking
 revision, stretch parameters, and preview format. Repeating an unchanged
-request loads the persistent result. **Rebuild** bypasses that lookup and
-atomically replaces the PNG, FITS, and manifest. Each run receives a distinct
-artifact revision in its download/display URLs so clients cannot mistake an
-immutable cached response for the rebuilt output.
+request loads the persistent result. A rebuild bypasses that lookup and
+atomically replaces the PNG, FITS, and manifest. The per-project latest index
+is also written atomically and is updated only for successfully completed
+groups. Each run receives a distinct artifact revision in its download/display
+URLs so clients cannot mistake an immutable cached response for the rebuilt
+output.
 
 ## Deliberate limits
 
@@ -111,15 +128,17 @@ immutable cached response for the rebuilt output.
 
 ## HTTP API
 
-The grid uses four per-database endpoints:
+The grid uses five per-database endpoints:
 
 ```text
 POST /api/db/{db}/projects/{project}/stack-previews
+GET  /api/db/{db}/projects/{project}/stack-previews/latest
 GET  /api/db/{db}/projects/{project}/stack-previews/{job}
 GET  /api/db/{db}/stack-previews/{job}/{group}/preview[?size=screen|original]
 GET  /api/db/{db}/stack-previews/{job}/{group}/fits
 ```
 
 The POST body is `{ "image_ids": [...], "accepted_only": false, "force":
-false }`. Status responses contain the group counters and complete per-frame
-decision records used by the UI.
+false }`. Status responses contain the group counters, captured image/grade
+snapshot, and complete per-frame decision records used by the UI. The latest
+endpoint returns the durable last-successful result for each target/channel.

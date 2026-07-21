@@ -41,7 +41,7 @@ use crate::server::state::AppState;
 pub const SEIZA_STACKING_VERSION: &str = "0.1.0-git-18aa9b8";
 /// Bump whenever stack admission, rendering, or persisted artifact semantics
 /// change. This deliberately versions PSF Guard policy separately from Seiza.
-const STACK_PREVIEW_CACHE_VERSION: u32 = 3;
+const STACK_PREVIEW_CACHE_VERSION: u32 = 4;
 const MAX_REQUEST_IMAGES: usize = 10_000;
 const MAX_REMEMBERED_JOBS: usize = 64;
 const PREVIEW_MAX_DIMENSION: u32 = 2400;
@@ -104,6 +104,12 @@ pub struct StackFrameDecision {
     pub integrated_fraction: Option<f32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StackInputImage {
+    pub image_id: i32,
+    pub grading_status: i32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StackGroupStatus {
     pub index: usize,
@@ -123,6 +129,8 @@ pub struct StackGroupStatus {
     pub preview_url: Option<String>,
     pub fits_url: Option<String>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub input_images: Vec<StackInputImage>,
     pub frames: Vec<StackFrameDecision>,
 }
 
@@ -144,8 +152,27 @@ pub struct StackPreviewJob {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LatestStackPreviewGroup {
+    pub job_id: String,
+    pub artifact_revision: String,
+    pub accepted_only: bool,
+    pub created_unix_seconds: i64,
+    pub group: StackGroupStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LatestStackPreviews {
+    pub schema_version: u32,
+    pub database_id: String,
+    pub project_id: i32,
+    pub updated_unix_seconds: i64,
+    pub groups: Vec<LatestStackPreviewGroup>,
+}
+
 pub struct StackPreviewManager {
     jobs: Mutex<HashMap<String, StackPreviewJob>>,
+    latest_write: Mutex<()>,
     permit: Arc<Semaphore>,
 }
 
@@ -153,6 +180,7 @@ impl StackPreviewManager {
     pub fn new() -> Self {
         Self {
             jobs: Mutex::new(HashMap::new()),
+            latest_write: Mutex::new(()),
             permit: Arc::new(Semaphore::new(1)),
         }
     }
@@ -187,6 +215,11 @@ impl StackPreviewManager {
         if let Some(job) = self.jobs.lock().unwrap().get_mut(job_id) {
             update(job);
         }
+    }
+
+    fn persist_latest(&self, cache_root: &FsPath, job: &StackPreviewJob) -> Result<(), String> {
+        let _guard = self.latest_write.lock().unwrap();
+        persist_latest_groups(cache_root, job)
     }
 }
 
@@ -236,18 +269,31 @@ pub async fn start_stack_previews(
 
     let manifest_path = manifest_path(&prepared.cache_root, &prepared.public.job_id);
     if let Some(existing) = state.stack_previews.get(&prepared.public.job_id)
-        && (!request.force
-            || matches!(
-                existing.state,
-                StackJobState::Queued | StackJobState::Running
-            ))
+        && (matches!(
+            existing.state,
+            StackJobState::Queued | StackJobState::Running
+        ) || (!request.force && existing.state == StackJobState::Completed))
     {
+        if existing.state == StackJobState::Completed
+            && let Err(error) = state
+                .stack_previews
+                .persist_latest(&prepared.cache_root, &existing)
+        {
+            tracing::warn!("Failed to refresh latest stack preview index: {error}");
+        }
         return Ok(Json(ApiResponse::success(existing)));
     }
     if !request.force
         && let Ok(bytes) = std::fs::read(&manifest_path)
         && let Ok(existing) = serde_json::from_slice::<StackPreviewJob>(&bytes)
+        && existing.state == StackJobState::Completed
     {
+        if let Err(error) = state
+            .stack_previews
+            .persist_latest(&prepared.cache_root, &existing)
+        {
+            tracing::warn!("Failed to refresh latest stack preview index: {error}");
+        }
         let _ = state.stack_previews.insert(existing.clone());
         return Ok(Json(ApiResponse::success(existing)));
     }
@@ -260,6 +306,34 @@ pub async fn start_stack_previews(
     }
     enqueue_job(Arc::clone(&state), prepared);
     Ok(Json(ApiResponse::success(response)))
+}
+
+pub async fn get_latest_stack_previews(
+    ctx: DbContext,
+    Path((_db_id, project_id)): Path<(String, i32)>,
+) -> Result<Json<ApiResponse<LatestStackPreviews>>, AppError> {
+    let path = latest_path(&ctx.cache_dir_path, project_id);
+    let latest = match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice::<LatestStackPreviews>(&bytes).map_err(|error| {
+            AppError::InternalError(format!("Invalid latest stack preview index: {error}"))
+        })?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => LatestStackPreviews {
+            schema_version: 1,
+            database_id: ctx.id.clone(),
+            project_id,
+            updated_unix_seconds: 0,
+            groups: Vec::new(),
+        },
+        Err(error) => {
+            return Err(AppError::InternalError(format!(
+                "Failed to read latest stack preview index: {error}"
+            )))
+        }
+    };
+    if latest.database_id != ctx.id || latest.project_id != project_id {
+        return Err(AppError::NotFound);
+    }
+    Ok(Json(ApiResponse::success(latest)))
 }
 
 pub async fn get_stack_preview_job(
@@ -476,6 +550,13 @@ fn prepare_job(
         hasher.update(filter_name.as_bytes());
         entries.sort_by_key(|(image, _)| (image.acquired_date.unwrap_or(0), image.id));
         let total_candidates = entries.len();
+        let input_images = entries
+            .iter()
+            .map(|(image, _)| StackInputImage {
+                image_id: image.id,
+                grading_status: image.grading_status,
+            })
+            .collect();
         let mut quality_excluded = 0usize;
         let mut missing_files = 0usize;
         let mut decisions = Vec::new();
@@ -562,6 +643,7 @@ fn prepare_job(
             preview_url: None,
             fits_url: None,
             error: (eligible_frames < 2).then(|| "Fewer than two eligible FITS frames".to_string()),
+            input_images,
             frames: decisions,
         });
         prepared_groups.push(PreparedGroup { index, frames });
@@ -587,7 +669,7 @@ fn prepare_job(
     let now = chrono::Utc::now().timestamp();
     Ok(PreparedJob {
         public: StackPreviewJob {
-            schema_version: 1,
+            schema_version: 2,
             job_id,
             database_id: ctx.id.clone(),
             project_id,
@@ -793,6 +875,12 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob) {
         && let Err(error) = persist_manifest(&cache_root, &job)
     {
         tracing::warn!("Failed to persist stack preview manifest: {error}");
+    }
+    if let Some(job) = state.stack_previews.get(&job_id)
+        && job.state == StackJobState::Completed
+        && let Err(error) = state.stack_previews.persist_latest(&cache_root, &job)
+    {
+        tracing::warn!("Failed to persist latest stack preview index: {error}");
     }
 }
 
@@ -1001,12 +1089,78 @@ fn persist_manifest(cache_root: &FsPath, job: &StackPreviewJob) -> Result<(), St
     std::fs::rename(&temporary, path).map_err(|error| error.to_string())
 }
 
+fn persist_latest_groups(cache_root: &FsPath, job: &StackPreviewJob) -> Result<(), String> {
+    let ready = job
+        .groups
+        .iter()
+        .filter(|group| group.state == StackGroupState::Ready)
+        .cloned()
+        .collect::<Vec<_>>();
+    if ready.is_empty() {
+        return Ok(());
+    }
+
+    let path = latest_path(cache_root, job.project_id);
+    let mut latest = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<LatestStackPreviews>(&bytes).ok())
+        .filter(|value| value.database_id == job.database_id && value.project_id == job.project_id)
+        .unwrap_or_else(|| LatestStackPreviews {
+            schema_version: 1,
+            database_id: job.database_id.clone(),
+            project_id: job.project_id,
+            updated_unix_seconds: 0,
+            groups: Vec::new(),
+        });
+
+    for group in ready {
+        let replacement = LatestStackPreviewGroup {
+            job_id: job.job_id.clone(),
+            artifact_revision: job.artifact_revision.clone(),
+            accepted_only: job.accepted_only,
+            created_unix_seconds: job.created_unix_seconds,
+            group,
+        };
+        if let Some(existing) = latest.groups.iter_mut().find(|existing| {
+            existing.group.target_id == replacement.group.target_id
+                && existing.group.filter_name == replacement.group.filter_name
+        }) {
+            *existing = replacement;
+        } else {
+            latest.groups.push(replacement);
+        }
+    }
+    latest.groups.sort_by(|left, right| {
+        left.group
+            .target_name
+            .cmp(&right.group.target_name)
+            .then_with(|| left.group.filter_name.cmp(&right.group.filter_name))
+            .then_with(|| left.group.target_id.cmp(&right.group.target_id))
+    });
+    latest.updated_unix_seconds = chrono::Utc::now().timestamp();
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Latest stack preview path has no parent".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
+    let bytes = serde_json::to_vec_pretty(&latest).map_err(|error| error.to_string())?;
+    std::fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
+    std::fs::rename(&temporary, path).map_err(|error| error.to_string())
+}
+
 fn stack_dir(cache_root: &FsPath, job_id: &str) -> PathBuf {
     cache_root.join("stack-previews").join(job_id)
 }
 
 fn manifest_path(cache_root: &FsPath, job_id: &str) -> PathBuf {
     stack_dir(cache_root, job_id).join("manifest.json")
+}
+
+fn latest_path(cache_root: &FsPath, project_id: i32) -> PathBuf {
+    cache_root
+        .join("stack-previews")
+        .join(format!("latest-project-{project_id}.json"))
 }
 
 fn preview_path(cache_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
@@ -1024,6 +1178,50 @@ fn fits_path(cache_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ready_group(target_id: i32, filter_name: &str, image_id: i32) -> StackGroupStatus {
+        StackGroupStatus {
+            index: 0,
+            target_id,
+            target_name: format!("Target {target_id}"),
+            filter_name: filter_name.into(),
+            state: StackGroupState::Ready,
+            total_candidates: 2,
+            eligible_frames: 2,
+            quality_excluded: 0,
+            missing_files: 0,
+            processed_frames: 2,
+            accepted_frames: 2,
+            rejected_frames: 0,
+            reference_image_id: Some(image_id),
+            total_exposure_seconds: 120.0,
+            preview_url: None,
+            fits_url: None,
+            error: None,
+            input_images: vec![StackInputImage {
+                image_id,
+                grading_status: 1,
+            }],
+            frames: Vec::new(),
+        }
+    }
+
+    fn completed_job(job_id: &str, groups: Vec<StackGroupStatus>) -> StackPreviewJob {
+        StackPreviewJob {
+            schema_version: 2,
+            job_id: job_id.into(),
+            database_id: "db-test".into(),
+            project_id: 7,
+            state: StackJobState::Completed,
+            accepted_only: false,
+            created_unix_seconds: 100,
+            artifact_revision: format!("revision-{job_id}"),
+            cache_version: STACK_PREVIEW_CACHE_VERSION,
+            stacking_version: SEIZA_STACKING_VERSION.into(),
+            groups,
+            error: None,
+        }
+    }
 
     #[test]
     fn request_requires_unique_pair_or_more() {
@@ -1061,6 +1259,10 @@ mod tests {
             fits_path(FsPath::new("/cache/db"), "abc", 2),
             PathBuf::from("/cache/db/stack-previews/abc/group-2.fits")
         );
+        assert_eq!(
+            latest_path(FsPath::new("/cache/db"), 7),
+            PathBuf::from("/cache/db/stack-previews/latest-project-7.json")
+        );
     }
 
     #[test]
@@ -1070,6 +1272,39 @@ mod tests {
         assert!(revision
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() || byte == b'-'));
+    }
+
+    #[test]
+    fn latest_index_replaces_only_the_rebuilt_channel() {
+        let cache = tempfile::tempdir().unwrap();
+        let first = completed_job(
+            "first",
+            vec![ready_group(10, "B", 1), ready_group(10, "R", 2)],
+        );
+        persist_latest_groups(cache.path(), &first).unwrap();
+
+        let mut rebuilt_blue = ready_group(10, "B", 3);
+        rebuilt_blue.index = 4;
+        let second = completed_job("second", vec![rebuilt_blue]);
+        persist_latest_groups(cache.path(), &second).unwrap();
+
+        let bytes = std::fs::read(latest_path(cache.path(), 7)).unwrap();
+        let latest: LatestStackPreviews = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(latest.groups.len(), 2);
+        let blue = latest
+            .groups
+            .iter()
+            .find(|entry| entry.group.filter_name == "B")
+            .unwrap();
+        let red = latest
+            .groups
+            .iter()
+            .find(|entry| entry.group.filter_name == "R")
+            .unwrap();
+        assert_eq!(blue.job_id, "second");
+        assert_eq!(blue.group.reference_image_id, Some(3));
+        assert_eq!(red.job_id, "first");
+        assert_eq!(red.group.reference_image_id, Some(2));
     }
 
     #[test]

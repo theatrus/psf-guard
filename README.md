@@ -26,8 +26,9 @@ points at your Target Scheduler database and image folders and gives you:
 - **On-demand stack previews** — integrate the selected or visible project
   frames per target and channel with Seiza registration, while carrying the
   same grading exclusions and per-frame admission evidence into the result;
-  inspect the full-resolution result with the normal zoom/pan tools or download
-  the cached linear FITS integration.
+  rebuild channels independently, retain and flag stale prior results, inspect
+  the full-resolution result with the normal zoom/pan tools, or download the
+  cached linear FITS integration.
 - **Scheduler write-back** — every grade lands in the Target Scheduler
   database, so the scheduler knows to re-capture what you rejected.
 - **Safe reject archival** — move rejected frames (and their sidecars) out of
