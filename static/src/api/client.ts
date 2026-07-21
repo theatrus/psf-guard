@@ -366,24 +366,6 @@ export const apiClient = {
     )}${revision}`;
   },
 
-  applyStackColorStretch: async (
-    dbId: string,
-    jobId: string,
-    request: StackStretchRequest
-  ): Promise<StackStretchPreview> => {
-    try {
-      const apiInstance = await getApi();
-      const { data } = await apiInstance.post<ApiResponse<StackStretchPreview>>(
-        dbPath(dbId, `/stack-previews/color/${encodeURIComponent(jobId)}/stretch`),
-        request
-      );
-      if (!data.data) throw new Error(data.error || 'Failed to apply color stretch');
-      return normalizeStretchPreview(data.data);
-    } catch (cause) {
-      throw stackStretchError(cause, 'Failed to apply color stretch');
-    }
-  },
-
   getImages: async (dbId: string, query: ImageQuery): Promise<Image[]> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<Image[]>>(dbPath(dbId, '/images'), {

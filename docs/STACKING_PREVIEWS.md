@@ -250,7 +250,6 @@ GET  /api/db/{db}/projects/{project}/stack-previews/color
 POST /api/db/{db}/projects/{project}/stack-previews/color
 GET  /api/db/{db}/projects/{project}/stack-previews/color/{job}
 GET  /api/db/{db}/stack-previews/color/{job}/preview[?size=screen|original]
-POST /api/db/{db}/stack-previews/color/{job}/stretch
 GET  /api/db/{db}/stack-previews/color/{job}/fits
 GET  /api/db/{db}/stack-previews/stretch/{stretch}/preview[?size=screen|original]
 ```

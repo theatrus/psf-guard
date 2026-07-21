@@ -687,38 +687,6 @@ pub async fn download_stack_color_fits(
     .await
 }
 
-pub async fn apply_stack_color_stretch(
-    State(state): State<Arc<AppState>>,
-    ctx: DbContext,
-    Path((_db_id, job_id)): Path<(String, String)>,
-    Json(request): Json<super::stretch::StackStretchRequest>,
-) -> Result<Json<ApiResponse<super::stretch::StackStretchPreview>>, AppError> {
-    super::validate_job_id(&job_id)?;
-    let job = if let Some(job) = state.stack_previews.get_color(&job_id) {
-        job
-    } else {
-        let bytes = std::fs::read(color_manifest_path(&ctx.cache_dir_path, &job_id))
-            .map_err(|_| AppError::NotFound)?;
-        serde_json::from_slice::<StackColorJob>(&bytes).map_err(|error| {
-            AppError::InternalError(format!("Invalid color preview manifest: {error}"))
-        })?
-    };
-    if job.database_id != ctx.id || job.state != StackJobState::Completed {
-        return Err(AppError::NotFound);
-    }
-    let result = super::stretch::apply_to_fits(
-        state,
-        ctx.id.clone(),
-        ctx.cache_dir_path.clone(),
-        format!("color:{job_id}"),
-        job.artifact_revision,
-        color_fits_path(&ctx.cache_dir_path, &job_id),
-        request,
-    )
-    .await?;
-    Ok(super::stretch::response(result))
-}
-
 async fn stream_artifact(
     path: PathBuf,
     content_type: &'static str,
@@ -982,33 +950,31 @@ fn run_color_job(state: &Arc<AppState>, prepared: PreparedColorJob) {
                 None,
                 None,
             );
-            progress.finish(StackColorProgressPhase::PublishingArtifacts);
-            state.stack_previews.update_color(&job_id, |job| {
-                job.state = StackJobState::Completed;
-                job.phase = "Color preview ready".into();
-                job.progress.active_phase = None;
-                job.progress.current_role = None;
-                job.progress.current_stage = None;
-                job.progress.stage_count = None;
-            });
-            if let Some(job) = state.stack_previews.get_color(&job_id) {
-                let persisted = persist_color_manifest(&prepared.cache_root, &job).and_then(|()| {
-                    state
-                        .stack_previews
-                        .persist_latest_color(&prepared.cache_root, &job)
-                });
-                if let Err(error) = persisted {
-                    tracing::warn!("Failed to publish color preview: {error}");
-                    state.stack_previews.update_color(&job_id, |job| {
-                        job.state = StackJobState::Failed;
-                        job.phase = "Publishing color preview failed".into();
-                        job.error = Some(error);
-                        if let Some(entry) = job.progress.phases.iter_mut().find(|entry| {
-                            entry.phase == StackColorProgressPhase::PublishingArtifacts
-                        }) {
-                            entry.state = StackColorProgressState::Failed;
-                        }
+            if let Some(mut completed) = state.stack_previews.get_color(&job_id) {
+                finish_color_job(&mut completed);
+                let persisted =
+                    persist_color_manifest(&prepared.cache_root, &completed).and_then(|()| {
+                        state
+                            .stack_previews
+                            .persist_latest_color(&prepared.cache_root, &completed)
                     });
+                match persisted {
+                    Ok(()) => {
+                        let _ = state.stack_previews.insert_color(completed);
+                    }
+                    Err(error) => {
+                        tracing::warn!("Failed to publish color preview: {error}");
+                        state.stack_previews.update_color(&job_id, |job| {
+                            job.state = StackJobState::Failed;
+                            job.phase = "Publishing color preview failed".into();
+                            job.error = Some(error);
+                            if let Some(entry) = job.progress.phases.iter_mut().find(|entry| {
+                                entry.phase == StackColorProgressPhase::PublishingArtifacts
+                            }) {
+                                entry.state = StackColorProgressState::Failed;
+                            }
+                        });
+                    }
                 }
             }
         }
@@ -1031,6 +997,26 @@ fn run_color_job(state: &Arc<AppState>, prepared: PreparedColorJob) {
     }
 }
 
+fn finish_color_job(job: &mut StackColorJob) {
+    if let Some(entry) = job
+        .progress
+        .phases
+        .iter_mut()
+        .find(|entry| entry.phase == StackColorProgressPhase::PublishingArtifacts)
+    {
+        let remaining = entry.total_units.saturating_sub(entry.completed_units);
+        entry.completed_units = entry.total_units;
+        entry.state = StackColorProgressState::Completed;
+        job.progress.completed_units += remaining;
+    }
+    job.state = StackJobState::Completed;
+    job.phase = "Color preview ready".into();
+    job.progress.active_phase = None;
+    job.progress.current_role = None;
+    job.progress.current_stage = None;
+    job.progress.stage_count = None;
+}
+
 fn compose_color(
     state: &Arc<AppState>,
     job: &StackColorJob,
@@ -1051,42 +1037,19 @@ fn compose_color(
         None,
         None,
     );
-    let mut frames = BTreeMap::new();
-    for source in &job.sources {
-        progress.begin(
-            StackColorProgressPhase::LoadingSources,
-            format!("Loading {} stack", source.role.label()),
-            Some(source.role),
-            None,
-        );
-        let frame = FitsFrame::open(super::fits_path(
-            cache_root,
-            &source.job_id,
-            source.group_index,
-        ))
-        .map_err(|error| {
-            format!(
-                "Failed to read {} channel stack: {error}",
-                source.role.label()
-            )
-        })?;
-        validate_mono(&frame.image, source.role)?;
-        frames.insert(source.role, frame);
-        progress.advance(StackColorProgressPhase::LoadingSources, 1);
-    }
-    progress.finish(StackColorProgressPhase::LoadingSources);
-
-    // The forthcoming background-extraction integration occupies this exact
-    // pipeline boundary. Keeping it explicit makes skipped work visible and
-    // prevents later progress totals from silently changing shape.
-    progress.skip(
-        StackColorProgressPhase::BackgroundPreparation,
-        "Background preparation skipped (not configured)",
-    );
-
-    let reference = frames
-        .remove(&reference_role)
+    let reference_source = job
+        .sources
+        .iter()
+        .find(|source| source.role == reference_role)
         .ok_or_else(|| "Color job has no reference channel".to_string())?;
+    progress.begin(
+        StackColorProgressPhase::LoadingSources,
+        format!("Loading {} stack", reference_role.label()),
+        Some(reference_role),
+        None,
+    );
+    let reference = load_source_frame(cache_root, reference_source)?;
+    progress.advance(StackColorProgressPhase::LoadingSources, 1);
     let pixels = reference.image.pixel_count();
     let estimate = (pixels as u64).saturating_mul(COLOR_BYTES_PER_PIXEL);
     let policy = state.worker_policy();
@@ -1114,6 +1077,34 @@ fn compose_color(
         job.job_id,
         budget.workers,
         budget.rationale
+    );
+
+    // Enforce the whole-pipeline memory budget after loading only the
+    // reference. The remaining channel buffers are admitted only after that
+    // check, so an oversized color job cannot allocate every source first.
+    let mut frames = BTreeMap::new();
+    for source in job
+        .sources
+        .iter()
+        .filter(|source| source.role != reference_role)
+    {
+        progress.begin(
+            StackColorProgressPhase::LoadingSources,
+            format!("Loading {} stack", source.role.label()),
+            Some(source.role),
+            None,
+        );
+        frames.insert(source.role, load_source_frame(cache_root, source)?);
+        progress.advance(StackColorProgressPhase::LoadingSources, 1);
+    }
+    progress.finish(StackColorProgressPhase::LoadingSources);
+
+    // The forthcoming background-extraction integration occupies this exact
+    // pipeline boundary. Keeping it explicit makes skipped work visible and
+    // prevents later progress totals from silently changing shape.
+    progress.skip(
+        StackColorProgressPhase::BackgroundPreparation,
+        "Background preparation skipped (not configured)",
     );
 
     pool.install(|| {
@@ -1448,6 +1439,22 @@ fn compose_color(
         }
         rendered.map(|_| ())
     })
+}
+
+fn load_source_frame(cache_root: &FsPath, source: &StackColorSource) -> Result<FitsFrame, String> {
+    let frame = FitsFrame::open(super::fits_path(
+        cache_root,
+        &source.job_id,
+        source.group_index,
+    ))
+    .map_err(|error| {
+        format!(
+            "Failed to read {} channel stack: {error}",
+            source.role.label()
+        )
+    })?;
+    validate_mono(&frame.image, source.role)?;
+    Ok(frame)
 }
 
 fn render_progress_phase(

@@ -261,10 +261,6 @@ async fn run_server_internal(
             get(stack_preview::color::get_stack_color_image),
         )
         .route(
-            "/stack-previews/color/{job_id}/stretch",
-            post(stack_preview::color::apply_stack_color_stretch),
-        )
-        .route(
             "/stack-previews/stretch/{stretch_id}/preview",
             get(stack_preview::stretch::get_stack_stretch_image),
         )
