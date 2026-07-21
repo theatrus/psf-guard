@@ -26,7 +26,8 @@ points at your Target Scheduler database and image folders and gives you:
 - **On-demand stack previews** — integrate the selected or visible project
   frames per target and channel with Seiza registration, while carrying the
   same grading exclusions and per-frame admission evidence into the result;
-  download the cached linear FITS integration for closer inspection.
+  inspect the full-resolution result with the normal zoom/pan tools or download
+  the cached linear FITS integration.
 - **Scheduler write-back** — every grade lands in the Target Scheduler
   database, so the scheduler knows to re-capture what you rejected.
 - **Safe reject archival** — move rejected frames (and their sidecars) out of
@@ -56,10 +57,10 @@ It runs as a desktop app (Windows/macOS/Linux), a self-hosted web server
 | ![Sequence Analysis](docs/sequence-quality-astrometry.png) | ![Annotated Stars](docs/annotated-stars.jpg) | ![PSF Visualization](docs/psf-visualization.jpg) |
 | Per-frame scores, cloud/occlusion screening, solved-center scatter, and off-target/tracking flags | HocusFocus inspired detection with annotated output (`annotate-stars`) | Observed / fitted / residual grids with Moffat & Gaussian models (`visualize-psf-multi`) |
 
-| Stack Preview | Stack Admission Decisions |
-|:--:|:--:|
-| ![A three-frame B-channel project stack preview](docs/stack-preview.png) | ![Per-frame Seiza registration and admission details](docs/stack-preview-decisions.png) |
-| Uncalibrated, on-demand integration grouped by exact target and channel | Quality exclusions, reference choice, matches, registration RMS, and rejection reasons |
+| Stack Preview | Full-size Inspection | Stack Admission Decisions |
+|:--:|:--:|:--:|
+| ![A three-frame B-channel project stack preview](docs/stack-preview.png) | ![Native-resolution stack inspection](docs/stack-preview-inspection.png) | ![Per-frame Seiza registration and admission details](docs/stack-preview-decisions.png) |
+| Uncalibrated, on-demand integration grouped by exact target and channel | Familiar zoom, pan, fit, and one-pixel-per-pixel controls | Quality exclusions, reference choice, matches, registration RMS, and rejection reasons |
 
 ## Installation
 
