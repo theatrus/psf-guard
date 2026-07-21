@@ -58,6 +58,30 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   );
   expect(integrated).toBeGreaterThanOrEqual(2);
 
+  const fitsLink = panel.getByRole('link', { name: 'Download linear FITS' });
+  const fitsHref = await fitsLink.getAttribute('href');
+  expect(fitsHref).toMatch(/\/stack-previews\/[a-f0-9]{64}\/0\/fits\?v=[a-f0-9-]+$/);
+  const fitsHead = await page.request.head(fitsHref!);
+  expect(fitsHead.status()).toBe(200);
+  expect(fitsHead.headers()['content-type']).toContain('application/fits');
+  expect(fitsHead.headers()['content-disposition']).toMatch(/attachment; filename=.*\.fits/);
+  expect(Number(fitsHead.headers()['content-length'])).toBeGreaterThan(10_000_000);
+
+  const jobId = fitsHref!.match(/\/stack-previews\/([a-f0-9]{64})\/0\/fits/)![1];
+  const fitsPath = path.join(
+    process.env.PSF_GUARD_E2E_TMP!,
+    'cache',
+    dbId,
+    'stack-previews',
+    jobId,
+    'group-0.fits'
+  );
+  const fitsHeader = Buffer.alloc(9);
+  const fitsFile = fs.openSync(fitsPath, 'r');
+  fs.readSync(fitsFile, fitsHeader, 0, fitsHeader.length, 0);
+  fs.closeSync(fitsFile);
+  expect(fitsHeader.toString('ascii')).toBe('SIMPLE  =');
+
   if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
     const docs = path.resolve(process.cwd(), '..', 'docs');
     fs.mkdirSync(docs, { recursive: true });
@@ -74,4 +98,38 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
     const docs = path.resolve(process.cwd(), '..', 'docs');
     await details.screenshot({ path: path.join(docs, 'stack-preview-decisions.png') });
   }
+
+  // Changing policy invalidates the visible result instead of relabeling the
+  // previous stack as if it used the new request.
+  const acceptedOnly = panel.getByRole('checkbox', { name: 'Accepted only' });
+  await acceptedOnly.check();
+  await expect(panel.locator('.stack-preview-results')).toHaveCount(0);
+  await acceptedOnly.uncheck();
+  await expect(panel.locator('.stack-preview-results')).toHaveCount(0);
+
+  // Reload the unchanged cached result, then force a rebuild. The same
+  // content-addressed job gets a fresh artifact revision and polling resumes.
+  await panel.getByRole('button', { name: 'Build stack previews' }).click();
+  await expect(panel.locator('.stack-preview-results')).toHaveAttribute(
+    'data-job-state',
+    'completed'
+  );
+  const cachedSrc = await panel
+    .getByRole('img', { name: /uncalibrated stack preview/i })
+    .getAttribute('src');
+  await panel.getByRole('button', { name: 'Rebuild' }).click();
+  await expect(panel.locator('.stack-preview-results')).toHaveAttribute(
+    'data-job-state',
+    /queued|running/,
+    { timeout: 15_000 }
+  );
+  await expect(panel.locator('.stack-preview-results')).toHaveAttribute(
+    'data-job-state',
+    'completed',
+    { timeout: 210_000 }
+  );
+  const rebuiltSrc = await panel
+    .getByRole('img', { name: /uncalibrated stack preview/i })
+    .getAttribute('src');
+  expect(rebuiltSrc).not.toBe(cachedSrc);
 });

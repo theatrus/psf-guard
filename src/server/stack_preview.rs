@@ -6,9 +6,10 @@
 //! a multi-database server cannot multiply the stacker's full-frame buffers.
 
 use axum::{
+    body::Body,
     extract::{Path, State},
     http::{
-        header::{CACHE_CONTROL, CONTENT_TYPE},
+        header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
         StatusCode,
     },
     response::{IntoResponse, Response},
@@ -21,8 +22,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::UNIX_EPOCH;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Semaphore;
+use tokio_util::io::ReaderStream;
 
 use crate::acquisition_context::FramingResolver;
 use crate::db::Database;
@@ -37,9 +39,14 @@ use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
 pub const SEIZA_STACKING_VERSION: &str = "0.1.0-git-18aa9b8";
+/// Bump whenever stack admission, rendering, or persisted artifact semantics
+/// change. This deliberately versions PSF Guard policy separately from Seiza.
+const STACK_PREVIEW_CACHE_VERSION: u32 = 2;
 const MAX_REQUEST_IMAGES: usize = 10_000;
 const MAX_REMEMBERED_JOBS: usize = 64;
 const PREVIEW_MAX_DIMENSION: u32 = 2400;
+const PREVIEW_STRETCH_FACTOR: f64 = 0.2;
+const PREVIEW_BLACK_CLIPPING: f64 = -2.8;
 const STACK_BYTES_PER_OUTPUT_SAMPLE: u64 = 40;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -100,6 +107,7 @@ pub struct StackGroupStatus {
     pub reference_image_id: Option<i32>,
     pub total_exposure_seconds: f64,
     pub preview_url: Option<String>,
+    pub fits_url: Option<String>,
     pub error: Option<String>,
     pub frames: Vec<StackFrameDecision>,
 }
@@ -113,6 +121,10 @@ pub struct StackPreviewJob {
     pub state: StackJobState,
     pub accepted_only: bool,
     pub created_unix_seconds: i64,
+    #[serde(default)]
+    pub artifact_revision: String,
+    #[serde(default)]
+    pub cache_version: u32,
     pub stacking_version: String,
     pub groups: Vec<StackGroupStatus>,
     pub error: Option<String>,
@@ -279,6 +291,36 @@ pub async fn get_stack_preview_image(
         .into_response())
 }
 
+pub async fn download_stack_preview_fits(
+    ctx: DbContext,
+    Path((_db_id, job_id, group_index)): Path<(String, String, usize)>,
+) -> Result<Response, AppError> {
+    validate_job_id(&job_id)?;
+    let path = fits_path(&ctx.cache_dir_path, &job_id, group_index);
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|_| AppError::NotFound)?;
+    let length = file
+        .metadata()
+        .await
+        .map_err(|error| AppError::InternalError(format!("Failed to stat stack FITS: {error}")))?
+        .len();
+    let filename = format!("psf-guard-stack-{}-{group_index}.fits", &job_id[..12]);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/fits")
+        .header(CONTENT_LENGTH, length)
+        .header(
+            CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{filename}\""),
+        )
+        .header(CACHE_CONTROL, "private, max-age=31536000, immutable")
+        .body(Body::from_stream(ReaderStream::new(file)))
+        .map_err(|error| {
+            AppError::InternalError(format!("Failed to build stack FITS response: {error}"))
+        })
+}
+
 fn validate_request(request: &StackPreviewRequest) -> Result<(), AppError> {
     if request.image_ids.len() < 2 {
         return Err(AppError::BadRequest(
@@ -305,6 +347,14 @@ fn validate_job_id(job_id: &str) -> Result<(), AppError> {
     } else {
         Err(AppError::BadRequest("Invalid stack preview job ID".into()))
     }
+}
+
+fn new_artifact_revision() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{nanos:x}-{:x}", std::process::id())
 }
 
 fn prepare_job(
@@ -382,12 +432,16 @@ fn prepare_job(
 
     let mut public_groups = Vec::new();
     let mut prepared_groups = Vec::new();
+    let artifact_revision = new_artifact_revision();
     let mut hasher = Sha256::new();
     hasher.update(ctx.id.as_bytes());
     hasher.update(project_id.to_le_bytes());
     hasher.update([request.accepted_only as u8]);
+    hasher.update(STACK_PREVIEW_CACHE_VERSION.to_le_bytes());
     hasher.update(SEIZA_STACKING_VERSION.as_bytes());
     hasher.update(PREVIEW_MAX_DIMENSION.to_le_bytes());
+    hasher.update(PREVIEW_STRETCH_FACTOR.to_le_bytes());
+    hasher.update(PREVIEW_BLACK_CLIPPING.to_le_bytes());
 
     for (index, ((target_id, target_name, filter_name), mut entries)) in
         grouped.into_iter().enumerate()
@@ -481,6 +535,7 @@ fn prepare_job(
             reference_image_id,
             total_exposure_seconds: 0.0,
             preview_url: None,
+            fits_url: None,
             error: (eligible_frames < 2).then(|| "Fewer than two eligible FITS frames".to_string()),
             frames: decisions,
         });
@@ -495,8 +550,12 @@ fn prepare_job(
     for group in &mut public_groups {
         if group.state == StackGroupState::Queued {
             group.preview_url = Some(format!(
-                "/api/db/{}/stack-previews/{}/{}/preview",
-                ctx.id, job_id, group.index
+                "/api/db/{}/stack-previews/{}/{}/preview?v={}",
+                ctx.id, job_id, group.index, artifact_revision
+            ));
+            group.fits_url = Some(format!(
+                "/api/db/{}/stack-previews/{}/{}/fits?v={}",
+                ctx.id, job_id, group.index, artifact_revision
             ));
         }
     }
@@ -510,6 +569,8 @@ fn prepare_job(
             state: StackJobState::Queued,
             accepted_only: request.accepted_only,
             created_unix_seconds: now,
+            artifact_revision,
+            cache_version: STACK_PREVIEW_CACHE_VERSION,
             stacking_version: SEIZA_STACKING_VERSION.into(),
             groups: public_groups,
             error: None,
@@ -842,7 +903,18 @@ fn run_group(
                 status.frames.push(decision);
             });
         }
+        let reference_headers = stacker.reference_headers().to_vec();
         let snapshot = stacker.into_snapshot().map_err(|error| error.to_string())?;
+        let fits_destination = fits_path(cache_root, job_id, group.index);
+        let fits_parent = fits_destination
+            .parent()
+            .ok_or_else(|| "Stack FITS path has no parent".to_string())?;
+        std::fs::create_dir_all(fits_parent).map_err(|error| error.to_string())?;
+        let fits_temporary =
+            fits_destination.with_extension(format!("{}.tmp.fits", std::process::id()));
+        seiza_stacking::write_fits_f32(&fits_temporary, &snapshot, &reference_headers)
+            .map_err(|error| error.to_string())?;
+        std::fs::rename(&fits_temporary, &fits_destination).map_err(|error| error.to_string())?;
         render_preview_atomic(
             &snapshot.image,
             &preview_path(cache_root, job_id, group.index),
@@ -858,8 +930,12 @@ fn render_preview_atomic(
         .parent()
         .ok_or_else(|| "Stack preview path has no parent".to_string())?;
     std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let pixels = crate::mtf_stretch::stretch_f32_to_u8(&image.data, 0.2, -2.8)
-        .ok_or_else(|| "Stack has no usable finite sample range".to_string())?;
+    let pixels = crate::mtf_stretch::stretch_f32_to_u8(
+        &image.data,
+        PREVIEW_STRETCH_FACTOR,
+        PREVIEW_BLACK_CLIPPING,
+    )
+    .ok_or_else(|| "Stack has no usable finite sample range".to_string())?;
     let dynamic = if image.channels == 1 {
         image::DynamicImage::ImageLuma8(
             image::GrayImage::from_raw(image.width as u32, image.height as u32, pixels)
@@ -907,6 +983,10 @@ fn preview_path(cache_root: &FsPath, job_id: &str, group_index: usize) -> PathBu
     stack_dir(cache_root, job_id).join(format!("group-{group_index}.png"))
 }
 
+fn fits_path(cache_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
+    stack_dir(cache_root, job_id).join(format!("group-{group_index}.fits"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -934,11 +1014,24 @@ mod tests {
     }
 
     #[test]
-    fn preview_paths_are_namespaced_by_job_and_group() {
+    fn artifact_paths_are_namespaced_by_job_and_group() {
         assert_eq!(
             preview_path(FsPath::new("/cache/db"), "abc", 2),
             PathBuf::from("/cache/db/stack-previews/abc/group-2.png")
         );
+        assert_eq!(
+            fits_path(FsPath::new("/cache/db"), "abc", 2),
+            PathBuf::from("/cache/db/stack-previews/abc/group-2.fits")
+        );
+    }
+
+    #[test]
+    fn artifact_revisions_are_safe_cache_busters() {
+        let revision = new_artifact_revision();
+        assert!(!revision.is_empty());
+        assert!(revision
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-'));
     }
 
     #[test]

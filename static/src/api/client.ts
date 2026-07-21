@@ -198,13 +198,34 @@ export const apiClient = {
     return data.data;
   },
 
-  getStackPreviewUrl: (dbId: string, jobId: string, groupIndex: number): string => {
+  getStackPreviewUrl: (
+    dbId: string,
+    jobId: string,
+    groupIndex: number,
+    artifactRevision: string
+  ): string => {
     const serverUrl = getCachedServerUrl();
     const basePath = serverUrl ? `${serverUrl}/api` : '/api';
+    const revision = artifactRevision ? `?v=${encodeURIComponent(artifactRevision)}` : '';
     return `${basePath}${dbPath(
       dbId,
       `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/preview`
-    )}`;
+    )}${revision}`;
+  },
+
+  getStackFitsUrl: (
+    dbId: string,
+    jobId: string,
+    groupIndex: number,
+    artifactRevision: string
+  ): string => {
+    const serverUrl = getCachedServerUrl();
+    const basePath = serverUrl ? `${serverUrl}/api` : '/api';
+    const revision = artifactRevision ? `?v=${encodeURIComponent(artifactRevision)}` : '';
+    return `${basePath}${dbPath(
+      dbId,
+      `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/fits`
+    )}${revision}`;
   },
 
   getImages: async (dbId: string, query: ImageQuery): Promise<Image[]> => {

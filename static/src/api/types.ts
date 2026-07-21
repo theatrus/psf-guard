@@ -286,13 +286,13 @@ export type StackGroupState = 'queued' | 'running' | 'ready' | 'skipped' | 'erro
 export interface StackFrameDecision {
   image_id: number;
   disposition: 'excluded' | 'reference' | 'accepted' | 'rejected';
-  reason?: string;
-  quality_score?: number;
-  matched_stars?: number;
-  registration_rms_pixels?: number;
-  registration_drift_pixels?: number;
-  overlap_fraction?: number;
-  integrated_fraction?: number;
+  reason: string | null;
+  quality_score: number | null;
+  matched_stars: number | null;
+  registration_rms_pixels: number | null;
+  registration_drift_pixels: number | null;
+  overlap_fraction: number | null;
+  integrated_fraction: number | null;
 }
 
 export interface StackGroupStatus {
@@ -308,10 +308,11 @@ export interface StackGroupStatus {
   processed_frames: number;
   accepted_frames: number;
   rejected_frames: number;
-  reference_image_id?: number;
+  reference_image_id: number | null;
   total_exposure_seconds: number;
-  preview_url?: string;
-  error?: string;
+  preview_url: string | null;
+  fits_url: string | null;
+  error: string | null;
   frames: StackFrameDecision[];
 }
 
@@ -323,9 +324,11 @@ export interface StackPreviewJob {
   state: StackJobState;
   accepted_only: boolean;
   created_unix_seconds: number;
+  artifact_revision: string;
+  cache_version: number;
   stacking_version: string;
   groups: StackGroupStatus[];
-  error?: string;
+  error: string | null;
 }
 
 export interface ServerInfo {

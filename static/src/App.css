@@ -2644,6 +2644,24 @@
   padding: 0.8rem 0.9rem;
 }
 
+.stack-preview-card-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.45rem;
+  flex-direction: column;
+}
+
+.stack-preview-download {
+  color: var(--color-primary);
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.stack-preview-download:hover {
+  text-decoration: underline;
+}
+
 .stack-preview-card h3 {
   display: inline;
   margin: 0 0.45rem 0 0;

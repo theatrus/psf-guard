@@ -25,7 +25,8 @@ points at your Target Scheduler database and image folders and gives you:
   every verdict.
 - **On-demand stack previews** — integrate the selected or visible project
   frames per target and channel with Seiza registration, while carrying the
-  same grading exclusions and per-frame admission evidence into the result.
+  same grading exclusions and per-frame admission evidence into the result;
+  download the cached linear FITS integration for closer inspection.
 - **Scheduler write-back** — every grade lands in the Target Scheduler
   database, so the scheduler knows to re-capture what you rejected.
 - **Safe reject archival** — move rejected frames (and their sidecars) out of
@@ -177,7 +178,8 @@ grading progress), an image grid, and a comparison mode:
 - **Stack previews**: in a single project, build an uncalibrated registered
   preview from an explicit multi-selection or the current visible filters.
   PSF Guard excludes rejected and regrade-recommended frames before Seiza
-  performs registration and admission. See
+  performs registration and admission, and retains a downloadable linear FITS
+  beside the display PNG. See
   **[docs/STACKING_PREVIEWS.md](docs/STACKING_PREVIEWS.md)**.
 - **Sky context and plate solving**: coordinate-only catalog matches appear
   immediately. Choose **Solve field** (or press `O`) to run Seiza against the

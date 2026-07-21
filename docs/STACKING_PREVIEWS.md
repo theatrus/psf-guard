@@ -48,16 +48,24 @@ PSF Guard quality score and disposition. Accepted frames also report matched
 stars, registration RMS, registration drift, overlap, and integrated-sample
 fraction; excluded or rejected frames retain their reason.
 
+Choose **Download linear FITS** on a ready group to retrieve the full-resolution
+floating-point integration from the cache. The FITS is unstretched and retains
+the reference frame's supported WCS headers plus Seiza's accepted/rejected
+frame counters, making it suitable for inspection or as an input to a separate
+processing workflow.
+
 ![Frame-by-frame stack admission details](stack-preview-decisions.png)
 
 ## Output, caching, and invalidation
 
-The default artifact is a display-stretched PNG no larger than 2400 pixels on
-its longest side plus a JSON provenance manifest. The integration itself uses
-the source resolution so Seiza sees the original star profiles; its
-incremental accumulator keeps memory bounded independently of frame count. A
-conservative memory estimate is checked against the server worker policy before
-integration starts.
+Each group produces a display-stretched PNG no larger than 2400 pixels on its
+longest side and an unstretched, source-resolution, 32-bit floating-point FITS.
+A JSON provenance manifest describes the job. Seiza sees the original star
+profiles during integration, and its incremental accumulator keeps memory
+bounded independently of frame count. A conservative memory estimate is
+checked against the server worker policy before integration starts. FITS
+downloads stream from disk rather than buffering the full artifact in server
+memory.
 
 Artifacts live below the database cache directory:
 
@@ -65,19 +73,25 @@ Artifacts live below the database cache directory:
 <cache>/<database>/stack-previews/<job-id>/
   manifest.json
   group-0.png
+  group-0.fits
   group-1.png
+  group-1.fits
 ```
 
 The content-addressed job ID includes the database/project, exact ordered
 inputs and grouping, grades, quality scores and regrade reasons, source path
-fingerprints, policy, Seiza stacking revision, and preview format. Repeating an
-unchanged request loads the persistent result. **Rebuild** bypasses that lookup
-while retaining the same address and atomically replaces the PNG/manifest.
+fingerprints, an explicit PSF Guard cache-policy version, Seiza stacking
+revision, stretch parameters, and preview format. Repeating an unchanged
+request loads the persistent result. **Rebuild** bypasses that lookup and
+atomically replaces the PNG, FITS, and manifest. Each run receives a distinct
+artifact revision in its download/display URLs so clients cannot mistake an
+immutable cached response for the rebuilt output.
 
 ## Deliberate limits
 
 - No bias, dark, or flat masters are applied in this first version.
-- No linear FITS stack is retained by default; the feature is a preview.
+- The retained FITS is still an uncalibrated preview integration, not a final
+  science product.
 - Channels remain separate. There is no LRGB/SHO combination, mosaic, drizzle,
   or cross-target integration.
 - Satellite predictions and image-detail overlays are not applied to a stack.
@@ -86,12 +100,13 @@ while retaining the same address and atomically replaces the PNG/manifest.
 
 ## HTTP API
 
-The grid uses three per-database endpoints:
+The grid uses four per-database endpoints:
 
 ```text
 POST /api/db/{db}/projects/{project}/stack-previews
 GET  /api/db/{db}/projects/{project}/stack-previews/{job}
 GET  /api/db/{db}/stack-previews/{job}/{group}/preview
+GET  /api/db/{db}/stack-previews/{job}/{group}/fits
 ```
 
 The POST body is `{ "image_ids": [...], "accepted_only": false, "force":
