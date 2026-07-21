@@ -78,6 +78,32 @@ as an input to a separate processing workflow.
 
 ![Frame-by-frame stack admission details](stack-preview-decisions.png)
 
+## Reversible display stretching
+
+Expand **Display stretch** on any mono stack card to change only its
+rendered PNG. **Apply stretch** asks Seiza to resolve the selected model against
+the cached FITS and renders both the grid and full-resolution inspection PNGs.
+The source stack and downloadable FITS are never rewritten. **Revert stretch**
+immediately returns the card and inspector to the default rendering.
+
+The controls expose Seiza's identity, explicit linear, asinh,
+percentile-asinh, MTF, Generalized Hyperbolic Stretch (GHS), and Auto-MTF
+models. Auto-MTF with PSF Guard's established target median and shadow clipping
+is the default for linear mono-stack artifacts.
+Explicit black, white, shadow, and highlight points use normalized zero–one
+display units. PSF Guard maps a robust 0.1%–99.9% range from linear FITS into
+that domain before invoking Seiza. After an application, the card shows the raw
+source range, median, and normalization bounds so the transform remains
+inspectable.
+
+Applied variants are content-addressed by the source artifact revision, full
+stretch configuration, robust-normalization policy, and Seiza stretch version.
+Reapplying the same settings reuses the cached PNG pair. The active selection
+is intentionally browser-local and reversible; a reload returns to the durable
+default preview while the linear FITS remains the sole source of truth.
+
+![Parameterized Seiza stretch controls applied to a stack preview](stack-preview-stretch.png)
+
 ## Color previews from channel stacks
 
 Once one target has completed mono stacks for **L/R/G/B** or **H-alpha/OIII**,
@@ -85,6 +111,7 @@ the grid adds a **Combine channel stacks** section. Color generation is a
 separate on-demand job: rebuilding or changing a color palette never changes
 the mono integrations or their admission evidence.
 
+- **RGB** requires one unambiguous Red, Green, and Blue stack.
 - **LRGB** requires one unambiguous Luminance, Red, Green, and Blue stack.
   Luminance supplies the output luminance while Seiza retains the RGB
   chromaticity.
@@ -101,31 +128,64 @@ deliberately does not guess when two stacks map to the same role or when a
 multi-band filter name is ambiguous. Rename the Target Scheduler filters to
 make those roles explicit before building color.
 
-Each non-reference stack is registered to L for LRGB or H-alpha for
-narrowband, using the same bounded Seiza star/similarity registration used by
-the Seiza color CLI. Seiza independently percentile-normalizes the channels
-for a useful quick look, then performs the selected composition. Direct LRGB,
-HOO, and three-filter palettes remain linear-light; their PNG receives a
-display-only stretch. Foraxx works on display-prepared channels, so its PNG is
-not stretched a second time. The RGB floating-point FITS records `COLORSPC`,
-`SEIZACLR`, and `SEIZATRF` (`LINEAR` or `DISPLAY`) and preserves supported WCS
-cards from the reference stack.
+Each non-reference stack is registered to R for RGB, L for LRGB, or H-alpha
+for narrowband, using the same bounded Seiza star/similarity registration used
+by the Seiza color CLI. The **Processing stack** editor then robustly normalizes
+each physical input independently and applies that role's ordered stretch
+stages before composition. Expand L/R/G/B, H-alpha/OIII/SII, or RGB output to
+add, edit, remove, and reorder Seiza identity, linear, asinh, percentile-asinh,
+MTF, GHS, and Auto-MTF stages. **Apply processing stack** starts a new cached
+color job; **Revert edits** returns to the last rendered pipeline and **Reset
+defaults** restores one Auto-MTF stage per input with no post-composition stage.
+
+Every intermediate remains `f32`, and each automatic stage resolves against
+the preceding stage's output. These are sequential transfer passes, not pixel
+values added together. Seiza receives the independently prepared channels as
+display-referred inputs, so Foraxx uses those values directly instead of
+applying a second shared stretch. RGB output stages may use linked, unlinked,
+or luminance-preserving color strategies. The downloadable RGB FITS contains
+the exact processed color result, records `COLORSPC`, `SEIZACLR`, and
+`SEIZATRF='DISPLAY'`, and preserves supported WCS cards from the reference
+stack. The manifest retains both the requested stage arrays and every resolved
+Seiza plan. The processing definition and source revisions are part of the job
+ID, so applying the same stack restores its prior artifact.
+
+Color composition currently consumes the cached linear channel stacks
+directly. Seiza's forthcoming background-extraction crate belongs immediately
+after loading and before channel registration, with additive correction fitted
+per channel stack; it is intentionally not approximated in PSF Guard while that
+API is still under review. The progress ledger already records that phase as
+skipped. When adopted, its configuration and fit diagnostics must participate
+in the color artifact revision and cache provenance.
 
 ![LRGB and selectable Foraxx narrowband previews built from cached channel stacks](stack-color-previews.png)
 
-Color cards retain the compact loading/status strip while channels are read,
-registered, composed, and rendered. **Inspect** opens the same native-size
-pan/zoom inspector as a mono stack. **FITS** downloads the full RGB result for
-further processing. A color result is marked **Out of date**—but remains
-viewable—when any source channel stack is rebuilt, a cached artifact goes
-missing, or the Seiza/color-processing cache version changes.
+The expanded RGB card shows the complete phase ledger plus independent R, G,
+B, and output stretch lanes. Each lane can add, remove, and reorder stages;
+**Apply processing stack** creates a new content-addressed preview while
+**Revert edits** restores the last rendered configuration.
+
+![RGB phase progress and per-input/output ordered stretch stack editor](stack-color-processing.png)
+
+Color cards retain the compact loading/status strip directly below the image.
+Its determinate total covers source loading, background preparation, channel
+registration, per-input normalization, every input stretch stage, composition,
+every output stretch stage, FITS writing, full-size rendering, screen rendering,
+and artifact publication. **Pipeline phases** preserves each phase's completed,
+skipped, reused, or failed state and identifies the active role and stage in the
+live label. **Inspect** opens the same native-size pan/zoom inspector as a mono
+stack. **FITS** downloads the full RGB result for further inspection. A color
+result is marked **Out of date**—but remains viewable—when any source channel
+stack is rebuilt, a cached artifact goes missing, or the Seiza/color-processing
+cache version changes.
 
 ## Output, caching, and invalidation
 
-Each group produces a display-stretched PNG no larger than 2400 pixels on its
-longest side, a native-resolution stretched PNG for interactive inspection,
-and an unstretched, source-resolution, 32-bit floating-point FITS. A JSON
-provenance manifest describes the job. Seiza sees the original star profiles
+Each group produces a default display-stretched PNG no larger than 2400 pixels
+on its longest side, a native-resolution stretched PNG for interactive
+inspection, and an unstretched, source-resolution, 32-bit floating-point FITS.
+Applied stretch variants live beside separate configuration and resolved-plan
+manifests. A JSON provenance manifest describes the stack job. Seiza sees the original star profiles
 during integration, and its incremental accumulator keeps memory bounded
 independently of frame count. A conservative memory estimate is checked against
 the server worker policy before integration starts. Full-size PNGs and FITS
@@ -184,12 +244,14 @@ POST /api/db/{db}/projects/{project}/stack-previews
 GET  /api/db/{db}/projects/{project}/stack-previews/latest
 GET  /api/db/{db}/projects/{project}/stack-previews/{job}
 GET  /api/db/{db}/stack-previews/{job}/{group}/preview[?size=screen|original]
+POST /api/db/{db}/stack-previews/{job}/{group}/stretch
 GET  /api/db/{db}/stack-previews/{job}/{group}/fits
 GET  /api/db/{db}/projects/{project}/stack-previews/color
 POST /api/db/{db}/projects/{project}/stack-previews/color
 GET  /api/db/{db}/projects/{project}/stack-previews/color/{job}
 GET  /api/db/{db}/stack-previews/color/{job}/preview[?size=screen|original]
 GET  /api/db/{db}/stack-previews/color/{job}/fits
+GET  /api/db/{db}/stack-previews/stretch/{stretch}/preview[?size=screen|original]
 ```
 
 The POST body is `{ "image_ids": [...], "accepted_only": false, "force":
@@ -197,6 +259,14 @@ false }`. Status responses contain the group counters, captured image/grade
 snapshot, and complete per-frame decision records used by the UI. The latest
 endpoint returns the durable last-successful result for each target/channel.
 The color catalog reports role/palette availability and durable results. Its
-POST body is `{ "target_id": 42, "kind": "lrgb", "force": false }` or
+POST body is `{ "target_id": 42, "kind": "rgb", "force": false,
+"processing": { "input_stretches": { "red": [{ "model": { "type":
+"auto-mtf", "target_median": 0.2, "shadows_clip": -2.8 },
+"color_strategy": "linked" }] }, "output_stretches": [] } }`,
+`{ "target_id": 42, "kind": "lrgb", "force": false }`, or
 `{ "target_id": 42, "kind": "narrowband", "palette": "foraxx-hoo",
-"force": false }`.
+"force": false }`. Omitting `processing` retains the earlier linear quick-look
+behavior for API compatibility. Mono stretch POST bodies use Seiza's tagged model shape, for
+example `{ "model": { "type": "percentile-asinh", "black_percentile":
+0.01, "white_percentile": 0.995, "strength": 8.0 }, "color_strategy":
+"luminance-preserving" }`.

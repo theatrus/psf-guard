@@ -27,10 +27,12 @@ points at your Target Scheduler database and image folders and gives you:
   frames per target and channel with Seiza registration, while carrying the
   same grading exclusions and per-frame admission evidence into the result;
   rebuild channels independently, retain and flag stale prior results, inspect
-  the full-resolution result with the normal zoom/pan tools, or download the
-  cached linear FITS integration. When the required channel stacks exist,
-  combine them into cached LRGB or selectable SHO/HOO/Foraxx color previews
-  with full-resolution RGB FITS output.
+  the full-resolution result with the normal zoom/pan tools, apply or revert
+  parameterized Seiza display stretches, or download the cached linear FITS
+  integration. When the required channel stacks exist, combine them into
+  cached RGB, LRGB, or selectable SHO/HOO/Foraxx color previews with
+  independently editable ordered input/output stretch stacks, phase-complete
+  progress, and full-resolution processed RGB FITS output.
 - **Scheduler write-back** — every grade lands in the Target Scheduler
   database, so the scheduler knows to re-capture what you rejected.
 - **Safe reject archival** — move rejected frames (and their sidecars) out of
@@ -65,10 +67,10 @@ It runs as a desktop app (Windows/macOS/Linux), a self-hosted web server
 | ![A three-frame B-channel project stack preview](docs/stack-preview.png) | ![Native-resolution stack inspection](docs/stack-preview-inspection.png) | ![Per-frame Seiza registration and admission details](docs/stack-preview-decisions.png) |
 | Uncalibrated, on-demand integration grouped by exact target and channel | Familiar zoom, pan, fit, and one-pixel-per-pixel controls | Quality exclusions, reference choice, matches, registration RMS, and rejection reasons |
 
-| LRGB and Narrowband Color Previews |
-|:--:|
-| ![LRGB and selectable Foraxx narrowband previews](docs/stack-color-previews.png) |
-| Cross-filter registration, palette selection, durable source-aware caching, full-size inspection, and RGB FITS download |
+| RGB, LRGB, and Narrowband Color Previews | Ordered Color Processing Stacks |
+|:--:|:--:|
+| ![LRGB and selectable Foraxx narrowband previews](docs/stack-color-previews.png) | ![Per-input and output stretch stack editor](docs/stack-color-processing.png) |
+| Cross-filter registration, palette selection, durable source-aware caching, full-size inspection, and RGB FITS download | Per-input and output stretch passes with a complete phase ledger and resolved-plan provenance |
 
 ## Installation
 
@@ -188,9 +190,9 @@ grading progress), an image grid, and a comparison mode:
   preview from an explicit multi-selection or the current visible filters.
   PSF Guard excludes rejected and regrade-recommended frames before Seiza
   performs registration and admission, and retains a downloadable linear FITS
-  beside the display PNG. Completed L/R/G/B or Ha/OIII/SII stacks can then be
-  registered across filters and combined into LRGB or a selected narrowband
-  palette without altering the source integrations. See
+  beside the display PNG. Completed R/G/B, L/R/G/B, or Ha/OIII/SII stacks can
+  then be registered across filters and combined into RGB, LRGB, or a selected
+  narrowband palette without altering the source integrations. See
   **[docs/STACKING_PREVIEWS.md](docs/STACKING_PREVIEWS.md)**.
 - **Sky context and plate solving**: coordinate-only catalog matches appear
   immediately. Choose **Solve field** (or press `O`) to run Seiza against the

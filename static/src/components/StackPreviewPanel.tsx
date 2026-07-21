@@ -8,9 +8,11 @@ import type {
   StackGroupStatus,
   StackInputImage,
   StackPreviewJob,
+  StackStretchPreview,
 } from '../api/types';
 import StackPreviewInspector from './StackPreviewInspector';
 import StackColorPreviewPanel from './StackColorPreviewPanel';
+import StackStretchControls from './StackStretchControls';
 
 type StackCandidateImage = Pick<
   Image,
@@ -51,6 +53,10 @@ function latestStackQueryKey(dbId: string, projectId: number) {
 
 function channelKey(targetId: number, filterName: string | null) {
   return `${targetId}:${filterName ?? ''}`;
+}
+
+function artifactStretchKey(artifact: StackArtifact) {
+  return `${artifact.jobId}:${artifact.group.index}:${artifact.artifactRevision}`;
 }
 
 function formatExposure(seconds: number): string {
@@ -113,6 +119,7 @@ export default function StackPreviewPanel({
   const [acceptedOnly, setAcceptedOnly] = useState(false);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [inspector, setInspector] = useState<StackArtifact | null>(null);
+  const [stretches, setStretches] = useState<Record<string, StackStretchPreview>>({});
 
   const currentChannels = useMemo(() => {
     const channels = new Map<string, ChannelInput>();
@@ -191,6 +198,7 @@ export default function StackPreviewPanel({
   useEffect(() => {
     setActiveJobId(null);
     setInspector(null);
+    setStretches({});
     resetStart();
   }, [dbId, projectId, resetStart]);
 
@@ -387,6 +395,8 @@ export default function StackPreviewPanel({
                       }
                     : undefined;
                 const artifact = activeArtifact ?? artifactFromLatest(latestEntry);
+                const stretchKey = artifact ? artifactStretchKey(artifact) : null;
+                const appliedStretch = stretchKey ? stretches[stretchKey] : undefined;
                 const group = artifact?.group ?? activeGroup;
                 const targetName = current?.targetName ?? group?.target_name ?? 'Unknown target';
                 const filterName = current?.filterName ?? group?.filter_name ?? '';
@@ -498,15 +508,33 @@ export default function StackPreviewPanel({
                     {artifact && (
                       <div className="stack-preview-image">
                         <img
-                          src={apiClient.getStackPreviewUrl(
-                            dbId,
-                            artifact.jobId,
-                            artifact.group.index,
-                            artifact.artifactRevision
+                          src={appliedStretch?.preview_url ?? apiClient.getStackPreviewUrl(
+                            dbId, artifact.jobId, artifact.group.index, artifact.artifactRevision
                           )}
                           alt={`${targetName} ${filterName} uncalibrated stack preview`}
                         />
                       </div>
+                    )}
+                    {artifact && stretchKey && (
+                      <StackStretchControls
+                        key={stretchKey}
+                        label={`${targetName} ${filterName || 'no filter'}`}
+                        channels={artifact.group.output_channels === 3 ? 3 : 1}
+                        disabled={running}
+                        applied={appliedStretch}
+                        apply={(request) => apiClient.applyStackStretch(
+                          dbId, artifact.jobId, artifact.group.index, request
+                        )}
+                        onApplied={(preview) => setStretches((currentStretches) => ({
+                          ...currentStretches,
+                          [stretchKey]: preview,
+                        }))}
+                        onRevert={() => setStretches((currentStretches) => {
+                          const next = { ...currentStretches };
+                          delete next[stretchKey];
+                          return next;
+                        })}
+                      />
                     )}
                     {!artifact && groupBusy && (
                       <div className="stack-preview-placeholder">
@@ -592,13 +620,14 @@ export default function StackPreviewPanel({
             `${inspector.group.accepted_frames} frames`,
             `${Math.round(inspector.group.total_exposure_seconds)} s`,
           ]}
-          imageUrl={apiClient.getStackPreviewUrl(
-            dbId,
-            inspector.jobId,
-            inspector.group.index,
-            inspector.artifactRevision,
-            'original'
-          )}
+          imageUrl={stretches[artifactStretchKey(inspector)]?.original_preview_url ??
+            apiClient.getStackPreviewUrl(
+              dbId,
+              inspector.jobId,
+              inspector.group.index,
+              inspector.artifactRevision,
+              'original'
+            )}
           fitsUrl={apiClient.getStackFitsUrl(
             dbId,
             inspector.jobId,

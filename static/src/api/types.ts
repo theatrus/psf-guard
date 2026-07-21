@@ -313,6 +313,7 @@ export interface StackGroupStatus {
   processed_frames: number;
   accepted_frames: number;
   rejected_frames: number;
+  output_channels: number;
   reference_image_id: number | null;
   total_exposure_seconds: number;
   preview_url: string | null;
@@ -353,8 +354,61 @@ export interface LatestStackPreviews {
   groups: LatestStackPreviewGroup[];
 }
 
+export type StackStretchColorStrategy = 'linked' | 'unlinked' | 'luminance-preserving';
+
+export type StackStretchModel =
+  | { type: 'identity' }
+  | { type: 'linear'; black: number; white: number }
+  | { type: 'asinh'; black: number; white: number; strength: number }
+  | {
+      type: 'percentile-asinh';
+      black_percentile: number;
+      white_percentile: number;
+      strength: number;
+    }
+  | { type: 'mtf'; shadows: number; midtone: number; highlights: number }
+  | {
+      type: 'ghs';
+      stretch_factor: number;
+      local_intensity: number;
+      symmetry_point: number;
+      protect_shadows: number;
+      protect_highlights: number;
+      black: number;
+      white: number;
+    }
+  | { type: 'auto-mtf'; target_median: number; shadows_clip: number };
+
+export interface StackStretchRequest {
+  model: StackStretchModel;
+  color_strategy: StackStretchColorStrategy;
+}
+
+export interface StackStretchStatistics {
+  min: number;
+  max: number;
+  median: number;
+  mad: number;
+  count: number;
+}
+
+export interface StackStretchPreview {
+  schema_version: number;
+  stretch_id: string;
+  stretch_version: string;
+  config: StackStretchRequest & { max_analysis_samples: number };
+  resolved_plan: unknown;
+  source_transfer: 'linear' | 'display_referred';
+  input_range: { black: number; white: number } | null;
+  linked_statistics: StackStretchStatistics;
+  channel_statistics: Array<StackStretchStatistics | null>;
+  luminance_statistics: StackStretchStatistics | null;
+  preview_url: string;
+  original_preview_url: string;
+}
+
 export type StackColorRole = 'luminance' | 'red' | 'green' | 'blue' | 'ha' | 'oiii' | 'sii';
-export type StackColorKind = 'lrgb' | 'narrowband';
+export type StackColorKind = 'rgb' | 'lrgb' | 'narrowband';
 export type StackNarrowbandPalette =
   | 'sho'
   | 'soh'
@@ -375,6 +429,50 @@ export interface StackColorSource {
   accepted_frames: number;
 }
 
+export interface StackColorProcessing {
+  input_stretches: Partial<Record<StackColorRole, StackStretchRequest[]>>;
+  output_stretches: StackStretchRequest[];
+}
+
+export type StackColorProgressState =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'skipped'
+  | 'reused'
+  | 'failed';
+
+export type StackColorProgressPhase =
+  | 'loading_sources'
+  | 'background_preparation'
+  | 'registering_sources'
+  | 'normalizing_inputs'
+  | 'stretching_inputs'
+  | 'composing_color'
+  | 'stretching_output'
+  | 'writing_fits'
+  | 'rendering_original'
+  | 'rendering_screen'
+  | 'publishing_artifacts';
+
+export interface StackColorPhaseProgress {
+  phase: StackColorProgressPhase;
+  label: string;
+  state: StackColorProgressState;
+  completed_units: number;
+  total_units: number;
+}
+
+export interface StackColorProgress {
+  completed_units: number;
+  total_units: number;
+  active_phase: StackColorProgressPhase | null;
+  current_role: StackColorRole | null;
+  current_stage: number | null;
+  stage_count: number | null;
+  phases: StackColorPhaseProgress[];
+}
+
 export interface StackColorJob {
   schema_version: number;
   job_id: string;
@@ -389,11 +487,15 @@ export interface StackColorJob {
   phase: string;
   processed_channels: number;
   total_channels: number;
+  progress: StackColorProgress;
   created_unix_seconds: number;
   artifact_revision: string;
   cache_version: number;
   stacking_version: string;
   sources: StackColorSource[];
+  processing: StackColorProcessing | null;
+  resolved_input_stretches: Partial<Record<StackColorRole, unknown[]>>;
+  resolved_output_stretches: unknown[];
   preview_url: string;
   fits_url: string;
   error: string | null;
@@ -412,6 +514,7 @@ export interface StackColorTargetAvailability {
   available_roles: StackColorAvailableRole[];
   ambiguous_roles: StackColorRole[];
   unmapped_filters: string[];
+  rgb_available: boolean;
   lrgb_available: boolean;
   narrowband_palettes: StackNarrowbandPalette[];
 }
