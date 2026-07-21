@@ -39,11 +39,19 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   expect(gridColumns).toBe(2);
   await panel.getByRole('button', { name: 'Build channel', exact: true }).click();
 
+  const progress = panel.locator('.stack-preview-progress');
+  await expect(progress).toBeVisible();
+  await expect(progress).toHaveAttribute('data-stack-state', /queued|running/);
+  await expect(progress).toContainText(/\d+\/3 frames/);
+  await expect(panel.locator('.stack-preview-metrics')).toBeVisible();
+
   const results = panel.locator('.stack-preview-results');
   await expect(results).toHaveAttribute('data-job-state', 'completed', {
     timeout: 210_000,
   });
   await expect(panel.locator('.stack-group-state.ready')).toHaveText('ready');
+  await expect(progress).toHaveAttribute('data-stack-state', 'ready');
+  await expect(progress).toContainText('3/3 frames');
   await expect(panel).toContainText('Alpha M44');
   await expect(panel.locator('.stack-preview-channel')).toHaveText('B');
   await expect(panel).toContainText('Uncalibrated stack preview');
