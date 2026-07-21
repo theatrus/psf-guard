@@ -12,7 +12,7 @@ import StackPreviewInspector from './StackPreviewInspector';
 interface StackColorPreviewPanelProps {
   dbId: string;
   projectId: number;
-  sourceRevision: number;
+  sourceRevision: string;
   channelBuildRunning: boolean;
   outdatedTargetIds: ReadonlySet<number>;
 }
@@ -46,7 +46,7 @@ const roleLabels: Record<string, string> = {
   luminance: 'L', red: 'R', green: 'G', blue: 'B', ha: 'Hα', oiii: 'OIII', sii: 'SII',
 };
 
-function catalogQueryKey(dbId: string, projectId: number, sourceRevision: number) {
+function catalogQueryKey(dbId: string, projectId: number, sourceRevision: string) {
   return ['db', dbId, 'project', projectId, 'stack-color', 'catalog', sourceRevision] as const;
 }
 
@@ -75,6 +75,11 @@ function defaultPalette(palettes: StackNarrowbandPalette[]): StackNarrowbandPale
   if (palettes.includes('sho')) return 'sho';
   if (palettes.includes('hoo')) return 'hoo';
   return palettes[0];
+}
+
+function expectedChannelCount(kind: StackColorKind, palette?: StackNarrowbandPalette): number {
+  if (kind === 'lrgb') return 4;
+  return palette === 'hoo' || palette === 'foraxx-hoo' ? 2 : 3;
 }
 
 function ColorCard({
@@ -112,7 +117,7 @@ function ColorCard({
   const state = activeJob?.state ?? (artifact ? 'completed' : 'not-built');
   const label = kind === 'lrgb' ? 'LRGB' : palette ? paletteLabels[palette].split(' · ')[0] : 'Narrowband';
   const processed = activeJob?.processed_channels ?? artifact?.total_channels ?? 0;
-  const total = activeJob?.total_channels ?? artifact?.total_channels ?? (kind === 'lrgb' ? 4 : 3);
+  const total = activeJob?.total_channels ?? artifact?.total_channels ?? expectedChannelCount(kind, palette);
   const percent = state === 'completed' ? 100 : total > 0 ? Math.min(100, processed / total * 100) : 0;
   const sourceFrames = artifact?.sources.reduce((sum, source) => sum + source.accepted_frames, 0) ?? 0;
   const stateLabel =

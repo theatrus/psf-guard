@@ -398,6 +398,7 @@ test('composes cached channel stacks into LRGB and selectable narrowband preview
   await palette.selectOption('foraxx-hoo');
   const foraxxButton = section.getByRole('button', { name: 'Build Foraxx HOO color preview' });
   const narrowbandCard = section.locator('.stack-color-card[data-color-kind="narrowband"]');
+  await expect(narrowbandCard.locator('.stack-preview-progress')).toContainText('0/2 channels');
   await foraxxButton.click();
   await expect(narrowbandCard.locator('.stack-preview-progress')).toHaveAttribute(
     'data-stack-color-state', 'completed', { timeout: 90_000 }

@@ -276,21 +276,8 @@ pub async fn get_stack_color_catalog(
     let targets = availability(&sources);
     let mut jobs = load_latest_colors(&ctx, project_id)?.jobs;
     for job in &mut jobs {
-        let current = job.sources.iter().all(|source| {
-            source_is_current(source, &latest)
-                && super::fits_path(&ctx.cache_dir_path, &source.job_id, source.group_index)
-                    .is_file()
-        });
-        let artifacts_exist = color_preview_path(&ctx.cache_dir_path, &job.job_id).is_file()
-            && color_fits_path(&ctx.cache_dir_path, &job.job_id).is_file();
-        job.outdated = !current || !artifacts_exist;
-        job.outdated_reason = if !artifacts_exist {
-            Some("a cached color artifact is missing".into())
-        } else if !current {
-            Some("one or more source channel stacks changed".into())
-        } else {
-            None
-        };
+        job.outdated_reason = color_job_outdated_reason(&ctx.cache_dir_path, job, &latest);
+        job.outdated = job.outdated_reason.is_some();
     }
     jobs.sort_by(|left, right| {
         left.target_name
@@ -323,22 +310,30 @@ pub async fn start_stack_color(
         AppError::InternalError(format!("Color preparation task failed: {error}"))
     })??;
 
-    if let Some(existing) = state.stack_previews.get_color(&prepared.public.job_id)
-        && (matches!(
+    if let Some(existing) = state.stack_previews.get_color(&prepared.public.job_id) {
+        if matches!(
             existing.state,
             StackJobState::Queued | StackJobState::Running
-        ) || (!request.force && existing.state == StackJobState::Completed))
-    {
-        return Ok(Json(ApiResponse::success(existing)));
+        ) {
+            return Ok(Json(ApiResponse::success(existing)));
+        }
+        if !request.force
+            && existing.state == StackJobState::Completed
+            && color_artifacts_exist(&prepared.cache_root, &existing.job_id)
+        {
+            state
+                .stack_previews
+                .persist_latest_color(&prepared.cache_root, &existing)
+                .map_err(AppError::InternalError)?;
+            return Ok(Json(ApiResponse::success(existing)));
+        }
     }
     let manifest = color_manifest_path(&prepared.cache_root, &prepared.public.job_id);
     if !request.force
         && let Ok(bytes) = std::fs::read(&manifest)
         && let Ok(existing) = serde_json::from_slice::<StackColorJob>(&bytes)
         && existing.state == StackJobState::Completed
-        && color_preview_path(&prepared.cache_root, &existing.job_id).is_file()
-        && color_original_preview_path(&prepared.cache_root, &existing.job_id).is_file()
-        && color_fits_path(&prepared.cache_root, &existing.job_id).is_file()
+        && color_artifacts_exist(&prepared.cache_root, &existing.job_id)
     {
         state
             .stack_previews
@@ -669,7 +664,12 @@ fn compose_color(
         &reference_source.job_id,
         reference_source.group_index,
     ))
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| {
+        format!(
+            "Failed to read {} channel stack: {error}",
+            reference_role.label()
+        )
+    })?;
     validate_mono(&reference.image, reference_role)?;
     let pixels = reference.image.pixel_count();
     let estimate = (pixels as u64).saturating_mul(COLOR_BYTES_PER_PIXEL);
@@ -725,7 +725,12 @@ fn compose_color(
                 &source.job_id,
                 source.group_index,
             ))
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| {
+                format!(
+                    "Failed to read {} channel stack: {error}",
+                    source.role.label()
+                )
+            })?;
             validate_mono(&frame.image, source.role)?;
             let registration = registrar.register(&frame.image).map_err(|error| {
                 format!(
@@ -756,7 +761,13 @@ fn compose_color(
                 images[&reference_role].height,
                 registration.transform,
             )
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| {
+                format!(
+                    "Failed to resample {} onto the {} reference: {error}",
+                    source.role.label(),
+                    reference_role.label()
+                )
+            })?;
             images.insert(source.role, aligned);
             state.stack_previews.update_color(&job.job_id, |current| {
                 current.processed_channels += 1;
@@ -1099,6 +1110,34 @@ fn source_is_current(source: &StackColorSource, latest: &LatestStackPreviews) ->
     })
 }
 
+fn color_artifacts_exist(cache_root: &FsPath, job_id: &str) -> bool {
+    color_preview_path(cache_root, job_id).is_file()
+        && color_original_preview_path(cache_root, job_id).is_file()
+        && color_fits_path(cache_root, job_id).is_file()
+}
+
+fn color_job_outdated_reason(
+    cache_root: &FsPath,
+    job: &StackColorJob,
+    latest: &LatestStackPreviews,
+) -> Option<String> {
+    if job.cache_version != STACK_COLOR_CACHE_VERSION
+        || job.stacking_version != SEIZA_STACKING_VERSION
+    {
+        return Some("the color processing version changed".into());
+    }
+    if !job.sources.iter().all(|source| {
+        source_is_current(source, latest)
+            && super::fits_path(cache_root, &source.job_id, source.group_index).is_file()
+    }) {
+        return Some("one or more source channel stacks changed".into());
+    }
+    if !color_artifacts_exist(cache_root, &job.job_id) {
+        return Some("a cached color artifact is missing".into());
+    }
+    None
+}
+
 fn persist_color_manifest(cache_root: &FsPath, job: &StackColorJob) -> Result<(), String> {
     write_json_atomic(&color_manifest_path(cache_root, &job.job_id), job)
 }
@@ -1280,5 +1319,41 @@ mod tests {
             latest_color_path(root, 7),
             PathBuf::from("/cache/db/stack-previews/color/latest-project-7.json")
         );
+    }
+
+    #[test]
+    fn cached_color_job_requires_screen_original_and_fits_artifacts() {
+        let cache = tempfile::tempdir().unwrap();
+        let job_id = "a".repeat(64);
+        let paths = [
+            color_preview_path(cache.path(), &job_id),
+            color_original_preview_path(cache.path(), &job_id),
+            color_fits_path(cache.path(), &job_id),
+        ];
+        std::fs::create_dir_all(paths[0].parent().unwrap()).unwrap();
+
+        for path in &paths {
+            assert!(!color_artifacts_exist(cache.path(), &job_id));
+            std::fs::write(path, b"fixture").unwrap();
+        }
+        assert!(color_artifacts_exist(cache.path(), &job_id));
+    }
+
+    #[test]
+    fn rejects_palette_shape_mismatches_before_preparing_a_job() {
+        assert!(validate_request(&StackColorRequest {
+            target_id: 1,
+            kind: StackColorKind::Lrgb,
+            palette: Some(StackNarrowbandPalette::Sho),
+            force: false,
+        })
+        .is_err());
+        assert!(validate_request(&StackColorRequest {
+            target_id: 1,
+            kind: StackColorKind::Narrowband,
+            palette: None,
+            force: false,
+        })
+        .is_err());
     }
 }

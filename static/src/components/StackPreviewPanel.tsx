@@ -282,6 +282,13 @@ export default function StackPreviewPanel({
     }
     return targetIds;
   }, [acceptedOnly, currentChannels, latest.data]);
+  const colorSourceRevision = useMemo(
+    () => (latest.data?.groups ?? [])
+      .map((entry) => `${entry.job_id}:${entry.group.index}:${entry.artifact_revision}`)
+      .sort()
+      .join('|'),
+    [latest.data?.groups]
+  );
 
   return (
     <>
@@ -343,7 +350,7 @@ export default function StackPreviewPanel({
         <StackColorPreviewPanel
           dbId={dbId}
           projectId={projectId}
-          sourceRevision={latest.data?.updated_unix_seconds ?? 0}
+          sourceRevision={colorSourceRevision}
           channelBuildRunning={running}
           outdatedTargetIds={outdatedTargetIds}
         />

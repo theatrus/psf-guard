@@ -117,8 +117,8 @@ Color cards retain the compact loading/status strip while channels are read,
 registered, composed, and rendered. **Inspect** opens the same native-size
 pan/zoom inspector as a mono stack. **FITS** downloads the full RGB result for
 further processing. A color result is marked **Out of date**—but remains
-viewable—when any source channel stack is rebuilt or its cached artifact goes
-missing.
+viewable—when any source channel stack is rebuilt, a cached artifact goes
+missing, or the Seiza/color-processing cache version changes.
 
 ## Output, caching, and invalidation
 
