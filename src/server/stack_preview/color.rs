@@ -21,9 +21,10 @@ use axum::{
 use rayon::ThreadPoolBuilder;
 use seiza_stacking::{
     combine_lrgb, combine_narrowband, combine_rgb, resample_to_reference, write_color_fits_f32,
-    ColorOptions, ColorTransfer, FitsFrame, ForaxxOptions, LinearImage, NarrowbandPalette,
-    Registrar, RegistrationOptions,
+    ColorComposition, ColorNormalization, ColorOptions, ColorTransfer, FitsFrame, ForaxxOptions,
+    LinearImage, NarrowbandPalette, Registrar, RegistrationOptions,
 };
+use seiza_stretch::StretchStack;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
@@ -37,7 +38,7 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-const STACK_COLOR_CACHE_VERSION: u32 = 2;
+const STACK_COLOR_CACHE_VERSION: u32 = 3;
 const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
 const COLOR_BYTES_PER_PIXEL: u64 = 64;
 
@@ -141,6 +142,68 @@ pub struct StackColorRequest {
     pub palette: Option<StackNarrowbandPalette>,
     #[serde(default)]
     pub force: bool,
+    /// Optional non-destructive display pipeline. Absent requests retain the
+    /// original quick-look behavior for API compatibility.
+    #[serde(default)]
+    pub processing: Option<StackColorProcessing>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StackColorProcessing {
+    /// Ordered display stretches applied independently after registration and
+    /// robust normalization of each physical input channel.
+    #[serde(default)]
+    pub input_stretches: BTreeMap<StackColorRole, Vec<super::stretch::StackStretchRequest>>,
+    /// Ordered display stretches applied to the composed RGB result.
+    #[serde(default)]
+    pub output_stretches: Vec<super::stretch::StackStretchRequest>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StackColorProgressState {
+    Pending,
+    Running,
+    Completed,
+    Skipped,
+    Reused,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StackColorProgressPhase {
+    LoadingSources,
+    BackgroundPreparation,
+    RegisteringSources,
+    NormalizingInputs,
+    StretchingInputs,
+    ComposingColor,
+    StretchingOutput,
+    WritingFits,
+    RenderingOriginal,
+    RenderingScreen,
+    PublishingArtifacts,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StackColorPhaseProgress {
+    pub phase: StackColorProgressPhase,
+    pub label: String,
+    pub state: StackColorProgressState,
+    pub completed_units: usize,
+    pub total_units: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StackColorProgress {
+    pub completed_units: usize,
+    pub total_units: usize,
+    pub active_phase: Option<StackColorProgressPhase>,
+    pub current_role: Option<StackColorRole>,
+    pub current_stage: Option<usize>,
+    pub stage_count: Option<usize>,
+    pub phases: Vec<StackColorPhaseProgress>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -168,11 +231,19 @@ pub struct StackColorJob {
     pub phase: String,
     pub processed_channels: usize,
     pub total_channels: usize,
+    #[serde(default)]
+    pub progress: StackColorProgress,
     pub created_unix_seconds: i64,
     pub artifact_revision: String,
     pub cache_version: u32,
     pub stacking_version: String,
     pub sources: Vec<StackColorSource>,
+    #[serde(default)]
+    pub processing: Option<StackColorProcessing>,
+    #[serde(default)]
+    pub resolved_input_stretches: BTreeMap<StackColorRole, Vec<serde_json::Value>>,
+    #[serde(default)]
+    pub resolved_output_stretches: Vec<serde_json::Value>,
     pub preview_url: String,
     pub fits_url: String,
     pub error: Option<String>,
@@ -228,6 +299,191 @@ struct TargetSources {
 struct PreparedColorJob {
     public: StackColorJob,
     cache_root: PathBuf,
+}
+
+fn color_progress(
+    channel_count: usize,
+    processing: Option<&StackColorProcessing>,
+) -> StackColorProgress {
+    let input_stages = processing
+        .map(|processing| {
+            processing
+                .input_stretches
+                .values()
+                .map(Vec::len)
+                .sum::<usize>()
+        })
+        .unwrap_or(0);
+    let output_stages = processing
+        .map(|processing| processing.output_stretches.len())
+        .unwrap_or(0);
+    let definitions = [
+        (
+            StackColorProgressPhase::LoadingSources,
+            "Loading source stacks",
+            channel_count,
+        ),
+        (
+            StackColorProgressPhase::BackgroundPreparation,
+            "Background preparation",
+            channel_count,
+        ),
+        (
+            StackColorProgressPhase::RegisteringSources,
+            "Registering source stacks",
+            channel_count,
+        ),
+        (
+            StackColorProgressPhase::NormalizingInputs,
+            "Normalizing input channels",
+            channel_count,
+        ),
+        (
+            StackColorProgressPhase::StretchingInputs,
+            "Applying input stretch stages",
+            input_stages,
+        ),
+        (
+            StackColorProgressPhase::ComposingColor,
+            "Composing color",
+            1,
+        ),
+        (
+            StackColorProgressPhase::StretchingOutput,
+            "Applying output stretch stages",
+            output_stages,
+        ),
+        (StackColorProgressPhase::WritingFits, "Writing FITS", 1),
+        (
+            StackColorProgressPhase::RenderingOriginal,
+            "Rendering full-size preview",
+            1,
+        ),
+        (
+            StackColorProgressPhase::RenderingScreen,
+            "Rendering screen preview",
+            1,
+        ),
+        (
+            StackColorProgressPhase::PublishingArtifacts,
+            "Publishing cached artifacts",
+            1,
+        ),
+    ];
+    let phases = definitions
+        .into_iter()
+        .map(|(phase, label, total_units)| StackColorPhaseProgress {
+            phase,
+            label: label.into(),
+            state: StackColorProgressState::Pending,
+            completed_units: 0,
+            total_units,
+        })
+        .collect::<Vec<_>>();
+    StackColorProgress {
+        total_units: phases.iter().map(|phase| phase.total_units).sum(),
+        phases,
+        ..StackColorProgress::default()
+    }
+}
+
+struct ColorProgressTracker<'a> {
+    state: &'a Arc<AppState>,
+    job_id: &'a str,
+}
+
+impl ColorProgressTracker<'_> {
+    fn begin(
+        &self,
+        phase: StackColorProgressPhase,
+        label: impl Into<String>,
+        role: Option<StackColorRole>,
+        stage: Option<(usize, usize)>,
+    ) {
+        let label = label.into();
+        self.state.stack_previews.update_color(self.job_id, |job| {
+            job.phase = label.clone();
+            job.progress.active_phase = Some(phase);
+            job.progress.current_role = role;
+            job.progress.current_stage = stage.map(|(index, _)| index);
+            job.progress.stage_count = stage.map(|(_, count)| count);
+            if let Some(entry) = job
+                .progress
+                .phases
+                .iter_mut()
+                .find(|entry| entry.phase == phase)
+            {
+                entry.label = label;
+                entry.state = StackColorProgressState::Running;
+            }
+        });
+    }
+
+    fn advance(&self, phase: StackColorProgressPhase, units: usize) {
+        self.state.stack_previews.update_color(self.job_id, |job| {
+            if let Some(entry) = job
+                .progress
+                .phases
+                .iter_mut()
+                .find(|entry| entry.phase == phase)
+            {
+                let remaining = entry.total_units.saturating_sub(entry.completed_units);
+                let increment = units.min(remaining);
+                entry.completed_units += increment;
+                job.progress.completed_units += increment;
+            }
+        });
+    }
+
+    fn finish(&self, phase: StackColorProgressPhase) {
+        self.state.stack_previews.update_color(self.job_id, |job| {
+            if let Some(entry) = job
+                .progress
+                .phases
+                .iter_mut()
+                .find(|entry| entry.phase == phase)
+            {
+                let remaining = entry.total_units.saturating_sub(entry.completed_units);
+                entry.completed_units = entry.total_units;
+                entry.state = StackColorProgressState::Completed;
+                job.progress.completed_units += remaining;
+            }
+        });
+    }
+
+    fn skip(&self, phase: StackColorProgressPhase, label: impl Into<String>) {
+        let label = label.into();
+        self.state.stack_previews.update_color(self.job_id, |job| {
+            if let Some(entry) = job
+                .progress
+                .phases
+                .iter_mut()
+                .find(|entry| entry.phase == phase)
+            {
+                let remaining = entry.total_units.saturating_sub(entry.completed_units);
+                entry.label = label.clone();
+                entry.completed_units = entry.total_units;
+                entry.state = StackColorProgressState::Skipped;
+                job.progress.completed_units += remaining;
+            }
+        });
+    }
+
+    fn fail_active(&self) {
+        self.state.stack_previews.update_color(self.job_id, |job| {
+            let Some(active) = job.progress.active_phase else {
+                return;
+            };
+            if let Some(entry) = job
+                .progress
+                .phases
+                .iter_mut()
+                .find(|entry| entry.phase == active)
+            {
+                entry.state = StackColorProgressState::Failed;
+            }
+        });
+    }
 }
 
 impl StackPreviewManager {
@@ -323,10 +579,12 @@ pub async fn start_stack_color(
             && existing.state == StackJobState::Completed
             && color_artifacts_exist(&prepared.cache_root, &existing.job_id)
         {
+            let existing = mark_color_reused(existing);
             state
                 .stack_previews
                 .persist_latest_color(&prepared.cache_root, &existing)
                 .map_err(AppError::InternalError)?;
+            let _ = state.stack_previews.insert_color(existing.clone());
             return Ok(Json(ApiResponse::success(existing)));
         }
     }
@@ -337,6 +595,7 @@ pub async fn start_stack_color(
         && existing.state == StackJobState::Completed
         && color_artifacts_exist(&prepared.cache_root, &existing.job_id)
     {
+        let existing = mark_color_reused(existing);
         state
             .stack_previews
             .persist_latest_color(&prepared.cache_root, &existing)
@@ -353,6 +612,20 @@ pub async fn start_stack_color(
     }
     enqueue_color_job(Arc::clone(&state), prepared);
     Ok(Json(ApiResponse::success(response)))
+}
+
+fn mark_color_reused(mut job: StackColorJob) -> StackColorJob {
+    job.phase = "Reused cached color preview".into();
+    job.progress.active_phase = None;
+    job.progress.current_role = None;
+    job.progress.current_stage = None;
+    job.progress.stage_count = None;
+    for phase in &mut job.progress.phases {
+        if phase.state == StackColorProgressState::Completed {
+            phase.state = StackColorProgressState::Reused;
+        }
+    }
+    job
 }
 
 pub async fn get_stack_color_job(
@@ -487,7 +760,42 @@ fn validate_request(request: &StackColorRequest) -> Result<(), AppError> {
         (StackColorKind::Narrowband, None) => Err(AppError::BadRequest(
             "Narrowband color previews require a palette".into(),
         )),
-        _ => Ok(()),
+        _ => {
+            let Some(processing) = &request.processing else {
+                return Ok(());
+            };
+            let required = required_roles(request.kind, request.palette);
+            if let Some(role) = processing
+                .input_stretches
+                .keys()
+                .find(|role| !required.contains(role))
+            {
+                return Err(AppError::BadRequest(format!(
+                    "{} is not an input to {}",
+                    role.label(),
+                    composition_label(request.kind, request.palette)
+                )));
+            }
+            if processing.input_stretches.values().flatten().any(|stage| {
+                stage.color_strategy == seiza_stretch::ColorStrategy::LuminancePreserving
+            }) {
+                return Err(AppError::BadRequest(
+                    "A mono input stretch cannot use luminance-preserving color".into(),
+                ));
+            }
+            let stage_count = processing
+                .input_stretches
+                .values()
+                .map(Vec::len)
+                .sum::<usize>()
+                + processing.output_stretches.len();
+            if stage_count > 64 {
+                return Err(AppError::BadRequest(
+                    "A color processing stack may contain at most 64 total stages".into(),
+                ));
+            }
+            Ok(())
+        }
     }
 }
 
@@ -532,6 +840,11 @@ fn prepare_color_job(
     hasher.update(label.as_bytes());
     hasher.update(STACK_COLOR_CACHE_VERSION.to_le_bytes());
     hasher.update(SEIZA_STACKING_VERSION.as_bytes());
+    hasher.update(serde_json::to_vec(&request.processing).map_err(|error| {
+        AppError::InternalError(format!(
+            "Failed to encode color processing options: {error}"
+        ))
+    })?);
     for source in &sources {
         hasher.update([source.role as u8]);
         hasher.update(source.filter_name.as_bytes());
@@ -561,11 +874,15 @@ fn prepare_color_job(
             phase: "Waiting for color processor".into(),
             processed_channels: 0,
             total_channels,
+            progress: color_progress(total_channels, request.processing.as_ref()),
             created_unix_seconds: chrono::Utc::now().timestamp(),
             artifact_revision: artifact_revision.clone(),
             cache_version: STACK_COLOR_CACHE_VERSION,
             stacking_version: SEIZA_STACKING_VERSION.into(),
             sources,
+            processing: request.processing.clone(),
+            resolved_input_stretches: BTreeMap::new(),
+            resolved_output_stretches: Vec::new(),
             preview_url: format!(
                 "/api/db/{}/stack-previews/color/{job_id}/preview?v={artifact_revision}",
                 ctx.id
@@ -653,34 +970,63 @@ fn run_color_job(state: &Arc<AppState>, prepared: PreparedColorJob) {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         compose_color(state, &prepared.public, &prepared.cache_root)
     }));
-    state
-        .stack_previews
-        .update_color(&job_id, |job| match result {
-            Ok(Ok(())) => {
+    let progress = ColorProgressTracker {
+        state,
+        job_id: &job_id,
+    };
+    match result {
+        Ok(Ok(())) => {
+            progress.begin(
+                StackColorProgressPhase::PublishingArtifacts,
+                "Publishing cached artifacts",
+                None,
+                None,
+            );
+            progress.finish(StackColorProgressPhase::PublishingArtifacts);
+            state.stack_previews.update_color(&job_id, |job| {
                 job.state = StackJobState::Completed;
                 job.phase = "Color preview ready".into();
+                job.progress.active_phase = None;
+                job.progress.current_role = None;
+                job.progress.current_stage = None;
+                job.progress.stage_count = None;
+            });
+            if let Some(job) = state.stack_previews.get_color(&job_id) {
+                let persisted = persist_color_manifest(&prepared.cache_root, &job).and_then(|()| {
+                    state
+                        .stack_previews
+                        .persist_latest_color(&prepared.cache_root, &job)
+                });
+                if let Err(error) = persisted {
+                    tracing::warn!("Failed to publish color preview: {error}");
+                    state.stack_previews.update_color(&job_id, |job| {
+                        job.state = StackJobState::Failed;
+                        job.phase = "Publishing color preview failed".into();
+                        job.error = Some(error);
+                        if let Some(entry) = job.progress.phases.iter_mut().find(|entry| {
+                            entry.phase == StackColorProgressPhase::PublishingArtifacts
+                        }) {
+                            entry.state = StackColorProgressState::Failed;
+                        }
+                    });
+                }
             }
-            Ok(Err(error)) => {
+        }
+        Ok(Err(error)) => {
+            progress.fail_active();
+            state.stack_previews.update_color(&job_id, |job| {
                 job.state = StackJobState::Failed;
                 job.phase = "Color preview failed".into();
                 job.error = Some(error);
-            }
-            Err(_) => {
+            });
+        }
+        Err(_) => {
+            progress.fail_active();
+            state.stack_previews.update_color(&job_id, |job| {
                 job.state = StackJobState::Failed;
                 job.phase = "Color worker failed".into();
                 job.error = Some("Color worker panicked".into());
-            }
-        });
-    if let Some(job) = state.stack_previews.get_color(&job_id) {
-        if let Err(error) = persist_color_manifest(&prepared.cache_root, &job) {
-            tracing::warn!("Failed to persist color preview manifest: {error}");
-        }
-        if job.state == StackJobState::Completed
-            && let Err(error) = state
-                .stack_previews
-                .persist_latest_color(&prepared.cache_root, &job)
-        {
-            tracing::warn!("Failed to persist latest color preview index: {error}");
+            });
         }
     }
 }
@@ -690,28 +1036,57 @@ fn compose_color(
     job: &StackColorJob,
     cache_root: &FsPath,
 ) -> Result<(), String> {
+    let progress = ColorProgressTracker {
+        state,
+        job_id: &job.job_id,
+    };
     let reference_role = match job.kind {
         StackColorKind::Rgb => StackColorRole::Red,
         StackColorKind::Lrgb => StackColorRole::Luminance,
         StackColorKind::Narrowband => StackColorRole::Ha,
     };
-    let reference_source = job
-        .sources
-        .iter()
-        .find(|source| source.role == reference_role)
+    progress.begin(
+        StackColorProgressPhase::LoadingSources,
+        "Loading source stacks",
+        None,
+        None,
+    );
+    let mut frames = BTreeMap::new();
+    for source in &job.sources {
+        progress.begin(
+            StackColorProgressPhase::LoadingSources,
+            format!("Loading {} stack", source.role.label()),
+            Some(source.role),
+            None,
+        );
+        let frame = FitsFrame::open(super::fits_path(
+            cache_root,
+            &source.job_id,
+            source.group_index,
+        ))
+        .map_err(|error| {
+            format!(
+                "Failed to read {} channel stack: {error}",
+                source.role.label()
+            )
+        })?;
+        validate_mono(&frame.image, source.role)?;
+        frames.insert(source.role, frame);
+        progress.advance(StackColorProgressPhase::LoadingSources, 1);
+    }
+    progress.finish(StackColorProgressPhase::LoadingSources);
+
+    // The forthcoming background-extraction integration occupies this exact
+    // pipeline boundary. Keeping it explicit makes skipped work visible and
+    // prevents later progress totals from silently changing shape.
+    progress.skip(
+        StackColorProgressPhase::BackgroundPreparation,
+        "Background preparation skipped (not configured)",
+    );
+
+    let reference = frames
+        .remove(&reference_role)
         .ok_or_else(|| "Color job has no reference channel".to_string())?;
-    let reference = FitsFrame::open(super::fits_path(
-        cache_root,
-        &reference_source.job_id,
-        reference_source.group_index,
-    ))
-    .map_err(|error| {
-        format!(
-            "Failed to read {} channel stack: {error}",
-            reference_role.label()
-        )
-    })?;
-    validate_mono(&reference.image, reference_role)?;
     let pixels = reference.image.pixel_count();
     let estimate = (pixels as u64).saturating_mul(COLOR_BYTES_PER_PIXEL);
     let policy = state.worker_policy();
@@ -744,13 +1119,19 @@ fn compose_color(
     pool.install(|| {
         let reference_headers = reference.headers;
         let reference_image = reference.image;
+        progress.begin(
+            StackColorProgressPhase::RegisteringSources,
+            format!("Using {} as registration reference", reference_role.label()),
+            Some(reference_role),
+            None,
+        );
         let registrar = Registrar::new(&reference_image, RegistrationOptions::default())
             .map_err(|error| error.to_string())?;
         let mut images = BTreeMap::new();
         images.insert(reference_role, reference_image);
+        progress.advance(StackColorProgressPhase::RegisteringSources, 1);
         state.stack_previews.update_color(&job.job_id, |current| {
             current.processed_channels = 1;
-            current.phase = format!("Registering {} channels", current.total_channels);
         });
 
         for source in job
@@ -758,21 +1139,15 @@ fn compose_color(
             .iter()
             .filter(|source| source.role != reference_role)
         {
-            state.stack_previews.update_color(&job.job_id, |current| {
-                current.phase = format!("Registering {}", source.role.label());
-            });
-            let frame = FitsFrame::open(super::fits_path(
-                cache_root,
-                &source.job_id,
-                source.group_index,
-            ))
-            .map_err(|error| {
-                format!(
-                    "Failed to read {} channel stack: {error}",
-                    source.role.label()
-                )
-            })?;
-            validate_mono(&frame.image, source.role)?;
+            progress.begin(
+                StackColorProgressPhase::RegisteringSources,
+                format!("Registering {}", source.role.label()),
+                Some(source.role),
+                None,
+            );
+            let frame = frames
+                .remove(&source.role)
+                .ok_or_else(|| format!("{} source was not loaded", source.role.label()))?;
             let registration = registrar.register(&frame.image).map_err(|error| {
                 format!(
                     "Failed to register {} to {}: {error}",
@@ -810,16 +1185,128 @@ fn compose_color(
                 )
             })?;
             images.insert(source.role, aligned);
+            progress.advance(StackColorProgressPhase::RegisteringSources, 1);
             state.stack_previews.update_color(&job.job_id, |current| {
                 current.processed_channels += 1;
             });
         }
+        progress.finish(StackColorProgressPhase::RegisteringSources);
 
-        state.stack_previews.update_color(&job.job_id, |current| {
-            current.phase = format!("Composing {}", current.label);
-        });
-        let options = ColorOptions::default();
-        let composition = match job.kind {
+        let options = if let Some(processing) = &job.processing {
+            progress.begin(
+                StackColorProgressPhase::NormalizingInputs,
+                "Normalizing input channels",
+                None,
+                None,
+            );
+            for source in &job.sources {
+                progress.begin(
+                    StackColorProgressPhase::NormalizingInputs,
+                    format!("Normalizing {}", source.role.label()),
+                    Some(source.role),
+                    None,
+                );
+                let image = images.remove(&source.role).ok_or_else(|| {
+                    format!("{} registered image is missing", source.role.label())
+                })?;
+                let normalized = super::stretch::normalize_linear_image(&image)?.0;
+                images.insert(source.role, normalized);
+                progress.advance(StackColorProgressPhase::NormalizingInputs, 1);
+            }
+            progress.finish(StackColorProgressPhase::NormalizingInputs);
+
+            let input_stage_count = processing
+                .input_stretches
+                .values()
+                .map(Vec::len)
+                .sum::<usize>();
+            if input_stage_count == 0 {
+                progress.skip(
+                    StackColorProgressPhase::StretchingInputs,
+                    "Input stretch stages skipped",
+                );
+            } else {
+                for source in &job.sources {
+                    let Some(stages) = processing.input_stretches.get(&source.role) else {
+                        continue;
+                    };
+                    if stages.is_empty() {
+                        continue;
+                    }
+                    let configs = stages
+                        .iter()
+                        .map(super::stretch::StackStretchRequest::config)
+                        .collect::<Vec<_>>();
+                    let stack = StretchStack::new(configs).map_err(|error| error.to_string())?;
+                    let image = images.remove(&source.role).ok_or_else(|| {
+                        format!("{} normalized image is missing", source.role.label())
+                    })?;
+                    let output = stack
+                        .apply_f32_with_progress(&image.data, 1, |event| {
+                            let number = event.stage_index + 1;
+                            let action = match event.state {
+                                seiza_stretch::StretchStageState::Resolving => "Resolving",
+                                seiza_stretch::StretchStageState::Applying => "Applying",
+                                seiza_stretch::StretchStageState::Completed => "Applied",
+                            };
+                            progress.begin(
+                                StackColorProgressPhase::StretchingInputs,
+                                format!(
+                                    "{action} {} stretch {number}/{}",
+                                    source.role.label(),
+                                    event.stage_count
+                                ),
+                                Some(source.role),
+                                Some((number, event.stage_count)),
+                            );
+                            if event.state == seiza_stretch::StretchStageState::Completed {
+                                progress.advance(StackColorProgressPhase::StretchingInputs, 1);
+                            }
+                        })
+                        .map_err(|error| error.to_string())?;
+                    let resolved = output
+                        .plans
+                        .iter()
+                        .map(|plan| serde_json::to_value(plan).map_err(|error| error.to_string()))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    state.stack_previews.update_color(&job.job_id, |current| {
+                        current
+                            .resolved_input_stretches
+                            .insert(source.role, resolved);
+                    });
+                    images.insert(
+                        source.role,
+                        LinearImage::new(image.width, image.height, 1, output.data)
+                            .map_err(|error| error.to_string())?,
+                    );
+                }
+                progress.finish(StackColorProgressPhase::StretchingInputs);
+            }
+            ColorOptions {
+                normalization: ColorNormalization::None,
+                input_transfer: ColorTransfer::DisplayReferred,
+            }
+        } else {
+            progress.begin(
+                StackColorProgressPhase::NormalizingInputs,
+                "Preparing legacy quick-look normalization",
+                None,
+                None,
+            );
+            progress.skip(
+                StackColorProgressPhase::StretchingInputs,
+                "Input stretch stages skipped (legacy quick look)",
+            );
+            ColorOptions::default()
+        };
+
+        progress.begin(
+            StackColorProgressPhase::ComposingColor,
+            format!("Composing {}", job.label),
+            None,
+            None,
+        );
+        let mut composition = match job.kind {
             StackColorKind::Rgb => combine_rgb(
                 &images[&StackColorRole::Red],
                 &images[&StackColorRole::Green],
@@ -847,7 +1334,76 @@ fn compose_color(
             }
         }
         .map_err(|error| error.to_string())?;
+        if job.processing.is_none() {
+            progress.finish(StackColorProgressPhase::NormalizingInputs);
+        }
+        progress.finish(StackColorProgressPhase::ComposingColor);
 
+        if let Some(processing) = &job.processing {
+            if processing.output_stretches.is_empty() {
+                progress.skip(
+                    StackColorProgressPhase::StretchingOutput,
+                    "Output stretch stages skipped",
+                );
+            } else {
+                let configs = processing
+                    .output_stretches
+                    .iter()
+                    .map(super::stretch::StackStretchRequest::config)
+                    .collect::<Vec<_>>();
+                let stack = StretchStack::new(configs).map_err(|error| error.to_string())?;
+                let output = stack
+                    .apply_f32_with_progress(&composition.image.data, 3, |event| {
+                        let number = event.stage_index + 1;
+                        let action = match event.state {
+                            seiza_stretch::StretchStageState::Resolving => "Resolving",
+                            seiza_stretch::StretchStageState::Applying => "Applying",
+                            seiza_stretch::StretchStageState::Completed => "Applied",
+                        };
+                        progress.begin(
+                            StackColorProgressPhase::StretchingOutput,
+                            format!("{action} output stretch {number}/{}", event.stage_count),
+                            None,
+                            Some((number, event.stage_count)),
+                        );
+                        if event.state == seiza_stretch::StretchStageState::Completed {
+                            progress.advance(StackColorProgressPhase::StretchingOutput, 1);
+                        }
+                    })
+                    .map_err(|error| error.to_string())?;
+                let resolved = output
+                    .plans
+                    .iter()
+                    .map(|plan| serde_json::to_value(plan).map_err(|error| error.to_string()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                state.stack_previews.update_color(&job.job_id, |current| {
+                    current.resolved_output_stretches = resolved;
+                });
+                composition = ColorComposition {
+                    image: LinearImage::new(
+                        composition.image.width,
+                        composition.image.height,
+                        3,
+                        output.data,
+                    )
+                    .map_err(|error| error.to_string())?,
+                    transfer: ColorTransfer::DisplayReferred,
+                };
+                progress.finish(StackColorProgressPhase::StretchingOutput);
+            }
+        } else {
+            progress.skip(
+                StackColorProgressPhase::StretchingOutput,
+                "Output stretch stages skipped (legacy quick look)",
+            );
+        }
+
+        progress.begin(
+            StackColorProgressPhase::WritingFits,
+            "Writing color FITS",
+            None,
+            None,
+        );
         let fits_destination = color_fits_path(cache_root, &job.job_id);
         let parent = fits_destination
             .parent()
@@ -857,9 +1413,7 @@ fn compose_color(
         write_color_fits_f32(&temporary, &composition, &reference_headers, &job.label)
             .map_err(|error| error.to_string())?;
         std::fs::rename(&temporary, &fits_destination).map_err(|error| error.to_string())?;
-        state.stack_previews.update_color(&job.job_id, |current| {
-            current.phase = "Rendering color preview".into();
-        });
+        progress.finish(StackColorProgressPhase::WritingFits);
         let stretch_config = match composition.transfer {
             ColorTransfer::LinearLight => super::stretch::default_linear_config(),
             ColorTransfer::DisplayReferred => super::stretch::display_identity_config(),
@@ -870,15 +1424,48 @@ fn compose_color(
                 super::stretch::StackStretchSourceTransfer::DisplayReferred
             }
         };
-        super::stretch::render_image_previews_atomic(
+        let mut active_render = None;
+        let rendered = super::stretch::render_image_previews_atomic_with_progress(
             &composition.image,
             &stretch_config,
             source_transfer,
             &color_preview_path(cache_root, &job.job_id),
             &color_original_preview_path(cache_root, &job.job_id),
-        )
-        .map(|_| ())
+            |render_phase| {
+                if let Some(previous) = active_render.replace(render_phase) {
+                    progress.finish(render_progress_phase(previous));
+                }
+                progress.begin(
+                    render_progress_phase(render_phase),
+                    render_progress_label(render_phase),
+                    None,
+                    None,
+                );
+            },
+        );
+        if let Some(active) = active_render {
+            progress.finish(render_progress_phase(active));
+        }
+        rendered.map(|_| ())
     })
+}
+
+fn render_progress_phase(
+    phase: super::stretch::StackPreviewRenderPhase,
+) -> StackColorProgressPhase {
+    match phase {
+        super::stretch::StackPreviewRenderPhase::Original => {
+            StackColorProgressPhase::RenderingOriginal
+        }
+        super::stretch::StackPreviewRenderPhase::Screen => StackColorProgressPhase::RenderingScreen,
+    }
+}
+
+fn render_progress_label(phase: super::stretch::StackPreviewRenderPhase) -> &'static str {
+    match phase {
+        super::stretch::StackPreviewRenderPhase::Original => "Rendering full-size preview",
+        super::stretch::StackPreviewRenderPhase::Screen => "Rendering screen preview",
+    }
 }
 
 fn validate_mono(image: &LinearImage, role: StackColorRole) -> Result<(), String> {
@@ -1399,6 +1986,7 @@ mod tests {
             kind: StackColorKind::Rgb,
             palette: Some(StackNarrowbandPalette::Sho),
             force: false,
+            processing: None,
         })
         .is_err());
         assert!(validate_request(&StackColorRequest {
@@ -1406,6 +1994,7 @@ mod tests {
             kind: StackColorKind::Lrgb,
             palette: Some(StackNarrowbandPalette::Sho),
             force: false,
+            processing: None,
         })
         .is_err());
         assert!(validate_request(&StackColorRequest {
@@ -1413,7 +2002,66 @@ mod tests {
             kind: StackColorKind::Narrowband,
             palette: None,
             force: false,
+            processing: None,
         })
         .is_err());
+    }
+
+    #[test]
+    fn progress_ledger_accounts_for_every_pipeline_phase() {
+        let processing = StackColorProcessing {
+            input_stretches: BTreeMap::from([
+                (
+                    StackColorRole::Red,
+                    vec![super::super::stretch::StackStretchRequest {
+                        model: seiza_stretch::StretchModel::Identity,
+                        color_strategy: seiza_stretch::ColorStrategy::Linked,
+                    }],
+                ),
+                (
+                    StackColorRole::Green,
+                    vec![
+                        super::super::stretch::StackStretchRequest {
+                            model: seiza_stretch::StretchModel::Identity,
+                            color_strategy: seiza_stretch::ColorStrategy::Linked,
+                        },
+                        super::super::stretch::StackStretchRequest {
+                            model: seiza_stretch::StretchModel::Identity,
+                            color_strategy: seiza_stretch::ColorStrategy::Linked,
+                        },
+                    ],
+                ),
+            ]),
+            output_stretches: vec![super::super::stretch::StackStretchRequest {
+                model: seiza_stretch::StretchModel::Identity,
+                color_strategy: seiza_stretch::ColorStrategy::Linked,
+            }],
+        };
+
+        let progress = color_progress(3, Some(&processing));
+
+        assert_eq!(progress.phases.len(), 11);
+        assert_eq!(progress.total_units, 21);
+        assert_eq!(
+            progress
+                .phases
+                .iter()
+                .find(|phase| phase.phase == StackColorProgressPhase::StretchingInputs)
+                .unwrap()
+                .total_units,
+            3
+        );
+        assert!(progress.phases.iter().any(|phase| {
+            phase.phase == StackColorProgressPhase::BackgroundPreparation && phase.total_units == 3
+        }));
+        assert!(progress.phases.iter().any(|phase| {
+            phase.phase == StackColorProgressPhase::RenderingOriginal && phase.total_units == 1
+        }));
+        assert!(progress.phases.iter().any(|phase| {
+            phase.phase == StackColorProgressPhase::RenderingScreen && phase.total_units == 1
+        }));
+        assert!(progress.phases.iter().any(|phase| {
+            phase.phase == StackColorProgressPhase::PublishingArtifacts && phase.total_units == 1
+        }));
     }
 }

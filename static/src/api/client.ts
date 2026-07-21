@@ -33,6 +33,7 @@ import type {
   StackColorCatalog,
   StackColorJob,
   StackColorKind,
+  StackColorProcessing,
   StackNarrowbandPalette,
   StackStretchPreview,
   StackStretchRequest,
@@ -308,6 +309,7 @@ export const apiClient = {
       kind: StackColorKind;
       palette?: StackNarrowbandPalette;
       force?: boolean;
+      processing?: StackColorProcessing;
     }
   ): Promise<StackColorJob> => {
     const apiInstance = await getApi();

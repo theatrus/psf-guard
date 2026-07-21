@@ -429,6 +429,50 @@ export interface StackColorSource {
   accepted_frames: number;
 }
 
+export interface StackColorProcessing {
+  input_stretches: Partial<Record<StackColorRole, StackStretchRequest[]>>;
+  output_stretches: StackStretchRequest[];
+}
+
+export type StackColorProgressState =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'skipped'
+  | 'reused'
+  | 'failed';
+
+export type StackColorProgressPhase =
+  | 'loading_sources'
+  | 'background_preparation'
+  | 'registering_sources'
+  | 'normalizing_inputs'
+  | 'stretching_inputs'
+  | 'composing_color'
+  | 'stretching_output'
+  | 'writing_fits'
+  | 'rendering_original'
+  | 'rendering_screen'
+  | 'publishing_artifacts';
+
+export interface StackColorPhaseProgress {
+  phase: StackColorProgressPhase;
+  label: string;
+  state: StackColorProgressState;
+  completed_units: number;
+  total_units: number;
+}
+
+export interface StackColorProgress {
+  completed_units: number;
+  total_units: number;
+  active_phase: StackColorProgressPhase | null;
+  current_role: StackColorRole | null;
+  current_stage: number | null;
+  stage_count: number | null;
+  phases: StackColorPhaseProgress[];
+}
+
 export interface StackColorJob {
   schema_version: number;
   job_id: string;
@@ -443,11 +487,15 @@ export interface StackColorJob {
   phase: string;
   processed_channels: number;
   total_channels: number;
+  progress: StackColorProgress;
   created_unix_seconds: number;
   artifact_revision: string;
   cache_version: number;
   stacking_version: string;
   sources: StackColorSource[];
+  processing: StackColorProcessing | null;
+  resolved_input_stretches: Partial<Record<StackColorRole, unknown[]>>;
+  resolved_output_stretches: unknown[];
   preview_url: string;
   fits_url: string;
   error: string | null;

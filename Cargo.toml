@@ -36,8 +36,8 @@ seiza-fits = "=0.1.6"
 seiza-satellites = { version = "0.4.1", features = ["serde"] }
 # Temporary pins to Seiza main for stacking, color composition, and interactive
 # display stretching until seiza-stacking and seiza-stretch are published.
-seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "82b7cfeed5e277994cbae46bab60ab6333bbdafd" }
-seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "82b7cfeed5e277994cbae46bab60ab6333bbdafd" }
+seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "d6b8dfc706923f673a379ead51a5be74149ccfb3" }
+seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "d6b8dfc706923f673a379ead51a5be74149ccfb3" }
 sha2 = "0.11"
 rayon = "1"
 bumpalo = { version = "3.20", features = ["collections"] }
@@ -108,5 +108,5 @@ tauri-build = { version = "2.6.2", features = [] }
 # crates.io packages with the same name and version. Remove this patch when
 # seiza-stacking is published.
 [patch.crates-io]
-seiza = { git = "https://github.com/theatrus/seiza", rev = "82b7cfeed5e277994cbae46bab60ab6333bbdafd" }
-seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "82b7cfeed5e277994cbae46bab60ab6333bbdafd" }
+seiza = { git = "https://github.com/theatrus/seiza", rev = "d6b8dfc706923f673a379ead51a5be74149ccfb3" }
+seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "d6b8dfc706923f673a379ead51a5be74149ccfb3" }

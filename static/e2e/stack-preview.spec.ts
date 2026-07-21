@@ -395,7 +395,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await expect(rgbCard.locator('.stack-preview-progress')).toHaveAttribute(
     'data-stack-color-state', 'completed', { timeout: 90_000 }
   );
-  await expect(rgbCard.locator('.stack-preview-progress')).toContainText('3/3 channels');
+  await expect(rgbCard.locator('.stack-preview-progress')).toContainText('20/20 steps');
   await expect(rgbCard.getByRole('img', { name: /RGB color stack preview/i })).toBeVisible();
   const rgbFits = rgbCard.getByRole('link', { name: 'Download RGB FITS' });
   const rgbResponse = await page.request.get((await rgbFits.getAttribute('href'))!);
@@ -403,28 +403,45 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   const rgbHeader = (await rgbResponse.body()).subarray(0, 2880).toString('ascii');
   expect(rgbHeader).toContain('COLORSPC');
   expect(rgbHeader).toContain('RGB');
-  expect(rgbHeader).toContain('LINEAR');
+  expect(rgbHeader).toContain('DISPLAY');
 
   const rgbImage = rgbCard.getByRole('img', { name: /RGB color stack preview/i });
   const defaultRgbSrc = await rgbImage.getAttribute('src');
-  const rgbStretch = rgbCard.locator('.stack-stretch-controls');
-  await rgbStretch.locator('summary').click();
-  await rgbStretch.getByRole('combobox', { name: 'Beta Field RGB stretch color strategy' })
+  const rgbProcessing = rgbCard.locator('.stack-color-processing');
+  await rgbProcessing.locator('summary').click();
+  await expect(rgbProcessing.getByRole('region', { name: 'R input stretch stack' }))
+    .toContainText('1 stage');
+  await expect(rgbProcessing.getByRole('region', { name: 'G input stretch stack' }))
+    .toContainText('1 stage');
+  await expect(rgbProcessing.getByRole('region', { name: 'B input stretch stack' }))
+    .toContainText('1 stage');
+  const outputLane = rgbProcessing.getByRole('region', { name: 'RGB output stretch stack' });
+  await outputLane.getByRole('button', { name: 'Add stage' }).click();
+  await outputLane.getByRole('combobox', { name: 'RGB output stage 1 stretch color strategy' })
     .selectOption('luminance-preserving');
-  await rgbStretch.getByRole('spinbutton', { name: 'Beta Field RGB Target median' }).fill('0.25');
-  await rgbStretch.getByRole('button', { name: 'Apply stretch' }).click();
-  await expect.poll(() => rgbImage.getAttribute('src')).toMatch(
-    /\/stack-previews\/stretch\/[a-f0-9]{64}\/preview$/
+  await outputLane.getByRole('spinbutton', { name: 'RGB output stage 1 Target median' })
+    .fill('0.25');
+  await rgbProcessing.getByRole('button', { name: 'Apply processing stack' }).click();
+  await expect(rgbCard.locator('.stack-preview-progress')).toHaveAttribute(
+    'data-stack-color-state', 'completed', { timeout: 90_000 }
   );
-  await expect(rgbStretch).toContainText('Auto MTF applied');
-  await rgbStretch.getByRole('button', { name: 'Revert stretch' }).click();
-  await expect(rgbImage).toHaveAttribute('src', defaultRgbSrc!);
+  await expect.poll(() => rgbImage.getAttribute('src')).not.toBe(defaultRgbSrc);
+  await expect(rgbCard.locator('.stack-preview-progress')).toContainText('21/21 steps');
+  const phaseDetails = rgbCard.locator('.stack-color-phase-details');
+  await phaseDetails.locator('summary').click();
+  await expect(phaseDetails.locator('li')).toHaveCount(11);
+  await expect(phaseDetails.locator('li[data-phase-state="skipped"]'))
+    .toContainText('Background preparation skipped');
+  await expect(phaseDetails.locator('li[data-phase="stretching_output"]'))
+    .toHaveAttribute('data-phase-state', 'completed');
+  await expect(phaseDetails.locator('li[data-phase="stretching_output"]'))
+    .toContainText('Applied output stretch 1/1');
 
   await lrgbButton.click();
   await expect(lrgbCard.locator('.stack-preview-progress')).toHaveAttribute(
     'data-stack-color-state', 'completed', { timeout: 90_000 }
   );
-  await expect(lrgbCard.locator('.stack-preview-progress')).toContainText('4/4 channels');
+  await expect(lrgbCard.locator('.stack-preview-progress')).toContainText('25/25 steps');
   const lrgbImage = lrgbCard.getByRole('img', { name: /LRGB color stack preview/i });
   await expect(lrgbImage).toBeVisible();
   const lrgbFits = lrgbCard.getByRole('link', { name: 'Download LRGB RGB FITS' });
@@ -433,7 +450,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   const lrgbHeader = (await lrgbResponse.body()).subarray(0, 2880).toString('ascii');
   expect(lrgbHeader).toContain('COLORSPC');
   expect(lrgbHeader).toContain('LRGB');
-  expect(lrgbHeader).toContain('LINEAR');
+  expect(lrgbHeader).toContain('DISPLAY');
 
   await lrgbCard.getByRole('button', { name: 'Inspect LRGB full size' }).click();
   const inspector = page.getByRole('dialog', { name: /Beta Field/i });
@@ -450,12 +467,12 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await palette.selectOption('foraxx-hoo');
   const foraxxButton = section.getByRole('button', { name: 'Build Foraxx HOO color preview' });
   const narrowbandCard = section.locator('.stack-color-card[data-color-kind="narrowband"]');
-  await expect(narrowbandCard.locator('.stack-preview-progress')).toContainText('0/2 channels');
+  await expect(narrowbandCard.locator('.stack-preview-progress')).toContainText('0/2 steps');
   await foraxxButton.click();
   await expect(narrowbandCard.locator('.stack-preview-progress')).toHaveAttribute(
     'data-stack-color-state', 'completed', { timeout: 90_000 }
   );
-  await expect(narrowbandCard.locator('.stack-preview-progress')).toContainText('2/2 channels');
+  await expect(narrowbandCard.locator('.stack-preview-progress')).toContainText('15/15 steps');
   await expect(
     narrowbandCard.getByRole('img', { name: /Foraxx HOO color stack preview/i })
   ).toBeVisible();
@@ -472,5 +489,10 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
     const docs = path.resolve(process.cwd(), '..', 'docs');
     fs.mkdirSync(docs, { recursive: true });
     await section.screenshot({ path: path.join(docs, 'stack-color-previews.png') });
+    const currentRgbProcessing = rgbCard.locator('.stack-color-processing');
+    if (!(await currentRgbProcessing.getAttribute('open'))) {
+      await currentRgbProcessing.locator('summary').click();
+    }
+    await rgbCard.screenshot({ path: path.join(docs, 'stack-color-processing.png') });
   }
 });

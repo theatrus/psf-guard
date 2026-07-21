@@ -37,7 +37,7 @@ const STRETCH_ANALYSIS_SAMPLES: usize = 200_000;
 const STRETCH_BYTES_PER_SAMPLE: u64 = 16;
 const LINEAR_BLACK_PERCENTILE: f64 = 0.001;
 const LINEAR_WHITE_PERCENTILE: f64 = 0.999;
-pub(super) const SEIZA_STRETCH_VERSION: &str = "0.1.0-git-82b7cfe";
+pub(super) const SEIZA_STRETCH_VERSION: &str = "0.1.0-git-d6b8dfc";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StackStretchRequest {
@@ -47,7 +47,7 @@ pub struct StackStretchRequest {
 }
 
 impl StackStretchRequest {
-    fn config(&self) -> StretchConfig {
+    pub(super) fn config(&self) -> StretchConfig {
         StretchConfig {
             model: self.model.clone(),
             color_strategy: self.color_strategy,
@@ -107,6 +107,12 @@ struct StretchRender {
     plan: StretchPlan,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StackPreviewRenderPhase {
+    Original,
+    Screen,
+}
+
 pub(super) fn render_image_previews_atomic(
     image: &LinearImage,
     config: &StretchConfig,
@@ -114,17 +120,41 @@ pub(super) fn render_image_previews_atomic(
     screen_destination: &FsPath,
     original_destination: &FsPath,
 ) -> Result<serde_json::Value, String> {
+    render_image_previews_atomic_with_progress(
+        image,
+        config,
+        source_transfer,
+        screen_destination,
+        original_destination,
+        |_| {},
+    )
+}
+
+pub(super) fn render_image_previews_atomic_with_progress(
+    image: &LinearImage,
+    config: &StretchConfig,
+    source_transfer: StackStretchSourceTransfer,
+    screen_destination: &FsPath,
+    original_destination: &FsPath,
+    progress: impl FnMut(StackPreviewRenderPhase),
+) -> Result<serde_json::Value, String> {
     let normalized = if source_transfer == StackStretchSourceTransfer::Linear {
         Some(normalize_linear_image(image)?.0)
     } else {
         None
     };
     let prepared = normalized.as_ref().unwrap_or(image);
-    render_image_previews_with_details(prepared, config, screen_destination, original_destination)
-        .and_then(|render| serde_json::to_value(render.plan).map_err(|error| error.to_string()))
+    render_image_previews_with_details(
+        prepared,
+        config,
+        screen_destination,
+        original_destination,
+        progress,
+    )
+    .and_then(|render| serde_json::to_value(render.plan).map_err(|error| error.to_string()))
 }
 
-fn normalize_linear_image(
+pub(super) fn normalize_linear_image(
     image: &LinearImage,
 ) -> Result<(LinearImage, StackStretchInputRange), String> {
     let sampled_pixels = (STRETCH_ANALYSIS_SAMPLES / image.channels).max(1);
@@ -174,6 +204,7 @@ fn render_image_previews_with_details(
     config: &StretchConfig,
     screen_destination: &FsPath,
     original_destination: &FsPath,
+    mut progress: impl FnMut(StackPreviewRenderPhase),
 ) -> Result<StretchRender, String> {
     for destination in [screen_destination, original_destination] {
         let parent = destination
@@ -207,7 +238,9 @@ fn render_image_previews_with_details(
                 .ok_or_else(|| "Stack preview dimensions do not match pixels".to_string())?,
         )
     };
+    progress(StackPreviewRenderPhase::Original);
     save_png_atomic(&dynamic, original_destination)?;
+    progress(StackPreviewRenderPhase::Screen);
     let resized = dynamic.resize(
         PREVIEW_MAX_DIMENSION,
         PREVIEW_MAX_DIMENSION,
@@ -369,8 +402,9 @@ fn render_fits_variant(
         .unwrap_or(&frame.image);
     let screen = stretch_preview_path(cache_root, stretch_id);
     let original = stretch_original_preview_path(cache_root, stretch_id);
-    let render =
-        pool.install(|| render_image_previews_with_details(prepared, config, &screen, &original))?;
+    let render = pool.install(|| {
+        render_image_previews_with_details(prepared, config, &screen, &original, |_| {})
+    })?;
     Ok(RenderedVariant {
         config: config.clone(),
         resolved_plan: serde_json::to_value(render.plan).map_err(|error| error.to_string())?,

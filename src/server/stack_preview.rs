@@ -41,7 +41,7 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-pub const SEIZA_STACKING_VERSION: &str = "0.1.0-git-82b7cfe";
+pub const SEIZA_STACKING_VERSION: &str = "0.1.0-git-d6b8dfc";
 /// Bump whenever stack admission, rendering, or persisted artifact semantics
 /// change. This deliberately versions PSF Guard policy separately from Seiza.
 const STACK_PREVIEW_CACHE_VERSION: u32 = 5;

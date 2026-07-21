@@ -4,12 +4,14 @@ import { apiClient } from '../api/client';
 import type {
   StackColorJob,
   StackColorKind,
+  StackColorProcessing,
+  StackColorRole,
   StackColorTargetAvailability,
   StackNarrowbandPalette,
-  StackStretchPreview,
 } from '../api/types';
 import StackPreviewInspector from './StackPreviewInspector';
-import StackStretchControls from './StackStretchControls';
+import StackColorProcessingControls from './StackColorProcessingControls';
+import { defaultColorProcessing } from './stackColorProcessing';
 
 interface StackColorPreviewPanelProps {
   dbId: string;
@@ -25,6 +27,7 @@ interface ColorOperation {
   palette?: StackNarrowbandPalette;
   force: boolean;
   operationKey: string;
+  processing: StackColorProcessing;
 }
 
 const terminalStates = new Set(['completed', 'failed']);
@@ -73,10 +76,6 @@ function jobMatches(
   return job.target_id === targetId && job.kind === kind && job.palette === (palette ?? null);
 }
 
-function colorStretchKey(job: StackColorJob) {
-  return `${job.job_id}:${job.artifact_revision}`;
-}
-
 function defaultPalette(palettes: StackNarrowbandPalette[]): StackNarrowbandPalette | undefined {
   if (palettes.includes('sho')) return 'sho';
   if (palettes.includes('hoo')) return 'hoo';
@@ -89,6 +88,17 @@ function expectedChannelCount(kind: StackColorKind, palette?: StackNarrowbandPal
   return palette === 'hoo' || palette === 'foraxx-hoo' ? 2 : 3;
 }
 
+function requiredRoles(
+  kind: StackColorKind,
+  palette?: StackNarrowbandPalette
+): StackColorRole[] {
+  if (kind === 'rgb') return ['red', 'green', 'blue'];
+  if (kind === 'lrgb') return ['luminance', 'red', 'green', 'blue'];
+  return palette === 'hoo' || palette === 'foraxx-hoo'
+    ? ['ha', 'oiii']
+    : ['ha', 'oiii', 'sii'];
+}
+
 function ColorCard({
   dbId,
   target,
@@ -96,7 +106,6 @@ function ColorCard({
   palette,
   paletteChoices,
   artifact,
-  appliedStretch,
   activeJob,
   busy,
   operationPending,
@@ -105,8 +114,7 @@ function ColorCard({
   onPaletteChange,
   onBuild,
   onInspect,
-  onStretchApplied,
-  onStretchReverted,
+  onProcessingApply,
 }: {
   dbId: string;
   target: StackColorTargetAvailability;
@@ -114,7 +122,6 @@ function ColorCard({
   palette?: StackNarrowbandPalette;
   paletteChoices: StackNarrowbandPalette[];
   artifact?: StackColorJob;
-  appliedStretch?: StackStretchPreview;
   activeJob?: StackColorJob;
   busy: boolean;
   operationPending: boolean;
@@ -123,8 +130,7 @@ function ColorCard({
   onPaletteChange?: (palette: StackNarrowbandPalette) => void;
   onBuild: () => void;
   onInspect: (job: StackColorJob) => void;
-  onStretchApplied: (job: StackColorJob, preview: StackStretchPreview) => void;
-  onStretchReverted: (job: StackColorJob) => void;
+  onProcessingApply: (processing: StackColorProcessing) => void;
 }) {
   const current = activeJob ?? artifact;
   const state = activeJob?.state ?? (artifact ? 'completed' : 'not-built');
@@ -135,14 +141,19 @@ function ColorCard({
       : palette
         ? paletteLabels[palette].split(' · ')[0]
         : 'Narrowband';
-  const processed = activeJob?.processed_channels ?? artifact?.total_channels ?? 0;
-  const total = activeJob?.total_channels ?? artifact?.total_channels ?? expectedChannelCount(kind, palette);
+  const detailedProgress = activeJob?.progress ?? artifact?.progress;
+  const processed = detailedProgress?.total_units
+    ? detailedProgress.completed_units
+    : activeJob?.processed_channels ?? artifact?.total_channels ?? 0;
+  const total = detailedProgress?.total_units
+    ? detailedProgress.total_units
+    : activeJob?.total_channels ?? artifact?.total_channels ?? expectedChannelCount(kind, palette);
   const percent = state === 'completed' ? 100 : total > 0 ? Math.min(100, processed / total * 100) : 0;
   const sourceFrames = artifact?.sources.reduce((sum, source) => sum + source.accepted_frames, 0) ?? 0;
   const stateLabel =
     state === 'queued' ? 'Waiting for color processor' :
       state === 'running' ? activeJob?.phase ?? 'Building color preview' :
-        state === 'completed' ? 'Color preview ready' :
+        state === 'completed' ? current?.phase ?? 'Color preview ready' :
           state === 'failed' ? 'Color preview failed' : 'Not built';
 
   return (
@@ -215,9 +226,7 @@ function ColorCard({
       {artifact ? (
         <div className="stack-preview-image stack-color-image">
           <img
-            src={appliedStretch?.preview_url ?? apiClient.getStackColorPreviewUrl(
-              dbId, artifact.job_id, artifact.artifact_revision
-            )}
+            src={apiClient.getStackColorPreviewUrl(dbId, artifact.job_id, artifact.artifact_revision)}
             alt={`${target.target_name} ${label} color stack preview`}
           />
         </div>
@@ -234,20 +243,6 @@ function ColorCard({
         </div>
       )}
 
-      {artifact && (
-        <StackStretchControls
-          key={colorStretchKey(artifact)}
-          label={`${target.target_name} ${label}`}
-          channels={3}
-          displayReferred={artifact.label.startsWith('Foraxx')}
-          disabled={busy}
-          applied={appliedStretch}
-          apply={(request) => apiClient.applyStackColorStretch(dbId, artifact.job_id, request)}
-          onApplied={(preview) => onStretchApplied(artifact, preview)}
-          onRevert={() => onStretchReverted(artifact)}
-        />
-      )}
-
       <div
         className={`stack-preview-progress ${state}`}
         data-stack-color-state={state}
@@ -256,7 +251,7 @@ function ColorCard({
       >
         <div className="stack-preview-progress-copy">
           <span>{stateLabel}</span>
-          <span>{processed}/{total} channels</span>
+          <span>{processed}/{total} steps</span>
         </div>
         <div
           className="stack-preview-progress-track"
@@ -269,6 +264,35 @@ function ColorCard({
           <span style={{ width: `${percent}%` }} />
         </div>
       </div>
+
+      {!!detailedProgress?.phases.length && (
+        <details className="stack-color-phase-details">
+          <summary>Pipeline phases</summary>
+          <ol>
+            {detailedProgress.phases.map((phase) => (
+              <li
+                key={phase.phase}
+                data-phase={phase.phase}
+                data-phase-state={phase.state}
+              >
+                <span>{phase.label}</span>
+                <small>{phase.state === 'skipped' || phase.state === 'reused'
+                  ? phase.state
+                  : `${phase.completed_units}/${phase.total_units}`}</small>
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
+
+      <StackColorProcessingControls
+        key={`${artifact?.job_id ?? 'new'}:${artifact?.artifact_revision ?? label}`}
+        label={`${target.target_name} ${label}`}
+        roles={requiredRoles(kind, palette)}
+        applied={artifact?.processing ?? null}
+        disabled={busy || unavailable}
+        onApply={onProcessingApply}
+      />
 
       {current && (
         <div className="stack-color-sources" aria-label={`${label} source stacks`}>
@@ -297,7 +321,6 @@ export default function StackColorPreviewPanel({
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [paletteByTarget, setPaletteByTarget] = useState<Record<number, StackNarrowbandPalette>>({});
   const [inspector, setInspector] = useState<StackColorJob | null>(null);
-  const [stretches, setStretches] = useState<Record<string, StackStretchPreview>>({});
 
   const catalog = useQuery({
     queryKey: catalogQueryKey(dbId, projectId, sourceRevision),
@@ -316,6 +339,7 @@ export default function StackColorPreviewPanel({
       kind: operation.kind,
       palette: operation.palette,
       force: operation.force,
+      processing: operation.processing,
     }),
     onSuccess: (job) => {
       queryClient.setQueryData(jobQueryKey(dbId, projectId, job.job_id), job);
@@ -349,7 +373,6 @@ export default function StackColorPreviewPanel({
     setActiveJobId(null);
     setPaletteByTarget({});
     setInspector(null);
-    setStretches({});
     resetStart();
   }, [dbId, projectId, resetStart]);
 
@@ -421,7 +444,6 @@ export default function StackColorPreviewPanel({
                   kind={kind}
                   paletteChoices={[]}
                   artifact={artifact}
-                  appliedStretch={artifact ? stretches[colorStretchKey(artifact)] : undefined}
                   activeJob={cardActive}
                   busy={busy}
                   operationPending={startPending && startVariables?.operationKey === key}
@@ -432,16 +454,15 @@ export default function StackColorPreviewPanel({
                     kind,
                     force: Boolean(artifact && !artifact.outdated),
                     operationKey: key,
+                    processing: artifact?.processing ?? defaultColorProcessing(requiredRoles(kind)),
                   })}
                   onInspect={setInspector}
-                  onStretchApplied={(job, preview) => setStretches((current) => ({
-                    ...current,
-                    [colorStretchKey(job)]: preview,
-                  }))}
-                  onStretchReverted={(job) => setStretches((current) => {
-                    const next = { ...current };
-                    delete next[colorStretchKey(job)];
-                    return next;
+                  onProcessingApply={(processing) => startColor({
+                    targetId: target.target_id,
+                    kind,
+                    force: false,
+                    operationKey: `${key}:processing`,
+                    processing,
                   })}
                 />
               );
@@ -471,7 +492,6 @@ export default function StackColorPreviewPanel({
                 palette={palette}
                 paletteChoices={paletteChoices}
                 artifact={artifact}
-                appliedStretch={artifact ? stretches[colorStretchKey(artifact)] : undefined}
                 activeJob={cardActive}
                 busy={busy}
                 operationPending={startPending && startVariables?.operationKey === key}
@@ -486,16 +506,18 @@ export default function StackColorPreviewPanel({
                   palette,
                   force: Boolean(artifact && !artifact.outdated),
                   operationKey: key,
+                  processing: artifact?.processing ?? defaultColorProcessing(
+                    requiredRoles('narrowband', palette)
+                  ),
                 })}
                 onInspect={setInspector}
-                onStretchApplied={(job, preview) => setStretches((current) => ({
-                  ...current,
-                  [colorStretchKey(job)]: preview,
-                }))}
-                onStretchReverted={(job) => setStretches((current) => {
-                  const next = { ...current };
-                  delete next[colorStretchKey(job)];
-                  return next;
+                onProcessingApply={(processing) => startColor({
+                  targetId: target.target_id,
+                  kind: 'narrowband',
+                  palette,
+                  force: false,
+                  operationKey: `${key}:processing`,
+                  processing,
                 })}
               />
             );
@@ -512,10 +534,9 @@ export default function StackColorPreviewPanel({
             `${inspector.sources.length} channel stacks`,
             `${inspector.sources.reduce((sum, source) => sum + source.accepted_frames, 0)} integrated inputs`,
           ]}
-          imageUrl={stretches[colorStretchKey(inspector)]?.original_preview_url ??
-            apiClient.getStackColorPreviewUrl(
-              dbId, inspector.job_id, inspector.artifact_revision, 'original'
-            )}
+          imageUrl={apiClient.getStackColorPreviewUrl(
+            dbId, inspector.job_id, inspector.artifact_revision, 'original'
+          )}
           fitsUrl={apiClient.getStackColorFitsUrl(
             dbId, inspector.job_id, inspector.artifact_revision
           )}
