@@ -61,16 +61,10 @@ FITS captures.
 # rust-toolchain.toml pins a rustup channel; Fedora's cargo ignores it, but
 # remove it so no rustup-based environment tries to fetch a toolchain offline.
 rm -f rust-toolchain.toml
-# Drop the vendored crates in beside the source and point cargo at them.
+# Drop the vendored crates and cargo vendor's complete source-replacement
+# config in beside the source. The generated config covers crates.io and any
+# pinned Git sources without allowing network access during the RPM build.
 tar -xf %{SOURCE1}
-mkdir -p .cargo
-cat > .cargo/config.toml <<'EOF'
-[source.crates-io]
-replace-with = "vendored-sources"
-
-[source.vendored-sources]
-directory = "vendor"
-EOF
 
 %build
 # The frontend is already built into static/dist by make-rpm-sources.sh; tell

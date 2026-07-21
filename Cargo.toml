@@ -99,3 +99,12 @@ overflow-checks = false
 
 [build-dependencies]
 tauri-build = { version = "2.6.2", features = [] }
+
+# Interim source unification for the unreleased seiza-stacking crate. Its
+# workspace path dependencies otherwise introduce second copies of these
+# released crates from Git, which cargo vendor cannot represent alongside the
+# crates.io packages with the same name and version. Remove this patch when
+# seiza-stacking is published.
+[patch.crates-io]
+seiza = { git = "https://github.com/theatrus/seiza", rev = "18aa9b802ac357fa0afd7e12b339322b83fa473a" }
+seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "18aa9b802ac357fa0afd7e12b339322b83fa473a" }

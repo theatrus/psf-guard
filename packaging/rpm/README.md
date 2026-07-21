@@ -15,15 +15,16 @@ done once, up front, by `scripts/make-rpm-sources.sh`:
 2. Build the frontend (`npm ci && npm run build`) into `static/dist`, then drop
    `node_modules`. At RPM build time `build.rs` is skipped via
    `PSF_GUARD_SKIP_FRONTEND_BUILD=1`.
-3. `cargo vendor` every crate into `vendor/`. The spec writes a
-   `.cargo/config.toml` pointing at it and builds with `CARGO_NET_OFFLINE=true`.
+3. `cargo vendor` every crate into `vendor/` and retain its generated
+   `.cargo/config.toml`, including replacements for pinned Git sources. The
+   spec extracts both and builds with `CARGO_NET_OFFLINE=true`.
 
 The result is two sources:
 
 | Source  | File                              | Contents                              |
 | ------- | --------------------------------- | ------------------------------------- |
 | Source0 | `psf-guard-<ver>.tar.gz`          | source tree + prebuilt `static/dist`  |
-| Source1 | `psf-guard-<ver>-vendor.tar.xz`   | vendored crates (`./vendor`)          |
+| Source1 | `psf-guard-<ver>-vendor.tar.xz`   | vendored crates + Cargo source config |
 
 OpenCV is enabled by default (matching the upstream default features). Build a
 lighter package without it using `--without opencv`.
