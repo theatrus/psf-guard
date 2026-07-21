@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { apiClient } from '../api/client';
 import type { ProjectOverview, TargetOverview, DateRange } from '../api/types';
@@ -12,10 +12,19 @@ import {
 } from '../hooks/useDatabases';
 import './Overview.css';
 
+/// Inline edit state for correcting imported groupings.
+type Organizing =
+  | { kind: 'project'; dbId: string; id: number; name: string; mergeInto: string }
+  | { kind: 'target'; dbId: string; id: number; name: string; moveTo: string };
+
 export default function Overview() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [collapsedDbs, setCollapsedDbs] = useState<Set<string>>(new Set());
+  const [organizing, setOrganizing] = useState<Organizing | null>(null);
+  const [organizeBusy, setOrganizeBusy] = useState(false);
+  const [organizeError, setOrganizeError] = useState('');
 
   const { data: databases } = useAllDatabases();
   const { data: serverInfo } = useQuery({
@@ -26,6 +35,49 @@ export default function Overview() {
   const { data: overallStats, isLoading: statsLoading } = useMergedOverallStats();
   const { data: projects, isLoading: projectsLoading } = useMergedProjectsOverview();
   const { data: targets, isLoading: targetsLoading } = useMergedTargetsOverview();
+  const organizeAllowed = serverInfo?.allow_database_management ?? false;
+
+  // Persist an organize edit (rename / move / merge), then refresh this DB's
+  // overview queries so the new grouping shows up.
+  const saveOrganize = async () => {
+    if (!organizing) return;
+    setOrganizeBusy(true);
+    setOrganizeError('');
+    try {
+      if (organizing.kind === 'project') {
+        if (organizing.mergeInto !== '') {
+          if (
+            !confirm(
+              'Merge this project into the selected one? Its targets and images move over and this project is deleted.'
+            )
+          ) {
+            setOrganizeBusy(false);
+            return;
+          }
+          await apiClient.mergeProject(
+            organizing.dbId,
+            organizing.id,
+            Number(organizing.mergeInto)
+          );
+        } else if (organizing.name.trim()) {
+          await apiClient.updateProject(organizing.dbId, organizing.id, organizing.name.trim());
+        }
+      } else {
+        const req: { name?: string; project_id?: number } = {};
+        if (organizing.name.trim()) req.name = organizing.name.trim();
+        if (organizing.moveTo !== '') req.project_id = Number(organizing.moveTo);
+        if (req.name !== undefined || req.project_id !== undefined) {
+          await apiClient.updateTarget(organizing.dbId, organizing.id, req);
+        }
+      }
+      queryClient.invalidateQueries({ queryKey: ['db', organizing.dbId] });
+      setOrganizing(null);
+    } catch (err) {
+      setOrganizeError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setOrganizeBusy(false);
+    }
+  };
 
   // Group targets by (db_id, project_id) since project IDs collide across DBs.
   const targetsByProject = useMemo(() => {
@@ -294,9 +346,78 @@ export default function Overview() {
                     </div>
                     <div>
                       {!project.has_files && <span className="no-files-badge">No Files</span>}
+                      {organizeAllowed && (
+                        <button
+                          className="organize-button"
+                          title="Rename or merge this project"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOrganizeError('');
+                            setOrganizing({
+                              kind: 'project',
+                              dbId: project.db_id,
+                              id: project.id,
+                              name: project.name,
+                              mergeInto: '',
+                            });
+                          }}
+                        >
+                          ✏️
+                        </button>
+                      )}
                     </div>
                   </div>
-                  
+
+                  {organizing?.kind === 'project' &&
+                    organizing.dbId === project.db_id &&
+                    organizing.id === project.id && (
+                      <div className="organize-panel" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          className="organize-input"
+                          value={organizing.name}
+                          onChange={(e) => setOrganizing({ ...organizing, name: e.target.value })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') saveOrganize();
+                            if (e.key === 'Escape') setOrganizing(null);
+                          }}
+                          placeholder="Project name"
+                          autoFocus
+                        />
+                        <select
+                          className="organize-select"
+                          value={organizing.mergeInto}
+                          onChange={(e) =>
+                            setOrganizing({ ...organizing, mergeInto: e.target.value })
+                          }
+                          title="Merge this project's targets and images into another project"
+                        >
+                          <option value="">(no merge)</option>
+                          {dbProjects
+                            .filter((p) => p.id !== project.id)
+                            .map((p) => (
+                              <option key={p.id} value={p.id}>
+                                Merge into: {p.display_name}
+                              </option>
+                            ))}
+                        </select>
+                        <button
+                          className="organize-save"
+                          onClick={saveOrganize}
+                          disabled={organizeBusy}
+                        >
+                          {organizing.mergeInto !== '' ? 'Merge' : 'Save'}
+                        </button>
+                        <button
+                          className="organize-cancel"
+                          onClick={() => setOrganizing(null)}
+                          disabled={organizeBusy}
+                        >
+                          Cancel
+                        </button>
+                        {organizeError && <span className="organize-error">{organizeError}</span>}
+                      </div>
+                    )}
+
                   {project.description && (
                     <p className="project-description">{project.description}</p>
                   )}
@@ -391,9 +512,85 @@ export default function Overview() {
                                 <span className={target.active ? 'active' : 'inactive'}>
                                   {target.active ? 'Active' : 'Inactive'}
                                 </span>
+                                {organizeAllowed && (
+                                  <button
+                                    className="organize-button"
+                                    title="Rename this target or move it to another project"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setOrganizeError('');
+                                      setOrganizing({
+                                        kind: 'target',
+                                        dbId: target.db_id,
+                                        id: target.id,
+                                        name: target.name,
+                                        moveTo: '',
+                                      });
+                                    }}
+                                  >
+                                    ✏️
+                                  </button>
+                                )}
                               </div>
                             </div>
-                            
+
+                            {organizing?.kind === 'target' &&
+                              organizing.dbId === target.db_id &&
+                              organizing.id === target.id && (
+                                <div
+                                  className="organize-panel"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <input
+                                    className="organize-input"
+                                    value={organizing.name}
+                                    onChange={(e) =>
+                                      setOrganizing({ ...organizing, name: e.target.value })
+                                    }
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') saveOrganize();
+                                      if (e.key === 'Escape') setOrganizing(null);
+                                    }}
+                                    placeholder="Target name"
+                                    autoFocus
+                                  />
+                                  <select
+                                    className="organize-select"
+                                    value={organizing.moveTo}
+                                    onChange={(e) =>
+                                      setOrganizing({ ...organizing, moveTo: e.target.value })
+                                    }
+                                    title="Move this target (and its images) to another project"
+                                  >
+                                    <option value="">(keep project)</option>
+                                    {dbProjects
+                                      .filter((p) => p.id !== target.project_id)
+                                      .map((p) => (
+                                        <option key={p.id} value={p.id}>
+                                          Move to: {p.display_name}
+                                        </option>
+                                      ))}
+                                  </select>
+                                  <button
+                                    className="organize-save"
+                                    onClick={saveOrganize}
+                                    disabled={organizeBusy}
+                                  >
+                                    Save
+                                  </button>
+                                  <button
+                                    className="organize-cancel"
+                                    onClick={() => setOrganizing(null)}
+                                    disabled={organizeBusy}
+                                  >
+                                    Cancel
+                                  </button>
+                                  {organizeError && (
+                                    <span className="organize-error">{organizeError}</span>
+                                  )}
+                                </div>
+                              )}
+
                             {target.coordinates_display && (
                               <p className="target-coordinates">{target.coordinates_display}</p>
                             )}

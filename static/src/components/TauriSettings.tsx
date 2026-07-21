@@ -4,6 +4,7 @@ import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
 import type { DbEntry, DbRegistry } from '../utils/tauri';
 import { apiClient } from '../api/client';
 import type { DatabaseSummary } from '../api/types';
+import { describeImportProgress, useImportJob } from '../hooks/useImportJob';
 import './TauriSettings.css';
 
 interface TauriSettingsProps {
@@ -50,6 +51,14 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
   const [formDbPath, setFormDbPath] = useState('');
   const [formImageDirs, setFormImageDirs] = useState<string[]>([]);
   const [showAddForm, setShowAddForm] = useState(false);
+  // true = "create a brand-new TS database from image folders" flow (no
+  // existing .sqlite required; the server bootstraps the full TS schema).
+  const [createMode, setCreateMode] = useState(false);
+
+  // Slug of the database whose import job we're currently tracking; drives
+  // the 1s progress poll + the progress panel at the bottom of the modal.
+  const [importDbId, setImportDbId] = useState<string | null>(null);
+  const { progress: importProgress, isRunning: importRunning } = useImportJob(importDbId);
 
   const reload = useCallback(async () => {
     setIsLoading(true);
@@ -96,6 +105,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setFormDbPath('');
     setFormImageDirs([]);
     setShowAddForm(false);
+    setCreateMode(false);
   };
 
   const startEdit = (entry: DbEntry) => {
@@ -104,6 +114,16 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setFormDbPath(entry.db_path);
     setFormImageDirs(entry.image_dirs);
     setShowAddForm(true);
+    setCreateMode(false);
+  };
+
+  const startCreate = () => {
+    setEditingId(null);
+    setFormName('');
+    setFormDbPath('');
+    setFormImageDirs([]);
+    setShowAddForm(true);
+    setCreateMode(true);
   };
 
   const startAdd = async () => {
@@ -111,6 +131,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setFormName('');
     setFormImageDirs([]);
     setShowAddForm(true);
+    setCreateMode(false);
     setFormDbPath('');
 
     if (isTauri) {
@@ -171,6 +192,37 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
   };
 
   const handleSaveForm = async () => {
+    if (createMode) {
+      // "New database from images": the server bootstraps a fresh TS-schema
+      // database and imports the folders in the background.
+      if (formImageDirs.length === 0) {
+        setStatusMessage('Add at least one image directory to import');
+        return;
+      }
+      const name = formName.trim() || 'Imported Images';
+      setIsApplying(true);
+      setStatusMessage('');
+      try {
+        const created = await apiClient.createDatabaseFromImages({
+          name,
+          image_dirs: formImageDirs,
+        });
+        queryClient.invalidateQueries({ queryKey: ['databases'] });
+        queryClient.invalidateQueries({ queryKey: ['db'] });
+        setImportDbId(created.database.id);
+        await reload();
+        resetForm();
+        setStatusMessage(`Created ${created.database.name}; importing images…`);
+      } catch (err) {
+        console.error('create-from-images failed:', err);
+        const msg = err instanceof Error ? err.message : String(err);
+        setStatusMessage(`Failed to create: ${msg}`);
+      } finally {
+        setIsApplying(false);
+      }
+      return;
+    }
+
     if (!formDbPath.trim()) {
       setStatusMessage('Please select a database file');
       return;
@@ -214,6 +266,32 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
       console.error('save failed:', err);
       const msg = err instanceof Error ? err.message : String(err);
       setStatusMessage(`Failed to save: ${msg}`);
+    } finally {
+      setIsApplying(false);
+    }
+  };
+
+  const handleImport = async (entry: DbEntry) => {
+    if (entry.image_dirs.length === 0) {
+      setStatusMessage(
+        `"${entry.name}" has no image directories configured — edit it and add the folders to import.`
+      );
+      return;
+    }
+    setIsApplying(true);
+    setStatusMessage('');
+    try {
+      const status = await apiClient.startImport(entry.id, {});
+      setImportDbId(entry.id);
+      setStatusMessage(
+        status.started
+          ? `Importing images into ${entry.name}…`
+          : 'An import is already running for this database.'
+      );
+    } catch (err) {
+      console.error('import failed to start:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      setStatusMessage(`Failed to start import: ${msg}`);
     } finally {
       setIsApplying(false);
     }
@@ -336,6 +414,14 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                   <div className="db-row-actions">
                     <button
                       className="browse-button"
+                      onClick={() => handleImport(entry)}
+                      disabled={isApplying || (importRunning && importDbId === entry.id)}
+                      title="Scan this database's image directories and import new FITS frames"
+                    >
+                      {importRunning && importDbId === entry.id ? 'Importing…' : 'Import'}
+                    </button>
+                    <button
+                      className="browse-button"
                       onClick={() => startEdit(entry)}
                       disabled={isApplying}
                     >
@@ -355,19 +441,65 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
             ))}
 
             {managementAllowed && !showAddForm && (
-              <button
-                className="add-directory-button"
-                onClick={startAdd}
-                disabled={isApplying}
-              >
-                + Add Database
-              </button>
+              <div className="db-add-buttons">
+                <button
+                  className="add-directory-button"
+                  onClick={startAdd}
+                  disabled={isApplying}
+                >
+                  + Add Database
+                </button>
+                <button
+                  className="add-directory-button"
+                  onClick={startCreate}
+                  disabled={isApplying}
+                  title="Create a brand-new Target Scheduler database and import folders of FITS images into it"
+                >
+                  ✨ New Database from Images
+                </button>
+              </div>
+            )}
+
+            {importDbId && importProgress && importProgress.stage !== '' && (
+              <div className="import-progress-panel">
+                <div className="import-progress-line">
+                  {importRunning && <span className="import-spinner">⏳ </span>}
+                  {describeImportProgress(importProgress)}
+                </div>
+                {importProgress.stage === 'complete' &&
+                  importProgress.outcome &&
+                  importProgress.outcome.project_summaries.length > 0 && (
+                    <ul className="import-project-list">
+                      {importProgress.outcome.project_summaries.map((p) => (
+                        <li key={p.name}>
+                          {p.name} — {p.targets} target(s), {p.frames} frame(s)
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+              </div>
             )}
           </div>
 
           {managementAllowed && showAddForm && (
             <div className="settings-section">
-              <h3>{editingId ? 'Edit Database' : 'Add Database'}</h3>
+              <h3>
+                {createMode
+                  ? 'New Database from Images'
+                  : editingId
+                    ? 'Edit Database'
+                    : 'Add Database'}
+              </h3>
+
+              {createMode && (
+                <p className="muted">
+                  Creates a brand-new Target Scheduler database and imports the
+                  selected folders. Frames are grouped into projects and
+                  targets by telescope, camera, focal length, object, and
+                  session gaps — you can rename or reorganize afterwards.
+                  Quality analysis runs automatically once the import finishes.
+                </p>
+              )}
 
               <div className="database-config">
                 <label>Display name (optional):</label>
@@ -375,26 +507,32 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                   type="text"
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
-                  placeholder="e.g. Imaging Rig (defaults to filename)"
+                  placeholder={
+                    createMode
+                      ? 'e.g. 2026 Archive (defaults to "Imported Images")'
+                      : 'e.g. Imaging Rig (defaults to filename)'
+                  }
                   className="file-path-input"
                 />
               </div>
 
-              <div className="database-config">
-                <label>N.I.N.A. Database File:</label>
-                <div className="file-input-group">
-                  <input
-                    type="text"
-                    value={formDbPath}
-                    onChange={(e) => setFormDbPath(e.target.value)}
-                    placeholder="Select or enter database path"
-                    className="file-path-input"
-                  />
-                  <button onClick={handlePickDbPath} className="browse-button">
-                    Browse…
-                  </button>
+              {!createMode && (
+                <div className="database-config">
+                  <label>N.I.N.A. Database File:</label>
+                  <div className="file-input-group">
+                    <input
+                      type="text"
+                      value={formDbPath}
+                      onChange={(e) => setFormDbPath(e.target.value)}
+                      placeholder="Select or enter database path"
+                      className="file-path-input"
+                    />
+                    <button onClick={handlePickDbPath} className="browse-button">
+                      Browse…
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
 
               <div className="database-config">
                 <label>Image Directories:</label>
@@ -455,9 +593,15 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                 <button
                   onClick={handleSaveForm}
                   className="save-button"
-                  disabled={!formDbPath.trim() || isApplying}
+                  disabled={
+                    (createMode ? formImageDirs.length === 0 : !formDbPath.trim()) || isApplying
+                  }
                 >
-                  {editingId ? 'Save Changes' : 'Add Database'}
+                  {createMode
+                    ? 'Create & Import'
+                    : editingId
+                      ? 'Save Changes'
+                      : 'Add Database'}
                 </button>
               </div>
             </div>

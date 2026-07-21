@@ -28,6 +28,129 @@ pub fn main() -> Result<()> {
                 .with_context(|| format!("Failed to open database: {}", cli.database))?;
             list_projects(&conn)?;
         }
+        Commands::CreateDb {
+            database,
+            directories,
+            name,
+            time_gap_days,
+            profile_id,
+            dry_run,
+            no_register,
+            registry,
+        } => {
+            use crate::commands::import::{
+                collect_fits_files, import_frames, print_outcome, scan_frames, ImportOptions,
+            };
+            use crate::db_registry::DbRegistry;
+            use std::path::PathBuf;
+
+            let dirs: Vec<PathBuf> = directories.iter().map(PathBuf::from).collect();
+            let files = collect_fits_files(&dirs)?;
+            println!("Found {} FITS file(s); reading headers...", files.len());
+            let frames = scan_frames(&files);
+
+            let db_path = PathBuf::from(&database);
+            let mut conn = crate::ts_schema::create_fresh_db(&db_path)?;
+            println!(
+                "Created Target Scheduler database at {} (schema v{})",
+                db_path.display(),
+                crate::ts_schema::TS_SCHEMA_VERSION
+            );
+
+            let options = ImportOptions {
+                time_gap_days,
+                profile_id,
+                dry_run,
+            };
+            let outcome = import_frames(&mut conn, frames, &options)?;
+            print_outcome(&outcome);
+
+            if dry_run {
+                // The bootstrap itself is not rolled back — remove the file
+                // so a dry run leaves nothing behind.
+                drop(conn);
+                std::fs::remove_file(&db_path)
+                    .with_context(|| format!("removing dry-run database {}", db_path.display()))?;
+                println!("Dry run: removed {}", db_path.display());
+            } else if !no_register {
+                let registry_path = match registry {
+                    Some(p) => PathBuf::from(p),
+                    None => {
+                        DbRegistry::default_path().context("resolving default registry path")?
+                    }
+                };
+                let mut reg = DbRegistry::load_or_init(&registry_path)
+                    .with_context(|| format!("loading registry at {}", registry_path.display()))?;
+                let display_name = name.unwrap_or_else(|| {
+                    db_path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "Imported".to_string())
+                });
+                let entry = reg
+                    .add(
+                        display_name,
+                        db_path.to_string_lossy().into_owned(),
+                        directories,
+                        None,
+                    )?
+                    .clone();
+                reg.save(&registry_path)?;
+                println!(
+                    "Registered as '{}' (slug {}) in {}",
+                    entry.name,
+                    entry.id,
+                    registry_path.display()
+                );
+            }
+        }
+        Commands::Import {
+            db,
+            directories,
+            time_gap_days,
+            profile_id,
+            dry_run,
+            registry,
+        } => {
+            use crate::commands::import::{
+                collect_fits_files, import_frames, print_outcome, scan_frames, ImportOptions,
+            };
+            use crate::commands::sync::{require_pull_capable, resolve_db_path};
+            use crate::db_registry::DbRegistry;
+            use rusqlite::OpenFlags;
+            use std::path::PathBuf;
+
+            // Prefer a registry slug; fall back to a raw file path.
+            let registry_path = match &registry {
+                Some(p) => PathBuf::from(p),
+                None => DbRegistry::default_path().context("resolving default registry path")?,
+            };
+            let reg = DbRegistry::load_or_init(&registry_path).ok();
+            let db_path = resolve_db_path(reg.as_ref(), &db)?;
+
+            let dirs: Vec<PathBuf> = directories.iter().map(PathBuf::from).collect();
+            let files = collect_fits_files(&dirs)?;
+            println!("Found {} FITS file(s); reading headers...", files.len());
+            let frames = scan_frames(&files);
+
+            // READ_WRITE without CREATE: a wrong path must error, not leave a
+            // junk sqlite file behind (same rule as screen-fits --regrade-db).
+            let mut conn = Connection::open_with_flags(
+                &db_path,
+                OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI,
+            )
+            .with_context(|| format!("opening database at {}", db_path.display()))?;
+            // Import needs the same v22+ guid columns sync pull does.
+            require_pull_capable(&conn)?;
+
+            let options = ImportOptions {
+                time_gap_days,
+                profile_id,
+                dry_run,
+            };
+            let outcome = import_frames(&mut conn, frames, &options)?;
+            print_outcome(&outcome);
+        }
         Commands::ListTargets { project } => {
             let conn = Connection::open(&cli.database)
                 .with_context(|| format!("Failed to open database: {}", cli.database))?;

@@ -256,6 +256,97 @@ pub struct AddDatabaseRequest {
     pub slug: Option<String>,
 }
 
+/// Body of `POST /api/databases/create` — create a brand-new Target
+/// Scheduler database (vendored schema, user_version 23) and start a
+/// background import of the given directories.
+#[derive(Debug, Deserialize)]
+pub struct CreateDatabaseRequest {
+    pub name: String,
+    /// Directories of FITS files to import; also become the registry entry's
+    /// image_dirs.
+    pub image_dirs: Vec<String>,
+    /// Where to create the .sqlite file. Defaults to
+    /// `<registry dir>/databases/<name-slug>.sqlite`.
+    #[serde(default)]
+    pub db_path: Option<String>,
+    /// Optional user-supplied registry slug; derived from the path if absent.
+    #[serde(default)]
+    pub slug: Option<String>,
+    #[serde(default)]
+    pub time_gap_days: Option<f64>,
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    /// Run the post-import quality backfill (default true).
+    #[serde(default)]
+    pub backfill: Option<bool>,
+}
+
+/// `POST /api/databases/create` response: the registered database plus the
+/// just-started import job's first progress snapshot.
+#[derive(Debug, Serialize)]
+pub struct CreateDatabaseResponse {
+    pub database: DatabaseSummary,
+    pub import: crate::server::import_job::ImportJobProgress,
+}
+
+/// Body of `POST /api/db/{db_id}/import` — import FITS folders into an
+/// existing database as a background job.
+#[derive(Debug, Deserialize, Default)]
+pub struct ImportRequest {
+    /// Directories to scan; defaults to the database's configured image_dirs.
+    #[serde(default)]
+    pub image_dirs: Option<Vec<String>>,
+    #[serde(default)]
+    pub time_gap_days: Option<f64>,
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    /// Plan + count without writing (the transaction is rolled back). No
+    /// quality backfill runs afterwards.
+    #[serde(default)]
+    pub dry_run: bool,
+    /// Run the post-import quality backfill (default true).
+    #[serde(default)]
+    pub backfill: Option<bool>,
+}
+
+/// Status returned by both the import-start and import-progress endpoints.
+#[derive(Debug, Serialize)]
+pub struct ImportStatusResponse {
+    /// POST: whether this request started a new job. GET: whether a job is
+    /// currently running.
+    pub started: bool,
+    pub progress: crate::server::import_job::ImportJobProgress,
+}
+
+/// Body of `PUT /api/db/{db_id}/projects/{project_id}` — rename a project.
+#[derive(Debug, Deserialize)]
+pub struct UpdateProjectRequest {
+    pub name: String,
+}
+
+/// Body of `PUT /api/db/{db_id}/targets/{target_id}` — rename and/or move a
+/// target to another project (same profile).
+#[derive(Debug, Deserialize, Default)]
+pub struct UpdateTargetRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<i32>,
+}
+
+/// Body of `POST /api/db/{db_id}/projects/{project_id}/merge`.
+#[derive(Debug, Deserialize)]
+pub struct MergeProjectRequest {
+    pub into_project_id: i32,
+}
+
+/// Result of a merge: how much moved.
+#[derive(Debug, Serialize)]
+pub struct MergeProjectResponse {
+    pub targets_moved: usize,
+    pub images_moved: usize,
+}
+
 /// Body of `PUT /api/databases/{db_id}`. All fields are optional; absent fields
 /// leave the existing value unchanged.
 #[derive(Debug, Deserialize, Default)]
