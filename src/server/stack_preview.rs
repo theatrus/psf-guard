@@ -7,12 +7,12 @@
 
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{
         header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
         StatusCode,
     },
-    response::{IntoResponse, Response},
+    response::Response,
     Json,
 };
 use rayon::ThreadPoolBuilder;
@@ -41,7 +41,7 @@ use crate::server::state::AppState;
 pub const SEIZA_STACKING_VERSION: &str = "0.1.0-git-18aa9b8";
 /// Bump whenever stack admission, rendering, or persisted artifact semantics
 /// change. This deliberately versions PSF Guard policy separately from Seiza.
-const STACK_PREVIEW_CACHE_VERSION: u32 = 2;
+const STACK_PREVIEW_CACHE_VERSION: u32 = 3;
 const MAX_REQUEST_IMAGES: usize = 10_000;
 const MAX_REMEMBERED_JOBS: usize = 64;
 const PREVIEW_MAX_DIMENSION: u32 = 2400;
@@ -56,6 +56,20 @@ pub struct StackPreviewRequest {
     pub accepted_only: bool,
     #[serde(default)]
     pub force: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StackPreviewImageSize {
+    #[default]
+    Screen,
+    Original,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+pub struct StackPreviewImageQuery {
+    #[serde(default)]
+    pub size: StackPreviewImageSize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -274,21 +288,32 @@ pub async fn get_stack_preview_job(
 pub async fn get_stack_preview_image(
     ctx: DbContext,
     Path((_db_id, job_id, group_index)): Path<(String, String, usize)>,
+    Query(query): Query<StackPreviewImageQuery>,
 ) -> Result<Response, AppError> {
     validate_job_id(&job_id)?;
-    let path = preview_path(&ctx.cache_dir_path, &job_id, group_index);
-    let bytes = tokio::fs::read(&path)
+    let path = match query.size {
+        StackPreviewImageSize::Screen => preview_path(&ctx.cache_dir_path, &job_id, group_index),
+        StackPreviewImageSize::Original => {
+            original_preview_path(&ctx.cache_dir_path, &job_id, group_index)
+        }
+    };
+    let file = tokio::fs::File::open(&path)
         .await
         .map_err(|_| AppError::NotFound)?;
-    Ok((
-        StatusCode::OK,
-        [
-            (CONTENT_TYPE, "image/png"),
-            (CACHE_CONTROL, "private, max-age=31536000, immutable"),
-        ],
-        bytes,
-    )
-        .into_response())
+    let length = file
+        .metadata()
+        .await
+        .map_err(|error| AppError::InternalError(format!("Failed to stat stack PNG: {error}")))?
+        .len();
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "image/png")
+        .header(CONTENT_LENGTH, length)
+        .header(CACHE_CONTROL, "private, max-age=31536000, immutable")
+        .body(Body::from_stream(ReaderStream::new(file)))
+        .map_err(|error| {
+            AppError::InternalError(format!("Failed to build stack PNG response: {error}"))
+        })
 }
 
 pub async fn download_stack_preview_fits(
@@ -915,18 +940,20 @@ fn run_group(
         seiza_stacking::write_fits_f32(&fits_temporary, &snapshot, &reference_headers)
             .map_err(|error| error.to_string())?;
         std::fs::rename(&fits_temporary, &fits_destination).map_err(|error| error.to_string())?;
-        render_preview_atomic(
+        render_previews_atomic(
             &snapshot.image,
             &preview_path(cache_root, job_id, group.index),
+            &original_preview_path(cache_root, job_id, group.index),
         )
     })
 }
 
-fn render_preview_atomic(
+fn render_previews_atomic(
     image: &seiza_stacking::LinearImage,
-    destination: &FsPath,
+    screen_destination: &FsPath,
+    original_destination: &FsPath,
 ) -> Result<(), String> {
-    let parent = destination
+    let parent = screen_destination
         .parent()
         .ok_or_else(|| "Stack preview path has no parent".to_string())?;
     std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -947,15 +974,18 @@ fn render_preview_atomic(
                 .ok_or_else(|| "Stack preview dimensions do not match pixels".to_string())?,
         )
     };
+    save_png_atomic(&dynamic, original_destination)?;
     let resized = dynamic.resize(
         PREVIEW_MAX_DIMENSION,
         PREVIEW_MAX_DIMENSION,
         image::imageops::FilterType::Lanczos3,
     );
+    save_png_atomic(&resized, screen_destination)
+}
+
+fn save_png_atomic(image: &image::DynamicImage, destination: &FsPath) -> Result<(), String> {
     let temporary = destination.with_extension(format!("{}.tmp.png", std::process::id()));
-    resized
-        .save(&temporary)
-        .map_err(|error| error.to_string())?;
+    image.save(&temporary).map_err(|error| error.to_string())?;
     std::fs::rename(&temporary, destination).map_err(|error| error.to_string())
 }
 
@@ -981,6 +1011,10 @@ fn manifest_path(cache_root: &FsPath, job_id: &str) -> PathBuf {
 
 fn preview_path(cache_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
     stack_dir(cache_root, job_id).join(format!("group-{group_index}.png"))
+}
+
+fn original_preview_path(cache_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
+    stack_dir(cache_root, job_id).join(format!("group-{group_index}-original.png"))
 }
 
 fn fits_path(cache_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
@@ -1018,6 +1052,10 @@ mod tests {
         assert_eq!(
             preview_path(FsPath::new("/cache/db"), "abc", 2),
             PathBuf::from("/cache/db/stack-previews/abc/group-2.png")
+        );
+        assert_eq!(
+            original_preview_path(FsPath::new("/cache/db"), "abc", 2),
+            PathBuf::from("/cache/db/stack-previews/abc/group-2-original.png")
         );
         assert_eq!(
             fits_path(FsPath::new("/cache/db"), "abc", 2),

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
-import type { StackFrameDecision, StackPreviewJob } from '../api/types';
+import type { StackFrameDecision, StackGroupStatus, StackPreviewJob } from '../api/types';
+import StackPreviewInspector from './StackPreviewInspector';
 
 interface StackPreviewPanelProps {
   dbId: string;
@@ -40,6 +41,11 @@ export default function StackPreviewPanel({
   const [acceptedOnly, setAcceptedOnly] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobRequestFingerprint, setJobRequestFingerprint] = useState<string | null>(null);
+  const [inspector, setInspector] = useState<{
+    jobId: string;
+    artifactRevision: string;
+    group: StackGroupStatus;
+  } | null>(null);
   const stableImageIds = useMemo(() => [...imageIds].sort((a, b) => a - b), [imageIds]);
   const requestFingerprint = `${dbId}:${projectId}:${acceptedOnly ? 1 : 0}:${stableImageIds.join(',')}`;
   const currentRequestRef = useRef(requestFingerprint);
@@ -73,6 +79,7 @@ export default function StackPreviewPanel({
   useEffect(() => {
     setJobId(null);
     setJobRequestFingerprint(null);
+    setInspector(null);
     resetStart();
   }, [requestFingerprint, resetStart]);
 
@@ -98,7 +105,8 @@ export default function StackPreviewPanel({
     });
 
   return (
-    <section className="stack-preview-panel" aria-labelledby="stack-preview-title">
+    <>
+      <section className="stack-preview-panel" aria-labelledby="stack-preview-title">
       <div className="stack-preview-heading">
         <div>
           <div className="stack-preview-eyebrow">Project integration</div>
@@ -184,15 +192,28 @@ export default function StackPreviewPanel({
                 </header>
 
                 {group.state === 'ready' && (
-                  <img
-                    src={apiClient.getStackPreviewUrl(
-                      dbId,
-                      job.job_id,
-                      group.index,
-                      job.artifact_revision
-                    )}
-                    alt={`${group.target_name} ${group.filter_name} uncalibrated stack preview`}
-                  />
+                  <div className="stack-preview-image">
+                    <img
+                      src={apiClient.getStackPreviewUrl(
+                        dbId,
+                        job.job_id,
+                        group.index,
+                        job.artifact_revision
+                      )}
+                      alt={`${group.target_name} ${group.filter_name} uncalibrated stack preview`}
+                    />
+                    <button
+                      className="stack-preview-inspect"
+                      type="button"
+                      onClick={() => setInspector({
+                        jobId: job.job_id,
+                        artifactRevision: job.artifact_revision,
+                        group,
+                      })}
+                    >
+                      Inspect full size
+                    </button>
+                  </div>
                 )}
                 {(group.state === 'queued' || group.state === 'running') && (
                   <div className="stack-preview-placeholder">
@@ -236,6 +257,16 @@ export default function StackPreviewPanel({
           </div>
         </div>
       )}
-    </section>
+      </section>
+      {inspector && (
+        <StackPreviewInspector
+          dbId={dbId}
+          jobId={inspector.jobId}
+          artifactRevision={inspector.artifactRevision}
+          group={inspector.group}
+          onClose={() => setInspector(null)}
+        />
+      )}
+    </>
   );
 }

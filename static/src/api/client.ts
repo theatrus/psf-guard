@@ -202,15 +202,19 @@ export const apiClient = {
     dbId: string,
     jobId: string,
     groupIndex: number,
-    artifactRevision: string
+    artifactRevision: string,
+    size: 'screen' | 'original' = 'screen'
   ): string => {
     const serverUrl = getCachedServerUrl();
     const basePath = serverUrl ? `${serverUrl}/api` : '/api';
-    const revision = artifactRevision ? `?v=${encodeURIComponent(artifactRevision)}` : '';
+    const params = new URLSearchParams();
+    if (size === 'original') params.set('size', size);
+    if (artifactRevision) params.set('v', artifactRevision);
+    const query = params.size ? `?${params.toString()}` : '';
     return `${basePath}${dbPath(
       dbId,
       `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/preview`
-    )}${revision}`;
+    )}${query}`;
   },
 
   getStackFitsUrl: (

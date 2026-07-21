@@ -48,22 +48,31 @@ PSF Guard quality score and disposition. Accepted frames also report matched
 stars, registration RMS, registration drift, overlap, and integrated-sample
 fraction; excluded or rejected frames retain their reason.
 
-Choose **Download linear FITS** on a ready group to retrieve the full-resolution
-floating-point integration from the cache. The FITS is unstretched and retains
-the reference frame's supported WCS headers plus Seiza's accepted/rejected
-frame counters, making it suitable for inspection or as an input to a separate
-processing workflow.
+Choose **Inspect full size** to open the native-resolution integration in PSF
+Guard's image inspector. It uses the same controls as individual images: scroll
+to zoom, drag to pan, **F** or **0** to fit, and **1** for one image pixel per
+screen pixel. The full-size stretched PNG is loaded only when the inspector is
+opened, so the project grid continues to use the smaller screen preview.
+
+![The native-resolution stack in PSF Guard's pan and zoom inspector](stack-preview-inspection.png)
+
+Choose **Download linear FITS** on the card or in the inspector to retrieve the
+full-resolution floating-point integration from the cache. The FITS is
+unstretched and retains the reference frame's supported WCS headers plus
+Seiza's accepted/rejected frame counters, making it suitable for inspection or
+as an input to a separate processing workflow.
 
 ![Frame-by-frame stack admission details](stack-preview-decisions.png)
 
 ## Output, caching, and invalidation
 
 Each group produces a display-stretched PNG no larger than 2400 pixels on its
-longest side and an unstretched, source-resolution, 32-bit floating-point FITS.
-A JSON provenance manifest describes the job. Seiza sees the original star
-profiles during integration, and its incremental accumulator keeps memory
-bounded independently of frame count. A conservative memory estimate is
-checked against the server worker policy before integration starts. FITS
+longest side, a native-resolution stretched PNG for interactive inspection,
+and an unstretched, source-resolution, 32-bit floating-point FITS. A JSON
+provenance manifest describes the job. Seiza sees the original star profiles
+during integration, and its incremental accumulator keeps memory bounded
+independently of frame count. A conservative memory estimate is checked against
+the server worker policy before integration starts. Full-size PNGs and FITS
 downloads stream from disk rather than buffering the full artifact in server
 memory.
 
@@ -73,8 +82,10 @@ Artifacts live below the database cache directory:
 <cache>/<database>/stack-previews/<job-id>/
   manifest.json
   group-0.png
+  group-0-original.png
   group-0.fits
   group-1.png
+  group-1-original.png
   group-1.fits
 ```
 
@@ -105,7 +116,7 @@ The grid uses four per-database endpoints:
 ```text
 POST /api/db/{db}/projects/{project}/stack-previews
 GET  /api/db/{db}/projects/{project}/stack-previews/{job}
-GET  /api/db/{db}/stack-previews/{job}/{group}/preview
+GET  /api/db/{db}/stack-previews/{job}/{group}/preview[?size=screen|original]
 GET  /api/db/{db}/stack-previews/{job}/{group}/fits
 ```
 
