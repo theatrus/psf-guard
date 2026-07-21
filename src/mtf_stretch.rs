@@ -38,6 +38,51 @@ pub fn stretch_image_with_bit_depth(
         .collect()
 }
 
+/// Auto-stretch arbitrary linear floating-point samples to display `u8`.
+///
+/// Derived images such as stacks do not have a meaningful fixed integer bit
+/// depth. Estimate the median, MAD, and a robust highlight from a bounded
+/// sample, then apply the same N.I.N.A.-style MTF mapping as [`stretch_image`].
+/// All channels share one mapping so RGB color balance is preserved.
+pub fn stretch_f32_to_u8(data: &[f32], factor: f64, black_clipping: f64) -> Option<Vec<u8>> {
+    let mut sample = data
+        .iter()
+        .step_by((data.len() / 300_000).max(1))
+        .copied()
+        .filter(|value| value.is_finite())
+        .collect::<Vec<_>>();
+    if sample.is_empty() {
+        return None;
+    }
+    sample.sort_unstable_by(f32::total_cmp);
+    let median = f64::from(sample[sample.len() / 2]);
+    let mut deviations = sample
+        .iter()
+        .map(|value| (f64::from(*value) - median).abs())
+        .collect::<Vec<_>>();
+    deviations.sort_unstable_by(f64::total_cmp);
+    let mad = deviations[deviations.len() / 2];
+    let shadows = median + black_clipping * mad * 1.4826;
+    let highlights = f64::from(sample[sample.len() * 999 / 1000]);
+    let range = highlights - shadows;
+    if !range.is_finite() || range <= f64::EPSILON {
+        return None;
+    }
+    let normalized_median = ((median - shadows) / range).clamp(0.0, 1.0);
+    let midtones = midtones_transfer_function(factor, normalized_median);
+    Some(
+        data.iter()
+            .map(|value| {
+                if !value.is_finite() {
+                    return 0;
+                }
+                let normalized = ((f64::from(*value) - shadows) / range).clamp(0.0, 1.0);
+                (midtones_transfer_function(midtones, normalized) * 255.0).round() as u8
+            })
+            .collect(),
+    )
+}
+
 fn get_stretch_map_with_bit_depth(
     statistics: &ImageStatistics,
     target_histogram_median_pct: f64,
@@ -210,5 +255,18 @@ mod tests {
         assert_eq!(denormalize_u16(1.0), 65535);
         // 0.5 * 65535 = 32767.5, rounds to 32768
         assert!((denormalize_u16(0.5) as i32 - 32768).abs() <= 1);
+    }
+
+    #[test]
+    fn float_stretch_places_background_near_requested_median() {
+        let mut data = (0..10_000)
+            .map(|index| 1000.0 + (index % 19) as f32 - 9.0)
+            .collect::<Vec<_>>();
+        data.extend([0.0, 25_000.0, f32::NAN]);
+        let stretched = stretch_f32_to_u8(&data, 0.2, -2.8).unwrap();
+        let mut background = stretched[..10_000].to_vec();
+        background.sort_unstable();
+        assert!((40..=65).contains(&background[background.len() / 2]));
+        assert_eq!(stretched.last(), Some(&0));
     }
 }

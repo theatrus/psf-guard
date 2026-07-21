@@ -12,6 +12,7 @@ import LazyImageCard from './LazyImageCard';
 import FilterControls, { type FilterOptions } from './FilterControls';
 import StatsDashboard from './StatsDashboard';
 import UndoRedoToolbar from './UndoRedoToolbar';
+import StackPreviewPanel from './StackPreviewPanel';
 import { 
   type GroupingMode, 
   SINGLE_PROJECT_MODES,
@@ -147,6 +148,16 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
 
   // Determine if we're in multi-project mode
   const isMultiProjectMode = projectId === null;
+
+  // A multi-selection is an explicit stacking set. A single highlighted image
+  // is normal grid navigation, so fall back to the complete visible set.
+  const stackCandidates = useMemo(() => {
+    const selectedVisible = filteredImages.filter((image) => selectedImages.has(image.id));
+    if (selectedVisible.length >= 2) {
+      return { imageIds: selectedVisible.map((image) => image.id), source: 'selected' as const };
+    }
+    return { imageIds: filteredImages.map((image) => image.id), source: 'visible' as const };
+  }, [filteredImages, selectedImages]);
   
   // Group images based on selected mode
   const imageGroups = useMemo(() => {
@@ -696,6 +707,15 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
             </div>
           )}
         </div>
+
+        {dbId && projectId !== null && projectId !== undefined && (
+          <StackPreviewPanel
+            dbId={dbId}
+            projectId={projectId}
+            imageIds={stackCandidates.imageIds}
+            selectionSource={stackCandidates.source}
+          />
+        )}
 
         {showStats && (
           <StatsDashboard images={filteredImages} />

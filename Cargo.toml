@@ -34,6 +34,10 @@ byteorder = "1.5"
 seiza = "0.11.2"
 seiza-fits = "=0.1.6"
 seiza-satellites = { version = "0.4.1", features = ["serde"] }
+# Temporary commit pin until Seiza PR #49 publishes seiza-stacking 0.1.0.
+seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "18aa9b802ac357fa0afd7e12b339322b83fa473a" }
+sha2 = "0.11"
+rayon = "1"
 bumpalo = { version = "3.20", features = ["collections"] }
 image = "0.25"
 imageproc = "0.27"

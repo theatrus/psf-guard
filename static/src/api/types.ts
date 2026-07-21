@@ -280,6 +280,54 @@ export interface PreviewDescriptor {
   maxStars?: number;
 }
 
+export type StackJobState = 'queued' | 'running' | 'completed' | 'failed';
+export type StackGroupState = 'queued' | 'running' | 'ready' | 'skipped' | 'error';
+
+export interface StackFrameDecision {
+  image_id: number;
+  disposition: 'excluded' | 'reference' | 'accepted' | 'rejected';
+  reason?: string;
+  quality_score?: number;
+  matched_stars?: number;
+  registration_rms_pixels?: number;
+  registration_drift_pixels?: number;
+  overlap_fraction?: number;
+  integrated_fraction?: number;
+}
+
+export interface StackGroupStatus {
+  index: number;
+  target_id: number;
+  target_name: string;
+  filter_name: string;
+  state: StackGroupState;
+  total_candidates: number;
+  eligible_frames: number;
+  quality_excluded: number;
+  missing_files: number;
+  processed_frames: number;
+  accepted_frames: number;
+  rejected_frames: number;
+  reference_image_id?: number;
+  total_exposure_seconds: number;
+  preview_url?: string;
+  error?: string;
+  frames: StackFrameDecision[];
+}
+
+export interface StackPreviewJob {
+  schema_version: number;
+  job_id: string;
+  database_id: string;
+  project_id: number;
+  state: StackJobState;
+  accepted_only: boolean;
+  created_unix_seconds: number;
+  stacking_version: string;
+  groups: StackGroupStatus[];
+  error?: string;
+}
+
 export interface ServerInfo {
   version: string;
   cache_directory: string;

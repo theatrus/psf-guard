@@ -28,6 +28,7 @@ import type {
   AstrometryAnalysis,
   SatelliteAnalysis,
   SatelliteAnalysisStatus,
+  StackPreviewJob,
 } from './types';
 
 // Store the initialized API instance and server URL
@@ -168,6 +169,42 @@ export const apiClient = {
       dbPath(dbId, `/projects/${projectId}/targets`)
     );
     return data.data || [];
+  },
+
+  startStackPreviews: async (
+    dbId: string,
+    projectId: number,
+    request: { image_ids: number[]; accepted_only: boolean; force?: boolean }
+  ): Promise<StackPreviewJob> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<StackPreviewJob>>(
+      dbPath(dbId, `/projects/${projectId}/stack-previews`),
+      request
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to start stack previews');
+    return data.data;
+  },
+
+  getStackPreviewJob: async (
+    dbId: string,
+    projectId: number,
+    jobId: string
+  ): Promise<StackPreviewJob> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<StackPreviewJob>>(
+      dbPath(dbId, `/projects/${projectId}/stack-previews/${encodeURIComponent(jobId)}`)
+    );
+    if (!data.data) throw new Error(data.error || 'Stack preview job not found');
+    return data.data;
+  },
+
+  getStackPreviewUrl: (dbId: string, jobId: string, groupIndex: number): string => {
+    const serverUrl = getCachedServerUrl();
+    const basePath = serverUrl ? `${serverUrl}/api` : '/api';
+    return `${basePath}${dbPath(
+      dbId,
+      `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/preview`
+    )}`;
   },
 
   getImages: async (dbId: string, query: ImageQuery): Promise<Image[]> => {
