@@ -78,6 +78,7 @@ function defaultPalette(palettes: StackNarrowbandPalette[]): StackNarrowbandPale
 }
 
 function expectedChannelCount(kind: StackColorKind, palette?: StackNarrowbandPalette): number {
+  if (kind === 'rgb') return 3;
   if (kind === 'lrgb') return 4;
   return palette === 'hoo' || palette === 'foraxx-hoo' ? 2 : 3;
 }
@@ -115,7 +116,13 @@ function ColorCard({
 }) {
   const current = activeJob ?? artifact;
   const state = activeJob?.state ?? (artifact ? 'completed' : 'not-built');
-  const label = kind === 'lrgb' ? 'LRGB' : palette ? paletteLabels[palette].split(' · ')[0] : 'Narrowband';
+  const label = kind === 'rgb'
+    ? 'RGB'
+    : kind === 'lrgb'
+      ? 'LRGB'
+      : palette
+        ? paletteLabels[palette].split(' · ')[0]
+        : 'Narrowband';
   const processed = activeJob?.processed_channels ?? artifact?.total_channels ?? 0;
   const total = activeJob?.total_channels ?? artifact?.total_channels ?? expectedChannelCount(kind, palette);
   const percent = state === 'completed' ? 100 : total > 0 ? Math.min(100, processed / total * 100) : 0;
@@ -149,7 +156,7 @@ function ColorCard({
                 ))}
               </select>
             </label>
-          ) : <span className="stack-preview-channel">LRGB</span>}
+          ) : <span className="stack-preview-channel">{label}</span>}
         </div>
         <div className="stack-preview-card-actions">
           <span className={`stack-group-state ${state}`}>{state.replace('-', ' ')}</span>
@@ -168,7 +175,7 @@ function ColorCard({
               className="stack-preview-card-action"
               href={apiClient.getStackColorFitsUrl(dbId, artifact.job_id, artifact.artifact_revision)}
               download
-              aria-label={`Download ${label} RGB FITS`}
+              aria-label={label === 'RGB' ? 'Download RGB FITS' : `Download ${label} RGB FITS`}
             >
               FITS
             </a>
@@ -328,13 +335,14 @@ export default function StackColorPreviewPanel({
           available_roles: [],
           ambiguous_roles: [],
           unmapped_filters: [],
+          rgb_available: false,
           lrgb_available: false,
           narrowband_palettes: [],
         });
       }
     }
     return [...byId.values()].filter((target) =>
-      target.lrgb_available || target.narrowband_palettes.length > 0 ||
+      target.rgb_available || target.lrgb_available || target.narrowband_palettes.length > 0 ||
       (catalog.data?.jobs ?? []).some((job) => job.target_id === target.target_id)
     );
   }, [catalog.data]);
@@ -351,7 +359,7 @@ export default function StackColorPreviewPanel({
         <div>
           <div className="stack-preview-eyebrow">Color quick looks</div>
           <h3 id="stack-color-title">Combine channel stacks</h3>
-          <p>Register completed mono stacks across filters, then compose an LRGB or selectable narrowband preview.</p>
+          <p>Register completed mono stacks across filters, then compose an RGB, LRGB, or selectable narrowband preview.</p>
         </div>
         <span>On demand · cached by source revision</span>
       </div>
@@ -364,36 +372,42 @@ export default function StackColorPreviewPanel({
         {targets.flatMap((target) => {
           const targetJobs = (catalog.data?.jobs ?? []).filter((job) => job.target_id === target.target_id);
           const cards = [];
-          const lrgbArtifact = activeJob?.state === 'completed' &&
-            jobMatches(activeJob, target.target_id, 'lrgb')
-            ? activeJob
-            : targetJobs.find((job) => jobMatches(job, target.target_id, 'lrgb'));
-          const lrgbActive = activeJob && jobMatches(activeJob, target.target_id, 'lrgb')
-            ? activeJob : undefined;
-          if (target.lrgb_available || lrgbArtifact) {
-            const key = operationKey(target.target_id, 'lrgb');
-            cards.push(
-              <ColorCard
-                key={key}
-                dbId={dbId}
-                target={target}
-                kind="lrgb"
-                paletteChoices={[]}
-                artifact={lrgbArtifact}
-                activeJob={lrgbActive}
-                busy={busy}
-                operationPending={startPending && startVariables?.operationKey === key}
-                unavailable={!target.lrgb_available}
-                sourceStacksOutdated={outdatedTargetIds.has(target.target_id)}
-                onBuild={() => startColor({
-                  targetId: target.target_id,
-                  kind: 'lrgb',
-                  force: Boolean(lrgbArtifact && !lrgbArtifact.outdated),
-                  operationKey: key,
-                })}
-                onInspect={setInspector}
-              />
-            );
+          const broadbandKinds: Array<{ kind: 'rgb' | 'lrgb'; available: boolean }> = [
+            { kind: 'rgb', available: target.rgb_available },
+            { kind: 'lrgb', available: target.lrgb_available },
+          ];
+          for (const { kind, available } of broadbandKinds) {
+            const artifact = activeJob?.state === 'completed' &&
+              jobMatches(activeJob, target.target_id, kind)
+              ? activeJob
+              : targetJobs.find((job) => jobMatches(job, target.target_id, kind));
+            const cardActive = activeJob && jobMatches(activeJob, target.target_id, kind)
+              ? activeJob : undefined;
+            if (available || artifact) {
+              const key = operationKey(target.target_id, kind);
+              cards.push(
+                <ColorCard
+                  key={key}
+                  dbId={dbId}
+                  target={target}
+                  kind={kind}
+                  paletteChoices={[]}
+                  artifact={artifact}
+                  activeJob={cardActive}
+                  busy={busy}
+                  operationPending={startPending && startVariables?.operationKey === key}
+                  unavailable={!available}
+                  sourceStacksOutdated={outdatedTargetIds.has(target.target_id)}
+                  onBuild={() => startColor({
+                    targetId: target.target_id,
+                    kind,
+                    force: Boolean(artifact && !artifact.outdated),
+                    operationKey: key,
+                  })}
+                  onInspect={setInspector}
+                />
+              );
+            }
           }
 
           const paletteChoices = paletteOrder.filter((palette) =>
@@ -457,7 +471,9 @@ export default function StackColorPreviewPanel({
             dbId, inspector.job_id, inspector.artifact_revision
           )}
           imageAlt={`Full-resolution ${inspector.label} color preview for ${inspector.target_name}`}
-          downloadLabel={`Download ${inspector.label} RGB FITS`}
+          downloadLabel={inspector.label === 'RGB'
+            ? 'Download RGB FITS'
+            : `Download ${inspector.label} RGB FITS`}
           onClose={() => setInspector(null)}
         />
       )}

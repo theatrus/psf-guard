@@ -20,7 +20,7 @@ use axum::{
 };
 use rayon::ThreadPoolBuilder;
 use seiza_stacking::{
-    combine_lrgb, combine_narrowband, resample_to_reference, write_color_fits_f32,
+    combine_lrgb, combine_narrowband, combine_rgb, resample_to_reference, write_color_fits_f32,
     ColorComposition, ColorOptions, ColorTransfer, FitsFrame, ForaxxOptions, LinearImage,
     NarrowbandPalette, Registrar, RegistrationOptions,
 };
@@ -70,6 +70,7 @@ impl StackColorRole {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StackColorKind {
+    Rgb,
     Lrgb,
     Narrowband,
 }
@@ -194,6 +195,7 @@ pub struct StackColorTargetAvailability {
     pub available_roles: Vec<StackColorAvailableRole>,
     pub ambiguous_roles: Vec<StackColorRole>,
     pub unmapped_filters: Vec<String>,
+    pub rgb_available: bool,
     pub lrgb_available: bool,
     pub narrowband_palettes: Vec<StackNarrowbandPalette>,
 }
@@ -447,8 +449,8 @@ async fn stream_artifact(
 
 fn validate_request(request: &StackColorRequest) -> Result<(), AppError> {
     match (request.kind, request.palette) {
-        (StackColorKind::Lrgb, Some(_)) => Err(AppError::BadRequest(
-            "LRGB color previews do not take a narrowband palette".into(),
+        (StackColorKind::Rgb | StackColorKind::Lrgb, Some(_)) => Err(AppError::BadRequest(
+            "RGB and LRGB color previews do not take a narrowband palette".into(),
         )),
         (StackColorKind::Narrowband, None) => Err(AppError::BadRequest(
             "Narrowband color previews require a palette".into(),
@@ -553,6 +555,11 @@ fn required_roles(
     palette: Option<StackNarrowbandPalette>,
 ) -> Vec<StackColorRole> {
     match kind {
+        StackColorKind::Rgb => vec![
+            StackColorRole::Red,
+            StackColorRole::Green,
+            StackColorRole::Blue,
+        ],
         StackColorKind::Lrgb => vec![
             StackColorRole::Luminance,
             StackColorRole::Red,
@@ -575,6 +582,7 @@ fn composition_label(
     palette: Option<StackNarrowbandPalette>,
 ) -> &'static str {
     match kind {
+        StackColorKind::Rgb => "RGB",
         StackColorKind::Lrgb => "LRGB",
         StackColorKind::Narrowband => palette.expect("validated narrowband palette").label(),
     }
@@ -651,6 +659,7 @@ fn compose_color(
     cache_root: &FsPath,
 ) -> Result<(), String> {
     let reference_role = match job.kind {
+        StackColorKind::Rgb => StackColorRole::Red,
         StackColorKind::Lrgb => StackColorRole::Luminance,
         StackColorKind::Narrowband => StackColorRole::Ha,
     };
@@ -779,6 +788,12 @@ fn compose_color(
         });
         let options = ColorOptions::default();
         let composition = match job.kind {
+            StackColorKind::Rgb => combine_rgb(
+                &images[&StackColorRole::Red],
+                &images[&StackColorRole::Green],
+                &images[&StackColorRole::Blue],
+                &options,
+            ),
             StackColorKind::Lrgb => combine_lrgb(
                 &images[&StackColorRole::Luminance],
                 &images[&StackColorRole::Red],
@@ -994,14 +1009,14 @@ fn availability(sources: &BTreeMap<i32, TargetSources>) -> Vec<StackColorTargetA
                 .iter()
                 .map(|available| available.role)
                 .collect::<HashSet<_>>();
-            let lrgb_available = [
-                StackColorRole::Luminance,
+            let rgb_available = [
                 StackColorRole::Red,
                 StackColorRole::Green,
                 StackColorRole::Blue,
             ]
             .iter()
             .all(|role| unique.contains(role));
+            let lrgb_available = rgb_available && unique.contains(&StackColorRole::Luminance);
             let has_ha_oiii =
                 unique.contains(&StackColorRole::Ha) && unique.contains(&StackColorRole::Oiii);
             let narrowband_palettes = if has_ha_oiii {
@@ -1015,6 +1030,7 @@ fn availability(sources: &BTreeMap<i32, TargetSources>) -> Vec<StackColorTargetA
                 available_roles,
                 ambiguous_roles,
                 unmapped_filters: target.unmapped_filters.clone(),
+                rgb_available,
                 lrgb_available,
                 narrowband_palettes,
             }
@@ -1309,6 +1325,42 @@ mod tests {
     }
 
     #[test]
+    fn rgb_is_available_without_a_luminance_stack() {
+        let cache = tempfile::tempdir().unwrap();
+        let groups = vec![
+            source_group("R", 0),
+            source_group("G", 1),
+            source_group("B", 2),
+        ];
+        for group in &groups {
+            let path = super::super::fits_path(cache.path(), &group.job_id, group.group.index);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"fixture").unwrap();
+        }
+        let latest = LatestStackPreviews {
+            schema_version: 1,
+            database_id: "db".into(),
+            project_id: 1,
+            updated_unix_seconds: 1,
+            groups,
+        };
+
+        let available = availability(&collect_sources(cache.path(), &latest));
+
+        assert_eq!(available.len(), 1);
+        assert!(available[0].rgb_available);
+        assert!(!available[0].lrgb_available);
+        assert_eq!(
+            required_roles(StackColorKind::Rgb, None),
+            [
+                StackColorRole::Red,
+                StackColorRole::Green,
+                StackColorRole::Blue
+            ]
+        );
+    }
+
+    #[test]
     fn color_artifact_paths_are_separate_from_mono_groups() {
         let root = FsPath::new("/cache/db");
         assert_eq!(
@@ -1341,6 +1393,13 @@ mod tests {
 
     #[test]
     fn rejects_palette_shape_mismatches_before_preparing_a_job() {
+        assert!(validate_request(&StackColorRequest {
+            target_id: 1,
+            kind: StackColorKind::Rgb,
+            palette: Some(StackNarrowbandPalette::Sho),
+            force: false,
+        })
+        .is_err());
         assert!(validate_request(&StackColorRequest {
             target_id: 1,
             kind: StackColorKind::Lrgb,

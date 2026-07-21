@@ -85,6 +85,7 @@ the grid adds a **Combine channel stacks** section. Color generation is a
 separate on-demand job: rebuilding or changing a color palette never changes
 the mono integrations or their admission evidence.
 
+- **RGB** requires one unambiguous Red, Green, and Blue stack.
 - **LRGB** requires one unambiguous Luminance, Red, Green, and Blue stack.
   Luminance supplies the output luminance while Seiza retains the RGB
   chromaticity.
@@ -101,10 +102,10 @@ deliberately does not guess when two stacks map to the same role or when a
 multi-band filter name is ambiguous. Rename the Target Scheduler filters to
 make those roles explicit before building color.
 
-Each non-reference stack is registered to L for LRGB or H-alpha for
-narrowband, using the same bounded Seiza star/similarity registration used by
+Each non-reference stack is registered to R for RGB, L for LRGB, or H-alpha
+for narrowband, using the same bounded Seiza star/similarity registration used by
 the Seiza color CLI. Seiza independently percentile-normalizes the channels
-for a useful quick look, then performs the selected composition. Direct LRGB,
+for a useful quick look, then performs the selected composition. Direct RGB, LRGB,
 HOO, and three-filter palettes remain linear-light; their PNG receives a
 display-only stretch. Foraxx works on display-prepared channels, so its PNG is
 not stretched a second time. The RGB floating-point FITS records `COLORSPC`,
@@ -197,6 +198,7 @@ false }`. Status responses contain the group counters, captured image/grade
 snapshot, and complete per-frame decision records used by the UI. The latest
 endpoint returns the durable last-successful result for each target/channel.
 The color catalog reports role/palette availability and durable results. Its
-POST body is `{ "target_id": 42, "kind": "lrgb", "force": false }` or
+POST body is `{ "target_id": 42, "kind": "rgb", "force": false }`,
+`{ "target_id": 42, "kind": "lrgb", "force": false }`, or
 `{ "target_id": 42, "kind": "narrowband", "palette": "foraxx-hoo",
 "force": false }`.

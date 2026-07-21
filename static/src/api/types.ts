@@ -354,7 +354,7 @@ export interface LatestStackPreviews {
 }
 
 export type StackColorRole = 'luminance' | 'red' | 'green' | 'blue' | 'ha' | 'oiii' | 'sii';
-export type StackColorKind = 'lrgb' | 'narrowband';
+export type StackColorKind = 'rgb' | 'lrgb' | 'narrowband';
 export type StackNarrowbandPalette =
   | 'sho'
   | 'soh'
@@ -412,6 +412,7 @@ export interface StackColorTargetAvailability {
   available_roles: StackColorAvailableRole[];
   ambiguous_roles: StackColorRole[];
   unmapped_filters: string[];
+  rgb_available: boolean;
   lrgb_available: boolean;
   narrowband_palettes: StackNarrowbandPalette[];
 }

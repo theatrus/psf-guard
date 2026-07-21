@@ -351,7 +351,7 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   expect(rebuiltSrc).not.toBe(cachedSrc);
 });
 
-test('composes cached channel stacks into LRGB and selectable narrowband previews', async ({
+test('composes cached channel stacks into RGB, LRGB, and selectable narrowband previews', async ({
   page,
 }) => {
   test.setTimeout(180_000);
@@ -362,11 +362,27 @@ test('composes cached channel stacks into LRGB and selectable narrowband preview
   const section = page.locator('.stack-color-section');
   await expect(section).toBeVisible();
   await expect(section).toContainText('Combine channel stacks');
+  const rgbButton = section.getByRole('button', { name: 'Build RGB color preview' });
+  const rgbCard = section.locator('.stack-color-card[data-color-kind="rgb"]');
   const lrgbButton = section.getByRole('button', { name: 'Build LRGB color preview' });
   const lrgbCard = section.locator('.stack-color-card[data-color-kind="lrgb"]');
   const palette = section.getByRole('combobox', { name: 'Beta Field narrowband palette' });
   await expect(palette.locator('option')).toHaveCount(9);
   await expect(palette).toHaveValue('sho');
+
+  await rgbButton.click();
+  await expect(rgbCard.locator('.stack-preview-progress')).toHaveAttribute(
+    'data-stack-color-state', 'completed', { timeout: 90_000 }
+  );
+  await expect(rgbCard.locator('.stack-preview-progress')).toContainText('3/3 channels');
+  await expect(rgbCard.getByRole('img', { name: /RGB color stack preview/i })).toBeVisible();
+  const rgbFits = rgbCard.getByRole('link', { name: 'Download RGB FITS' });
+  const rgbResponse = await page.request.get((await rgbFits.getAttribute('href'))!);
+  expect(rgbResponse.status()).toBe(200);
+  const rgbHeader = (await rgbResponse.body()).subarray(0, 2880).toString('ascii');
+  expect(rgbHeader).toContain('COLORSPC');
+  expect(rgbHeader).toContain('RGB');
+  expect(rgbHeader).toContain('LINEAR');
 
   await lrgbButton.click();
   await expect(lrgbCard.locator('.stack-preview-progress')).toHaveAttribute(
