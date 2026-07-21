@@ -52,27 +52,61 @@ It runs as a desktop app (Windows/macOS/Linux), a self-hosted web server
 > projects, captured images, and grades — between machines. It's careful
 > (dry-run flags everywhere), but it's also young software.
 
-## Screenshots
+## Features in practice
+
+The sky images below come from real FITS acquisitions, not generated demo
+fields. They are deliberately shown as quick-look data: PSF Guard is for
+finding problems, making grading decisions, and checking an integration before
+committing hours to a full calibration and processing workflow.
+
+### Review and grade a night quickly
 
 | Overview Dashboard | Image Grid | Side-by-Side Comparison |
 |:--:|:--:|:--:|
 | ![Overview](docs/overview.png) | ![Grid](docs/image_grid.jpg) | ![Compare](docs/compare.jpg) |
 | Project statistics and progress tracking | Grid view with filtering and batch operations | Synchronized zoom and detailed comparison |
 
+### See the evidence behind a quality decision
+
 | Sequence Analysis & Astrometry Quality | Star Detection | PSF Fitting |
 |:--:|:--:|:--:|
 | ![Sequence Analysis](docs/sequence-quality-astrometry.png) | ![Annotated Stars](docs/annotated-stars.jpg) | ![PSF Visualization](docs/psf-visualization.jpg) |
-| Per-frame scores, cloud/occlusion screening, solved-center scatter, and off-target/tracking flags | HocusFocus inspired detection with annotated output (`annotate-stars`) | Observed / fitted / residual grids with Moffat & Gaussian models (`visualize-psf-multi`) |
+| Per-frame scores, cloud/occlusion screening, solved-center scatter, and off-target/tracking flags | HocusFocus-inspired detection with annotated output (`annotate-stars`) | Observed / fitted / residual grids with Moffat & Gaussian models (`visualize-psf-multi`) |
+
+The sequence analyzer brings global image statistics, spatial and photometric
+screening, pixel-derived plate solves, and cached satellite evidence into a
+per-frame score. Recommendations remain reviewable before PSF Guard writes a
+grade back to Target Scheduler.
+
+### Preview a stack without leaving the grader
 
 | Stack Preview | Full-size Inspection | Stack Admission Decisions |
 |:--:|:--:|:--:|
 | ![A three-frame B-channel project stack preview](docs/stack-preview.png) | ![Native-resolution stack inspection](docs/stack-preview-inspection.png) | ![Per-frame Seiza registration and admission details](docs/stack-preview-decisions.png) |
 | Uncalibrated, on-demand integration grouped by exact target and channel | Familiar zoom, pan, fit, and one-pixel-per-pixel controls | Quality exclusions, reference choice, matches, registration RMS, and rejection reasons |
 
-| RGB, LRGB, and Narrowband Color Previews | Ordered Color Processing Stacks |
-|:--:|:--:|
-| ![LRGB and selectable Foraxx narrowband previews](docs/stack-color-previews.png) | ![Background extraction and ordered stretch editor](docs/stack-color-processing.png) |
-| Per-channel background extraction, cross-filter registration, palette selection, durable source-aware caching, full-size inspection, and RGB FITS download | Editable background fitting plus per-input and output stretch passes with a complete phase ledger and resolved-plan provenance |
+This real M44 example was built from three B-channel acquisitions. Each input's
+quality exclusion, registration match count, residual, and admission decision
+is retained with the cached linear FITS result.
+
+### Combine real RGB and narrowband channel stacks
+
+![Real RGB and Foraxx SHO previews of Caldwell 33 built from PSF Guard channel stacks](docs/stack-color-real-previews.jpg)
+
+These are real Caldwell 33 (Veil Nebula) quick-look previews from twelve
+accepted Ultracat acquisitions: two each in R, G, B, Ha, OIII, and SII. The
+same six channel stacks produce both the natural RGB result and the selected
+Foraxx SHO palette; palette changes do not rebuild the linear integrations.
+
+<img src="docs/stack-background-real.jpg" width="570" alt="Background extraction controls and fit diagnostics from the real Caldwell 33 RGB preview">
+
+Color previews fit and subtract each input channel's background before
+cross-filter registration. The UI exposes the resolved fit evidence, editable
+background model, per-input and output stretch stacks, complete phase progress,
+full-size inspection, and a downloadable processed RGB FITS file. This real RGB
+run accepted 91, 92, and 96 of 96 candidate background samples in R, G, and B.
+See the **[stack preview guide](docs/STACKING_PREVIEWS.md)** for the full
+workflow and cache behavior.
 
 ## Installation
 
