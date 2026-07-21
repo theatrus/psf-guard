@@ -368,6 +368,36 @@ export default function StackPreviewPanel({
                 const groupBusy =
                   activeGroup?.state === 'queued' || activeGroup?.state === 'running';
                 const canBuildChannel = (current?.images.length ?? 0) >= 2;
+                const progressGroup = activeGroup ?? artifact?.group;
+                const progressState = progressGroup?.state ?? 'not-built';
+                const processedFrames = progressGroup?.processed_frames ?? 0;
+                const eligibleFrames =
+                  progressGroup?.eligible_frames ?? current?.images.length ?? 0;
+                const progressPercentage =
+                  progressState === 'ready'
+                    ? 100
+                    : eligibleFrames > 0
+                      ? Math.min(100, (processedFrames / eligibleFrames) * 100)
+                      : 0;
+                const progressLabel =
+                  progressState === 'queued'
+                    ? artifact
+                      ? 'Rebuild queued'
+                      : 'Waiting for stacker'
+                    : progressState === 'running'
+                      ? artifact
+                        ? 'Rebuilding stack'
+                        : 'Registering frames'
+                      : progressState === 'ready'
+                        ? 'Stack ready'
+                        : progressState === 'skipped'
+                          ? 'Stack skipped'
+                          : progressState === 'error'
+                            ? 'Stack failed'
+                            : 'Not built';
+                const progressDetail = progressGroup
+                  ? `${processedFrames}/${eligibleFrames} frames`
+                  : `${current?.images.length ?? 0} candidates`;
 
                 return (
                   <article
@@ -460,15 +490,39 @@ export default function StackPreviewPanel({
                       </div>
                     )}
 
+                    <div
+                      className={`stack-preview-progress ${progressState}`}
+                      data-stack-state={progressState}
+                      role="status"
+                      aria-live="polite"
+                    >
+                      <div className="stack-preview-progress-copy">
+                        <span>{progressLabel}</span>
+                        <span>{progressDetail}</span>
+                      </div>
+                      <div
+                        className="stack-preview-progress-track"
+                        role="progressbar"
+                        aria-label={`${targetName} ${filterName || 'no filter'} stack progress`}
+                        aria-valuemin={0}
+                        aria-valuemax={eligibleFrames}
+                        aria-valuenow={processedFrames}
+                      >
+                        <span style={{ width: `${progressPercentage}%` }} />
+                      </div>
+                    </div>
+
+                    {progressGroup && (
+                      <div className="stack-preview-metrics">
+                        <div><strong>{progressGroup.accepted_frames}</strong><span>integrated</span></div>
+                        <div><strong>{progressGroup.rejected_frames}</strong><span>stack rejects</span></div>
+                        <div><strong>{progressGroup.quality_excluded}</strong><span>quality excluded</span></div>
+                        <div><strong>{formatExposure(progressGroup.total_exposure_seconds)}</strong><span>exposure</span></div>
+                      </div>
+                    )}
+
                     {artifact && (
                       <>
-                        <div className="stack-preview-metrics">
-                          <div><strong>{artifact.group.accepted_frames}</strong><span>integrated</span></div>
-                          <div><strong>{artifact.group.rejected_frames}</strong><span>stack rejects</span></div>
-                          <div><strong>{artifact.group.quality_excluded}</strong><span>quality excluded</span></div>
-                          <div><strong>{formatExposure(artifact.group.total_exposure_seconds)}</strong><span>exposure</span></div>
-                        </div>
-
                         <details className="stack-preview-details">
                           <summary>Frame decisions ({artifact.group.frames.length})</summary>
                           <div className="stack-frame-table-wrap">

@@ -2808,6 +2808,61 @@
   to { transform: rotate(360deg); }
 }
 
+.stack-preview-progress {
+  padding: 0.4rem 0.65rem 0.45rem;
+  border-top: 1px solid var(--color-bg-tertiary);
+  border-bottom: 1px solid var(--color-bg-tertiary);
+  background: var(--color-bg-secondary);
+}
+
+.stack-preview-progress-copy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.32rem;
+  color: var(--color-text-muted);
+  font-size: 0.69rem;
+  font-weight: 650;
+}
+
+.stack-preview-progress.running .stack-preview-progress-copy,
+.stack-preview-progress.queued .stack-preview-progress-copy {
+  color: var(--color-primary);
+}
+
+.stack-preview-progress.ready .stack-preview-progress-copy {
+  color: var(--color-success);
+}
+
+.stack-preview-progress.error .stack-preview-progress-copy {
+  color: var(--color-error);
+}
+
+.stack-preview-progress-track {
+  height: 4px;
+  overflow: hidden;
+  background: var(--color-bg-quaternary);
+  border-radius: 999px;
+}
+
+.stack-preview-progress-track > span {
+  display: block;
+  height: 100%;
+  min-width: 0;
+  background: var(--color-primary);
+  border-radius: inherit;
+  transition: width 180ms ease-out;
+}
+
+.stack-preview-progress.ready .stack-preview-progress-track > span {
+  background: var(--color-success);
+}
+
+.stack-preview-progress.error .stack-preview-progress-track > span {
+  background: var(--color-error);
+}
+
 .stack-preview-metrics {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
