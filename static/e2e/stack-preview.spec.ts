@@ -33,7 +33,11 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   const panel = page.locator('.stack-preview-panel');
   await expect(panel).toBeVisible({ timeout: 15_000 });
   await expect(panel).toContainText('3 visible images');
-  await panel.getByRole('button', { name: 'Build stack previews' }).click();
+  const gridColumns = await panel.locator('.stack-preview-grid').evaluate(
+    (grid) => getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length
+  );
+  expect(gridColumns).toBe(2);
+  await panel.getByRole('button', { name: 'Build channel', exact: true }).click();
 
   const results = panel.locator('.stack-preview-results');
   await expect(results).toHaveAttribute('data-job-state', 'completed', {
@@ -136,6 +140,14 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   fs.closeSync(fitsFile);
   expect(fitsHeader.toString('ascii')).toBe('SIMPLE  =');
 
+  const latestResponse = await page.request.get(
+    `/api/db/${encodeURIComponent(dbId)}/projects/1/stack-previews/latest`
+  );
+  expect(latestResponse.status()).toBe(200);
+  const latestPayload = await latestResponse.json();
+  expect(latestPayload.data.groups).toHaveLength(1);
+  expect(latestPayload.data.groups[0].job_id).toBe(jobId);
+
   if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
     const docs = path.resolve(process.cwd(), '..', 'docs');
     fs.mkdirSync(docs, { recursive: true });
@@ -153,36 +165,75 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
     await details.screenshot({ path: path.join(docs, 'stack-preview-decisions.png') });
   }
 
-  // Changing policy invalidates the visible result instead of relabeling the
-  // previous stack as if it used the new request.
+  // Changing policy marks the remembered result out of date without hiding it.
   const acceptedOnly = panel.getByRole('checkbox', { name: 'Accepted only' });
   await acceptedOnly.check();
-  await expect(panel.locator('.stack-preview-results')).toHaveCount(0);
+  await expect(panel.locator('.stack-preview-card')).toHaveAttribute('data-outdated', 'true');
+  await expect(panel.locator('.stack-preview-outdated')).toContainText('Accepted only changed');
+  await expect(panel.getByRole('img', { name: /uncalibrated stack preview/i })).toBeVisible();
   await acceptedOnly.uncheck();
-  await expect(panel.locator('.stack-preview-results')).toHaveCount(0);
+  await expect(panel.locator('.stack-preview-card')).toHaveAttribute('data-outdated', 'false');
 
-  // Reload the unchanged cached result, then force a rebuild. The same
-  // content-addressed job gets a fresh artifact revision and polling resumes.
-  await panel.getByRole('button', { name: 'Build stack previews' }).click();
-  await expect(panel.locator('.stack-preview-results')).toHaveAttribute(
-    'data-job-state',
-    'completed'
+  await page.goto(
+    `/#/grid?db=${encodeURIComponent(dbId)}&project=1&search=no-such-stack-target`
   );
-  const cachedSrc = await panel
+  await expect(page.locator('.stack-preview-outdated')).toContainText(
+    'not in the current input'
+  );
+  await expect(page.getByRole('img', { name: /uncalibrated stack preview/i })).toBeVisible();
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+  await expect(page.locator('.stack-preview-card')).toHaveAttribute('data-outdated', 'false');
+
+  // The last successful per-channel result survives navigation and restart-like
+  // page reloads without starting another stack job.
+  const rememberedSrc = await panel
     .getByRole('img', { name: /uncalibrated stack preview/i })
     .getAttribute('src');
-  await panel.getByRole('button', { name: 'Rebuild' }).click();
-  await expect(panel.locator('.stack-preview-results')).toHaveAttribute(
-    'data-job-state',
-    /queued|running/,
-    { timeout: 15_000 }
+  await page.reload();
+  const reloadedPanel = page.locator('.stack-preview-panel');
+  await expect(reloadedPanel.locator('.stack-preview-results')).toHaveAttribute(
+    'data-job-state', 'remembered'
   );
-  await expect(panel.locator('.stack-preview-results')).toHaveAttribute(
+  await expect(reloadedPanel.getByRole('img', { name: /uncalibrated stack preview/i })).toBeVisible();
+  expect(
+    await reloadedPanel.getByRole('img', { name: /uncalibrated stack preview/i }).getAttribute('src')
+  ).toBe(rememberedSrc);
+
+  // Scheduler grade changes are independently detected even when the set of
+  // image IDs is unchanged.
+  const input = latestPayload.data.groups[0].group.input_images[0];
+  const statusNames = ['pending', 'accepted', 'rejected'] as const;
+  const changedStatus = input.grading_status === 2 ? 'accepted' : 'rejected';
+  const gradeResponse = await page.request.put(
+    `/api/db/${encodeURIComponent(dbId)}/images/${input.image_id}/grade`,
+    { data: { status: changedStatus } }
+  );
+  expect(gradeResponse.ok()).toBe(true);
+  await page.reload();
+  await expect(page.locator('.stack-preview-outdated')).toContainText('image grades changed');
+
+  const restoreResponse = await page.request.put(
+    `/api/db/${encodeURIComponent(dbId)}/images/${input.image_id}/grade`,
+    { data: { status: statusNames[input.grading_status] } }
+  );
+  expect(restoreResponse.ok()).toBe(true);
+  await page.reload();
+  await expect(page.locator('.stack-preview-card')).toHaveAttribute('data-outdated', 'false');
+
+  // Rebuild just this channel. Its content-addressed job stays the same, but
+  // the forced run receives a fresh artifact revision.
+  const cachedSrc = await page.locator('.stack-preview-panel')
+    .getByRole('img', { name: /uncalibrated stack preview/i })
+    .getAttribute('src');
+  await page.locator('.stack-preview-panel')
+    .getByRole('button', { name: 'Rebuild channel', exact: true })
+    .click();
+  await expect(page.locator('.stack-preview-results')).toHaveAttribute(
     'data-job-state',
     'completed',
     { timeout: 210_000 }
   );
-  const rebuiltSrc = await panel
+  const rebuiltSrc = await page.locator('.stack-preview-panel')
     .getByRole('img', { name: /uncalibrated stack preview/i })
     .getAttribute('src');
   expect(rebuiltSrc).not.toBe(cachedSrc);

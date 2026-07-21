@@ -295,6 +295,11 @@ export interface StackFrameDecision {
   integrated_fraction: number | null;
 }
 
+export interface StackInputImage {
+  image_id: number;
+  grading_status: number;
+}
+
 export interface StackGroupStatus {
   index: number;
   target_id: number;
@@ -313,6 +318,7 @@ export interface StackGroupStatus {
   preview_url: string | null;
   fits_url: string | null;
   error: string | null;
+  input_images: StackInputImage[];
   frames: StackFrameDecision[];
 }
 
@@ -329,6 +335,22 @@ export interface StackPreviewJob {
   stacking_version: string;
   groups: StackGroupStatus[];
   error: string | null;
+}
+
+export interface LatestStackPreviewGroup {
+  job_id: string;
+  artifact_revision: string;
+  accepted_only: boolean;
+  created_unix_seconds: number;
+  group: StackGroupStatus;
+}
+
+export interface LatestStackPreviews {
+  schema_version: number;
+  database_id: string;
+  project_id: number;
+  updated_unix_seconds: number;
+  groups: LatestStackPreviewGroup[];
 }
 
 export interface ServerInfo {

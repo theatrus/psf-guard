@@ -154,9 +154,9 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const stackCandidates = useMemo(() => {
     const selectedVisible = filteredImages.filter((image) => selectedImages.has(image.id));
     if (selectedVisible.length >= 2) {
-      return { imageIds: selectedVisible.map((image) => image.id), source: 'selected' as const };
+      return { images: selectedVisible, source: 'selected' as const };
     }
-    return { imageIds: filteredImages.map((image) => image.id), source: 'visible' as const };
+    return { images: filteredImages, source: 'visible' as const };
   }, [filteredImages, selectedImages]);
   
   // Group images based on selected mode
@@ -712,7 +712,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
           <StackPreviewPanel
             dbId={dbId}
             projectId={projectId}
-            imageIds={stackCandidates.imageIds}
+            images={stackCandidates.images}
             selectionSource={stackCandidates.source}
           />
         )}

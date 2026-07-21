@@ -29,6 +29,7 @@ import type {
   SatelliteAnalysis,
   SatelliteAnalysisStatus,
   StackPreviewJob,
+  LatestStackPreviews,
 } from './types';
 
 // Store the initialized API instance and server URL
@@ -195,6 +196,18 @@ export const apiClient = {
       dbPath(dbId, `/projects/${projectId}/stack-previews/${encodeURIComponent(jobId)}`)
     );
     if (!data.data) throw new Error(data.error || 'Stack preview job not found');
+    return data.data;
+  },
+
+  getLatestStackPreviews: async (
+    dbId: string,
+    projectId: number
+  ): Promise<LatestStackPreviews> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<LatestStackPreviews>>(
+      dbPath(dbId, `/projects/${projectId}/stack-previews/latest`)
+    );
+    if (!data.data) throw new Error(data.error || 'Latest stack previews could not be loaded');
     return data.data;
   },
 
