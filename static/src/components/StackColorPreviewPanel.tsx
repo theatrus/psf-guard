@@ -6,8 +6,10 @@ import type {
   StackColorKind,
   StackColorTargetAvailability,
   StackNarrowbandPalette,
+  StackStretchPreview,
 } from '../api/types';
 import StackPreviewInspector from './StackPreviewInspector';
+import StackStretchControls from './StackStretchControls';
 
 interface StackColorPreviewPanelProps {
   dbId: string;
@@ -71,6 +73,10 @@ function jobMatches(
   return job.target_id === targetId && job.kind === kind && job.palette === (palette ?? null);
 }
 
+function colorStretchKey(job: StackColorJob) {
+  return `${job.job_id}:${job.artifact_revision}`;
+}
+
 function defaultPalette(palettes: StackNarrowbandPalette[]): StackNarrowbandPalette | undefined {
   if (palettes.includes('sho')) return 'sho';
   if (palettes.includes('hoo')) return 'hoo';
@@ -90,6 +96,7 @@ function ColorCard({
   palette,
   paletteChoices,
   artifact,
+  appliedStretch,
   activeJob,
   busy,
   operationPending,
@@ -98,6 +105,8 @@ function ColorCard({
   onPaletteChange,
   onBuild,
   onInspect,
+  onStretchApplied,
+  onStretchReverted,
 }: {
   dbId: string;
   target: StackColorTargetAvailability;
@@ -105,6 +114,7 @@ function ColorCard({
   palette?: StackNarrowbandPalette;
   paletteChoices: StackNarrowbandPalette[];
   artifact?: StackColorJob;
+  appliedStretch?: StackStretchPreview;
   activeJob?: StackColorJob;
   busy: boolean;
   operationPending: boolean;
@@ -113,6 +123,8 @@ function ColorCard({
   onPaletteChange?: (palette: StackNarrowbandPalette) => void;
   onBuild: () => void;
   onInspect: (job: StackColorJob) => void;
+  onStretchApplied: (job: StackColorJob, preview: StackStretchPreview) => void;
+  onStretchReverted: (job: StackColorJob) => void;
 }) {
   const current = activeJob ?? artifact;
   const state = activeJob?.state ?? (artifact ? 'completed' : 'not-built');
@@ -203,7 +215,7 @@ function ColorCard({
       {artifact ? (
         <div className="stack-preview-image stack-color-image">
           <img
-            src={apiClient.getStackColorPreviewUrl(
+            src={appliedStretch?.preview_url ?? apiClient.getStackColorPreviewUrl(
               dbId, artifact.job_id, artifact.artifact_revision
             )}
             alt={`${target.target_name} ${label} color stack preview`}
@@ -220,6 +232,20 @@ function ColorCard({
             ? 'The required channel stacks are not currently available.'
             : `Build an on-demand ${label} quick look from the channel stacks.`)}
         </div>
+      )}
+
+      {artifact && (
+        <StackStretchControls
+          key={colorStretchKey(artifact)}
+          label={`${target.target_name} ${label}`}
+          channels={3}
+          displayReferred={artifact.label.startsWith('Foraxx')}
+          disabled={busy}
+          applied={appliedStretch}
+          apply={(request) => apiClient.applyStackColorStretch(dbId, artifact.job_id, request)}
+          onApplied={(preview) => onStretchApplied(artifact, preview)}
+          onRevert={() => onStretchReverted(artifact)}
+        />
       )}
 
       <div
@@ -271,6 +297,7 @@ export default function StackColorPreviewPanel({
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [paletteByTarget, setPaletteByTarget] = useState<Record<number, StackNarrowbandPalette>>({});
   const [inspector, setInspector] = useState<StackColorJob | null>(null);
+  const [stretches, setStretches] = useState<Record<string, StackStretchPreview>>({});
 
   const catalog = useQuery({
     queryKey: catalogQueryKey(dbId, projectId, sourceRevision),
@@ -322,6 +349,7 @@ export default function StackColorPreviewPanel({
     setActiveJobId(null);
     setPaletteByTarget({});
     setInspector(null);
+    setStretches({});
     resetStart();
   }, [dbId, projectId, resetStart]);
 
@@ -393,6 +421,7 @@ export default function StackColorPreviewPanel({
                   kind={kind}
                   paletteChoices={[]}
                   artifact={artifact}
+                  appliedStretch={artifact ? stretches[colorStretchKey(artifact)] : undefined}
                   activeJob={cardActive}
                   busy={busy}
                   operationPending={startPending && startVariables?.operationKey === key}
@@ -405,6 +434,15 @@ export default function StackColorPreviewPanel({
                     operationKey: key,
                   })}
                   onInspect={setInspector}
+                  onStretchApplied={(job, preview) => setStretches((current) => ({
+                    ...current,
+                    [colorStretchKey(job)]: preview,
+                  }))}
+                  onStretchReverted={(job) => setStretches((current) => {
+                    const next = { ...current };
+                    delete next[colorStretchKey(job)];
+                    return next;
+                  })}
                 />
               );
             }
@@ -433,6 +471,7 @@ export default function StackColorPreviewPanel({
                 palette={palette}
                 paletteChoices={paletteChoices}
                 artifact={artifact}
+                appliedStretch={artifact ? stretches[colorStretchKey(artifact)] : undefined}
                 activeJob={cardActive}
                 busy={busy}
                 operationPending={startPending && startVariables?.operationKey === key}
@@ -449,6 +488,15 @@ export default function StackColorPreviewPanel({
                   operationKey: key,
                 })}
                 onInspect={setInspector}
+                onStretchApplied={(job, preview) => setStretches((current) => ({
+                  ...current,
+                  [colorStretchKey(job)]: preview,
+                }))}
+                onStretchReverted={(job) => setStretches((current) => {
+                  const next = { ...current };
+                  delete next[colorStretchKey(job)];
+                  return next;
+                })}
               />
             );
           }
@@ -464,9 +512,10 @@ export default function StackColorPreviewPanel({
             `${inspector.sources.length} channel stacks`,
             `${inspector.sources.reduce((sum, source) => sum + source.accepted_frames, 0)} integrated inputs`,
           ]}
-          imageUrl={apiClient.getStackColorPreviewUrl(
-            dbId, inspector.job_id, inspector.artifact_revision, 'original'
-          )}
+          imageUrl={stretches[colorStretchKey(inspector)]?.original_preview_url ??
+            apiClient.getStackColorPreviewUrl(
+              dbId, inspector.job_id, inspector.artifact_revision, 'original'
+            )}
           fitsUrl={apiClient.getStackColorFitsUrl(
             dbId, inspector.job_id, inspector.artifact_revision
           )}

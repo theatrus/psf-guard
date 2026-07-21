@@ -6,7 +6,7 @@
 
 use super::{
     LatestStackPreviews, StackJobState, StackPreviewImageQuery, StackPreviewImageSize,
-    StackPreviewManager, MAX_REMEMBERED_JOBS, PREVIEW_MAX_DIMENSION, SEIZA_STACKING_VERSION,
+    StackPreviewManager, MAX_REMEMBERED_JOBS, SEIZA_STACKING_VERSION,
 };
 use axum::{
     body::Body,
@@ -21,8 +21,8 @@ use axum::{
 use rayon::ThreadPoolBuilder;
 use seiza_stacking::{
     combine_lrgb, combine_narrowband, combine_rgb, resample_to_reference, write_color_fits_f32,
-    ColorComposition, ColorOptions, ColorTransfer, FitsFrame, ForaxxOptions, LinearImage,
-    NarrowbandPalette, Registrar, RegistrationOptions,
+    ColorOptions, ColorTransfer, FitsFrame, ForaxxOptions, LinearImage, NarrowbandPalette,
+    Registrar, RegistrationOptions,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -37,7 +37,7 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-const STACK_COLOR_CACHE_VERSION: u32 = 1;
+const STACK_COLOR_CACHE_VERSION: u32 = 2;
 const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
 const COLOR_BYTES_PER_PIXEL: u64 = 64;
 
@@ -412,6 +412,38 @@ pub async fn download_stack_color_fits(
         Some(filename),
     )
     .await
+}
+
+pub async fn apply_stack_color_stretch(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, job_id)): Path<(String, String)>,
+    Json(request): Json<super::stretch::StackStretchRequest>,
+) -> Result<Json<ApiResponse<super::stretch::StackStretchPreview>>, AppError> {
+    super::validate_job_id(&job_id)?;
+    let job = if let Some(job) = state.stack_previews.get_color(&job_id) {
+        job
+    } else {
+        let bytes = std::fs::read(color_manifest_path(&ctx.cache_dir_path, &job_id))
+            .map_err(|_| AppError::NotFound)?;
+        serde_json::from_slice::<StackColorJob>(&bytes).map_err(|error| {
+            AppError::InternalError(format!("Invalid color preview manifest: {error}"))
+        })?
+    };
+    if job.database_id != ctx.id || job.state != StackJobState::Completed {
+        return Err(AppError::NotFound);
+    }
+    let result = super::stretch::apply_to_fits(
+        state,
+        ctx.id.clone(),
+        ctx.cache_dir_path.clone(),
+        format!("color:{job_id}"),
+        job.artifact_revision,
+        color_fits_path(&ctx.cache_dir_path, &job_id),
+        request,
+    )
+    .await?;
+    Ok(super::stretch::response(result))
 }
 
 async fn stream_artifact(
@@ -828,11 +860,24 @@ fn compose_color(
         state.stack_previews.update_color(&job.job_id, |current| {
             current.phase = "Rendering color preview".into();
         });
-        render_color_previews_atomic(
-            &composition,
+        let stretch_config = match composition.transfer {
+            ColorTransfer::LinearLight => super::stretch::default_linear_config(),
+            ColorTransfer::DisplayReferred => super::stretch::display_identity_config(),
+        };
+        let source_transfer = match composition.transfer {
+            ColorTransfer::LinearLight => super::stretch::StackStretchSourceTransfer::Linear,
+            ColorTransfer::DisplayReferred => {
+                super::stretch::StackStretchSourceTransfer::DisplayReferred
+            }
+        };
+        super::stretch::render_image_previews_atomic(
+            &composition.image,
+            &stretch_config,
+            source_transfer,
             &color_preview_path(cache_root, &job.job_id),
             &color_original_preview_path(cache_root, &job.job_id),
         )
+        .map(|_| ())
     })
 }
 
@@ -846,51 +891,6 @@ fn validate_mono(image: &LinearImage, role: StackColorRole) -> Result<(), String
             image.channels
         ))
     }
-}
-
-fn render_color_previews_atomic(
-    composition: &ColorComposition,
-    screen_destination: &FsPath,
-    original_destination: &FsPath,
-) -> Result<(), String> {
-    let image = &composition.image;
-    if image.channels != 3 {
-        return Err("Color preview output is not RGB".into());
-    }
-    let parent = screen_destination
-        .parent()
-        .ok_or_else(|| "Color preview path has no parent".to_string())?;
-    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let pixels = match composition.transfer {
-        ColorTransfer::LinearLight => crate::mtf_stretch::stretch_f32_to_u8(
-            &image.data,
-            super::PREVIEW_STRETCH_FACTOR,
-            super::PREVIEW_BLACK_CLIPPING,
-        )
-        .ok_or_else(|| "Color stack has no usable finite sample range".to_string())?,
-        ColorTransfer::DisplayReferred => image
-            .data
-            .iter()
-            .map(|value| {
-                if value.is_finite() {
-                    (value.clamp(0.0, 1.0) * 255.0).round() as u8
-                } else {
-                    0
-                }
-            })
-            .collect(),
-    };
-    let dynamic = image::DynamicImage::ImageRgb8(
-        image::RgbImage::from_raw(image.width as u32, image.height as u32, pixels)
-            .ok_or_else(|| "Color preview dimensions do not match pixels".to_string())?,
-    );
-    super::save_png_atomic(&dynamic, original_destination)?;
-    let resized = dynamic.resize(
-        PREVIEW_MAX_DIMENSION,
-        PREVIEW_MAX_DIMENSION,
-        image::imageops::FilterType::Lanczos3,
-    );
-    super::save_png_atomic(&resized, screen_destination)
 }
 
 fn load_latest_stacks(
@@ -1248,6 +1248,7 @@ mod tests {
                 processed_frames: 3,
                 accepted_frames: 3,
                 rejected_frames: 0,
+                output_channels: 1,
                 reference_image_id: Some(1),
                 total_exposure_seconds: 180.0,
                 preview_url: None,

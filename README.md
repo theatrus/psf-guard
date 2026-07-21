@@ -27,10 +27,11 @@ points at your Target Scheduler database and image folders and gives you:
   frames per target and channel with Seiza registration, while carrying the
   same grading exclusions and per-frame admission evidence into the result;
   rebuild channels independently, retain and flag stale prior results, inspect
-  the full-resolution result with the normal zoom/pan tools, or download the
-  cached linear FITS integration. When the required channel stacks exist,
-  combine them into cached RGB, LRGB, or selectable SHO/HOO/Foraxx color previews
-  with full-resolution RGB FITS output.
+  the full-resolution result with the normal zoom/pan tools, apply or revert
+  parameterized Seiza display stretches, or download the cached linear FITS
+  integration. When the required channel stacks exist, combine them into
+  cached RGB, LRGB, or selectable SHO/HOO/Foraxx color previews with
+  full-resolution RGB FITS output.
 - **Scheduler write-back** — every grade lands in the Target Scheduler
   database, so the scheduler knows to re-capture what you rejected.
 - **Safe reject archival** — move rejected frames (and their sidecars) out of

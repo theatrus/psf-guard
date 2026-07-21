@@ -3095,6 +3095,111 @@
   border-right: 0;
 }
 
+.stack-stretch-controls {
+  border-top: 1px solid var(--color-bg-tertiary);
+  background: color-mix(in srgb, var(--color-bg-secondary) 72%, transparent);
+}
+
+.stack-stretch-controls > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.42rem 0.65rem;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 0.69rem;
+  font-weight: 700;
+  list-style-position: inside;
+}
+
+.stack-stretch-controls > summary small {
+  color: var(--color-primary);
+  font-size: 0.62rem;
+  font-weight: 650;
+}
+
+.stack-stretch-body {
+  display: grid;
+  gap: 0.48rem;
+  padding: 0.2rem 0.65rem 0.65rem;
+}
+
+.stack-stretch-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(90px, 1fr));
+  gap: 0.42rem;
+}
+
+.stack-stretch-field {
+  min-width: 0;
+  display: grid;
+  gap: 0.18rem;
+  color: var(--color-text-muted);
+  font-size: 0.6rem;
+  font-weight: 650;
+}
+
+.stack-stretch-field input,
+.stack-stretch-field select {
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  box-sizing: border-box;
+  padding: 0.25rem 0.38rem;
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-bg-quaternary);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 0.68rem;
+}
+
+.stack-stretch-model,
+.stack-stretch-strategy {
+  grid-column: span 1;
+}
+
+.stack-stretch-note,
+.stack-stretch-stats,
+.stack-stretch-error {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.62rem;
+}
+
+.stack-stretch-error {
+  color: var(--color-error);
+}
+
+.stack-stretch-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.38rem;
+}
+
+.stack-stretch-actions button {
+  min-height: 28px;
+  padding: 0.28rem 0.55rem;
+  color: var(--color-primary);
+  background: transparent;
+  border: 1px solid var(--color-primary-alpha-50);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.stack-stretch-actions button:hover:not(:disabled) {
+  color: var(--color-bg-primary);
+  background: var(--color-primary);
+}
+
+.stack-stretch-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .stack-inspector-overlay {
   position: fixed;
   inset: 0;
@@ -3231,6 +3336,10 @@
 
   .stack-preview-metrics {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .stack-stretch-fields {
+    grid-template-columns: repeat(2, minmax(90px, 1fr));
   }
 
   .stack-inspector-overlay {

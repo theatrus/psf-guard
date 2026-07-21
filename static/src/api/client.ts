@@ -34,6 +34,8 @@ import type {
   StackColorJob,
   StackColorKind,
   StackNarrowbandPalette,
+  StackStretchPreview,
+  StackStretchRequest,
 } from './types';
 
 // Store the initialized API instance and server URL
@@ -83,6 +85,21 @@ export const initializeApiClient = async () => {
 
 // Build a per-DB path under /api/db/{dbId}.
 const dbPath = (dbId: string, path: string) => `/db/${encodeURIComponent(dbId)}${path}`;
+
+const withServerUrl = (path: string): string => `${getCachedServerUrl()}${path}`;
+
+const normalizeStretchPreview = (preview: StackStretchPreview): StackStretchPreview => ({
+  ...preview,
+  preview_url: withServerUrl(preview.preview_url),
+  original_preview_url: withServerUrl(preview.original_preview_url),
+});
+
+const stackStretchError = (cause: unknown, fallback: string): Error => {
+  if (axios.isAxiosError<ApiResponse<unknown>>(cause)) {
+    return new Error(cause.response?.data?.error || cause.message || fallback);
+  }
+  return cause instanceof Error ? cause : new Error(fallback);
+};
 
 export const apiClient = {
   // ── Global ────────────────────────────────────────────────────────────────
@@ -249,6 +266,28 @@ export const apiClient = {
     )}${revision}`;
   },
 
+  applyStackStretch: async (
+    dbId: string,
+    jobId: string,
+    groupIndex: number,
+    request: StackStretchRequest
+  ): Promise<StackStretchPreview> => {
+    try {
+      const apiInstance = await getApi();
+      const { data } = await apiInstance.post<ApiResponse<StackStretchPreview>>(
+        dbPath(
+          dbId,
+          `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/stretch`
+        ),
+        request
+      );
+      if (!data.data) throw new Error(data.error || 'Failed to apply stack stretch');
+      return normalizeStretchPreview(data.data);
+    } catch (cause) {
+      throw stackStretchError(cause, 'Failed to apply stack stretch');
+    }
+  },
+
   getStackColorCatalog: async (
     dbId: string,
     projectId: number
@@ -323,6 +362,24 @@ export const apiClient = {
       dbId,
       `/stack-previews/color/${encodeURIComponent(jobId)}/fits`
     )}${revision}`;
+  },
+
+  applyStackColorStretch: async (
+    dbId: string,
+    jobId: string,
+    request: StackStretchRequest
+  ): Promise<StackStretchPreview> => {
+    try {
+      const apiInstance = await getApi();
+      const { data } = await apiInstance.post<ApiResponse<StackStretchPreview>>(
+        dbPath(dbId, `/stack-previews/color/${encodeURIComponent(jobId)}/stretch`),
+        request
+      );
+      if (!data.data) throw new Error(data.error || 'Failed to apply color stretch');
+      return normalizeStretchPreview(data.data);
+    } catch (cause) {
+      throw stackStretchError(cause, 'Failed to apply color stretch');
+    }
   },
 
   getImages: async (dbId: string, query: ImageQuery): Promise<Image[]> => {

@@ -183,6 +183,23 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   expect(fitsHead.headers()['content-disposition']).toMatch(/attachment; filename=.*\.fits/);
   expect(Number(fitsHead.headers()['content-length'])).toBeGreaterThan(10_000_000);
 
+  const defaultPreviewSrc = await preview.getAttribute('src');
+  const stretchControls = panel.locator('.stack-preview-card .stack-stretch-controls');
+  await stretchControls.locator('summary').click();
+  await stretchControls.getByRole('spinbutton', { name: 'Alpha M44 B Target median' }).fill('0.25');
+  await stretchControls.getByRole('button', { name: 'Apply stretch' }).click();
+  await expect.poll(() => preview.getAttribute('src')).toMatch(
+    /\/stack-previews\/stretch\/[a-f0-9]{64}\/preview$/
+  );
+  await expect(stretchControls).toContainText('Auto MTF applied');
+  if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
+    const docs = path.resolve(process.cwd(), '..', 'docs');
+    fs.mkdirSync(docs, { recursive: true });
+    await panel.locator('.stack-preview-card').screenshot({
+      path: path.join(docs, 'stack-preview-stretch.png'),
+    });
+  }
+
   await panel.getByRole('button', { name: 'Inspect full size' }).click();
   const inspector = page.getByRole('dialog', { name: /Alpha M44/i });
   await expect(inspector).toBeVisible();
@@ -205,6 +222,7 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   );
 
   const fullSizeSrc = await fullSizeImage.getAttribute('src');
+  expect(fullSizeSrc).toContain('/stack-previews/stretch/');
   expect(fullSizeSrc).toContain('size=original');
   const fullSizeHead = await page.request.head(fullSizeSrc!);
   expect(fullSizeHead.status()).toBe(200);
@@ -236,6 +254,9 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
 
   await page.keyboard.press('Escape');
   await expect(inspector).toHaveCount(0);
+  await stretchControls.getByRole('button', { name: 'Revert stretch' }).click();
+  await expect(preview).toHaveAttribute('src', defaultPreviewSrc!);
+  await expect(stretchControls).toContainText('Default');
 
   const jobId = fitsHref!.match(/\/stack-previews\/([a-f0-9]{64})\/0\/fits/)![1];
   const fitsPath = path.join(
@@ -383,6 +404,21 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   expect(rgbHeader).toContain('COLORSPC');
   expect(rgbHeader).toContain('RGB');
   expect(rgbHeader).toContain('LINEAR');
+
+  const rgbImage = rgbCard.getByRole('img', { name: /RGB color stack preview/i });
+  const defaultRgbSrc = await rgbImage.getAttribute('src');
+  const rgbStretch = rgbCard.locator('.stack-stretch-controls');
+  await rgbStretch.locator('summary').click();
+  await rgbStretch.getByRole('combobox', { name: 'Beta Field RGB stretch color strategy' })
+    .selectOption('luminance-preserving');
+  await rgbStretch.getByRole('spinbutton', { name: 'Beta Field RGB Target median' }).fill('0.25');
+  await rgbStretch.getByRole('button', { name: 'Apply stretch' }).click();
+  await expect.poll(() => rgbImage.getAttribute('src')).toMatch(
+    /\/stack-previews\/stretch\/[a-f0-9]{64}\/preview$/
+  );
+  await expect(rgbStretch).toContainText('Auto MTF applied');
+  await rgbStretch.getByRole('button', { name: 'Revert stretch' }).click();
+  await expect(rgbImage).toHaveAttribute('src', defaultRgbSrc!);
 
   await lrgbButton.click();
   await expect(lrgbCard.locator('.stack-preview-progress')).toHaveAttribute(

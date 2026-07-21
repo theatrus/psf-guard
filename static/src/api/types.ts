@@ -313,6 +313,7 @@ export interface StackGroupStatus {
   processed_frames: number;
   accepted_frames: number;
   rejected_frames: number;
+  output_channels: number;
   reference_image_id: number | null;
   total_exposure_seconds: number;
   preview_url: string | null;
@@ -351,6 +352,59 @@ export interface LatestStackPreviews {
   project_id: number;
   updated_unix_seconds: number;
   groups: LatestStackPreviewGroup[];
+}
+
+export type StackStretchColorStrategy = 'linked' | 'unlinked' | 'luminance-preserving';
+
+export type StackStretchModel =
+  | { type: 'identity' }
+  | { type: 'linear'; black: number; white: number }
+  | { type: 'asinh'; black: number; white: number; strength: number }
+  | {
+      type: 'percentile-asinh';
+      black_percentile: number;
+      white_percentile: number;
+      strength: number;
+    }
+  | { type: 'mtf'; shadows: number; midtone: number; highlights: number }
+  | {
+      type: 'ghs';
+      stretch_factor: number;
+      local_intensity: number;
+      symmetry_point: number;
+      protect_shadows: number;
+      protect_highlights: number;
+      black: number;
+      white: number;
+    }
+  | { type: 'auto-mtf'; target_median: number; shadows_clip: number };
+
+export interface StackStretchRequest {
+  model: StackStretchModel;
+  color_strategy: StackStretchColorStrategy;
+}
+
+export interface StackStretchStatistics {
+  min: number;
+  max: number;
+  median: number;
+  mad: number;
+  count: number;
+}
+
+export interface StackStretchPreview {
+  schema_version: number;
+  stretch_id: string;
+  stretch_version: string;
+  config: StackStretchRequest & { max_analysis_samples: number };
+  resolved_plan: unknown;
+  source_transfer: 'linear' | 'display_referred';
+  input_range: { black: number; white: number } | null;
+  linked_statistics: StackStretchStatistics;
+  channel_statistics: Array<StackStretchStatistics | null>;
+  luminance_statistics: StackStretchStatistics | null;
+  preview_url: string;
+  original_preview_url: string;
 }
 
 export type StackColorRole = 'luminance' | 'red' | 'green' | 'blue' | 'ha' | 'oiii' | 'sii';
