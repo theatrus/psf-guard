@@ -10,6 +10,7 @@ import {
   useMergedOverallStats,
   type WithDb,
 } from '../hooks/useDatabases';
+import { isTauriApp, tauriFileSystem } from '../utils/tauri';
 import './Overview.css';
 
 /// Inline edit state for correcting imported groupings.
@@ -36,6 +37,36 @@ export default function Overview() {
   const { data: projects, isLoading: projectsLoading } = useMergedProjectsOverview();
   const { data: targets, isLoading: targetsLoading } = useMergedTargetsOverview();
   const organizeAllowed = serverInfo?.allow_database_management ?? false;
+
+  // Desktop mode: export straight to a local folder (hardlink-or-copy) via
+  // the native picker — the server IS this machine, so downloading a zip of
+  // our own files would be silly. Browser mode keeps the zip download link.
+  const isTauri = isTauriApp();
+  const [exportBusy, setExportBusy] = useState(false);
+  const handleLocalExport = async (
+    dbId: string,
+    scope: { project_id?: number; target_id?: number },
+    label: string
+  ) => {
+    try {
+      const dest = await tauriFileSystem.pickImageDirectory();
+      if (!dest) return;
+      setExportBusy(true);
+      const summary = await apiClient.exportLocal(dbId, { dest, ...scope });
+      const placed = summary.copied + summary.linked;
+      alert(
+        `Exported ${label}: ${placed} file(s) placed` +
+          `${summary.linked > 0 ? ` (${summary.linked} hardlinked)` : ''}` +
+          `${summary.skipped_existing > 0 ? `, ${summary.skipped_existing} already present` : ''}` +
+          `${summary.missing > 0 ? `, ${summary.missing} missing on disk` : ''}` +
+          `${summary.errors > 0 ? `, ${summary.errors} ERRORS` : ''}\n\n${dest}`
+      );
+    } catch (err) {
+      alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setExportBusy(false);
+    }
+  };
 
   // Persist an organize edit (rename / move / merge), then refresh this DB's
   // overview queries so the new grouping shows up.
@@ -488,16 +519,35 @@ export default function Overview() {
                       </span>
                     )}
                     {project.has_files && project.accepted_images > 0 && (
-                      <a
-                        className="export-link"
-                        href={apiClient.exportDownloadUrl(project.db_id, {
-                          project_id: project.id,
-                        })}
-                        title="Download this project's accepted lights as a zip (WBPP-style layout, rejects excluded)"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        ⬇ Export
-                      </a>
+                      isTauri ? (
+                        <span
+                          className="export-link"
+                          title="Export this project's accepted lights to a local folder (hardlink or copy, rejects excluded)"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!exportBusy) {
+                              handleLocalExport(
+                                project.db_id,
+                                { project_id: project.id },
+                                project.display_name
+                              );
+                            }
+                          }}
+                        >
+                          ⬇ Export
+                        </span>
+                      ) : (
+                        <a
+                          className="export-link"
+                          href={apiClient.exportDownloadUrl(project.db_id, {
+                            project_id: project.id,
+                          })}
+                          title="Download this project's accepted lights as a zip (WBPP-style layout, rejects excluded)"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          ⬇ Export
+                        </a>
+                      )
                     )}
                   </div>
 
@@ -649,16 +699,35 @@ export default function Overview() {
                                 <span>{target.filters_used.join(', ')}</span>
                               )}
                               {target.has_files && target.accepted_count > 0 && (
-                                <a
-                                  className="export-link"
-                                  href={apiClient.exportDownloadUrl(target.db_id, {
-                                    target_id: target.id,
-                                  })}
-                                  title="Download this target's accepted lights as a zip (rejects excluded)"
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  ⬇ Export
-                                </a>
+                                isTauri ? (
+                                  <span
+                                    className="export-link"
+                                    title="Export this target's accepted lights to a local folder (hardlink or copy, rejects excluded)"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (!exportBusy) {
+                                        handleLocalExport(
+                                          target.db_id,
+                                          { target_id: target.id },
+                                          target.name
+                                        );
+                                      }
+                                    }}
+                                  >
+                                    ⬇ Export
+                                  </span>
+                                ) : (
+                                  <a
+                                    className="export-link"
+                                    href={apiClient.exportDownloadUrl(target.db_id, {
+                                      target_id: target.id,
+                                    })}
+                                    title="Download this target's accepted lights as a zip (rejects excluded)"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    ⬇ Export
+                                  </a>
+                                )
                               )}
                             </div>
                           </div>

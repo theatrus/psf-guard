@@ -69,7 +69,7 @@ pub struct ExportOptions {
     pub filter_name: Option<String>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize)]
 pub struct ExportSummary {
     pub planned: usize,
     pub copied: usize,

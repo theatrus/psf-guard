@@ -37,7 +37,8 @@ fn build_app(state: Arc<AppState>) -> Router {
             "/import",
             post(handlers::start_import_route).get(handlers::get_import_progress),
         )
-        .route("/export", get(handlers::export_archive_route));
+        .route("/export", get(handlers::export_archive_route))
+        .route("/export/local", post(handlers::export_local_route));
 
     Router::new()
         .route(
@@ -708,4 +709,76 @@ async fn export_streams_zip_of_non_rejected_lights() {
         !has(b"m81_l_0002.fits"),
         "rejected frame must not be exported"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_export_places_files_and_respects_management_gate() {
+    let dir = tempdir().unwrap();
+    let images = dir.path().join("lights");
+    std::fs::create_dir_all(&images).unwrap();
+    write_fits(
+        &images.join("ic434_ha_0001.fits"),
+        "IC434",
+        "Ha",
+        "2026-05-01T02:00:00.000",
+        85.25,
+    );
+
+    let state = state_with_management(dir.path());
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        "/api/databases/create",
+        Some(serde_json::json!({
+            "name": "LocalExport",
+            "image_dirs": [images.to_string_lossy()],
+            "backfill": false,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let slug = body["data"]["database"]["id"].as_str().unwrap().to_string();
+    wait_for_import(&state, &slug).await;
+
+    // Local export (pending included; link mode falls back gracefully).
+    let dest = dir.path().join("takeout");
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        &format!("/api/db/{slug}/export/local"),
+        Some(serde_json::json!({
+            "dest": dest.to_string_lossy(),
+            "include_pending": true,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "local export failed: {body}");
+    let summary = &body["data"];
+    let placed = summary["copied"].as_u64().unwrap() + summary["linked"].as_u64().unwrap();
+    assert_eq!(placed, 1, "summary: {summary}");
+    assert!(dest.join("IC434/LIGHT/Ha/ic434_ha_0001.fits").is_file());
+
+    // Second run is a no-op.
+    let (_, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        &format!("/api/db/{slug}/export/local"),
+        Some(serde_json::json!({
+            "dest": dest.to_string_lossy(),
+            "include_pending": true,
+        })),
+    )
+    .await;
+    assert_eq!(body["data"]["skipped_existing"], 1);
+
+    // Management gate: local export writes server-side files.
+    state.set_allow_database_management(false);
+    let (status, _) = json_request(
+        build_app(state.clone()),
+        "POST",
+        &format!("/api/db/{slug}/export/local"),
+        Some(serde_json::json!({ "dest": dest.to_string_lossy() })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }

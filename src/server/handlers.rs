@@ -604,6 +604,70 @@ pub async fn export_archive_route(
         .map_err(|e| AppError::InternalError(format!("building response: {e}")))
 }
 
+/// `POST /api/db/{db_id}/export/local` — run the folder export on the
+/// server's own filesystem (copy or hardlink), for desktop/Tauri mode where
+/// server and user share a machine. Same selection and layout as the CLI
+/// `export` command and the zip stream. Management-gated: a remote client
+/// could otherwise write files to arbitrary server paths.
+pub async fn export_local_route(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Json(req): Json<LocalExportRequest>,
+) -> Result<Json<ApiResponse<crate::commands::export::ExportSummary>>, AppError> {
+    use crate::commands::export::{execute_plan, plan_export, ExportOptions};
+
+    require_database_management_allowed(&state)?;
+    let dest = req.dest.trim().to_string();
+    if dest.is_empty() {
+        return Err(AppError::BadRequest("dest must not be empty".into()));
+    }
+
+    let options = ExportOptions {
+        include_pending: req.include_pending,
+        project_id: req.project_id,
+        target_id: req.target_id,
+        filter_name: req.filter_name.clone(),
+        ..Default::default()
+    };
+    let link = req.link.unwrap_or(true);
+    let dry_run = req.dry_run;
+
+    // Plan + place on a blocking thread with a dedicated read-only
+    // connection (same rule as the zip stream: never hold the shared
+    // request-connection mutex through a directory walk).
+    let plan_ctx = ctx.0.clone();
+    let summary = tokio::task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open_with_flags(
+            &plan_ctx.database_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .map_err(|e| anyhow::anyhow!("opening {}: {e}", plan_ctx.database_path))?;
+        let plan = plan_export(&conn, &plan_ctx.image_dirs, &options)?;
+        Ok::<_, anyhow::Error>(execute_plan(
+            &plan,
+            std::path::Path::new(&dest),
+            link,
+            dry_run,
+        ))
+    })
+    .await
+    .map_err(|e| AppError::InternalError(format!("export task: {e}")))?
+    .map_err(|e| AppError::InternalError(format!("export: {e}")))?;
+
+    tracing::info!(
+        "📤 Local export db={}: planned={} copied={} linked={} skipped={} missing={} errors={}{}",
+        ctx.id,
+        summary.planned,
+        summary.copied,
+        summary.linked,
+        summary.skipped_existing,
+        summary.missing,
+        summary.errors,
+        if dry_run { " (dry-run)" } else { "" }
+    );
+    Ok(Json(ApiResponse::success(summary)))
+}
+
 /// `PUT /api/db/{db_id}/projects/{project_id}` — rename a project. Used to
 /// correct import-synthesized groupings; management-gated like the rest of
 /// the structural mutations.
