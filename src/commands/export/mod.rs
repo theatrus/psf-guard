@@ -280,15 +280,15 @@ mod tests {
             let path = dir.join(name);
             std::fs::write(&path, b"fitsdata").unwrap();
             let filter = if name.contains("OIII") { "OIII" } else { "Ha" };
+            // Serialize via serde_json so Windows path backslashes are
+            // escaped exactly as the plugin's own writer would (a format!()
+            // string produced invalid JSON on Windows and emptied the plan).
+            let metadata =
+                serde_json::json!({ "FileName": path.display().to_string() }).to_string();
             conn.execute(
                 "INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername,
                  gradingStatus, metadata) VALUES (?1, 1, 1, 100, ?2, ?3, ?4)",
-                rusqlite::params![
-                    id,
-                    filter,
-                    status,
-                    format!("{{\"FileName\": \"{}\"}}", path.display())
-                ],
+                rusqlite::params![id, filter, status, metadata],
             )
             .unwrap();
         }
