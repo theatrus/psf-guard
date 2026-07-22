@@ -300,7 +300,12 @@ Design, phases, tracker: [REJECT_ARCHIVE_PLAN.md](./REJECT_ARCHIVE_PLAN.md).
   singleton per-DB background task (~8s/frame full-frame) over a target's
   FITS files (paths via `find_fits_file`). Worker count is sized by
   `concurrency::plan_workers` (see the parallelism note below), not a fixed
-  2. Results live in
+  2. Star count and HFR use N.I.N.A. Fast to match the measurements Target
+  Scheduler wrote into image metadata; the same full-resolution measurement
+  aperture supplies calibrated flux for the photometric catalog. Cache entries
+  record the detector and measurement version, and older HocusFocus/untagged
+  entries cannot replace scheduler star metrics or join the photometric pass.
+  Results live in
   `DatabaseContext.spatial_metrics` and persist to
   `<cache_dir>/spatial_metrics.json` (survives restarts; entries invalidated
   by filename change; re-scan skips cached, `force` recomputes).

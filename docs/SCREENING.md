@@ -199,8 +199,9 @@ Safety properties worth knowing:
 
 ## Limitations
 
-- Photometry requires the default HocusFocus detector (the N.I.N.A. detector
-  port does not measure flux).
+- The server scan uses N.I.N.A. Fast for scheduler-compatible star count and
+  HFR. Its full-resolution measurement aperture also supplies flux for
+  photometry. `screen-fits` supports flux photometry with either detector.
 - The photometric reference requires stars present in ≥50% of a session's
   frames, so it is blind to regions occluded for *most* of a sequence — by
   design; that case belongs to the dead-cell metric.

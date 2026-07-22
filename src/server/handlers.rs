@@ -3299,7 +3299,7 @@ pub(crate) fn stored_entry_for(
     metadata_json: &str,
 ) -> Option<crate::server::spatial_scan::StoredSpatialMetrics> {
     let file_only = filename_from_metadata(metadata_json)?;
-    crate::server::spatial_scan::valid_entry(store, image_id, &file_only)
+    crate::server::spatial_scan::valid_quality_entry(store, image_id, &file_only)
 }
 
 /// Run the cross-frame photometric pass (transparency, localized extinction,
@@ -3400,8 +3400,12 @@ pub(crate) fn merge_spatial_metrics(
     if let Some(entry) =
         crate::server::spatial_scan::valid_entry(store, metrics.image_id, &file_only)
     {
-        metrics.star_count = Some(entry.star_count as f64);
-        metrics.hfr = (entry.avg_hfr > 0.0).then_some(entry.avg_hfr);
+        if entry.detector == crate::server::spatial_scan::QUALITY_DETECTOR
+            && entry.detector_version == crate::server::spatial_scan::QUALITY_DETECTOR_VERSION
+        {
+            metrics.star_count = Some(entry.star_count as f64);
+            metrics.hfr = (entry.avg_hfr > 0.0).then_some(entry.avg_hfr);
+        }
         if metrics.dead_cell_fraction.is_none() {
             metrics.dead_cell_fraction = entry.dead_cell_fraction;
         }

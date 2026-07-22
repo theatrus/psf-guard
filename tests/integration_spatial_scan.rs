@@ -141,6 +141,8 @@ fn stored_entry(image_id: i32, filename: &str, dead: f64, bg_spread: f64) -> Sto
     StoredSpatialMetrics {
         image_id,
         filename: filename.to_string(),
+        detector: psf_guard::server::spatial_scan::QUALITY_DETECTOR.to_string(),
+        detector_version: psf_guard::server::spatial_scan::QUALITY_DETECTOR_VERSION,
         star_count: 4000,
         avg_hfr: 2.5,
         dead_cell_fraction: Some(dead),
@@ -330,6 +332,45 @@ async fn scanned_metrics_merge_into_sequence_analysis() {
             > 0.9
     );
     assert!(clean["category"].is_null());
+}
+
+#[tokio::test]
+async fn legacy_detector_cache_keeps_scheduler_star_metrics() {
+    let conn = Connection::open_in_memory().unwrap();
+    create_test_schema(&conn);
+    seed_target_with_images(&conn, 10);
+    let tmp = tempfile::tempdir().unwrap();
+    let (app, state) = create_test_app(conn, tmp.path());
+
+    {
+        let ctx = state.get_database("test").unwrap();
+        let mut store = ctx.spatial_metrics.write().unwrap();
+        for i in 0..10i32 {
+            let dead = if matches!(i, 7 | 8) { 0.40 } else { 0.02 };
+            let mut entry = stored_entry(i + 1, &format!("frame_{:04}.fits", i), dead, 0.05);
+            entry.detector.clear();
+            entry.detector_version = 0;
+            entry.star_count = 1;
+            entry.avg_hfr = 99.0;
+            store.metrics.insert(i + 1, entry);
+        }
+    }
+
+    let (status, json) = get_json(app, "/api/db/test/analysis/sequence?target_id=1").await;
+    assert_eq!(status, StatusCode::OK, "body: {json}");
+    let sequence = &json["data"]["sequences"][0];
+    assert_eq!(sequence["reference_values"]["best_star_count"], 4500.0);
+    assert_eq!(sequence["reference_values"]["best_hfr"], 2.5);
+    assert_eq!(
+        sequence["images"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|image| image["image_id"] == 8)
+            .unwrap()["category"],
+        "possible_obstruction",
+        "legacy cache should still supply spatial obstruction evidence"
+    );
 }
 
 #[tokio::test]

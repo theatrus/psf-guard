@@ -46,11 +46,10 @@ pub const DEFAULT_BACKGROUND_RATIO: f64 = 0.25;
 pub const DEFAULT_HARD_MAX_WORKERS: usize = 64;
 
 /// Estimated peak resident bytes per image pixel while one frame is being
-/// processed. The raw frame is `u16` (2 bytes/px), but HocusFocus detection
-/// converts to `f64` and holds several full-frame working buffers at once
-/// (`float_data`, its `structure_map` clone, wavelet/gaussian scratch). 32 is
-/// a deliberately conservative envelope of that transient peak with margin;
-/// the memory ceiling is a safety backstop, not a precise allocator.
+/// processed. The quality path holds the raw and stretched `u16` frames plus
+/// full-frame detection and spatial-analysis buffers. 32 is a deliberately
+/// conservative envelope of that transient peak with margin; the memory
+/// ceiling is a safety backstop, not a precise allocator.
 pub const DEFAULT_PEAK_BYTES_PER_PIXEL: usize = 32;
 
 /// Fraction of the probed system memory a pool may budget for in-flight

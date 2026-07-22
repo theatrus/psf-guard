@@ -447,7 +447,9 @@ Database settings also offer **Analyze Missing Quality** and **Rescan All
 Quality**. These low-priority jobs cover the whole database, persist progress
 while the settings page is closed, and refresh star counts, HFR, spatial and
 photometric metrics, and pointing evidence. FITS import stays header-only by
-default and never waits for this work.
+default and never waits for this work. Star count and HFR use the N.I.N.A.
+Fast detector so rescanned values remain comparable with Target Scheduler;
+its full-resolution measurements also supply calibrated flux for photometry.
 
 | Astrometry quality results | Guarded rejection review |
 |:--:|:--:|

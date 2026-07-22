@@ -4,7 +4,6 @@ use crate::accord_imaging::*;
 use crate::star_contours::StarBlobDetector;
 use seiza_imgproc::morphology::{KernelShape, MorphBorder, StructuringElement};
 use seiza_imgproc::BorderMode;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Convert 16-bit data to 8-bit using NINA's exact method
 /// Matches Accord.NET's Convert16bppTo8bpp: *d = (byte)(*s >> 8);
@@ -93,6 +92,7 @@ struct Star {
     pub max_pixel_value: f64,
     pub hfr: f64,
     pub average: f64,
+    pub flux: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -111,6 +111,9 @@ pub struct DetectedStar {
     pub average_brightness: f64,
     pub max_brightness: f64,
     pub background: f64,
+    /// Background-subtracted flux in the original image's units, measured
+    /// inside the same full-resolution aperture used for HFR.
+    pub flux: f64,
 }
 
 /// Star detection result
@@ -142,26 +145,17 @@ pub fn detect_stars_with_original(
         params,
     );
 
-    // Debug output for resize factor
-    eprintln!(
-        "Debug: Image {}x{}, resize_factor: {:.3}, min_star_size: {}, max_star_size: {}",
-        width, height, state.resize_factor, state.min_star_size, state.max_star_size
+    tracing::debug!(
+        "N.I.N.A. detection: image {}x{}, resize factor {:.3}, star size {}..{}",
+        width,
+        height,
+        state.resize_factor,
+        state.min_star_size,
+        state.max_star_size
     );
 
     // Step 2: Convert 16bpp to 8bpp for edge detection using NINA's method (right shift by 8)
     let image_8bit = convert_16bpp_to_8bpp_nina(detection_data_16bit);
-
-    // Debug: Check 8-bit conversion
-    let min_8bit = *image_8bit.iter().min().unwrap_or(&0);
-    let max_8bit = *image_8bit.iter().max().unwrap_or(&0);
-    let non_zero_count = image_8bit.iter().filter(|&&x| x > 0).count();
-    eprintln!(
-        "Debug: 8-bit conversion - min: {}, max: {}, non-zero pixels: {} ({:.2}%)",
-        min_8bit,
-        max_8bit,
-        non_zero_count,
-        non_zero_count as f64 / image_8bit.len() as f64 * 100.0
-    );
 
     // Step 3: Noise reduction (if enabled)
     let mut bitmap_to_analyze = if params.noise_reduction != NoiseReduction::None {
@@ -185,7 +179,11 @@ pub fn detect_stars_with_original(
     );
     bitmap_to_analyze = resized_image;
 
-    eprintln!("Debug: Resized to {}x{}", resized_width, resized_height);
+    tracing::debug!(
+        "N.I.N.A. detection image: {}x{}",
+        resized_width,
+        resized_height
+    );
 
     // Step 5: Prepare image for structure detection
     prepare_for_structure_detection(
@@ -198,7 +196,7 @@ pub fn detect_stars_with_original(
     // Step 6: Get structure info
     let blobs = detect_structures(&bitmap_to_analyze, resized_width, resized_height);
 
-    eprintln!("Debug: Detected {} blobs", blobs.len());
+    tracing::debug!("N.I.N.A. detection found {} blobs", blobs.len());
 
     // Step 7: Identify stars
     let (star_list, _detected_stars) =
@@ -457,6 +455,7 @@ fn identify_stars(
                 max_pixel_value: 0.0,
                 hfr: 0.0,
                 average: 0.0,
+                flux: 0.0,
             }
         } else {
             // Star is elongated - check eccentricity
@@ -480,6 +479,7 @@ fn identify_stars(
                 max_pixel_value: 0.0,
                 hfr: 0.0,
                 average: 0.0,
+                flux: 0.0,
             }
         };
 
@@ -523,8 +523,8 @@ fn identify_stars(
         let stdev =
             ((sum_squares - star_list.len() as f64 * avg * avg) / star_list.len() as f64).sqrt();
 
-        eprintln!(
-            "Debug: Before radius filter: {} stars, avg radius: {:.2}, stdev: {:.2}",
+        tracing::debug!(
+            "N.I.N.A. radius filter: {} stars, average {:.2}, standard deviation {:.2}",
             star_list.len(),
             avg,
             stdev
@@ -538,12 +538,15 @@ fn identify_stars(
             _ => s.radius <= avg + 1.5 * stdev && s.radius >= avg - 1.5 * stdev,
         });
 
-        eprintln!("Debug: After radius filter: {} stars", star_list.len());
+        tracing::debug!("N.I.N.A. radius filter kept {} stars", star_list.len());
     }
 
-    eprintln!(
-        "Debug: Blob filtering - Size: {}, ROI: {}, Failed detection: {}, Edge: {}",
-        size_filtered, roi_filtered, failed_detection, edge_filtered
+    tracing::debug!(
+        "N.I.N.A. blob filtering: size {}, ROI {}, failed {}, edge {}",
+        size_filtered,
+        roi_filtered,
+        failed_detection,
+        edge_filtered
     );
 
     // Convert to DetectedStar
@@ -555,6 +558,7 @@ fn identify_stars(
             average_brightness: s.average,
             max_brightness: s.max_pixel_value,
             background: s.surrounding_mean,
+            flux: s.flux,
         })
         .collect();
 
@@ -669,17 +673,6 @@ fn analyze_star_pixels(
     let is_star = star.mean_brightness >= brightness_threshold
         && inner_star_bright_pixels > minimum_bright_pixels;
 
-    // Debug why stars fail
-    if !is_star && star_pixel_count > 0 {
-        static FAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
-        let count = FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
-        if count < 5 {
-            // Only print first 5 failures
-            eprintln!("Debug: Star failed - brightness: {:.1} vs threshold: {:.1}, bright_pixels: {} vs minimum: {}", 
-                star.mean_brightness, brightness_threshold, inner_star_bright_pixels, minimum_bright_pixels);
-        }
-    }
-
     (is_star, star)
 }
 
@@ -736,6 +729,7 @@ fn calculate_star_hfr(state: &DetectionState, mut star: Star) -> Star {
     } else {
         2.0_f64.sqrt() * outer_radius
     };
+    star.flux = sum;
 
     star.average = if pixel_count > 0 {
         all_sum / pixel_count as f64
@@ -783,5 +777,43 @@ mod tests {
         // Very elongated ellipse
         let e = calculate_eccentricity(10.0, 5.0);
         assert!(e > 0.8);
+    }
+
+    #[test]
+    fn hfr_measurement_keeps_background_subtracted_flux() {
+        let width = 7;
+        let height = 7;
+        let mut pixels = vec![100u16; width * height];
+        pixels[3 * width + 3] = 200;
+        let state = DetectionState {
+            detection_data: &pixels,
+            original_data: &pixels,
+            width,
+            height,
+            resize_factor: 1.0,
+            inverse_resize_factor: 1.0,
+            min_star_size: 2,
+            max_star_size: 150,
+        };
+        let star = Star {
+            position: (3.0, 3.0),
+            radius: 1.0,
+            rectangle: Rectangle {
+                x: 2,
+                y: 2,
+                width: 3,
+                height: 3,
+            },
+            mean_brightness: 0.0,
+            surrounding_mean: 100.0,
+            max_pixel_value: 200.0,
+            hfr: 0.0,
+            average: 0.0,
+            flux: 0.0,
+        };
+
+        let measured = calculate_star_hfr(&state, star);
+        assert_eq!(measured.flux, 100.0);
+        assert_eq!(measured.position, (3.0, 3.0));
     }
 }
