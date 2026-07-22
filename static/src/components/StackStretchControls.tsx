@@ -1,6 +1,8 @@
 import { useState } from 'react';
-import type { StackStretchPreview, StackStretchRequest } from '../api/types';
+import type { StackStretchPreview, StackViewProcessingRequest } from '../api/types';
 import StackStretchStageEditor from './StackStretchStageEditor';
+import StackDeconvolutionControls from './StackDeconvolutionControls';
+import { validateDeconvolution } from './stackDeconvolution';
 import {
   defaultStretchRequest,
   stretchModelLabels,
@@ -12,7 +14,7 @@ interface StackStretchControlsProps {
   displayReferred?: boolean;
   disabled?: boolean;
   applied?: StackStretchPreview;
-  apply: (request: StackStretchRequest) => Promise<StackStretchPreview>;
+  apply: (request: StackViewProcessingRequest) => Promise<StackStretchPreview>;
   onApplied: (preview: StackStretchPreview) => void;
   onRevert: () => void;
 }
@@ -28,14 +30,14 @@ export default function StackStretchControls({
   onRevert,
 }: StackStretchControlsProps) {
   const initialType = displayReferred ? 'identity' : 'auto-mtf';
-  const [request, setRequest] = useState<StackStretchRequest>(() =>
-    defaultStretchRequest(initialType)
+  const [request, setRequest] = useState<StackViewProcessingRequest>(() =>
+    ({ ...defaultStretchRequest(initialType), deconvolution: null })
   );
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const revert = () => {
-    setRequest(defaultStretchRequest(initialType));
+    setRequest({ ...defaultStretchRequest(initialType), deconvolution: null });
     setError(null);
     onRevert();
   };
@@ -43,6 +45,11 @@ export default function StackStretchControls({
     if (Object.values(request.model).some((value) =>
       typeof value === 'number' && !Number.isFinite(value))) {
       setError('Enter a finite value for every stretch parameter');
+      return;
+    }
+    const deconvolutionError = validateDeconvolution(request.deconvolution);
+    if (deconvolutionError) {
+      setError(deconvolutionError);
       return;
     }
     setPending(true);
@@ -59,12 +66,22 @@ export default function StackStretchControls({
   return (
     <details className="stack-stretch-controls">
       <summary>
-        <span>Display stretch</span>
+        <span>View processing</span>
         <small>{applied
-          ? `${stretchModelLabels[applied.config.model.type]} applied`
-          : 'Default'}</small>
+          ? `${applied.deconvolution ? `${applied.deconvolution.config.psf_fwhm_pixels}px deconv · ` : ''}${stretchModelLabels[applied.config.model.type]} applied`
+          : 'Deconvolution off · default stretch'}</small>
       </summary>
       <div className="stack-stretch-body">
+        <StackDeconvolutionControls
+          label={label}
+          config={request.deconvolution}
+          result={applied?.deconvolution ?? undefined}
+          disabled={disabled || pending || displayReferred}
+          onChange={(deconvolution) => setRequest((current) => ({
+            ...current,
+            deconvolution,
+          }))}
+        />
         <StackStretchStageEditor
           label={label}
           channels={channels}
@@ -89,10 +106,10 @@ export default function StackStretchControls({
         {error && <div className="stack-stretch-error" role="alert">{error}</div>}
         <div className="stack-stretch-actions">
           <button type="button" disabled={disabled || pending} onClick={submit}>
-            {pending ? 'Applying…' : 'Apply stretch'}
+            {pending ? 'Applying…' : 'Apply processing'}
           </button>
           <button type="button" disabled={disabled || pending || !applied} onClick={revert}>
-            Revert stretch
+            Revert processing
           </button>
         </div>
       </div>

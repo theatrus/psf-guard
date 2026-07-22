@@ -5,8 +5,11 @@ import type {
   StackBackgroundFit,
   StackColorProcessing,
   StackColorRole,
+  StackDeconvolutionResult,
   StackStretchRequest,
 } from '../api/types';
+import StackDeconvolutionControls from './StackDeconvolutionControls';
+import { validateDeconvolution } from './stackDeconvolution';
 import StackStretchStageEditor from './StackStretchStageEditor';
 import { defaultStretchRequest, stretchModelLabels } from './stackStretchModels';
 import {
@@ -29,7 +32,9 @@ function hasInvalidNumbers(processing: StackColorProcessing): boolean {
   ];
   return stages.some((stage) => Object.values(stage.model).some(
     (value) => typeof value === 'number' && !Number.isFinite(value)
-  ));
+  )) || Object.values(processing.input_deconvolutions).some((config) =>
+    config && Object.values(config).some((value) => !Number.isFinite(value))
+  );
 }
 
 function validateBackground(extraction: StackBackgroundExtraction | null): string | null {
@@ -206,13 +211,19 @@ function BackgroundControls({
 }
 
 function StageLane({
-  label, stages, channels, disabled, onChange,
+  label, stages, channels, deconvolution, deconvolutionResult, disabled,
+  onChange, onDeconvolutionChange,
 }: {
   label: string;
   stages: StackStretchRequest[];
   channels: 1 | 3;
+  deconvolution?: StackColorProcessing['input_deconvolutions'][StackColorRole];
+  deconvolutionResult?: StackDeconvolutionResult;
   disabled: boolean;
   onChange: (stages: StackStretchRequest[]) => void;
+  onDeconvolutionChange?: (
+    config: StackColorProcessing['input_deconvolutions'][StackColorRole] | null
+  ) => void;
 }) {
   const replace = (index: number, stage: StackStretchRequest) => {
     const next = [...stages];
@@ -233,6 +244,15 @@ function StageLane({
         <strong>{label}</strong>
         <span>{stages.length} stage{stages.length === 1 ? '' : 's'}</span>
       </header>
+      {onDeconvolutionChange && (
+        <StackDeconvolutionControls
+          label={label}
+          config={deconvolution}
+          result={deconvolutionResult}
+          disabled={disabled}
+          onChange={onDeconvolutionChange}
+        />
+      )}
       {stages.length === 0 && (
         <p>Normalized only — no stretch stages.</p>
       )}
@@ -272,17 +292,20 @@ function StageLane({
 }
 
 export default function StackColorProcessingControls({
-  label, roles, applied, backgrounds, disabled, onApply,
+  label, roles, applied, backgrounds, deconvolutions, disabled, onApply,
 }: {
   label: string;
   roles: StackColorRole[];
   applied: StackColorProcessing | null;
   backgrounds: Partial<Record<StackColorRole, StackBackgroundFit>>;
+  deconvolutions: Partial<Record<StackColorRole, StackDeconvolutionResult>>;
   disabled: boolean;
   onApply: (processing: StackColorProcessing) => void;
 }) {
   const defaults = useMemo(() => defaultColorProcessing(roles), [roles]);
-  const baseline = applied ?? defaults;
+  const baseline = applied
+    ? { ...applied, input_deconvolutions: applied.input_deconvolutions ?? {} }
+    : defaults;
   const [draft, setDraft] = useState<StackColorProcessing>(() => cloneProcessing(baseline));
   const [error, setError] = useState<string | null>(null);
   const changed = JSON.stringify(draft) !== JSON.stringify(baseline);
@@ -291,6 +314,15 @@ export default function StackColorProcessingControls({
     ...current,
     input_stretches: { ...current.input_stretches, [role]: stages },
   }));
+  const updateDeconvolution = (
+    role: StackColorRole,
+    config: StackColorProcessing['input_deconvolutions'][StackColorRole] | null
+  ) => setDraft((current) => {
+    const input_deconvolutions = { ...current.input_deconvolutions };
+    if (config) input_deconvolutions[role] = config;
+    else delete input_deconvolutions[role];
+    return { ...current, input_deconvolutions };
+  });
   const submit = () => {
     if (hasInvalidNumbers(draft)) {
       setError('Enter a finite value for every stretch parameter');
@@ -301,6 +333,13 @@ export default function StackColorProcessingControls({
       setError(backgroundError);
       return;
     }
+    for (const config of Object.values(draft.input_deconvolutions)) {
+      const deconvolutionError = validateDeconvolution(config);
+      if (deconvolutionError) {
+        setError(deconvolutionError);
+        return;
+      }
+    }
     setError(null);
     onApply(cloneProcessing(draft));
   };
@@ -310,13 +349,16 @@ export default function StackColorProcessingControls({
       <summary>
         <span>Processing stack</span>
         <small>BG {draft.background_extraction ? draft.background_extraction.correction_mode : 'off'}
+          {' · '}DC {Object.keys(draft.input_deconvolutions).length || 'off'}
           {' · '}{roles.map((role) => `${roleLabels[role]} ${draft.input_stretches[role]?.length ?? 0}`).join(' · ')}
           {' · '}RGB {draft.output_stretches.length}</small>
       </summary>
       <div className="stack-color-processing-body">
         <p className="stack-stretch-note">
-          Background correction runs on each linear input before registration. Normalization and
-          input stretches follow alignment; the RGB output stack runs after composition.
+          Background correction runs on each linear input before registration. Optional
+          per-channel deconvolution runs after alignment while the data is still linear;
+          normalization and input stretches follow. The RGB output stack runs after composition.
+          Deconvolution is off by default.
         </p>
         <BackgroundControls
           extraction={draft.background_extraction}
@@ -333,8 +375,11 @@ export default function StackColorProcessingControls({
               label={`${roleLabels[role]} input`}
               stages={draft.input_stretches[role] ?? []}
               channels={1}
+              deconvolution={draft.input_deconvolutions[role]}
+              deconvolutionResult={deconvolutions[role]}
               disabled={disabled}
               onChange={(stages) => updateInput(role, stages)}
+              onDeconvolutionChange={(config) => updateDeconvolution(role, config)}
             />
           ))}
           <StageLane

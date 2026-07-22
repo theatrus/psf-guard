@@ -41,7 +41,7 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-pub const SEIZA_STACKING_VERSION: &str = "0.1.0-git-d6b8dfc";
+pub const SEIZA_STACKING_VERSION: &str = "0.1.0-git-b9bdcd1";
 /// Bump whenever stack admission, rendering, or persisted artifact semantics
 /// change. This deliberately versions PSF Guard policy separately from Seiza.
 const STACK_PREVIEW_CACHE_VERSION: u32 = 5;
@@ -429,7 +429,7 @@ pub async fn apply_stack_preview_stretch(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, job_id, group_index)): Path<(String, String, usize)>,
-    Json(request): Json<stretch::StackStretchRequest>,
+    Json(request): Json<stretch::StackViewProcessingRequest>,
 ) -> Result<Json<ApiResponse<stretch::StackStretchPreview>>, AppError> {
     validate_job_id(&job_id)?;
     let job = if let Some(job) = state.stack_previews.get(&job_id) {
