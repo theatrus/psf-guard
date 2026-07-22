@@ -500,6 +500,103 @@ pub async fn remove_database_route(
     }))))
 }
 
+/// `GET /api/db/{db_id}/export` — stream the selected non-rejected lights as
+/// an uncompressed (store-mode) zip, laid out exactly like the CLI export
+/// (`<target>/LIGHT/<filter>/<basename>`). FITS doesn't compress, so store
+/// mode streams at wire speed with no server-side staging. Read-only, so it
+/// is not management-gated.
+pub async fn export_archive_route(
+    ctx: DbContext,
+    Query(query): Query<ExportQuery>,
+) -> Result<axum::response::Response, AppError> {
+    use crate::commands::export::{plan_export, ExportOptions};
+    use axum::body::Body;
+    use axum::http::header;
+
+    let options = ExportOptions {
+        include_pending: query.include_pending,
+        project_id: query.project_id,
+        target_id: query.target_id,
+        filter_name: query.filter_name.clone(),
+        ..Default::default()
+    };
+
+    // Plan on a blocking thread: it queries the DB and walks the image dirs.
+    let plan_ctx = ctx.0.clone();
+    let plan = tokio::task::spawn_blocking(move || {
+        let conn = plan_ctx.db();
+        let conn = conn.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
+        plan_export(&conn, &plan_ctx.image_dirs, &options)
+    })
+    .await
+    .map_err(|e| AppError::InternalError(format!("export planning task: {e}")))?
+    .map_err(|e| AppError::InternalError(format!("planning export: {e}")))?;
+
+    if plan.items.is_empty() {
+        return Err(AppError::BadRequest(format!(
+            "nothing to export ({} matching rows had missing files)",
+            plan.missing.len()
+        )));
+    }
+
+    let filename = format!(
+        "psf-guard-export-{}{}.zip",
+        ctx.id,
+        query
+            .target_id
+            .map(|t| format!("-target{}", t))
+            .unwrap_or_default()
+    );
+    let total_files = plan.items.len();
+    let db_id = ctx.id.clone();
+
+    // Zip writer feeds one end of a duplex pipe; the response body streams
+    // the other. A mid-stream file error truncates the download (logged) —
+    // the client sees a corrupt archive rather than a silent partial success.
+    let (writer, reader) = tokio::io::duplex(1 << 20);
+    tokio::spawn(async move {
+        use async_zip::tokio::write::ZipFileWriter;
+        use async_zip::{Compression, ZipEntryBuilder};
+
+        let mut zip = ZipFileWriter::with_tokio(writer);
+        for item in &plan.items {
+            let entry_name = item.relative_dest.to_string_lossy().replace('\\', "/");
+            let bytes = match tokio::fs::read(&item.source).await {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    tracing::warn!(
+                        "📦 export db={}: aborting stream, {} unreadable: {}",
+                        db_id,
+                        item.source.display(),
+                        e
+                    );
+                    return;
+                }
+            };
+            let entry = ZipEntryBuilder::new(entry_name.into(), Compression::Stored);
+            if let Err(e) = zip.write_entry_whole(entry, &bytes).await {
+                tracing::warn!("📦 export db={}: zip write failed: {}", db_id, e);
+                return;
+            }
+        }
+        if let Err(e) = zip.close().await {
+            tracing::warn!("📦 export db={}: zip finalize failed: {}", db_id, e);
+        } else {
+            tracing::info!("📦 export db={}: streamed {} file(s)", db_id, total_files);
+        }
+    });
+
+    let body = Body::from_stream(tokio_util::io::ReaderStream::new(reader));
+    axum::response::Response::builder()
+        .header(header::CONTENT_TYPE, "application/zip")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}\"", filename),
+        )
+        .body(body)
+        .map_err(|e| AppError::InternalError(format!("building response: {e}")))
+}
+
 /// `PUT /api/db/{db_id}/projects/{project_id}` — rename a project. Used to
 /// correct import-synthesized groupings; management-gated like the rest of
 /// the structural mutations.

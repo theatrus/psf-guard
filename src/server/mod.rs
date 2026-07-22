@@ -325,7 +325,8 @@ async fn run_server_internal(
         .route(
             "/import",
             post(handlers::start_import_route).get(handlers::get_import_progress),
-        );
+        )
+        .route("/export", get(handlers::export_archive_route));
 
     // Top-level API: global endpoints + nested per-DB routes.
     let api_routes = Router::new()

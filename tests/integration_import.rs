@@ -36,7 +36,8 @@ fn build_app(state: Arc<AppState>) -> Router {
         .route(
             "/import",
             post(handlers::start_import_route).get(handlers::get_import_progress),
-        );
+        )
+        .route("/export", get(handlers::export_archive_route));
 
     Router::new()
         .route(
@@ -615,4 +616,98 @@ async fn organize_rename_move_and_merge() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// Raw request helper for binary responses (the export zip).
+async fn raw_request(app: Router, uri: &str) -> (StatusCode, Vec<u8>, String) {
+    let req = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(req).await.unwrap();
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .map(|v| v.to_str().unwrap_or_default().to_string())
+        .unwrap_or_default();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, bytes.to_vec(), content_type)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn export_streams_zip_of_non_rejected_lights() {
+    let dir = tempdir().unwrap();
+    let images = dir.path().join("lights");
+    std::fs::create_dir_all(&images).unwrap();
+    write_fits(
+        &images.join("m81_l_0001.fits"),
+        "M81",
+        "L",
+        "2026-04-01T02:00:00.000",
+        148.888,
+    );
+    write_fits(
+        &images.join("m81_l_0002.fits"),
+        "M81",
+        "L",
+        "2026-04-01T02:06:00.000",
+        148.889,
+    );
+
+    let state = state_with_management(dir.path());
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        "/api/databases/create",
+        Some(serde_json::json!({
+            "name": "ExportMe",
+            "image_dirs": [images.to_string_lossy()],
+            "backfill": false,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let slug = body["data"]["database"]["id"].as_str().unwrap().to_string();
+    let db_path = body["data"]["database"]["database_path"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    wait_for_import(&state, &slug).await;
+
+    // All frames are Pending: the accepted-only default has nothing to send.
+    let (status, _, _) =
+        raw_request(build_app(state.clone()), &format!("/api/db/{slug}/export")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Reject one frame, then export with pending included: only the
+    // non-rejected frame is in the archive.
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "UPDATE acquiredimage SET gradingStatus = 2 WHERE metadata LIKE '%m81_l_0002%'",
+            [],
+        )
+        .unwrap();
+    }
+    let (status, bytes, content_type) = raw_request(
+        build_app(state.clone()),
+        &format!("/api/db/{slug}/export?include_pending=true"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type, "application/zip");
+    assert_eq!(&bytes[..4], b"PK\x03\x04", "zip magic");
+    let haystack = bytes.windows(14);
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    drop(haystack);
+    assert!(
+        has(b"M81/LIGHT/L/m81_l_0001.fits"),
+        "expected entry present"
+    );
+    assert!(
+        !has(b"m81_l_0002.fits"),
+        "rejected frame must not be exported"
+    );
 }

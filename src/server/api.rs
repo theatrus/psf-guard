@@ -318,6 +318,21 @@ pub struct ImportStatusResponse {
     pub progress: crate::server::import_job::ImportJobProgress,
 }
 
+/// Query for `GET /api/db/{db_id}/export` — stream selected lights as a
+/// store-mode zip laid out `<target>/LIGHT/<filter>/...` (rejects excluded).
+#[derive(Debug, Deserialize, Default)]
+pub struct ExportQuery {
+    #[serde(default)]
+    pub project_id: Option<i32>,
+    #[serde(default)]
+    pub target_id: Option<i32>,
+    #[serde(default)]
+    pub include_pending: bool,
+    /// Restrict to one filter name (exact, case-insensitive).
+    #[serde(default)]
+    pub filter_name: Option<String>,
+}
+
 /// Body of `PUT /api/db/{db_id}/projects/{project_id}` — rename a project.
 #[derive(Debug, Deserialize)]
 pub struct UpdateProjectRequest {

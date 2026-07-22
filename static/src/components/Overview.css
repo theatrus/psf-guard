@@ -754,3 +754,13 @@
   color: var(--color-error, #e66);
   font-size: 12px;
 }
+
+.export-link {
+  color: var(--color-primary, #2d6cdf);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.export-link:hover {
+  text-decoration: underline;
+}

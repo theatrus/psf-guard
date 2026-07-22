@@ -487,6 +487,18 @@ export default function Overview() {
                         View Project →
                       </span>
                     )}
+                    {project.has_files && project.accepted_images > 0 && (
+                      <a
+                        className="export-link"
+                        href={apiClient.exportDownloadUrl(project.db_id, {
+                          project_id: project.id,
+                        })}
+                        title="Download this project's accepted lights as a zip (WBPP-style layout, rejects excluded)"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        ⬇ Export
+                      </a>
+                    )}
                   </div>
 
                   {/* Nested Targets */}
@@ -635,6 +647,18 @@ export default function Overview() {
                               <span>{formatDateRange(target.date_range)}</span>
                               {target.filters_used.length > 0 && (
                                 <span>{target.filters_used.join(', ')}</span>
+                              )}
+                              {target.has_files && target.accepted_count > 0 && (
+                                <a
+                                  className="export-link"
+                                  href={apiClient.exportDownloadUrl(target.db_id, {
+                                    target_id: target.id,
+                                  })}
+                                  title="Download this target's accepted lights as a zip (rejects excluded)"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  ⬇ Export
+                                </a>
                               )}
                             </div>
                           </div>

@@ -199,6 +199,22 @@ export const apiClient = {
     return data.data;
   },
 
+  /**
+   * Absolute URL for the streaming export zip (non-rejected lights, laid out
+   * `<target>/LIGHT/<filter>/…`). Used as a plain download link.
+   */
+  exportDownloadUrl: (
+    dbId: string,
+    params: { project_id?: number; target_id?: number; include_pending?: boolean }
+  ): string => {
+    const query = new URLSearchParams();
+    if (params.project_id !== undefined) query.set('project_id', String(params.project_id));
+    if (params.target_id !== undefined) query.set('target_id', String(params.target_id));
+    if (params.include_pending) query.set('include_pending', 'true');
+    const qs = query.toString();
+    return withServerUrl(`/api${dbPath(dbId, '/export')}${qs ? `?${qs}` : ''}`);
+  },
+
   /** Rename a project (organize imported groupings). */
   updateProject: async (dbId: string, projectId: number, name: string): Promise<void> => {
     const apiInstance = await getApi();
