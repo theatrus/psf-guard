@@ -20,6 +20,10 @@ categories = ["command-line-utilities", "science"]
 name = "psf_guard"
 path = "src/lib.rs"
 
+[workspace]
+members = [".", "crates/seiza-imgproc"]
+default-members = [".", "crates/seiza-imgproc"]
+
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -33,6 +37,7 @@ uuid = { version = "1", features = ["v4"] }
 regex = "1.12"
 byteorder = "1.5"
 seiza = "0.11.2"
+seiza-imgproc = { path = "crates/seiza-imgproc" }
 seiza-fits = "=0.1.6"
 seiza-satellites = { version = "0.4.1", features = ["serde"] }
 # Temporary pins to Seiza main for stacking, color composition, background
@@ -49,10 +54,6 @@ image = "0.25"
 imageproc = "0.27"
 rand = "0.10"
 nalgebra = "0.35"
-# OpenCV integration for advanced computer vision. Keep the enabled modules
-# aligned with the APIs used in src/: the crate's defaults pull in every
-# contrib module and can require libraries that a system OpenCV omits.
-opencv = { version = "0.99", optional = true, default-features = false, features = ["imgproc", "photo", "ximgproc"] }
 # Web server dependencies
 axum = { version = "0.8", features = ["multipart", "macros"] }
 tokio = { version = "1", features = ["full"] }
@@ -82,8 +83,7 @@ tempfile = "3.27"
 http-body-util = "0.1"
 
 [features]
-default = ["opencv"]
-opencv = ["dep:opencv"]
+default = []
 tauri = ["dep:tauri", "dep:tauri-plugin-dialog"]
 
 [profile.release]

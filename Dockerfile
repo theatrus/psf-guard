@@ -5,11 +5,6 @@ FROM rust:1.97.1 AS builder
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
     pkg-config \
-    libopencv-dev \
-    clang \
-    llvm \
-    libclang-dev \
-    cmake \
     build-essential \
     nodejs \
     npm \
@@ -24,24 +19,16 @@ COPY Cargo.toml Cargo.lock ./
 # Copy source code
 COPY src ./src
 COPY static ./static
+COPY crates ./crates
 COPY build.rs ./
 
-# Build the application with OpenCV support
-ENV OPENCV_LINK_LIBS=opencv_core,opencv_imgproc,opencv_imgcodecs,opencv_ximgproc
-ENV OPENCV_LINK_PATHS=/usr/lib/x86_64-linux-gnu
-ENV OPENCV_INCLUDE_PATHS=/usr/include/opencv4
-
-RUN cargo build --release --features opencv
+RUN cargo build --release
 
 # Runtime stage - use trixie to match the build stage
 FROM debian:trixie-slim
 
-# Install runtime dependencies including OpenCV libraries
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
-    libopencv-core410 \
-    libopencv-imgproc410 \
-    libopencv-imgcodecs410 \
-    libopencv-contrib410 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

@@ -7,7 +7,7 @@
   "build": {
     "devUrl": "http://localhost:5173",
     "frontendDist": "./static/dist",
-    "features": ["tauri", "opencv"]
+    "features": ["tauri"]
   },
   "bundle": {
     "active": true,

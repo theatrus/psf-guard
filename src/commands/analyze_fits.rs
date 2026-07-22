@@ -99,7 +99,7 @@ fn generate_detector_configs() -> Vec<DetectorConfig> {
         });
     }
 
-    // HocusFocus configuration (always tries OpenCV first with automatic fallback)
+    // HocusFocus configuration
     configs.push(DetectorConfig {
         name: "HocusFocus".to_string(),
         detector: "hocusfocus".to_string(),
@@ -471,7 +471,7 @@ fn detect_stars(
             ))
         }
         "hocusfocus" => {
-            println!("  Using OpenCV with automatic fallback");
+            println!("  Using pure-Rust image processing (seiza-imgproc)");
 
             // Parse PSF type
             let params = HocusFocusParams {

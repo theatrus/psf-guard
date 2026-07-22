@@ -1,10 +1,9 @@
 /// Exact implementation of N.I.N.A.'s star detection algorithm
 /// Based on StarDetection.cs from N.I.N.A. source code
 use crate::accord_imaging::*;
-use crate::opencv_canny::{
-    OpenCVBinaryMorphology, OpenCVCanny, OpenCVNoiseReduction, OpenCVThreshold,
-};
-use crate::opencv_contours::OpenCVBlobDetector;
+use crate::star_contours::StarBlobDetector;
+use seiza_imgproc::morphology::{KernelShape, MorphBorder, StructuringElement};
+use seiza_imgproc::BorderMode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Convert 16-bit data to 8-bit using NINA's exact method
@@ -281,50 +280,31 @@ fn reduce_noise(
 ) -> Vec<u8> {
     match noise_reduction {
         NoiseReduction::None => image.to_vec(),
-        NoiseReduction::Normal => {
-            // Try OpenCV first
-            match OpenCVNoiseReduction::gaussian_blur(image, width, height, 1.0) {
-                Ok(blurred) => blurred,
-                Err(e) => {
-                    eprintln!("OpenCV Gaussian blur failed: {}, using fallback", e);
-                    let blur = FastGaussianBlur::new();
-                    blur.process(image, width, height, 1)
-                }
-            }
-        }
-        NoiseReduction::High => {
-            // Try OpenCV first
-            match OpenCVNoiseReduction::gaussian_blur(image, width, height, 2.0) {
-                Ok(blurred) => blurred,
-                Err(e) => {
-                    eprintln!("OpenCV Gaussian blur failed: {}, using fallback", e);
-                    let blur = FastGaussianBlur::new();
-                    blur.process(image, width, height, 2)
-                }
-            }
-        }
-        NoiseReduction::Highest => {
-            // Try OpenCV first
-            match OpenCVNoiseReduction::gaussian_blur(image, width, height, 3.0) {
-                Ok(blurred) => blurred,
-                Err(e) => {
-                    eprintln!("OpenCV Gaussian blur failed: {}, using fallback", e);
-                    let blur = FastGaussianBlur::new();
-                    blur.process(image, width, height, 3)
-                }
-            }
-        }
-        NoiseReduction::Median => {
-            // Try OpenCV median filter (3x3 kernel)
-            match OpenCVNoiseReduction::median_blur(image, width, height, 3) {
-                Ok(blurred) => blurred,
-                Err(e) => {
-                    eprintln!("OpenCV median blur failed: {}, using fallback", e);
-                    let median = Median;
-                    median.apply(image, width, height)
-                }
-            }
-        }
+        NoiseReduction::Normal => seiza_imgproc::blur::gaussian_blur_u8(
+            image,
+            width,
+            height,
+            0,
+            1.0,
+            BorderMode::Reflect101,
+        ),
+        NoiseReduction::High => seiza_imgproc::blur::gaussian_blur_u8(
+            image,
+            width,
+            height,
+            0,
+            2.0,
+            BorderMode::Reflect101,
+        ),
+        NoiseReduction::Highest => seiza_imgproc::blur::gaussian_blur_u8(
+            image,
+            width,
+            height,
+            0,
+            3.0,
+            BorderMode::Reflect101,
+        ),
+        NoiseReduction::Median => seiza_imgproc::blur::median_blur3_u8(image, width, height),
     }
 }
 
@@ -334,39 +314,24 @@ fn prepare_for_structure_detection(
     height: usize,
     params: &StarDetectionParams,
 ) {
-    // Apply Canny edge detector using OpenCV
-    let canny = OpenCVCanny::new(10, 80);
-    let canny_result = match params.sensitivity {
+    // Canny edge detection (blurred for Normal sensitivity, raw otherwise)
+    let edges = match params.sensitivity {
         StarSensitivity::Normal => {
-            // Apply with Gaussian blur for Normal sensitivity
-            canny.apply_with_blur(image, width, height, 5, 1.4)
+            let blurred = seiza_imgproc::blur::gaussian_blur_u8(
+                image,
+                width,
+                height,
+                5,
+                1.4,
+                BorderMode::Reflect101,
+            );
+            seiza_imgproc::canny::canny(&blurred, width, height, 10, 80)
         }
         StarSensitivity::High | StarSensitivity::Highest => {
-            // No blur for High/Highest sensitivity
-            canny.apply(image, width, height)
+            seiza_imgproc::canny::canny(image, width, height, 10, 80)
         }
     };
-
-    match canny_result {
-        Ok(edges) => {
-            // Copy result back to image
-            image.copy_from_slice(&edges);
-        }
-        Err(e) => {
-            eprintln!("OpenCV Canny failed: {}, using fallback", e);
-            // Fallback to original implementation
-            match params.sensitivity {
-                StarSensitivity::Normal => {
-                    let canny = CannyEdgeDetector::new(10, 80);
-                    canny.apply_in_place(image, width, height);
-                }
-                StarSensitivity::High | StarSensitivity::Highest => {
-                    let canny = CannyEdgeDetector::new_no_blur(10, 80);
-                    canny.apply_in_place(image, width, height);
-                }
-            }
-        }
-    }
+    image.copy_from_slice(&edges);
 
     // Debug: Check edge detection results
     let edge_pixels = image.iter().filter(|&&p| p > 0).count();
@@ -375,54 +340,37 @@ fn prepare_for_structure_detection(
         edge_pixels
     );
 
-    // Apply SIS threshold using OpenCV
-    match OpenCVThreshold::apply_sis(image, width, height) {
-        Ok(thresholded) => {
-            image.copy_from_slice(&thresholded);
-        }
-        Err(e) => {
-            eprintln!("OpenCV threshold failed: {}, using fallback", e);
-            // Fallback to original implementation
-            let sis = SISThreshold;
-            sis.apply_in_place(image, width, height);
-        }
-    }
+    // Otsu threshold (kept from the former OpenCV pipeline, which always
+    // substituted Otsu for N.I.N.A.'s SIS here)
+    let thresholded = seiza_imgproc::threshold::otsu_binary(image, width, height);
+    image.copy_from_slice(&thresholded);
 
-    // Debug: Count non-zero pixels after SIS
+    // Debug: Count non-zero pixels after threshold
     let non_zero = image.iter().filter(|&&p| p > 0).count();
     eprintln!("Debug: After SIS threshold - {} non-zero pixels", non_zero);
 
-    // Apply binary dilation using OpenCV
-    match OpenCVBinaryMorphology::dilate_3x3(image, width, height) {
-        Ok(dilated) => {
-            image.copy_from_slice(&dilated);
-        }
-        Err(e) => {
-            eprintln!("OpenCV dilation failed: {}, using fallback", e);
-            // Fallback to original implementation
-            let dilation = BinaryDilation3x3;
-            dilation.apply_in_place(image, width, height);
-        }
-    }
+    // Binary dilation with a 3x3 rectangular kernel
+    let se = StructuringElement::new(KernelShape::Rect, 3);
+    let dilated = seiza_imgproc::morphology::dilate(image, width, height, &se, MorphBorder::Ignore);
+    image.copy_from_slice(&dilated);
 }
 
 fn detect_structures(image: &[u8], width: usize, height: usize) -> Vec<Blob> {
-    // Try OpenCV contour detection first for better accuracy
-    let detector = OpenCVBlobDetector::default();
+    let detector = StarBlobDetector::default();
+    let contours = detector.analyze_star_contours(image, width, height);
 
-    if let Ok(contours) = detector.analyze_star_contours(image, width, height) {
-        // Filter by quality and convert to blobs
-        let quality_contours: Vec<_> = contours
-            .into_iter()
-            .filter(|contour| detector.assess_star_quality(contour) > 0.3)
-            .collect();
+    // Filter by quality and convert to blobs
+    let quality_contours: Vec<_> = contours
+        .into_iter()
+        .filter(|contour| detector.assess_star_quality(contour) > 0.3)
+        .collect();
 
-        if !quality_contours.is_empty() {
-            return OpenCVBlobDetector::star_contours_to_blobs(&quality_contours);
-        }
+    if !quality_contours.is_empty() {
+        return StarBlobDetector::star_contours_to_blobs(&quality_contours);
     }
 
-    // Fallback to original blob detection
+    // Fallback to plain blob detection when no contour passes the quality
+    // gate (preserved behavior from the OpenCV era).
     let mut blob_counter = BlobCounter::new();
     blob_counter.process_image(image, width, height);
     blob_counter.get_objects_information()

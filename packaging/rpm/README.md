@@ -26,8 +26,6 @@ The result is two sources:
 | Source0 | `psf-guard-<ver>.tar.gz`          | source tree + prebuilt `static/dist`  |
 | Source1 | `psf-guard-<ver>-vendor.tar.xz`   | vendored crates + Cargo source config |
 
-OpenCV is enabled by default (matching the upstream default features). Build a
-lighter package without it using `--without opencv`.
 
 ## Systemd server service
 
@@ -64,7 +62,7 @@ drop-in: `systemctl edit psf-guard`.
 ```bash
 # Install tooling (Fedora):
 sudo dnf install -y rpm-build rpmdevtools cargo rust clang-devel \
-    opencv-devel nodejs npm git
+    nodejs npm git
 rpmdev-setuptree
 
 # Generate the two source tarballs (needs network: npm + cargo vendor).
@@ -76,11 +74,6 @@ rpmbuild -ba packaging/rpm/psf-guard.spec
 # RPMs land in ~/rpmbuild/RPMS/<arch>/
 ```
 
-Build without OpenCV:
-
-```bash
-rpmbuild -ba --without opencv packaging/rpm/psf-guard.spec
-```
 
 ## Build in clean Fedora containers (podman)
 

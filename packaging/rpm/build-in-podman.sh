@@ -53,7 +53,7 @@ git config --global --add safe.directory /src
 cd /src
 ./scripts/make-rpm-sources.sh
 cp packaging/rpm/psf-guard.spec ~/rpmbuild/SPECS/
-# Pull the rest of the BuildRequires straight from the spec (rust, opencv-devel,
+# Pull the rest of the BuildRequires straight from the spec (rust,
 # clang-devel, gcc-c++, systemd-rpm-macros, ...) so the list stays in sync.
 dnf -y builddep ~/rpmbuild/SPECS/psf-guard.spec
 # tee to the bind-mounted /out so the rpmbuild log survives even if the
