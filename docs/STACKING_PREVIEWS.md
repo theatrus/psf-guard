@@ -201,9 +201,9 @@ deconvolution instead of failing the color build or treating gaps as data.
 
 | Standard SHO | Foraxx SHO |
 |:--:|:--:|
-| ![Real Golf of Mexico standard SHO preview built from cached H-alpha, OIII, and SII stacks](stack-narrowband-sho-real.jpg) | ![Real Golf of Mexico Foraxx SHO preview built from the same cached channel stacks](stack-color-real-previews.jpg) |
+| ![Real Gulf of Mexico standard SHO preview built from cached H-alpha, OIII, and SII stacks](stack-narrowband-sho-real.jpg) | ![Real Gulf of Mexico Foraxx SHO preview built from the same cached channel stacks](stack-color-real-previews.jpg) |
 
-Both previews above come from the same six accepted Golf of Mexico
+Both previews above come from the same six accepted Gulf of Mexico (NGC 7000)
 acquisitions: two each in H-alpha, OIII, and SII. Switching palettes reuses the
 three registered mono artifacts; it does not repeat their integrations.
 
@@ -212,7 +212,7 @@ and output stretch lanes. Each lane can add, remove, and reorder stages;
 **Apply processing stack** creates a new content-addressed preview while
 **Revert edits** restores the last rendered configuration.
 
-![Real Golf of Mexico narrowband background extraction diagnostics and ordered stretch editor](stack-background-real.jpg)
+![Real Gulf of Mexico narrowband background extraction diagnostics and ordered stretch editor](stack-background-real.jpg)
 
 This real Foraxx SHO run retained 73 of 96 H-alpha samples, 78 of 96 OIII
 samples, and 95 of 96 SII samples. The rejected locations contain excess noise

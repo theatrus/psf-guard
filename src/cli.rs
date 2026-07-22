@@ -113,6 +113,57 @@ pub enum Commands {
         registry: Option<String>,
     },
 
+    /// Export ("take out") graded lights into a stacking-friendly folder.
+    ///
+    /// Selects non-rejected images (accepted only by default), locates the
+    /// files under the database's image directories, and lays them out
+    /// WBPP-style: <dest>/<target>/LIGHT/<filter>/. Re-runs skip files that
+    /// already exist with the right size, so an export folder can be topped
+    /// up after each session. Rejects are never exported.
+    Export {
+        /// Registry slug or path of the database.
+        db: String,
+
+        /// Destination folder for the export tree.
+        #[arg(long)]
+        dest: String,
+
+        /// Also export ungraded (Pending) frames.
+        #[arg(long)]
+        include_pending: bool,
+
+        /// Filter by project name (substring match).
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Filter by target name (substring match).
+        #[arg(short, long)]
+        target: Option<String>,
+
+        /// Restrict to one filter name (exact, case-insensitive).
+        #[arg(long)]
+        filter: Option<String>,
+
+        /// Hardlink instead of copy (instant + no extra disk when the
+        /// destination is on the same filesystem; falls back to copy).
+        #[arg(long)]
+        link: bool,
+
+        /// Print the plan without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Override the image directories to search (defaults to the
+        /// registry entry's; required when `db` is a bare .sqlite path).
+        #[arg(long, value_delimiter = ',')]
+        image_dirs: Option<Vec<String>>,
+
+        /// Path to the database registry JSON file (defaults to the platform
+        /// config directory).
+        #[arg(long)]
+        registry: Option<String>,
+    },
+
     /// List all projects
     ListProjects,
 

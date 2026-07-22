@@ -68,6 +68,7 @@ humantime = "2.3"
 tauri = { version = "2.11.1", features = ["custom-protocol"], optional = true }
 tauri-plugin-dialog = { version = "2.7.1", optional = true }
 dirs = "6.0"
+async_zip = { version = "0.0.18", features = ["tokio"] }
 # Platform memory probes for the occlusion-scan worker budget in
 # `concurrency` (both already in the tree transitively). Linux uses
 # /proc/meminfo and needs no crate.

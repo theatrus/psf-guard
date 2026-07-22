@@ -500,6 +500,174 @@ pub async fn remove_database_route(
     }))))
 }
 
+/// `GET /api/db/{db_id}/export` — stream the selected non-rejected lights as
+/// an uncompressed (store-mode) zip, laid out exactly like the CLI export
+/// (`<target>/LIGHT/<filter>/<basename>`). FITS doesn't compress, so store
+/// mode streams at wire speed with no server-side staging. Read-only, so it
+/// is not management-gated.
+pub async fn export_archive_route(
+    ctx: DbContext,
+    Query(query): Query<ExportQuery>,
+) -> Result<axum::response::Response, AppError> {
+    use crate::commands::export::{plan_export, ExportOptions};
+    use axum::body::Body;
+    use axum::http::header;
+
+    let options = ExportOptions {
+        include_pending: query.include_pending,
+        project_id: query.project_id,
+        target_id: query.target_id,
+        filter_name: query.filter_name.clone(),
+        ..Default::default()
+    };
+
+    // Plan on a blocking thread: it queries the DB and walks the image dirs.
+    // Use a DEDICATED read-only connection — the walk can take tens of
+    // seconds on network storage, and holding the shared request-connection
+    // mutex for that long would block every other API call on this DB
+    // (same rule as the import job and the background file-check refresh).
+    let plan_ctx = ctx.0.clone();
+    let plan = tokio::task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open_with_flags(
+            &plan_ctx.database_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .map_err(|e| anyhow::anyhow!("opening {}: {e}", plan_ctx.database_path))?;
+        plan_export(&conn, &plan_ctx.image_dirs, &options)
+    })
+    .await
+    .map_err(|e| AppError::InternalError(format!("export planning task: {e}")))?
+    .map_err(|e| AppError::InternalError(format!("planning export: {e}")))?;
+
+    if plan.items.is_empty() {
+        return Err(AppError::BadRequest(format!(
+            "nothing to export ({} matching rows had missing files)",
+            plan.missing.len()
+        )));
+    }
+
+    let filename = format!(
+        "psf-guard-export-{}{}.zip",
+        ctx.id,
+        query
+            .target_id
+            .map(|t| format!("-target{}", t))
+            .unwrap_or_default()
+    );
+    let total_files = plan.items.len();
+    let db_id = ctx.id.clone();
+
+    // Zip writer feeds one end of a duplex pipe; the response body streams
+    // the other. A mid-stream file error truncates the download (logged) —
+    // the client sees a corrupt archive rather than a silent partial success.
+    let (writer, reader) = tokio::io::duplex(1 << 20);
+    tokio::spawn(async move {
+        use async_zip::tokio::write::ZipFileWriter;
+        use async_zip::{Compression, ZipEntryBuilder};
+
+        let mut zip = ZipFileWriter::with_tokio(writer);
+        for item in &plan.items {
+            let entry_name = item.relative_dest.to_string_lossy().replace('\\', "/");
+            let bytes = match tokio::fs::read(&item.source).await {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    tracing::warn!(
+                        "📦 export db={}: aborting stream, {} unreadable: {}",
+                        db_id,
+                        item.source.display(),
+                        e
+                    );
+                    return;
+                }
+            };
+            let entry = ZipEntryBuilder::new(entry_name.into(), Compression::Stored);
+            if let Err(e) = zip.write_entry_whole(entry, &bytes).await {
+                tracing::warn!("📦 export db={}: zip write failed: {}", db_id, e);
+                return;
+            }
+        }
+        if let Err(e) = zip.close().await {
+            tracing::warn!("📦 export db={}: zip finalize failed: {}", db_id, e);
+        } else {
+            tracing::info!("📦 export db={}: streamed {} file(s)", db_id, total_files);
+        }
+    });
+
+    let body = Body::from_stream(tokio_util::io::ReaderStream::new(reader));
+    axum::response::Response::builder()
+        .header(header::CONTENT_TYPE, "application/zip")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}\"", filename),
+        )
+        .body(body)
+        .map_err(|e| AppError::InternalError(format!("building response: {e}")))
+}
+
+/// `POST /api/db/{db_id}/export/local` — run the folder export on the
+/// server's own filesystem (copy or hardlink), for desktop/Tauri mode where
+/// server and user share a machine. Same selection and layout as the CLI
+/// `export` command and the zip stream. Management-gated: a remote client
+/// could otherwise write files to arbitrary server paths.
+pub async fn export_local_route(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Json(req): Json<LocalExportRequest>,
+) -> Result<Json<ApiResponse<crate::commands::export::ExportSummary>>, AppError> {
+    use crate::commands::export::{execute_plan, plan_export, ExportOptions};
+
+    require_database_management_allowed(&state)?;
+    let dest = req.dest.trim().to_string();
+    if dest.is_empty() {
+        return Err(AppError::BadRequest("dest must not be empty".into()));
+    }
+
+    let options = ExportOptions {
+        include_pending: req.include_pending,
+        project_id: req.project_id,
+        target_id: req.target_id,
+        filter_name: req.filter_name.clone(),
+        ..Default::default()
+    };
+    let link = req.link.unwrap_or(true);
+    let dry_run = req.dry_run;
+
+    // Plan + place on a blocking thread with a dedicated read-only
+    // connection (same rule as the zip stream: never hold the shared
+    // request-connection mutex through a directory walk).
+    let plan_ctx = ctx.0.clone();
+    let summary = tokio::task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open_with_flags(
+            &plan_ctx.database_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .map_err(|e| anyhow::anyhow!("opening {}: {e}", plan_ctx.database_path))?;
+        let plan = plan_export(&conn, &plan_ctx.image_dirs, &options)?;
+        Ok::<_, anyhow::Error>(execute_plan(
+            &plan,
+            std::path::Path::new(&dest),
+            link,
+            dry_run,
+        ))
+    })
+    .await
+    .map_err(|e| AppError::InternalError(format!("export task: {e}")))?
+    .map_err(|e| AppError::InternalError(format!("export: {e}")))?;
+
+    tracing::info!(
+        "📤 Local export db={}: planned={} copied={} linked={} skipped={} missing={} errors={}{}",
+        ctx.id,
+        summary.planned,
+        summary.copied,
+        summary.linked,
+        summary.skipped_existing,
+        summary.missing,
+        summary.errors,
+        if dry_run { " (dry-run)" } else { "" }
+    );
+    Ok(Json(ApiResponse::success(summary)))
+}
+
 /// `PUT /api/db/{db_id}/projects/{project_id}` — rename a project. Used to
 /// correct import-synthesized groupings; management-gated like the rest of
 /// the structural mutations.

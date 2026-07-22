@@ -318,6 +318,45 @@ pub struct ImportStatusResponse {
     pub progress: crate::server::import_job::ImportJobProgress,
 }
 
+/// Query for `GET /api/db/{db_id}/export` — stream selected lights as a
+/// store-mode zip laid out `<target>/LIGHT/<filter>/...` (rejects excluded).
+#[derive(Debug, Deserialize, Default)]
+pub struct ExportQuery {
+    #[serde(default)]
+    pub project_id: Option<i32>,
+    #[serde(default)]
+    pub target_id: Option<i32>,
+    #[serde(default)]
+    pub include_pending: bool,
+    /// Restrict to one filter name (exact, case-insensitive).
+    #[serde(default)]
+    pub filter_name: Option<String>,
+}
+
+/// Body of `POST /api/db/{db_id}/export/local` — place the selected lights
+/// into a folder on the SERVER's filesystem (desktop/Tauri mode, where the
+/// server is the user's own machine). Management-gated: on a remote server
+/// this writes to arbitrary paths.
+#[derive(Debug, Deserialize)]
+pub struct LocalExportRequest {
+    /// Destination folder (absolute path on the server machine).
+    pub dest: String,
+    #[serde(default)]
+    pub project_id: Option<i32>,
+    #[serde(default)]
+    pub target_id: Option<i32>,
+    #[serde(default)]
+    pub include_pending: bool,
+    #[serde(default)]
+    pub filter_name: Option<String>,
+    /// Hardlink instead of copy (instant, no extra disk on the same
+    /// filesystem; automatically falls back to copy). Default true.
+    #[serde(default)]
+    pub link: Option<bool>,
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
 /// Body of `PUT /api/db/{db_id}/projects/{project_id}` — rename a project.
 #[derive(Debug, Deserialize)]
 pub struct UpdateProjectRequest {

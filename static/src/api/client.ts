@@ -203,6 +203,63 @@ export const apiClient = {
     return data.data;
   },
 
+  /**
+   * Absolute URL for the streaming export zip (non-rejected lights, laid out
+   * `<target>/LIGHT/<filter>/…`). Used as a plain download link.
+   */
+  exportDownloadUrl: (
+    dbId: string,
+    params: { project_id?: number; target_id?: number; include_pending?: boolean }
+  ): string => {
+    const query = new URLSearchParams();
+    if (params.project_id !== undefined) query.set('project_id', String(params.project_id));
+    if (params.target_id !== undefined) query.set('target_id', String(params.target_id));
+    if (params.include_pending) query.set('include_pending', 'true');
+    const qs = query.toString();
+    return withServerUrl(`/api${dbPath(dbId, '/export')}${qs ? `?${qs}` : ''}`);
+  },
+
+  /**
+   * Run the folder export on the server's own filesystem (desktop mode:
+   * server and user share a machine). Hardlinks by default, falling back to
+   * copy. Management-gated server-side.
+   */
+  exportLocal: async (
+    dbId: string,
+    req: {
+      dest: string;
+      project_id?: number;
+      target_id?: number;
+      include_pending?: boolean;
+      filter_name?: string;
+      link?: boolean;
+      dry_run?: boolean;
+    }
+  ): Promise<{
+    planned: number;
+    copied: number;
+    linked: number;
+    skipped_existing: number;
+    missing: number;
+    errors: number;
+    bytes: number;
+  }> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<
+      ApiResponse<{
+        planned: number;
+        copied: number;
+        linked: number;
+        skipped_existing: number;
+        missing: number;
+        errors: number;
+        bytes: number;
+      }>
+    >(dbPath(dbId, '/export/local'), req);
+    if (!data.data) throw new Error(data.error || 'Failed to export');
+    return data.data;
+  },
+
   /** Rename a project (organize imported groupings). */
   updateProject: async (dbId: string, projectId: number, name: string): Promise<void> => {
     const apiInstance = await getApi();

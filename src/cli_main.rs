@@ -28,6 +28,86 @@ pub fn main() -> Result<()> {
                 .with_context(|| format!("Failed to open database: {}", cli.database))?;
             list_projects(&conn)?;
         }
+        Commands::Export {
+            db,
+            dest,
+            include_pending,
+            project,
+            target,
+            filter,
+            link,
+            dry_run,
+            image_dirs,
+            registry,
+        } => {
+            use crate::commands::export::{execute_plan, plan_export, ExportOptions};
+            use crate::db_registry::DbRegistry;
+            use rusqlite::OpenFlags;
+            use std::path::PathBuf;
+
+            let registry_path = match &registry {
+                Some(p) => PathBuf::from(p),
+                None => DbRegistry::default_path().context("resolving default registry path")?,
+            };
+            let reg = DbRegistry::load_or_init(&registry_path).ok();
+            let db_path = crate::commands::sync::resolve_db_path(reg.as_ref(), &db)?;
+            // Image dirs: explicit flag > registry entry.
+            let dirs = match image_dirs {
+                Some(dirs) if !dirs.is_empty() => dirs,
+                _ => reg
+                    .as_ref()
+                    .and_then(|r| r.find(&db))
+                    .map(|e| e.image_dirs.clone())
+                    .unwrap_or_default(),
+            };
+            if dirs.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "No image directories: pass --image-dirs or use a registry slug \
+                     with configured image_dirs."
+                ));
+            }
+
+            let conn = Connection::open_with_flags(
+                &db_path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+            )
+            .with_context(|| format!("opening database at {}", db_path.display()))?;
+
+            let options = ExportOptions {
+                include_pending,
+                project_filter: project,
+                target_filter: target,
+                filter_name: filter,
+                ..Default::default()
+            };
+            let plan = plan_export(&conn, &dirs, &options)?;
+            let summary = execute_plan(&plan, &PathBuf::from(&dest), link, dry_run);
+
+            println!(
+                "\nExport {}: planned={}, copied={}, linked={}, already_present={}, \
+                 missing_files={}, errors={}, {:.2} GiB",
+                if dry_run { "(dry-run)" } else { "(live)" },
+                summary.planned,
+                summary.copied,
+                summary.linked,
+                summary.skipped_existing,
+                summary.missing,
+                summary.errors,
+                summary.bytes as f64 / (1024.0 * 1024.0 * 1024.0),
+            );
+            for (id, basename) in plan.missing.iter().take(10) {
+                eprintln!("  ⚠️ missing on disk: image {} ({})", id, basename);
+            }
+            if plan.missing.len() > 10 {
+                eprintln!("  … and {} more missing", plan.missing.len() - 10);
+            }
+            if summary.errors > 0 {
+                return Err(anyhow::anyhow!(
+                    "{} file(s) failed to export",
+                    summary.errors
+                ));
+            }
+        }
         Commands::CreateDb {
             database,
             directories,
