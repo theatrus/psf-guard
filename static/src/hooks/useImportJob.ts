@@ -59,9 +59,15 @@ export function describeImportProgress(
       const o = progress.outcome;
       if (!o) return 'Import complete.';
       const skipped = o.skipped_existing > 0 ? `, ${o.skipped_existing} already present` : '';
+      const attached = o.attached > 0 ? `${o.attached} to existing target(s)` : '';
+      const fresh =
+        o.projects_created > 0
+          ? `${o.imported - o.attached} into ${o.projects_created} NEW project(s)`
+          : '';
+      const detail = [attached, fresh].filter(Boolean).join(', ') || 'nothing new';
       return o.dry_run
-        ? `Dry run: would import ${o.imported} frame(s) into ${o.projects_created} project(s)${skipped}.`
-        : `Imported ${o.imported} frame(s) into ${o.projects_created} project(s), ${o.targets_created} target(s)${skipped}.`;
+        ? `Preview: would import ${o.imported} frame(s) — ${detail}${skipped}.`
+        : `Imported ${o.imported} frame(s) — ${detail}${skipped}.`;
     }
     case 'error':
       return `Import failed: ${progress.error ?? 'unknown error'}`;

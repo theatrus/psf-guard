@@ -271,6 +271,11 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     }
   };
 
+  // Import is two-step: a dry-run PREVIEW first (rolled back server-side),
+  // then an explicit confirmation. Nothing touches the database until the
+  // user has seen exactly what would be attached vs newly created.
+  const [confirmImport, setConfirmImport] = useState<DbEntry | null>(null);
+
   const handleImport = async (entry: DbEntry) => {
     if (entry.image_dirs.length === 0) {
       setStatusMessage(
@@ -281,15 +286,32 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setIsApplying(true);
     setStatusMessage('');
     try {
-      const status = await apiClient.startImport(entry.id, {});
+      const status = await apiClient.startImport(entry.id, { dry_run: true, backfill: false });
       setImportDbId(entry.id);
+      setConfirmImport(entry);
       setStatusMessage(
         status.started
-          ? `Importing images into ${entry.name}…`
+          ? `Previewing import into ${entry.name}… nothing is written until you confirm.`
           : 'An import is already running for this database.'
       );
     } catch (err) {
-      console.error('import failed to start:', err);
+      console.error('import preview failed to start:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      setStatusMessage(`Failed to preview import: ${msg}`);
+    } finally {
+      setIsApplying(false);
+    }
+  };
+
+  const handleConfirmImport = async () => {
+    if (!confirmImport) return;
+    const entry = confirmImport;
+    setConfirmImport(null);
+    setIsApplying(true);
+    try {
+      await apiClient.startImport(entry.id, { dry_run: false });
+      setStatusMessage(`Importing images into ${entry.name}…`);
+    } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setStatusMessage(`Failed to start import: ${msg}`);
     } finally {
@@ -466,17 +488,60 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                   {importRunning && <span className="import-spinner">⏳ </span>}
                   {describeImportProgress(importProgress)}
                 </div>
-                {importProgress.stage === 'complete' &&
-                  importProgress.outcome &&
-                  importProgress.outcome.project_summaries.length > 0 && (
-                    <ul className="import-project-list">
-                      {importProgress.outcome.project_summaries.map((p) => (
-                        <li key={p.name}>
-                          {p.name} — {p.targets} target(s), {p.frames} frame(s)
-                        </li>
-                      ))}
-                    </ul>
-                  )}
+                {importProgress.stage === 'complete' && importProgress.outcome && (
+                  <>
+                    {importProgress.outcome.attach_summaries.length > 0 && (
+                      <ul className="import-project-list">
+                        {importProgress.outcome.attach_summaries.map((a) => (
+                          <li key={`${a.project}:${a.target}`}>
+                            ↳ existing {a.project} / {a.target} — +{a.frames} frame(s) (
+                            {a.matched_by} match)
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {importProgress.outcome.project_summaries.length > 0 && (
+                      <ul className="import-project-list">
+                        {importProgress.outcome.project_summaries.map((p) => (
+                          <li key={p.name}>
+                            NEW {p.name} — {p.targets} target(s), {p.frames} frame(s)
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {importProgress.outcome.dry_run &&
+                      confirmImport &&
+                      importDbId === confirmImport.id && (
+                        <div className="modal-buttons import-confirm-buttons">
+                          {importProgress.outcome.imported > 0 ? (
+                            <>
+                              <button
+                                className="save-button"
+                                onClick={handleConfirmImport}
+                                disabled={isApplying}
+                              >
+                                Import {importProgress.outcome.imported} frame(s)
+                              </button>
+                              <button
+                                className="cancel-button"
+                                onClick={() => {
+                                  setConfirmImport(null);
+                                  setStatusMessage('Import cancelled — nothing was written.');
+                                }}
+                                disabled={isApplying}
+                              >
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <span className="muted">
+                              Nothing new to import — every frame is already in the database.
+                            </span>
+                          )}
+                        </div>
+                      )}
+                  </>
+                )}
               </div>
             )}
           </div>

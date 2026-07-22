@@ -28,6 +28,38 @@ pub fn main() -> Result<()> {
                 .with_context(|| format!("Failed to open database: {}", cli.database))?;
             list_projects(&conn)?;
         }
+        Commands::RemoveImported {
+            db,
+            dry_run,
+            registry,
+        } => {
+            use crate::db_registry::DbRegistry;
+            use rusqlite::OpenFlags;
+            use std::path::PathBuf;
+
+            let registry_path = match &registry {
+                Some(p) => PathBuf::from(p),
+                None => DbRegistry::default_path().context("resolving default registry path")?,
+            };
+            let reg = DbRegistry::load_or_init(&registry_path).ok();
+            let db_path = crate::commands::sync::resolve_db_path(reg.as_ref(), &db)?;
+            let mut conn = Connection::open_with_flags(
+                &db_path,
+                OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI,
+            )
+            .with_context(|| format!("opening database at {}", db_path.display()))?;
+
+            let (projects, targets, plans, images) =
+                crate::commands::import::remove_imported(&mut conn, dry_run)?;
+            println!(
+                "Remove-imported {}: {} project(s), {} target(s), {} plan(s), {} image row(s)",
+                if dry_run { "(dry-run)" } else { "(live)" },
+                projects,
+                targets,
+                plans,
+                images
+            );
+        }
         Commands::Export {
             db,
             dest,
@@ -141,6 +173,7 @@ pub fn main() -> Result<()> {
                 time_gap_days,
                 profile_id,
                 dry_run,
+                ..Default::default()
             };
             let outcome = import_frames(&mut conn, frames, &options)?;
             print_outcome(&outcome);
@@ -190,6 +223,8 @@ pub fn main() -> Result<()> {
             time_gap_days,
             profile_id,
             dry_run,
+            no_attach,
+            match_radius_deg,
             registry,
         } => {
             use crate::commands::import::{
@@ -227,6 +262,8 @@ pub fn main() -> Result<()> {
                 time_gap_days,
                 profile_id,
                 dry_run,
+                attach_existing: !no_attach,
+                match_radius_deg,
             };
             let outcome = import_frames(&mut conn, frames, &options)?;
             print_outcome(&outcome);

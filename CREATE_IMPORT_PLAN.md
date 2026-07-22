@@ -188,6 +188,31 @@ Import guesses; the user fixes them.
 
 ---
 
+## 8. Safety: merge-aware import + preview-confirm (2026-07-22) ☑
+
+Shipped after a real-world incident: the per-DB Import button ran a
+ground-zero import against an existing scheduler database, synthesizing
+duplicate projects/targets with no confirmation.
+
+- ☑ **Merge phase**: after basename dedup, frames attach to EXISTING targets
+  — exact (case-insensitive) OBJECT-name match first, else nearest target
+  within `match_radius_deg` (default 0.5°). Attached frames reuse the
+  target's project/profile, reuse the profile's exposure template, and reuse
+  a matching exposure plan (bumping `acquired`) or add one. Only unmatched
+  frames reach the ground-zero grouping. `--no-attach` restores the old
+  behavior deliberately.
+- ☑ A fully-attached import no longer resolves/creates an import profile —
+  multi-profile databases import cleanly when everything matches.
+- ☑ **UI preview-confirm**: the Import button now runs a dry-run first and
+  shows exactly what would happen (attached per existing target with match
+  kind, NEW projects, skip counts); nothing is written until the user
+  clicks "Import N frame(s)". Cancel writes nothing.
+- ☑ **Recovery**: `psf-guard remove-imported <db> [--dry-run]` deletes the
+  projects an import created (recognized by the `Imported by PSF Guard`
+  description marker) with their targets/plans/rule weights/images —
+  attached frames in pre-existing projects are never touched.
+- ☑ Backfill scans attached targets too (cached frames skip, cost ∝ new).
+
 ## Phasing
 
 1. **P0** §1 bootstrap module + golden-schema test. ☑

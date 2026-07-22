@@ -493,7 +493,10 @@ psf-guard screen-fits ./lights --format json         # or table, csv
 
 # Create a new Target Scheduler database from folders of FITS lights
 psf-guard create-db new.sqlite ./lights1 ./lights2 [--name "My Rig"] [--dry-run]
-psf-guard import <slug-or-path> ./more-lights [--dry-run]   # top up later
+# Top up later: attaches to EXISTING targets (name/coordinate match); only
+# unmatched frames create new projects. Preview with --dry-run first.
+psf-guard import <slug-or-path> ./more-lights [--dry-run] [--no-attach]
+psf-guard remove-imported <slug-or-path> [--dry-run]  # undo an import's projects
 
 # Export ("take out") non-rejected lights for stacking — WBPP-style layout
 # <dest>/<target>/LIGHT/<filter>/; rejects are never exported

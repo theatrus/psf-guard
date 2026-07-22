@@ -455,3 +455,8 @@
   padding-left: 18px;
   color: var(--color-text-secondary, #999);
 }
+
+.tauri-settings .import-confirm-buttons {
+  margin-top: 10px;
+  justify-content: flex-start;
+}
