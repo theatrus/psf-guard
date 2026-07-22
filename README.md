@@ -36,7 +36,9 @@ points at your Target Scheduler database and image folders and gives you:
   independent Seiza background extraction before registration, editable
   additive or multiplicative correction controls, optional per-input
   deconvolution, ordered input/output stretch stacks, phase-complete progress,
-  and full-resolution processed RGB FITS output.
+  reusable prepared-channel caches, and full-resolution processed RGB FITS
+  output. Stretch-only edits reuse prior background, registration, and
+  deconvolution work.
 - **Scheduler write-back** — every grade lands in the Target Scheduler
   database, so the scheduler knows to re-capture what you rejected.
 - **Safe reject archival** — move rejected frames (and their sidecars) out of

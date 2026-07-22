@@ -276,6 +276,14 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
 
   await page.keyboard.press('Escape');
   await expect(inspector).toHaveCount(0);
+  const firstProcessedSrc = await preview.getAttribute('src');
+  await stretchControls.getByRole('spinbutton', { name: 'Alpha M44 B Target median' }).fill('0.3');
+  await stretchControls.getByRole('button', { name: 'Apply processing' }).click();
+  await expect.poll(() => preview.getAttribute('src')).not.toBe(firstProcessedSrc);
+  const deconvolutionRoot = path.join(
+    process.env.PSF_GUARD_E2E_TMP!, 'cache', dbId, 'stack-previews', 'deconvolution'
+  );
+  expect(fs.readdirSync(deconvolutionRoot)).toHaveLength(1);
   await stretchControls.getByRole('button', { name: 'Revert processing' }).click();
   await expect(preview).toHaveAttribute('src', defaultPreviewSrc!);
   await expect(stretchControls).toContainText('Deconvolution off');
@@ -443,12 +451,12 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
     .toContainText('1 stage');
   await expect(rgbProcessing.getByRole('region', { name: 'B input stretch stack' }))
     .toContainText('1 stage');
-  const redLane = rgbProcessing.getByRole('region', { name: 'R input stretch stack' });
-  const redDeconvolution = redLane.getByRole('region', { name: 'R input deconvolution' });
-  await expect(redDeconvolution.getByRole('checkbox', { name: 'Deconvolution' }))
+  const greenLane = rgbProcessing.getByRole('region', { name: 'G input stretch stack' });
+  const greenDeconvolution = greenLane.getByRole('region', { name: 'G input deconvolution' });
+  await expect(greenDeconvolution.getByRole('checkbox', { name: 'Deconvolution' }))
     .not.toBeChecked();
-  await redDeconvolution.getByRole('checkbox', { name: 'Deconvolution' }).check();
-  await redDeconvolution.getByRole('spinbutton', { name: 'Deconvolution Iterations' }).fill('2');
+  await greenDeconvolution.getByRole('checkbox', { name: 'Deconvolution' }).check();
+  await greenDeconvolution.getByRole('spinbutton', { name: 'Deconvolution Iterations' }).fill('2');
   const outputLane = rgbProcessing.getByRole('region', { name: 'RGB output stretch stack' });
   await outputLane.getByRole('button', { name: 'Add stage' }).click();
   await outputLane.getByRole('combobox', { name: 'RGB output stage 1 stretch color strategy' })
@@ -475,7 +483,34 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await expect(phaseDetails.locator('li[data-phase="deconvolving_inputs"]'))
     .toHaveAttribute('data-phase-state', 'completed');
   await expect(phaseDetails.locator('li[data-phase="deconvolving_inputs"]'))
-    .toContainText('Deconvolving R');
+    .toContainText('Deconvolving G');
+
+  const colorInputRoot = path.join(
+    process.env.PSF_GUARD_E2E_TMP!, 'cache', dbId, 'stack-previews', 'color-inputs'
+  );
+  const colorInputsBeforeStretchEdit = fs.readdirSync(colorInputRoot).sort();
+  const currentProcessing = rgbCard.locator('.stack-color-processing');
+  await currentProcessing.locator(':scope > summary').click();
+  const currentOutputLane = currentProcessing.getByRole('region', {
+    name: 'RGB output stretch stack',
+  });
+  await currentOutputLane.getByRole('spinbutton', { name: 'RGB output stage 1 Target median' })
+    .fill('0.3');
+  await currentProcessing.getByRole('button', { name: 'Apply processing stack' }).click();
+  await expect(rgbCard.locator('.stack-preview-progress')).toHaveAttribute(
+    'data-stack-color-state', 'completed', { timeout: 90_000 }
+  );
+  for (const phase of [
+    'loading_sources',
+    'background_preparation',
+    'registering_sources',
+    'deconvolving_inputs',
+    'normalizing_inputs',
+  ]) {
+    await expect(phaseDetails.locator(`li[data-phase="${phase}"]`))
+      .toHaveAttribute('data-phase-state', 'reused');
+  }
+  expect(fs.readdirSync(colorInputRoot).sort()).toEqual(colorInputsBeforeStretchEdit);
 
   await lrgbButton.click();
   await expect(lrgbCard.locator('.stack-preview-progress')).toHaveAttribute(

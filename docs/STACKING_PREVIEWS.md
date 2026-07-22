@@ -101,6 +101,9 @@ and observation metadata preserved plus `SEIZADC`, `DCFWHM`, `DCITER`,
 `DCAMT`, `DCNOISE`, and `DCMAXCOR` provenance cards. While that variant is
 active, the full-size inspector downloads the deconvolved FITS. Turning the
 processing off returns to the original cached stack FITS.
+Changing only the display stretch reuses the same restored FITS. Its cache key
+depends on the source revision, restoration settings, and Seiza algorithm
+version, not the display model.
 
 The controls expose Seiza's identity, explicit linear, asinh,
 percentile-asinh, MTF, Generalized Hyperbolic Stretch (GHS), and Auto-MTF
@@ -112,13 +115,13 @@ that domain before invoking Seiza. After an application, the card shows the raw
 source range, median, and normalization bounds so the transform remains
 inspectable.
 
-Applied variants are content-addressed by the source artifact revision, full
-deconvolution and stretch configuration, robust-normalization policy, and
-Seiza processing versions.
-Reapplying the same settings reuses the cached PNG pair and, when enabled, its
-processed linear FITS. The active selection
-is intentionally browser-local and reversible; a reload returns to the durable
-default preview while the linear FITS remains the sole source of truth.
+Applied PNG variants are content-addressed by the source artifact revision,
+restoration artifact, stretch configuration, robust-normalization policy, and
+Seiza processing versions. Reapplying the same settings reuses the cached PNG
+pair. Stretch edits also reuse a matching processed linear FITS. The active
+selection is intentionally browser-local and reversible; a reload returns to
+the durable default preview while the linear FITS remains the sole source of
+truth.
 
 ![Opt-in Seiza deconvolution and display stretch controls applied to a real M44 stack preview](stack-preview-stretch.png)
 
@@ -189,6 +192,13 @@ applying the same pipeline restores its prior artifact. Artifacts from before
 background extraction are rebuilt with the new additive default; a current
 artifact whose extraction was explicitly disabled keeps that choice.
 
+PSF Guard caches each set of prepared linear inputs after background
+correction, registration, optional deconvolution, and normalization. Input or
+output stretch edits reuse those FITS files, so they do not repeat source
+loading, background fits, registration, or deconvolution. Registered channels
+may contain `NaN` at uncovered borders; Seiza keeps that mask through
+deconvolution instead of failing the color build or treating gaps as data.
+
 | Standard SHO | Foraxx SHO |
 |:--:|:--:|
 | ![Real Golf of Mexico standard SHO preview built from cached H-alpha, OIII, and SII stacks](stack-narrowband-sho-real.jpg) | ![Real Golf of Mexico Foraxx SHO preview built from the same cached channel stacks](stack-color-real-previews.jpg) |
@@ -252,8 +262,15 @@ Artifacts live below the database cache directory:
   manifest.json
   preview.png
   preview-original.png
-  deconvolved.fits  # present only when explicitly enabled
+<cache>/<database>/stack-previews/deconvolution/<restoration-id>/
+  manifest.json
+  deconvolved.fits
 <cache>/<database>/stack-previews/latest-project-<project-id>.json
+<cache>/<database>/stack-previews/color-inputs/<input-id>/
+  manifest.json
+  red.fits
+  green.fits
+  blue.fits
 <cache>/<database>/stack-previews/color/<color-job-id>/
   manifest.json
   preview.png
@@ -265,13 +282,14 @@ Artifacts live below the database cache directory:
 The content-addressed job ID includes the database/project, exact ordered
 inputs and grouping, grades, quality scores and regrade reasons, source path
 fingerprints, an explicit PSF Guard cache-policy version, Seiza stacking
-revision, deconvolution and stretch parameters, and preview format. Repeating an unchanged
-request loads the persistent result. A rebuild bypasses that lookup and
-atomically replaces the PNG, FITS, and manifest. The per-project latest index
-is also written atomically and is updated only for successfully completed
-groups. Each run receives a distinct artifact revision in its download/display
-URLs so clients cannot mistake an immutable cached response for the rebuilt
-output.
+revision, processing parameters, and preview format. Restoration and prepared
+color-input caches use narrower keys so display-only edits can reuse earlier
+linear work. Repeating an unchanged request loads the persistent result. A
+rebuild bypasses that lookup and atomically replaces the PNG, FITS, and
+manifest. The per-project latest index is also written atomically and is
+updated only for successfully completed groups. Each run receives a distinct
+artifact revision in its download/display URLs so clients cannot mistake an
+immutable cached response for the rebuilt output.
 
 ## Deliberate limits
 

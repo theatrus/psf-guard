@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { StackStretchPreview, StackStretchRequest } from '../api/types';
+import type { StackStretchPreview, StackViewProcessingRequest } from '../api/types';
 import StackStretchStageEditor from './StackStretchStageEditor';
 import StackDeconvolutionControls from './StackDeconvolutionControls';
 import { validateDeconvolution } from './stackDeconvolution';
@@ -14,7 +14,7 @@ interface StackStretchControlsProps {
   displayReferred?: boolean;
   disabled?: boolean;
   applied?: StackStretchPreview;
-  apply: (request: StackStretchRequest) => Promise<StackStretchPreview>;
+  apply: (request: StackViewProcessingRequest) => Promise<StackStretchPreview>;
   onApplied: (preview: StackStretchPreview) => void;
   onRevert: () => void;
 }
@@ -30,14 +30,14 @@ export default function StackStretchControls({
   onRevert,
 }: StackStretchControlsProps) {
   const initialType = displayReferred ? 'identity' : 'auto-mtf';
-  const [request, setRequest] = useState<StackStretchRequest>(() =>
-    defaultStretchRequest(initialType)
+  const [request, setRequest] = useState<StackViewProcessingRequest>(() =>
+    ({ ...defaultStretchRequest(initialType), deconvolution: null })
   );
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const revert = () => {
-    setRequest(defaultStretchRequest(initialType));
+    setRequest({ ...defaultStretchRequest(initialType), deconvolution: null });
     setError(null);
     onRevert();
   };

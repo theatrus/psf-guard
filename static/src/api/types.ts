@@ -382,6 +382,9 @@ export type StackStretchModel =
 export interface StackStretchRequest {
   model: StackStretchModel;
   color_strategy: StackStretchColorStrategy;
+}
+
+export interface StackViewProcessingRequest extends StackStretchRequest {
   deconvolution?: StackDeconvolutionConfig | null;
 }
 
@@ -418,6 +421,7 @@ export interface StackStretchPreview {
   stretch_id: string;
   stretch_version: string;
   deconvolution_version: string | null;
+  deconvolution_id: string | null;
   config: StackStretchRequest & { max_analysis_samples: number };
   resolved_plan: unknown;
   source_transfer: 'linear' | 'display_referred';
@@ -561,6 +565,7 @@ export interface StackColorJob {
   stacking_version: string;
   background_version: string;
   deconvolution_version: string;
+  linear_input_id: string | null;
   sources: StackColorSource[];
   processing: StackColorProcessing | null;
   resolved_input_stretches: Partial<Record<StackColorRole, unknown[]>>;

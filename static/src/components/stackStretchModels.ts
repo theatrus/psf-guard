@@ -41,6 +41,5 @@ export function defaultStretchRequest(
   return {
     model: defaultStretchModel(type),
     color_strategy: 'linked',
-    deconvolution: null,
   };
 }
