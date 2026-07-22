@@ -413,3 +413,45 @@
   font-size: 12px;
   color: var(--color-text-secondary, #999);
 }
+
+.tauri-settings .db-add-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tauri-settings .db-add-buttons .add-directory-button {
+  width: auto;
+  flex: 1;
+  min-width: 180px;
+}
+
+.tauri-settings .import-progress-panel {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border, #444);
+  border-radius: 6px;
+  background: var(--color-bg-secondary, rgba(255, 255, 255, 0.03));
+  font-size: 13px;
+}
+
+.tauri-settings .import-progress-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tauri-settings .import-spinner {
+  animation: import-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes import-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.tauri-settings .import-project-list {
+  margin: 8px 0 0 0;
+  padding-left: 18px;
+  color: var(--color-text-secondary, #999);
+}

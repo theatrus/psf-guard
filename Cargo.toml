@@ -29,6 +29,7 @@ serde_json = "1.0"
 toml_edit = { version = "0.25", features = ["serde"] }
 anyhow = "1.0"
 chrono = "0.4"
+uuid = { version = "1", features = ["v4"] }
 regex = "1.12"
 byteorder = "1.5"
 seiza = "0.11.2"

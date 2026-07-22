@@ -678,3 +678,79 @@
     font-size: 0.8em;
   }
 }
+/* Organize (rename / move / merge) inline editor */
+.organize-button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 6px;
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+
+.organize-button:hover {
+  opacity: 1;
+}
+
+.organize-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+  padding: 8px;
+  border: 1px solid var(--color-border, #444);
+  border-radius: 6px;
+  background: var(--color-bg-secondary, rgba(255, 255, 255, 0.04));
+}
+
+.organize-input {
+  flex: 1;
+  min-width: 140px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border, #555);
+  border-radius: 4px;
+  background: var(--color-bg-primary, #1a1a1a);
+  color: inherit;
+  font-size: 13px;
+}
+
+.organize-select {
+  padding: 4px 6px;
+  border: 1px solid var(--color-border, #555);
+  border-radius: 4px;
+  background: var(--color-bg-primary, #1a1a1a);
+  color: inherit;
+  font-size: 12px;
+  max-width: 220px;
+}
+
+.organize-save,
+.organize-cancel {
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border, #555);
+  cursor: pointer;
+  font-size: 12px;
+  background: var(--color-bg-primary, #222);
+  color: inherit;
+}
+
+.organize-save {
+  background: var(--color-primary, #2d6cdf);
+  border-color: var(--color-primary, #2d6cdf);
+  color: #fff;
+}
+
+.organize-save:disabled,
+.organize-cancel:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.organize-error {
+  flex-basis: 100%;
+  color: var(--color-error, #e66);
+  font-size: 12px;
+}

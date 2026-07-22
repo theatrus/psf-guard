@@ -182,6 +182,8 @@ pub struct DatabaseContext {
     /// Per-DB spatial (occlusion) metrics store + scan progress; persisted
     /// under `cache_dir` as spatial_metrics.json.
     pub spatial_metrics: crate::server::spatial_scan::SharedSpatialStore,
+    /// Per-DB singleton FITS import job state (see `server::import_job`).
+    pub import_job: crate::server::import_job::SharedImportJob,
 }
 
 impl DatabaseContext {
@@ -247,6 +249,7 @@ impl DatabaseContext {
             astrometry_solve_mutex: Arc::new(TokioMutex::new(())),
             astrometry_evidence: Arc::new(crate::astrometry::AstrometryEvidenceCache::new()),
             spatial_metrics: Arc::new(RwLock::new(Default::default())),
+            import_job: Arc::new(RwLock::new(Default::default())),
         })
     }
 
@@ -948,6 +951,7 @@ impl DatabaseContext {
             astrometry_solve_mutex: Arc::new(TokioMutex::new(())),
             astrometry_evidence: Arc::new(crate::astrometry::AstrometryEvidenceCache::new()),
             spatial_metrics: Arc::new(RwLock::new(Default::default())),
+            import_job: Arc::new(RwLock::new(Default::default())),
         }
     }
 }
@@ -973,6 +977,7 @@ impl Clone for DatabaseContext {
             astrometry_solve_mutex: self.astrometry_solve_mutex.clone(),
             astrometry_evidence: self.astrometry_evidence.clone(),
             spatial_metrics: self.spatial_metrics.clone(),
+            import_job: self.import_job.clone(),
         }
     }
 }

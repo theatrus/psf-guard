@@ -618,6 +618,79 @@ export interface DatabaseSummary {
   image_directories: string[];
 }
 
+/** Per-project line of an import outcome report. */
+export interface ImportProjectSummary {
+  name: string;
+  targets: number;
+  frames: number;
+}
+
+/** Result of one FITS import run (mirrors Rust `ImportOutcome`). */
+export interface ImportOutcome {
+  scanned: number;
+  unreadable: number;
+  non_light: number;
+  skipped_existing: number;
+  imported: number;
+  projects_created: number;
+  targets_created: number;
+  templates_created: number;
+  templates_reused: number;
+  plans_created: number;
+  profile_id: string;
+  dry_run: boolean;
+  project_summaries: ImportProjectSummary[];
+  created_target_ids: number[];
+}
+
+/** Progress of the singleton per-DB import job (poll ~1s while running). */
+export interface ImportJobProgress {
+  running: boolean;
+  /** scanning | importing | backfill | complete | error | "" (never ran) */
+  stage: string;
+  image_dirs: string[];
+  total_files: number;
+  scanned_files: number;
+  outcome?: ImportOutcome | null;
+  backfill_total: number;
+  backfill_done: number;
+  backfill_current_target?: number | null;
+  started_at?: number | null;
+  finished_at?: number | null;
+  error?: string | null;
+}
+
+export interface ImportStatus {
+  /** POST: whether this request started a job. GET: whether one is running. */
+  started: boolean;
+  progress: ImportJobProgress;
+}
+
+/** Body of `POST /api/db/{db_id}/import`. */
+export interface ImportRequest {
+  image_dirs?: string[];
+  time_gap_days?: number;
+  profile_id?: string;
+  dry_run?: boolean;
+  backfill?: boolean;
+}
+
+/** Body of `POST /api/databases/create`. */
+export interface CreateDatabaseRequest {
+  name: string;
+  image_dirs: string[];
+  db_path?: string;
+  slug?: string;
+  time_gap_days?: number;
+  profile_id?: string;
+  backfill?: boolean;
+}
+
+export interface CreateDatabaseResponse {
+  database: DatabaseSummary;
+  import: ImportJobProgress;
+}
+
 export interface FileCheckResponse {
   images_checked: number;
   files_found: number;

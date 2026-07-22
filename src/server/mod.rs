@@ -4,6 +4,7 @@ pub mod database_context;
 pub mod embedded_static;
 pub mod extract;
 pub mod handlers;
+pub mod import_job;
 pub mod preview_queue;
 pub mod slug;
 pub mod spatial_scan;
@@ -216,6 +217,15 @@ async fn run_server_internal(
             put(handlers::refresh_directory_tree_cache),
         )
         .route("/projects", get(handlers::list_projects))
+        .route(
+            "/projects/{project_id}",
+            put(handlers::update_project_route),
+        )
+        .route(
+            "/projects/{project_id}/merge",
+            post(handlers::merge_project_route),
+        )
+        .route("/targets/{target_id}", put(handlers::update_target_route))
         .route("/projects/overview", get(handlers::get_projects_overview))
         .route("/targets/overview", get(handlers::get_targets_overview))
         .route("/stats/overall", get(handlers::get_overall_stats))
@@ -315,6 +325,10 @@ async fn run_server_internal(
         .route(
             "/analysis/quality-scan",
             post(handlers::start_spatial_scan).get(handlers::get_spatial_scan_progress),
+        )
+        .route(
+            "/import",
+            post(handlers::start_import_route).get(handlers::get_import_progress),
         );
 
     // Top-level API: global endpoints + nested per-DB routes.
@@ -332,6 +346,11 @@ async fn run_server_internal(
             "/databases",
             get(handlers::list_databases).post(handlers::add_database_route),
         )
+        // Static segment must be declared alongside the {db_id} capture; axum
+        // prefers the literal match, so a database slugged "create" can still
+        // be updated/deleted (only POST collides, and POST /databases/create
+        // is exactly this route).
+        .route("/databases/create", post(handlers::create_database_route))
         .route(
             "/databases/{db_id}",
             put(handlers::update_database_route).delete(handlers::remove_database_route),
