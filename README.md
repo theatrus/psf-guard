@@ -98,14 +98,14 @@ is retained with the cached linear FITS result.
 
 ### Combine real narrowband channel stacks
 
-![Real Golf of Mexico Foraxx SHO preview built from PSF Guard channel stacks](docs/stack-color-real-previews.jpg)
+![Real Gulf of Mexico Foraxx SHO preview built from PSF Guard channel stacks](docs/stack-color-real-previews.jpg)
 
-This real Golf of Mexico quick-look preview uses six accepted Ultracat
+This real Gulf of Mexico (NGC 7000) quick-look preview uses six accepted Ultracat
 acquisitions: two each in H-alpha, OIII, and SII. The same three linear channel
 stacks can be recombined as standard SHO, Foraxx SHO, or any other compatible
 narrowband palette without rebuilding the integrations.
 
-<img src="docs/stack-background-real.jpg" width="720" alt="Background extraction controls and per-channel fit diagnostics from the real Golf of Mexico narrowband preview">
+<img src="docs/stack-background-real.jpg" width="720" alt="Background extraction controls and per-channel fit diagnostics from the real Gulf of Mexico narrowband preview">
 
 Color previews fit and subtract each input channel's background before
 cross-filter registration. The UI exposes the resolved fit evidence, editable
