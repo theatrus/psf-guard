@@ -61,6 +61,19 @@ object with fields such as `FileName`, `FilterName`, `ExposureStartTime`,
 RMS, focuser/rotator/pier/camera/airmass. Most map 1:1 to FITS headers plus
 PSF Guard's own star detection.
 
+## License
+
+The `.sql` files in this directory (and `migrate/`) are copied verbatim from
+`tcpalmer/nina.plugin.targetscheduler` and remain under the **Mozilla Public
+License 2.0** — see [`LICENSE`](./LICENSE) in this directory. MPL-2.0 is a
+file-level copyleft: these files stay MPL-covered wherever they go (including
+embedded via `include_str!` into release binaries), and their source is this
+directory. Per MPL-2.0 §3.3 this is a permitted "Larger Work" combination —
+the rest of PSF Guard is Apache-2.0 (see the repository root `LICENSE`) and
+is unaffected.
+
+Upstream source: <https://github.com/tcpalmer/nina.plugin.targetscheduler>
+
 ## Updating this snapshot
 
 Re-fetch from the upstream repo when TS ships a new `user_version`, add the new
