@@ -2606,7 +2606,8 @@
 }
 
 .stack-preview-state.completed,
-.stack-group-state.ready {
+.stack-group-state.ready,
+.stack-group-state.completed {
   color: var(--color-success);
   border-color: var(--color-success-alpha-20);
 }
@@ -2620,13 +2621,15 @@
 }
 
 .stack-preview-state.failed,
-.stack-group-state.error {
+.stack-group-state.error,
+.stack-group-state.failed {
   color: var(--color-error);
   border-color: var(--color-error-alpha-20);
 }
 
 .stack-preview-state.running,
-.stack-group-state.running {
+.stack-group-state.running,
+.stack-group-state.queued {
   color: var(--color-primary);
   border-color: var(--color-primary-alpha-50);
 }
@@ -2835,7 +2838,15 @@
   color: var(--color-success);
 }
 
+.stack-preview-progress.completed .stack-preview-progress-copy {
+  color: var(--color-success);
+}
+
 .stack-preview-progress.error .stack-preview-progress-copy {
+  color: var(--color-error);
+}
+
+.stack-preview-progress.failed .stack-preview-progress-copy {
   color: var(--color-error);
 }
 
@@ -2859,7 +2870,15 @@
   background: var(--color-success);
 }
 
+.stack-preview-progress.completed .stack-preview-progress-track > span {
+  background: var(--color-success);
+}
+
 .stack-preview-progress.error .stack-preview-progress-track > span {
+  background: var(--color-error);
+}
+
+.stack-preview-progress.failed .stack-preview-progress-track > span {
   background: var(--color-error);
 }
 
@@ -2930,6 +2949,494 @@
   color: var(--color-text-muted);
   font-size: 0.65rem;
   text-transform: uppercase;
+}
+
+.stack-color-section {
+  margin-top: 1rem;
+  padding: 0.8rem;
+  background: color-mix(in srgb, var(--color-bg-primary) 72%, transparent);
+  border: 1px solid var(--color-primary-alpha-20);
+  border-radius: 8px;
+}
+
+.stack-color-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.stack-color-heading h3 {
+  margin: 0.08rem 0 0.15rem;
+  font-size: 1rem;
+}
+
+.stack-color-heading p,
+.stack-color-heading > span {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.74rem;
+}
+
+.stack-color-heading > span {
+  white-space: nowrap;
+}
+
+.stack-color-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  width: 100%;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+.stack-color-card {
+  overflow: hidden;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-bg-tertiary);
+  border-radius: 8px;
+}
+
+.stack-color-card.outdated {
+  border-color: var(--color-warning);
+}
+
+.stack-color-card > header {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  padding: 0.48rem 0.7rem;
+}
+
+.stack-color-card > header > div:first-child {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.stack-color-card h3 {
+  overflow: hidden;
+  margin: 0;
+  font-size: 0.9rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stack-color-palette {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.stack-color-palette > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.stack-color-palette select {
+  max-width: 210px;
+  min-height: 27px;
+  padding: 0.2rem 1.6rem 0.2rem 0.45rem;
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-bg-quaternary);
+  border-radius: 4px;
+  font-size: 0.68rem;
+}
+
+.stack-color-image {
+  background:
+    linear-gradient(45deg, rgb(255 255 255 / 3%) 25%, transparent 25% 75%, rgb(255 255 255 / 3%) 75%),
+    #05070a;
+  background-size: 18px 18px;
+}
+
+.stack-color-sources {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  border-top: 1px solid var(--color-bg-tertiary);
+}
+
+.stack-color-sources > span {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.1rem 0.35rem;
+  align-items: baseline;
+  padding: 0.45rem 0.55rem;
+  color: var(--color-text-muted);
+  border-right: 1px solid var(--color-bg-tertiary);
+  font-size: 0.66rem;
+}
+
+.stack-color-sources strong {
+  color: var(--color-primary);
+}
+
+.stack-color-sources small {
+  grid-column: 2;
+  color: var(--color-text-muted);
+  font-size: 0.58rem;
+  opacity: 0.72;
+}
+
+.stack-color-sources .stack-color-source-total {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  border-right: 0;
+}
+
+.stack-stretch-controls {
+  border-top: 1px solid var(--color-bg-tertiary);
+  background: color-mix(in srgb, var(--color-bg-secondary) 72%, transparent);
+}
+
+.stack-stretch-controls > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.42rem 0.65rem;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 0.69rem;
+  font-weight: 700;
+  list-style-position: inside;
+}
+
+.stack-stretch-controls > summary small {
+  color: var(--color-primary);
+  font-size: 0.62rem;
+  font-weight: 650;
+}
+
+.stack-stretch-body {
+  display: grid;
+  gap: 0.48rem;
+  padding: 0.2rem 0.65rem 0.65rem;
+}
+
+.stack-stretch-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(90px, 1fr));
+  gap: 0.42rem;
+}
+
+.stack-stretch-field {
+  min-width: 0;
+  display: grid;
+  gap: 0.18rem;
+  color: var(--color-text-muted);
+  font-size: 0.6rem;
+  font-weight: 650;
+}
+
+.stack-stretch-field input,
+.stack-stretch-field select {
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  box-sizing: border-box;
+  padding: 0.25rem 0.38rem;
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-bg-quaternary);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 0.68rem;
+}
+
+.stack-stretch-model,
+.stack-stretch-strategy {
+  grid-column: span 1;
+}
+
+.stack-stretch-note,
+.stack-stretch-stats,
+.stack-stretch-error {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.62rem;
+}
+
+.stack-stretch-error {
+  color: var(--color-error);
+}
+
+.stack-stretch-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.38rem;
+}
+
+.stack-stretch-actions button {
+  min-height: 28px;
+  padding: 0.28rem 0.55rem;
+  color: var(--color-primary);
+  background: transparent;
+  border: 1px solid var(--color-primary-alpha-50);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.stack-stretch-actions button:hover:not(:disabled) {
+  color: var(--color-bg-primary);
+  background: var(--color-primary);
+}
+
+.stack-stretch-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.stack-color-phase-details,
+.stack-color-processing {
+  border-bottom: 1px solid var(--color-bg-tertiary);
+  background: color-mix(in srgb, var(--color-bg-secondary) 72%, transparent);
+}
+
+.stack-color-phase-details > summary,
+.stack-color-processing > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.42rem 0.65rem;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 0.69rem;
+  font-weight: 700;
+  list-style-position: inside;
+}
+
+.stack-color-processing > summary small {
+  overflow: hidden;
+  color: var(--color-primary);
+  font-size: 0.6rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stack-color-phase-details ol {
+  display: grid;
+  gap: 0.22rem;
+  margin: 0;
+  padding: 0 0.65rem 0.6rem 1.8rem;
+  color: var(--color-text-muted);
+  font-size: 0.64rem;
+}
+
+.stack-color-phase-details li {
+  padding-left: 0.15rem;
+}
+
+.stack-color-phase-details li::marker {
+  color: var(--color-bg-input);
+}
+
+.stack-color-phase-details li[data-phase-state='running'],
+.stack-color-phase-details li[data-phase-state='running']::marker {
+  color: var(--color-primary);
+}
+
+.stack-color-phase-details li[data-phase-state='completed'],
+.stack-color-phase-details li[data-phase-state='completed']::marker {
+  color: var(--color-success);
+}
+
+.stack-color-phase-details li[data-phase-state='failed'],
+.stack-color-phase-details li[data-phase-state='failed']::marker {
+  color: var(--color-error);
+}
+
+.stack-color-phase-details li[data-phase-state='skipped'] {
+  opacity: 0.65;
+}
+
+.stack-color-phase-details li span {
+  display: inline-block;
+  width: calc(100% - 4.5rem);
+}
+
+.stack-color-phase-details li small {
+  float: right;
+  text-transform: capitalize;
+}
+
+.stack-color-processing-body {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0 0.65rem 0.65rem;
+}
+
+.stack-background-controls {
+  min-width: 0;
+  padding: 0.55rem;
+  border: 1px solid var(--color-bg-tertiary);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-bg-primary) 88%, var(--color-primary));
+}
+
+.stack-background-controls > header,
+.stack-background-controls > header label {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+}
+
+.stack-background-controls > header {
+  justify-content: space-between;
+  color: var(--color-primary);
+  font-size: 0.68rem;
+}
+
+.stack-background-controls > header input {
+  accent-color: var(--color-primary);
+}
+
+.stack-background-controls > header span,
+.stack-background-controls > p {
+  color: var(--color-text-muted);
+  font-size: 0.59rem;
+}
+
+.stack-background-controls > p {
+  margin: 0.35rem 0 0;
+}
+
+.stack-background-fields {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(80px, 1fr));
+  gap: 0.42rem;
+  margin-top: 0.5rem;
+}
+
+.stack-background-diagnostics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+
+.stack-background-diagnostics span {
+  display: grid;
+  gap: 0.12rem;
+  padding: 0.32rem 0.4rem;
+  color: var(--color-text-secondary);
+  border-left: 2px solid var(--color-success);
+  background: var(--color-bg-secondary);
+  font-size: 0.58rem;
+}
+
+.stack-background-diagnostics strong {
+  color: var(--color-primary);
+}
+
+.stack-background-diagnostics small {
+  color: var(--color-text-muted);
+  font-size: 0.54rem;
+}
+
+.stack-color-stage-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.stack-color-stage-lane {
+  min-width: 0;
+  padding: 0.5rem;
+  border: 1px solid var(--color-bg-tertiary);
+  border-radius: 6px;
+  background: var(--color-bg-primary);
+}
+
+.stack-color-stage-lane > header,
+.stack-color-stage-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.stack-color-stage-lane > header {
+  margin-bottom: 0.4rem;
+  color: var(--color-primary);
+  font-size: 0.68rem;
+}
+
+.stack-color-stage-lane > header span,
+.stack-color-stage-lane > p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.58rem;
+}
+
+.stack-color-stage {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--color-bg-tertiary);
+}
+
+.stack-color-stage-heading {
+  color: var(--color-text-secondary);
+  font-size: 0.61rem;
+  font-weight: 700;
+}
+
+.stack-color-stage-heading > div {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.stack-color-stage-heading button,
+.stack-color-add-stage {
+  min-height: 24px;
+  padding: 0.2rem 0.38rem;
+  color: var(--color-primary);
+  background: transparent;
+  border: 1px solid var(--color-primary-alpha-50);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.58rem;
+}
+
+.stack-color-stage-heading button:disabled,
+.stack-color-add-stage:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.stack-color-add-stage {
+  width: 100%;
+  margin-top: 0.45rem;
+}
+
+.stack-color-stage-lane .stack-stretch-fields {
+  grid-template-columns: repeat(2, minmax(75px, 1fr));
+}
+
+@media (max-width: 1050px) {
+  .stack-color-stage-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .stack-background-fields {
+    grid-template-columns: repeat(2, minmax(90px, 1fr));
+  }
 }
 
 .stack-inspector-overlay {
@@ -3057,8 +3564,21 @@
     justify-content: flex-start;
   }
 
+  .stack-color-heading {
+    flex-direction: column;
+  }
+
+  .stack-color-card > header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .stack-preview-metrics {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .stack-stretch-fields {
+    grid-template-columns: repeat(2, minmax(90px, 1fr));
   }
 
   .stack-inspector-overlay {
@@ -3091,7 +3611,8 @@
 }
 
 @media (max-width: 980px) {
-  .stack-preview-grid {
+  .stack-preview-grid,
+  .stack-color-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 

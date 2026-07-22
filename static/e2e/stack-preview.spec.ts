@@ -9,6 +9,110 @@ import {
 
 let dbId: string;
 
+function fitsIntegerCard(keyword: string, value: number): string {
+  return `${keyword.padEnd(8)}= ${value.toString().padStart(20)}`.padEnd(80);
+}
+
+function writeSyntheticMonoStack(destination: string, variant: number): void {
+  const width = 512;
+  const height = 384;
+  const values = new Float32Array(width * height);
+  const angle = variant * 0.78;
+  const centerX = width * (0.5 + 0.17 * Math.cos(angle));
+  const centerY = height * (0.5 + 0.2 * Math.sin(angle));
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const dx = (x - centerX) / (75 + variant * 3);
+      const dy = (y - centerY) / (55 + (variant % 3) * 7);
+      const broadDx = (x - width * 0.52) / 165;
+      const broadDy = (y - height * 0.5) / 120;
+      values[y * width + x] = 80 + variant * 4
+        + 520 * Math.exp(-(dx * dx + dy * dy) / 2)
+        + (120 + variant * 18) * Math.exp(-(broadDx * broadDx + broadDy * broadDy) / 2);
+    }
+  }
+  for (let star = 0; star < 120; star += 1) {
+    const cx = 14 + ((star * 83 + 29) % (width - 28));
+    const cy = 14 + ((star * 47 + 17) % (height - 28));
+    const amplitude = 900 + ((star * (variant + 3) * 137) % 4_000);
+    const sigma = 1.15 + (star % 4) * 0.16;
+    for (let dy = -5; dy <= 5; dy += 1) {
+      for (let dx = -5; dx <= 5; dx += 1) {
+        const radius = dx * dx + dy * dy;
+        values[(cy + dy) * width + cx + dx] += amplitude * Math.exp(-radius / (2 * sigma * sigma));
+      }
+    }
+  }
+  const cards = [
+    'SIMPLE  =                    T'.padEnd(80),
+    fitsIntegerCard('BITPIX', -32),
+    fitsIntegerCard('NAXIS', 2),
+    fitsIntegerCard('NAXIS1', width),
+    fitsIntegerCard('NAXIS2', height),
+    'EXTEND  =                    T'.padEnd(80),
+    'END'.padEnd(80),
+  ];
+  const headerText = cards.join('');
+  const header = Buffer.alloc(Math.ceil(headerText.length / 2880) * 2880, 0x20);
+  header.write(headerText, 0, 'ascii');
+  const pixels = Buffer.alloc(values.length * 4);
+  for (let index = 0; index < values.length; index += 1) {
+    pixels.writeFloatBE(values[index], index * 4);
+  }
+  const padding = Buffer.alloc((2880 - (pixels.length % 2880)) % 2880);
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.writeFileSync(destination, Buffer.concat([header, pixels, padding]));
+}
+
+function seedSyntheticColorStacks(databaseId: string, projectId: number): void {
+  const cacheRoot = path.join(
+    process.env.PSF_GUARD_E2E_TMP!, 'cache', databaseId, 'stack-previews'
+  );
+  const filters = ['L', 'R', 'G', 'B', 'Ha', 'OIII', 'SII'];
+  const groups = filters.map((filterName, index) => {
+    const jobId = (index + 1).toString(16).padStart(64, '0');
+    writeSyntheticMonoStack(path.join(cacheRoot, jobId, 'group-0.fits'), index);
+    return {
+      job_id: jobId,
+      artifact_revision: `synthetic-${index}`,
+      accepted_only: false,
+      created_unix_seconds: 1_760_000_000 + index,
+      group: {
+        index: 0,
+        target_id: 2,
+        target_name: 'Beta Field',
+        filter_name: filterName,
+        state: 'ready',
+        total_candidates: 3,
+        eligible_frames: 3,
+        quality_excluded: 0,
+        missing_files: 0,
+        processed_frames: 3,
+        accepted_frames: 3,
+        rejected_frames: 0,
+        reference_image_id: 4,
+        total_exposure_seconds: 180,
+        preview_url: null,
+        fits_url: null,
+        error: null,
+        input_images: [],
+        frames: [],
+      },
+    };
+  });
+  fs.mkdirSync(cacheRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(cacheRoot, `latest-project-${projectId}.json`),
+    JSON.stringify({
+      schema_version: 1,
+      database_id: databaseId,
+      project_id: projectId,
+      updated_unix_seconds: 1_760_000_100,
+      groups,
+    }, null, 2)
+  );
+}
+
 test.beforeEach(async ({ request }) => {
   await resetDatabases(request);
   const entry = await registerFixtureDb(request, {
@@ -79,6 +183,23 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   expect(fitsHead.headers()['content-disposition']).toMatch(/attachment; filename=.*\.fits/);
   expect(Number(fitsHead.headers()['content-length'])).toBeGreaterThan(10_000_000);
 
+  const defaultPreviewSrc = await preview.getAttribute('src');
+  const stretchControls = panel.locator('.stack-preview-card .stack-stretch-controls');
+  await stretchControls.locator('summary').click();
+  await stretchControls.getByRole('spinbutton', { name: 'Alpha M44 B Target median' }).fill('0.25');
+  await stretchControls.getByRole('button', { name: 'Apply stretch' }).click();
+  await expect.poll(() => preview.getAttribute('src')).toMatch(
+    /\/stack-previews\/stretch\/[a-f0-9]{64}\/preview$/
+  );
+  await expect(stretchControls).toContainText('Auto MTF applied');
+  if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
+    const docs = path.resolve(process.cwd(), '..', 'docs');
+    fs.mkdirSync(docs, { recursive: true });
+    await panel.locator('.stack-preview-card').screenshot({
+      path: path.join(docs, 'stack-preview-stretch.png'),
+    });
+  }
+
   await panel.getByRole('button', { name: 'Inspect full size' }).click();
   const inspector = page.getByRole('dialog', { name: /Alpha M44/i });
   await expect(inspector).toBeVisible();
@@ -101,6 +222,7 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   );
 
   const fullSizeSrc = await fullSizeImage.getAttribute('src');
+  expect(fullSizeSrc).toContain('/stack-previews/stretch/');
   expect(fullSizeSrc).toContain('size=original');
   const fullSizeHead = await page.request.head(fullSizeSrc!);
   expect(fullSizeHead.status()).toBe(200);
@@ -132,6 +254,9 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
 
   await page.keyboard.press('Escape');
   await expect(inspector).toHaveCount(0);
+  await stretchControls.getByRole('button', { name: 'Revert stretch' }).click();
+  await expect(preview).toHaveAttribute('src', defaultPreviewSrc!);
+  await expect(stretchControls).toContainText('Default');
 
   const jobId = fitsHref!.match(/\/stack-previews\/([a-f0-9]{64})\/0\/fits/)![1];
   const fitsPath = path.join(
@@ -245,4 +370,137 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
     .getByRole('img', { name: /uncalibrated stack preview/i })
     .getAttribute('src');
   expect(rebuiltSrc).not.toBe(cachedSrc);
+});
+
+test('composes cached channel stacks into RGB, LRGB, and selectable narrowband previews', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  seedSyntheticColorStacks(dbId, 2);
+  await page.setViewportSize({ width: 1440, height: 1800 });
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=2`);
+
+  const section = page.locator('.stack-color-section');
+  await expect(section).toBeVisible();
+  await expect(section).toContainText('Combine channel stacks');
+  const rgbButton = section.getByRole('button', { name: 'Build RGB color preview' });
+  const rgbCard = section.locator('.stack-color-card[data-color-kind="rgb"]');
+  const lrgbButton = section.getByRole('button', { name: 'Build LRGB color preview' });
+  const lrgbCard = section.locator('.stack-color-card[data-color-kind="lrgb"]');
+  const palette = section.getByRole('combobox', { name: 'Beta Field narrowband palette' });
+  await expect(palette.locator('option')).toHaveCount(9);
+  await expect(palette).toHaveValue('sho');
+
+  await rgbButton.click();
+  await expect(rgbCard.locator('.stack-preview-progress')).toHaveAttribute(
+    'data-stack-color-state', 'completed', { timeout: 90_000 }
+  );
+  await expect(rgbCard.locator('.stack-preview-progress')).toContainText('23/23 steps');
+  await expect(rgbCard.getByRole('img', { name: /RGB color stack preview/i })).toBeVisible();
+  const rgbFits = rgbCard.getByRole('link', { name: 'Download RGB FITS' });
+  const rgbResponse = await page.request.get((await rgbFits.getAttribute('href'))!);
+  expect(rgbResponse.status()).toBe(200);
+  const rgbHeader = (await rgbResponse.body()).subarray(0, 2880).toString('ascii');
+  expect(rgbHeader).toContain('COLORSPC');
+  expect(rgbHeader).toContain('RGB');
+  expect(rgbHeader).toContain('DISPLAY');
+
+  const rgbImage = rgbCard.getByRole('img', { name: /RGB color stack preview/i });
+  const defaultRgbSrc = await rgbImage.getAttribute('src');
+  const rgbProcessing = rgbCard.locator('.stack-color-processing');
+  await rgbProcessing.locator('summary').click();
+  const backgroundControls = rgbProcessing.getByRole('region', { name: 'Background extraction' });
+  await expect(backgroundControls.getByRole('checkbox', { name: 'Background extraction' }))
+    .toBeChecked();
+  await expect(backgroundControls.getByLabel('Background fit diagnostics')).toContainText('samples');
+  await backgroundControls.getByRole('spinbutton', { name: 'Background Polynomial degree' })
+    .fill('1');
+  await expect(rgbProcessing.getByRole('region', { name: 'R input stretch stack' }))
+    .toContainText('1 stage');
+  await expect(rgbProcessing.getByRole('region', { name: 'G input stretch stack' }))
+    .toContainText('1 stage');
+  await expect(rgbProcessing.getByRole('region', { name: 'B input stretch stack' }))
+    .toContainText('1 stage');
+  const outputLane = rgbProcessing.getByRole('region', { name: 'RGB output stretch stack' });
+  await outputLane.getByRole('button', { name: 'Add stage' }).click();
+  await outputLane.getByRole('combobox', { name: 'RGB output stage 1 stretch color strategy' })
+    .selectOption('luminance-preserving');
+  await outputLane.getByRole('spinbutton', { name: 'RGB output stage 1 Target median' })
+    .fill('0.25');
+  await rgbProcessing.getByRole('button', { name: 'Apply processing stack' }).click();
+  await expect(rgbCard.locator('.stack-preview-progress')).toHaveAttribute(
+    'data-stack-color-state', 'completed', { timeout: 90_000 }
+  );
+  await expect.poll(() => rgbImage.getAttribute('src')).not.toBe(defaultRgbSrc);
+  await expect(rgbCard.locator('.stack-preview-progress')).toContainText('24/24 steps');
+  const phaseDetails = rgbCard.locator('.stack-color-phase-details');
+  await phaseDetails.locator('summary').click();
+  await expect(phaseDetails.locator('li')).toHaveCount(11);
+  await expect(phaseDetails.locator('li[data-phase="background_preparation"]'))
+    .toHaveAttribute('data-phase-state', 'completed');
+  await expect(phaseDetails.locator('li[data-phase="background_preparation"]'))
+    .toContainText('Correcting B background');
+  await expect(phaseDetails.locator('li[data-phase="stretching_output"]'))
+    .toHaveAttribute('data-phase-state', 'completed');
+  await expect(phaseDetails.locator('li[data-phase="stretching_output"]'))
+    .toContainText('Applied output stretch 1/1');
+
+  await lrgbButton.click();
+  await expect(lrgbCard.locator('.stack-preview-progress')).toHaveAttribute(
+    'data-stack-color-state', 'completed', { timeout: 90_000 }
+  );
+  await expect(lrgbCard.locator('.stack-preview-progress')).toContainText('29/29 steps');
+  const lrgbImage = lrgbCard.getByRole('img', { name: /LRGB color stack preview/i });
+  await expect(lrgbImage).toBeVisible();
+  const lrgbFits = lrgbCard.getByRole('link', { name: 'Download LRGB RGB FITS' });
+  const lrgbResponse = await page.request.get((await lrgbFits.getAttribute('href'))!);
+  expect(lrgbResponse.status()).toBe(200);
+  const lrgbHeader = (await lrgbResponse.body()).subarray(0, 2880).toString('ascii');
+  expect(lrgbHeader).toContain('COLORSPC');
+  expect(lrgbHeader).toContain('LRGB');
+  expect(lrgbHeader).toContain('DISPLAY');
+
+  await lrgbCard.getByRole('button', { name: 'Inspect LRGB full size' }).click();
+  const inspector = page.getByRole('dialog', { name: /Beta Field/i });
+  await expect(inspector).toBeVisible();
+  const inspectorImage = inspector.getByTestId('stack-inspector-image');
+  await page.waitForFunction(
+    (element) => element instanceof HTMLImageElement && element.naturalWidth === 512,
+    await inspectorImage.elementHandle(),
+    { timeout: 30_000 }
+  );
+  await expect(inspector).toContainText('512 × 384');
+  await page.keyboard.press('Escape');
+
+  await palette.selectOption('foraxx-hoo');
+  const foraxxButton = section.getByRole('button', { name: 'Build Foraxx HOO color preview' });
+  const narrowbandCard = section.locator('.stack-color-card[data-color-kind="narrowband"]');
+  await expect(narrowbandCard.locator('.stack-preview-progress')).toContainText('0/2 steps');
+  await foraxxButton.click();
+  await expect(narrowbandCard.locator('.stack-preview-progress')).toHaveAttribute(
+    'data-stack-color-state', 'completed', { timeout: 90_000 }
+  );
+  await expect(narrowbandCard.locator('.stack-preview-progress')).toContainText('17/17 steps');
+  await expect(
+    narrowbandCard.getByRole('img', { name: /Foraxx HOO color stack preview/i })
+  ).toBeVisible();
+  const foraxxFits = narrowbandCard.getByRole('link', {
+    name: 'Download Foraxx HOO RGB FITS',
+  });
+  const foraxxResponse = await page.request.get((await foraxxFits.getAttribute('href'))!);
+  expect(foraxxResponse.status()).toBe(200);
+  const foraxxHeader = (await foraxxResponse.body()).subarray(0, 2880).toString('ascii');
+  expect(foraxxHeader).toContain('FORAXX-HOO');
+  expect(foraxxHeader).toContain('DISPLAY');
+
+  if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
+    const docs = path.resolve(process.cwd(), '..', 'docs');
+    fs.mkdirSync(docs, { recursive: true });
+    await section.screenshot({ path: path.join(docs, 'stack-color-previews.png') });
+    const currentRgbProcessing = rgbCard.locator('.stack-color-processing');
+    if (!(await currentRgbProcessing.getAttribute('open'))) {
+      await currentRgbProcessing.locator('summary').click();
+    }
+    await rgbCard.screenshot({ path: path.join(docs, 'stack-color-processing.png') });
+  }
 });

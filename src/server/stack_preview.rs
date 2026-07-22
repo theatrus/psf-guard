@@ -5,6 +5,9 @@
 //! and ordered accumulation. Jobs are process-global and run one at a time so
 //! a multi-database server cannot multiply the stacker's full-frame buffers.
 
+pub mod color;
+pub mod stretch;
+
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -38,15 +41,13 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-pub const SEIZA_STACKING_VERSION: &str = "0.1.0-git-065af44";
+pub const SEIZA_STACKING_VERSION: &str = "0.1.0-git-d6b8dfc";
 /// Bump whenever stack admission, rendering, or persisted artifact semantics
 /// change. This deliberately versions PSF Guard policy separately from Seiza.
-const STACK_PREVIEW_CACHE_VERSION: u32 = 4;
+const STACK_PREVIEW_CACHE_VERSION: u32 = 5;
 const MAX_REQUEST_IMAGES: usize = 10_000;
 const MAX_REMEMBERED_JOBS: usize = 64;
 const PREVIEW_MAX_DIMENSION: u32 = 2400;
-const PREVIEW_STRETCH_FACTOR: f64 = 0.2;
-const PREVIEW_BLACK_CLIPPING: f64 = -2.8;
 const STACK_BYTES_PER_OUTPUT_SAMPLE: u64 = 40;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -124,6 +125,8 @@ pub struct StackGroupStatus {
     pub processed_frames: usize,
     pub accepted_frames: usize,
     pub rejected_frames: usize,
+    #[serde(default)]
+    pub output_channels: usize,
     pub reference_image_id: Option<i32>,
     pub total_exposure_seconds: f64,
     pub preview_url: Option<String>,
@@ -172,6 +175,7 @@ pub struct LatestStackPreviews {
 
 pub struct StackPreviewManager {
     jobs: Mutex<HashMap<String, StackPreviewJob>>,
+    color_jobs: Mutex<HashMap<String, color::StackColorJob>>,
     latest_write: Mutex<()>,
     permit: Arc<Semaphore>,
 }
@@ -180,6 +184,7 @@ impl StackPreviewManager {
     pub fn new() -> Self {
         Self {
             jobs: Mutex::new(HashMap::new()),
+            color_jobs: Mutex::new(HashMap::new()),
             latest_write: Mutex::new(()),
             permit: Arc::new(Semaphore::new(1)),
         }
@@ -420,6 +425,44 @@ pub async fn download_stack_preview_fits(
         })
 }
 
+pub async fn apply_stack_preview_stretch(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, job_id, group_index)): Path<(String, String, usize)>,
+    Json(request): Json<stretch::StackStretchRequest>,
+) -> Result<Json<ApiResponse<stretch::StackStretchPreview>>, AppError> {
+    validate_job_id(&job_id)?;
+    let job = if let Some(job) = state.stack_previews.get(&job_id) {
+        job
+    } else {
+        let bytes = std::fs::read(manifest_path(&ctx.cache_dir_path, &job_id))
+            .map_err(|_| AppError::NotFound)?;
+        serde_json::from_slice::<StackPreviewJob>(&bytes).map_err(|error| {
+            AppError::InternalError(format!("Invalid stack preview manifest: {error}"))
+        })?
+    };
+    if job.database_id != ctx.id {
+        return Err(AppError::NotFound);
+    }
+    let group = job
+        .groups
+        .get(group_index)
+        .filter(|group| group.index == group_index && group.state == StackGroupState::Ready)
+        .ok_or(AppError::NotFound)?;
+    let source = fits_path(&ctx.cache_dir_path, &job_id, group.index);
+    let result = stretch::apply_to_fits(
+        state,
+        ctx.id.clone(),
+        ctx.cache_dir_path.clone(),
+        format!("mono:{job_id}:{}", group.index),
+        job.artifact_revision,
+        source,
+        request,
+    )
+    .await?;
+    Ok(stretch::response(result))
+}
+
 fn validate_request(request: &StackPreviewRequest) -> Result<(), AppError> {
     if request.image_ids.len() < 2 {
         return Err(AppError::BadRequest(
@@ -539,8 +582,7 @@ fn prepare_job(
     hasher.update(STACK_PREVIEW_CACHE_VERSION.to_le_bytes());
     hasher.update(SEIZA_STACKING_VERSION.as_bytes());
     hasher.update(PREVIEW_MAX_DIMENSION.to_le_bytes());
-    hasher.update(PREVIEW_STRETCH_FACTOR.to_le_bytes());
-    hasher.update(PREVIEW_BLACK_CLIPPING.to_le_bytes());
+    hasher.update(stretch::SEIZA_STRETCH_VERSION.as_bytes());
 
     for (index, ((target_id, target_name, filter_name), mut entries)) in
         grouped.into_iter().enumerate()
@@ -638,6 +680,7 @@ fn prepare_job(
             processed_frames: 0,
             accepted_frames: 0,
             rejected_frames: 0,
+            output_channels: 0,
             reference_image_id,
             total_exposure_seconds: 0.0,
             preview_url: None,
@@ -946,6 +989,7 @@ fn run_group(
             let status = &mut job.groups[group.index];
             status.processed_frames = 1;
             status.accepted_frames = 1;
+            status.output_channels = output_channels as usize;
             status.total_exposure_seconds = reference_exposure;
             status.frames.push(StackFrameDecision {
                 image_id: group.frames[0].image_id,
@@ -1028,47 +1072,15 @@ fn run_group(
         seiza_stacking::write_fits_f32(&fits_temporary, &snapshot, &reference_headers)
             .map_err(|error| error.to_string())?;
         std::fs::rename(&fits_temporary, &fits_destination).map_err(|error| error.to_string())?;
-        render_previews_atomic(
+        stretch::render_image_previews_atomic(
             &snapshot.image,
+            &stretch::default_linear_config(),
+            stretch::StackStretchSourceTransfer::Linear,
             &preview_path(cache_root, job_id, group.index),
             &original_preview_path(cache_root, job_id, group.index),
         )
+        .map(|_| ())
     })
-}
-
-fn render_previews_atomic(
-    image: &seiza_stacking::LinearImage,
-    screen_destination: &FsPath,
-    original_destination: &FsPath,
-) -> Result<(), String> {
-    let parent = screen_destination
-        .parent()
-        .ok_or_else(|| "Stack preview path has no parent".to_string())?;
-    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let pixels = crate::mtf_stretch::stretch_f32_to_u8(
-        &image.data,
-        PREVIEW_STRETCH_FACTOR,
-        PREVIEW_BLACK_CLIPPING,
-    )
-    .ok_or_else(|| "Stack has no usable finite sample range".to_string())?;
-    let dynamic = if image.channels == 1 {
-        image::DynamicImage::ImageLuma8(
-            image::GrayImage::from_raw(image.width as u32, image.height as u32, pixels)
-                .ok_or_else(|| "Stack preview dimensions do not match pixels".to_string())?,
-        )
-    } else {
-        image::DynamicImage::ImageRgb8(
-            image::RgbImage::from_raw(image.width as u32, image.height as u32, pixels)
-                .ok_or_else(|| "Stack preview dimensions do not match pixels".to_string())?,
-        )
-    };
-    save_png_atomic(&dynamic, original_destination)?;
-    let resized = dynamic.resize(
-        PREVIEW_MAX_DIMENSION,
-        PREVIEW_MAX_DIMENSION,
-        image::imageops::FilterType::Lanczos3,
-    );
-    save_png_atomic(&resized, screen_destination)
 }
 
 fn save_png_atomic(image: &image::DynamicImage, destination: &FsPath) -> Result<(), String> {
@@ -1193,6 +1205,7 @@ mod tests {
             processed_frames: 2,
             accepted_frames: 2,
             rejected_frames: 0,
+            output_channels: 1,
             reference_image_id: Some(image_id),
             total_exposure_seconds: 120.0,
             preview_url: None,

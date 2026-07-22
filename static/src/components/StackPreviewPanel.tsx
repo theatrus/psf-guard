@@ -8,8 +8,11 @@ import type {
   StackGroupStatus,
   StackInputImage,
   StackPreviewJob,
+  StackStretchPreview,
 } from '../api/types';
 import StackPreviewInspector from './StackPreviewInspector';
+import StackColorPreviewPanel from './StackColorPreviewPanel';
+import StackStretchControls from './StackStretchControls';
 
 type StackCandidateImage = Pick<
   Image,
@@ -50,6 +53,10 @@ function latestStackQueryKey(dbId: string, projectId: number) {
 
 function channelKey(targetId: number, filterName: string | null) {
   return `${targetId}:${filterName ?? ''}`;
+}
+
+function artifactStretchKey(artifact: StackArtifact) {
+  return `${artifact.jobId}:${artifact.group.index}:${artifact.artifactRevision}`;
 }
 
 function formatExposure(seconds: number): string {
@@ -112,6 +119,7 @@ export default function StackPreviewPanel({
   const [acceptedOnly, setAcceptedOnly] = useState(false);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [inspector, setInspector] = useState<StackArtifact | null>(null);
+  const [stretches, setStretches] = useState<Record<string, StackStretchPreview>>({});
 
   const currentChannels = useMemo(() => {
     const channels = new Map<string, ChannelInput>();
@@ -190,6 +198,7 @@ export default function StackPreviewPanel({
   useEffect(() => {
     setActiveJobId(null);
     setInspector(null);
+    setStretches({});
     resetStart();
   }, [dbId, projectId, resetStart]);
 
@@ -264,6 +273,30 @@ export default function StackPreviewPanel({
         ) !== null
       : false;
   }).length;
+  const outdatedTargetIds = useMemo(() => {
+    const targetIds = new Set<number>();
+    for (const entry of latest.data?.groups ?? []) {
+      const key = channelKey(entry.group.target_id, entry.group.filter_name);
+      if (
+        staleReason(
+          currentChannels.get(key),
+          entry.group.input_images,
+          entry.accepted_only,
+          acceptedOnly
+        )
+      ) {
+        targetIds.add(entry.group.target_id);
+      }
+    }
+    return targetIds;
+  }, [acceptedOnly, currentChannels, latest.data]);
+  const colorSourceRevision = useMemo(
+    () => (latest.data?.groups ?? [])
+      .map((entry) => `${entry.job_id}:${entry.group.index}:${entry.artifact_revision}`)
+      .sort()
+      .join('|'),
+    [latest.data?.groups]
+  );
 
   return (
     <>
@@ -322,6 +355,14 @@ export default function StackPreviewPanel({
         )}
         {activeJob?.error && <div className="stack-preview-message error">{activeJob.error}</div>}
 
+        <StackColorPreviewPanel
+          dbId={dbId}
+          projectId={projectId}
+          sourceRevision={colorSourceRevision}
+          channelBuildRunning={running}
+          outdatedTargetIds={outdatedTargetIds}
+        />
+
         {displayKeys.length > 0 && (
           <div
             className="stack-preview-results"
@@ -354,6 +395,8 @@ export default function StackPreviewPanel({
                       }
                     : undefined;
                 const artifact = activeArtifact ?? artifactFromLatest(latestEntry);
+                const stretchKey = artifact ? artifactStretchKey(artifact) : null;
+                const appliedStretch = stretchKey ? stretches[stretchKey] : undefined;
                 const group = artifact?.group ?? activeGroup;
                 const targetName = current?.targetName ?? group?.target_name ?? 'Unknown target';
                 const filterName = current?.filterName ?? group?.filter_name ?? '';
@@ -465,15 +508,33 @@ export default function StackPreviewPanel({
                     {artifact && (
                       <div className="stack-preview-image">
                         <img
-                          src={apiClient.getStackPreviewUrl(
-                            dbId,
-                            artifact.jobId,
-                            artifact.group.index,
-                            artifact.artifactRevision
+                          src={appliedStretch?.preview_url ?? apiClient.getStackPreviewUrl(
+                            dbId, artifact.jobId, artifact.group.index, artifact.artifactRevision
                           )}
                           alt={`${targetName} ${filterName} uncalibrated stack preview`}
                         />
                       </div>
+                    )}
+                    {artifact && stretchKey && (
+                      <StackStretchControls
+                        key={stretchKey}
+                        label={`${targetName} ${filterName || 'no filter'}`}
+                        channels={artifact.group.output_channels === 3 ? 3 : 1}
+                        disabled={running}
+                        applied={appliedStretch}
+                        apply={(request) => apiClient.applyStackStretch(
+                          dbId, artifact.jobId, artifact.group.index, request
+                        )}
+                        onApplied={(preview) => setStretches((currentStretches) => ({
+                          ...currentStretches,
+                          [stretchKey]: preview,
+                        }))}
+                        onRevert={() => setStretches((currentStretches) => {
+                          const next = { ...currentStretches };
+                          delete next[stretchKey];
+                          return next;
+                        })}
+                      />
                     )}
                     {!artifact && groupBusy && (
                       <div className="stack-preview-placeholder">
@@ -552,10 +613,29 @@ export default function StackPreviewPanel({
       </section>
       {inspector && (
         <StackPreviewInspector
-          dbId={dbId}
-          jobId={inspector.jobId}
-          artifactRevision={inspector.artifactRevision}
-          group={inspector.group}
+          eyebrow="Full-resolution integration"
+          title={inspector.group.target_name}
+          label={inspector.group.filter_name || 'No filter'}
+          summary={[
+            `${inspector.group.accepted_frames} frames`,
+            `${Math.round(inspector.group.total_exposure_seconds)} s`,
+          ]}
+          imageUrl={stretches[artifactStretchKey(inspector)]?.original_preview_url ??
+            apiClient.getStackPreviewUrl(
+              dbId,
+              inspector.jobId,
+              inspector.group.index,
+              inspector.artifactRevision,
+              'original'
+            )}
+          fitsUrl={apiClient.getStackFitsUrl(
+            dbId,
+            inspector.jobId,
+            inspector.group.index,
+            inspector.artifactRevision
+          )}
+          imageAlt={`Full-resolution stack for ${inspector.group.target_name} ${inspector.group.filter_name || 'No filter'}`}
+          downloadLabel="Download linear FITS"
           onClose={() => setInspector(null)}
         />
       )}

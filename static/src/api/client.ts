@@ -34,6 +34,13 @@ import type {
   SatelliteAnalysisStatus,
   StackPreviewJob,
   LatestStackPreviews,
+  StackColorCatalog,
+  StackColorJob,
+  StackColorKind,
+  StackColorProcessing,
+  StackNarrowbandPalette,
+  StackStretchPreview,
+  StackStretchRequest,
 } from './types';
 
 // Store the initialized API instance and server URL
@@ -83,6 +90,21 @@ export const initializeApiClient = async () => {
 
 // Build a per-DB path under /api/db/{dbId}.
 const dbPath = (dbId: string, path: string) => `/db/${encodeURIComponent(dbId)}${path}`;
+
+const withServerUrl = (path: string): string => `${getCachedServerUrl()}${path}`;
+
+const normalizeStretchPreview = (preview: StackStretchPreview): StackStretchPreview => ({
+  ...preview,
+  preview_url: withServerUrl(preview.preview_url),
+  original_preview_url: withServerUrl(preview.original_preview_url),
+});
+
+const stackStretchError = (cause: unknown, fallback: string): Error => {
+  if (axios.isAxiosError<ApiResponse<unknown>>(cause)) {
+    return new Error(cause.response?.data?.error || cause.message || fallback);
+  }
+  return cause instanceof Error ? cause : new Error(fallback);
+};
 
 export const apiClient = {
   // ── Global ────────────────────────────────────────────────────────────────
@@ -319,6 +341,105 @@ export const apiClient = {
     return `${basePath}${dbPath(
       dbId,
       `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/fits`
+    )}${revision}`;
+  },
+
+  applyStackStretch: async (
+    dbId: string,
+    jobId: string,
+    groupIndex: number,
+    request: StackStretchRequest
+  ): Promise<StackStretchPreview> => {
+    try {
+      const apiInstance = await getApi();
+      const { data } = await apiInstance.post<ApiResponse<StackStretchPreview>>(
+        dbPath(
+          dbId,
+          `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/stretch`
+        ),
+        request
+      );
+      if (!data.data) throw new Error(data.error || 'Failed to apply stack stretch');
+      return normalizeStretchPreview(data.data);
+    } catch (cause) {
+      throw stackStretchError(cause, 'Failed to apply stack stretch');
+    }
+  },
+
+  getStackColorCatalog: async (
+    dbId: string,
+    projectId: number
+  ): Promise<StackColorCatalog> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<StackColorCatalog>>(
+      dbPath(dbId, `/projects/${projectId}/stack-previews/color`)
+    );
+    if (!data.data) throw new Error(data.error || 'Color preview availability could not be loaded');
+    return data.data;
+  },
+
+  startStackColor: async (
+    dbId: string,
+    projectId: number,
+    request: {
+      target_id: number;
+      kind: StackColorKind;
+      palette?: StackNarrowbandPalette;
+      force?: boolean;
+      processing?: StackColorProcessing;
+    }
+  ): Promise<StackColorJob> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<StackColorJob>>(
+      dbPath(dbId, `/projects/${projectId}/stack-previews/color`),
+      request
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to start color preview');
+    return data.data;
+  },
+
+  getStackColorJob: async (
+    dbId: string,
+    projectId: number,
+    jobId: string
+  ): Promise<StackColorJob> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<StackColorJob>>(
+      dbPath(dbId, `/projects/${projectId}/stack-previews/color/${encodeURIComponent(jobId)}`)
+    );
+    if (!data.data) throw new Error(data.error || 'Color preview job not found');
+    return data.data;
+  },
+
+  getStackColorPreviewUrl: (
+    dbId: string,
+    jobId: string,
+    artifactRevision: string,
+    size: 'screen' | 'original' = 'screen'
+  ): string => {
+    const serverUrl = getCachedServerUrl();
+    const basePath = serverUrl ? `${serverUrl}/api` : '/api';
+    const params = new URLSearchParams();
+    if (size === 'original') params.set('size', size);
+    if (artifactRevision) params.set('v', artifactRevision);
+    const query = params.size ? `?${params.toString()}` : '';
+    return `${basePath}${dbPath(
+      dbId,
+      `/stack-previews/color/${encodeURIComponent(jobId)}/preview`
+    )}${query}`;
+  },
+
+  getStackColorFitsUrl: (
+    dbId: string,
+    jobId: string,
+    artifactRevision: string
+  ): string => {
+    const serverUrl = getCachedServerUrl();
+    const basePath = serverUrl ? `${serverUrl}/api` : '/api';
+    const revision = artifactRevision ? `?v=${encodeURIComponent(artifactRevision)}` : '';
+    return `${basePath}${dbPath(
+      dbId,
+      `/stack-previews/color/${encodeURIComponent(jobId)}/fits`
     )}${revision}`;
   },
 

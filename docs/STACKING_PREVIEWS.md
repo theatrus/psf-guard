@@ -78,12 +78,136 @@ as an input to a separate processing workflow.
 
 ![Frame-by-frame stack admission details](stack-preview-decisions.png)
 
+## Reversible display stretching
+
+Expand **Display stretch** on any mono stack card to change only its
+rendered PNG. **Apply stretch** asks Seiza to resolve the selected model against
+the cached FITS and renders both the grid and full-resolution inspection PNGs.
+The source stack and downloadable FITS are never rewritten. **Revert stretch**
+immediately returns the card and inspector to the default rendering.
+
+The controls expose Seiza's identity, explicit linear, asinh,
+percentile-asinh, MTF, Generalized Hyperbolic Stretch (GHS), and Auto-MTF
+models. Auto-MTF with PSF Guard's established target median and shadow clipping
+is the default for linear mono-stack artifacts.
+Explicit black, white, shadow, and highlight points use normalized zero–one
+display units. PSF Guard maps a robust 0.1%–99.9% range from linear FITS into
+that domain before invoking Seiza. After an application, the card shows the raw
+source range, median, and normalization bounds so the transform remains
+inspectable.
+
+Applied variants are content-addressed by the source artifact revision, full
+stretch configuration, robust-normalization policy, and Seiza stretch version.
+Reapplying the same settings reuses the cached PNG pair. The active selection
+is intentionally browser-local and reversible; a reload returns to the durable
+default preview while the linear FITS remains the sole source of truth.
+
+![Parameterized Seiza stretch controls applied to a stack preview](stack-preview-stretch.png)
+
+## Color previews from channel stacks
+
+Once one target has completed mono stacks for **L/R/G/B** or **H-alpha/OIII**,
+the grid adds a **Combine channel stacks** section. Color generation is a
+separate on-demand job: rebuilding or changing a color palette never changes
+the mono integrations or their admission evidence.
+
+- **RGB** requires one unambiguous Red, Green, and Blue stack.
+- **LRGB** requires one unambiguous Luminance, Red, Green, and Blue stack.
+  Luminance supplies the output luminance while Seiza retains the RGB
+  chromaticity.
+- **Narrowband** requires H-alpha and OIII. HOO and Foraxx HOO are then
+  available. Adding SII enables SHO, SOH, HSO, HOS, OSH, OHS, and Foraxx SHO.
+- The palette picker is part of the cache key. Previously generated palettes
+  remain available, and selecting another palette builds or restores its own
+  artifact.
+
+PSF Guard recognizes the ordinary short and long filter names (`L`, `Red`,
+`Ha`, `H-alpha`, `OIII`, `SII`, `O3`, and `S2`) plus descriptive names such as
+`Red`, `H-alpha`, and `OIII` as distinct tokens in vendor labels. It
+deliberately does not guess when two stacks map to the same role or when a
+multi-band filter name is ambiguous. Rename the Target Scheduler filters to
+make those roles explicit before building color.
+
+Before registration, PSF Guard uses `seiza-background` to fit and correct each
+linear channel independently. Background extraction is enabled for new UI
+builds and defaults to additive subtraction, which removes the fitted gradient
+while preserving that channel's robust sky reference level. Multiplicative
+division is available for vignetting-like fields, and extraction can be
+disabled when the source stacks are already corrected. After correction, each
+non-reference stack is registered to R for RGB, L for LRGB, or H-alpha for
+narrowband, using the same bounded Seiza star/similarity registration used by
+the Seiza color CLI.
+
+The **Processing stack** editor exposes the background correction mode plus
+Seiza's polynomial degree, sample-grid density and radius, sample-search steps,
+sample and fit rejection thresholds, rejection passes, border exclusion, and
+ridge regularization. It then robustly normalizes each physical input and
+applies that role's ordered stretch stages before composition. Expand L/R/G/B,
+H-alpha/OIII/SII, or RGB output to add, edit, remove, and reorder Seiza
+identity, linear, asinh, percentile-asinh, MTF, GHS, and Auto-MTF stages.
+**Apply processing stack** starts a new cached color job; **Revert edits**
+returns to the last rendered pipeline and **Reset defaults** restores additive
+background extraction, one Auto-MTF stage per input, and no post-composition
+stage.
+
+Every intermediate remains `f32`, and each automatic stage resolves against
+the preceding stage's output. These are sequential transfer passes, not pixel
+values added together. Seiza receives the independently prepared channels as
+display-referred inputs, so Foraxx uses those values directly instead of
+applying a second shared stretch. RGB output stages may use linked, unlinked,
+or luminance-preserving color strategies. The downloadable RGB FITS contains
+the exact processed color result, records `COLORSPC`, `SEIZACLR`, and
+`SEIZATRF='DISPLAY'`, and preserves supported WCS cards from the reference
+stack. The manifest retains the requested background configuration and stage
+arrays, each resolved background model and diagnostic, and every resolved Seiza
+stretch plan. The UI reports accepted/candidate sample counts and the resolved
+sample radius for every input role. The complete processing definition,
+resolved dependency versions, and source revisions are part of the job ID, so
+applying the same pipeline restores its prior artifact. Artifacts from before
+background extraction are rebuilt with the new additive default; a current
+artifact whose extraction was explicitly disabled keeps that choice.
+
+| Standard SHO | Foraxx SHO |
+|:--:|:--:|
+| ![Real Golf of Mexico standard SHO preview built from cached H-alpha, OIII, and SII stacks](stack-narrowband-sho-real.jpg) | ![Real Golf of Mexico Foraxx SHO preview built from the same cached channel stacks](stack-color-real-previews.jpg) |
+
+Both previews above come from the same six accepted Golf of Mexico
+acquisitions: two each in H-alpha, OIII, and SII. Switching palettes reuses the
+three registered mono artifacts; it does not repeat their integrations.
+
+The expanded color card shows the complete phase ledger plus independent input
+and output stretch lanes. Each lane can add, remove, and reorder stages;
+**Apply processing stack** creates a new content-addressed preview while
+**Revert edits** restores the last rendered configuration.
+
+![Real Golf of Mexico narrowband background extraction diagnostics and ordered stretch editor](stack-background-real.jpg)
+
+This real Foraxx SHO run retained 73 of 96 H-alpha samples, 78 of 96 OIII
+samples, and 95 of 96 SII samples. The rejected locations contain excess noise
+or nebular structure that should not influence the fitted sky surface.
+
+Color cards retain the compact loading/status strip directly below the image.
+Its determinate total covers source loading, one background fit and one
+correction per channel, channel registration, per-input normalization, every
+input stretch stage, composition, every output stretch stage, FITS writing,
+full-size rendering, screen rendering, and artifact publication. When
+extraction is disabled, background preparation is retained as an explicitly
+skipped phase. **Pipeline phases** preserves each phase's completed, skipped,
+reused, or failed state and identifies the active role and stage in the live
+label. A failed fit stops the build with its input role named; disable
+extraction or adjust the sampling controls to retry. **Inspect** opens the same
+native-size pan/zoom inspector as a mono stack. **FITS** downloads the full RGB
+result for further inspection. A color result is marked **Out of date**—but
+remains viewable—when any source channel stack is rebuilt, a cached artifact
+goes missing, or the Seiza/background/color-processing cache version changes.
+
 ## Output, caching, and invalidation
 
-Each group produces a display-stretched PNG no larger than 2400 pixels on its
-longest side, a native-resolution stretched PNG for interactive inspection,
-and an unstretched, source-resolution, 32-bit floating-point FITS. A JSON
-provenance manifest describes the job. Seiza sees the original star profiles
+Each group produces a default display-stretched PNG no larger than 2400 pixels
+on its longest side, a native-resolution stretched PNG for interactive
+inspection, and an unstretched, source-resolution, 32-bit floating-point FITS.
+Applied stretch variants live beside separate configuration and resolved-plan
+manifests. A JSON provenance manifest describes the stack job. Seiza sees the original star profiles
 during integration, and its incremental accumulator keeps memory bounded
 independently of frame count. A conservative memory estimate is checked against
 the server worker policy before integration starts. Full-size PNGs and FITS
@@ -102,6 +226,12 @@ Artifacts live below the database cache directory:
   group-1-original.png
   group-1.fits
 <cache>/<database>/stack-previews/latest-project-<project-id>.json
+<cache>/<database>/stack-previews/color/<color-job-id>/
+  manifest.json
+  preview.png
+  preview-original.png
+  color.fits
+<cache>/<database>/stack-previews/color/latest-project-<project-id>.json
 ```
 
 The content-addressed job ID includes the database/project, exact ordered
@@ -120,25 +250,50 @@ output.
 - No bias, dark, or flat masters are applied in this first version.
 - The retained FITS is still an uncalibrated preview integration, not a final
   science product.
-- Channels remain separate. There is no LRGB/SHO combination, mosaic, drizzle,
-  or cross-target integration.
+- Color is a visual channel combination, not photometric or
+  spectrophotometric calibration. There is no gradient removal, custom mixing
+  matrix UI, star removal, mosaic, drizzle, or cross-target integration.
 - Satellite predictions and image-detail overlays are not applied to a stack.
   They describe individual shutter intervals, while one preview represents
   several exposures.
 
 ## HTTP API
 
-The grid uses five per-database endpoints:
+The grid uses these per-database endpoints:
 
 ```text
 POST /api/db/{db}/projects/{project}/stack-previews
 GET  /api/db/{db}/projects/{project}/stack-previews/latest
 GET  /api/db/{db}/projects/{project}/stack-previews/{job}
 GET  /api/db/{db}/stack-previews/{job}/{group}/preview[?size=screen|original]
+POST /api/db/{db}/stack-previews/{job}/{group}/stretch
 GET  /api/db/{db}/stack-previews/{job}/{group}/fits
+GET  /api/db/{db}/projects/{project}/stack-previews/color
+POST /api/db/{db}/projects/{project}/stack-previews/color
+GET  /api/db/{db}/projects/{project}/stack-previews/color/{job}
+GET  /api/db/{db}/stack-previews/color/{job}/preview[?size=screen|original]
+GET  /api/db/{db}/stack-previews/color/{job}/fits
+GET  /api/db/{db}/stack-previews/stretch/{stretch}/preview[?size=screen|original]
 ```
 
 The POST body is `{ "image_ids": [...], "accepted_only": false, "force":
 false }`. Status responses contain the group counters, captured image/grade
 snapshot, and complete per-frame decision records used by the UI. The latest
 endpoint returns the durable last-successful result for each target/channel.
+The color catalog reports role/palette availability and durable results. Its
+POST body is `{ "target_id": 42, "kind": "rgb", "force": false,
+"processing": { "background_extraction": { "correction_mode": "subtract",
+"config": { "model": { "kind": "polynomial", "degree": 2, "ridge": 1e-8 },
+"samples_per_axis": 12, "sample_radius": null, "search_steps": 4,
+"sample_rejection_sigma": 3.5, "fit_rejection_sigma": 3.0,
+"fit_rejection_iterations": 3, "border_fraction": 0.03 } },
+"input_stretches": { "red": [{ "model": { "type": "auto-mtf",
+"target_median": 0.2, "shadows_clip": -2.8 }, "color_strategy": "linked" }] },
+"output_stretches": [] } }`,
+`{ "target_id": 42, "kind": "lrgb", "force": false }`, or
+`{ "target_id": 42, "kind": "narrowband", "palette": "foraxx-hoo",
+"force": false }`. Omitting `processing` retains the earlier linear quick-look
+behavior for API compatibility. Mono stretch POST bodies use Seiza's tagged model shape, for
+example `{ "model": { "type": "percentile-asinh", "black_percentile":
+0.01, "white_percentile": 0.995, "strength": 8.0 }, "color_strategy":
+"luminance-preserving" }`.

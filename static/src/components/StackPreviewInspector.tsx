@@ -1,36 +1,34 @@
 import { useEffect, useState } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
-import { apiClient } from '../api/client';
-import type { StackGroupStatus } from '../api/types';
 import { useImageZoom } from '../hooks/useImageZoom';
 
 interface StackPreviewInspectorProps {
-  dbId: string;
-  jobId: string;
-  artifactRevision: string;
-  group: StackGroupStatus;
+  eyebrow: string;
+  title: string;
+  label: string;
+  summary: string[];
+  imageUrl: string;
+  fitsUrl: string;
+  imageAlt: string;
+  downloadLabel: string;
   onClose: () => void;
 }
 
 export default function StackPreviewInspector({
-  dbId,
-  jobId,
-  artifactRevision,
-  group,
+  eyebrow,
+  title,
+  label,
+  summary,
+  imageUrl,
+  fitsUrl,
+  imageAlt,
+  downloadLabel,
   onClose,
 }: StackPreviewInspectorProps) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
   const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null);
   const zoom = useImageZoom({ minScale: 0.05, maxScale: 10 });
-  const imageUrl = apiClient.getStackPreviewUrl(
-    dbId,
-    jobId,
-    group.index,
-    artifactRevision,
-    'original'
-  );
-
   useHotkeys('escape', onClose, { enableOnFormTags: true }, [onClose]);
   useHotkeys('plus,equal', zoom.zoomIn, [zoom.zoomIn]);
   useHotkeys('minus', zoom.zoomOut, [zoom.zoomOut]);
@@ -52,14 +50,13 @@ export default function StackPreviewInspector({
       >
         <header className="stack-inspector-header">
           <div>
-            <div className="stack-preview-eyebrow">Full-resolution integration</div>
+            <div className="stack-preview-eyebrow">{eyebrow}</div>
             <h2 id="stack-inspector-title">
-              {group.target_name} <span>{group.filter_name || 'No filter'}</span>
+              {title} <span>{label}</span>
             </h2>
           </div>
           <div className="stack-inspector-summary">
-            <span>{group.accepted_frames} frames</span>
-            <span>{Math.round(group.total_exposure_seconds)} s</span>
+            {summary.map((item) => <span key={item}>{item}</span>)}
             {dimensions && <span>{dimensions.width} × {dimensions.height}</span>}
           </div>
           <button className="close-button" type="button" onClick={onClose} aria-label="Close stack inspector">
@@ -92,7 +89,7 @@ export default function StackPreviewInspector({
             <img
               ref={zoom.imageRef}
               src={imageUrl}
-              alt={`Full-resolution stack for ${group.target_name} ${group.filter_name || 'No filter'}`}
+              alt={imageAlt}
               data-testid="stack-inspector-image"
               draggable={false}
               onError={() => setError(true)}
@@ -118,10 +115,10 @@ export default function StackPreviewInspector({
           <div className="stack-inspector-hint">Wheel to zoom · drag to pan · F fit · 1 actual size</div>
           <a
             className="stack-preview-download"
-            href={apiClient.getStackFitsUrl(dbId, jobId, group.index, artifactRevision)}
+            href={fitsUrl}
             download
           >
-            Download linear FITS
+            {downloadLabel}
           </a>
           <div className="zoom-info-compact">
             <span className="zoom-percentage-compact">{zoom.getZoomPercentage()}%</span>
