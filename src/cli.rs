@@ -81,10 +81,11 @@ pub enum Commands {
 
     /// Import FITS folders into an existing Target Scheduler database.
     ///
-    /// Accepts a registry slug or a path to a .sqlite file. Grouping and
-    /// idempotency rules match `create-db`: frames whose basename is already
-    /// recorded in the database are skipped, so re-running after a new night
-    /// only adds the new subs.
+    /// Accepts a registry slug or a path to a .sqlite file. Frames whose
+    /// basename is already recorded are skipped; remaining frames attach to
+    /// EXISTING targets when the OBJECT name or coordinates match, and only
+    /// unmatched frames create new projects/targets. Use --dry-run first to
+    /// preview exactly what will happen.
     Import {
         /// Registry slug or path of the target database.
         db: String,
@@ -104,6 +105,37 @@ pub enum Commands {
         profile_id: Option<String>,
 
         /// Preview the plan and roll back without writing.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Do NOT attach frames to existing targets — synthesize new
+        /// structure for everything (ground-zero import).
+        #[arg(long)]
+        no_attach: bool,
+
+        /// Coordinate-match radius (degrees) for attaching to an existing
+        /// target.
+        #[arg(long, default_value_t = crate::commands::import::DEFAULT_MATCH_RADIUS_DEG)]
+        match_radius_deg: f64,
+
+        /// Path to the database registry JSON file (defaults to the platform
+        /// config directory).
+        #[arg(long)]
+        registry: Option<String>,
+    },
+
+    /// Remove everything a PSF Guard import created from a database.
+    ///
+    /// Deletes projects whose description carries the `Imported by PSF
+    /// Guard` marker, together with their targets, exposure plans, rule
+    /// weights, and acquired images. Frames that were ATTACHED to
+    /// pre-existing projects are not touched. Recovery hatch for an import
+    /// that should not have happened.
+    RemoveImported {
+        /// Registry slug or path of the database.
+        db: String,
+
+        /// Show what would be removed without writing.
         #[arg(long)]
         dry_run: bool,
 

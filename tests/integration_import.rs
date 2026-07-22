@@ -782,3 +782,97 @@ async fn local_export_places_files_and_respects_management_gate() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reimport_attaches_to_existing_targets_after_preview() {
+    let dir = tempdir().unwrap();
+    let images = dir.path().join("lights");
+    std::fs::create_dir_all(&images).unwrap();
+    write_fits(
+        &images.join("m31_ha_0001.fits"),
+        "M31",
+        "Ha",
+        "2026-01-15T04:00:00.000",
+        10.6847,
+    );
+
+    let state = state_with_management(dir.path());
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        "/api/databases/create",
+        Some(serde_json::json!({
+            "name": "MergeSafe",
+            "image_dirs": [images.to_string_lossy()],
+            "backfill": false,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let slug = body["data"]["database"]["id"].as_str().unwrap().to_string();
+    let db_path = body["data"]["database"]["database_path"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    wait_for_import(&state, &slug).await;
+
+    // A new night lands more M31 subs (different basenames, same object).
+    write_fits(
+        &images.join("m31_ha_0002.fits"),
+        "M31",
+        "Ha",
+        "2026-01-16T04:00:00.000",
+        10.6851,
+    );
+
+    // Step 1: PREVIEW (dry run) — reports the attach, writes nothing.
+    let (status, _) = json_request(
+        build_app(state.clone()),
+        "POST",
+        &format!("/api/db/{slug}/import"),
+        Some(serde_json::json!({ "dry_run": true, "backfill": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let progress = wait_for_import(&state, &slug).await;
+    let outcome = &progress["outcome"];
+    assert_eq!(outcome["dry_run"], true);
+    assert_eq!(outcome["attached"], 1, "outcome: {outcome}");
+    assert_eq!(outcome["projects_created"], 0, "no duplicated structure");
+    assert_eq!(outcome["attach_summaries"][0]["target"], "M31");
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM acquiredimage", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1, "preview must not write");
+    }
+
+    // Step 2: confirmed live import — attaches to the existing target.
+    let (status, _) = json_request(
+        build_app(state.clone()),
+        "POST",
+        &format!("/api/db/{slug}/import"),
+        Some(serde_json::json!({ "backfill": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let progress = wait_for_import(&state, &slug).await;
+    assert_eq!(progress["outcome"]["attached"], 1);
+
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let (projects, targets, images_n, distinct_targets): (i64, i64, i64, i64) = conn
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM project), (SELECT COUNT(*) FROM target),
+                    (SELECT COUNT(*) FROM acquiredimage),
+                    (SELECT COUNT(DISTINCT targetId) FROM acquiredimage)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (projects, targets, images_n, distinct_targets),
+        (1, 1, 2, 1),
+        "both frames on the one existing target"
+    );
+}

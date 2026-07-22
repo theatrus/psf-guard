@@ -853,6 +853,7 @@ pub async fn create_database_route(
             .unwrap_or(crate::commands::import::grouping::DEFAULT_TIME_GAP_DAYS),
         profile_id: req.profile_id.clone(),
         dry_run: false,
+        ..Default::default()
     };
     spawn_import_job(
         &state,
@@ -901,6 +902,10 @@ pub async fn start_import_route(
             .unwrap_or(crate::commands::import::grouping::DEFAULT_TIME_GAP_DAYS),
         profile_id: req.profile_id,
         dry_run: req.dry_run,
+        attach_existing: req.attach_existing.unwrap_or(true),
+        match_radius_deg: req
+            .match_radius_deg
+            .unwrap_or(crate::commands::import::DEFAULT_MATCH_RADIUS_DEG),
     };
     let started = spawn_import_job(
         &state,
@@ -1020,7 +1025,12 @@ fn spawn_import_job(
             outcome.targets_created,
             if outcome.dry_run { " (dry-run)" } else { "" }
         );
-        let target_ids = outcome.created_target_ids.clone();
+        let mut target_ids = outcome.created_target_ids.clone();
+        for id in &outcome.attached_target_ids {
+            if !target_ids.contains(id) {
+                target_ids.push(*id);
+            }
+        }
         job::set_outcome(&job_store, outcome);
 
         // New rows reference files the DB-based file cache hasn't seen; kick

@@ -307,6 +307,13 @@ pub struct ImportRequest {
     /// Run the post-import quality backfill (default true).
     #[serde(default)]
     pub backfill: Option<bool>,
+    /// Attach frames to existing targets (name/coordinate match) instead of
+    /// synthesizing new structure for them (default true).
+    #[serde(default)]
+    pub attach_existing: Option<bool>,
+    /// Coordinate-match radius in degrees (default 0.5).
+    #[serde(default)]
+    pub match_radius_deg: Option<f64>,
 }
 
 /// Status returned by both the import-start and import-progress endpoints.

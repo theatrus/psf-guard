@@ -625,6 +625,15 @@ export interface ImportProjectSummary {
   frames: number;
 }
 
+/** One existing target that received attached frames. */
+export interface ImportAttachSummary {
+  project: string;
+  target: string;
+  frames: number;
+  /** 'name' or 'coordinates' */
+  matched_by: string;
+}
+
 /** Result of one FITS import run (mirrors Rust `ImportOutcome`). */
 export interface ImportOutcome {
   scanned: number;
@@ -632,6 +641,8 @@ export interface ImportOutcome {
   non_light: number;
   skipped_existing: number;
   imported: number;
+  /** Frames attached to targets that already existed. */
+  attached: number;
   projects_created: number;
   targets_created: number;
   templates_created: number;
@@ -640,7 +651,9 @@ export interface ImportOutcome {
   profile_id: string;
   dry_run: boolean;
   project_summaries: ImportProjectSummary[];
+  attach_summaries: ImportAttachSummary[];
   created_target_ids: number[];
+  attached_target_ids: number[];
 }
 
 /** Progress of the singleton per-DB import job (poll ~1s while running). */
@@ -673,6 +686,9 @@ export interface ImportRequest {
   profile_id?: string;
   dry_run?: boolean;
   backfill?: boolean;
+  /** Attach to existing targets by name/coordinates (default true). */
+  attach_existing?: boolean;
+  match_radius_deg?: number;
 }
 
 /** Body of `POST /api/databases/create`. */
