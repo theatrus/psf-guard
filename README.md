@@ -160,8 +160,8 @@ Version-independent download links, always pointing at the latest release:
 
 | Platform | Download | Notes |
 |----------|----------|-------|
-| Linux x64 | [`psf-guard-linux-x64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-linux-x64) | Needs system OpenCV — Docker is easier |
-| macOS | [`psf-guard-macos-x64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-macos-x64) | Needs Homebrew OpenCV |
+| Linux x64 | [`psf-guard-linux-x64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-linux-x64) | Self-contained binary |
+| macOS | [`psf-guard-macos-x64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-macos-x64) | Self-contained binary |
 | Windows x64 | [`psf-guard-windows-x64.exe`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-windows-x64.exe) | Static binary, no dependencies |
 
 ```bash
@@ -194,15 +194,14 @@ Prefer to build your own? Native RPMs build with standard tooling
 (`rpmbuild`, `mock`, COPR), fully offline once sources are prepared:
 
 ```bash
-sudo dnf install -y rpm-build rpmdevtools cargo rust clang-devel \
-    opencv-devel nodejs npm git
+sudo dnf install -y rpm-build rpmdevtools cargo rust nodejs npm git
 rpmdev-setuptree
 ./scripts/make-rpm-sources.sh                  # builds frontend + vendors crates
 rpmbuild -ba packaging/rpm/psf-guard.spec      # RPMs land in ~/rpmbuild/RPMS/
 ```
 
-See [`packaging/rpm/README.md`](packaging/rpm/README.md) for mock builds, the
-`--without opencv` variant, and release steps.
+See [`packaging/rpm/README.md`](packaging/rpm/README.md) for mock builds and
+release steps.
 
 ### Build from source
 
@@ -213,11 +212,9 @@ cargo build --release
 ./target/release/psf-guard server schedulerdb.sqlite /path/to/images/
 ```
 
-You'll need Rust, Node.js/npm (the React frontend is embedded at build time),
-and OpenCV with clang. OpenCV is the painful one — the CI workflows under
-[`.github/workflows/`](.github/workflows/) are the authoritative package lists
-per platform (vcpkg on Windows, Homebrew on macOS, `libopencv-dev` on
-Debian/Ubuntu).
+You'll need Rust and Node.js/npm (the React frontend is embedded at build
+time). Image processing is pure Rust (the `seiza-imgproc` crate in this
+repository), so no native computer-vision libraries are required.
 
 ## The grader UI
 

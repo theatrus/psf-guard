@@ -41,7 +41,7 @@ npm run build
 
 ### Tauri Build Process
 The release workflow builds both CLI and Tauri versions:
-1. Install system dependencies (WebKit, OpenCV, etc.)
+1. Install system dependencies (WebKit, etc.)
 2. Install Node.js and build frontend
 3. Install Rust toolchain
 4. Install Tauri CLI: `cargo install tauri-cli --version "^2.0"`
@@ -54,7 +54,6 @@ The release workflow builds both CLI and Tauri versions:
 ### Ubuntu/Debian
 ```bash
 sudo apt-get install -y \
-  libopencv-dev clang libclang-dev \
   libwebkit2gtk-4.1-dev \
   libappindicator3-dev \
   librsvg2-dev \
@@ -63,11 +62,9 @@ sudo apt-get install -y \
 
 ### macOS
 ```bash
-brew install opencv
 ```
 
 ### Windows
-- Uses vcpkg for OpenCV: `opencv4[contrib,nonfree]:x64-windows-static-md`
 - WebKit dependencies are handled by Tauri automatically
 
 ## Smart Binary Architecture
@@ -131,8 +128,6 @@ All releases now include both CLI binaries and desktop applications:
    - Ensure frontend builds successfully
    - Verify Tauri CLI is the correct version
 
-2. **OpenCV linking issues**:
-   - Check platform-specific OpenCV installation
    - Verify environment variables (especially on Windows)
 
 3. **Bundle generation fails**:

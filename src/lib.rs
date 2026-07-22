@@ -16,18 +16,13 @@ pub mod image_analysis;
 pub mod models;
 pub mod mtf_stretch;
 pub mod nina_star_detection;
-pub mod opencv_canny;
-pub mod opencv_contours;
-pub mod opencv_morphology;
-#[cfg(feature = "opencv")]
-pub mod opencv_utils;
-pub mod opencv_wavelets;
 pub mod photometry;
 pub mod psf_fitting;
 pub mod satellites;
 pub mod sequence_analysis;
 pub mod server;
 pub mod spatial_analysis;
+pub mod star_contours;
 pub mod ts_schema;
 pub mod utils;
 

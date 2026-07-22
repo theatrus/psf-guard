@@ -1,10 +1,6 @@
 # Build offline from vendored crates; the frontend dist ships prebuilt in
 # Source0 (see scripts/make-rpm-sources.sh), so no network or npm is needed
 # here -- this builds cleanly in mock/COPR.
-#
-# OpenCV support is on by default (matches the upstream default feature set).
-# Build a lighter package without it:  rpmbuild --without opencv ...
-%bcond_without opencv
 
 # Rust release binaries carry no DWARF here (the release profile sets no
 # debug), so there is nothing for find-debuginfo to harvest.
@@ -35,19 +31,8 @@ BuildRequires:  systemd-rpm-macros
 Requires(post):   systemd
 Requires(preun):  systemd
 Requires(postun): systemd
-%if %{with opencv}
-# The opencv crate runs bindgen (needs libclang), compiles a C++ shim, links
-# the system OpenCV, and probes it via pkg-config in build.rs.
-BuildRequires:  clang-devel
-BuildRequires:  gcc-c++
-BuildRequires:  opencv-devel
-# build.rs shells out to the pkg-config binary to detect the OpenCV version.
-BuildRequires:  pkgconfig
-%endif
-
-# Runtime dependencies are resolved automatically by RPM's ELF dependency
-# generator (the OpenCV sonames the binary links against). SQLite is statically
-# bundled, so it is not a runtime dependency.
+# SQLite is statically bundled, so it is not a runtime dependency; image
+# processing is pure Rust (seiza-imgproc), so no OpenCV is required.
 
 %description
 PSF Guard is a command-line utility and web server for analyzing N.I.N.A.
@@ -71,11 +56,7 @@ tar -xf %{SOURCE1}
 # build.rs not to invoke npm. Crates resolve from ./vendor, so build offline.
 export PSF_GUARD_SKIP_FRONTEND_BUILD=1
 export CARGO_NET_OFFLINE=true
-cargo build --release --locked \
-%if %{without opencv}
-    --no-default-features \
-%endif
-    %{nil}
+cargo build --release --locked
 
 %install
 install -Dpm0755 target/release/%{name} %{buildroot}%{_bindir}/%{name}

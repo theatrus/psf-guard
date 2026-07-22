@@ -1,3 +1,4 @@
+use crate::psf_fitting::{PSFModel, PSFType};
 /// HocusFocus star detection algorithm
 /// Based on the HocusFocus plugin for N.I.N.A. by George Hilios
 /// Original: https://github.com/ghilios/joko.nina.plugins
@@ -7,9 +8,8 @@
 /// - Kappa-Sigma noise estimation for adaptive thresholding
 /// - Hot pixel filtering
 /// - Multi-criteria star validation
-use crate::opencv_morphology::OpenCVMorphology;
-use crate::opencv_wavelets::WaveletStructureRemover;
-use crate::psf_fitting::{PSFModel, PSFType};
+use seiza_imgproc::morphology::{KernelShape, MorphBorder, StructuringElement};
+use seiza_imgproc::wavelets::StructureRemover;
 
 /// Star detection parameters for HocusFocus algorithm
 #[derive(Debug, Clone)]
@@ -19,7 +19,7 @@ pub struct HocusFocusParams {
     pub hotpixel_threshold: f64, // Percent of max ADU for hot pixel threshold
     pub noise_reduction_radius: usize, // Half-size of Gaussian kernel
 
-    // Note: OpenCV operations are always attempted first with automatic fallback
+    // Image processing runs on seiza-imgproc (pure Rust, OpenCV-verified)
 
     // Structure detection
     pub structure_layers: usize, // Number of wavelet layers for large structure removal
@@ -48,7 +48,7 @@ impl Default for HocusFocusParams {
             hotpixel_threshold: 0.001, // 0.1% of max ADU
             noise_reduction_radius: 4, // Actual default from user
 
-            // OpenCV operations always attempted with automatic fallback
+            // seiza-imgproc structure removal and morphology
             structure_layers: 4,
             noise_clipping_multiplier: 4.0,
             star_clipping_multiplier: 2.0,
@@ -323,11 +323,10 @@ fn create_structure_map(
 ) -> Result<Vec<f64>, Box<dyn std::error::Error>> {
     let float_data: Vec<f64> = data.iter().map(|&v| v as f64).collect();
 
-    // Compute wavelet decomposition using OpenCV enhanced version
-    let wavelet_remover = WaveletStructureRemover::new(params.structure_layers);
-    let residual = wavelet_remover
-        .remove_structures(&float_data, width, height)
-        .map_err(|e| format!("OpenCV wavelet removal failed: {}", e))?;
+    // Multi-scale structure removal (Gaussian + domain-transform layers,
+    // reproducing the former OpenCV filter pipeline bit-for-bit in intent).
+    let wavelet_remover = StructureRemover::new(params.structure_layers);
+    let residual = wavelet_remover.remove_structures_filtered(&float_data, width, height);
 
     // Subtract residual from original to remove large structures
     let mut structure_map = float_data.clone();
@@ -488,7 +487,7 @@ fn binarize(data: &[f64], threshold: f64) -> Vec<bool> {
     data.iter().map(|&v| v > threshold).collect()
 }
 
-/// Convert bool vector to u8 vector for OpenCV processing
+/// Convert bool vector to u8 vector for image processing
 fn bool_to_u8(binary_map: &[bool]) -> Vec<u8> {
     binary_map
         .iter()
@@ -507,15 +506,13 @@ fn apply_erosion(
     width: usize,
     height: usize,
 ) -> Result<Vec<bool>, Box<dyn std::error::Error>> {
-    // Try OpenCV erosion first
-    let mut u8_data = bool_to_u8(binary_map);
-    let morphology = OpenCVMorphology::new_ellipse(3); // Ellipse is better for breaking up components
-
-    morphology
-        .erode_in_place(&mut u8_data, width, height)
-        .map_err(|e| format!("OpenCV erosion failed: {}", e))?;
-
-    Ok(u8_to_bool(&u8_data))
+    let u8_data = bool_to_u8(binary_map);
+    // Ellipse is better for breaking up components; reflected border like
+    // the former OpenCV call.
+    let se = StructuringElement::new(KernelShape::Ellipse, 3);
+    let eroded =
+        seiza_imgproc::morphology::erode(&u8_data, width, height, &se, MorphBorder::Reflect);
+    Ok(u8_to_bool(&eroded))
 }
 
 /// Find star candidates from binary map using HocusFocus-style scanning

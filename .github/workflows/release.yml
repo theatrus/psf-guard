@@ -38,7 +38,6 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          libopencv-dev clang libclang-dev \
           libwebkit2gtk-4.1-dev \
           libappindicator3-dev \
           librsvg2-dev \
@@ -73,58 +72,6 @@ jobs:
         CERT_ID=$(echo "$CERT_INFO" | awk -F'"' '{print $2}')
         echo "CERT_ID=$CERT_ID" >> $GITHUB_ENV
         echo "Certificate imported."
-
-    - name: Install OpenCV dependencies (macOS)
-      if: matrix.os == 'macos-latest'
-      run: |
-        # opencv-rust 0.99 targets OpenCV 4. Homebrew's unversioned formula now
-        # installs OpenCV 5, whose moved types break binding generation.
-        brew install opencv@4
-        OPENCV_PREFIX="$(brew --prefix opencv@4)"
-        echo "PKG_CONFIG_PATH=${OPENCV_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
-        echo "OPENCV_PKGCONFIG_NAME=opencv4" >> "$GITHUB_ENV"
-        echo "OpenCV 4 installed via Homebrew"
-
-        # Set up libclang path for macOS to avoid dyld errors
-        # Try both XCode and Command Line Tools paths
-        if [ -d "$(xcode-select --print-path)/Toolchains/XcodeDefault.xctoolchain/usr/lib/" ]; then
-          echo "DYLD_FALLBACK_LIBRARY_PATH=$(xcode-select --print-path)/Toolchains/XcodeDefault.xctoolchain/usr/lib/" >> $GITHUB_ENV
-        else
-          echo "DYLD_FALLBACK_LIBRARY_PATH=$(xcode-select --print-path)/usr/lib/" >> $GITHUB_ENV
-        fi
-
-
-    - name: Cache vcpkg (Windows)
-      if: matrix.os == 'windows-latest'
-      id: vcpkg-cache
-      uses: actions/cache@v6
-      with:
-        path: C:\vcpkg
-        key: ${{ runner.os }}-vcpkg-opencv4-v2
-
-    - name: Install OpenCV dependencies (Windows)
-      if: matrix.os == 'windows-latest'
-      run: |
-        # Install vcpkg if not cached
-        if (!(Test-Path "C:\vcpkg")) {
-          git clone https://github.com/Microsoft/vcpkg.git C:\vcpkg
-          C:\vcpkg\bootstrap-vcpkg.bat
-        }
-
-        C:\vcpkg\vcpkg integrate install
-
-        # Install OpenCV if not already installed
-        if (!(Test-Path "C:\vcpkg\installed\x64-windows\include\opencv2")) {
-          C:\vcpkg\vcpkg install opencv4[contrib,nonfree]:x64-windows-static-md
-        }
-
-        # Set environment variables
-        echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
-        echo "OpenCV_DIR=C:\vcpkg\installed\x64-windows-static-md" >> $env:GITHUB_ENV
-        echo "OPENCV_DISABLE_PROBES=pkg_config,cmake,vcpkg_cmake" >> $env:GITHUB_ENV
-        echo "OPENCV_LINK_DIRS=C:\vcpkg\installed\x64-windows-static-md\lib" >> $env:GITHUB_ENV
-
-      shell: pwsh
 
     - name: Read Rust toolchain
       id: rust-toolchain

@@ -436,7 +436,7 @@ mod tests {
             result_with_nr.star_list.len()
         );
 
-        // With OpenCV, noise reduction can actually improve detection of real stars
+        // Noise reduction can actually improve detection of real stars
         // while filtering noise. The behavior differs from pure Rust implementation.
         // We should detect roughly the expected number of stars (5) or fewer
         assert!(

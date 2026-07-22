@@ -34,6 +34,40 @@ cargo build --release --features tauri   # GUI capable
 - **Web Server**: Axum + embedded React frontend
 - **Cache System**: Directory tree + file cache with 5-minute TTL
 
+### Pure-Rust image processing: seiza-imgproc (2026-07)
+OpenCV was removed. All star-detection image ops live in the workspace crate
+`crates/seiza-imgproc` (std-only, destined to break out as a published
+`seiza-` crate): Gaussian/median blur, Canny, Otsu, binary morphology,
+Suzuki-Abe external contours + polygon metrics, the Gastal-Oliveira domain
+transform (`DTF_NC`), and à trous wavelets / structure removal.
+- **Fidelity**: each op reproduces the exact OpenCV semantics the detectors
+  relied on, verified bit-exact against OpenCV 4.13 with a since-deleted
+  parity harness. Key discoveries baked into the code: OpenCV quantizes u8
+  Gaussian kernels via differences of rounded cumulative sums (Q8, sum 256);
+  its f32 filter engine has per-kernel-size accumulation orders with an
+  8-lane FMA body and unfused scalar tail columns; its dt-filter box sums are
+  f32 prefix sums. `crates/seiza-imgproc/tests/golden.rs` locks all of this
+  with platform-stable fixtures (no transcendentals in the generator).
+- **Detection equality**: N.I.N.A. detector output is bit-identical to the
+  old OpenCV build; HocusFocus matches through the kappa-sigma knife edge
+  (noise_sigma/threshold/star counts identical on real frames). The
+  `remove_structures_filtered` path — 3 Gaussian layers then near-identity
+  dt layers — deliberately reproduces the OpenCV-era behavior in which the
+  dt layers zero the residual (structure map ≈ smoothed data, not à trous
+  detail). Don't "fix" that without re-validating detection.
+- **Sensitivity warning**: HocusFocus's kappa-sigma loop (`Δσ ≤ 1e-5`
+  convergence) amplifies bit-level structure-map changes into ~10% sigma
+  shifts. Any change to blur/dt numerics must re-check star counts on real
+  frames, not just op-level diffs.
+- **SIMD**: hot loops are written as axis-swapped slice passes that
+  auto-vectorize at the SSE2 baseline (verified in emitted asm); the f32
+  path runtime-dispatches FMA on x86-64 (`is_x86_feature_detected!`) and is
+  native-FMA on aarch64, mirroring OpenCV's own dispatch. Single-core
+  throughput is on par with single-threaded OpenCV (canny ~1.2x, otsu
+  faster); frame-level parallelism stays in psf-guard's worker pools.
+- The old `--features opencv` flag, build.rs probing, and all CI OpenCV
+  installs (vcpkg/brew/apt) are gone; `default = []` now.
+
 ### Multi-database support (2026-05)
 The server can manage many N.I.N.A. scheduler databases at once. Both the
 Tauri app and the CLI `server` command read from a shared JSON registry at
@@ -592,13 +626,6 @@ cargo tauri dev
 
 # Frontend development  
 cd static && npm run dev
-
-# OpenCV setup (macOS)
-brew install opencv
-# For Command Line Tools:
-export DYLD_FALLBACK_LIBRARY_PATH="/Library/Developer/CommandLineTools/usr/lib"
-# For Xcode.app:
-# export DYLD_FALLBACK_LIBRARY_PATH="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib"
 ```
 
 ### Tauri Desktop Configuration
@@ -636,7 +663,7 @@ export DYLD_FALLBACK_LIBRARY_PATH="/Library/Developer/CommandLineTools/usr/lib"
 
 ### Star Detection
 - N.I.N.A. algorithm port with MTF stretching
-- Optional OpenCV integration (`--features opencv`)
+- Image processing via `crates/seiza-imgproc` (see below) — no OpenCV
 - PSF fitting: Gaussian/Moffat models
 
 ### Performance

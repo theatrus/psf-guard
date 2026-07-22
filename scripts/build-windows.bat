@@ -1,11 +1,5 @@
-
-set OPENCV_LINK_DIRS=C:\vcpkg\installed\x64-windows-static-md\lib
-set OPENCV_DISABLE_PROBES=pkg_config,cmake,vcpkg_cmake
-set OpenCV_DIR=C:\vcpkg\installed\x64-windows-static-md
-set LIBCLANG_PATH=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin
-set PATH=C:\vcpkg;%PATH%
-set VCPKG_ROOT=C:\vcpkg
-rem set VCPKGRS_DYNAMIC=1
+rem Build helper for Windows (no special environment needed since the
+rem OpenCV dependency was removed).
 
 cargo build --release
 cargo tauri build
