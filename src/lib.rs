@@ -14,7 +14,6 @@ pub mod grading;
 pub mod hocus_focus_star_detection;
 pub mod image_analysis;
 pub mod models;
-pub mod mtf_stretch;
 pub mod nina_star_detection;
 pub mod photometry;
 pub mod psf_fitting;

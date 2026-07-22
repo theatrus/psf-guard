@@ -4,8 +4,8 @@ use imageproc::drawing::{draw_filled_circle_mut, draw_hollow_circle_mut};
 
 use crate::hocus_focus_star_detection::{detect_stars_hocus_focus, HocusFocusParams};
 use crate::image_analysis::FitsImage;
-use crate::mtf_stretch::{stretch_image, StretchParameters};
 use crate::psf_fitting::PSFType;
+use seiza_stretch::{stretch_u16_to_u16, StretchParams};
 
 /// Create an annotated RGB image from FITS data
 pub fn create_annotated_image(
@@ -22,17 +22,12 @@ pub fn create_annotated_image(
     let stats = fits.calculate_basic_statistics();
 
     // Apply MTF stretch
-    let stretch_params = StretchParameters {
-        factor: midtone_factor,
-        black_clipping: shadow_clipping,
+    let stretch_params = StretchParams {
+        target_median: midtone_factor,
+        shadows_clip: shadow_clipping,
     };
 
-    let stretched = stretch_image(
-        &fits.data,
-        &stats,
-        stretch_params.factor,
-        stretch_params.black_clipping,
-    );
+    let stretched = stretch_u16_to_u16(&fits.data, &stats.to_stretch_statistics(), &stretch_params);
 
     // Detect stars using HocusFocus (default for server)
     let params = HocusFocusParams {

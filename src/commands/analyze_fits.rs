@@ -1,13 +1,13 @@
 use crate::directory_tree::DirectoryTree;
 use crate::hocus_focus_star_detection::{detect_stars_hocus_focus, HocusFocusParams};
 use crate::image_analysis::{FitsImage, ImageStatistics as ComputedStats};
-use crate::mtf_stretch::{stretch_image, StretchParameters};
 use crate::nina_star_detection::{
     detect_stars_with_original, NoiseReduction, StarDetectionParams, StarSensitivity,
 };
 use crate::psf_fitting::PSFType;
 use anyhow::Result;
 use rusqlite::Connection;
+use seiza_stretch::{stretch_u16_to_u16, StretchParams};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -242,12 +242,11 @@ fn run_detector_config(
             };
 
             // NINA always uses MTF stretch
-            let stretch_params = StretchParameters::default();
-            let stretched = stretch_image(
+            let stretch_params = StretchParams::default();
+            let stretched = stretch_u16_to_u16(
                 &fits.data,
-                computed_stats,
-                stretch_params.factor,
-                stretch_params.black_clipping,
+                &computed_stats.to_stretch_statistics(),
+                &stretch_params,
             );
 
             let result = detect_stars_with_original(
@@ -268,12 +267,11 @@ fn run_detector_config(
             let params = HocusFocusParams::default();
 
             let detection_data = if apply_stretch {
-                let stretch_params = StretchParameters::default();
-                stretch_image(
+                let stretch_params = StretchParams::default();
+                stretch_u16_to_u16(
                     &fits.data,
-                    computed_stats,
-                    stretch_params.factor,
-                    stretch_params.black_clipping,
+                    &computed_stats.to_stretch_statistics(),
+                    &stretch_params,
                 )
             } else {
                 fits.data.clone()
@@ -445,12 +443,11 @@ fn detect_stars(
             };
 
             // NINA always uses MTF stretch
-            let stretch_params = StretchParameters::default();
-            let stretched = stretch_image(
+            let stretch_params = StretchParams::default();
+            let stretched = stretch_u16_to_u16(
                 &fits.data,
-                computed_stats,
-                stretch_params.factor,
-                stretch_params.black_clipping,
+                &computed_stats.to_stretch_statistics(),
+                &stretch_params,
             );
 
             let result = detect_stars_with_original(
@@ -483,12 +480,11 @@ fn detect_stars(
             }
 
             let detection_data = if apply_stretch {
-                let stretch_params = StretchParameters::default();
-                stretch_image(
+                let stretch_params = StretchParams::default();
+                stretch_u16_to_u16(
                     &fits.data,
-                    computed_stats,
-                    stretch_params.factor,
-                    stretch_params.black_clipping,
+                    &computed_stats.to_stretch_statistics(),
+                    &stretch_params,
                 )
             } else {
                 fits.data.clone()

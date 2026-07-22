@@ -7,7 +7,6 @@ use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
 use crate::image_analysis::FitsImage;
-use crate::mtf_stretch::StretchParameters;
 
 pub fn stretch_to_png(
     fits_path: &str,
@@ -142,12 +141,12 @@ fn apply_mtf_stretch(
     shadow_clipping: f64,
     invert: bool,
 ) -> Result<Vec<u8>> {
-    use crate::mtf_stretch::stretch_image;
+    use seiza_stretch::{stretch_u16_to_u16, StretchParams};
 
     // Create stretch parameters
-    let stretch_params = StretchParameters {
-        factor: midtone_factor,
-        black_clipping: shadow_clipping,
+    let stretch_params = StretchParams {
+        target_median: midtone_factor,
+        shadows_clip: shadow_clipping,
     };
 
     println!(
@@ -156,12 +155,8 @@ fn apply_mtf_stretch(
     );
 
     // Apply MTF stretch to get 16-bit data
-    let stretched_16bit = stretch_image(
-        &image.data,
-        stats,
-        stretch_params.factor,
-        stretch_params.black_clipping,
-    );
+    let stretched_16bit =
+        stretch_u16_to_u16(&image.data, &stats.to_stretch_statistics(), &stretch_params);
 
     // Convert to 8-bit
     let mut result = Vec::with_capacity(stretched_16bit.len());

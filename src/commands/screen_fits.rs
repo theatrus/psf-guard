@@ -13,7 +13,6 @@
 
 use crate::hocus_focus_star_detection::{detect_stars_hocus_focus, HocusFocusParams};
 use crate::image_analysis::FitsImage;
-use crate::mtf_stretch::{stretch_image, StretchParameters};
 use crate::nina_star_detection::{
     detect_stars_with_original, NoiseReduction, StarDetectionParams, StarSensitivity,
 };
@@ -26,6 +25,7 @@ use crate::sequence_analysis::{
 };
 use crate::spatial_analysis::{compute_spatial_metrics, PixelCalibration, SpatialAnalysisConfig};
 use anyhow::Result;
+use seiza_stretch::{stretch_u16_to_u16, StretchParams};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -718,13 +718,9 @@ fn detect_stars(
                 noise_reduction: NoiseReduction::None,
                 use_roi: false,
             };
-            let stretch_params = StretchParameters::default();
-            let stretched = stretch_image(
-                &fits.data,
-                stats,
-                stretch_params.factor,
-                stretch_params.black_clipping,
-            );
+            let stretch_params = StretchParams::default();
+            let stretched =
+                stretch_u16_to_u16(&fits.data, &stats.to_stretch_statistics(), &stretch_params);
             let result = detect_stars_with_original(
                 &stretched,
                 &fits.data,

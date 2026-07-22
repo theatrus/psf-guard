@@ -9,11 +9,11 @@ use std::path::Path;
 
 use crate::hocus_focus_star_detection::{detect_stars_hocus_focus, HocusFocusParams};
 use crate::image_analysis::FitsImage;
-use crate::mtf_stretch::{stretch_image, StretchParameters};
 use crate::nina_star_detection::{
     detect_stars_with_original, StarDetectionParams, StarSensitivity,
 };
 use crate::psf_fitting::PSFType;
+use seiza_stretch::{stretch_u16_to_u16, StretchParams};
 
 /// Convert a color name to RGB values
 fn parse_color(color_name: &str) -> Rgb<u8> {
@@ -67,17 +67,12 @@ pub fn annotate_stars(
     }
 
     // Apply MTF stretch
-    let stretch_params = StretchParameters {
-        factor: midtone_factor,
-        black_clipping: shadow_clipping,
+    let stretch_params = StretchParams {
+        target_median: midtone_factor,
+        shadows_clip: shadow_clipping,
     };
 
-    let stretched = stretch_image(
-        &fits.data,
-        &stats,
-        stretch_params.factor,
-        stretch_params.black_clipping,
-    );
+    let stretched = stretch_u16_to_u16(&fits.data, &stats.to_stretch_statistics(), &stretch_params);
 
     if verbose {
         eprintln!(

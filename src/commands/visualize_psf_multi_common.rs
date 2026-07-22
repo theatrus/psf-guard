@@ -334,17 +334,12 @@ pub fn create_psf_multi_image(
     let stats = fits.calculate_basic_statistics();
 
     // Apply MTF stretch for better visibility
-    use crate::mtf_stretch::{stretch_image, StretchParameters};
-    let stretch_params = StretchParameters {
-        factor: 0.25,         // Stronger stretch for better minimap visibility
-        black_clipping: -2.0, // Less aggressive black clipping
+    use seiza_stretch::{stretch_u16_to_u16, StretchParams};
+    let stretch_params = StretchParams {
+        target_median: 0.25, // Stronger stretch for better minimap visibility
+        shadows_clip: -2.0,  // Less aggressive black clipping
     };
-    let stretched = stretch_image(
-        &fits.data,
-        &stats,
-        stretch_params.factor,
-        stretch_params.black_clipping,
-    );
+    let stretched = stretch_u16_to_u16(&fits.data, &stats.to_stretch_statistics(), &stretch_params);
 
     // Draw downsampled image as minimap background
     for y in 0..map_height {
