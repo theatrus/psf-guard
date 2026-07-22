@@ -59,6 +59,9 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
   // the 1s progress poll + the progress panel at the bottom of the modal.
   const [importDbId, setImportDbId] = useState<string | null>(null);
   const { progress: importProgress, isRunning: importRunning } = useImportJob(importDbId);
+  // A running preview survives closing or reloading this page. Keep the
+  // destination so its completed dry-run can still show the confirm step.
+  const [confirmImport, setConfirmImport] = useState<DbEntry | null>(null);
 
   const reload = useCallback(async () => {
     setIsLoading(true);
@@ -83,6 +86,29 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
         };
       }
       setRegistry(reg);
+
+      // Import jobs live on the server, while importDbId is only view state.
+      // Recover a running job when settings opens so progress polling resumes
+      // after a page reload. There can be one job per database; this modal
+      // shows the first active job in registry order.
+      const runningImport = (
+        await Promise.all(
+          reg.databases.map(async (entry) => {
+            try {
+              const status = await apiClient.getImportStatus(entry.id);
+              return status.progress.running ? entry : null;
+            } catch (err) {
+              console.warn(`Failed to check import status for ${entry.id}:`, err);
+              return null;
+            }
+          })
+        )
+      ).find((entry): entry is DbEntry => entry !== null);
+      if (runningImport) {
+        setImportDbId(runningImport.id);
+        setConfirmImport(runningImport);
+      }
+
       // If empty AND we're allowed to mutate, default to showing the add
       // form so the welcome flow lands somewhere usable.
       setShowAddForm((!reg || reg.databases.length === 0) && managementAllowed);
@@ -274,8 +300,6 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
   // Import is two-step: a dry-run PREVIEW first (rolled back server-side),
   // then an explicit confirmation. Nothing touches the database until the
   // user has seen exactly what would be attached vs newly created.
-  const [confirmImport, setConfirmImport] = useState<DbEntry | null>(null);
-
   const handleImport = async (entry: DbEntry) => {
     if (entry.image_dirs.length === 0) {
       setStatusMessage(
