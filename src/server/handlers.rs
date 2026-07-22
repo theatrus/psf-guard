@@ -1522,27 +1522,20 @@ pub async fn get_images(
         _ => None,
     });
 
+    let offset = params.offset.unwrap_or(0).max(0) as usize;
+    let limit = params.limit.unwrap_or(100).max(0) as usize;
     let images = db
-        .query_images(status_filter, None, None, None)
+        .query_images_scoped(
+            status_filter,
+            params.project_id,
+            params.target_id,
+            Some(limit),
+            offset,
+        )
         .map_err(AppError::db)?;
 
-    // Filter by project_id and target_id if provided
-    let filtered_images: Vec<_> = images
+    let response: Vec<ImageResponse> = images
         .into_iter()
-        .filter(|(img, _, _)| {
-            params.project_id.is_none_or(|id| img.project_id == id)
-                && params.target_id.is_none_or(|id| img.target_id == id)
-        })
-        .collect();
-
-    // Apply limit and offset
-    let offset = params.offset.unwrap_or(0) as usize;
-    let limit = params.limit.unwrap_or(100) as usize;
-
-    let response: Vec<ImageResponse> = filtered_images
-        .into_iter()
-        .skip(offset)
-        .take(limit)
         .map(|(img, proj_name, target_name)| {
             let metadata: serde_json::Value = serde_json::from_str(&img.metadata)
                 .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
@@ -1595,11 +1588,11 @@ pub async fn get_image(
         let image = images.into_iter().next().ok_or(AppError::NotFound)?;
 
         // Get project and target names
-        let all_images = db
-            .query_images(None, None, None, None)
+        let scoped_images = db
+            .query_images_scoped(None, Some(image.project_id), Some(image.target_id), None, 0)
             .map_err(AppError::db)?;
 
-        let (_, proj_name, target_name) = all_images
+        let (_, proj_name, target_name) = scoped_images
             .into_iter()
             .find(|(img, _, _)| img.id == image_id)
             .ok_or(AppError::NotFound)?;
@@ -2830,7 +2823,7 @@ pub async fn analyze_sequence(
 
         // Query images for this target
         let all_images = db
-            .query_images(None, None, None, None)
+            .query_images_scoped(None, None, Some(target_id), None, 0)
             .map_err(AppError::db)?;
 
         let filtered: Vec<_> = all_images
@@ -2937,7 +2930,7 @@ pub async fn analyze_sequence(
     .await
     .map_err(|e| AppError::InternalError(format!("Analysis task failed: {}", e)))?;
 
-    let sequences = result
+    let mut sequences: Vec<_> = result
         .into_iter()
         .map(|seq| crate::server::api::ScoredSequenceResponse {
             target_id: seq.target_id,
@@ -2951,6 +2944,11 @@ pub async fn analyze_sequence(
             summary: seq.summary,
         })
         .collect();
+    sequences.sort_by(|a, b| {
+        b.session_start
+            .cmp(&a.session_start)
+            .then_with(|| a.filter_name.cmp(&b.filter_name))
+    });
 
     Ok(Json(ApiResponse::success(
         crate::server::api::SequenceAnalysisResponse { sequences },
@@ -2984,7 +2982,7 @@ pub async fn get_image_quality(
 
         // Get all images for the same target + filter
         let all_images = db
-            .query_images(None, None, None, None)
+            .query_images_scoped(None, None, Some(target_image.target_id), None, 0)
             .map_err(AppError::db)?;
 
         let filter_images: Vec<_> = all_images
@@ -3291,7 +3289,7 @@ pub async fn start_spatial_scan(
         let target_name = target.name.clone();
 
         let all_images = db
-            .query_images(None, None, None, None)
+            .query_images_scoped(None, None, Some(req.target_id), None, 0)
             .map_err(AppError::db)?;
 
         let mut resolver =

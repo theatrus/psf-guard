@@ -366,6 +366,89 @@ impl<'a> Database<'a> {
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.into())
     }
 
+    /// Query images by numeric project/target scope and apply pagination in
+    /// SQLite. Server routes use numeric IDs, so this avoids loading and
+    /// decoding every image in the scheduler database before filtering.
+    pub fn query_images_scoped(
+        &self,
+        status_filter: Option<GradingStatus>,
+        project_id: Option<i32>,
+        target_id: Option<i32>,
+        limit: Option<usize>,
+        offset: usize,
+    ) -> Result<Vec<(AcquiredImage, String, String)>> {
+        let has_guid = self.schema.has_acquiredimage_guid;
+        let base_select = if has_guid {
+            "SELECT ai.Id, ai.projectId, ai.targetId, ai.acquireddate, ai.filtername,
+                    ai.gradingStatus, ai.metadata, ai.rejectreason, ai.profileId, ai.guid,
+                    p.name as project_name, t.name as target_name
+             FROM acquiredimage ai
+             JOIN project p ON ai.projectId = p.Id
+             JOIN target t ON ai.targetId = t.Id
+             WHERE 1=1"
+        } else {
+            "SELECT ai.Id, ai.projectId, ai.targetId, ai.acquireddate, ai.filtername,
+                    ai.gradingStatus, ai.metadata, ai.rejectreason, ai.profileId,
+                    p.name as project_name, t.name as target_name
+             FROM acquiredimage ai
+             JOIN project p ON ai.projectId = p.Id
+             JOIN target t ON ai.targetId = t.Id
+             WHERE 1=1"
+        };
+        let mut query = String::from(base_select);
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+        if let Some(status) = status_filter {
+            query.push_str(" AND ai.gradingStatus = ?");
+            params.push(Box::new(status as i32));
+        }
+        if let Some(project_id) = project_id {
+            query.push_str(" AND ai.projectId = ?");
+            params.push(Box::new(project_id));
+        }
+        if let Some(target_id) = target_id {
+            query.push_str(" AND ai.targetId = ?");
+            params.push(Box::new(target_id));
+        }
+
+        query.push_str(" ORDER BY ai.acquireddate DESC");
+        if let Some(limit) = limit {
+            query.push_str(" LIMIT ? OFFSET ?");
+            params.push(Box::new(limit as i64));
+            params.push(Box::new(offset as i64));
+        }
+
+        let mut stmt = self.conn.prepare(&query)?;
+        let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let images = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                let (guid, name_offset) = if has_guid {
+                    (row.get(9)?, 10)
+                } else {
+                    (None, 9)
+                };
+                Ok((
+                    AcquiredImage {
+                        id: row.get(0)?,
+                        project_id: row.get(1)?,
+                        target_id: row.get(2)?,
+                        acquired_date: row.get(3)?,
+                        filter_name: row.get(4)?,
+                        grading_status: row.get(5)?,
+                        metadata: row.get(6)?,
+                        reject_reason: row.get(7)?,
+                        profile_id: row.get(8)?,
+                        guid,
+                    },
+                    row.get::<_, String>(name_offset)?,
+                    row.get::<_, String>(name_offset + 1)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(images)
+    }
+
     pub fn query_images(
         &self,
         status_filter: Option<GradingStatus>,
@@ -1152,6 +1235,58 @@ mod tests {
         );
         assert!(caps.has_project_guid, "New schema should have project.guid");
         assert!(caps.has_target_guid, "New schema should have target.guid");
+    }
+
+    #[test]
+    fn scoped_image_query_filters_and_paginates_in_sql() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE project (
+                Id INTEGER PRIMARY KEY, profileId TEXT NOT NULL,
+                name TEXT NOT NULL, description TEXT
+             );
+             CREATE TABLE target (
+                Id INTEGER PRIMARY KEY, name TEXT NOT NULL, active INTEGER NOT NULL,
+                ra REAL, dec REAL, projectId INTEGER NOT NULL
+             );
+             CREATE TABLE acquiredimage (
+                Id INTEGER PRIMARY KEY, projectId INTEGER NOT NULL,
+                targetId INTEGER NOT NULL, acquireddate INTEGER,
+                filtername TEXT NOT NULL, gradingStatus INTEGER NOT NULL,
+                metadata TEXT NOT NULL, rejectreason TEXT, profileId TEXT
+             );
+             INSERT INTO project VALUES (1, 'profile', 'Project', NULL);
+             INSERT INTO target VALUES (10, 'First', 1, NULL, NULL, 1);
+             INSERT INTO target VALUES (11, 'Second', 1, NULL, NULL, 1);
+             INSERT INTO acquiredimage VALUES
+                (1, 1, 10, 100, 'R', 0, '{}', NULL, 'profile'),
+                (2, 1, 10, 200, 'G', 1, '{}', NULL, 'profile'),
+                (3, 1, 11, 300, 'B', 2, '{}', NULL, 'profile');",
+        )
+        .unwrap();
+
+        let db = Database::new(&conn);
+        let target_rows = db
+            .query_images_scoped(None, None, Some(10), None, 0)
+            .unwrap();
+        assert_eq!(
+            target_rows
+                .iter()
+                .map(|(image, _, _)| image.id)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+
+        let accepted = db
+            .query_images_scoped(Some(GradingStatus::Accepted), Some(1), None, Some(1), 0)
+            .unwrap();
+        assert_eq!(accepted.len(), 1);
+        assert_eq!(accepted[0].0.id, 2);
+
+        let second_project_row = db
+            .query_images_scoped(None, Some(1), None, Some(1), 1)
+            .unwrap();
+        assert_eq!(second_project_row[0].0.id, 2);
     }
 
     #[test]

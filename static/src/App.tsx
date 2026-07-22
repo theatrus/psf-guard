@@ -92,53 +92,88 @@ function App() {
 
   return (
     <div className="app">
-      <header className="app-header compact">
-        <div className="header-left">
-          <h1 
+      <header className={`app-header compact${isOnOverview ? ' app-header--overview' : ''}`}>
+        <div className="header-brand">
+          <button
+            type="button"
+            className="brand-button"
             onClick={() => navigate('/')}
-            style={{ cursor: 'pointer' }}
             title="Go to Overview"
           >
             PSF Guard
-          </h1>
+          </button>
         </div>
-        
-        <div className="header-center">
+
+        <div className={`header-context${isOnOverview ? ' header-context--overview' : ''}`}>
+          {!isOnOverview && <ProjectTargetSelector />}
+          <div className="header-cache-slot" aria-live="polite">
           {/* CacheRefreshStatus renders for scoped views (?db= in URL);
               AggregatedCacheStatus renders for unscoped views (e.g. overview).
-              Each is internally a no-op in the other case, so both can be
-              mounted unconditionally. */}
-          <CacheRefreshStatus />
-          <AggregatedCacheStatus />
-          {!isOnOverview && <ProjectTargetSelector />}
+              This fixed slot keeps status changes from moving the header. */}
+            <CacheRefreshStatus className="header-cache-progress" />
+            <AggregatedCacheStatus className="header-cache-progress" />
+          </div>
         </div>
-        
-        <div className="header-right">
-          {!isOnOverview && (
-            <button onClick={() => navigate('/')} className="header-button">
-              Overview
-            </button>
-          )}
-          {!isOnGrid && (
-            <button onClick={() => navigate(toScoped('/grid'))} className="header-button">
-              Images
-            </button>
-          )}
-          {!isOnSequence && (
-            <button onClick={() => navigate(toScoped('/sequence'))} className="header-button">
-              Sequence
-            </button>
-          )}
-          {!isOnOverview && (
-            <button onClick={() => setShowStats(!showStats)} className="header-button">
-              {showStats ? 'Hide Stats' : 'Stats'}
-            </button>
-          )}
-          <button onClick={() => setShowSettings(true)} className="header-button">
-            Settings
+
+        <nav className="header-view-tabs" aria-label="Views">
+          <button
+            type="button"
+            onClick={() => navigate('/')}
+            className="header-button"
+            aria-current={isOnOverview ? 'page' : undefined}
+          >
+            Overview
           </button>
-          <button onClick={() => setShowHelp(true)} className="header-button">
-            Help
+          <button
+            type="button"
+            onClick={() => navigate(toScoped('/grid'))}
+            className="header-button"
+            aria-current={isOnGrid ? 'page' : undefined}
+          >
+            Images
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate(toScoped('/sequence'))}
+            className="header-button"
+            aria-current={isOnSequence ? 'page' : undefined}
+          >
+            Sequence
+          </button>
+        </nav>
+
+        <div className="header-utilities">
+          {isOnGrid && (
+            <button
+              type="button"
+              onClick={() => setShowStats(!showStats)}
+              className="header-button utility-button"
+              aria-pressed={showStats}
+              title={showStats ? 'Hide image statistics' : 'Show image statistics'}
+            >
+              <span className="utility-icon" aria-hidden="true">▥</span>
+              <span className="utility-label">
+              {showStats ? 'Hide Stats' : 'Stats'}
+              </span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setShowSettings(true)}
+            className="header-button utility-button"
+            title="Settings"
+          >
+            <span className="utility-icon" aria-hidden="true">⚙</span>
+            <span className="utility-label">Settings</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowHelp(true)}
+            className="header-button utility-button"
+            title="Keyboard shortcuts"
+          >
+            <span className="utility-icon" aria-hidden="true">?</span>
+            <span className="utility-label">Help</span>
           </button>
           <ServerInfoPanel />
         </div>
