@@ -12,6 +12,10 @@ import type {
   PreviewOptions,
   ServerInfo,
   DatabaseSummary,
+  CreateDatabaseRequest,
+  CreateDatabaseResponse,
+  ImportRequest,
+  ImportStatus,
   FileCheckResponse,
   DirectoryTreeResponse,
   ProjectOverview,
@@ -158,6 +162,79 @@ export const apiClient = {
       `/databases/${encodeURIComponent(dbId)}`
     );
     return data.data?.removed ?? false;
+  },
+
+  /**
+   * Create a brand-new Target Scheduler database (full upstream schema) and
+   * start a background import of the given FITS folders.
+   */
+  createDatabaseFromImages: async (
+    req: CreateDatabaseRequest
+  ): Promise<CreateDatabaseResponse> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<CreateDatabaseResponse>>(
+      '/databases/create',
+      req
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to create database');
+    return data.data;
+  },
+
+  /** Start a background FITS import into an existing database. */
+  startImport: async (dbId: string, req: ImportRequest): Promise<ImportStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<ImportStatus>>(
+      dbPath(dbId, '/import'),
+      req
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to start import');
+    return data.data;
+  },
+
+  /** Import job progress (poll ~1s while running). */
+  getImportStatus: async (dbId: string): Promise<ImportStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<ImportStatus>>(dbPath(dbId, '/import'));
+    if (!data.data) throw new Error('Failed to get import status');
+    return data.data;
+  },
+
+  /** Rename a project (organize imported groupings). */
+  updateProject: async (dbId: string, projectId: number, name: string): Promise<void> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<{ updated: boolean }>>(
+      dbPath(dbId, `/projects/${projectId}`),
+      { name }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to rename project');
+  },
+
+  /** Rename a target and/or move it to another project (same profile). */
+  updateTarget: async (
+    dbId: string,
+    targetId: number,
+    req: { name?: string; project_id?: number }
+  ): Promise<void> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<{ updated: boolean }>>(
+      dbPath(dbId, `/targets/${targetId}`),
+      req
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to update target');
+  },
+
+  /** Merge a project's targets and images into another project. */
+  mergeProject: async (
+    dbId: string,
+    projectId: number,
+    intoProjectId: number
+  ): Promise<{ targets_moved: number; images_moved: number }> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<
+      ApiResponse<{ targets_moved: number; images_moved: number }>
+    >(dbPath(dbId, `/projects/${projectId}/merge`), { into_project_id: intoProjectId });
+    if (!data.data) throw new Error(data.error || 'Failed to merge project');
+    return data.data;
   },
 
   // ── Per-DB ────────────────────────────────────────────────────────────────

@@ -500,6 +500,473 @@ pub async fn remove_database_route(
     }))))
 }
 
+/// `PUT /api/db/{db_id}/projects/{project_id}` — rename a project. Used to
+/// correct import-synthesized groupings; management-gated like the rest of
+/// the structural mutations.
+pub async fn update_project_route(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, project_id)): Path<(String, i32)>,
+    Json(req): Json<UpdateProjectRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    require_database_management_allowed(&state)?;
+    let name = req.name.trim();
+    if name.is_empty() {
+        return Err(AppError::BadRequest("name must not be empty".into()));
+    }
+    let renamed = {
+        let conn = ctx.db();
+        let conn = conn.lock().map_err(AppError::db)?;
+        Database::new(&conn)
+            .rename_project(project_id, name)
+            .map_err(AppError::db)?
+    };
+    if !renamed {
+        return Err(AppError::BadRequest(format!(
+            "project {} not found",
+            project_id
+        )));
+    }
+    Ok(Json(ApiResponse::success(
+        serde_json::json!({ "updated": true }),
+    )))
+}
+
+/// `PUT /api/db/{db_id}/targets/{target_id}` — rename a target and/or move it
+/// to another project (same profile; images follow the target).
+pub async fn update_target_route(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, target_id)): Path<(String, i32)>,
+    Json(req): Json<UpdateTargetRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    require_database_management_allowed(&state)?;
+    if req.name.is_none() && req.project_id.is_none() {
+        return Err(AppError::BadRequest(
+            "nothing to update: pass name and/or project_id".into(),
+        ));
+    }
+
+    let conn = ctx.db();
+    let conn = conn.lock().map_err(AppError::db)?;
+    let db = Database::new(&conn);
+
+    if let Some(name) = &req.name {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(AppError::BadRequest("name must not be empty".into()));
+        }
+        if !db.rename_target(target_id, name).map_err(AppError::db)? {
+            return Err(AppError::BadRequest(format!(
+                "target {} not found",
+                target_id
+            )));
+        }
+    }
+
+    let mut images_moved = 0usize;
+    if let Some(project_id) = req.project_id {
+        images_moved = db
+            .move_target(target_id, project_id)
+            .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    }
+
+    Ok(Json(ApiResponse::success(serde_json::json!({
+        "updated": true,
+        "images_moved": images_moved,
+    }))))
+}
+
+/// `POST /api/db/{db_id}/projects/{project_id}/merge` — merge this project's
+/// targets and images into another project, then delete it.
+pub async fn merge_project_route(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, project_id)): Path<(String, i32)>,
+    Json(req): Json<MergeProjectRequest>,
+) -> Result<Json<ApiResponse<MergeProjectResponse>>, AppError> {
+    require_database_management_allowed(&state)?;
+    let (targets_moved, images_moved) = {
+        let conn = ctx.db();
+        let conn = conn.lock().map_err(AppError::db)?;
+        Database::new(&conn)
+            .merge_projects(project_id, req.into_project_id)
+            .map_err(|e| AppError::BadRequest(e.to_string()))?
+    };
+    Ok(Json(ApiResponse::success(MergeProjectResponse {
+        targets_moved,
+        images_moved,
+    })))
+}
+
+/// `POST /api/databases/create` — bootstrap a brand-new Target Scheduler
+/// database (vendored schema), register it, and start a background import of
+/// the given image directories. Gated like the other management routes.
+pub async fn create_database_route(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateDatabaseRequest>,
+) -> Result<Json<ApiResponse<CreateDatabaseResponse>>, AppError> {
+    use crate::db_registry::DbRegistry;
+
+    require_database_management_allowed(&state)?;
+    let registry_path = require_registry_path(&state)?;
+
+    if req.image_dirs.is_empty() {
+        return Err(AppError::BadRequest(
+            "image_dirs must contain at least one directory".into(),
+        ));
+    }
+    for dir in &req.image_dirs {
+        if !std::path::Path::new(dir).is_dir() {
+            return Err(AppError::BadRequest(format!(
+                "image directory does not exist: {}",
+                dir
+            )));
+        }
+    }
+
+    let mut reg = DbRegistry::load_or_init(&registry_path)
+        .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
+
+    // Resolve where the new .sqlite lives: explicit path, or a managed file
+    // under the registry's directory named after the database.
+    let db_path = match &req.db_path {
+        Some(p) => std::path::PathBuf::from(p),
+        None => {
+            let base = registry_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("databases");
+            let stem = sanitize_file_stem(req.slug.as_deref().unwrap_or(&req.name));
+            unique_db_file(&base, &stem)
+        }
+    };
+
+    // Bootstrap on a blocking thread (fast, but it is filesystem + SQL work).
+    let bootstrap_path = db_path.clone();
+    tokio::task::spawn_blocking(move || crate::ts_schema::create_fresh_db(&bootstrap_path))
+        .await
+        .map_err(|e| AppError::InternalError(format!("bootstrap task failed: {}", e)))?
+        .map_err(|e| AppError::BadRequest(format!("creating database: {}", e)))?;
+
+    let entry = reg
+        .add(
+            req.name.clone(),
+            db_path.to_string_lossy().into_owned(),
+            req.image_dirs.clone(),
+            req.slug.clone(),
+        )
+        .map_err(|e| AppError::BadRequest(e.to_string()))?
+        .clone();
+
+    let ctx = Arc::new(
+        DatabaseContext::new(
+            entry.id.clone(),
+            entry.name.clone(),
+            entry.db_path.clone(),
+            entry.image_dirs.clone(),
+            state.cache_dir_root.clone(),
+        )
+        .map_err(|e| AppError::InternalError(format!("opening new database: {}", e)))?,
+    );
+
+    reg.save(&registry_path)
+        .map_err(|e| AppError::InternalError(format!("persisting registry: {}", e)))?;
+
+    state
+        .databases
+        .write()
+        .unwrap()
+        .insert(entry.id.clone(), ctx.clone());
+
+    let options = crate::commands::import::ImportOptions {
+        time_gap_days: req
+            .time_gap_days
+            .unwrap_or(crate::commands::import::grouping::DEFAULT_TIME_GAP_DAYS),
+        profile_id: req.profile_id.clone(),
+        dry_run: false,
+    };
+    spawn_import_job(
+        &state,
+        ctx.clone(),
+        req.image_dirs.clone(),
+        options,
+        req.backfill.unwrap_or(true),
+    );
+
+    Ok(Json(ApiResponse::success(CreateDatabaseResponse {
+        database: summary_of(&ctx),
+        import: crate::server::import_job::progress_snapshot(&ctx.import_job),
+    })))
+}
+
+/// `POST /api/db/{db_id}/import` — start a background FITS import into an
+/// existing database. One import runs per database at a time.
+pub async fn start_import_route(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Json(req): Json<ImportRequest>,
+) -> Result<Json<ApiResponse<ImportStatusResponse>>, AppError> {
+    require_database_management_allowed(&state)?;
+
+    let dirs = match req.image_dirs {
+        Some(dirs) if !dirs.is_empty() => dirs,
+        _ => ctx.image_dirs.clone(),
+    };
+    if dirs.is_empty() {
+        return Err(AppError::BadRequest(
+            "no image directories: pass image_dirs or configure them on the database".into(),
+        ));
+    }
+    for dir in &dirs {
+        if !std::path::Path::new(dir).is_dir() {
+            return Err(AppError::BadRequest(format!(
+                "image directory does not exist: {}",
+                dir
+            )));
+        }
+    }
+
+    let options = crate::commands::import::ImportOptions {
+        time_gap_days: req
+            .time_gap_days
+            .unwrap_or(crate::commands::import::grouping::DEFAULT_TIME_GAP_DAYS),
+        profile_id: req.profile_id,
+        dry_run: req.dry_run,
+    };
+    let started = spawn_import_job(
+        &state,
+        ctx.0.clone(),
+        dirs,
+        options,
+        req.backfill.unwrap_or(true),
+    );
+    Ok(Json(ApiResponse::success(ImportStatusResponse {
+        started,
+        progress: crate::server::import_job::progress_snapshot(&ctx.import_job),
+    })))
+}
+
+/// `GET /api/db/{db_id}/import` — import job progress (1s poll).
+pub async fn get_import_progress(
+    ctx: DbContext,
+) -> Result<Json<ApiResponse<ImportStatusResponse>>, AppError> {
+    let progress = crate::server::import_job::progress_snapshot(&ctx.import_job);
+    Ok(Json(ApiResponse::success(ImportStatusResponse {
+        started: progress.running,
+        progress,
+    })))
+}
+
+/// Filesystem-safe stem for a managed database file, derived from the
+/// user-facing name (`My Rig!` → `my-rig`).
+fn sanitize_file_stem(name: &str) -> String {
+    let mut stem: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    while stem.contains("--") {
+        stem = stem.replace("--", "-");
+    }
+    let stem = stem.trim_matches('-').to_string();
+    if stem.is_empty() {
+        "database".to_string()
+    } else {
+        stem
+    }
+}
+
+/// First non-existing `<base>/<stem>[-N].sqlite`.
+fn unique_db_file(base: &std::path::Path, stem: &str) -> std::path::PathBuf {
+    let candidate = base.join(format!("{stem}.sqlite"));
+    if !candidate.exists() {
+        return candidate;
+    }
+    for n in 2.. {
+        let candidate = base.join(format!("{stem}-{n}.sqlite"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!()
+}
+
+/// Launch the singleton import job for one database: header scan → one-shot
+/// import transaction → chained quality-scan backfill over created targets.
+/// Returns false when a job is already running for this database.
+fn spawn_import_job(
+    state: &Arc<AppState>,
+    ctx: Arc<DatabaseContext>,
+    dirs: Vec<String>,
+    options: crate::commands::import::ImportOptions,
+    backfill: bool,
+) -> bool {
+    use crate::server::import_job as job;
+
+    if !job::try_begin(&ctx.import_job, dirs.clone()) {
+        return false;
+    }
+    tracing::info!(
+        "📥 Import started for db={} ({} director{})",
+        ctx.id,
+        dirs.len(),
+        if dirs.len() == 1 { "y" } else { "ies" }
+    );
+
+    let state = state.clone();
+    tokio::spawn(async move {
+        let job_store = ctx.import_job.clone();
+
+        let blocking_ctx = ctx.clone();
+        let blocking_options = options.clone();
+        let dir_paths: Vec<std::path::PathBuf> =
+            dirs.iter().map(std::path::PathBuf::from).collect();
+        let import_result = tokio::task::spawn_blocking(move || {
+            run_import_blocking(&blocking_ctx, &dir_paths, &blocking_options)
+        })
+        .await;
+
+        let outcome = match import_result {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(e)) => {
+                tracing::warn!("📥 Import for db={} failed: {:#}", ctx.id, e);
+                job::finish(&job_store, Some(format!("{:#}", e)));
+                return;
+            }
+            Err(join_err) => {
+                tracing::error!("📥 Import task for db={} panicked: {}", ctx.id, join_err);
+                job::finish(
+                    &job_store,
+                    Some(format!("import task panicked: {join_err}")),
+                );
+                return;
+            }
+        };
+
+        tracing::info!(
+            "📥 Import for db={} done: {} imported, {} projects, {} targets{}",
+            ctx.id,
+            outcome.imported,
+            outcome.projects_created,
+            outcome.targets_created,
+            if outcome.dry_run { " (dry-run)" } else { "" }
+        );
+        let target_ids = outcome.created_target_ids.clone();
+        job::set_outcome(&job_store, outcome);
+
+        // New rows reference files the DB-based file cache hasn't seen; kick
+        // the normal background refresh so the UI resolves them promptly.
+        let _ = ctx.ensure_cache_available();
+
+        // Post-import metric backfill: chain the existing singleton quality
+        // scan over each created target. Failures are logged, never fatal —
+        // the user can always re-run Scan Quality from the SequenceView.
+        if backfill && !target_ids.is_empty() {
+            job::begin_backfill(&job_store, target_ids.len());
+            for target_id in target_ids {
+                job::backfill_target(&job_store, target_id);
+                run_backfill_for_target(&state, &ctx, target_id).await;
+                job::backfill_target_done(&job_store);
+            }
+        }
+        job::finish(&job_store, None);
+    });
+    true
+}
+
+/// Stages 1+2 of the import job, on a blocking thread: collect files, scan
+/// headers (with progress), then run the single import transaction on a
+/// dedicated connection (never the shared request connection).
+fn run_import_blocking(
+    ctx: &DatabaseContext,
+    dirs: &[std::path::PathBuf],
+    options: &crate::commands::import::ImportOptions,
+) -> anyhow::Result<crate::commands::import::ImportOutcome> {
+    use crate::commands::import as imp;
+    use crate::server::import_job as job;
+    use rayon::prelude::*;
+
+    let files = imp::collect_fits_files(dirs)?;
+    job::set_scan_totals(&ctx.import_job, files.len(), 0);
+
+    let store = ctx.import_job.clone();
+    let frames: Vec<imp::headers::FrameMeta> = files
+        .par_iter()
+        .map(|path| {
+            let meta = imp::headers::read_frame_meta(path);
+            store.write().unwrap().progress.scanned_files += 1;
+            meta
+        })
+        .collect();
+
+    job::set_stage(&ctx.import_job, "importing");
+    let mut conn = rusqlite::Connection::open_with_flags(
+        &ctx.database_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .map_err(|e| anyhow::anyhow!("opening {} for import: {}", ctx.database_path, e))?;
+    imp::import_frames(&mut conn, frames, options)
+}
+
+/// Run (or wait for) the quality scan for one imported target. The scan is a
+/// per-DB singleton, so this retries while a previous target's scan is still
+/// running, then waits for its own scan to complete.
+async fn run_backfill_for_target(
+    state: &Arc<AppState>,
+    ctx: &Arc<DatabaseContext>,
+    target_id: i32,
+) {
+    use crate::server::spatial_scan;
+
+    let poll = tokio::time::Duration::from_millis(1500);
+    loop {
+        let response = start_spatial_scan(
+            State(state.clone()),
+            DbContext(ctx.clone()),
+            Json(SpatialScanRequest {
+                target_id,
+                filter_name: None,
+                force: false,
+                force_spatial: false,
+                force_astrometry: false,
+                force_satellites: false,
+            }),
+        )
+        .await;
+        match response {
+            Ok(Json(body)) => {
+                let Some(data) = body.data else { return };
+                if data.started {
+                    break; // our scan launched; wait for it below
+                }
+                if !data.progress.running {
+                    return; // nothing to compute for this target
+                }
+                // Another scan (previous target) still running — wait, retry.
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "📥 Backfill scan for db={} target={} not started: {:?}",
+                    ctx.id,
+                    target_id,
+                    e
+                );
+                return;
+            }
+        }
+        tokio::time::sleep(poll).await;
+    }
+
+    loop {
+        tokio::time::sleep(poll).await;
+        let (progress, _) = spatial_scan::progress_snapshot(&ctx.spatial_metrics);
+        if !progress.running {
+            break;
+        }
+    }
+}
+
 pub async fn refresh_file_cache(
     ctx: DbContext,
 ) -> Result<Json<ApiResponse<FileCheckResponse>>, AppError> {

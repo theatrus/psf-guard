@@ -142,7 +142,11 @@ impl FramingResolver {
                             .and_then(|m| number(m, &["ROI", "Roi", "roi"]))
                     }),
                     source,
-                    grading_eligible: epoch_code.is_none_or(|code| code == 0),
+                    // N.I.N.A.'s Epoch enum: JNOW=0, B1950=1, J2000=2, J2050=3.
+                    // TS writes `(int)Epoch.J2000` (= 2) for every target it
+                    // creates; only J2000 (or an unspecified epoch) is ICRS-
+                    // comparable without a precession implementation.
+                    grading_eligible: epoch_code.is_none_or(|code| code == 2),
                 })
         });
         self.by_target.insert(target_id, framing.clone());
@@ -355,7 +359,7 @@ mod tests {
             "CREATE TABLE target (Id INTEGER, ra REAL, dec REAL, epochCode INTEGER, rotation REAL, roi REAL);
              CREATE TABLE project (Id INTEGER, isMosaic INTEGER);
              CREATE TABLE acquiredimage (Id INTEGER, exposureId INTEGER);
-             INSERT INTO target VALUES (3, 5.5, -12.0, 0, 90.0, 80.0);
+             INSERT INTO target VALUES (3, 5.5, -12.0, 2, 90.0, 80.0);
              INSERT INTO project VALUES (2, 1);
              INSERT INTO acquiredimage VALUES (7, 44);",
         )
@@ -373,6 +377,27 @@ mod tests {
         assert_eq!(context.session_id.as_deref(), Some("night-1"));
         assert_eq!(context.project_is_mosaic, Some(true));
         assert_eq!(context.guiding_rms_arcsec, Some(0.8));
+    }
+
+    #[test]
+    fn jnow_epoch_abstains_from_absolute_grading() {
+        // NINA Epoch::JNOW = 0: coordinates precess away from ICRS, so
+        // absolute grading must abstain (they were eligible before the
+        // epoch-code fix — J2000 is enum value 2, not 0).
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE target (Id INTEGER, ra REAL, dec REAL, epochCode INTEGER, rotation REAL, roi REAL);
+             CREATE TABLE project (Id INTEGER, isMosaic INTEGER);
+             CREATE TABLE acquiredimage (Id INTEGER, exposureId INTEGER);
+             INSERT INTO target VALUES (3, 5.5, -12.0, 0, 90.0, 80.0);
+             INSERT INTO project VALUES (2, 0);
+             INSERT INTO acquiredimage VALUES (7, 44);",
+        )
+        .unwrap();
+        let context = load(&conn, &image("{}")).unwrap();
+        let expected = context.expected_framing.as_ref().unwrap();
+        assert!(!expected.grading_eligible);
+        assert_eq!(context.expected_for_grading(), None);
     }
 
     #[test]

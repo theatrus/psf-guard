@@ -34,6 +34,85 @@ pub enum Commands {
         format: String,
     },
 
+    /// Create a new Target Scheduler database and import FITS folders into it.
+    ///
+    /// Bootstraps a fully-faithful scheduler database (vendored upstream
+    /// schema, user_version 23) at the given path, then scans the supplied
+    /// directories for light frames and synthesizes projects, targets,
+    /// exposure templates and plans from their headers. Frames grade as
+    /// Pending; quality backfill runs later (Scan Quality / screen-fits).
+    /// Registers the new database in the shared registry unless
+    /// `--no-register`.
+    CreateDb {
+        /// Path of the new .sqlite database file to create.
+        database: String,
+
+        /// Directories (or single FITS files) to import.
+        #[arg(required = true)]
+        directories: Vec<String>,
+
+        /// Display name for the registry entry (defaults to the DB filename).
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Time gap (days) between frames of the same rig that starts a new
+        /// project.
+        #[arg(long, default_value_t = crate::commands::import::grouping::DEFAULT_TIME_GAP_DAYS)]
+        time_gap_days: f64,
+
+        /// Profile ID to attach imported rows to (defaults to a fresh one).
+        #[arg(long)]
+        profile_id: Option<String>,
+
+        /// Preview the plan; the database file is still created but the
+        /// import transaction is rolled back.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Do not register the new database in the shared registry.
+        #[arg(long)]
+        no_register: bool,
+
+        /// Path to the database registry JSON file (defaults to the platform
+        /// config directory). Useful for dev/test isolation.
+        #[arg(long)]
+        registry: Option<String>,
+    },
+
+    /// Import FITS folders into an existing Target Scheduler database.
+    ///
+    /// Accepts a registry slug or a path to a .sqlite file. Grouping and
+    /// idempotency rules match `create-db`: frames whose basename is already
+    /// recorded in the database are skipped, so re-running after a new night
+    /// only adds the new subs.
+    Import {
+        /// Registry slug or path of the target database.
+        db: String,
+
+        /// Directories (or single FITS files) to import.
+        #[arg(required = true)]
+        directories: Vec<String>,
+
+        /// Time gap (days) between frames of the same rig that starts a new
+        /// project.
+        #[arg(long, default_value_t = crate::commands::import::grouping::DEFAULT_TIME_GAP_DAYS)]
+        time_gap_days: f64,
+
+        /// Profile ID to attach imported rows to (defaults to the database's
+        /// single profile; required if it has several).
+        #[arg(long)]
+        profile_id: Option<String>,
+
+        /// Preview the plan and roll back without writing.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Path to the database registry JSON file (defaults to the platform
+        /// config directory).
+        #[arg(long)]
+        registry: Option<String>,
+    },
+
     /// List all projects
     ListProjects,
 
