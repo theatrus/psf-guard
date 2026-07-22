@@ -157,10 +157,13 @@ pub fn plan_export(
         };
         let size_bytes = std::fs::metadata(&source).map(|m| m.len()).unwrap_or(0);
 
+        // The basename comes from the row's metadata JSON; sanitize it too so
+        // a degenerate FileName (e.g. "..") can never shift the destination
+        // or produce a traversal-shaped archive entry name.
         let mut relative_dest = PathBuf::from(sanitize_component(&target_name))
             .join("LIGHT")
             .join(sanitize_component(&image.filter_name))
-            .join(&basename);
+            .join(sanitize_component(&basename));
         let clashes = used_dests.entry(relative_dest.clone()).or_insert(0);
         *clashes += 1;
         if *clashes > 1 {

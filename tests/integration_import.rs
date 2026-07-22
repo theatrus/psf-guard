@@ -699,9 +699,7 @@ async fn export_streams_zip_of_non_rejected_lights() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(content_type, "application/zip");
     assert_eq!(&bytes[..4], b"PK\x03\x04", "zip magic");
-    let haystack = bytes.windows(14);
     let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
-    drop(haystack);
     assert!(
         has(b"M81/LIGHT/L/m81_l_0001.fits"),
         "expected entry present"

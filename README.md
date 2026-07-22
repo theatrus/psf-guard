@@ -37,6 +37,13 @@ points at your Target Scheduler database and image folders and gives you:
   output.
 - **Scheduler write-back** — every grade lands in the Target Scheduler
   database, so the scheduler knows to re-capture what you rejected.
+- **Start from plain folders** — no scheduler database? `create-db` bootstraps
+  a fully-faithful Target Scheduler database and imports folders of FITS
+  lights, grouping them into projects and targets by rig, object, and session
+  gaps (correctable in the UI); quality analysis backfills automatically.
+- **Take out for stacking** — export the non-rejected lights into a
+  WBPP-style folder tree (copy or instant hardlinks), or download them as a
+  zip straight from the web UI. Rejects never leave the library.
 - **Safe reject archival** — move rejected frames (and their sidecars) out of
   the directory tree your stacking software scans, reversibly.
 - **Two-machine workflows** — sync projects, captured images, and grades
@@ -479,6 +486,15 @@ psf-guard server --host 127.0.0.1 <db> <dirs...>    # localhost only (default bi
 psf-guard screen-fits ./lights --annotate ./diagnostics
 psf-guard screen-fits ./lights --regrade-db my-db --dry-run
 psf-guard screen-fits ./lights --format json         # or table, csv
+
+# Create a new Target Scheduler database from folders of FITS lights
+psf-guard create-db new.sqlite ./lights1 ./lights2 [--name "My Rig"] [--dry-run]
+psf-guard import <slug-or-path> ./more-lights [--dry-run]   # top up later
+
+# Export ("take out") non-rejected lights for stacking — WBPP-style layout
+# <dest>/<target>/LIGHT/<filter>/; rejects are never exported
+psf-guard export <slug-or-path> --dest ./stacking [--include-pending]
+psf-guard export my-db --dest ./stacking --target "M 31" --link  # hardlinks
 
 # Reject archival
 psf-guard move-rejects --db <slug> [--dry-run] [--project NAME] [--target NAME]

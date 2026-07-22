@@ -522,10 +522,17 @@ pub async fn export_archive_route(
     };
 
     // Plan on a blocking thread: it queries the DB and walks the image dirs.
+    // Use a DEDICATED read-only connection — the walk can take tens of
+    // seconds on network storage, and holding the shared request-connection
+    // mutex for that long would block every other API call on this DB
+    // (same rule as the import job and the background file-check refresh).
     let plan_ctx = ctx.0.clone();
     let plan = tokio::task::spawn_blocking(move || {
-        let conn = plan_ctx.db();
-        let conn = conn.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
+        let conn = rusqlite::Connection::open_with_flags(
+            &plan_ctx.database_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .map_err(|e| anyhow::anyhow!("opening {}: {e}", plan_ctx.database_path))?;
         plan_export(&conn, &plan_ctx.image_dirs, &options)
     })
     .await
