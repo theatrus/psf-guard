@@ -35,19 +35,20 @@ cargo build --release --features tauri   # GUI capable
 - **Cache System**: Directory tree + file cache with 5-minute TTL
 
 ### Pure-Rust image processing: seiza-imgproc (2026-07)
-OpenCV was removed. All star-detection image ops live in the workspace crate
-`crates/seiza-imgproc` (std-only, destined to break out as a published
-`seiza-` crate): Gaussian/median blur, Canny, Otsu, binary morphology,
-Suzuki-Abe external contours + polygon metrics, the Gastal-Oliveira domain
-transform (`DTF_NC`), and à trous wavelets / structure removal.
+OpenCV was removed. All star-detection image ops live in the published
+`seiza-imgproc` crate (std-only; developed in the seiza repo at
+`~/repos/seiza/seiza-imgproc`, consumed here from crates.io): Gaussian/median
+blur, Canny, Otsu, binary morphology, Suzuki-Abe external contours + polygon
+metrics, the Gastal-Oliveira domain transform (`DTF_NC`), and à trous
+wavelets / structure removal.
 - **Fidelity**: each op reproduces the exact OpenCV semantics the detectors
   relied on, verified bit-exact against OpenCV 4.13 with a since-deleted
   parity harness. Key discoveries baked into the code: OpenCV quantizes u8
   Gaussian kernels via differences of rounded cumulative sums (Q8, sum 256);
   its f32 filter engine has per-kernel-size accumulation orders with an
   8-lane FMA body and unfused scalar tail columns; its dt-filter box sums are
-  f32 prefix sums. `crates/seiza-imgproc/tests/golden.rs` locks all of this
-  with platform-stable fixtures (no transcendentals in the generator).
+  f32 prefix sums. The crate's `tests/golden.rs` locks all of this with
+  platform-stable fixtures (no transcendentals in the generator).
 - **Detection equality**: N.I.N.A. detector output is bit-identical to the
   old OpenCV build; HocusFocus matches through the kappa-sigma knife edge
   (noise_sigma/threshold/star counts identical on real frames). The
@@ -663,7 +664,7 @@ cd static && npm run dev
 
 ### Star Detection
 - N.I.N.A. algorithm port with MTF stretching
-- Image processing via `crates/seiza-imgproc` (see below) — no OpenCV
+- Image processing via the `seiza-imgproc` crate (see below) — no OpenCV
 - PSF fitting: Gaussian/Moffat models
 
 ### Performance
