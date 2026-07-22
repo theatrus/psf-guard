@@ -28,13 +28,17 @@ points at your Target Scheduler database and image folders and gives you:
   same grading exclusions and per-frame admission evidence into the result;
   rebuild channels independently, retain and flag stale prior results, inspect
   the full-resolution result with the normal zoom/pan tools, apply or revert
-  parameterized Seiza display stretches, or download the cached linear FITS
-  integration. When the required channel stacks exist, combine them into
-  cached RGB, LRGB, or selectable SHO/HOO/Foraxx color previews with
+  parameterized Seiza display stretches and conservative deconvolution, or
+  download either the cached integration or its processed linear FITS variant.
+  Deconvolution is explicitly opt-in and defaults off. When the required
+  channel stacks exist, combine them into cached RGB, LRGB, or selectable
+  SHO/HOO/Foraxx color previews with
   independent Seiza background extraction before registration, editable
-  additive or multiplicative correction controls, ordered input/output stretch
-  stacks, phase-complete progress, and full-resolution processed RGB FITS
-  output.
+  additive or multiplicative correction controls, optional per-input
+  deconvolution, ordered input/output stretch stacks, phase-complete progress,
+  reusable prepared-channel caches, and full-resolution processed RGB FITS
+  output. Stretch-only edits reuse prior background, registration, and
+  deconvolution work.
 - **Scheduler write-back** — every grade lands in the Target Scheduler
   database, so the scheduler knows to re-capture what you rejected.
 - **Start from plain folders** — no scheduler database? `create-db` bootstraps

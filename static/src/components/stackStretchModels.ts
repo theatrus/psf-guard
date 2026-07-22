@@ -38,5 +38,8 @@ export function defaultStretchModel(type: StretchModelType): StackStretchModel {
 export function defaultStretchRequest(
   type: StretchModelType = 'auto-mtf'
 ): StackStretchRequest {
-  return { model: defaultStretchModel(type), color_strategy: 'linked' };
+  return {
+    model: defaultStretchModel(type),
+    color_strategy: 'linked',
+  };
 }

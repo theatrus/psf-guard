@@ -78,13 +78,32 @@ as an input to a separate processing workflow.
 
 ![Frame-by-frame stack admission details](stack-preview-decisions.png)
 
-## Reversible display stretching
+## Reversible view processing
 
-Expand **Display stretch** on any mono stack card to change only its
-rendered PNG. **Apply stretch** asks Seiza to resolve the selected model against
-the cached FITS and renders both the grid and full-resolution inspection PNGs.
-The source stack and downloadable FITS are never rewritten. **Revert stretch**
-immediately returns the card and inspector to the default rendering.
+Expand **View processing** on any mono stack card to configure its optional
+linear restoration and display rendering. **Apply processing** reads the cached
+FITS and renders both the grid and full-resolution inspection PNGs. The source
+stack is never rewritten. **Revert processing** immediately returns the card,
+inspector, and FITS download to the original integration.
+
+**Deconvolution is off by default.** When enabled, PSF Guard uses
+`seiza-deconvolution` before display normalization and stretching. Supply the
+measured unsaturated-star FWHM in pixels, then tune the conservative damped
+Richardson–Lucy iteration count, restored-image blend, noise damping, and
+per-iteration correction limit. The defaults—3.1 px, four iterations, 35%
+blend, 0.001 noise fraction, and 2× correction limit—are only populated after
+the checkbox is enabled. Inspect bright stars at full resolution for ringing;
+this is a circular, spatially invariant Gaussian PSF model, not blind or
+spatially varying deconvolution.
+
+An enabled restoration creates its own content-addressed linear FITS with WCS
+and observation metadata preserved plus `SEIZADC`, `DCFWHM`, `DCITER`,
+`DCAMT`, `DCNOISE`, and `DCMAXCOR` provenance cards. While that variant is
+active, the full-size inspector downloads the deconvolved FITS. Turning the
+processing off returns to the original cached stack FITS.
+Changing only the display stretch reuses the same restored FITS. Its cache key
+depends on the source revision, restoration settings, and Seiza algorithm
+version, not the display model.
 
 The controls expose Seiza's identity, explicit linear, asinh,
 percentile-asinh, MTF, Generalized Hyperbolic Stretch (GHS), and Auto-MTF
@@ -96,13 +115,15 @@ that domain before invoking Seiza. After an application, the card shows the raw
 source range, median, and normalization bounds so the transform remains
 inspectable.
 
-Applied variants are content-addressed by the source artifact revision, full
-stretch configuration, robust-normalization policy, and Seiza stretch version.
-Reapplying the same settings reuses the cached PNG pair. The active selection
-is intentionally browser-local and reversible; a reload returns to the durable
-default preview while the linear FITS remains the sole source of truth.
+Applied PNG variants are content-addressed by the source artifact revision,
+restoration artifact, stretch configuration, robust-normalization policy, and
+Seiza processing versions. Reapplying the same settings reuses the cached PNG
+pair. Stretch edits also reuse a matching processed linear FITS. The active
+selection is intentionally browser-local and reversible; a reload returns to
+the durable default preview while the linear FITS remains the sole source of
+truth.
 
-![Parameterized Seiza stretch controls applied to a stack preview](stack-preview-stretch.png)
+![Opt-in Seiza deconvolution and display stretch controls applied to a real M44 stack preview](stack-preview-stretch.png)
 
 ## Color previews from channel stacks
 
@@ -141,14 +162,17 @@ the Seiza color CLI.
 The **Processing stack** editor exposes the background correction mode plus
 Seiza's polynomial degree, sample-grid density and radius, sample-search steps,
 sample and fit rejection thresholds, rejection passes, border exclusion, and
-ridge regularization. It then robustly normalizes each physical input and
-applies that role's ordered stretch stages before composition. Expand L/R/G/B,
-H-alpha/OIII/SII, or RGB output to add, edit, remove, and reorder Seiza
+ridge regularization. After registration it applies optional per-role
+deconvolution while each physical input is still linear, then robustly
+normalizes the result and applies that role's ordered stretch stages before
+composition. Deconvolution is independently opt-in for L/R/G/B or
+H-alpha/OIII/SII and is off for every role by default. Expand those input lanes
+or RGB output to add, edit, remove, and reorder Seiza
 identity, linear, asinh, percentile-asinh, MTF, GHS, and Auto-MTF stages.
 **Apply processing stack** starts a new cached color job; **Revert edits**
 returns to the last rendered pipeline and **Reset defaults** restores additive
-background extraction, one Auto-MTF stage per input, and no post-composition
-stage.
+background extraction, deconvolution off, one Auto-MTF stage per input, and no
+post-composition stage.
 
 Every intermediate remains `f32`, and each automatic stage resolves against
 the preceding stage's output. These are sequential transfer passes, not pixel
@@ -158,14 +182,22 @@ applying a second shared stretch. RGB output stages may use linked, unlinked,
 or luminance-preserving color strategies. The downloadable RGB FITS contains
 the exact processed color result, records `COLORSPC`, `SEIZACLR`, and
 `SEIZATRF='DISPLAY'`, and preserves supported WCS cards from the reference
-stack. The manifest retains the requested background configuration and stage
-arrays, each resolved background model and diagnostic, and every resolved Seiza
-stretch plan. The UI reports accepted/candidate sample counts and the resolved
-sample radius for every input role. The complete processing definition,
+stack. The manifest retains the requested background configuration,
+per-channel deconvolution parameters and peak/flux diagnostics, and stage
+arrays, plus each resolved background model and Seiza stretch plan. The UI
+reports accepted/candidate sample counts and the resolved sample radius for
+every input role. The complete processing definition,
 resolved dependency versions, and source revisions are part of the job ID, so
 applying the same pipeline restores its prior artifact. Artifacts from before
 background extraction are rebuilt with the new additive default; a current
 artifact whose extraction was explicitly disabled keeps that choice.
+
+PSF Guard caches each set of prepared linear inputs after background
+correction, registration, optional deconvolution, and normalization. Input or
+output stretch edits reuse those FITS files, so they do not repeat source
+loading, background fits, registration, or deconvolution. Registered channels
+may contain `NaN` at uncovered borders; Seiza keeps that mask through
+deconvolution instead of failing the color build or treating gaps as data.
 
 | Standard SHO | Foraxx SHO |
 |:--:|:--:|
@@ -188,11 +220,12 @@ or nebular structure that should not influence the fitted sky surface.
 
 Color cards retain the compact loading/status strip directly below the image.
 Its determinate total covers source loading, one background fit and one
-correction per channel, channel registration, per-input normalization, every
-input stretch stage, composition, every output stretch stage, FITS writing,
-full-size rendering, screen rendering, and artifact publication. When
-extraction is disabled, background preparation is retained as an explicitly
-skipped phase. **Pipeline phases** preserves each phase's completed, skipped,
+correction per channel, channel registration, every enabled linear-input
+deconvolution, per-input normalization, every input stretch stage, composition,
+every output stretch stage, FITS writing, full-size rendering, screen rendering,
+and artifact publication. When extraction or deconvolution is disabled, its
+phase is retained as explicitly skipped. **Pipeline phases** preserves each
+phase's completed, skipped,
 reused, or failed state and identifies the active role and stage in the live
 label. A failed fit stops the build with its input role named; disable
 extraction or adjust the sampling controls to retry. **Inspect** opens the same
@@ -225,7 +258,19 @@ Artifacts live below the database cache directory:
   group-1.png
   group-1-original.png
   group-1.fits
+<cache>/<database>/stack-previews/stretch/<processing-id>/
+  manifest.json
+  preview.png
+  preview-original.png
+<cache>/<database>/stack-previews/deconvolution/<restoration-id>/
+  manifest.json
+  deconvolved.fits
 <cache>/<database>/stack-previews/latest-project-<project-id>.json
+<cache>/<database>/stack-previews/color-inputs/<input-id>/
+  manifest.json
+  red.fits
+  green.fits
+  blue.fits
 <cache>/<database>/stack-previews/color/<color-job-id>/
   manifest.json
   preview.png
@@ -237,13 +282,14 @@ Artifacts live below the database cache directory:
 The content-addressed job ID includes the database/project, exact ordered
 inputs and grouping, grades, quality scores and regrade reasons, source path
 fingerprints, an explicit PSF Guard cache-policy version, Seiza stacking
-revision, stretch parameters, and preview format. Repeating an unchanged
-request loads the persistent result. A rebuild bypasses that lookup and
-atomically replaces the PNG, FITS, and manifest. The per-project latest index
-is also written atomically and is updated only for successfully completed
-groups. Each run receives a distinct artifact revision in its download/display
-URLs so clients cannot mistake an immutable cached response for the rebuilt
-output.
+revision, processing parameters, and preview format. Restoration and prepared
+color-input caches use narrower keys so display-only edits can reuse earlier
+linear work. Repeating an unchanged request loads the persistent result. A
+rebuild bypasses that lookup and atomically replaces the PNG, FITS, and
+manifest. The per-project latest index is also written atomically and is
+updated only for successfully completed groups. Each run receives a distinct
+artifact revision in its download/display URLs so clients cannot mistake an
+immutable cached response for the rebuilt output.
 
 ## Deliberate limits
 
@@ -251,8 +297,11 @@ output.
 - The retained FITS is still an uncalibrated preview integration, not a final
   science product.
 - Color is a visual channel combination, not photometric or
-  spectrophotometric calibration. There is no gradient removal, custom mixing
-  matrix UI, star removal, mosaic, drizzle, or cross-target integration.
+  spectrophotometric calibration. There is no custom mixing matrix UI, star
+  removal, mosaic, drizzle, or cross-target integration.
+- Deconvolution requires a user-supplied FWHM and one circular Gaussian PSF for
+  the whole channel. It does not estimate a PSF, vary it across the field, or
+  replace a final scientific restoration workflow.
 - Satellite predictions and image-detail overlays are not applied to a stack.
   They describe individual shutter intervals, while one preview represents
   several exposures.
@@ -274,6 +323,7 @@ GET  /api/db/{db}/projects/{project}/stack-previews/color/{job}
 GET  /api/db/{db}/stack-previews/color/{job}/preview[?size=screen|original]
 GET  /api/db/{db}/stack-previews/color/{job}/fits
 GET  /api/db/{db}/stack-previews/stretch/{stretch}/preview[?size=screen|original]
+GET  /api/db/{db}/stack-previews/stretch/{stretch}/fits
 ```
 
 The POST body is `{ "image_ids": [...], "accepted_only": false, "force":
@@ -287,6 +337,9 @@ POST body is `{ "target_id": 42, "kind": "rgb", "force": false,
 "samples_per_axis": 12, "sample_radius": null, "search_steps": 4,
 "sample_rejection_sigma": 3.5, "fit_rejection_sigma": 3.0,
 "fit_rejection_iterations": 3, "border_fraction": 0.03 } },
+"input_deconvolutions": { "red": { "psf_fwhm_pixels": 3.1,
+"iterations": 4, "amount": 0.35, "noise_fraction": 0.001,
+"max_correction": 2.0 } },
 "input_stretches": { "red": [{ "model": { "type": "auto-mtf",
 "target_median": 0.2, "shadows_clip": -2.8 }, "color_strategy": "linked" }] },
 "output_stretches": [] } }`,
@@ -296,4 +349,5 @@ POST body is `{ "target_id": 42, "kind": "rgb", "force": false,
 behavior for API compatibility. Mono stretch POST bodies use Seiza's tagged model shape, for
 example `{ "model": { "type": "percentile-asinh", "black_percentile":
 0.01, "white_percentile": 0.995, "strength": 8.0 }, "color_strategy":
-"luminance-preserving" }`.
+"luminance-preserving", "deconvolution": null }`. Replace `null` with the
+same deconvolution object shown above to opt in.

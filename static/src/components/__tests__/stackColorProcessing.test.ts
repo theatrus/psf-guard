@@ -5,6 +5,10 @@ import {
   processingForColorBuild,
 } from '../stackColorProcessing';
 import { defaultStretchRequest } from '../stackStretchModels';
+import {
+  defaultDeconvolutionConfig,
+  validateDeconvolution,
+} from '../stackDeconvolution';
 
 describe('stack color processing defaults', () => {
   it('starts every physical input with its own Auto-MTF stage', () => {
@@ -20,6 +24,7 @@ describe('stack color processing defaults', () => {
       defaultStretchRequest('auto-mtf'),
     ]);
     expect(processing.output_stretches).toEqual([]);
+    expect(processing.input_deconvolutions).toEqual({});
     expect(processing.background_extraction?.correction_mode).toBe('subtract');
     expect(processing.background_extraction?.config.model.degree).toBe(2);
   });
@@ -53,5 +58,31 @@ describe('stack color processing defaults', () => {
       cache_version: BACKGROUND_COLOR_CACHE_VERSION,
       processing,
     }, ['red', 'green', 'blue']).background_extraction).toBeNull();
+  });
+
+  it('migrates current artifacts without deconvolution to the disabled state', () => {
+    const processing = defaultColorProcessing(['red', 'green', 'blue']);
+    const legacy = { ...processing } as Partial<typeof processing>;
+    delete legacy.input_deconvolutions;
+
+    expect(processingForColorBuild({
+      cache_version: BACKGROUND_COLOR_CACHE_VERSION,
+      processing: legacy as typeof processing,
+    }, ['red', 'green', 'blue']).input_deconvolutions).toEqual({});
+  });
+
+  it('uses conservative upstream defaults only after deconvolution is enabled', () => {
+    const processing = defaultColorProcessing(['ha', 'oiii']);
+    expect(processing.input_deconvolutions.ha).toBeUndefined();
+
+    const config = defaultDeconvolutionConfig();
+    expect(validateDeconvolution(config)).toBeNull();
+    expect(config).toEqual({
+      psf_fwhm_pixels: 3.1,
+      iterations: 4,
+      amount: 0.35,
+      noise_fraction: 0.001,
+      max_correction: 2,
+    });
   });
 });
