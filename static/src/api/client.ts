@@ -27,6 +27,8 @@ import type {
   ImageQualityResponse,
   SpatialScanRequest,
   SpatialScanStatus,
+  QualityBackfillRequest,
+  QualityBackfillStatus,
   PreviewDescriptor,
   GenerationStatus,
   AstrometryAnalysis,
@@ -66,6 +68,10 @@ const initializeApi = async () => {
       (response) => response,
       (error) => {
         console.error('API Error:', error);
+        if (axios.isAxiosError<ApiResponse<unknown>>(error)) {
+          const message = error.response?.data?.error;
+          if (message) return Promise.reject(new Error(message, { cause: error }));
+        }
         return Promise.reject(error);
       }
     );
@@ -732,6 +738,28 @@ export const apiClient = {
       dbPath(dbId, '/analysis/quality-scan')
     );
     if (!data.data) throw new Error('Failed to get spatial scan status');
+    return data.data;
+  },
+
+  startQualityBackfill: async (
+    dbId: string,
+    request: QualityBackfillRequest
+  ): Promise<QualityBackfillStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<QualityBackfillStatus>>(
+      dbPath(dbId, '/analysis/quality-backfill'),
+      request
+    );
+    if (!data.data) throw new Error('Failed to start database quality analysis');
+    return data.data;
+  },
+
+  getQualityBackfillStatus: async (dbId: string): Promise<QualityBackfillStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<QualityBackfillStatus>>(
+      dbPath(dbId, '/analysis/quality-backfill')
+    );
+    if (!data.data) throw new Error('Failed to get database quality status');
     return data.data;
   },
 };

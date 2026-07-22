@@ -276,7 +276,7 @@ pub struct CreateDatabaseRequest {
     pub time_gap_days: Option<f64>,
     #[serde(default)]
     pub profile_id: Option<String>,
-    /// Run the post-import quality backfill (default true).
+    /// Queue the separate database quality job after import (default false).
     #[serde(default)]
     pub backfill: Option<bool>,
 }
@@ -301,10 +301,10 @@ pub struct ImportRequest {
     #[serde(default)]
     pub profile_id: Option<String>,
     /// Plan + count without writing (the transaction is rolled back). No
-    /// quality backfill runs afterwards.
+    /// quality job is queued afterwards.
     #[serde(default)]
     pub dry_run: bool,
-    /// Run the post-import quality backfill (default true).
+    /// Queue the separate database quality job after import (default false).
     #[serde(default)]
     pub backfill: Option<bool>,
     /// Attach frames to existing targets (name/coordinate match) instead of
@@ -521,6 +521,19 @@ pub struct SpatialScanStatusResponse {
     pub progress: crate::server::spatial_scan::SpatialScanProgress,
     /// Total number of images with cached spatial metrics in this database.
     pub cached_count: usize,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct QualityBackfillRequest {
+    /// Recompute cached star, background, photometry, and pointing evidence.
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct QualityBackfillStatusResponse {
+    pub started: bool,
+    pub progress: crate::server::quality_backfill::QualityBackfillProgress,
 }
 
 #[derive(Debug, Serialize)]

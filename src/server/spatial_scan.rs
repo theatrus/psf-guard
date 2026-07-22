@@ -230,6 +230,7 @@ pub fn run_scan(
     cache_dir: &Path,
     work: &[ScanWorkItem],
     workers: usize,
+    wait_for_turn: &(dyn Fn() + Sync),
 ) {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -238,6 +239,7 @@ pub fn run_scan(
 
     // Shared work-stealing pool sized by the caller's worker budget.
     crate::concurrency::parallel_index(work.len(), workers, |i| {
+        wait_for_turn();
         let item = &work[i];
         {
             let mut s = store.write().unwrap();
@@ -415,6 +417,24 @@ pub fn valid_entry(
         .cloned()
 }
 
+/// Look up an entry that contains every field produced by the current quality
+/// scan. Older cache files deserialize successfully, but their defaulted grid
+/// dimensions and cell arrays cannot support photometric screening.
+pub fn valid_quality_entry(
+    store: &RwLock<SpatialMetricsStore>,
+    image_id: i32,
+    filename: &str,
+) -> Option<StoredSpatialMetrics> {
+    valid_entry(store, image_id, filename).filter(|entry| {
+        let cells = entry.grid_cols.saturating_mul(entry.grid_rows);
+        entry.width > 0
+            && entry.height > 0
+            && cells > 0
+            && entry.star_cell_counts.len() == cells
+            && entry.bg_cell_medians.len() == cells
+    })
+}
+
 /// Snapshot of progress plus store size, for the progress endpoint.
 pub fn progress_snapshot(store: &RwLock<SpatialMetricsStore>) -> (SpatialScanProgress, usize) {
     let s = store.read().unwrap();
@@ -464,6 +484,24 @@ mod tests {
         assert!(valid_entry(&store, 1, "a.fits").is_some());
         assert!(valid_entry(&store, 1, "renamed.fits").is_none());
         assert!(valid_entry(&store, 2, "a.fits").is_none());
+    }
+
+    #[test]
+    fn complete_quality_entry_requires_current_photometry_inputs() {
+        let legacy = entry(1, "legacy.fits");
+        let mut current = entry(2, "current.fits");
+        current.width = 6248;
+        current.height = 4176;
+        current.star_cell_counts = vec![0.0; 48];
+        current.bg_cell_medians = vec![1000.0; 48];
+        let mut dimensions_only = entry(3, "dimensions-only.fits");
+        dimensions_only.width = 6248;
+        dimensions_only.height = 4176;
+        let store = store_with(vec![legacy, current, dimensions_only]);
+
+        assert!(valid_quality_entry(&store, 1, "legacy.fits").is_none());
+        assert!(valid_quality_entry(&store, 2, "current.fits").is_some());
+        assert!(valid_quality_entry(&store, 3, "dimensions-only.fits").is_none());
     }
 
     #[test]

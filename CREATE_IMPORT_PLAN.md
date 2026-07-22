@@ -4,8 +4,8 @@ Let users create a brand-new, fully-faithful Target Scheduler (TS) database and
 populate it by importing folders of FITS images — **without** requiring an
 existing N.I.N.A. scheduler DB. Available from the CLI and from the
 DB-management UI. Import synthesizes projects / targets / exposure plans that the
-user can then correct in the UI, and a post-import background task backfills
-image-quality metrics.
+user can then correct in the UI. Image-quality work is a separate database
+maintenance action.
 
 Status legend: ☐ todo · ◐ in progress · ☑ done
 
@@ -66,11 +66,14 @@ Per light FITS, extract (reuse existing header parsing): `OBJECT`, `RA/DEC`
 
 - **EquipmentSignature** = (`TELESCOP`/`INSTRUME` camera, `FOCALLEN`, binning).
   Frames with different signatures never share a project.
-- **Project split** = new project when the equipment signature changes **or**
-  the sorted-by-`DATE-OBS` gap exceeds `--time-gap-days` (default **14**).
-  Project name auto-generated (`"<scope> <focallen>mm — <first-date>"`),
-  user-editable later.
-- **Target** within a project = distinct `OBJECT` (carry RA/DEC, epoch).
+- **Project** = one distinct `OBJECT` by default, across all of its capture
+  dates for one equipment signature. The project carries one target with the
+  same name and median RA/Dec.
+- **Mosaic exception** = panel-style target names with the same root (for
+  example `North America Panel 1/2`), centers within 5°, and capture ranges
+  no more than `--time-gap-days` apart share one project. Name, sky position,
+  and time must all agree; nearby unrelated objects never merge by position
+  alone.
 - **ExposureTemplate** = distinct (`FILTER`, `GAIN`, `OFFSET`, binning,
   `READOUTMODE`); **ExposurePlan** = one per template on a target, `exposure` =
   `EXPTIME`, `desired`/`acquired`/`accepted` seeded from the frame counts.
@@ -129,21 +132,23 @@ All guarded by `require_database_management_allowed`.
 - ☑ `POST /api/db/{id}/import` (`image_dirs` defaults to the DB's configured
   dirs; `dry_run`, `backfill` flags) + ☑ `GET /api/db/{id}/import` progress.
 - ☑ `src/server/import_job.rs`: singleton per-DB job
-  (`DatabaseContext.import_job`), stages `scanning → importing → backfill →
+  (`DatabaseContext.import_job`), stages `scanning → importing →
   complete|error`. Import runs on a **dedicated connection** (never the shared
   request connection); scan-headers stage reports per-file progress. Panic in
   the blocking task is caught via the JoinError path so the singleton can't
   wedge.
-- ☑ Backfill chains the existing singleton quality scan per created target by
-  invoking `start_spatial_scan` directly (constructed extractors) and polling
-  the scan's own progress; failures log and skip, never abort the job.
+- ☑ `POST/GET /api/db/{id}/analysis/quality-backfill` runs quality work as a
+  separate database-wide job. `force=false` fills missing cache entries;
+  `force=true` recomputes star counts, spatial/photometric metrics, and
+  pointing evidence. Fresh star counts and HFR replace stale scheduler values
+  in sequence grading. The job uses the background worker budget and yields
+  between frames to interactive work.
 - ☑ `tests/integration_import.rs`: 6 end-to-end tests with synthetic
   N.I.N.A.-style FITS (create→import→verify v23 rows, idempotent re-import,
   dry-run writes nothing, 403 without the management flag, missing-dir 400,
   concurrent import produces no duplicates).
-- ☑ Live-verified against real frames: create → import (4 frames) → chained
-  backfill over 2 targets → 4 persisted spatial-metric entries with real star
-  counts.
+- ☑ Import completion is independent from optional quality analysis; users can
+  browse and correct the new structure as soon as the header transaction ends.
 
 ---
 
@@ -156,11 +161,12 @@ All guarded by `require_database_management_allowed`.
   (button shows "Importing…" while its job runs).
 - ☑ `hooks/useImportJob.ts`: 1s poll while running; on running→finished
   invalidates `['databases']` + `['db', id]`; `describeImportProgress`
-  renders one-line stage text (scan counts, backfill target x/y, outcome
-  summary incl. dry-run/skipped counts).
+  renders one-line scan/import text and the dry-run/skipped outcome summary.
 - ☑ Progress panel lists created projects (name — targets, frames) on
-  completion. Backfill progress is shown inside the same panel (stage
-  `backfill`, target N/M).
+  completion.
+- ☑ Each database row exposes **Analyze Missing Quality** and **Rescan All
+  Quality**. The separate job restores its progress after the settings page is
+  reopened.
 - Follow-up: a Playwright e2e spec for the create flow (needs the release
   binary harness); time-gap-days option exposed in the form.
 
@@ -211,13 +217,14 @@ duplicate projects/targets with no confirmation.
   projects an import created (recognized by the `Imported by PSF Guard`
   description marker) with their targets/plans/rule weights/images —
   attached frames in pre-existing projects are never touched.
-- ☑ Backfill scans attached targets too (cached frames skip, cost ∝ new).
+- ☑ An opt-in import can queue changed targets in the general quality job;
+  cached frames skip unless a full rescan was requested.
 
 ## Phasing
 
 1. **P0** §1 bootstrap module + golden-schema test. ☑
 2. **P1** §2–§4 grouping + import engine + CLI (header-only, all Pending). ☑
-3. **P2** §5 create/import endpoints + progress + post-import backfill wiring. ☑
+3. **P2** §5 create/import endpoints + independent quality-job wiring. ☑
 4. **P3** §6 UI wizard + per-DB import button + progress. ☑
 5. **P4** §7 UI grouping edits + supporting write endpoints. ☑ (MVP: rename /
    move-target / merge; frame-level reassign is a follow-up)

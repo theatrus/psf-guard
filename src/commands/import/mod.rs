@@ -7,8 +7,8 @@
 //!
 //! Import is header-only and fast: `gradingStatus` starts Pending and star /
 //! quality metrics are intentionally absent from the metadata JSON (readers
-//! treat missing keys as None). The quality backfill is a separate pass —
-//! the server kicks its existing quality scan after an import job finishes.
+//! treat missing keys as None). Database-wide quality analysis is a separate,
+//! on-demand background job; imports may queue it but never wait for it.
 //!
 //! Idempotency: a frame whose basename already appears in any
 //! `acquiredimage.metadata` FileName is skipped, so re-running an import on a
@@ -98,11 +98,10 @@ pub struct ImportOutcome {
     pub project_summaries: Vec<ProjectSummary>,
     /// Existing targets that gained frames, for the preview/confirm UI.
     pub attach_summaries: Vec<AttachSummary>,
-    /// Target row ids created by this import (live runs only) — the server's
-    /// post-import quality backfill iterates these.
+    /// Target row ids created by this import (live runs only). An opt-in
+    /// database quality job can scan these after the import completes.
     pub created_target_ids: Vec<i32>,
-    /// Existing target ids that gained frames (live runs only) — backfill
-    /// scans these too (cached frames are skipped, so cost ∝ new frames).
+    /// Existing target ids that gained frames (live runs only).
     pub attached_target_ids: Vec<i32>,
 }
 
@@ -1052,7 +1051,7 @@ mod tests {
         ];
         let outcome = import_frames(&mut conn, frames, &ImportOptions::default()).unwrap();
         assert_eq!(outcome.imported, 3);
-        assert_eq!(outcome.projects_created, 1);
+        assert_eq!(outcome.projects_created, 2);
         assert_eq!(outcome.targets_created, 2);
         assert_eq!(outcome.templates_created, 2);
         assert_eq!(outcome.plans_created, 3);
@@ -1084,11 +1083,11 @@ mod tests {
             .unwrap();
         assert_eq!(epoch, 2);
 
-        // Rule weights exist for the project.
+        // Rule weights exist for both projects.
         let weights: i64 = conn
             .query_row("SELECT COUNT(*) FROM ruleweight", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(weights, 8);
+        assert_eq!(weights, 16);
 
         // Metadata parses and has no fabricated star metrics.
         let metadata: String = conn

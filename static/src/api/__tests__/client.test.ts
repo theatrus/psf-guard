@@ -127,3 +127,31 @@ describe('apiClient.getImageQuality', () => {
     await expect(apiClient.getImageQuality('test', 99999)).rejects.toThrow();
   });
 });
+
+describe('apiClient database errors', () => {
+  it('keeps the server error message for a rejected database path', async () => {
+    server.use(
+      http.post('/api/databases', () =>
+        HttpResponse.json(
+          {
+            success: false,
+            data: null,
+            error: 'opening database: Database file not found: /missing/scheduler.sqlite',
+            status: null,
+          },
+          { status: 400 }
+        )
+      )
+    );
+
+    await expect(
+      apiClient.addDatabase({
+        name: 'Missing',
+        db_path: '/missing/scheduler.sqlite',
+        image_dirs: ['/images'],
+      })
+    ).rejects.toThrow(
+      'opening database: Database file not found: /missing/scheduler.sqlite'
+    );
+  });
+});

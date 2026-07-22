@@ -43,8 +43,10 @@ points at your Target Scheduler database and image folders and gives you:
   database, so the scheduler knows to re-capture what you rejected.
 - **Start from plain folders** — no scheduler database? `create-db` bootstraps
   a fully-faithful Target Scheduler database and imports folders of FITS
-  lights, grouping them into projects and targets by rig, object, and session
-  gaps (correctable in the UI); quality analysis backfills automatically.
+  lights. Each target becomes one project by default; nearby, similarly dated
+  panel targets share a project when their names identify a likely mosaic.
+  A separate database action can fill missing quality data or rescan every
+  image for stars, background, clouds, obstructions, and pointing.
 - **Take out for stacking** — export the non-rejected lights into a
   WBPP-style folder tree (copy or instant hardlinks), or download them as a
   zip straight from the web UI. Rejects never leave the library.
@@ -422,6 +424,12 @@ scatter, field-relative offsets, quality scores, and Off Target / Pointing
 Jump / Pointing Drift / Unsolved evidence. **Select Recommended** opens a
 per-image review before any rejection is written. Stable multi-frame framing
 offsets remain advisory instead of being mistaken for lost tracking.
+
+Database settings also offer **Analyze Missing Quality** and **Rescan All
+Quality**. These low-priority jobs cover the whole database, persist progress
+while the settings page is closed, and refresh star counts, HFR, spatial and
+photometric metrics, and pointing evidence. FITS import stays header-only by
+default and never waits for this work.
 
 | Astrometry quality results | Guarded rejection review |
 |:--:|:--:|

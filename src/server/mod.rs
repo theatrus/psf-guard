@@ -6,6 +6,7 @@ pub mod extract;
 pub mod handlers;
 pub mod import_job;
 pub mod preview_queue;
+pub mod quality_backfill;
 pub mod slug;
 pub mod spatial_scan;
 pub mod stack_preview;
@@ -325,6 +326,11 @@ async fn run_server_internal(
         .route(
             "/analysis/quality-scan",
             post(handlers::start_spatial_scan).get(handlers::get_spatial_scan_progress),
+        )
+        .route(
+            "/analysis/quality-backfill",
+            post(handlers::start_quality_backfill_route)
+                .get(handlers::get_quality_backfill_progress),
         )
         .route(
             "/import",

@@ -860,7 +860,7 @@ pub async fn create_database_route(
         ctx.clone(),
         req.image_dirs.clone(),
         options,
-        req.backfill.unwrap_or(true),
+        req.backfill.unwrap_or(false),
     );
 
     Ok(Json(ApiResponse::success(CreateDatabaseResponse {
@@ -912,7 +912,7 @@ pub async fn start_import_route(
         ctx.0.clone(),
         dirs,
         options,
-        req.backfill.unwrap_or(true),
+        req.backfill.unwrap_or(false),
     );
     Ok(Json(ApiResponse::success(ImportStatusResponse {
         started,
@@ -966,7 +966,8 @@ fn unique_db_file(base: &std::path::Path, stem: &str) -> std::path::PathBuf {
 }
 
 /// Launch the singleton import job for one database: header scan → one-shot
-/// import transaction → chained quality-scan backfill over created targets.
+/// import transaction. Optional quality work starts afterwards with the
+/// background worker budget and does not delay import completion.
 /// Returns false when a job is already running for this database.
 fn spawn_import_job(
     state: &Arc<AppState>,
@@ -1031,24 +1032,17 @@ fn spawn_import_job(
                 target_ids.push(*id);
             }
         }
-        job::set_outcome(&job_store, outcome);
+        job::complete_import(&job_store, outcome);
 
         // New rows reference files the DB-based file cache hasn't seen; kick
         // the normal background refresh so the UI resolves them promptly.
         let _ = ctx.ensure_cache_available();
 
-        // Post-import metric backfill: chain the existing singleton quality
-        // scan over each created target. Failures are logged, never fatal —
-        // the user can always re-run Scan Quality from the SequenceView.
+        // Quality analysis is a general database maintenance job, not an
+        // import stage. An opt-in import only queues the changed targets.
         if backfill && !target_ids.is_empty() {
-            job::begin_backfill(&job_store, target_ids.len());
-            for target_id in target_ids {
-                job::backfill_target(&job_store, target_id);
-                run_backfill_for_target(&state, &ctx, target_id).await;
-                job::backfill_target_done(&job_store);
-            }
+            spawn_quality_backfill(&state, ctx.clone(), target_ids, false);
         }
-        job::finish(&job_store, None);
     });
     true
 }
@@ -1087,29 +1081,32 @@ fn run_import_blocking(
     imp::import_frames(&mut conn, frames, options)
 }
 
-/// Run (or wait for) the quality scan for one imported target. The scan is a
+/// Run (or wait for) the quality scan for one database target. The scan is a
 /// per-DB singleton, so this retries while a previous target's scan is still
 /// running, then waits for its own scan to complete.
-async fn run_backfill_for_target(
+async fn run_quality_scan_for_target(
     state: &Arc<AppState>,
     ctx: &Arc<DatabaseContext>,
     target_id: i32,
+    force: bool,
 ) {
     use crate::server::spatial_scan;
 
     let poll = tokio::time::Duration::from_millis(1500);
     loop {
-        let response = start_spatial_scan(
+        let response = start_spatial_scan_with_priority(
             State(state.clone()),
             DbContext(ctx.clone()),
             Json(SpatialScanRequest {
                 target_id,
                 filter_name: None,
                 force: false,
-                force_spatial: false,
-                force_astrometry: false,
+                force_spatial: force,
+                force_astrometry: force,
                 force_satellites: false,
             }),
+            crate::concurrency::Priority::Background,
+            false,
         )
         .await;
         match response {
@@ -1143,6 +1140,72 @@ async fn run_backfill_for_target(
             break;
         }
     }
+}
+
+fn spawn_quality_backfill(
+    state: &Arc<AppState>,
+    ctx: Arc<DatabaseContext>,
+    target_ids: Vec<i32>,
+    force: bool,
+) -> bool {
+    use crate::server::quality_backfill as job;
+
+    if !job::try_begin(&ctx.quality_backfill, force, target_ids.len()) {
+        return false;
+    }
+    if target_ids.is_empty() {
+        return true;
+    }
+
+    let state = Arc::clone(state);
+    tokio::spawn(async move {
+        tracing::info!(
+            "📐 Database quality {} started for db={} ({} targets)",
+            if force { "rescan" } else { "backfill" },
+            ctx.id,
+            target_ids.len()
+        );
+        for target_id in target_ids {
+            job::begin_target(&ctx.quality_backfill, target_id);
+            run_quality_scan_for_target(&state, &ctx, target_id, force).await;
+            job::finish_target(&ctx.quality_backfill);
+        }
+        job::finish(&ctx.quality_backfill);
+        tracing::info!("📐 Database quality work finished for db={}", ctx.id);
+    });
+    true
+}
+
+pub async fn start_quality_backfill_route(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Json(req): Json<QualityBackfillRequest>,
+) -> Result<Json<ApiResponse<QualityBackfillStatusResponse>>, AppError> {
+    let target_ids = {
+        let conn = ctx.db();
+        let conn = conn.lock().map_err(AppError::db)?;
+        Database::new(&conn)
+            .get_all_targets_with_project_info()
+            .map_err(AppError::db)?
+            .into_iter()
+            .map(|target| target.target.id)
+            .collect::<Vec<_>>()
+    };
+    let started = spawn_quality_backfill(&state, ctx.0.clone(), target_ids, req.force);
+    Ok(Json(ApiResponse::success(QualityBackfillStatusResponse {
+        started,
+        progress: crate::server::quality_backfill::snapshot(&ctx.quality_backfill),
+    })))
+}
+
+pub async fn get_quality_backfill_progress(
+    ctx: DbContext,
+) -> Result<Json<ApiResponse<QualityBackfillStatusResponse>>, AppError> {
+    let progress = crate::server::quality_backfill::snapshot(&ctx.quality_backfill);
+    Ok(Json(ApiResponse::success(QualityBackfillStatusResponse {
+        started: progress.running,
+        progress,
+    })))
 }
 
 pub async fn refresh_file_cache(
@@ -2854,8 +2917,8 @@ pub async fn analyze_sequence(
         )));
     }
 
-    // Extract metrics and group by filter. Spatial metrics from a prior
-    // background scan are merged in when the DB metadata lacks them.
+    // Extract metrics and group by filter. A prior quality scan supplies fresh
+    // star/HFR measurements plus the spatial fields N.I.N.A. does not store.
     crate::server::spatial_scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
     let spatial_store = ctx.spatial_metrics.clone();
     let astrometry_cache_dir = ctx.cache_dir_path.clone();
@@ -3196,22 +3259,22 @@ pub(crate) fn merge_photometric_signals(
     }
 }
 
-/// Fill spatial metric fields from the per-DB scan store when the DB
-/// metadata did not provide them (N.I.N.A. never does).
+/// Merge fresh detector and spatial results from the per-DB quality cache.
+/// A quality scan is the source of truth for star count and HFR once present;
+/// the spatial fields fill values that N.I.N.A. does not store.
 pub(crate) fn merge_spatial_metrics(
     metrics: &mut crate::sequence_analysis::ImageMetrics,
     store: &crate::server::spatial_scan::SharedSpatialStore,
     metadata_json: &str,
 ) {
-    if metrics.dead_cell_fraction.is_some() && metrics.bg_cell_spread.is_some() {
-        return;
-    }
     let Some(file_only) = filename_from_metadata(metadata_json) else {
         return;
     };
     if let Some(entry) =
         crate::server::spatial_scan::valid_entry(store, metrics.image_id, &file_only)
     {
+        metrics.star_count = Some(entry.star_count as f64);
+        metrics.hfr = (entry.avg_hfr > 0.0).then_some(entry.avg_hfr);
         if metrics.dead_cell_fraction.is_none() {
             metrics.dead_cell_fraction = entry.dead_cell_fraction;
         }
@@ -3261,6 +3324,23 @@ pub async fn start_spatial_scan(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Json(req): Json<SpatialScanRequest>,
+) -> Result<Json<ApiResponse<SpatialScanStatusResponse>>, AppError> {
+    start_spatial_scan_with_priority(
+        State(state),
+        ctx,
+        Json(req),
+        crate::concurrency::Priority::Interactive,
+        true,
+    )
+    .await
+}
+
+async fn start_spatial_scan_with_priority(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Json(req): Json<SpatialScanRequest>,
+    priority: crate::concurrency::Priority,
+    include_satellites: bool,
 ) -> Result<Json<ApiResponse<SpatialScanStatusResponse>>, AppError> {
     use crate::server::spatial_scan as scan;
 
@@ -3321,8 +3401,8 @@ pub async fn start_spatial_scan(
         let Some(file_only) = filename_from_metadata(&img.metadata) else {
             continue;
         };
-        let spatial_cached =
-            !force_spatial && scan::valid_entry(&ctx.spatial_metrics, img.id, &file_only).is_some();
+        let spatial_cached = !force_spatial
+            && scan::valid_quality_entry(&ctx.spatial_metrics, img.id, &file_only).is_some();
         if spatial_cached {
             skipped_cached += 1;
         }
@@ -3342,11 +3422,12 @@ pub async fn start_spatial_scan(
                     == Some(file_only.as_str())
             });
         let astrometry_cached = cached_astrometry.is_some();
-        let satellite_cached = !force_satellites
-            && cached_astrometry.as_ref().is_some_and(|analysis| {
-                crate::satellites::persisted_analysis(&ctx.cache_dir_path, img.id, analysis)
-                    .is_some()
-            });
+        let satellite_cached = !include_satellites
+            || (!force_satellites
+                && cached_astrometry.as_ref().is_some_and(|analysis| {
+                    crate::satellites::persisted_analysis(&ctx.cache_dir_path, img.id, analysis)
+                        .is_some()
+                }));
         if !spatial_cached || !astrometry_cached || !satellite_cached {
             work.push((
                 img,
@@ -3400,7 +3481,9 @@ pub async fn start_spatial_scan(
     // Mark this as an interactive job for its whole lifetime so background
     // pre-generation yields cores + memory to it. Moved into the blocking task
     // and dropped when the scan returns (or panics).
-    let interactive_guard = state.begin_interactive_job();
+    let interactive_guard = (priority == crate::concurrency::Priority::Interactive)
+        .then(|| state.begin_interactive_job());
+    let scheduling_state = Arc::clone(&state);
     tokio::task::spawn_blocking(move || {
         let _interactive_guard = interactive_guard;
         // Any panic below would be silently swallowed by tokio (the join
@@ -3454,12 +3537,15 @@ pub async fn start_spatial_scan(
             let frame_pixels = spatial_items
                 .first()
                 .and_then(|it| crate::concurrency::probe_frame_pixels(&it.fits_path));
-            let budget = crate::concurrency::plan_workers(
-                None,
-                &worker_policy,
-                crate::concurrency::Priority::Interactive,
-                frame_pixels,
-            );
+            let budget =
+                crate::concurrency::plan_workers(None, &worker_policy, priority, frame_pixels);
+            let wait_for_turn = || {
+                while priority == crate::concurrency::Priority::Background
+                    && scheduling_state.interactive_job_active()
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+            };
             if !spatial_items.is_empty() {
                 tracing::info!(
                     "📐 Spatial scan concurrency: {} worker(s) — {}",
@@ -3471,6 +3557,7 @@ pub async fn start_spatial_scan(
                     &ctx_arc.cache_dir_path,
                     &spatial_items,
                     budget.workers,
+                    &wait_for_turn,
                 );
             }
 
@@ -3484,6 +3571,7 @@ pub async fn start_spatial_scan(
                     astrometry_items.len(),
                 );
                 for (item, expected, _, need_astrometry, need_satellite) in astrometry_items {
+                    wait_for_turn();
                     crate::server::spatial_scan::begin_astrometry_item(
                         &ctx_arc.spatial_metrics,
                         &item.filename,

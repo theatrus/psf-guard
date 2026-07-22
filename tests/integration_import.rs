@@ -214,7 +214,7 @@ async fn create_database_imports_fits_folders() {
     assert_eq!(progress["stage"], "complete", "progress: {progress}");
     let outcome = &progress["outcome"];
     assert_eq!(outcome["imported"], 3);
-    assert_eq!(outcome["projects_created"], 1);
+    assert_eq!(outcome["projects_created"], 2);
     assert_eq!(outcome["targets_created"], 2);
     assert_eq!(outcome["dry_run"], false);
 
@@ -228,7 +228,7 @@ async fn create_database_imports_fits_folders() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let projects = body["data"].as_array().unwrap();
-    assert_eq!(projects.len(), 1, "projects: {body}");
+    assert_eq!(projects.len(), 2, "projects: {body}");
 
     // And the file itself is a real v23 Target Scheduler database.
     let conn = rusqlite::Connection::open(&db_path).unwrap();
@@ -481,17 +481,17 @@ async fn organize_rename_move_and_merge() {
     let dir = tempdir().unwrap();
     let images = dir.path().join("lights");
     std::fs::create_dir_all(&images).unwrap();
-    // Two sessions 60 days apart → two projects (same rig, same object name).
+    // Two distinct targets become two projects by default.
     write_fits(
         &images.join("veil_ha_0001.fits"),
-        "Veil",
+        "Veil East",
         "Ha",
         "2026-01-01T02:00:00.000",
         311.0,
     );
     write_fits(
         &images.join("veil_ha_0101.fits"),
-        "Veil",
+        "Veil West",
         "Ha",
         "2026-03-02T02:00:00.000",
         311.0,

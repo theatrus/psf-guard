@@ -659,15 +659,12 @@ export interface ImportOutcome {
 /** Progress of the singleton per-DB import job (poll ~1s while running). */
 export interface ImportJobProgress {
   running: boolean;
-  /** scanning | importing | backfill | complete | error | "" (never ran) */
+  /** scanning | importing | complete | error | "" (never ran) */
   stage: string;
   image_dirs: string[];
   total_files: number;
   scanned_files: number;
   outcome?: ImportOutcome | null;
-  backfill_total: number;
-  backfill_done: number;
-  backfill_current_target?: number | null;
   started_at?: number | null;
   finished_at?: number | null;
   error?: string | null;
@@ -941,6 +938,25 @@ export interface SpatialScanRequest {
   force_spatial?: boolean;
   force_astrometry?: boolean;
   force_satellites?: boolean;
+}
+
+export interface QualityBackfillProgress {
+  running: boolean;
+  force: boolean;
+  total_targets: number;
+  processed_targets: number;
+  current_target_id: number | null;
+  started_at: number | null;
+  finished_at: number | null;
+}
+
+export interface QualityBackfillStatus {
+  started: boolean;
+  progress: QualityBackfillProgress;
+}
+
+export interface QualityBackfillRequest {
+  force?: boolean;
 }
 
 export interface SequenceSummary {

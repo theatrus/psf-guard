@@ -64,6 +64,25 @@ export const handlers = [
   http.post('/api/db/:dbId/analysis/quality-scan', () => {
     return HttpResponse.json(idleSpatialScan);
   }),
+  http.get('/api/db/:dbId/analysis/quality-backfill', () =>
+    HttpResponse.json({
+      success: true,
+      data: {
+        started: false,
+        progress: {
+          running: false,
+          force: false,
+          total_targets: 0,
+          processed_targets: 0,
+          current_target_id: null,
+          started_at: null,
+          finished_at: null,
+        },
+      },
+      error: null,
+      status: 'ready',
+    })
+  ),
 
   // Image quality endpoint
   http.get('/api/db/:dbId/analysis/image/:imageId', () => {

@@ -97,6 +97,11 @@ fn create_test_app(conn: Connection, cache_dir: &std::path::Path) -> (Router, Ar
         .route(
             "/analysis/spatial-scan",
             post(handlers::start_spatial_scan).get(handlers::get_spatial_scan_progress),
+        )
+        .route(
+            "/analysis/quality-backfill",
+            post(handlers::start_quality_backfill_route)
+                .get(handlers::get_quality_backfill_progress),
         );
 
     let app = Router::new()
@@ -213,6 +218,40 @@ async fn spatial_scan_runs_and_reports_missing_files_as_errors() {
 }
 
 #[tokio::test]
+async fn database_quality_backfill_runs_as_a_separate_job() {
+    let conn = Connection::open_in_memory().unwrap();
+    create_test_schema(&conn);
+    seed_target_with_images(&conn, 2);
+    let tmp = tempfile::tempdir().unwrap();
+    let (app, state) = create_test_app(conn, tmp.path());
+
+    let (status, json) = post_json(
+        app.clone(),
+        "/api/db/test/analysis/quality-backfill",
+        &serde_json::json!({"force": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {json}");
+    assert_eq!(json["data"]["started"], true);
+    assert_eq!(json["data"]["progress"]["total_targets"], 1);
+    assert_eq!(json["data"]["progress"]["force"], true);
+
+    let ctx = state.get_database("test").unwrap();
+    for _ in 0..100 {
+        if !ctx.quality_backfill.read().unwrap().progress.running {
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    }
+
+    let (status, json) = get_json(app, "/api/db/test/analysis/quality-backfill").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["progress"]["running"], false);
+    assert_eq!(json["data"]["progress"]["processed_targets"], 1);
+    assert!(json["data"]["progress"]["finished_at"].is_i64());
+}
+
+#[tokio::test]
 async fn scan_start_rejects_unknown_target() {
     let conn = Connection::open_in_memory().unwrap();
     create_test_schema(&conn);
@@ -259,6 +298,14 @@ async fn scanned_metrics_merge_into_sequence_analysis() {
     assert_eq!(status, StatusCode::OK, "body: {}", json);
     let sequences = json["data"]["sequences"].as_array().unwrap();
     assert_eq!(sequences.len(), 1);
+    assert_eq!(
+        sequences[0]["reference_values"]["best_star_count"], 4000.0,
+        "quality cache should replace stale N.I.N.A. star counts"
+    );
+    assert_eq!(
+        sequences[0]["reference_values"]["best_hfr"], 2.5,
+        "quality cache should supply freshly measured HFR"
+    );
     let images = sequences[0]["images"].as_array().unwrap();
 
     let occluded = images

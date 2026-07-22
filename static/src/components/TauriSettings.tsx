@@ -5,6 +5,7 @@ import type { DbEntry, DbRegistry } from '../utils/tauri';
 import { apiClient } from '../api/client';
 import type { DatabaseSummary } from '../api/types';
 import { describeImportProgress, useImportJob } from '../hooks/useImportJob';
+import QualityBackfillControls from './QualityBackfillControls';
 import './TauriSettings.css';
 
 interface TauriSettingsProps {
@@ -54,6 +55,8 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
   // true = "create a brand-new TS database from image folders" flow (no
   // existing .sqlite required; the server bootstraps the full TS schema).
   const [createMode, setCreateMode] = useState(false);
+  const [createAnalyzeQuality, setCreateAnalyzeQuality] = useState(false);
+  const [importAnalyzeQuality, setImportAnalyzeQuality] = useState(false);
 
   // Slug of the database whose import job we're currently tracking; drives
   // the 1s progress poll + the progress panel at the bottom of the modal.
@@ -132,6 +135,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setFormImageDirs([]);
     setShowAddForm(false);
     setCreateMode(false);
+    setCreateAnalyzeQuality(false);
   };
 
   const startEdit = (entry: DbEntry) => {
@@ -150,6 +154,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setFormImageDirs([]);
     setShowAddForm(true);
     setCreateMode(true);
+    setCreateAnalyzeQuality(false);
   };
 
   const startAdd = async () => {
@@ -232,6 +237,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
         const created = await apiClient.createDatabaseFromImages({
           name,
           image_dirs: formImageDirs,
+          backfill: createAnalyzeQuality,
         });
         queryClient.invalidateQueries({ queryKey: ['databases'] });
         queryClient.invalidateQueries({ queryKey: ['db'] });
@@ -309,6 +315,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     }
     setIsApplying(true);
     setStatusMessage('');
+    setImportAnalyzeQuality(false);
     try {
       const status = await apiClient.startImport(entry.id, { dry_run: true, backfill: false });
       setImportDbId(entry.id);
@@ -333,7 +340,10 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setConfirmImport(null);
     setIsApplying(true);
     try {
-      await apiClient.startImport(entry.id, { dry_run: false });
+      await apiClient.startImport(entry.id, {
+        dry_run: false,
+        backfill: importAnalyzeQuality,
+      });
       setStatusMessage(`Importing images into ${entry.name}…`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -455,6 +465,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                       {entry.image_dirs.join(', ')}
                     </div>
                   )}
+                  <QualityBackfillControls dbId={entry.id} />
                 </div>
                 {managementAllowed && (
                   <div className="db-row-actions">
@@ -538,7 +549,26 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                       importDbId === confirmImport.id && (
                         <div className="modal-buttons import-confirm-buttons">
                           {importProgress.outcome.imported > 0 ? (
-                            <>
+                            <div className="import-confirm-content">
+                              <label className="quality-analysis-option">
+                                <input
+                                  type="checkbox"
+                                  checked={importAnalyzeQuality}
+                                  onChange={(event) =>
+                                    setImportAnalyzeQuality(event.target.checked)
+                                  }
+                                />
+                                <span>
+                                  <strong>Queue background quality analysis</strong>
+                                  <small>
+                                    Reads every image to measure stars, background, clouds,
+                                    obstructions, and pointing. This can take a long time,
+                                    especially in a debug build. You can run it later from this
+                                    database&apos;s settings.
+                                  </small>
+                                </span>
+                              </label>
+                              <div className="modal-buttons import-action-buttons">
                               <button
                                 className="save-button"
                                 onClick={handleConfirmImport}
@@ -556,7 +586,8 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                               >
                                 Cancel
                               </button>
-                            </>
+                              </div>
+                            </div>
                           ) : (
                             <span className="muted">
                               Nothing new to import — every frame is already in the database.
@@ -583,10 +614,11 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
               {createMode && (
                 <p className="muted">
                   Creates a brand-new Target Scheduler database and imports the
-                  selected folders. Frames are grouped into projects and
-                  targets by telescope, camera, focal length, object, and
-                  session gaps — you can rename or reorganize afterwards.
-                  Quality analysis runs automatically once the import finishes.
+                  selected folders. Each target gets its own project. Nearby,
+                  similarly dated panels with matching panel names share a
+                  mosaic project. You can rename or reorganize them afterwards.
+                  The import reads headers only; pixel-based quality work is a
+                  separate option below.
                 </p>
               )}
 
@@ -670,6 +702,24 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                   </div>
                 )}
               </div>
+
+              {createMode && (
+                <label className="quality-analysis-option">
+                  <input
+                    type="checkbox"
+                    checked={createAnalyzeQuality}
+                    onChange={(event) => setCreateAnalyzeQuality(event.target.checked)}
+                  />
+                  <span>
+                    <strong>Queue background quality analysis</strong>
+                    <small>
+                      Reads every image to measure stars, background, clouds, obstructions,
+                      and pointing. This can take a long time, especially in a debug build.
+                      You can run it later from this database&apos;s settings.
+                    </small>
+                  </span>
+                </label>
+              )}
 
               <div className="modal-buttons">
                 <button

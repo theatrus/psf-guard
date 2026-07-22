@@ -7,11 +7,8 @@ import type { ImportStatus } from '../api/types';
  * Monitor the singleton per-DB FITS import job (started via
  * `apiClient.createDatabaseFromImages` or `apiClient.startImport`).
  *
- * Polls at 1s while the job runs (same pattern as useSpatialScan). When the
- * job transitions running → finished, every per-DB query plus the databases
- * listing is invalidated so overviews pick up the imported projects; the
- * backfill stage additionally feeds sequence-analysis, which is covered by
- * the blanket per-DB invalidation.
+ * Polls at 1s while the import runs and invalidates database views when it
+ * completes. Database-wide quality work has its own job and hook.
  */
 export function useImportJob(dbId: string | null | undefined) {
   const queryClient = useQueryClient();
@@ -53,8 +50,6 @@ export function describeImportProgress(
       return `Scanning headers… ${progress.scanned_files}/${progress.total_files}`;
     case 'importing':
       return `Importing ${progress.total_files} frame(s) into the database…`;
-    case 'backfill':
-      return `Analyzing quality… target ${progress.backfill_done + 1}/${progress.backfill_total}`;
     case 'complete': {
       const o = progress.outcome;
       if (!o) return 'Import complete.';
