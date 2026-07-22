@@ -91,6 +91,7 @@ fn write_fits(path: &std::path::Path, object: &str, filter: &str, date_obs: &str
     card(&mut header, "OFFSET  =                   30");
     card(&mut header, "XBINNING=                    1");
     card(&mut header, "YBINNING=                    1");
+    card(&mut header, "READOUTM=                    2");
     card(&mut header, &format!("RA      = {ra:>20.6}"));
     card(&mut header, "DEC     =            41.268700");
     card(&mut header, "TELESCOP= 'TestScope'");
@@ -541,6 +542,32 @@ async fn project_scheduler_views_and_updates_plans() {
         body["data"]["targets"][0]["exposure_plans"][0]["filter_name"],
         "Ha"
     );
+    let imported_template = &body["data"]["exposure_templates"][0];
+    assert_eq!(imported_template["filter_name"], "Ha");
+    assert_eq!(imported_template["gain"], 100);
+    assert_eq!(imported_template["offset"], 30);
+    assert_eq!(imported_template["bin"], 1);
+    assert_eq!(imported_template["readout_mode"], 2);
+    assert_eq!(imported_template["default_exposure"], 300.0);
+    assert_eq!(imported_template["plan_count"], 1);
+    let imported_template_id = imported_template["id"].as_i64().unwrap();
+
+    // A new plan can select the exact shared template instead of asking the
+    // server to infer one from a duplicate set of capture fields.
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        &format!("/api/db/{slug}/targets/{target_id}/exposure-plans"),
+        Some(serde_json::json!({
+            "exposure_template_id": imported_template_id,
+            "exposure": 120.0,
+            "desired": 5,
+            "enabled": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "template reuse failed: {body}");
+    assert_eq!(body["data"]["exposure_template_id"], imported_template_id);
 
     let (status, body) = json_request(
         build_app(state.clone()),

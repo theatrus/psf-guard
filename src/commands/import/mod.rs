@@ -1147,6 +1147,46 @@ mod tests {
     }
 
     #[test]
+    fn derives_exposure_template_capture_settings_and_default_from_frames() {
+        let mut conn = fresh_conn();
+        let mut frames = vec![
+            light("M31", "Ha", 1_000),
+            light("M31", "Ha", 2_000),
+            light("M31", "Ha", 3_000),
+        ];
+        frames[0].exposure_s = Some(180.0);
+        frames[1].exposure_s = Some(300.0);
+        frames[2].exposure_s = Some(300.0);
+        for frame in &mut frames {
+            frame.gain = Some(120);
+            frame.offset = Some(25);
+            frame.binning_x = Some(2);
+            frame.binning_y = Some(2);
+            frame.readout_mode = Some(3);
+        }
+
+        import_frames(&mut conn, frames, &ImportOptions::default()).unwrap();
+        let template: (String, i64, i64, i64, i64, f64) = conn
+            .query_row(
+                "SELECT filtername, gain, offset, bin, readoutmode, defaultexposure
+                 FROM exposuretemplate",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(template, ("Ha".into(), 120, 25, 2, 3, 300.0));
+    }
+
+    #[test]
     fn dry_run_rolls_back() {
         let mut conn = fresh_conn();
         let options = ImportOptions {

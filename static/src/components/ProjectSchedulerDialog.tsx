@@ -4,6 +4,7 @@ import { apiClient } from '../api/client';
 import type {
   CreateExposurePlanRequest,
   ExposurePlanDetails,
+  ExposureTemplateDetails,
   ProjectSchedulerDetails,
   SchedulerTargetDetails,
 } from '../api/types';
@@ -41,6 +42,46 @@ function optionalNumber(value: string): number | undefined {
 
 function templateSetting(label: string, value: number | null) {
   return `${label} ${value == null || value < 0 ? 'default' : value}`;
+}
+
+function TemplateSection({ templates }: { templates: ExposureTemplateDetails[] }) {
+  return (
+    <section className="scheduler-section">
+      <div className="scheduler-section-heading">
+        <div>
+          <h3>Shared exposure templates</h3>
+          <span className="scheduler-muted">Profile-wide capture and scheduling settings used by exposure plans.</span>
+        </div>
+        <span className="scheduler-muted">{templates.length} template{templates.length === 1 ? '' : 's'}</span>
+      </div>
+      {templates.length > 0 ? (
+        <div className="scheduler-table-wrap">
+          <table className="scheduler-plans scheduler-templates">
+            <thead><tr><th>Name</th><th>Filter</th><th>Default</th><th>Capture</th><th>Limits</th><th>Moon</th><th>Timing</th><th>Plans</th></tr></thead>
+            <tbody>{templates.map((template) => (
+              <tr key={template.id}>
+                <td><strong>{template.name}</strong><small>#{template.id}</small></td>
+                <td>{template.filter_name}</td>
+                <td>{template.default_exposure}s</td>
+                <td>{[
+                  templateSetting('G', template.gain),
+                  templateSetting('O', template.offset),
+                  template.bin != null && `${template.bin}×${template.bin}`,
+                  templateSetting('R', template.readout_mode),
+                ].filter(Boolean).join(' · ')}</td>
+                <td>Twilight {template.twilight_level} · humidity {template.maximum_humidity}</td>
+                <td>{template.moon_avoidance_enabled
+                  ? `${template.moon_avoidance_separation}° / ${template.moon_avoidance_width}° · relax ${template.moon_relax_scale} (${template.moon_relax_min_altitude}°–${template.moon_relax_max_altitude}°)${template.moon_down_enabled ? ' · down only' : ''}`
+                  : 'Avoidance off'}</td>
+                <td>{template.dither_every < 0 ? 'Project dither' : `Dither ${template.dither_every}`} · {template.minutes_offset >= 0 ? '+' : ''}{template.minutes_offset} min</td>
+                <td>{template.plan_count}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      ) : <p className="scheduler-empty">No exposure templates in this profile.</p>}
+    </section>
+  );
 }
 
 function ProjectForm({
@@ -184,9 +225,33 @@ const EMPTY_PLAN: CreateExposurePlanRequest = {
   enabled: true,
 };
 
-function NewPlanForm({ target, dbId, reload, onDone }: { target: SchedulerTargetDetails; dbId: string; reload: () => Promise<unknown>; onDone: () => void }) {
+function NewPlanForm({ target, templates, dbId, reload, onDone }: { target: SchedulerTargetDetails; templates: ExposureTemplateDetails[]; dbId: string; reload: () => Promise<unknown>; onDone: () => void }) {
   const [form, setForm] = useState(EMPTY_PLAN);
   const [status, setStatus] = useState('');
+  const selectedTemplate = templates.find((template) => template.id === form.exposure_template_id);
+  const chooseTemplate = (value: string) => {
+    if (value === '') {
+      setForm({
+        ...EMPTY_PLAN,
+        exposure: form.exposure,
+        desired: form.desired,
+        enabled: form.enabled,
+      });
+      return;
+    }
+    const template = templates.find((candidate) => candidate.id === Number(value));
+    if (!template) return;
+    setForm({
+      ...form,
+      exposure_template_id: template.id,
+      template_name: template.name,
+      filter_name: template.filter_name,
+      gain: template.gain ?? undefined,
+      offset: template.offset ?? undefined,
+      bin: template.bin ?? 1,
+      readout_mode: template.readout_mode ?? undefined,
+    });
+  };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setStatus('Creating…');
@@ -202,13 +267,15 @@ function NewPlanForm({ target, dbId, reload, onDone }: { target: SchedulerTarget
     <form className="scheduler-new-plan" onSubmit={submit} noValidate>
       <h5>New exposure plan</h5>
       <div className="scheduler-fields">
-        <label>Filter<input required value={form.filter_name} onChange={(e) => setForm({ ...form, filter_name: e.target.value })} /></label>
+        <label className="scheduler-wide">Exposure template<select aria-label="Exposure template" value={form.exposure_template_id ?? ''} onChange={(e) => chooseTemplate(e.target.value)}><option value="">Match settings or create a template</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name} · {template.filter_name} · {template.default_exposure}s</option>)}</select></label>
+        <label>Template name<input value={form.template_name ?? ''} disabled={Boolean(selectedTemplate)} onChange={(e) => setForm({ ...form, template_name: e.target.value || undefined })} /></label>
+        <label>Filter<input required value={form.filter_name ?? ''} disabled={Boolean(selectedTemplate)} onChange={(e) => setForm({ ...form, filter_name: e.target.value })} /></label>
         <label>Exposure (s)<input required type="number" min="0.001" step="0.1" value={form.exposure} onChange={(e) => setForm({ ...form, exposure: e.target.valueAsNumber })} /></label>
         <label>Desired<input required type="number" min="0" value={form.desired} onChange={(e) => setForm({ ...form, desired: e.target.valueAsNumber })} /></label>
-        <label>Gain<input type="number" value={form.gain ?? ''} onChange={(e) => setForm({ ...form, gain: optionalNumber(e.target.value) })} /></label>
-        <label>Offset<input type="number" value={form.offset ?? ''} onChange={(e) => setForm({ ...form, offset: optionalNumber(e.target.value) })} /></label>
-        <label>Bin<input required type="number" min="1" value={form.bin} onChange={(e) => setForm({ ...form, bin: e.target.valueAsNumber })} /></label>
-        <label>Readout mode<input type="number" value={form.readout_mode ?? ''} onChange={(e) => setForm({ ...form, readout_mode: optionalNumber(e.target.value) })} /></label>
+        <label>Gain<input type="number" value={form.gain ?? ''} disabled={Boolean(selectedTemplate)} onChange={(e) => setForm({ ...form, gain: optionalNumber(e.target.value) })} /></label>
+        <label>Offset<input type="number" value={form.offset ?? ''} disabled={Boolean(selectedTemplate)} onChange={(e) => setForm({ ...form, offset: optionalNumber(e.target.value) })} /></label>
+        <label>Bin<input required type="number" min="1" value={form.bin ?? 1} disabled={Boolean(selectedTemplate)} onChange={(e) => setForm({ ...form, bin: e.target.valueAsNumber })} /></label>
+        <label>Readout mode<input type="number" value={form.readout_mode ?? ''} disabled={Boolean(selectedTemplate)} onChange={(e) => setForm({ ...form, readout_mode: optionalNumber(e.target.value) })} /></label>
         <label className="scheduler-check"><input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} /> Enabled</label>
       </div>
       <div className="scheduler-actions"><span role="status">{status}</span><button type="button" onClick={onDone}>Cancel</button><button type="submit">Create plan</button></div>
@@ -216,7 +283,7 @@ function NewPlanForm({ target, dbId, reload, onDone }: { target: SchedulerTarget
   );
 }
 
-function TargetSection({ target, dbId, canEdit, reload }: { target: SchedulerTargetDetails; dbId: string; canEdit: boolean; reload: () => Promise<unknown> }) {
+function TargetSection({ target, templates, dbId, canEdit, reload }: { target: SchedulerTargetDetails; templates: ExposureTemplateDetails[]; dbId: string; canEdit: boolean; reload: () => Promise<unknown> }) {
   const [form, setForm] = useState(target);
   const [adding, setAdding] = useState(false);
   const [status, setStatus] = useState('');
@@ -257,7 +324,7 @@ function TargetSection({ target, dbId, canEdit, reload }: { target: SchedulerTar
         {target.exposure_plans.length > 0 ? (
           <div className="scheduler-table-wrap"><table className="scheduler-plans"><thead><tr><th>Filter</th><th>Seconds</th><th>Desired</th><th>Acquired</th><th>Accepted</th><th>On</th><th>Template</th>{canEdit && <th />}</tr></thead><tbody>{target.exposure_plans.map((plan) => <PlanRow key={plan.id} plan={plan} dbId={dbId} canEdit={canEdit} reload={reload} />)}</tbody></table></div>
         ) : <p className="scheduler-empty">No exposure plans.</p>}
-        {adding && <NewPlanForm target={target} dbId={dbId} reload={reload} onDone={() => setAdding(false)} />}
+        {adding && <NewPlanForm target={target} templates={templates} dbId={dbId} reload={reload} onDone={() => setAdding(false)} />}
       </div>
     </details>
   );
@@ -283,8 +350,9 @@ export default function ProjectSchedulerDialog({ open, dbId, projectId, projectN
       {query.data && (
         <div className="scheduler-content">
           <ProjectForm project={query.data} dbId={dbId} canEdit={canEdit} reload={reload} />
+          <TemplateSection templates={query.data.exposure_templates ?? []} />
           <div className="scheduler-targets-heading"><h3>Targets and coordinates</h3><span>{query.data.targets.length} target{query.data.targets.length === 1 ? '' : 's'}</span></div>
-          {query.data.targets.map((target) => <TargetSection key={target.id} target={target} dbId={dbId} canEdit={canEdit} reload={reload} />)}
+          {query.data.targets.map((target) => <TargetSection key={target.id} target={target} templates={query.data.exposure_templates ?? []} dbId={dbId} canEdit={canEdit} reload={reload} />)}
           {query.data.targets.length === 0 && <p className="scheduler-empty">This project has no targets.</p>}
         </div>
       )}

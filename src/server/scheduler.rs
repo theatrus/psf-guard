@@ -36,7 +36,35 @@ pub struct ProjectSchedulerResponse {
     pub dither_every: i32,
     pub enable_grader: bool,
     pub is_mosaic: bool,
+    /// All shared exposure templates for this project's Target Scheduler
+    /// profile, plus any legacy template already linked to this project.
+    pub exposure_templates: Vec<ExposureTemplateResponse>,
     pub targets: Vec<SchedulerTargetResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExposureTemplateResponse {
+    pub id: i32,
+    pub profile_id: String,
+    pub name: String,
+    pub filter_name: String,
+    pub gain: Option<i32>,
+    pub offset: Option<i32>,
+    pub bin: Option<i32>,
+    pub readout_mode: Option<i32>,
+    pub twilight_level: i32,
+    pub moon_avoidance_enabled: bool,
+    pub moon_avoidance_separation: f64,
+    pub moon_avoidance_width: i32,
+    pub maximum_humidity: f64,
+    pub default_exposure: f64,
+    pub moon_relax_scale: f64,
+    pub moon_relax_max_altitude: f64,
+    pub moon_relax_min_altitude: f64,
+    pub moon_down_enabled: bool,
+    pub dither_every: i32,
+    pub minutes_offset: i32,
+    pub plan_count: i32,
 }
 
 #[derive(Debug, Serialize)]
@@ -71,15 +99,20 @@ pub struct ExposurePlanResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateExposurePlanRequest {
-    pub filter_name: String,
+    /// Reuse this exact profile-scoped template. When absent, the settings
+    /// below match an existing template or create a new one.
+    #[serde(default)]
+    pub exposure_template_id: Option<i32>,
+    #[serde(default)]
+    pub filter_name: Option<String>,
     #[serde(default)]
     pub template_name: Option<String>,
     #[serde(default)]
     pub gain: Option<i32>,
     #[serde(default)]
     pub offset: Option<i32>,
-    #[serde(default = "default_bin")]
-    pub bin: i32,
+    #[serde(default)]
+    pub bin: Option<i32>,
     #[serde(default)]
     pub readout_mode: Option<i32>,
     pub exposure: f64,
@@ -93,10 +126,6 @@ pub struct UpdateExposurePlanRequest {
     pub exposure: f64,
     pub desired: i32,
     pub enabled: bool,
-}
-
-fn default_bin() -> i32 {
-    1
 }
 
 fn default_true() -> bool {
@@ -157,10 +186,72 @@ fn project_details(
             dither_every: row.get(16)?,
             enable_grader: row.get::<_, i32>(17)? != 0,
             is_mosaic: row.get::<_, i32>(18)? != 0,
+            exposure_templates: Vec::new(),
             targets: Vec::new(),
         })
     })
     .optional()
+}
+
+fn templates_for_project(
+    conn: &Connection,
+    profile_id: &str,
+    project_id: i32,
+) -> rusqlite::Result<Vec<ExposureTemplateResponse>> {
+    let mut stmt = conn.prepare(
+        "SELECT et.Id, et.profileId, et.name, et.filtername,
+                et.gain, et.offset, et.bin, et.readoutmode,
+                COALESCE(et.twilightlevel, 0),
+                COALESCE(et.moonavoidanceenabled, 0),
+                COALESCE(et.moonavoidanceseparation, 60),
+                COALESCE(et.moonavoidancewidth, 7),
+                COALESCE(et.maximumhumidity, 0),
+                COALESCE(et.defaultexposure, 60),
+                COALESCE(et.moonrelaxscale, 0),
+                COALESCE(et.moonrelaxmaxaltitude, 5),
+                COALESCE(et.moonrelaxminaltitude, -15),
+                COALESCE(et.moondownenabled, 0),
+                COALESCE(et.ditherevery, -1),
+                COALESCE(et.minutesOffset, 0),
+                COUNT(ep.Id)
+         FROM exposuretemplate et
+         LEFT JOIN exposureplan ep ON ep.exposureTemplateId = et.Id
+         WHERE et.profileId = ?1
+            OR EXISTS (
+                SELECT 1 FROM exposureplan linked_ep
+                JOIN target linked_target ON linked_target.Id = linked_ep.targetid
+                WHERE linked_ep.exposureTemplateId = et.Id
+                  AND linked_target.projectid = ?2
+            )
+         GROUP BY et.Id
+         ORDER BY et.filtername, et.name, et.Id",
+    )?;
+    stmt.query_map(params![profile_id, project_id], |row| {
+        Ok(ExposureTemplateResponse {
+            id: row.get(0)?,
+            profile_id: row.get(1)?,
+            name: row.get(2)?,
+            filter_name: row.get(3)?,
+            gain: row.get(4)?,
+            offset: row.get(5)?,
+            bin: row.get(6)?,
+            readout_mode: row.get(7)?,
+            twilight_level: row.get(8)?,
+            moon_avoidance_enabled: row.get::<_, i32>(9)? != 0,
+            moon_avoidance_separation: row.get(10)?,
+            moon_avoidance_width: row.get(11)?,
+            maximum_humidity: row.get(12)?,
+            default_exposure: row.get(13)?,
+            moon_relax_scale: row.get(14)?,
+            moon_relax_max_altitude: row.get(15)?,
+            moon_relax_min_altitude: row.get(16)?,
+            moon_down_enabled: row.get::<_, i32>(17)? != 0,
+            dither_every: row.get(18)?,
+            minutes_offset: row.get(19)?,
+            plan_count: row.get(20)?,
+        })
+    })?
+    .collect()
 }
 
 fn targets_for_project(
@@ -290,6 +381,8 @@ pub async fn get_project_scheduler(
     let mut project = project_details(&conn, project_id)
         .map_err(AppError::db)?
         .ok_or_else(|| AppError::BadRequest(format!("project {project_id} not found")))?;
+    project.exposure_templates =
+        templates_for_project(&conn, &project.profile_id, project_id).map_err(AppError::db)?;
     project.targets = targets_for_project(&conn, project_id).map_err(AppError::db)?;
     Ok(Json(ApiResponse::success(project)))
 }
@@ -461,12 +554,13 @@ pub async fn create_exposure_plan(
     Json(req): Json<CreateExposurePlanRequest>,
 ) -> Result<Json<ApiResponse<ExposurePlanResponse>>, AppError> {
     require_database_management_allowed(&state)?;
-    let filter_name = req.filter_name.trim();
-    if filter_name.is_empty() {
+    let filter_name = req.filter_name.as_deref().unwrap_or_default().trim();
+    if req.exposure_template_id.is_none() && filter_name.is_empty() {
         return Err(AppError::BadRequest("filter name must not be empty".into()));
     }
     validate_plan_values(req.exposure, req.desired)?;
-    if req.bin <= 0 {
+    let bin = req.bin.unwrap_or(1);
+    if req.exposure_template_id.is_none() && bin <= 0 {
         return Err(AppError::BadRequest("bin must be greater than zero".into()));
     }
     let gain = req.gain.unwrap_or(-1);
@@ -484,26 +578,51 @@ pub async fn create_exposure_plan(
         ));
     }
     let tx = conn.transaction().map_err(AppError::db)?;
-    let profile_id: String = tx
+    let (profile_id, project_id): (String, i32) = tx
         .query_row(
-            "SELECT p.profileId FROM target t JOIN project p ON p.Id = t.projectid WHERE t.Id = ?",
+            "SELECT p.profileId, p.Id
+             FROM target t JOIN project p ON p.Id = t.projectid WHERE t.Id = ?",
             [target_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
         .map_err(AppError::db)?
         .ok_or_else(|| AppError::BadRequest(format!("target {target_id} not found")))?;
-    let template_id: Option<i32> = tx
-        .query_row(
+    let template_id: Option<i32> = if let Some(template_id) = req.exposure_template_id {
+        let id = tx
+            .query_row(
+                "SELECT et.Id FROM exposuretemplate et
+                 WHERE et.Id = ?1 AND (
+                    et.profileId = ?2 OR EXISTS (
+                        SELECT 1 FROM exposureplan linked_ep
+                        JOIN target linked_target ON linked_target.Id = linked_ep.targetid
+                        WHERE linked_ep.exposureTemplateId = et.Id
+                          AND linked_target.projectid = ?3
+                    )
+                 )",
+                params![template_id, profile_id, project_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(AppError::db)?
+            .ok_or_else(|| {
+                AppError::BadRequest(format!(
+                    "exposure template {template_id} is not available to the target project"
+                ))
+            })?;
+        Some(id)
+    } else {
+        tx.query_row(
             "SELECT Id FROM exposuretemplate
              WHERE profileId = ?1 AND filtername = ?2 AND gain IS ?3
                AND offset IS ?4 AND IFNULL(bin, 1) = ?5 AND readoutmode IS ?6
              ORDER BY Id LIMIT 1",
-            params![profile_id, filter_name, gain, offset, req.bin, readout_mode],
+            params![profile_id, filter_name, gain, offset, bin, readout_mode],
             |row| row.get(0),
         )
         .optional()
-        .map_err(AppError::db)?;
+        .map_err(AppError::db)?
+    };
     let template_id = if let Some(id) = template_id {
         id
     } else {
@@ -527,7 +646,7 @@ pub async fn create_exposure_plan(
                 filter_name,
                 gain,
                 offset,
-                req.bin,
+                bin,
                 readout_mode,
                 60.0,
                 crate::ts_schema::new_guid()

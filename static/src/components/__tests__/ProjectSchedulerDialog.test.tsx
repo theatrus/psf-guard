@@ -26,6 +26,29 @@ const project = {
   dither_every: 3,
   enable_grader: true,
   is_mosaic: false,
+  exposure_templates: [{
+    id: 31,
+    profile_id: 'profile-1',
+    name: 'Ha template',
+    filter_name: 'Ha',
+    gain: 100,
+    offset: 30,
+    bin: 1,
+    readout_mode: null,
+    twilight_level: 0,
+    moon_avoidance_enabled: true,
+    moon_avoidance_separation: 60,
+    moon_avoidance_width: 7,
+    maximum_humidity: 75,
+    default_exposure: 300,
+    moon_relax_scale: 0,
+    moon_relax_max_altitude: 5,
+    moon_relax_min_altitude: -15,
+    moon_down_enabled: false,
+    dither_every: -1,
+    minutes_offset: 0,
+    plan_count: 1,
+  }],
   targets: [{
     id: 11,
     name: 'M31',
@@ -82,7 +105,9 @@ describe('ProjectSchedulerDialog', () => {
 
     expect(await screen.findByText('M31')).toBeInTheDocument();
     expect(screen.getByText(/00h 42m 44\.3s/)).toBeInTheDocument();
-    expect(screen.getByText('Ha template')).toBeInTheDocument();
+    expect(screen.getAllByText('Ha template')).toHaveLength(2);
+    expect(screen.getByText('300s')).toBeInTheDocument();
+    expect(screen.getByText(/Twilight 0 · humidity 75/)).toBeInTheDocument();
     expect(screen.getByRole('cell', { name: '12' })).toBeInTheDocument();
     expect(screen.getByRole('cell', { name: '10' })).toBeInTheDocument();
     expect(screen.getByText(/View only/)).toBeInTheDocument();
@@ -119,6 +144,41 @@ describe('ProjectSchedulerDialog', () => {
       desired: 1,
       bin: 1,
       enabled: true,
+    });
+  });
+
+  it('reuses an exposed profile template by id', async () => {
+    let posted: unknown = null;
+    server.use(
+      http.get('/api/db/db-test/projects/7/scheduler', () =>
+        HttpResponse.json({ success: true, data: project, error: null, status: 'ready' })
+      ),
+      http.post('/api/db/db-test/targets/11/exposure-plans', async ({ request }) => {
+        posted = await request.json();
+        return HttpResponse.json({
+          success: true,
+          data: { ...project.targets[0].exposure_plans[0], id: 22 },
+          error: null,
+          status: 'ready',
+        });
+      })
+    );
+    const user = userEvent.setup();
+    renderDialog();
+
+    await screen.findByText('M31');
+    await user.click(screen.getByRole('button', { name: 'Add plan' }));
+    await user.selectOptions(screen.getByLabelText('Exposure template'), '31');
+    expect(screen.getByLabelText('Filter')).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Create plan' }));
+
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted).toMatchObject({
+      exposure_template_id: 31,
+      filter_name: 'Ha',
+      gain: 100,
+      offset: 30,
+      bin: 1,
     });
   });
 });

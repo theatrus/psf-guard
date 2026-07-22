@@ -792,6 +792,30 @@ export interface ExposurePlanDetails {
   enabled: boolean;
 }
 
+export interface ExposureTemplateDetails {
+  id: number;
+  profile_id: string;
+  name: string;
+  filter_name: string;
+  gain: number | null;
+  offset: number | null;
+  bin: number | null;
+  readout_mode: number | null;
+  twilight_level: number;
+  moon_avoidance_enabled: boolean;
+  moon_avoidance_separation: number;
+  moon_avoidance_width: number;
+  maximum_humidity: number;
+  default_exposure: number;
+  moon_relax_scale: number;
+  moon_relax_max_altitude: number;
+  moon_relax_min_altitude: number;
+  moon_down_enabled: boolean;
+  dither_every: number;
+  minutes_offset: number;
+  plan_count: number;
+}
+
 export interface SchedulerTargetDetails {
   id: number;
   name: string;
@@ -824,6 +848,7 @@ export interface ProjectSchedulerDetails {
   dither_every: number;
   enable_grader: boolean;
   is_mosaic: boolean;
+  exposure_templates: ExposureTemplateDetails[];
   targets: SchedulerTargetDetails[];
 }
 
@@ -856,11 +881,12 @@ export interface TargetSchedulerUpdate {
 }
 
 export interface CreateExposurePlanRequest {
-  filter_name: string;
+  exposure_template_id?: number;
+  filter_name?: string;
   template_name?: string;
   gain?: number;
   offset?: number;
-  bin: number;
+  bin?: number;
   readout_mode?: number;
   exposure: number;
   desired: number;

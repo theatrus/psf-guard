@@ -42,14 +42,17 @@ points at your Target Scheduler database and image folders and gives you:
 - **Scheduler write-back** — every grade lands in the Target Scheduler
   database, so the scheduler knows to re-capture what you rejected.
 - **Project and target planning** — inspect Target Scheduler project state,
-  priority, limits, target coordinates, rotation, ROI, and exposure plans from
-  the Overview. With database management enabled, edit those fields, change a
-  plan's exposure or desired count, and add filter plans without changing a
-  shared exposure template. Acquired and accepted counts stay read-only.
+  priority, limits, target coordinates, rotation, ROI, shared exposure
+  templates, and exposure plans from the Overview. With database management
+  enabled, edit those fields, change a plan's exposure or desired count, and
+  add filter plans by reusing an exact profile template or deriving a new one.
+  Acquired and accepted counts stay read-only.
 - **Start from plain folders** — no scheduler database? `create-db` bootstraps
   a fully-faithful Target Scheduler database and imports folders of FITS
   lights. Each target becomes one project by default; nearby, similarly dated
   panel targets share a project when their names identify a likely mosaic.
+  Import derives shared exposure templates from each frame's filter, gain,
+  offset, binning, numeric readout mode, and most-used exposure duration.
   A separate database action can fill missing quality data or rescan every
   image for stars, background, clouds, obstructions, and pointing.
 - **Take out for stacking** — export the non-rejected lights into a
