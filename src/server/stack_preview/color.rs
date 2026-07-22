@@ -42,7 +42,7 @@ use crate::server::state::AppState;
 
 const STACK_COLOR_CACHE_VERSION: u32 = 5;
 const COLOR_INPUT_CACHE_VERSION: u32 = 1;
-const SEIZA_BACKGROUND_VERSION: &str = "0.1.0-git-8c4c1ad";
+const SEIZA_BACKGROUND_VERSION: &str = "0.1.0-git-b9bdcd1";
 const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
 const COLOR_BYTES_PER_PIXEL: u64 = 64;
 const COLOR_DECONVOLUTION_BYTES_PER_PIXEL: u64 = 40;

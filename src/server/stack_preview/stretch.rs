@@ -44,7 +44,7 @@ const STRETCH_BYTES_PER_SAMPLE: u64 = 16;
 const DECONVOLUTION_BYTES_PER_SAMPLE: u64 = 40;
 const LINEAR_BLACK_PERCENTILE: f64 = 0.001;
 const LINEAR_WHITE_PERCENTILE: f64 = 0.999;
-pub(super) const SEIZA_STRETCH_VERSION: &str = "0.1.0-git-8c4c1ad";
+pub(super) const SEIZA_STRETCH_VERSION: &str = "0.1.0-git-b9bdcd1";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StackDeconvolutionResult {
