@@ -19,7 +19,6 @@ COPY Cargo.toml Cargo.lock ./
 # Copy source code
 COPY src ./src
 COPY static ./static
-COPY crates ./crates
 COPY build.rs ./
 
 RUN cargo build --release

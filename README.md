@@ -213,8 +213,9 @@ cargo build --release
 ```
 
 You'll need Rust and Node.js/npm (the React frontend is embedded at build
-time). Image processing is pure Rust (the `seiza-imgproc` crate in this
-repository), so no native computer-vision libraries are required.
+time). Image processing is pure Rust (the published
+[`seiza-imgproc`](https://github.com/theatrus/seiza) crate), so no native
+computer-vision libraries are required.
 
 ## The grader UI
 
