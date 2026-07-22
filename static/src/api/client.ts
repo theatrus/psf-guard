@@ -20,6 +20,11 @@ import type {
   DirectoryTreeResponse,
   ProjectOverview,
   TargetOverview,
+  ProjectSchedulerDetails,
+  ProjectSchedulerUpdate,
+  TargetSchedulerUpdate,
+  CreateExposurePlanRequest,
+  ExposurePlanDetails,
   OverallStats,
   CacheRefreshProgress,
   SequenceAnalysisRequest,
@@ -266,12 +271,16 @@ export const apiClient = {
     return data.data;
   },
 
-  /** Rename a project (organize imported groupings). */
-  updateProject: async (dbId: string, projectId: number, name: string): Promise<void> => {
+  /** Update a project's Target Scheduler fields. */
+  updateProject: async (
+    dbId: string,
+    projectId: number,
+    request: ProjectSchedulerUpdate | string
+  ): Promise<void> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.put<ApiResponse<{ updated: boolean }>>(
       dbPath(dbId, `/projects/${projectId}`),
-      { name }
+      typeof request === 'string' ? { name: request } : request
     );
     if (!data.data) throw new Error(data.error || 'Failed to rename project');
   },
@@ -280,7 +289,7 @@ export const apiClient = {
   updateTarget: async (
     dbId: string,
     targetId: number,
-    req: { name?: string; project_id?: number }
+    req: TargetSchedulerUpdate
   ): Promise<void> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.put<ApiResponse<{ updated: boolean }>>(
@@ -669,6 +678,45 @@ export const apiClient = {
       dbPath(dbId, '/projects/overview')
     );
     return data.data || [];
+  },
+
+  getProjectScheduler: async (
+    dbId: string,
+    projectId: number
+  ): Promise<ProjectSchedulerDetails> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<ProjectSchedulerDetails>>(
+      dbPath(dbId, `/projects/${projectId}/scheduler`)
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to load project schedule');
+    return data.data;
+  },
+
+  createExposurePlan: async (
+    dbId: string,
+    targetId: number,
+    request: CreateExposurePlanRequest
+  ): Promise<ExposurePlanDetails> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<ExposurePlanDetails>>(
+      dbPath(dbId, `/targets/${targetId}/exposure-plans`),
+      request
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to create exposure plan');
+    return data.data;
+  },
+
+  updateExposurePlan: async (
+    dbId: string,
+    planId: number,
+    request: { exposure: number; desired: number; enabled: boolean }
+  ): Promise<void> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<{ updated: boolean }>>(
+      dbPath(dbId, `/exposure-plans/${planId}`),
+      request
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to update exposure plan');
   },
 
   getTargetsOverview: async (dbId: string): Promise<TargetOverview[]> => {

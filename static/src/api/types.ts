@@ -776,6 +776,97 @@ export interface TargetOverview {
   coordinates_display?: string;
 }
 
+export interface ExposurePlanDetails {
+  id: number;
+  exposure_template_id: number;
+  template_name: string;
+  filter_name: string;
+  gain: number | null;
+  offset: number | null;
+  bin: number | null;
+  readout_mode: number | null;
+  exposure: number;
+  desired: number;
+  acquired: number;
+  accepted: number;
+  enabled: boolean;
+}
+
+export interface SchedulerTargetDetails {
+  id: number;
+  name: string;
+  active: boolean;
+  ra_hours: number;
+  dec_degrees: number;
+  epoch_code: number;
+  rotation: number;
+  roi: number;
+  exposure_plans: ExposurePlanDetails[];
+}
+
+export interface ProjectSchedulerDetails {
+  id: number;
+  profile_id: string;
+  name: string;
+  description: string | null;
+  state: number;
+  priority: number;
+  created_at: number | null;
+  active_at: number | null;
+  inactive_at: number | null;
+  minimum_time: number;
+  minimum_altitude: number;
+  maximum_altitude: number;
+  use_custom_horizon: boolean;
+  horizon_offset: number;
+  meridian_window: number;
+  filter_switch_frequency: number;
+  dither_every: number;
+  enable_grader: boolean;
+  is_mosaic: boolean;
+  targets: SchedulerTargetDetails[];
+}
+
+export interface ProjectSchedulerUpdate {
+  name?: string;
+  description?: string;
+  state?: number;
+  priority?: number;
+  minimum_time?: number;
+  minimum_altitude?: number;
+  maximum_altitude?: number;
+  use_custom_horizon?: boolean;
+  horizon_offset?: number;
+  meridian_window?: number;
+  filter_switch_frequency?: number;
+  dither_every?: number;
+  enable_grader?: boolean;
+  is_mosaic?: boolean;
+}
+
+export interface TargetSchedulerUpdate {
+  name?: string;
+  project_id?: number;
+  active?: boolean;
+  ra_hours?: number;
+  dec_degrees?: number;
+  epoch_code?: number;
+  rotation?: number;
+  roi?: number;
+}
+
+export interface CreateExposurePlanRequest {
+  filter_name: string;
+  template_name?: string;
+  gain?: number;
+  offset?: number;
+  bin: number;
+  readout_mode?: number;
+  exposure: number;
+  desired: number;
+  enabled: boolean;
+}
+
 export interface OverallStats {
   total_projects: number;
   active_projects: number;

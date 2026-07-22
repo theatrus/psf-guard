@@ -680,6 +680,37 @@ impl<'a> Database<'a> {
         Ok(changed > 0)
     }
 
+    /// Update Target Scheduler framing fields without changing the target's
+    /// project or the image rows which refer to it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_target_scheduler_fields(
+        &self,
+        target_id: i32,
+        active: Option<bool>,
+        ra_hours: Option<f64>,
+        dec_degrees: Option<f64>,
+        epoch_code: Option<i32>,
+        rotation: Option<f64>,
+        roi: Option<f64>,
+    ) -> Result<bool> {
+        let changed = self.conn.execute(
+            "UPDATE target SET active = COALESCE(?1, active), ra = COALESCE(?2, ra),
+                dec = COALESCE(?3, dec), epochcode = COALESCE(?4, epochcode),
+                rotation = COALESCE(?5, rotation), roi = COALESCE(?6, roi)
+             WHERE Id = ?7",
+            params![
+                active.map(i32::from),
+                ra_hours,
+                dec_degrees,
+                epoch_code,
+                rotation,
+                roi,
+                target_id,
+            ],
+        )?;
+        Ok(changed > 0)
+    }
+
     fn project_profile(&self, project_id: i32) -> Result<Option<String>> {
         use rusqlite::OptionalExtension;
         Ok(self

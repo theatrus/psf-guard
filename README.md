@@ -41,6 +41,11 @@ points at your Target Scheduler database and image folders and gives you:
   deconvolution work.
 - **Scheduler write-back** — every grade lands in the Target Scheduler
   database, so the scheduler knows to re-capture what you rejected.
+- **Project and target planning** — inspect Target Scheduler project state,
+  priority, limits, target coordinates, rotation, ROI, and exposure plans from
+  the Overview. With database management enabled, edit those fields, change a
+  plan's exposure or desired count, and add filter plans without changing a
+  shared exposure template. Acquired and accepted counts stay read-only.
 - **Start from plain folders** — no scheduler database? `create-db` bootstraps
   a fully-faithful Target Scheduler database and imports folders of FITS
   lights. Each target becomes one project by default; nearby, similarly dated
@@ -78,6 +83,16 @@ committing hours to a full calibration and processing workflow.
 |:--:|:--:|:--:|
 | ![Overview](docs/overview.png) | ![Grid](docs/image_grid.jpg) | ![Compare](docs/compare.jpg) |
 | Project statistics and progress tracking | Grid view with filtering and batch operations | Synchronized zoom and detailed comparison |
+
+Each Overview project has a **Plan & coordinates** view. It shows the project
+settings and every target's Target Scheduler coordinates and exposure plans.
+RA uses Target Scheduler's decimal-hour convention; Dec uses degrees. New plans
+reuse an exact matching profile template or create one with Target Scheduler
+defaults. The plan table keeps Target Scheduler's `-1` exposure value, which
+means “use the template default.” Start the server with
+`--allow-database-management` to edit; without
+that flag the same view remains available read-only. A sky-map link can use the
+stored coordinates in a later release.
 
 ### See the evidence behind a quality decision
 

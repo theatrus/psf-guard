@@ -364,10 +364,37 @@ pub struct LocalExportRequest {
     pub dry_run: bool,
 }
 
-/// Body of `PUT /api/db/{db_id}/projects/{project_id}` — rename a project.
-#[derive(Debug, Deserialize)]
+/// Body of `PUT /api/db/{db_id}/projects/{project_id}`.
+#[derive(Debug, Deserialize, Default)]
 pub struct UpdateProjectRequest {
-    pub name: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub state: Option<i32>,
+    #[serde(default)]
+    pub priority: Option<i32>,
+    #[serde(default)]
+    pub minimum_time: Option<i32>,
+    #[serde(default)]
+    pub minimum_altitude: Option<f64>,
+    #[serde(default)]
+    pub maximum_altitude: Option<f64>,
+    #[serde(default)]
+    pub use_custom_horizon: Option<bool>,
+    #[serde(default)]
+    pub horizon_offset: Option<f64>,
+    #[serde(default)]
+    pub meridian_window: Option<i32>,
+    #[serde(default)]
+    pub filter_switch_frequency: Option<i32>,
+    #[serde(default)]
+    pub dither_every: Option<i32>,
+    #[serde(default)]
+    pub enable_grader: Option<bool>,
+    #[serde(default)]
+    pub is_mosaic: Option<bool>,
 }
 
 /// Body of `PUT /api/db/{db_id}/targets/{target_id}` — rename and/or move a
@@ -378,6 +405,18 @@ pub struct UpdateTargetRequest {
     pub name: Option<String>,
     #[serde(default)]
     pub project_id: Option<i32>,
+    #[serde(default)]
+    pub active: Option<bool>,
+    #[serde(default)]
+    pub ra_hours: Option<f64>,
+    #[serde(default)]
+    pub dec_degrees: Option<f64>,
+    #[serde(default)]
+    pub epoch_code: Option<i32>,
+    #[serde(default)]
+    pub rotation: Option<f64>,
+    #[serde(default)]
+    pub roi: Option<f64>,
 }
 
 /// Body of `POST /api/db/{db_id}/projects/{project_id}/merge`.

@@ -11,6 +11,7 @@ import {
   type WithDb,
 } from '../hooks/useDatabases';
 import { isTauriApp, tauriFileSystem } from '../utils/tauri';
+import ProjectSchedulerDialog from './ProjectSchedulerDialog';
 import './Overview.css';
 
 /// Inline edit state for correcting imported groupings.
@@ -26,6 +27,11 @@ export default function Overview() {
   const [organizing, setOrganizing] = useState<Organizing | null>(null);
   const [organizeBusy, setOrganizeBusy] = useState(false);
   const [organizeError, setOrganizeError] = useState('');
+  const [schedulerProject, setSchedulerProject] = useState<{
+    dbId: string;
+    id: number;
+    name: string;
+  } | null>(null);
 
   const { data: databases } = useAllDatabases();
   const { data: serverInfo } = useQuery({
@@ -507,6 +513,20 @@ export default function Overview() {
                     {project.filters_used.length > 0 && (
                       <span>{project.filters_used.join(', ')}</span>
                     )}
+                    <button
+                      type="button"
+                      className="project-meta-link"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSchedulerProject({
+                          dbId: project.db_id,
+                          id: project.id,
+                          name: project.display_name,
+                        });
+                      }}
+                    >
+                      Plan &amp; coordinates
+                    </button>
                     {project.has_files && (
                       <span 
                         style={{ color: 'var(--color-primary)', cursor: 'pointer', textDecoration: 'underline' }}
@@ -745,6 +765,17 @@ export default function Overview() {
           })}
         </div>
       </div>
+
+      {schedulerProject && (
+        <ProjectSchedulerDialog
+          open
+          dbId={schedulerProject.dbId}
+          projectId={schedulerProject.id}
+          projectName={schedulerProject.name}
+          canEdit={organizeAllowed}
+          onClose={() => setSchedulerProject(null)}
+        />
+      )}
 
       {/* Footer with GitHub and License Info */}
       <div className="overview-footer">

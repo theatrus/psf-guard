@@ -24,9 +24,8 @@ use crate::server::state::AppState;
 // Helper function to format RA/Dec coordinates
 fn format_coordinates(ra: Option<f64>, dec: Option<f64>) -> Option<String> {
     match (ra, dec) {
-        (Some(ra_deg), Some(dec_deg)) => {
-            // Convert decimal degrees to hours/degrees, minutes, seconds
-            let ra_hours = ra_deg / 15.0; // RA is in hours
+        (Some(ra_hours), Some(dec_deg)) => {
+            // Target Scheduler stores RA in decimal hours and Dec in degrees.
             let ra_h = ra_hours.floor();
             let ra_m = ((ra_hours - ra_h) * 60.0).floor();
             let ra_s = ((ra_hours - ra_h) * 60.0 - ra_m) * 60.0;
@@ -43,6 +42,19 @@ fn format_coordinates(ra: Option<f64>, dec: Option<f64>) -> Option<String> {
             ))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod coordinate_format_tests {
+    use super::format_coordinates;
+
+    #[test]
+    fn target_scheduler_ra_is_already_in_hours() {
+        assert_eq!(
+            format_coordinates(Some(10.5), Some(-20.25)).as_deref(),
+            Some("RA 10h 30m 00.0s, Dec -20° 15' 00.0\"")
+        );
     }
 }
 
@@ -316,7 +328,7 @@ fn require_registry_path(state: &AppState) -> Result<std::path::PathBuf, AppErro
 /// server was launched without `--allow-database-management`. Anyone reachable
 /// over the network could otherwise re-point or remove the user's configured
 /// databases.
-fn require_database_management_allowed(state: &AppState) -> Result<(), AppError> {
+pub(super) fn require_database_management_allowed(state: &AppState) -> Result<(), AppError> {
     if state.database_management_allowed() {
         Ok(())
     } else {
@@ -668,9 +680,7 @@ pub async fn export_local_route(
     Ok(Json(ApiResponse::success(summary)))
 }
 
-/// `PUT /api/db/{db_id}/projects/{project_id}` — rename a project. Used to
-/// correct import-synthesized groupings; management-gated like the rest of
-/// the structural mutations.
+/// `PUT /api/db/{db_id}/projects/{project_id}` — update scheduler fields.
 pub async fn update_project_route(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
@@ -678,23 +688,7 @@ pub async fn update_project_route(
     Json(req): Json<UpdateProjectRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
     require_database_management_allowed(&state)?;
-    let name = req.name.trim();
-    if name.is_empty() {
-        return Err(AppError::BadRequest("name must not be empty".into()));
-    }
-    let renamed = {
-        let conn = ctx.db();
-        let conn = conn.lock().map_err(AppError::db)?;
-        Database::new(&conn)
-            .rename_project(project_id, name)
-            .map_err(AppError::db)?
-    };
-    if !renamed {
-        return Err(AppError::BadRequest(format!(
-            "project {} not found",
-            project_id
-        )));
-    }
+    crate::server::scheduler::update_project(ctx, project_id, req)?;
     Ok(Json(ApiResponse::success(
         serde_json::json!({ "updated": true }),
     )))
@@ -709,7 +703,15 @@ pub async fn update_target_route(
     Json(req): Json<UpdateTargetRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
     require_database_management_allowed(&state)?;
-    if req.name.is_none() && req.project_id.is_none() {
+    if req.name.is_none()
+        && req.project_id.is_none()
+        && req.active.is_none()
+        && req.ra_hours.is_none()
+        && req.dec_degrees.is_none()
+        && req.epoch_code.is_none()
+        && req.rotation.is_none()
+        && req.roi.is_none()
+    {
         return Err(AppError::BadRequest(
             "nothing to update: pass name and/or project_id".into(),
         ));
@@ -738,6 +740,8 @@ pub async fn update_target_route(
             .move_target(target_id, project_id)
             .map_err(|e| AppError::BadRequest(e.to_string()))?;
     }
+
+    crate::server::scheduler::update_target_fields(&db, target_id, &req)?;
 
     Ok(Json(ApiResponse::success(serde_json::json!({
         "updated": true,
