@@ -452,10 +452,10 @@ PNG (the pregen paths in `mod.rs` do the same now).
   live `<img>`, so an unreported load leaves pans clamped against the previous
   image's dimensions.
 
-### Two-DB sync (2026-06)
-Lives in `src/commands/sync/` (`mod.rs` shared helpers + `grades.rs` + `pull.rs`).
-Two complementary single-direction kinds, structured as `sync <kind>` so more
-kinds slot in without breaking the CLI. Both match by `guid` (TS schema v22+),
+### Two-DB sync (2026-07)
+Lives in `src/commands/sync/` (`mod.rs` shared helpers + `grades.rs` +
+`pull.rs` + `planning.rs`). Three safe single-direction kinds are structured
+as `sync <kind>`. They match by `guid` (TS schema v22+),
 accept a registry slug *or* a raw `.sqlite` path for `--from`/`--to` (registry
 loaded only when a side isn't already a file), open source READ_ONLY / dest
 READ_WRITE, refuse same-path source/dest, and have `--dry-run` + `--verbose`.
@@ -489,6 +489,19 @@ READ_WRITE, refuse same-path source/dest, and have `--dry-run` + `--verbose`.
   plans, images; templates always synced so plan FKs resolve). Whole pull runs
   in one transaction, rolled back on `--dry-run`.
 - Reports per-table inserted/updated/unchanged plus grades filled/preserved.
+
+**`sync planning --from <our> --to <telescope>`** — push planning settings.
+- Mirrors `exposuretemplate`, `project`, `ruleweight`, `target`, and
+  `exposureplan` in the same FK order as pull. It never reads or writes
+  `acquiredimage`, `imagedata`, grades, or reject reasons.
+- Existing telescope plan `acquired`/`accepted` counts stay unchanged. New
+  plans start with both counts at zero. Other shared plan fields, including
+  exposure, desired count, enabled state, and template links, come from ours.
+- `--project <substr>` scopes projects, targets, and plans. Templates remain a
+  full profile-wide sync so plan FKs always resolve.
+- The management-gated `POST /api/databases/{local_id}/sync` endpoint and
+  Settings panel expose dry-run-first full pulls and planning pushes between
+  configured databases.
 
 ### Smart Binary Mode Selection
 - **Single binary** `psf-guard` with intelligent mode detection

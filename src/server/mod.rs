@@ -373,6 +373,10 @@ async fn run_server_internal(
         // is exactly this route).
         .route("/databases/create", post(handlers::create_database_route))
         .route(
+            "/databases/{db_id}/sync",
+            post(handlers::sync_database_route),
+        )
+        .route(
             "/databases/{db_id}",
             put(handlers::update_database_route).delete(handlers::remove_database_route),
         )

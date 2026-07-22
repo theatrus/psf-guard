@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
+use std::path::{Path, PathBuf};
 
 use crate::cli::{Cli, Commands};
 use crate::commands::{
@@ -8,6 +9,57 @@ use crate::commands::{
     filter_rejected_files, list_projects, list_targets, read_fits, regrade_images, screen_fits,
     show_images, stretch_to_png, update_grade,
 };
+
+struct SyncPair {
+    from_path: PathBuf,
+    to_path: PathBuf,
+    source: Connection,
+    destination: Connection,
+}
+
+/// Resolve registry slugs or file paths, reject self-sync, and open one
+/// read-only source plus one existing read-write destination.
+fn open_sync_pair(from: &str, to: &str, registry: Option<&str>) -> Result<SyncPair> {
+    use crate::commands::sync::resolve_db_path;
+    use crate::db_registry::DbRegistry;
+
+    let need_registry = !Path::new(from).is_file() || !Path::new(to).is_file();
+    let registry_obj = if need_registry {
+        let registry_path = match registry {
+            Some(path) => PathBuf::from(path),
+            None => DbRegistry::default_path().context("resolving default registry path")?,
+        };
+        Some(
+            DbRegistry::load_or_init(&registry_path)
+                .with_context(|| format!("loading registry at {}", registry_path.display()))?,
+        )
+    } else {
+        None
+    };
+
+    let from_path = resolve_db_path(registry_obj.as_ref(), from)?;
+    let to_path = resolve_db_path(registry_obj.as_ref(), to)?;
+    let from_canon = std::fs::canonicalize(&from_path).unwrap_or_else(|_| from_path.clone());
+    let to_canon = std::fs::canonicalize(&to_path).unwrap_or_else(|_| to_path.clone());
+    if from_canon == to_canon {
+        return Err(anyhow::anyhow!(
+            "Source and destination resolve to the same database ({}); nothing to sync",
+            from_canon.display()
+        ));
+    }
+
+    let source = Connection::open_with_flags(&from_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("opening source database {}", from_path.display()))?;
+    let destination = Connection::open_with_flags(&to_path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+        .with_context(|| format!("opening destination database {}", to_path.display()))?;
+
+    Ok(SyncPair {
+        from_path,
+        to_path,
+        source,
+        destination,
+    })
+}
 
 pub fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -639,56 +691,14 @@ pub fn main() -> Result<()> {
                 registry,
                 verbose,
             } => {
-                use crate::commands::sync::{
-                    parse_status, resolve_db_path, sync_grades, SyncGradesOptions,
-                };
-                use crate::db_registry::DbRegistry;
-                use rusqlite::OpenFlags;
-                use std::path::{Path, PathBuf};
-
-                // Load the registry only when a side might be a slug (i.e. isn't
-                // already an existing file), so syncing two plain paths doesn't
-                // create a registry file as a side effect.
-                let need_registry = !Path::new(&from).is_file() || !Path::new(&to).is_file();
-                let registry_obj = if need_registry {
-                    let registry_path = match &registry {
-                        Some(p) => PathBuf::from(p),
-                        None => {
-                            DbRegistry::default_path().context("resolving default registry path")?
-                        }
-                    };
-                    Some(DbRegistry::load_or_init(&registry_path).with_context(|| {
-                        format!("loading registry at {}", registry_path.display())
-                    })?)
-                } else {
-                    None
-                };
-
-                let from_path = resolve_db_path(registry_obj.as_ref(), &from)?;
-                let to_path = resolve_db_path(registry_obj.as_ref(), &to)?;
-
-                // Refuse to "sync" a database with itself.
-                let from_canon =
-                    std::fs::canonicalize(&from_path).unwrap_or_else(|_| from_path.clone());
-                let to_canon = std::fs::canonicalize(&to_path).unwrap_or_else(|_| to_path.clone());
-                if from_canon == to_canon {
-                    return Err(anyhow::anyhow!(
-                        "Source and destination resolve to the same database ({}); nothing to sync",
-                        from_canon.display()
-                    ));
-                }
+                use crate::commands::sync::{parse_status, sync_grades, SyncGradesOptions};
 
                 let status_filter = match status.as_deref() {
                     Some(s) => Some(parse_status(s)?),
                     None => None,
                 };
 
-                let src = Connection::open_with_flags(&from_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-                    .with_context(|| format!("opening source database {}", from_path.display()))?;
-                let dest = Connection::open_with_flags(&to_path, OpenFlags::SQLITE_OPEN_READ_WRITE)
-                    .with_context(|| {
-                        format!("opening destination database {}", to_path.display())
-                    })?;
+                let pair = open_sync_pair(&from, &to, registry.as_deref())?;
 
                 let options = SyncGradesOptions {
                     status_filter,
@@ -697,7 +707,7 @@ pub fn main() -> Result<()> {
                     dry_run,
                 };
 
-                let summary = sync_grades(&src, &dest, &options)?;
+                let summary = sync_grades(&pair.source, &pair.destination, &options)?;
 
                 if verbose && !summary.changes.is_empty() {
                     use crate::models::GradingStatus;
@@ -719,8 +729,8 @@ pub fn main() -> Result<()> {
                 println!(
                     "\nGrade sync {} {} → {}:",
                     if dry_run { "(dry-run)" } else { "(live)" },
-                    from_path.display(),
-                    to_path.display(),
+                    pair.from_path.display(),
+                    pair.to_path.display(),
                 );
                 println!(
                     "  source rows considered: {} (skipped, no guid: {})",
@@ -758,46 +768,8 @@ pub fn main() -> Result<()> {
                 registry,
                 verbose,
             } => {
-                use crate::commands::sync::{resolve_db_path, sync_pull, PullOptions, TableCounts};
-                use crate::db_registry::DbRegistry;
-                use rusqlite::OpenFlags;
-                use std::path::{Path, PathBuf};
-
-                // Load the registry only when a side might be a slug.
-                let need_registry = !Path::new(&from).is_file() || !Path::new(&to).is_file();
-                let registry_obj = if need_registry {
-                    let registry_path = match &registry {
-                        Some(p) => PathBuf::from(p),
-                        None => {
-                            DbRegistry::default_path().context("resolving default registry path")?
-                        }
-                    };
-                    Some(DbRegistry::load_or_init(&registry_path).with_context(|| {
-                        format!("loading registry at {}", registry_path.display())
-                    })?)
-                } else {
-                    None
-                };
-
-                let from_path = resolve_db_path(registry_obj.as_ref(), &from)?;
-                let to_path = resolve_db_path(registry_obj.as_ref(), &to)?;
-
-                let from_canon =
-                    std::fs::canonicalize(&from_path).unwrap_or_else(|_| from_path.clone());
-                let to_canon = std::fs::canonicalize(&to_path).unwrap_or_else(|_| to_path.clone());
-                if from_canon == to_canon {
-                    return Err(anyhow::anyhow!(
-                        "Source and destination resolve to the same database ({}); nothing to pull",
-                        from_canon.display()
-                    ));
-                }
-
-                let src = Connection::open_with_flags(&from_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-                    .with_context(|| format!("opening source database {}", from_path.display()))?;
-                let dest = Connection::open_with_flags(&to_path, OpenFlags::SQLITE_OPEN_READ_WRITE)
-                    .with_context(|| {
-                        format!("opening destination database {}", to_path.display())
-                    })?;
+                use crate::commands::sync::{sync_pull, PullOptions, TableCounts};
+                let pair = open_sync_pair(&from, &to, registry.as_deref())?;
 
                 let options = PullOptions {
                     dry_run,
@@ -805,7 +777,7 @@ pub fn main() -> Result<()> {
                     project_filter: project,
                 };
 
-                let summary = sync_pull(&src, &dest, &options)?;
+                let summary = sync_pull(&pair.source, &pair.destination, &options)?;
 
                 if verbose && !summary.changes.is_empty() {
                     println!("Entity changes:");
@@ -828,8 +800,8 @@ pub fn main() -> Result<()> {
                 println!(
                     "\nEntity pull {} {} → {}:",
                     if dry_run { "(dry-run)" } else { "(live)" },
-                    from_path.display(),
-                    to_path.display(),
+                    pair.from_path.display(),
+                    pair.to_path.display(),
                 );
                 tc("exposuretemplate", &summary.exposuretemplate);
                 tc("project", &summary.project);
@@ -876,6 +848,57 @@ pub fn main() -> Result<()> {
                         suffix
                     );
                 }
+            }
+
+            crate::cli::SyncKind::Planning {
+                from,
+                to,
+                dry_run,
+                project,
+                registry,
+                verbose,
+            } => {
+                use crate::commands::sync::{sync_planning, PlanningOptions, TableCounts};
+
+                let pair = open_sync_pair(&from, &to, registry.as_deref())?;
+                let summary = sync_planning(
+                    &pair.source,
+                    &pair.destination,
+                    &PlanningOptions {
+                        dry_run,
+                        project_filter: project,
+                    },
+                )?;
+
+                if verbose {
+                    for change in &summary.changes {
+                        println!("  {}", change);
+                    }
+                }
+                let print_counts = |label: &str, counts: &TableCounts| {
+                    println!(
+                        "  {:<16} inserted={} updated={} unchanged={} skipped={}",
+                        label, counts.inserted, counts.updated, counts.unchanged, counts.skipped
+                    );
+                };
+                println!(
+                    "\nPlanning sync {} {} → {}:",
+                    if dry_run { "(dry-run)" } else { "(live)" },
+                    pair.from_path.display(),
+                    pair.to_path.display(),
+                );
+                print_counts("exposuretemplate", &summary.exposuretemplate);
+                print_counts("project", &summary.project);
+                print_counts("ruleweight", &summary.ruleweight);
+                print_counts("target", &summary.target);
+                print_counts("exposureplan", &summary.exposureplan);
+                println!(
+                    "  ── total: inserted={} updated={}{}",
+                    summary.total_inserted(),
+                    summary.total_updated(),
+                    if dry_run { " (planned)" } else { "" }
+                );
+                println!("     telescope capture counts, images, and grades were left unchanged");
             }
         },
         Commands::Server {

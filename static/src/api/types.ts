@@ -606,7 +606,7 @@ export interface StackColorCatalog {
 export interface ServerInfo {
   version: string;
   cache_directory: string;
-  /** Whether POST/PUT/DELETE /api/databases are accepted on this server. */
+  /** Whether database mutations and sync are accepted on this server. */
   allow_database_management: boolean;
 }
 
@@ -616,6 +616,42 @@ export interface DatabaseSummary {
   name: string;
   database_path: string;
   image_directories: string[];
+}
+
+export type SchedulerSyncKind = 'pull' | 'push_planning';
+
+export interface SchedulerSyncRequest {
+  peer_db_id: string;
+  kind: SchedulerSyncKind;
+  dry_run?: boolean;
+  with_image_data?: boolean;
+  project?: string;
+}
+
+export interface SchedulerSyncTableCounts {
+  inserted: number;
+  updated: number;
+  unchanged: number;
+  skipped: number;
+}
+
+export interface SchedulerSyncResponse {
+  kind: SchedulerSyncKind;
+  dry_run: boolean;
+  source_db_id: string;
+  destination_db_id: string;
+  exposuretemplate: SchedulerSyncTableCounts;
+  project: SchedulerSyncTableCounts;
+  ruleweight: SchedulerSyncTableCounts;
+  target: SchedulerSyncTableCounts;
+  exposureplan: SchedulerSyncTableCounts;
+  acquiredimage: SchedulerSyncTableCounts | null;
+  imagedata: SchedulerSyncTableCounts | null;
+  grade_filled: number;
+  grade_preserved: number;
+  imagedata_bytes: number;
+  total_inserted: number;
+  total_updated: number;
 }
 
 /** Per-project line of an import outcome report. */

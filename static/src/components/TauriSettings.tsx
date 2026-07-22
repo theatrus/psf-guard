@@ -6,6 +6,7 @@ import { apiClient } from '../api/client';
 import type { DatabaseSummary } from '../api/types';
 import { describeImportProgress, useImportJob } from '../hooks/useImportJob';
 import QualityBackfillControls from './QualityBackfillControls';
+import SchedulerSyncControls from './SchedulerSyncControls';
 import './TauriSettings.css';
 
 interface TauriSettingsProps {
@@ -466,6 +467,13 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                     </div>
                   )}
                   <QualityBackfillControls dbId={entry.id} />
+                  {managementAllowed && (
+                    <SchedulerSyncControls
+                      database={entry}
+                      databases={databases}
+                      disabled={isApplying}
+                    />
+                  )}
                 </div>
                 {managementAllowed && (
                   <div className="db-row-actions">

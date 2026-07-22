@@ -482,22 +482,30 @@ its statistical-regrading flags but is deprecated in favor of `move-rejects`.
 ## Syncing between machines
 
 Grade on one machine while the telescope keeps capturing on another. `sync`
-moves state between two scheduler databases — registry slugs or `.sqlite`
-paths — matching images by their stable GUID (Target Scheduler schema v22+):
+moves selected state between two scheduler databases — registry slugs or
+`.sqlite` paths — matching rows by their stable GUID (Target Scheduler schema
+v22+):
 
 ```bash
 # Mirror projects, targets and captured images FROM the telescope INTO your DB.
 # Your local grading is preserved; new images arrive with the telescope's grade.
 psf-guard sync pull --from telescope.sqlite --to my-db --dry-run
 
+# Push new or edited planning settings back TO the telescope. This updates
+# projects, targets, templates, plans, and rule weights. Telescope capture
+# counts, images, and grades stay unchanged.
+psf-guard sync planning --from my-db --to telescope.sqlite --dry-run
+
 # Push your grading decisions back TO the telescope (one-way, source wins).
 psf-guard sync grades --from my-db --to telescope.sqlite --dry-run
 ```
 
-Use them as a loop — pull to refresh, grade locally, push grades back. Both
-directions support `--project` filters and `--dry-run` (`grades` also
-`--target` and `--status`), open the source read-only, and run in a single
-transaction.
+Use them as a loop: pull complete new projects and captures, edit plans or
+grade locally, then push planning settings and grades back. All three support
+`--project` filters and `--dry-run` (`grades` also supports `--target` and
+`--status`), open the source read-only, and run in one transaction. The
+Settings panel offers the same full-pull and planning-push actions with a
+dry-run preview before Apply.
 
 ## CLI reference
 
@@ -533,6 +541,7 @@ psf-guard restore-rejects --db <slug> [--all] [--image-id N] [--dry-run]
 
 # Two-database sync (see "Syncing between machines" above)
 psf-guard sync pull --from telescope.sqlite --to my-db
+psf-guard sync planning --from my-db --to telescope.sqlite
 psf-guard sync grades --from my-db --to telescope.sqlite
 
 # Star detection & PSF analysis
@@ -661,6 +670,16 @@ curl -X POST "localhost:3000/api/db/my-db/images/123/astrometry"
 # Read a cached satellite prediction, or explicitly refresh/predict on demand
 curl "localhost:3000/api/db/my-db/images/123/satellites"
 curl -X POST "localhost:3000/api/db/my-db/images/123/satellites"
+
+# Preview a full telescope → local sync. Use dry_run=false to apply it.
+curl -X POST "localhost:3000/api/databases/my-db/sync" \
+  -H "Content-Type: application/json" \
+  -d '{"peer_db_id":"telescope","kind":"pull","dry_run":true}'
+
+# Preview a local → telescope planning-settings sync.
+curl -X POST "localhost:3000/api/databases/my-db/sync" \
+  -H "Content-Type: application/json" \
+  -d '{"peer_db_id":"telescope","kind":"push_planning","dry_run":true}'
 ```
 
 ## Known limitations

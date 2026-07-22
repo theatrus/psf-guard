@@ -11,6 +11,8 @@ import type {
   StarDetectionResponse,
   PreviewOptions,
   ServerInfo,
+  SchedulerSyncRequest,
+  SchedulerSyncResponse,
   DatabaseSummary,
   CreateDatabaseRequest,
   CreateDatabaseResponse,
@@ -177,6 +179,20 @@ export const apiClient = {
       `/databases/${encodeURIComponent(dbId)}`
     );
     return data.data?.removed ?? false;
+  },
+
+  /** Preview or run a safe scheduler database sync. */
+  syncDatabase: async (
+    dbId: string,
+    req: SchedulerSyncRequest
+  ): Promise<SchedulerSyncResponse> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<SchedulerSyncResponse>>(
+      `/databases/${encodeURIComponent(dbId)}/sync`,
+      req
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to sync databases');
+    return data.data;
   },
 
   /**

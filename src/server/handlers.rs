@@ -326,15 +326,15 @@ fn require_registry_path(state: &AppState) -> Result<std::path::PathBuf, AppErro
 
 /// Gate for mutating endpoints on `/api/databases`. Returns 403 when the
 /// server was launched without `--allow-database-management`. Anyone reachable
-/// over the network could otherwise re-point or remove the user's configured
-/// databases.
+/// over the network could otherwise re-point, remove, or sync the user's
+/// configured databases.
 pub(super) fn require_database_management_allowed(state: &AppState) -> Result<(), AppError> {
     if state.database_management_allowed() {
         Ok(())
     } else {
         Err(AppError::Forbidden(
             "database management is disabled on this server. Restart the server \
-             with --allow-database-management to enable runtime add/edit/remove."
+            with --allow-database-management to enable runtime database changes and sync."
                 .into(),
         ))
     }
@@ -347,6 +347,129 @@ fn summary_of(ctx: &crate::server::database_context::DatabaseContext) -> Databas
         database_path: ctx.database_path.clone(),
         image_directories: ctx.image_dirs.clone(),
     }
+}
+
+/// `POST /api/databases/{db_id}/sync` — preview or run one safe scheduler
+/// database sync. The path database is the local working copy. A pull reads
+/// the peer and fills the local copy; a planning push reads the local copy and
+/// updates planning settings in the peer.
+pub async fn sync_database_route(
+    State(state): State<Arc<AppState>>,
+    Path(db_id): Path<String>,
+    Json(req): Json<SchedulerSyncRequest>,
+) -> Result<Json<ApiResponse<SchedulerSyncResponse>>, AppError> {
+    use crate::commands::sync::{sync_planning, sync_pull, PlanningOptions, PullOptions};
+    use rusqlite::{Connection, OpenFlags};
+
+    require_database_management_allowed(&state)?;
+    if db_id == req.peer_db_id {
+        return Err(AppError::BadRequest(
+            "Choose two different databases to sync.".into(),
+        ));
+    }
+
+    let local = state.get_database(&db_id).ok_or(AppError::NotFound)?;
+    let peer = state
+        .get_database(&req.peer_db_id)
+        .ok_or(AppError::NotFound)?;
+    let (source_ctx, destination_ctx) = match req.kind {
+        SchedulerSyncKind::Pull => (Arc::clone(&peer), Arc::clone(&local)),
+        SchedulerSyncKind::PushPlanning => (Arc::clone(&local), Arc::clone(&peer)),
+    };
+    let source_path = PathBuf::from(&source_ctx.database_path);
+    let destination_path = PathBuf::from(&destination_ctx.database_path);
+    let source_id = source_ctx.id.clone();
+    let destination_id = destination_ctx.id.clone();
+    let kind = req.kind;
+    let dry_run = req.dry_run;
+    let project = req.project;
+    let with_image_data = req.with_image_data.unwrap_or(true);
+
+    let response = tokio::task::spawn_blocking(move || -> anyhow::Result<SchedulerSyncResponse> {
+        let source_canon =
+            std::fs::canonicalize(&source_path).unwrap_or_else(|_| source_path.clone());
+        let destination_canon =
+            std::fs::canonicalize(&destination_path).unwrap_or_else(|_| destination_path.clone());
+        anyhow::ensure!(
+            source_canon != destination_canon,
+            "The two configured entries point to the same database file."
+        );
+
+        let source = Connection::open_with_flags(&source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let destination =
+            Connection::open_with_flags(&destination_path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+
+        let response = match kind {
+            SchedulerSyncKind::Pull => {
+                let summary = sync_pull(
+                    &source,
+                    &destination,
+                    &PullOptions {
+                        dry_run,
+                        with_image_data,
+                        project_filter: project,
+                    },
+                )?;
+                SchedulerSyncResponse {
+                    kind,
+                    dry_run,
+                    source_db_id: source_id,
+                    destination_db_id: destination_id,
+                    exposuretemplate: (&summary.exposuretemplate).into(),
+                    project: (&summary.project).into(),
+                    ruleweight: (&summary.ruleweight).into(),
+                    target: (&summary.target).into(),
+                    exposureplan: (&summary.exposureplan).into(),
+                    acquiredimage: Some((&summary.acquiredimage).into()),
+                    imagedata: summary
+                        .imagedata_synced
+                        .then(|| (&summary.imagedata).into()),
+                    grade_filled: summary.grade_filled,
+                    grade_preserved: summary.grade_preserved,
+                    imagedata_bytes: summary.imagedata_bytes,
+                    total_inserted: summary.total_inserted(),
+                    total_updated: summary.total_updated(),
+                }
+            }
+            SchedulerSyncKind::PushPlanning => {
+                let summary = sync_planning(
+                    &source,
+                    &destination,
+                    &PlanningOptions {
+                        dry_run,
+                        project_filter: project,
+                    },
+                )?;
+                SchedulerSyncResponse {
+                    kind,
+                    dry_run,
+                    source_db_id: source_id,
+                    destination_db_id: destination_id,
+                    exposuretemplate: (&summary.exposuretemplate).into(),
+                    project: (&summary.project).into(),
+                    ruleweight: (&summary.ruleweight).into(),
+                    target: (&summary.target).into(),
+                    exposureplan: (&summary.exposureplan).into(),
+                    acquiredimage: None,
+                    imagedata: None,
+                    grade_filled: 0,
+                    grade_preserved: 0,
+                    imagedata_bytes: 0,
+                    total_inserted: summary.total_inserted(),
+                    total_updated: summary.total_updated(),
+                }
+            }
+        };
+        Ok(response)
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("scheduler sync task failed: {error}")))?
+    .map_err(|error| AppError::BadRequest(error.to_string()))?;
+
+    if !dry_run {
+        let _ = destination_ctx.ensure_cache_available();
+    }
+    Ok(Json(ApiResponse::success(response)))
 }
 
 /// `POST /api/databases` — register a new database. Validates that the file
