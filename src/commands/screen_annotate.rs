@@ -19,7 +19,7 @@ use image::{ImageBuffer, Rgb};
 use std::path::Path;
 
 use crate::image_analysis::FitsImage;
-use crate::mtf_stretch::{stretch_image, StretchParameters};
+use seiza_stretch::{stretch_u16_to_u16, StretchParams};
 
 /// Per-frame data the renderer needs beyond the FITS itself.
 pub(crate) struct AnnotationData {
@@ -55,13 +55,8 @@ pub(crate) fn render_annotated_frame(
     out_path: &Path,
 ) -> Result<()> {
     let stats = fits.calculate_basic_statistics();
-    let stretch_params = StretchParameters::default();
-    let stretched = stretch_image(
-        &fits.data,
-        &stats,
-        stretch_params.factor,
-        stretch_params.black_clipping,
-    );
+    let stretch_params = StretchParams::default();
+    let stretched = stretch_u16_to_u16(&fits.data, &stats.to_stretch_statistics(), &stretch_params);
 
     let out_w = (fits.width / DOWNSCALE).max(1);
     let out_h = (fits.height / DOWNSCALE).max(1);

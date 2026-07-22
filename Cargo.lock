@@ -4692,8 +4692,8 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "seiza"
-version = "0.11.2"
-source = "git+https://github.com/theatrus/seiza?rev=b9bdcd1efedd7ad40534caa7fa75a4091c1cd34a#b9bdcd1efedd7ad40534caa7fa75a4091c1cd34a"
+version = "0.12.0"
+source = "git+https://github.com/theatrus/seiza?rev=5bb77362a2028ef9819687b9db19cc53728bd3da#5bb77362a2028ef9819687b9db19cc53728bd3da"
 dependencies = [
  "directories",
  "image",
@@ -4713,7 +4713,7 @@ dependencies = [
 [[package]]
 name = "seiza-background"
 version = "0.1.0"
-source = "git+https://github.com/theatrus/seiza?rev=b9bdcd1efedd7ad40534caa7fa75a4091c1cd34a#b9bdcd1efedd7ad40534caa7fa75a4091c1cd34a"
+source = "git+https://github.com/theatrus/seiza?rev=5bb77362a2028ef9819687b9db19cc53728bd3da#5bb77362a2028ef9819687b9db19cc53728bd3da"
 dependencies = [
  "rayon",
  "seiza-stats",
@@ -4724,7 +4724,7 @@ dependencies = [
 [[package]]
 name = "seiza-deconvolution"
 version = "0.1.0"
-source = "git+https://github.com/theatrus/seiza?rev=b9bdcd1efedd7ad40534caa7fa75a4091c1cd34a#b9bdcd1efedd7ad40534caa7fa75a4091c1cd34a"
+source = "git+https://github.com/theatrus/seiza?rev=5bb77362a2028ef9819687b9db19cc53728bd3da#5bb77362a2028ef9819687b9db19cc53728bd3da"
 dependencies = [
  "rayon",
  "serde",
@@ -4733,9 +4733,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-download"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8adbf5e69a4f516d755283941e1d6734191e6223456d3b4605a1d95c5f1b6753"
+checksum = "cef1b97548079179df46c445b19056a4e0d9e332899b1980ba505ad479095ab0"
 dependencies = [
  "async-compression",
  "directories",
@@ -4752,8 +4752,8 @@ dependencies = [
 
 [[package]]
 name = "seiza-fits"
-version = "0.1.6"
-source = "git+https://github.com/theatrus/seiza?rev=b9bdcd1efedd7ad40534caa7fa75a4091c1cd34a#b9bdcd1efedd7ad40534caa7fa75a4091c1cd34a"
+version = "0.2.0"
+source = "git+https://github.com/theatrus/seiza?rev=5bb77362a2028ef9819687b9db19cc53728bd3da#5bb77362a2028ef9819687b9db19cc53728bd3da"
 dependencies = [
  "multiversion",
  "seiza-stretch",
@@ -4768,9 +4768,9 @@ checksum = "7c6a748b383cfcac2ab9b83e1addfd9caf6b58b18be182655ea699770bea1d12"
 
 [[package]]
 name = "seiza-satellites"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ebec6e24911c969ddba9f55d8b527773217f539f53007ae74f87886658e54a3"
+checksum = "299bcbcee1382d3a7b9eab050cd44c1e4ac06507ae374c3e21b5859fb3f7329f"
 dependencies = [
  "directories",
  "fs2",
@@ -4788,7 +4788,7 @@ dependencies = [
 [[package]]
 name = "seiza-stacking"
 version = "0.1.0"
-source = "git+https://github.com/theatrus/seiza?rev=b9bdcd1efedd7ad40534caa7fa75a4091c1cd34a#b9bdcd1efedd7ad40534caa7fa75a4091c1cd34a"
+source = "git+https://github.com/theatrus/seiza?rev=5bb77362a2028ef9819687b9db19cc53728bd3da#5bb77362a2028ef9819687b9db19cc53728bd3da"
 dependencies = [
  "rayon",
  "seiza",
@@ -4803,12 +4803,12 @@ dependencies = [
 [[package]]
 name = "seiza-stats"
 version = "0.1.0"
-source = "git+https://github.com/theatrus/seiza?rev=b9bdcd1efedd7ad40534caa7fa75a4091c1cd34a#b9bdcd1efedd7ad40534caa7fa75a4091c1cd34a"
+source = "git+https://github.com/theatrus/seiza?rev=5bb77362a2028ef9819687b9db19cc53728bd3da#5bb77362a2028ef9819687b9db19cc53728bd3da"
 
 [[package]]
 name = "seiza-stretch"
 version = "0.1.0"
-source = "git+https://github.com/theatrus/seiza?rev=b9bdcd1efedd7ad40534caa7fa75a4091c1cd34a#b9bdcd1efedd7ad40534caa7fa75a4091c1cd34a"
+source = "git+https://github.com/theatrus/seiza?rev=5bb77362a2028ef9819687b9db19cc53728bd3da#5bb77362a2028ef9819687b9db19cc53728bd3da"
 dependencies = [
  "rayon",
  "seiza-stats",
@@ -4819,7 +4819,7 @@ dependencies = [
 [[package]]
 name = "seiza-xisf"
 version = "0.1.0"
-source = "git+https://github.com/theatrus/seiza?rev=b9bdcd1efedd7ad40534caa7fa75a4091c1cd34a#b9bdcd1efedd7ad40534caa7fa75a4091c1cd34a"
+source = "git+https://github.com/theatrus/seiza?rev=5bb77362a2028ef9819687b9db19cc53728bd3da#5bb77362a2028ef9819687b9db19cc53728bd3da"
 dependencies = [
  "flate2",
  "lz4_flex",

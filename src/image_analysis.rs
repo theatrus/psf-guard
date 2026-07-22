@@ -16,6 +16,25 @@ pub struct ImageStatistics {
     pub mad: Option<f64>,
 }
 
+impl ImageStatistics {
+    /// View as seiza-stretch's exact-histogram statistics for the N.I.N.A.
+    /// u16 LUT stretch. Lossless: `calculate_statistics_with_mad` computed
+    /// these fields with `seiza_fits::statistics_u16` in the first place.
+    /// A missing MAD falls back to the normal-distribution approximation,
+    /// matching the retired local stretch implementation.
+    pub fn to_stretch_statistics(&self) -> seiza_stretch::Statistics {
+        seiza_stretch::Statistics {
+            min: self.min as u16,
+            max: self.max as u16,
+            mean: self.mean,
+            std_dev: self.std_dev,
+            median: self.median as u16,
+            mad: self.mad.unwrap_or(self.std_dev * 0.6745),
+            count: self.width * self.height,
+        }
+    }
+}
+
 /// FITS image data structure
 pub struct FitsImage {
     pub width: usize,

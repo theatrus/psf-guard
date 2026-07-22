@@ -43,7 +43,7 @@ mod tests {
         params: &StarDetectionParams,
     ) -> crate::nina_star_detection::StarDetectionResult {
         use crate::image_analysis::FitsImage;
-        use crate::mtf_stretch::{stretch_image, StretchParameters};
+        use seiza_stretch::{stretch_u16_to_u16, StretchParams};
 
         // Calculate statistics and apply stretching
         let fits = FitsImage {
@@ -55,13 +55,9 @@ mod tests {
             bzero: 0.0,
         };
         let stats = fits.calculate_basic_statistics();
-        let stretch_params = StretchParameters::default();
-        let stretched_data = stretch_image(
-            &image.data,
-            &stats,
-            stretch_params.factor,
-            stretch_params.black_clipping,
-        );
+        let stretch_params = StretchParams::default();
+        let stretched_data =
+            stretch_u16_to_u16(&image.data, &stats.to_stretch_statistics(), &stretch_params);
 
         // Use stretched data for detection, original for HFR
         detect_stars_with_original(
