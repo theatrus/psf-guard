@@ -22,8 +22,9 @@ use rayon::ThreadPoolBuilder;
 use seiza_background::{BackgroundConfig, BackgroundFit, CorrectionMode};
 use seiza_stacking::{
     combine_lrgb, combine_narrowband, combine_rgb, resample_to_reference, write_color_fits_f32,
-    ColorComposition, ColorNormalization, ColorOptions, ColorTransfer, FitsFrame, ForaxxOptions,
-    LinearImage, NarrowbandPalette, Registrar, RegistrationOptions,
+    write_processed_image_fits_f32, ColorComposition, ColorNormalization, ColorOptions,
+    ColorTransfer, FitsFrame, ForaxxOptions, LinearImage, NarrowbandPalette, Registrar,
+    RegistrationOptions,
 };
 use seiza_stretch::StretchStack;
 use serde::{Deserialize, Serialize};
@@ -39,10 +40,12 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-const STACK_COLOR_CACHE_VERSION: u32 = 4;
-const SEIZA_BACKGROUND_VERSION: &str = "0.1.0-git-d6b8dfc";
+const STACK_COLOR_CACHE_VERSION: u32 = 5;
+const COLOR_INPUT_CACHE_VERSION: u32 = 1;
+const SEIZA_BACKGROUND_VERSION: &str = "0.1.0-git-b9bdcd1";
 const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
 const COLOR_BYTES_PER_PIXEL: u64 = 64;
+const COLOR_DECONVOLUTION_BYTES_PER_PIXEL: u64 = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -156,6 +159,11 @@ pub struct StackColorProcessing {
     /// independently before cross-channel registration.
     #[serde(default)]
     pub background_extraction: Option<StackBackgroundExtraction>,
+    /// Optional deconvolution of selected registered linear input channels,
+    /// before display normalization. Empty by default: color previews never
+    /// restore pixels unless the user explicitly enables a role.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub input_deconvolutions: BTreeMap<StackColorRole, seiza_deconvolution::DeconvolutionConfig>,
     /// Ordered display stretches applied independently after registration and
     /// robust normalization of each physical input channel.
     #[serde(default)]
@@ -189,6 +197,7 @@ pub enum StackColorProgressPhase {
     LoadingSources,
     BackgroundPreparation,
     RegisteringSources,
+    DeconvolvingInputs,
     NormalizingInputs,
     StretchingInputs,
     ComposingColor,
@@ -252,11 +261,18 @@ pub struct StackColorJob {
     pub stacking_version: String,
     #[serde(default)]
     pub background_version: String,
+    #[serde(default)]
+    pub deconvolution_version: String,
+    #[serde(default)]
+    pub linear_input_id: Option<String>,
     pub sources: Vec<StackColorSource>,
     #[serde(default)]
     pub processing: Option<StackColorProcessing>,
     #[serde(default)]
     pub resolved_input_stretches: BTreeMap<StackColorRole, Vec<serde_json::Value>>,
+    #[serde(default)]
+    pub resolved_input_deconvolutions:
+        BTreeMap<StackColorRole, super::stretch::StackDeconvolutionResult>,
     #[serde(default)]
     pub resolved_output_stretches: Vec<serde_json::Value>,
     #[serde(default)]
@@ -297,6 +313,15 @@ struct LatestStackColorPreviews {
     jobs: Vec<StackColorJob>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedColorInputs {
+    schema_version: u32,
+    input_id: String,
+    roles: Vec<StackColorRole>,
+    resolved_backgrounds: BTreeMap<StackColorRole, BackgroundFit>,
+    resolved_deconvolutions: BTreeMap<StackColorRole, super::stretch::StackDeconvolutionResult>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StackColorCatalog {
     pub schema_version: u32,
@@ -334,6 +359,9 @@ fn color_progress(
     let output_stages = processing
         .map(|processing| processing.output_stretches.len())
         .unwrap_or(0);
+    let deconvolution_units = processing
+        .map(|processing| processing.input_deconvolutions.len())
+        .unwrap_or(0);
     let background_units = if processing
         .and_then(|processing| processing.background_extraction.as_ref())
         .is_some()
@@ -357,6 +385,11 @@ fn color_progress(
             StackColorProgressPhase::RegisteringSources,
             "Registering source stacks",
             channel_count,
+        ),
+        (
+            StackColorProgressPhase::DeconvolvingInputs,
+            "Deconvolving input channels",
+            deconvolution_units,
         ),
         (
             StackColorProgressPhase::NormalizingInputs,
@@ -489,6 +522,24 @@ impl ColorProgressTracker<'_> {
                 entry.label = label.clone();
                 entry.completed_units = entry.total_units;
                 entry.state = StackColorProgressState::Skipped;
+                job.progress.completed_units += remaining;
+            }
+        });
+    }
+
+    fn reuse(&self, phase: StackColorProgressPhase, label: impl Into<String>) {
+        let label = label.into();
+        self.state.stack_previews.update_color(self.job_id, |job| {
+            if let Some(entry) = job
+                .progress
+                .phases
+                .iter_mut()
+                .find(|entry| entry.phase == phase)
+            {
+                let remaining = entry.total_units.saturating_sub(entry.completed_units);
+                entry.label = label.clone();
+                entry.completed_units = entry.total_units;
+                entry.state = StackColorProgressState::Reused;
                 job.progress.completed_units += remaining;
             }
         });
@@ -769,6 +820,24 @@ fn validate_request(request: &StackColorRequest) -> Result<(), AppError> {
                     composition_label(request.kind, request.palette)
                 )));
             }
+            if let Some(error) = processing
+                .input_deconvolutions
+                .values()
+                .find_map(|request| request.validate().err())
+            {
+                return Err(AppError::BadRequest(error.to_string()));
+            }
+            if let Some(role) = processing
+                .input_deconvolutions
+                .keys()
+                .find(|role| !required.contains(role))
+            {
+                return Err(AppError::BadRequest(format!(
+                    "{} is not an input to {}",
+                    role.label(),
+                    composition_label(request.kind, request.palette)
+                )));
+            }
             if processing.input_stretches.values().flatten().any(|stage| {
                 stage.color_strategy == seiza_stretch::ColorStrategy::LuminancePreserving
             }) {
@@ -826,6 +895,13 @@ fn prepare_color_job(
     }
 
     let label = composition_label(request.kind, request.palette).to_string();
+    let linear_input_id = request
+        .processing
+        .as_ref()
+        .map(|processing| {
+            color_input_cache_id(&ctx.id, project_id, request.target_id, processing, &sources)
+        })
+        .transpose()?;
     let mut hasher = Sha256::new();
     hasher.update(ctx.id.as_bytes());
     hasher.update(project_id.to_le_bytes());
@@ -834,6 +910,13 @@ fn prepare_color_job(
     hasher.update(STACK_COLOR_CACHE_VERSION.to_le_bytes());
     hasher.update(SEIZA_STACKING_VERSION.as_bytes());
     hasher.update(SEIZA_BACKGROUND_VERSION.as_bytes());
+    if request
+        .processing
+        .as_ref()
+        .is_some_and(|processing| !processing.input_deconvolutions.is_empty())
+    {
+        hasher.update(super::stretch::deconvolution_version().as_bytes());
+    }
     hasher.update(serde_json::to_vec(&request.processing).map_err(|error| {
         AppError::InternalError(format!(
             "Failed to encode color processing options: {error}"
@@ -874,9 +957,17 @@ fn prepare_color_job(
             cache_version: STACK_COLOR_CACHE_VERSION,
             stacking_version: SEIZA_STACKING_VERSION.into(),
             background_version: SEIZA_BACKGROUND_VERSION.into(),
+            deconvolution_version: request
+                .processing
+                .as_ref()
+                .filter(|processing| !processing.input_deconvolutions.is_empty())
+                .map(|_| super::stretch::deconvolution_version())
+                .unwrap_or_default(),
+            linear_input_id,
             sources,
             processing: request.processing.clone(),
             resolved_input_stretches: BTreeMap::new(),
+            resolved_input_deconvolutions: BTreeMap::new(),
             resolved_output_stretches: Vec::new(),
             resolved_backgrounds: BTreeMap::new(),
             preview_url: format!(
@@ -893,6 +984,48 @@ fn prepare_color_job(
         },
         cache_root: ctx.cache_dir_path.clone(),
     })
+}
+
+fn color_input_cache_id(
+    database_id: &str,
+    project_id: i32,
+    target_id: i32,
+    processing: &StackColorProcessing,
+    sources: &[StackColorSource],
+) -> Result<String, AppError> {
+    let mut hasher = Sha256::new();
+    hasher.update(database_id.as_bytes());
+    hasher.update(project_id.to_le_bytes());
+    hasher.update(target_id.to_le_bytes());
+    hasher.update(COLOR_INPUT_CACHE_VERSION.to_le_bytes());
+    hasher.update(SEIZA_STACKING_VERSION.as_bytes());
+    if processing.background_extraction.is_some() {
+        hasher.update(SEIZA_BACKGROUND_VERSION.as_bytes());
+    }
+    if !processing.input_deconvolutions.is_empty() {
+        hasher.update(seiza_deconvolution::ALGORITHM_VERSION.to_le_bytes());
+    }
+    hasher.update(
+        serde_json::to_vec(&(
+            &processing.background_extraction,
+            &processing.input_deconvolutions,
+        ))
+        .map_err(|error| {
+            AppError::InternalError(format!("Failed to encode color input processing: {error}"))
+        })?,
+    );
+    for source in sources {
+        hasher.update([source.role as u8]);
+        hasher.update(source.filter_name.as_bytes());
+        hasher.update(source.job_id.as_bytes());
+        hasher.update(source.group_index.to_le_bytes());
+        hasher.update(source.artifact_revision.as_bytes());
+    }
+    let mut id = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        write!(&mut id, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    Ok(id)
 }
 
 fn required_roles(
@@ -1059,27 +1192,56 @@ fn compose_color(
         StackColorKind::Lrgb => StackColorRole::Luminance,
         StackColorKind::Narrowband => StackColorRole::Ha,
     };
-    progress.begin(
-        StackColorProgressPhase::LoadingSources,
-        "Loading source stacks",
-        None,
-        None,
-    );
     let reference_source = job
         .sources
         .iter()
         .find(|source| source.role == reference_role)
         .ok_or_else(|| "Color job has no reference channel".to_string())?;
-    progress.begin(
-        StackColorProgressPhase::LoadingSources,
-        format!("Loading {} stack", reference_role.label()),
-        Some(reference_role),
-        None,
-    );
-    let mut reference = load_source_frame(cache_root, reference_source)?;
-    progress.advance(StackColorProgressPhase::LoadingSources, 1);
+    let cached_inputs = job.linear_input_id.as_deref().and_then(|input_id| {
+        load_cached_color_input_manifest(cache_root, input_id, reference_role, &job.sources)
+    });
+    let reused_inputs = cached_inputs.is_some();
+    let (mut reference, mut resolved_backgrounds, mut resolved_deconvolutions) =
+        if let Some((manifest, reference)) = cached_inputs {
+            state.stack_previews.update_color(&job.job_id, |current| {
+                current.processed_channels = current.total_channels;
+                current.resolved_backgrounds = manifest.resolved_backgrounds.clone();
+                current.resolved_input_deconvolutions = manifest.resolved_deconvolutions.clone();
+            });
+            (
+                reference,
+                manifest.resolved_backgrounds,
+                manifest.resolved_deconvolutions,
+            )
+        } else {
+            progress.begin(
+                StackColorProgressPhase::LoadingSources,
+                "Loading source stacks",
+                None,
+                None,
+            );
+            progress.begin(
+                StackColorProgressPhase::LoadingSources,
+                format!("Loading {} stack", reference_role.label()),
+                Some(reference_role),
+                None,
+            );
+            let reference = load_source_frame(cache_root, reference_source)?;
+            progress.advance(StackColorProgressPhase::LoadingSources, 1);
+            (reference, BTreeMap::new(), BTreeMap::new())
+        };
     let pixels = reference.image.pixel_count();
-    let estimate = (pixels as u64).saturating_mul(COLOR_BYTES_PER_PIXEL);
+    let bytes_per_pixel = COLOR_BYTES_PER_PIXEL
+        + if job
+            .processing
+            .as_ref()
+            .is_some_and(|processing| !processing.input_deconvolutions.is_empty())
+        {
+            COLOR_DECONVOLUTION_BYTES_PER_PIXEL
+        } else {
+            0
+        };
+    let estimate = (pixels as u64).saturating_mul(bytes_per_pixel);
     let policy = state.worker_policy();
     if let Some(available) = crate::concurrency::available_memory_bytes()
         && estimate > (available as f64 * policy.memory_budget_fraction) as u64
@@ -1107,27 +1269,51 @@ fn compose_color(
         budget.rationale
     );
 
-    // Enforce the whole-pipeline memory budget after loading only the
-    // reference. The remaining channel buffers are admitted only after that
-    // check, so an oversized color job cannot allocate every source first.
+    // Check the whole-pipeline budget after loading only the reference. Admit
+    // the other channel buffers only after that check.
     let mut frames = BTreeMap::new();
     for source in job
         .sources
         .iter()
         .filter(|source| source.role != reference_role)
     {
-        progress.begin(
-            StackColorProgressPhase::LoadingSources,
-            format!("Loading {} stack", source.role.label()),
-            Some(source.role),
-            None,
-        );
-        frames.insert(source.role, load_source_frame(cache_root, source)?);
-        progress.advance(StackColorProgressPhase::LoadingSources, 1);
+        let frame = if reused_inputs {
+            let input_id = job
+                .linear_input_id
+                .as_deref()
+                .expect("cached inputs have an identity");
+            let frame = FitsFrame::open(color_input_fits_path(cache_root, input_id, source.role))
+                .map_err(|error| error.to_string())?;
+            validate_mono(&frame.image, source.role)?;
+            frame
+        } else {
+            progress.begin(
+                StackColorProgressPhase::LoadingSources,
+                format!("Loading {} stack", source.role.label()),
+                Some(source.role),
+                None,
+            );
+            let frame = load_source_frame(cache_root, source)?;
+            progress.advance(StackColorProgressPhase::LoadingSources, 1);
+            frame
+        };
+        frames.insert(source.role, frame);
     }
-    progress.finish(StackColorProgressPhase::LoadingSources);
+    if reused_inputs {
+        progress.reuse(
+            StackColorProgressPhase::LoadingSources,
+            "Reused prepared input channels",
+        );
+    } else {
+        progress.finish(StackColorProgressPhase::LoadingSources);
+    }
 
-    if let Some(extraction) = job
+    if reused_inputs {
+        progress.reuse(
+            StackColorProgressPhase::BackgroundPreparation,
+            "Reused prepared backgrounds",
+        );
+    } else if let Some(extraction) = job
         .processing
         .as_ref()
         .and_then(|processing| processing.background_extraction.as_ref())
@@ -1173,8 +1359,11 @@ fn compose_color(
                     })?;
                 progress.advance(StackColorProgressPhase::BackgroundPreparation, 1);
                 state.stack_previews.update_color(&job.job_id, |current| {
-                    current.resolved_backgrounds.insert(source.role, fit);
+                    current
+                        .resolved_backgrounds
+                        .insert(source.role, fit.clone());
                 });
+                resolved_backgrounds.insert(source.role, fit);
             }
             Ok::<(), String>(())
         })?;
@@ -1189,101 +1378,170 @@ fn compose_color(
     pool.install(|| {
         let reference_headers = reference.headers;
         let reference_image = reference.image;
-        progress.begin(
-            StackColorProgressPhase::RegisteringSources,
-            format!("Using {} as registration reference", reference_role.label()),
-            Some(reference_role),
-            None,
-        );
-        let registrar = Registrar::new(&reference_image, RegistrationOptions::default())
-            .map_err(|error| error.to_string())?;
         let mut images = BTreeMap::new();
         images.insert(reference_role, reference_image);
-        progress.advance(StackColorProgressPhase::RegisteringSources, 1);
-        state.stack_previews.update_color(&job.job_id, |current| {
-            current.processed_channels = 1;
-        });
-
-        for source in job
-            .sources
-            .iter()
-            .filter(|source| source.role != reference_role)
-        {
+        if reused_inputs {
+            images.extend(frames.into_iter().map(|(role, frame)| (role, frame.image)));
+            progress.reuse(
+                StackColorProgressPhase::RegisteringSources,
+                "Reused registered input channels",
+            );
+        } else {
             progress.begin(
                 StackColorProgressPhase::RegisteringSources,
-                format!("Registering {}", source.role.label()),
-                Some(source.role),
+                format!("Using {} as registration reference", reference_role.label()),
+                Some(reference_role),
                 None,
             );
-            let frame = frames
-                .remove(&source.role)
-                .ok_or_else(|| format!("{} source was not loaded", source.role.label()))?;
-            let registration = registrar.register(&frame.image).map_err(|error| {
-                format!(
-                    "Failed to register {} to {}: {error}",
-                    source.role.label(),
-                    reference_role.label()
-                )
-            })?;
-            if registration.rms_error_pixels > MAX_REGISTRATION_RMS_PIXELS {
-                return Err(format!(
-                    "{} registration RMS {:.3}px exceeds {:.3}px",
-                    source.role.label(),
-                    registration.rms_error_pixels,
-                    MAX_REGISTRATION_RMS_PIXELS
-                ));
-            }
-            tracing::info!(
-                "Stack color {} registered {}: {:.3}px RMS, {:.1}px drift, {} stars",
-                job.job_id,
-                source.role.label(),
-                registration.rms_error_pixels,
-                registration.drift_pixels,
-                registration.matched_stars
-            );
-            let aligned = resample_to_reference(
-                &frame.image,
-                images[&reference_role].width,
-                images[&reference_role].height,
-                registration.transform,
-            )
-            .map_err(|error| {
-                format!(
-                    "Failed to resample {} onto the {} reference: {error}",
-                    source.role.label(),
-                    reference_role.label()
-                )
-            })?;
-            images.insert(source.role, aligned);
+            let registrar =
+                Registrar::new(&images[&reference_role], RegistrationOptions::default())
+                    .map_err(|error| error.to_string())?;
             progress.advance(StackColorProgressPhase::RegisteringSources, 1);
             state.stack_previews.update_color(&job.job_id, |current| {
-                current.processed_channels += 1;
+                current.processed_channels = 1;
             });
-        }
-        progress.finish(StackColorProgressPhase::RegisteringSources);
 
-        let options = if let Some(processing) = &job.processing {
-            progress.begin(
-                StackColorProgressPhase::NormalizingInputs,
-                "Normalizing input channels",
-                None,
-                None,
-            );
-            for source in &job.sources {
+            for source in job
+                .sources
+                .iter()
+                .filter(|source| source.role != reference_role)
+            {
                 progress.begin(
-                    StackColorProgressPhase::NormalizingInputs,
-                    format!("Normalizing {}", source.role.label()),
+                    StackColorProgressPhase::RegisteringSources,
+                    format!("Registering {}", source.role.label()),
                     Some(source.role),
                     None,
                 );
-                let image = images.remove(&source.role).ok_or_else(|| {
-                    format!("{} registered image is missing", source.role.label())
+                let frame = frames
+                    .remove(&source.role)
+                    .ok_or_else(|| format!("{} source was not loaded", source.role.label()))?;
+                let registration = registrar.register(&frame.image).map_err(|error| {
+                    format!(
+                        "Failed to register {} to {}: {error}",
+                        source.role.label(),
+                        reference_role.label()
+                    )
                 })?;
-                let normalized = super::stretch::normalize_linear_image(&image)?.0;
-                images.insert(source.role, normalized);
-                progress.advance(StackColorProgressPhase::NormalizingInputs, 1);
+                if registration.rms_error_pixels > MAX_REGISTRATION_RMS_PIXELS {
+                    return Err(format!(
+                        "{} registration RMS {:.3}px exceeds {:.3}px",
+                        source.role.label(),
+                        registration.rms_error_pixels,
+                        MAX_REGISTRATION_RMS_PIXELS
+                    ));
+                }
+                tracing::info!(
+                    "Stack color {} registered {}: {:.3}px RMS, {:.1}px drift, {} stars",
+                    job.job_id,
+                    source.role.label(),
+                    registration.rms_error_pixels,
+                    registration.drift_pixels,
+                    registration.matched_stars
+                );
+                let aligned = resample_to_reference(
+                    &frame.image,
+                    images[&reference_role].width,
+                    images[&reference_role].height,
+                    registration.transform,
+                )
+                .map_err(|error| {
+                    format!(
+                        "Failed to resample {} onto the {} reference: {error}",
+                        source.role.label(),
+                        reference_role.label()
+                    )
+                })?;
+                images.insert(source.role, aligned);
+                progress.advance(StackColorProgressPhase::RegisteringSources, 1);
+                state.stack_previews.update_color(&job.job_id, |current| {
+                    current.processed_channels += 1;
+                });
             }
-            progress.finish(StackColorProgressPhase::NormalizingInputs);
+            progress.finish(StackColorProgressPhase::RegisteringSources);
+        }
+
+        let options = if let Some(processing) = &job.processing {
+            if reused_inputs {
+                progress.reuse(
+                    StackColorProgressPhase::DeconvolvingInputs,
+                    "Reused prepared deconvolution",
+                );
+                progress.reuse(
+                    StackColorProgressPhase::NormalizingInputs,
+                    "Reused normalized input channels",
+                );
+            } else {
+                if processing.input_deconvolutions.is_empty() {
+                    progress.skip(
+                        StackColorProgressPhase::DeconvolvingInputs,
+                        "Input deconvolution skipped (disabled)",
+                    );
+                } else {
+                    for source in &job.sources {
+                        let Some(request) =
+                            processing.input_deconvolutions.get(&source.role).copied()
+                        else {
+                            continue;
+                        };
+                        progress.begin(
+                            StackColorProgressPhase::DeconvolvingInputs,
+                            format!("Deconvolving {}", source.role.label()),
+                            Some(source.role),
+                            None,
+                        );
+                        let image = images.remove(&source.role).ok_or_else(|| {
+                            format!("{} registered image is missing", source.role.label())
+                        })?;
+                        let role_label = source.role.label();
+                        let (restored, result) = super::stretch::apply_deconvolution(
+                            &image, request,
+                        )
+                        .map_err(|error| format!("Failed to deconvolve {role_label}: {error}"))?;
+                        images.insert(source.role, restored);
+                        resolved_deconvolutions.insert(source.role, result.clone());
+                        state.stack_previews.update_color(&job.job_id, |current| {
+                            current
+                                .resolved_input_deconvolutions
+                                .insert(source.role, result);
+                        });
+                        progress.advance(StackColorProgressPhase::DeconvolvingInputs, 1);
+                    }
+                    progress.finish(StackColorProgressPhase::DeconvolvingInputs);
+                }
+
+                progress.begin(
+                    StackColorProgressPhase::NormalizingInputs,
+                    "Normalizing input channels",
+                    None,
+                    None,
+                );
+                for source in &job.sources {
+                    progress.begin(
+                        StackColorProgressPhase::NormalizingInputs,
+                        format!("Normalizing {}", source.role.label()),
+                        Some(source.role),
+                        None,
+                    );
+                    let image = images.remove(&source.role).ok_or_else(|| {
+                        format!("{} registered image is missing", source.role.label())
+                    })?;
+                    let normalized = super::stretch::normalize_linear_image(&image)?.0;
+                    images.insert(source.role, normalized);
+                    progress.advance(StackColorProgressPhase::NormalizingInputs, 1);
+                }
+                progress.finish(StackColorProgressPhase::NormalizingInputs);
+                if let Some(input_id) = job.linear_input_id.as_deref() {
+                    store_cached_color_inputs(
+                        cache_root,
+                        input_id,
+                        &job.sources,
+                        &images,
+                        &reference_headers,
+                        &resolved_backgrounds,
+                        &resolved_deconvolutions,
+                    )?;
+                }
+            }
 
             let input_stage_count = processing
                 .input_stretches
@@ -1362,6 +1620,10 @@ fn compose_color(
                 "Preparing legacy quick-look normalization",
                 None,
                 None,
+            );
+            progress.skip(
+                StackColorProgressPhase::DeconvolvingInputs,
+                "Input deconvolution skipped (legacy quick look)",
             );
             progress.skip(
                 StackColorProgressPhase::StretchingInputs,
@@ -1534,6 +1796,68 @@ fn load_source_frame(cache_root: &FsPath, source: &StackColorSource) -> Result<F
     })?;
     validate_mono(&frame.image, source.role)?;
     Ok(frame)
+}
+
+fn load_cached_color_input_manifest(
+    cache_root: &FsPath,
+    input_id: &str,
+    reference_role: StackColorRole,
+    sources: &[StackColorSource],
+) -> Option<(CachedColorInputs, FitsFrame)> {
+    let bytes = std::fs::read(color_input_manifest_path(cache_root, input_id)).ok()?;
+    let manifest = serde_json::from_slice::<CachedColorInputs>(&bytes).ok()?;
+    let roles = sources.iter().map(|source| source.role).collect::<Vec<_>>();
+    if manifest.schema_version != COLOR_INPUT_CACHE_VERSION
+        || manifest.input_id != input_id
+        || manifest.roles != roles
+    {
+        return None;
+    }
+    if !roles
+        .iter()
+        .all(|role| color_input_fits_path(cache_root, input_id, *role).is_file())
+    {
+        return None;
+    }
+    let reference =
+        FitsFrame::open(color_input_fits_path(cache_root, input_id, reference_role)).ok()?;
+    validate_mono(&reference.image, reference_role).ok()?;
+    Some((manifest, reference))
+}
+
+fn store_cached_color_inputs(
+    cache_root: &FsPath,
+    input_id: &str,
+    sources: &[StackColorSource],
+    images: &BTreeMap<StackColorRole, LinearImage>,
+    reference_headers: &[(String, seiza_fits::HeaderValue)],
+    resolved_backgrounds: &BTreeMap<StackColorRole, BackgroundFit>,
+    resolved_deconvolutions: &BTreeMap<StackColorRole, super::stretch::StackDeconvolutionResult>,
+) -> Result<(), String> {
+    for source in sources {
+        let image = images
+            .get(&source.role)
+            .ok_or_else(|| format!("{} prepared image is missing", source.role.label()))?;
+        let destination = color_input_fits_path(cache_root, input_id, source.role);
+        let parent = destination
+            .parent()
+            .ok_or_else(|| "Color input FITS path has no parent".to_string())?;
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        let temporary = destination.with_extension(format!("{}.tmp.fits", std::process::id()));
+        write_processed_image_fits_f32(&temporary, image, reference_headers, &[])
+            .map_err(|error| error.to_string())?;
+        std::fs::rename(&temporary, &destination).map_err(|error| error.to_string())?;
+    }
+    write_json_atomic(
+        &color_input_manifest_path(cache_root, input_id),
+        &CachedColorInputs {
+            schema_version: COLOR_INPUT_CACHE_VERSION,
+            input_id: input_id.into(),
+            roles: sources.iter().map(|source| source.role).collect(),
+            resolved_backgrounds: resolved_backgrounds.clone(),
+            resolved_deconvolutions: resolved_deconvolutions.clone(),
+        },
+    )
 }
 
 fn render_progress_phase(
@@ -1813,6 +2137,11 @@ fn color_job_outdated_reason(
     if job.cache_version != STACK_COLOR_CACHE_VERSION
         || job.stacking_version != SEIZA_STACKING_VERSION
         || job.background_version != SEIZA_BACKGROUND_VERSION
+        || (job
+            .processing
+            .as_ref()
+            .is_some_and(|processing| !processing.input_deconvolutions.is_empty())
+            && job.deconvolution_version != super::stretch::deconvolution_version())
     {
         return Some("the color processing version changed".into());
     }
@@ -1887,6 +2216,33 @@ fn color_original_preview_path(cache_root: &FsPath, job_id: &str) -> PathBuf {
 
 fn color_fits_path(cache_root: &FsPath, job_id: &str) -> PathBuf {
     color_dir(cache_root, job_id).join("color.fits")
+}
+
+fn color_input_dir(cache_root: &FsPath, input_id: &str) -> PathBuf {
+    cache_root
+        .join("stack-previews")
+        .join("color-inputs")
+        .join(input_id)
+}
+
+fn color_input_manifest_path(cache_root: &FsPath, input_id: &str) -> PathBuf {
+    color_input_dir(cache_root, input_id).join("manifest.json")
+}
+
+fn color_input_fits_path(cache_root: &FsPath, input_id: &str, role: StackColorRole) -> PathBuf {
+    color_input_dir(cache_root, input_id).join(format!("{}.fits", role_cache_name(role)))
+}
+
+fn role_cache_name(role: StackColorRole) -> &'static str {
+    match role {
+        StackColorRole::Luminance => "luminance",
+        StackColorRole::Red => "red",
+        StackColorRole::Green => "green",
+        StackColorRole::Blue => "blue",
+        StackColorRole::Ha => "ha",
+        StackColorRole::Oiii => "oiii",
+        StackColorRole::Sii => "sii",
+    }
 }
 
 fn latest_color_path(cache_root: &FsPath, project_id: i32) -> PathBuf {
@@ -2101,6 +2457,10 @@ mod tests {
                 config: BackgroundConfig::default(),
                 correction_mode: CorrectionMode::Subtract,
             }),
+            input_deconvolutions: BTreeMap::from([(
+                StackColorRole::Red,
+                seiza_deconvolution::DeconvolutionConfig::conservative(3.1),
+            )]),
             input_stretches: BTreeMap::from([
                 (
                     StackColorRole::Red,
@@ -2131,8 +2491,8 @@ mod tests {
 
         let progress = color_progress(3, Some(&processing));
 
-        assert_eq!(progress.phases.len(), 11);
-        assert_eq!(progress.total_units, 24);
+        assert_eq!(progress.phases.len(), 12);
+        assert_eq!(progress.total_units, 25);
         assert_eq!(
             progress
                 .phases
@@ -2146,6 +2506,9 @@ mod tests {
             phase.phase == StackColorProgressPhase::BackgroundPreparation && phase.total_units == 6
         }));
         assert!(progress.phases.iter().any(|phase| {
+            phase.phase == StackColorProgressPhase::DeconvolvingInputs && phase.total_units == 1
+        }));
+        assert!(progress.phases.iter().any(|phase| {
             phase.phase == StackColorProgressPhase::RenderingOriginal && phase.total_units == 1
         }));
         assert!(progress.phases.iter().any(|phase| {
@@ -2154,5 +2517,69 @@ mod tests {
         assert!(progress.phases.iter().any(|phase| {
             phase.phase == StackColorProgressPhase::PublishingArtifacts && phase.total_units == 1
         }));
+    }
+
+    #[test]
+    fn disabled_deconvolution_keeps_legacy_processing_serialization() {
+        let processing = StackColorProcessing::default();
+        let encoded = serde_json::to_value(processing).unwrap();
+
+        assert!(encoded.get("input_deconvolutions").is_none());
+    }
+
+    #[test]
+    fn color_input_cache_identity_ignores_stretch_edits() {
+        let sources = [
+            StackColorRole::Red,
+            StackColorRole::Green,
+            StackColorRole::Blue,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, role)| StackColorSource {
+            role,
+            filter_name: role.label().into(),
+            job_id: format!("{index:064x}"),
+            group_index: 0,
+            artifact_revision: format!("revision-{index}"),
+            accepted_frames: 4,
+        })
+        .collect::<Vec<_>>();
+        let mut first = StackColorProcessing::default();
+        first.input_deconvolutions.insert(
+            StackColorRole::Green,
+            seiza_deconvolution::DeconvolutionConfig::conservative(3.1),
+        );
+        first.input_stretches.insert(
+            StackColorRole::Red,
+            vec![super::super::stretch::StackStretchRequest {
+                model: seiza_stretch::StretchModel::Identity,
+                color_strategy: seiza_stretch::ColorStrategy::Linked,
+            }],
+        );
+        let mut changed_stretch = first.clone();
+        changed_stretch
+            .output_stretches
+            .push(super::super::stretch::StackStretchRequest {
+                model: seiza_stretch::StretchModel::AutoMtf(seiza_stretch::StretchParams {
+                    target_median: 0.3,
+                    shadows_clip: -2.8,
+                }),
+                color_strategy: seiza_stretch::ColorStrategy::Linked,
+            });
+        let first_id = color_input_cache_id("db", 2, 3, &first, &sources).unwrap();
+        let changed_stretch_id =
+            color_input_cache_id("db", 2, 3, &changed_stretch, &sources).unwrap();
+        let mut changed_linear = first;
+        changed_linear
+            .input_deconvolutions
+            .get_mut(&StackColorRole::Green)
+            .unwrap()
+            .amount = 0.5;
+        let changed_linear_id =
+            color_input_cache_id("db", 2, 3, &changed_linear, &sources).unwrap();
+
+        assert_eq!(first_id, changed_stretch_id);
+        assert_ne!(first_id, changed_linear_id);
     }
 }

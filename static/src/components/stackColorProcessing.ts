@@ -27,6 +27,7 @@ export function defaultBackgroundExtraction(): StackBackgroundExtraction {
 export function defaultColorProcessing(roles: StackColorRole[]): StackColorProcessing {
   return {
     background_extraction: defaultBackgroundExtraction(),
+    input_deconvolutions: {},
     input_stretches: Object.fromEntries(
       roles.map((role) => [role, [defaultStretchRequest('auto-mtf')]])
     ),
@@ -41,5 +42,9 @@ export function processingForColorBuild(
   if (!artifact || artifact.cache_version < BACKGROUND_COLOR_CACHE_VERSION) {
     return defaultColorProcessing(roles);
   }
-  return artifact.processing ?? defaultColorProcessing(roles);
+  const processing = artifact.processing ?? defaultColorProcessing(roles);
+  return {
+    ...processing,
+    input_deconvolutions: processing.input_deconvolutions ?? {},
+  };
 }
