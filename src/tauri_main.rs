@@ -372,14 +372,14 @@ fn validate_image_reveal_path(
     let database = registry
         .find(db_id)
         .ok_or_else(|| "Image catalog is not configured".to_string())?;
-    let path = std::fs::canonicalize(requested)
-        .map_err(|e| format!("Image file is not available: {e}"))?;
+    let path =
+        dunce::canonicalize(requested).map_err(|e| format!("Image file is not available: {e}"))?;
     if !path.is_file() {
         return Err("Image path does not point to a file".to_string());
     }
 
     let registered = database.image_dirs.iter().any(|root| {
-        std::fs::canonicalize(root)
+        dunce::canonicalize(root)
             .map(|root| path.starts_with(root))
             .unwrap_or(false)
     });
@@ -543,7 +543,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(validated, std::fs::canonicalize(file).unwrap());
+        assert_eq!(validated, dunce::canonicalize(file).unwrap());
     }
 
     #[test]
@@ -625,6 +625,30 @@ mod tests {
             command.get_args().collect::<Vec<_>>(),
             vec![OsStr::new(r"/select,C:\images\frame.fits")]
         );
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn validated_reveal_path_uses_an_explorer_compatible_path() {
+        use std::ffi::OsStr;
+
+        let root = tempdir().unwrap();
+        let file = root.path().join("frame.fits");
+        std::fs::write(&file, b"fits").unwrap();
+        let validated = validate_image_reveal_path(
+            &registry_with_root(root.path()),
+            "test",
+            file.to_str().unwrap(),
+        )
+        .unwrap();
+        let command = file_manager_command(&validated).unwrap();
+        let argument = command.get_args().next().unwrap();
+
+        assert_eq!(
+            argument,
+            OsStr::new(&format!("/select,{}", validated.display()))
+        );
+        assert!(!argument.to_string_lossy().contains(r"\\?\"));
     }
 
     #[test]
