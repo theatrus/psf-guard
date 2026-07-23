@@ -183,12 +183,14 @@ pub fn detect_stars_hocus_focus(
                 };
             }
         };
-        let eroded_count = binary_map.iter().filter(|&&x| x).count();
-        crate::debug_detection!(
-            "Debug HocusFocus: After erosion: {} non-zero pixels ({:.2}%)",
-            eroded_count,
-            eroded_count as f64 / binary_map.len() as f64 * 100.0
-        );
+        if crate::debug::is_debug_enabled() {
+            let eroded_count = binary_map.iter().filter(|&&x| x).count();
+            crate::debug_detection!(
+                "Debug HocusFocus: After erosion: {} non-zero pixels ({:.2}%)",
+                eroded_count,
+                eroded_count as f64 / binary_map.len() as f64 * 100.0
+            );
+        }
     }
 
     // Step 6: Find star candidates
@@ -389,34 +391,35 @@ fn create_structure_map(
         structure_map[i] = (data[i] as f64 - residual[i] as f64).max(0.0);
     }
 
-    // Debug: Check structure map statistics
-    let min = structure_map.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-    let max = structure_map
-        .iter()
-        .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-    let non_zero = structure_map.iter().filter(|&&v| v > 0.0).count();
+    // Debug statistics cost six full passes over the map — only compute
+    // them when debug output is actually enabled.
+    if crate::debug::is_debug_enabled() {
+        let min = structure_map.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = structure_map
+            .iter()
+            .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let non_zero = structure_map.iter().filter(|&&v| v > 0.0).count();
+        let above_10 = structure_map.iter().filter(|&&v| v > 10.0).count();
+        let above_50 = structure_map.iter().filter(|&&v| v > 50.0).count();
+        let above_100 = structure_map.iter().filter(|&&v| v > 100.0).count();
 
-    // Check how many pixels are above various thresholds
-    let above_10 = structure_map.iter().filter(|&&v| v > 10.0).count();
-    let above_50 = structure_map.iter().filter(|&&v| v > 50.0).count();
-    let above_100 = structure_map.iter().filter(|&&v| v > 100.0).count();
-
-    crate::debug_detection!(
-        "Debug structure_map: min={:.1}, max={:.1}, non_zero={} ({:.1}%)",
-        min,
-        max,
-        non_zero,
-        non_zero as f64 / structure_map.len() as f64 * 100.0
-    );
-    crate::debug_detection!(
-        "  Above 10: {} ({:.1}%), Above 50: {} ({:.1}%), Above 100: {} ({:.1}%)",
-        above_10,
-        above_10 as f64 / structure_map.len() as f64 * 100.0,
-        above_50,
-        above_50 as f64 / structure_map.len() as f64 * 100.0,
-        above_100,
-        above_100 as f64 / structure_map.len() as f64 * 100.0
-    );
+        crate::debug_detection!(
+            "Debug structure_map: min={:.1}, max={:.1}, non_zero={} ({:.1}%)",
+            min,
+            max,
+            non_zero,
+            non_zero as f64 / structure_map.len() as f64 * 100.0
+        );
+        crate::debug_detection!(
+            "  Above 10: {} ({:.1}%), Above 50: {} ({:.1}%), Above 100: {} ({:.1}%)",
+            above_10,
+            above_10 as f64 / structure_map.len() as f64 * 100.0,
+            above_50,
+            above_50 as f64 / structure_map.len() as f64 * 100.0,
+            above_100,
+            above_100 as f64 / structure_map.len() as f64 * 100.0
+        );
+    }
 
     // Apply smoothing to blend edges
     let kernel_size = params.structure_layers * 2 + 1;
@@ -446,20 +449,29 @@ fn smooth_gaussian(data: &mut [f64], width: usize, height: usize, kernel_size: u
         *k /= sum;
     }
 
-    // Apply convolution
+    // Apply convolution, axis-swapped like apply_gaussian_blur: per tap,
+    // add tap * shifted-row into a row accumulator. Each output pixel
+    // receives its terms in the same (ky, kx) order as the naive loop, so
+    // the sums are bit-identical, and the inner loop vectorizes.
+    if width < kernel_size || height < kernel_size {
+        return;
+    }
     let original = data.to_vec();
+    let ilen = width - 2 * radius;
+    let mut acc = vec![0f64; ilen];
     for y in radius..(height - radius) {
-        for x in radius..(width - radius) {
-            let mut sum = 0.0;
-            for ky in 0..kernel_size {
-                for kx in 0..kernel_size {
-                    let sy = y + ky - radius;
-                    let sx = x + kx - radius;
-                    sum += original[sy * width + sx] * kernel[ky * kernel_size + kx];
+        acc.fill(0.0);
+        for ky in 0..kernel_size {
+            let srow = &original[(y + ky - radius) * width..(y + ky - radius + 1) * width];
+            for kx in 0..kernel_size {
+                let kv = kernel[ky * kernel_size + kx];
+                let sr = &srow[kx..kx + ilen];
+                for (a, &v) in acc.iter_mut().zip(sr.iter()) {
+                    *a += v * kv;
                 }
             }
-            data[y * width + x] = sum;
         }
+        data[y * width + radius..y * width + radius + ilen].copy_from_slice(&acc);
     }
 }
 
@@ -477,28 +489,34 @@ fn kappa_sigma_noise_estimate(
     let mut last_mean = 1.0;
     let mut num_iterations = 0;
 
-    // Work with a copy of the data
-    let data_vec: Vec<f64> = data.to_vec();
-
     while num_iterations < max_iterations {
-        // Create mask for values below threshold
-        let mask: Vec<f64> = if num_iterations > 0 {
-            data_vec
-                .iter()
-                .filter(|&&x| x > f64::EPSILON && x < threshold - f64::EPSILON)
-                .copied()
-                .collect()
-        } else {
-            data_vec.clone()
+        // Stream the clipped subset instead of collecting it: the filter
+        // preserves element order, and the mean and variance passes visit
+        // the same values in the same order as they did over the collected
+        // mask, so the sums are bit-identical — without allocating up to
+        // the full map size on every iteration.
+        let keep = |x: &&f64| -> bool {
+            num_iterations == 0 || (**x > f64::EPSILON && **x < threshold - f64::EPSILON)
         };
 
-        if mask.is_empty() {
+        let mut count = 0usize;
+        let mut sum = 0.0f64;
+        for x in data.iter().filter(keep) {
+            sum += *x;
+            count += 1;
+        }
+        if count == 0 {
             break;
         }
 
         // Calculate mean and standard deviation
-        let mean = mask.iter().sum::<f64>() / mask.len() as f64;
-        let variance = mask.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / mask.len() as f64;
+        let mean = sum / count as f64;
+        let variance = data
+            .iter()
+            .filter(keep)
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>()
+            / count as f64;
         let sigma = variance.sqrt();
 
         num_iterations += 1;
