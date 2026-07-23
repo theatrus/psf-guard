@@ -122,8 +122,8 @@ Implementation tracker and design rationale: [MULTI_DB_PLAN.md](./MULTI_DB_PLAN.
   persistent reload, rendered object overlay, and keyboard toggling.
 
 ### Satellite track prediction (2026-07)
-- **Boundary**: `src/satellites.rs` uses Seiza 0.11.2 and
-  `seiza-satellites 0.4.1` to predict named orbital crossings through one solved
+- **Boundary**: `src/satellites.rs` uses Seiza 0.12.0 and
+  `seiza-satellites 0.4.2` to predict named orbital crossings through one solved
   exposure. `association = predicted_not_pixel_detected` is intentional:
   never present a catalog prediction as a trail found in image pixels.
 - **Inputs**: a solved WCS, UTC shutter bounds (`DATE-BEG`/`DATE-OBS` plus

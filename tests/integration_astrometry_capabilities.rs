@@ -95,8 +95,8 @@ async fn capabilities_and_validation_report_a_partial_data_directory() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["data"]["seiza_version"], "0.11.2");
-    assert_eq!(body["data"]["seiza_fits_version"], "0.1.6");
+    assert_eq!(body["data"]["seiza_version"], "0.12.0");
+    assert_eq!(body["data"]["seiza_fits_version"], "0.2.0");
     assert_eq!(
         body["data"]["resources"]["objects"]["status"],
         serde_json::to_value(AstrometryResourceStatus::Available).unwrap()

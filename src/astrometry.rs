@@ -10,8 +10,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-pub const SEIZA_VERSION: &str = "0.11.2";
-pub const SEIZA_FITS_VERSION: &str = "0.1.6";
+pub const SEIZA_VERSION: &str = "0.12.0";
+pub const SEIZA_FITS_VERSION: &str = "0.2.0";
 
 pub type AstrometryResourcePath = Result<Option<PathBuf>, seiza::data_paths::DataPathError>;
 

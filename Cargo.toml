@@ -35,13 +35,10 @@ seiza = "0.12.0"
 seiza-imgproc = "0.2.0"
 seiza-fits = "=0.2.0"
 seiza-satellites = { version = "0.4.2", features = ["serde"] }
-# Temporary pins to Seiza main for stacking, color composition, background
-# extraction, deconvolution, and interactive stretching until these support
-# crates are published.
-seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "5bb77362a2028ef9819687b9db19cc53728bd3da" }
-seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "5bb77362a2028ef9819687b9db19cc53728bd3da" }
-seiza-background = { git = "https://github.com/theatrus/seiza", rev = "5bb77362a2028ef9819687b9db19cc53728bd3da" }
-seiza-deconvolution = { git = "https://github.com/theatrus/seiza", rev = "5bb77362a2028ef9819687b9db19cc53728bd3da" }
+seiza-stacking = "0.1.0"
+seiza-stretch = "0.1.0"
+seiza-background = "0.1.0"
+seiza-deconvolution = "0.1.0"
 sha2 = "0.11"
 rayon = "1"
 bumpalo = { version = "3.20", features = ["collections"] }
@@ -101,12 +98,3 @@ overflow-checks = false
 
 [build-dependencies]
 tauri-build = { version = "2.6.2", features = [] }
-
-# Interim source unification for the unreleased seiza-stacking crate. Its
-# workspace path dependencies otherwise introduce second copies of these
-# released crates from Git, which cargo vendor cannot represent alongside the
-# crates.io packages with the same name and version. Remove this patch when
-# seiza-stacking is published.
-[patch.crates-io]
-seiza = { git = "https://github.com/theatrus/seiza", rev = "5bb77362a2028ef9819687b9db19cc53728bd3da" }
-seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "5bb77362a2028ef9819687b9db19cc53728bd3da" }
