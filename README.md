@@ -362,6 +362,8 @@ features are ready, keeps download progress across page reloads, and can
 validate every installed file. Catalog packages are additive; **Blind
 solving** is the recommended default.
 
+![Settings showing Seiza catalog readiness, package installation, validation, and database quality actions](docs/settings-catalog-quality.png)
+
 For a manual or headless install, get the `seiza` CLI from the
 [Seiza releases](https://github.com/theatrus/seiza/releases) or with
 `cargo install seiza-cli --version 0.12.0`, then download a bundle once:
@@ -527,6 +529,24 @@ score caps, cache safety, and CLI behavior:
 
 Full documentation — the detection stack, annotated diagnostic examples,
 tuning, and safety properties: **[docs/SCREENING.md](docs/SCREENING.md)**.
+
+## 📤 Export accepted frames for stacking
+
+After grading, expand a project on **Overview** and choose **⬇ Export**. The
+desktop app writes a WBPP-style target/filter tree to a folder you choose. A
+browser downloads the same tree as a ZIP. Rejected frames never enter the
+export.
+
+![Overview project card with the Export action](docs/export-overview.png)
+
+You can export a whole project or one target. The action appears when PSF Guard
+has found at least one accepted source file. The CLI offers the same filters
+and a dry run:
+
+```bash
+psf-guard export my-db --dest ./stacking --dry-run
+psf-guard export my-db --dest ./stacking
+```
 
 ## 🗂️ Managing rejected files
 

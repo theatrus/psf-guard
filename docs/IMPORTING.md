@@ -117,6 +117,8 @@ reads the server's job state when it opens, so navigation or a page reload does
 not hide a running job. A server restart ends the in-memory job; start it again
 to resume from the persistent cache.
 
+![Settings showing Analyze Missing Quality and Rescan All Quality beside the Seiza catalog controls](settings-catalog-quality.png)
+
 The backfill uses the N.I.N.A. Fast detector for star count and HFR, which keeps
 new values comparable with Target Scheduler data. It also stores the full-star
 flux data needed by photometry, spatial cloud and obstruction metrics, and
