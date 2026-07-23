@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Route } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -135,4 +135,73 @@ test('data transfer controls fit a compact settings view', async ({ page }) => {
     (element) => element.scrollWidth > element.clientWidth + 1
   );
   expect(overflows).toBe(false);
+});
+
+test('a pending transfer preview returns after a page reload', async ({ page }) => {
+  const counts = { inserted: 0, updated: 0, unchanged: 0, skipped: 0 };
+  const preview = {
+    preview_id: 'reload-preview',
+    created_at: 1,
+    expires_at: 4_102_444_800,
+    result: {
+      kind: 'push_planning',
+      dry_run: true,
+      source_db_id: 'review',
+      destination_db_id: 'telescope',
+      exposuretemplate: counts,
+      project: counts,
+      ruleweight: counts,
+      target: counts,
+      exposureplan: counts,
+      acquiredimage: null,
+      imagedata: null,
+      grades: null,
+      grade_filled: 0,
+      grade_preserved: 0,
+      imagedata_bytes: 0,
+      total_inserted: 0,
+      total_updated: 0,
+    },
+  };
+  const fulfillPreview = (route: Route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
+        data: preview,
+        error: null,
+        status: 'ready',
+      }),
+    });
+  await page.route('**/api/databases/review/sync/preview', fulfillPreview);
+  await page.route(
+    '**/api/databases/review/sync/previews/reload-preview',
+    fulfillPreview
+  );
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings' }).click();
+
+  let workspace = page.locator('.scheduler-sync-workspace');
+  await workspace.getByLabel('Transfer source').selectOption({ label: 'Review copy' });
+  await workspace
+    .getByLabel('Transfer destination')
+    .selectOption({ label: 'Telescope scheduler' });
+  await workspace.getByRole('button', { name: 'Send planning' }).click();
+  await workspace.getByRole('button', { name: 'Preview changes' }).click();
+  await expect(
+    workspace.getByRole('button', { name: 'Apply this preview' })
+  ).toBeVisible();
+
+  await page.reload();
+  await page.getByRole('button', { name: 'Settings' }).click();
+  workspace = page.locator('.scheduler-sync-workspace');
+  await expect(
+    workspace.getByText('Restored the pending transfer preview.')
+  ).toBeVisible();
+  await expect(
+    workspace.getByRole('button', { name: 'Apply this preview' })
+  ).toBeVisible();
+  await workspace.getByRole('button', { name: 'Cancel' }).click();
 });

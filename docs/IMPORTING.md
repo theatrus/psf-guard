@@ -147,8 +147,8 @@ Add both the local and telescope databases in Settings, then use
   reasons for matching image GUIDs. Pending source rows are skipped.
 
 All three actions create a server-owned preview before **Apply**. The preview
-expires after 30 minutes and becomes stale if either database changes. The CLI
-equivalents are:
+expires after 30 minutes. It keeps the source state you reviewed and becomes
+stale if the destination changes. The CLI equivalents are:
 
 ```bash
 psf-guard sync pull --from telescope.sqlite --to archive.sqlite --dry-run
@@ -159,5 +159,5 @@ psf-guard sync grades --from archive.sqlite --to telescope.sqlite --dry-run
 Back up both databases before the first write.
 
 See [the data-transfer design](../DATA_TRANSFER_DESIGN.md) for planned native
-one-off file handles, frozen source bundles, remote peers, and the N.I.N.A.
+one-off file handles, versioned remote bundles, remote peers, and the N.I.N.A.
 plugin endpoint.

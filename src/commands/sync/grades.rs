@@ -13,7 +13,7 @@ use crate::commands::reject_archive::require_target_scheduler_guid;
 use crate::db::Database;
 use crate::models::GradingStatus;
 use anyhow::{anyhow, Context, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Knobs for a one-way grade push.
@@ -93,8 +93,27 @@ pub fn sync_grades(
     require_target_scheduler_guid(src).context("source database")?;
     require_target_scheduler_guid(dest).context("destination database")?;
 
+    let tx = dest.unchecked_transaction()?;
+    let summary = sync_grades_in_transaction(src, &tx, opts)?;
+    if opts.dry_run {
+        tx.rollback()?;
+    } else {
+        tx.commit()?;
+    }
+    Ok(summary)
+}
+
+/// Stage one grade push inside a transaction owned by the caller.
+pub(crate) fn sync_grades_in_transaction(
+    src: &Connection,
+    tx: &Transaction<'_>,
+    opts: &SyncGradesOptions,
+) -> Result<SyncSummary> {
+    require_target_scheduler_guid(src).context("source database")?;
+    require_target_scheduler_guid(tx).context("destination database")?;
+
     let src_db = Database::new(src);
-    let dest_db = Database::new(dest);
+    let dest_db = Database::new(tx);
 
     let src_rows = src_db.query_images(
         opts.status_filter,
@@ -215,10 +234,14 @@ pub fn sync_grades(
         .filter(|g| !matched_dest.contains(g.as_str()))
         .count();
 
-    if !opts.dry_run && !updates.is_empty() {
-        dest_db
-            .batch_update_grading_status(&updates)
-            .context("applying grade updates to destination")?;
+    if !opts.dry_run {
+        for (id, status, reason) in updates {
+            tx.execute(
+                "UPDATE acquiredimage SET gradingStatus = ?1, rejectreason = ?2 WHERE Id = ?3",
+                rusqlite::params![status as i32, reason.as_deref(), id],
+            )
+            .context("applying grade update to destination")?;
+        }
     }
 
     Ok(summary)

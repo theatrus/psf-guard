@@ -251,6 +251,26 @@ export const apiClient = {
     return data.data;
   },
 
+  /** Reload one durable preview after the Settings UI closes or reloads. */
+  getDatabaseSyncPreview: async (
+    dbId: string,
+    previewId: string
+  ): Promise<SchedulerSyncPreviewResponse> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<SchedulerSyncPreviewResponse>>(
+      `/databases/${encodeURIComponent(dbId)}/sync/previews/${encodeURIComponent(previewId)}`
+    );
+    if (!data.data) throw new Error(data.error || 'Database sync preview not found');
+    return data.data;
+  },
+
+  deleteDatabaseSyncPreview: async (dbId: string, previewId: string): Promise<void> => {
+    const apiInstance = await getApi();
+    await apiInstance.delete(
+      `/databases/${encodeURIComponent(dbId)}/sync/previews/${encodeURIComponent(previewId)}`
+    );
+  },
+
   /** Apply one unexpired server-owned preview. */
   applyDatabaseSyncPreview: async (
     dbId: string,

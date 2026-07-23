@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
 import SchedulerSyncControls from '../SchedulerSyncControls';
 
@@ -32,6 +32,63 @@ function wrapper() {
 const counts = { inserted: 0, updated: 0, unchanged: 0, skipped: 0 };
 
 describe('SchedulerSyncControls', () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+  });
+
+  it('restores a durable preview after the Settings UI reloads', async () => {
+    const result = {
+      kind: 'push_planning' as const,
+      dry_run: true,
+      source_db_id: 'local',
+      destination_db_id: 'scope',
+      exposuretemplate: counts,
+      project: { ...counts, updated: 1 },
+      ruleweight: counts,
+      target: counts,
+      exposureplan: counts,
+      acquiredimage: null,
+      imagedata: null,
+      grades: null,
+      grade_filled: 0,
+      grade_preserved: 0,
+      imagedata_bytes: 0,
+      total_inserted: 0,
+      total_updated: 1,
+    };
+    sessionStorage.setItem(
+      'psf-guard.scheduler-sync-preview',
+      JSON.stringify({ localDbId: 'local', previewId: 'restored-preview' })
+    );
+    server.use(
+      http.get(
+        '/api/databases/local/sync/previews/restored-preview',
+        () => HttpResponse.json({
+          success: true,
+          data: {
+            preview_id: 'restored-preview',
+            created_at: 1,
+            expires_at: 4_102_444_800,
+            result,
+          },
+          error: null,
+          status: 'ready',
+        })
+      )
+    );
+
+    render(<SchedulerSyncControls databases={[local, telescope]} />, {
+      wrapper: wrapper(),
+    });
+
+    expect(await screen.findByText('Restored the pending transfer preview.'))
+      .toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply this preview' }))
+      .toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send planning' }))
+      .toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('previews before applying a planning-only push', async () => {
     const requests: Array<Record<string, unknown>> = [];
     const result = {

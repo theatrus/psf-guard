@@ -396,11 +396,41 @@ async fn execute_scheduler_sync(
     db_id: &str,
     req: SchedulerSyncRequest,
 ) -> Result<SchedulerSyncResponse, AppError> {
+    execute_scheduler_sync_guarded(state, db_id, req, None, SyncGuardMode::None)
+        .await
+        .map(|(response, _)| response)
+}
+
+enum SyncGuardMode {
+    None,
+    Preview,
+    Apply { destination_fingerprint: String },
+}
+
+#[derive(Debug)]
+struct StaleSyncPreview;
+
+impl std::fmt::Display for StaleSyncPreview {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("sync preview destination changed")
+    }
+}
+
+impl std::error::Error for StaleSyncPreview {}
+
+async fn execute_scheduler_sync_guarded(
+    state: &Arc<AppState>,
+    db_id: &str,
+    req: SchedulerSyncRequest,
+    source_override: Option<PathBuf>,
+    guard_mode: SyncGuardMode,
+) -> Result<(SchedulerSyncResponse, Option<String>), AppError> {
     use crate::commands::sync::{
-        parse_status, sync_grades, sync_planning, sync_pull, PlanningOptions, PullOptions,
-        SyncGradesOptions,
+        parse_status, sync_grades, sync_grades_in_transaction, sync_planning,
+        sync_planning_in_transaction, sync_pull, sync_pull_in_transaction, PlanningOptions,
+        PullOptions, SyncGradesOptions,
     };
-    use rusqlite::{Connection, OpenFlags};
+    use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
 
     require_database_management_allowed(state)?;
     if db_id == req.peer_db_id {
@@ -419,10 +449,11 @@ async fn execute_scheduler_sync(
             (Arc::clone(&local), Arc::clone(&peer))
         }
     };
-    let source_path = PathBuf::from(&source_ctx.database_path);
+    let source_path = source_override.unwrap_or_else(|| PathBuf::from(&source_ctx.database_path));
     let destination_path = PathBuf::from(&destination_ctx.database_path);
     let source_id = source_ctx.id.clone();
     let destination_id = destination_ctx.id.clone();
+    let fingerprint_queries = crate::server::sync_preview::fingerprint_queries(&req);
     let kind = req.kind;
     let dry_run = req.dry_run;
     let project = req.project;
@@ -439,130 +470,182 @@ async fn execute_scheduler_sync(
     let reviewed_only = req.reviewed_only;
     let with_image_data = req.with_image_data.unwrap_or(true);
 
-    let response = tokio::task::spawn_blocking(move || -> anyhow::Result<SchedulerSyncResponse> {
-        let source_canon =
-            std::fs::canonicalize(&source_path).unwrap_or_else(|_| source_path.clone());
-        let destination_canon =
-            std::fs::canonicalize(&destination_path).unwrap_or_else(|_| destination_path.clone());
-        anyhow::ensure!(
-            source_canon != destination_canon,
-            "The two configured entries point to the same database file."
-        );
+    let response = tokio::task::spawn_blocking(
+        move || -> anyhow::Result<(SchedulerSyncResponse, Option<String>)> {
+            let source_canon =
+                std::fs::canonicalize(&source_path).unwrap_or_else(|_| source_path.clone());
+            let destination_canon = std::fs::canonicalize(&destination_path)
+                .unwrap_or_else(|_| destination_path.clone());
+            anyhow::ensure!(
+                source_canon != destination_canon,
+                "The two configured entries point to the same database file."
+            );
 
-        let source = Connection::open_with_flags(&source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        let destination =
-            Connection::open_with_flags(&destination_path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+            let source =
+                Connection::open_with_flags(&source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            let destination =
+                Connection::open_with_flags(&destination_path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
 
-        let response = match kind {
-            SchedulerSyncKind::Pull => {
-                let summary = sync_pull(
-                    &source,
-                    &destination,
-                    &PullOptions {
-                        dry_run,
-                        with_image_data,
-                        project_filter: project,
-                    },
-                )?;
-                SchedulerSyncResponse {
-                    kind,
-                    dry_run,
-                    source_db_id: source_id,
-                    destination_db_id: destination_id,
-                    exposuretemplate: (&summary.exposuretemplate).into(),
-                    project: (&summary.project).into(),
-                    ruleweight: (&summary.ruleweight).into(),
-                    target: (&summary.target).into(),
-                    exposureplan: (&summary.exposureplan).into(),
-                    acquiredimage: Some((&summary.acquiredimage).into()),
-                    imagedata: summary
-                        .imagedata_synced
-                        .then(|| (&summary.imagedata).into()),
-                    grades: None,
-                    grade_filled: summary.grade_filled,
-                    grade_preserved: summary.grade_preserved,
-                    imagedata_bytes: summary.imagedata_bytes,
-                    total_inserted: summary.total_inserted(),
-                    total_updated: summary.total_updated(),
+            let run =
+                |transaction: Option<&Transaction<'_>>| -> anyhow::Result<SchedulerSyncResponse> {
+                    let response = match kind {
+                        SchedulerSyncKind::Pull => {
+                            let options = PullOptions {
+                                dry_run,
+                                with_image_data,
+                                project_filter: project.clone(),
+                            };
+                            let summary = match transaction {
+                                Some(transaction) => {
+                                    sync_pull_in_transaction(&source, transaction, &options)?
+                                }
+                                None => sync_pull(&source, &destination, &options)?,
+                            };
+                            SchedulerSyncResponse {
+                                kind,
+                                dry_run,
+                                source_db_id: source_id,
+                                destination_db_id: destination_id,
+                                exposuretemplate: (&summary.exposuretemplate).into(),
+                                project: (&summary.project).into(),
+                                ruleweight: (&summary.ruleweight).into(),
+                                target: (&summary.target).into(),
+                                exposureplan: (&summary.exposureplan).into(),
+                                acquiredimage: Some((&summary.acquiredimage).into()),
+                                imagedata: summary
+                                    .imagedata_synced
+                                    .then(|| (&summary.imagedata).into()),
+                                grades: None,
+                                grade_filled: summary.grade_filled,
+                                grade_preserved: summary.grade_preserved,
+                                imagedata_bytes: summary.imagedata_bytes,
+                                total_inserted: summary.total_inserted(),
+                                total_updated: summary.total_updated(),
+                            }
+                        }
+                        SchedulerSyncKind::PushPlanning => {
+                            let options = PlanningOptions {
+                                dry_run,
+                                project_filter: project.clone(),
+                            };
+                            let summary = match transaction {
+                                Some(transaction) => {
+                                    sync_planning_in_transaction(&source, transaction, &options)?
+                                }
+                                None => sync_planning(&source, &destination, &options)?,
+                            };
+                            SchedulerSyncResponse {
+                                kind,
+                                dry_run,
+                                source_db_id: source_id,
+                                destination_db_id: destination_id,
+                                exposuretemplate: (&summary.exposuretemplate).into(),
+                                project: (&summary.project).into(),
+                                ruleweight: (&summary.ruleweight).into(),
+                                target: (&summary.target).into(),
+                                exposureplan: (&summary.exposureplan).into(),
+                                acquiredimage: None,
+                                imagedata: None,
+                                grades: None,
+                                grade_filled: 0,
+                                grade_preserved: 0,
+                                imagedata_bytes: 0,
+                                total_inserted: summary.total_inserted(),
+                                total_updated: summary.total_updated(),
+                            }
+                        }
+                        SchedulerSyncKind::PushGrades => {
+                            let options = SyncGradesOptions {
+                                status_filter,
+                                reviewed_only,
+                                project_filter: project.clone(),
+                                target_filter: target.clone(),
+                                dry_run,
+                            };
+                            let summary = match transaction {
+                                Some(transaction) => {
+                                    sync_grades_in_transaction(&source, transaction, &options)?
+                                }
+                                None => sync_grades(&source, &destination, &options)?,
+                            };
+                            SchedulerSyncResponse {
+                                kind,
+                                dry_run,
+                                source_db_id: source_id,
+                                destination_db_id: destination_id,
+                                exposuretemplate: SchedulerSyncTableCounts::default(),
+                                project: SchedulerSyncTableCounts::default(),
+                                ruleweight: SchedulerSyncTableCounts::default(),
+                                target: SchedulerSyncTableCounts::default(),
+                                exposureplan: SchedulerSyncTableCounts::default(),
+                                acquiredimage: None,
+                                imagedata: None,
+                                grades: Some(SchedulerSyncGradeCounts {
+                                    source_considered: summary.source_considered,
+                                    source_no_guid: summary.source_no_guid,
+                                    matched: summary.matched,
+                                    changed: summary.changed,
+                                    unchanged: summary.unchanged,
+                                    unmatched_source: summary.unmatched_source,
+                                    destination_only: summary.dest_only,
+                                    duplicate_guids: summary.duplicate_guids,
+                                    transitions: summary.transitions,
+                                }),
+                                grade_filled: 0,
+                                grade_preserved: 0,
+                                imagedata_bytes: 0,
+                                total_inserted: 0,
+                                total_updated: summary.changed,
+                            }
+                        }
+                    };
+                    Ok(response)
+                };
+
+            match guard_mode {
+                SyncGuardMode::None => Ok((run(None)?, None)),
+                SyncGuardMode::Preview => {
+                    let transaction =
+                        Transaction::new_unchecked(&destination, TransactionBehavior::Deferred)?;
+                    let fingerprint = crate::server::sync_preview::connection_fingerprint(
+                        &transaction,
+                        &fingerprint_queries,
+                    )?;
+                    let response = run(Some(&transaction))?;
+                    transaction.rollback()?;
+                    Ok((response, Some(fingerprint)))
+                }
+                SyncGuardMode::Apply {
+                    destination_fingerprint,
+                } => {
+                    let transaction =
+                        Transaction::new_unchecked(&destination, TransactionBehavior::Immediate)?;
+                    let fingerprint = crate::server::sync_preview::connection_fingerprint(
+                        &transaction,
+                        &fingerprint_queries,
+                    )?;
+                    if fingerprint != destination_fingerprint {
+                        return Err(StaleSyncPreview.into());
+                    }
+                    let response = run(Some(&transaction))?;
+                    transaction.commit()?;
+                    Ok((response, None))
                 }
             }
-            SchedulerSyncKind::PushPlanning => {
-                let summary = sync_planning(
-                    &source,
-                    &destination,
-                    &PlanningOptions {
-                        dry_run,
-                        project_filter: project,
-                    },
-                )?;
-                SchedulerSyncResponse {
-                    kind,
-                    dry_run,
-                    source_db_id: source_id,
-                    destination_db_id: destination_id,
-                    exposuretemplate: (&summary.exposuretemplate).into(),
-                    project: (&summary.project).into(),
-                    ruleweight: (&summary.ruleweight).into(),
-                    target: (&summary.target).into(),
-                    exposureplan: (&summary.exposureplan).into(),
-                    acquiredimage: None,
-                    imagedata: None,
-                    grades: None,
-                    grade_filled: 0,
-                    grade_preserved: 0,
-                    imagedata_bytes: 0,
-                    total_inserted: summary.total_inserted(),
-                    total_updated: summary.total_updated(),
-                }
-            }
-            SchedulerSyncKind::PushGrades => {
-                let summary = sync_grades(
-                    &source,
-                    &destination,
-                    &SyncGradesOptions {
-                        status_filter,
-                        reviewed_only,
-                        project_filter: project,
-                        target_filter: target,
-                        dry_run,
-                    },
-                )?;
-                SchedulerSyncResponse {
-                    kind,
-                    dry_run,
-                    source_db_id: source_id,
-                    destination_db_id: destination_id,
-                    exposuretemplate: SchedulerSyncTableCounts::default(),
-                    project: SchedulerSyncTableCounts::default(),
-                    ruleweight: SchedulerSyncTableCounts::default(),
-                    target: SchedulerSyncTableCounts::default(),
-                    exposureplan: SchedulerSyncTableCounts::default(),
-                    acquiredimage: None,
-                    imagedata: None,
-                    grades: Some(SchedulerSyncGradeCounts {
-                        source_considered: summary.source_considered,
-                        source_no_guid: summary.source_no_guid,
-                        matched: summary.matched,
-                        changed: summary.changed,
-                        unchanged: summary.unchanged,
-                        unmatched_source: summary.unmatched_source,
-                        destination_only: summary.dest_only,
-                        duplicate_guids: summary.duplicate_guids,
-                        transitions: summary.transitions,
-                    }),
-                    grade_filled: 0,
-                    grade_preserved: 0,
-                    imagedata_bytes: 0,
-                    total_inserted: 0,
-                    total_updated: summary.changed,
-                }
-            }
-        };
-        Ok(response)
-    })
+        },
+    )
     .await
     .map_err(|error| AppError::InternalError(format!("scheduler sync task failed: {error}")))?
-    .map_err(|error| AppError::BadRequest(format!("{error:#}")))?;
+    .map_err(|error| {
+        if error.downcast_ref::<StaleSyncPreview>().is_some() {
+            AppError::Conflict(
+                "This preview is stale because the destination database changed. Preview again."
+                    .into(),
+            )
+        } else {
+            AppError::BadRequest(format!("{error:#}"))
+        }
+    })?;
 
     if !dry_run {
         let _ = destination_ctx.ensure_cache_available();
@@ -594,49 +677,6 @@ fn sync_endpoint_paths(
     ))
 }
 
-fn sync_fingerprint_tables(request: &SchedulerSyncRequest) -> Vec<&'static str> {
-    match request.kind {
-        SchedulerSyncKind::Pull => {
-            let mut tables = vec![
-                "exposuretemplate",
-                "project",
-                "ruleweight",
-                "target",
-                "exposureplan",
-                "acquiredimage",
-            ];
-            if request.with_image_data.unwrap_or(true) {
-                tables.push("imagedata");
-            }
-            tables
-        }
-        SchedulerSyncKind::PushPlanning => vec![
-            "exposuretemplate",
-            "project",
-            "ruleweight",
-            "target",
-            "exposureplan",
-        ],
-        SchedulerSyncKind::PushGrades => vec!["acquiredimage"],
-    }
-}
-
-async fn sync_fingerprint_pair(
-    source_path: PathBuf,
-    destination_path: PathBuf,
-    tables: Vec<&'static str>,
-) -> Result<(String, String), AppError> {
-    tokio::task::spawn_blocking(move || {
-        let source = crate::server::sync_preview::database_fingerprint(&source_path, &tables)?;
-        let destination =
-            crate::server::sync_preview::database_fingerprint(&destination_path, &tables)?;
-        Ok::<_, anyhow::Error>((source, destination))
-    })
-    .await
-    .map_err(|error| AppError::InternalError(format!("sync fingerprint task failed: {error}")))?
-    .map_err(|error| AppError::BadRequest(format!("{error:#}")))
-}
-
 /// Create a server-owned dry preview. Apply is a separate endpoint keyed by
 /// the returned opaque preview ID.
 pub async fn preview_sync_database_route(
@@ -646,27 +686,47 @@ pub async fn preview_sync_database_route(
 ) -> Result<Json<ApiResponse<SchedulerSyncPreviewResponse>>, AppError> {
     require_database_management_allowed(&state)?;
     request.dry_run = true;
-    let (source_path, destination_path) = sync_endpoint_paths(&state, &db_id, &request)?;
-    let tables = sync_fingerprint_tables(&request);
-    let before = sync_fingerprint_pair(
-        source_path.clone(),
-        destination_path.clone(),
-        tables.clone(),
+    let (source_path, _destination_path) = sync_endpoint_paths(&state, &db_id, &request)?;
+    let source_snapshot_file = state
+        .sync_previews
+        .create_source_snapshot(&source_path)
+        .map_err(|error| AppError::BadRequest(format!("{error:#}")))?;
+    let source_snapshot_path = state
+        .sync_previews
+        .source_snapshot_path_for_file(&source_snapshot_file)
+        .map_err(|error| AppError::InternalError(format!("{error:#}")))?;
+    let preview = execute_scheduler_sync_guarded(
+        &state,
+        &db_id,
+        request.clone(),
+        Some(source_snapshot_path),
+        SyncGuardMode::Preview,
     )
-    .await?;
-    let result = execute_scheduler_sync(&state, &db_id, request.clone()).await?;
-    let after = sync_fingerprint_pair(source_path, destination_path, tables).await?;
-    if before != after {
-        return Err(AppError::Conflict(
-            "A source or destination database changed while the preview was running. Preview again."
-                .into(),
-        ));
-    }
+    .await;
+    let (result, destination_fingerprint) = match preview {
+        Ok((result, Some(fingerprint))) => (result, fingerprint),
+        Ok(_) => unreachable!("preview execution always returns a fingerprint"),
+        Err(error) => {
+            state
+                .sync_previews
+                .remove_source_snapshot(&source_snapshot_file);
+            return Err(error);
+        }
+    };
 
     let record = state
         .sync_previews
-        .store(db_id, request, before.0, before.1, result.clone())
+        .store(
+            db_id,
+            request,
+            source_snapshot_file.clone(),
+            destination_fingerprint,
+            result.clone(),
+        )
         .map_err(|error| {
+            state
+                .sync_previews
+                .remove_source_snapshot(&source_snapshot_file);
             AppError::InternalError(format!("saving scheduler sync preview: {error}"))
         })?;
     Ok(Json(ApiResponse::success(SchedulerSyncPreviewResponse {
@@ -675,6 +735,37 @@ pub async fn preview_sync_database_route(
         expires_at: record.expires_at,
         result,
     })))
+}
+
+pub async fn get_sync_database_preview_route(
+    State(state): State<Arc<AppState>>,
+    Path((db_id, preview_id)): Path<(String, String)>,
+) -> Result<Json<ApiResponse<SchedulerSyncPreviewResponse>>, AppError> {
+    require_database_management_allowed(&state)?;
+    let record = state
+        .sync_previews
+        .get(&preview_id)
+        .map_err(|error| AppError::InternalError(format!("loading sync preview: {error}")))?
+        .filter(|record| record.local_db_id == db_id)
+        .ok_or(AppError::NotFound)?;
+    Ok(Json(ApiResponse::success(SchedulerSyncPreviewResponse {
+        preview_id: record.id,
+        created_at: record.created_at,
+        expires_at: record.expires_at,
+        result: record.result,
+    })))
+}
+
+pub async fn delete_sync_database_preview_route(
+    State(state): State<Arc<AppState>>,
+    Path((db_id, preview_id)): Path<(String, String)>,
+) -> Result<Json<ApiResponse<bool>>, AppError> {
+    require_database_management_allowed(&state)?;
+    let deleted = state
+        .sync_previews
+        .discard(&preview_id, &db_id)
+        .map_err(|error| AppError::InternalError(format!("deleting sync preview: {error}")))?;
+    Ok(Json(ApiResponse::success(deleted)))
 }
 
 /// Apply one unexpired preview after proving that neither catalog changed.
@@ -690,25 +781,28 @@ pub async fn apply_sync_database_preview_route(
         .map_err(|error| AppError::InternalError(format!("loading sync preview: {error}")))?
         .ok_or(AppError::NotFound)?;
 
-    let (source_path, destination_path) = sync_endpoint_paths(&state, &db_id, &record.request)?;
-    let fingerprints = sync_fingerprint_pair(
-        source_path,
-        destination_path,
-        sync_fingerprint_tables(&record.request),
-    )
-    .await?;
-    if fingerprints.0 != record.source_fingerprint
-        || fingerprints.1 != record.destination_fingerprint
-    {
-        return Err(AppError::Conflict(
-            "This preview is stale because a source or destination database changed. Preview again."
-                .into(),
-        ));
-    }
+    let source_snapshot = state
+        .sync_previews
+        .source_snapshot_path(&record)
+        .map_err(|error| AppError::InternalError(format!("{error:#}")))?;
 
     let mut request = record.request;
     request.dry_run = false;
-    let result = execute_scheduler_sync(&state, &db_id, request).await?;
+    let result = execute_scheduler_sync_guarded(
+        &state,
+        &db_id,
+        request,
+        Some(source_snapshot),
+        SyncGuardMode::Apply {
+            destination_fingerprint: record.destination_fingerprint,
+        },
+    )
+    .await
+    .map(|(result, _)| result);
+    state
+        .sync_previews
+        .remove_source_snapshot(&record.source_snapshot_file);
+    let result = result?;
     Ok(Json(ApiResponse::success(result)))
 }
 

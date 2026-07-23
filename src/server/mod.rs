@@ -400,6 +400,11 @@ async fn run_server_internal(
             post(handlers::apply_sync_database_preview_route),
         )
         .route(
+            "/databases/{db_id}/sync/previews/{preview_id}",
+            get(handlers::get_sync_database_preview_route)
+                .delete(handlers::delete_sync_database_preview_route),
+        )
+        .route(
             "/databases/{db_id}",
             put(handlers::update_database_route).delete(handlers::remove_database_route),
         )

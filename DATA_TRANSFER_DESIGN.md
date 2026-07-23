@@ -36,8 +36,6 @@ The repository already has most of the local merge rules:
 The missing pieces are:
 
 - one clear transfer workspace instead of controls repeated under each catalog;
-- a frozen source bundle so source edits after Preview can wait for the next
-  transfer instead of making the preview stale;
 - durable job and preview state;
 - local-file selection without first keeping a catalog in the registry;
 - remote peers, authentication, and a versioned wire format; and
@@ -187,10 +185,10 @@ The connection test shows:
 ## Preview and apply
 
 The local API now records each dry run under an opaque preview ID and Apply
-accepts only that ID. It fingerprints the relevant source and destination
-tables and returns `409 Conflict` if either changed. That prevents the browser
-from changing options between Preview and Apply and rejects catalog drift, but
-source rows are not frozen yet.
+accepts only that ID. Preview takes an online SQLite snapshot of the source.
+Apply reads that snapshot, takes the destination write lock, and checks the
+destination fingerprint in the same transaction as the write. Source edits
+wait for the next transfer; destination edits return `409 Conflict`.
 Preview IDs are one-use, and guarded applies run one at a time so two requests
 cannot both pass the same precondition check.
 
@@ -334,7 +332,8 @@ transactional, so it cannot leave half a merge committed.
 ### Phase 2: immutable local previews
 
 - [ ] Refactor sync cores into bundle, plan, and apply stages.
-- [x] Add preview IDs, expiry, and source and destination stale checks.
+- [x] Add preview IDs, expiry, frozen source snapshots, and atomic destination
+  stale checks.
 - [ ] Add destination backups and audit jobs.
 - [x] Add the Data Transfer workspace for registered local catalogs.
 - [ ] Move FITS import onto the same preview and job model.

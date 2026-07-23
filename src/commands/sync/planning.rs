@@ -8,7 +8,7 @@
 use super::pull::sync_structure;
 use super::{require_planning_capable, TableCounts};
 use anyhow::{Context, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction};
 
 /// Options for a planning-only settings push.
 pub struct PlanningOptions {
@@ -59,10 +59,32 @@ pub fn sync_planning(
     require_planning_capable(dest).context("destination database")?;
 
     let tx = dest.unchecked_transaction()?;
+    let summary = sync_planning_in_transaction(src, &tx, opts)?;
+    if opts.dry_run {
+        tx.rollback()?;
+    } else {
+        tx.commit()?;
+    }
+    Ok(summary)
+}
+
+/// Stage one planning sync inside a transaction owned by the caller.
+///
+/// The guarded server path uses this form so it can verify destination
+/// preconditions after taking SQLite's write lock, then apply in that same
+/// transaction.
+pub(crate) fn sync_planning_in_transaction(
+    src: &Connection,
+    tx: &Transaction<'_>,
+    opts: &PlanningOptions,
+) -> Result<PlanningSummary> {
+    require_planning_capable(src).context("source database")?;
+    require_planning_capable(tx).context("destination database")?;
+
     let mut summary = PlanningSummary::default();
     let structure = sync_structure(
         src,
-        &tx,
+        tx,
         opts.project_filter.as_deref(),
         true,
         &mut summary.changes,
@@ -74,11 +96,6 @@ pub fn sync_planning(
     summary.target = structure.target;
     summary.exposureplan = structure.exposureplan;
 
-    if opts.dry_run {
-        tx.rollback()?;
-    } else {
-        tx.commit()?;
-    }
     Ok(summary)
 }
 

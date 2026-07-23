@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { SchedulerSyncKind, SchedulerSyncResponse } from '../api/types';
@@ -10,11 +10,13 @@ interface SchedulerSyncControlsProps {
 }
 
 interface PendingSync {
-  kind: SchedulerSyncKind;
+  localDbId: string;
   previewId: string;
   expiresAt: number;
   result: SchedulerSyncResponse;
 }
+
+const STORED_PREVIEW_KEY = 'psf-guard.scheduler-sync-preview';
 
 const operationLabel = (kind: SchedulerSyncKind) => {
   switch (kind) {
@@ -39,6 +41,7 @@ export default function SchedulerSyncControls({
   const [pending, setPending] = useState<PendingSync | null>(null);
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState('');
+  const recoveryAttempted = useRef(false);
 
   const source = useMemo(
     () => databases.find((database) => database.id === sourceId) ?? databases[0],
@@ -51,10 +54,60 @@ export default function SchedulerSyncControls({
     [databases, destinationId, source?.id]
   );
 
-  const invalidatePreview = () => {
+  const forgetPending = (discardServerPreview: boolean) => {
+    if (pending && discardServerPreview) {
+      void apiClient
+        .deleteDatabaseSyncPreview(pending.localDbId, pending.previewId)
+        .catch(() => undefined);
+    }
+    sessionStorage.removeItem(STORED_PREVIEW_KEY);
     setPending(null);
     setMessage('');
   };
+
+  const invalidatePreview = () => forgetPending(true);
+
+  useEffect(() => {
+    if (recoveryAttempted.current || databases.length === 0) return;
+    recoveryAttempted.current = true;
+    const stored = sessionStorage.getItem(STORED_PREVIEW_KEY);
+    if (!stored) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const reference = JSON.parse(stored) as {
+          localDbId?: string;
+          previewId?: string;
+        };
+        if (!reference.localDbId || !reference.previewId) {
+          throw new Error('invalid stored preview');
+        }
+        const response = await apiClient.getDatabaseSyncPreview(
+          reference.localDbId,
+          reference.previewId
+        );
+        if (cancelled) return;
+        const restored = {
+          localDbId: reference.localDbId,
+          previewId: response.preview_id,
+          expiresAt: response.expires_at,
+          result: response.result,
+        };
+        setPending(restored);
+        setKind(response.result.kind);
+        setSourceId(response.result.source_db_id);
+        setDestinationId(response.result.destination_db_id);
+        setWithImageData(response.result.imagedata !== null);
+        setMessage('Restored the pending transfer preview.');
+      } catch {
+        sessionStorage.removeItem(STORED_PREVIEW_KEY);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [databases]);
 
   const changeSource = (nextSourceId: string) => {
     setSourceId(nextSourceId);
@@ -84,6 +137,13 @@ export default function SchedulerSyncControls({
     setRunning(true);
     setMessage('');
     try {
+      if (pending) {
+        await apiClient
+          .deleteDatabaseSyncPreview(pending.localDbId, pending.previewId)
+          .catch(() => undefined);
+        sessionStorage.removeItem(STORED_PREVIEW_KEY);
+        setPending(null);
+      }
       const localDbId = kind === 'pull' ? destination.id : source.id;
       const peerDbId = kind === 'pull' ? source.id : destination.id;
       const response = await apiClient.previewDatabaseSync(localDbId, {
@@ -94,11 +154,15 @@ export default function SchedulerSyncControls({
         reviewed_only: kind === 'push_grades',
       });
       setPending({
-        kind,
+        localDbId,
         previewId: response.preview_id,
         expiresAt: response.expires_at,
         result: response.result,
       });
+      sessionStorage.setItem(
+        STORED_PREVIEW_KEY,
+        JSON.stringify({ localDbId, previewId: response.preview_id })
+      );
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       setMessage(`Preview failed: ${detail}`);
@@ -113,11 +177,10 @@ export default function SchedulerSyncControls({
     setMessage('');
     try {
       const result = await apiClient.applyDatabaseSyncPreview(
-        pending.result.kind === 'pull'
-          ? pending.result.destination_db_id
-          : pending.result.source_db_id,
+        pending.localDbId,
         pending.previewId
       );
+      sessionStorage.removeItem(STORED_PREVIEW_KEY);
       setPending(null);
       setMessage(
         `${operationLabel(result.kind)} complete: ${result.total_inserted} added, ` +
@@ -128,6 +191,7 @@ export default function SchedulerSyncControls({
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       setMessage(`Apply failed: ${detail}`);
+      sessionStorage.removeItem(STORED_PREVIEW_KEY);
       setPending(null);
     } finally {
       setRunning(false);
@@ -320,13 +384,13 @@ export default function SchedulerSyncControls({
           )}
           <small>
             Preview expires at {new Date(pending.expiresAt * 1000).toLocaleTimeString()}.
-            Changing either database makes it stale.
+            Source edits wait for the next preview; destination edits make this one stale.
           </small>
           <div className="scheduler-sync-confirm">
             <button className="save-button" onClick={apply} disabled={disabled}>
               Apply this preview
             </button>
-            <button className="cancel-button" onClick={() => setPending(null)}>
+            <button className="cancel-button" onClick={() => forgetPending(true)}>
               Cancel
             </button>
           </div>

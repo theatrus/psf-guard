@@ -44,6 +44,16 @@ async fn request(app: Router, uri: &str, body: Value) -> (StatusCode, Value) {
     (status, serde_json::from_slice(&bytes).unwrap())
 }
 
+async fn get_request(app: Router, uri: &str) -> (StatusCode, Value) {
+    let response = app
+        .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
 #[tokio::test]
 async fn planning_and_grade_pushes_preview_before_writing() {
     let dir = tempdir().unwrap();
@@ -115,6 +125,11 @@ async fn planning_and_grade_pushes_preview_before_writing() {
         .route(
             "/api/databases/{db_id}/sync/previews/{preview_id}/apply",
             post(handlers::apply_sync_database_preview_route),
+        )
+        .route(
+            "/api/databases/{db_id}/sync/previews/{preview_id}",
+            axum::routing::get(handlers::get_sync_database_preview_route)
+                .delete(handlers::delete_sync_database_preview_route),
         )
         .with_state(state);
 
@@ -194,6 +209,14 @@ async fn planning_and_grade_pushes_preview_before_writing() {
     assert_eq!(preview["data"]["result"]["dry_run"], true);
     assert_eq!(preview["data"]["result"]["grades"]["changed"], 1);
     let preview_id = preview["data"]["preview_id"].as_str().unwrap();
+    let (status, restored) = get_request(
+        app.clone(),
+        &format!("/api/databases/local/sync/previews/{preview_id}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(restored["data"]["preview_id"], preview_id);
+    assert_eq!(restored["data"]["result"]["grades"]["changed"], 1);
     let telescope = Connection::open(&telescope_path).unwrap();
     assert_eq!(
         telescope
@@ -229,6 +252,52 @@ async fn planning_and_grade_pushes_preview_before_writing() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Apply uses the frozen source snapshot, not source rows edited after
+    // Preview.
+    let telescope = Connection::open(&telescope_path).unwrap();
+    telescope
+        .execute(
+            "UPDATE acquiredimage SET gradingStatus = 0, rejectreason = NULL",
+            [],
+        )
+        .unwrap();
+    drop(telescope);
+    let (status, frozen_preview) = request(
+        app.clone(),
+        "/api/databases/local/sync/preview",
+        json!({
+            "peer_db_id": "scope",
+            "kind": "push_grades"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let frozen_preview_id = frozen_preview["data"]["preview_id"].as_str().unwrap();
+    let local = Connection::open(&local_path).unwrap();
+    local
+        .execute(
+            "UPDATE acquiredimage SET gradingStatus = 2, rejectreason = 'later source edit'",
+            [],
+        )
+        .unwrap();
+    drop(local);
+    let (status, _) = request(
+        app.clone(),
+        &format!("/api/databases/local/sync/previews/{frozen_preview_id}/apply"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let telescope = Connection::open(&telescope_path).unwrap();
+    assert_eq!(
+        telescope
+            .query_row("SELECT gradingStatus FROM acquiredimage", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    drop(telescope);
 
     let (status, stale_preview) = request(
         app.clone(),

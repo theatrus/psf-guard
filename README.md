@@ -613,11 +613,12 @@ push planning settings and grades back. All three commands support
 `--status`), open the source read-only, and run in one transaction. The
 Settings has one Data Transfer workspace with explicit source and destination
 catalogs. It offers merge, planning, and reviewed-grade actions with a
-server-owned preview before Apply. Pending grades are excluded from the UI
-grade push by default.
+server-owned preview before Apply. The preview keeps a frozen source snapshot
+and returns after a page reload. Apply rejects destination changes before it
+writes. Pending grades are excluded from the UI grade push by default.
 
-Native one-off file handles, frozen source bundles, the remote protocol, and
-the future N.I.N.A. plugin boundary are tracked in
+Native one-off file handles, versioned remote bundles, the remote protocol,
+and the future N.I.N.A. plugin boundary are tracked in
 [DATA_TRANSFER_DESIGN.md](./DATA_TRANSFER_DESIGN.md).
 
 ## ⌨️ CLI reference
