@@ -1,6 +1,8 @@
-# PSF Guard
+# 🛡️ PSF Guard
 
+[![Latest release](https://img.shields.io/github/v/release/theatrus/psf-guard?label=release)](https://github.com/theatrus/psf-guard/releases/latest)
 [![CI](https://github.com/theatrus/psf-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/theatrus/psf-guard/actions/workflows/ci.yml)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-64748b.svg)](https://github.com/theatrus/psf-guard/releases/latest)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 **Image grading and quality screening for [N.I.N.A.](https://nighttime-imaging.eu/)
@@ -10,24 +12,23 @@ The common setup is simple: open the desktop app, add one Target Scheduler
 database and its FITS folders in Settings, then review a project. You do not
 need the command line, an import, or a second database for this path.
 
-[Download the latest release](https://github.com/theatrus/psf-guard/releases/latest)
-· [Read the full documentation](https://psf-guard.atpn.co/docs/)
-· [Report an issue](https://github.com/theatrus/psf-guard/issues)
+**[⬇️ Download](https://github.com/theatrus/psf-guard/releases/latest)**
+· **[📖 Documentation](https://psf-guard.atpn.co/docs/)**
+· **[🐛 Report an issue](https://github.com/theatrus/psf-guard/issues)**
 
-## Choose a workflow
+## 🧭 Choose a workflow
 
-- **One existing database:** open it in the desktop app and start reviewing.
-  This is the normal path.
-- **FITS folders:** create a database or import missing frames. Header import
-  runs first; quality analysis can run later.
-- **CLI or NAS:** serve the UI, screen folders, export files, or automate jobs.
-- **Two database files:** pull from the telescope copy, then push plans and
-  grades back. Skip sync when PSF Guard opens the telescope database directly.
+| | Start here when… | What to do |
+|:--:|---|---|
+| 🗃️ | **You have one Target Scheduler database** | Add it in the desktop app and start reviewing. This is the normal path. |
+| 📥 | **You have FITS folders** | Create a database or import missing frames. Header import runs first; quality analysis can run later. |
+| 🌐 | **You need a CLI or NAS setup** | Serve the UI, screen folders, export files, or automate jobs. |
+| 🔄 | **You keep two database files** | Pull from the telescope copy, then push plans and grades back. Skip sync when PSF Guard opens the telescope database directly. |
 
-**Before the first write:** back up the Target Scheduler database. Grading
-updates it; import and sync preview wider changes before applying them.
+> **Before the first write:** back up the Target Scheduler database. Grading
+> updates it; import and sync preview wider changes before applying them.
 
-## What PSF Guard does
+## ✨ What PSF Guard does
 
 - **Review frames quickly** in the desktop app or browser with stretched
   previews, zoom and pan, comparison, batch grading, keyboard controls, and
@@ -53,7 +54,7 @@ updates it; import and sync preview wider changes before applying them.
 PSF Guard runs as a desktop app on Windows, macOS, and Linux, as a self-hosted
 web server for Docker or a NAS, and as a standalone CLI.
 
-## Start with one existing database
+## 🚀 Start with one existing database
 
 1. Install the desktop app from the
    [latest release](https://github.com/theatrus/psf-guard/releases/latest).
@@ -67,7 +68,7 @@ PSF Guard reads images in place; it does not copy the FITS library. Image
 folders can stay read-only. The database must be writable to save grades or
 planning changes.
 
-## See it in practice
+## 📷 See it in practice
 
 The images below come from real FITS acquisitions. They show quick-look data:
 PSF Guard finds problems, records grading decisions, and checks an integration
@@ -183,7 +184,7 @@ of 96 SII samples while rejecting noisy or source-contaminated fit locations.
 See the **[stack preview guide](docs/STACKING_PREVIEWS.md)** for the full
 workflow and cache behavior.
 
-## Installation
+## 📦 Installation
 
 ### Desktop app (Windows / macOS / Linux)
 
@@ -283,7 +284,7 @@ processing uses the pure-Rust
 [`seiza-imgproc`](https://github.com/theatrus/seiza) crate, so no native
 computer-vision libraries are required.
 
-## The grader UI
+## 🖼️ The grader UI
 
 The desktop app embeds the grader, so it needs no separate server or browser.
 `psf-guard server` serves the same UI for a NAS or remote setup. The overview
@@ -333,7 +334,7 @@ Grades are written to the Target Scheduler database, so the
 scheduler's acquired-image counts stay accurate and rejected frames get
 re-shot.
 
-## Sky context, plate solving, and overlays
+## 🌌 Sky context, plate solving, and overlays
 
 Open an image and the **Sky context** panel immediately reads its FITS headers
 and Target Scheduler coordinates. With `objects.bin` installed, PSF Guard can
@@ -462,7 +463,7 @@ while other in-frame predictions correctly remain prediction-only. Treat the
 name as a candidate association; rejection is based on the pixel-aligned
 bright trail, not catalog presence alone.
 
-## Quality screening
+## 🔍 Quality screening
 
 PSF Guard screens for occlusion, clouds, veils, stray light, off-target
 pointing, and tracking loss. These faults can pass star-count and HFR grading.
@@ -520,7 +521,7 @@ score caps, cache safety, and CLI behavior:
 Full documentation — the detection stack, annotated diagnostic examples,
 tuning, and safety properties: **[docs/SCREENING.md](docs/SCREENING.md)**.
 
-## Managing rejected files
+## 🗂️ Managing rejected files
 
 This is a CLI workflow. Preview the move with `--dry-run`; PSF Guard records
 the source path so the files can be restored later.
@@ -542,7 +543,7 @@ psf-guard restore-rejects --db my-db --all    # restores everything
 visible in the web UI. The legacy `filter-rejected` command remains available
 for its statistical regrading flags but has been replaced by `move-rejects`.
 
-## Syncing between machines
+## 🔄 Syncing between machines
 
 This workflow needs two database files. Keep the directions shown below: pull
 from the telescope, then push planning settings and reviewed grades back.
@@ -574,7 +575,7 @@ push planning settings and grades back. All three commands support
 Settings panel offers the same full-pull and planning-push actions with a
 dry-run preview before Apply.
 
-## CLI reference
+## ⌨️ CLI reference
 
 Desktop users who open one existing database do not need this section. Run
 `psf-guard --help` for the full command list and use `<command> --help` for
@@ -640,7 +641,7 @@ Batch commands also support statistical outlier detection
 analysis plus sequence-based cloud detection. Details in
 [docs/STATISTICAL_GRADING.md](docs/STATISTICAL_GRADING.md).
 
-## Configuration
+## ⚙️ Configuration
 
 Most desktop users can manage databases in Settings and do not need to edit
 the registry or server TOML. The settings below are for server and API setups.
@@ -719,7 +720,7 @@ Command-line arguments override the config file. (A legacy
 `[database]`/`[images]` section is still parsed but ignored in server mode —
 databases come from the registry.)
 
-## REST API
+## 🔌 REST API
 
 Per-database endpoints are nested under `/api/db/{db_id}/`; `GET
 /api/databases` lists the configured databases and their ids.
@@ -756,7 +757,7 @@ curl -X POST "localhost:3000/api/databases/my-db/sync" \
   -d '{"peer_db_id":"telescope","kind":"push_planning","dry_run":true}'
 ```
 
-## Known limitations
+## ⚠️ Known limitations
 
 - **Monochrome only.** PSF Guard does not debayer color or OSC FITS files.
   Sample FITS files for future support are welcome at psf-guard@theatr.us.
@@ -770,7 +771,7 @@ curl -X POST "localhost:3000/api/databases/my-db/sync" \
   before using file-moving commands. `move-rejects` records reversible moves,
   but a backup remains the last line of recovery.
 
-## Development
+## 🛠️ Development
 
 ```bash
 cargo fmt && cargo clippy && cargo test
@@ -781,6 +782,6 @@ cd static && npm run test:e2e              # Playwright end-to-end suite
 
 Architecture notes live in [CLAUDE.md](CLAUDE.md).
 
-## License
+## 📄 License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
