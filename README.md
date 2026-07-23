@@ -16,27 +16,16 @@ need the command line, an import, or a second database for this path.
 
 ## Choose a workflow
 
-> [!TIP]
-> **Simple — open one existing database.** Use the desktop app to review and
-> grade images already tracked by Target Scheduler. Start here.
+- **One existing database:** open it in the desktop app and start reviewing.
+  This is the normal path.
+- **FITS folders:** create a database or import missing frames. Header import
+  runs first; quality analysis can run later.
+- **CLI or NAS:** serve the UI, screen folders, export files, or automate jobs.
+- **Two database files:** pull from the telescope copy, then push plans and
+  grades back. Skip sync when PSF Guard opens the telescope database directly.
 
-> [!NOTE]
-> **From FITS — create or extend a database.** Import reads headers first and
-> leaves star detection, photometry, spatial checks, and plate solving for a
-> background quality job.
-
-> [!IMPORTANT]
-> **CLI / NAS — serve the UI or run batch tools.** Use this path for Docker,
-> remote access, automation, folder screening, export, and file archival.
-
-> [!WARNING]
-> **Two database files — sync with care.** Use sync only when the telescope and
-> grading machine keep separate copies. A direct desktop connection does not
-> need it.
-
-> [!CAUTION]
-> **Back up the Target Scheduler database before the first write.** Grading
-> updates it. Import and sync show a preview before they make wider changes.
+**Before the first write:** back up the Target Scheduler database. Grading
+updates it; import and sync preview wider changes before applying them.
 
 ## What PSF Guard does
 
@@ -116,10 +105,9 @@ read-only.
 
 ### Build a scheduler database from FITS folders
 
-> [!NOTE]
-> **From FITS.** Use this path when no scheduler database exists or when frames
-> are missing from an existing database. The normal one-database review flow
-> does not need an import.
+**Import is optional.** Use it when no scheduler database exists or when frames
+are missing from an existing database. The normal one-database review flow
+does not need it.
 
 ![New Database from Images with separate background quality analysis](docs/import-from-images.png)
 
@@ -147,11 +135,10 @@ coordinates, limits, and desired counts. See the
 **[import and planning guide](docs/IMPORTING.md)** for database paths, grouping
 rules, backfill behavior, and CLI commands.
 
-> [!WARNING]
-> **Sync is for two database files.** Settings can pull new projects from a
-> telescope copy or push edited planning fields back without changing its
-> captures or grades. Skip this step when PSF Guard opens the telescope
-> database directly.
+**Sync is for two database files.** Settings can pull new projects from a
+telescope copy or push edited planning fields back without changing its
+captures or grades. Skip this step when PSF Guard opens the telescope database
+directly.
 
 ### See the evidence behind a quality decision
 
@@ -215,9 +202,8 @@ installer (`-setup.exe`) that also installs a console
 `psf-guard-cli.exe` and adds it to your user `PATH`, so the full CLI works
 from any terminal.
 
-> [!IMPORTANT]
-> **CLI / NAS.** The remaining install options serve the UI on another machine
-> or provide command-line tools. Desktop review does not require them.
+The remaining install options serve the UI on another machine or provide
+command-line tools. Desktop review does not require them.
 
 ### Docker (Linux servers / NAS)
 
@@ -481,10 +467,9 @@ bright trail, not catalog presence alone.
 PSF Guard screens for occlusion, clouds, veils, stray light, off-target
 pointing, and tracking loss. These faults can pass star-count and HFR grading.
 
-> [!TIP]
-> **In the app — scan one target.** Open its Sequence view and choose
-> **Scan Quality**. Use the selectors to focus Clouded, Off Target, Unsolved,
-> or all Recommended frames.
+**In the app:** open a target's Sequence view and choose **Scan Quality**. Use
+the selectors to focus Clouded, Off Target, Unsolved, or all Recommended
+frames.
 
 The scan runs spatial, photometric, and astrometric analysis on the server. It
 shows solved-center scatter, field-relative offsets, quality scores, and Off
@@ -508,10 +493,9 @@ measurements also provide calibrated flux for photometry.
 |:--:|:--:|
 | ![Quality scan with one off-target frame](docs/sequence-quality-astrometry.png) | ![Review proposed astrometry rejection](docs/sequence-quality-review.png) |
 
-> [!IMPORTANT]
-> **CLI / NAS — screen folders in a batch.** No database is needed for spatial
-> and photometric screening. Add `--regrade-db` to load the intended target,
-> run fresh Seiza solves, and preview supported grade changes.
+**From the CLI:** screen folders in a batch without a database. Add
+`--regrade-db` to load the intended target, run fresh Seiza solves, and preview
+supported grade changes.
 
 ```bash
 # Screen a night, get per-frame verdicts (OK / WARN / REJECT)
@@ -538,9 +522,8 @@ tuning, and safety properties: **[docs/SCREENING.md](docs/SCREENING.md)**.
 
 ## Managing rejected files
 
-> [!IMPORTANT]
-> **CLI — archive files after grading.** Preview the move with `--dry-run`.
-> PSF Guard records the source path so the files can be restored later.
+This is a CLI workflow. Preview the move with `--dry-run`; PSF Guard records
+the source path so the files can be restored later.
 
 Once frames are rejected by hand or by screening, move them out of the
 directory tree used by the stacking tool:
@@ -561,10 +544,9 @@ for its statistical regrading flags but has been replaced by `move-rejects`.
 
 ## Syncing between machines
 
-> [!WARNING]
-> **Two database files only.** Keep the directions shown below: pull from the
-> telescope, then push planning settings and reviewed grades back. Preview the
-> first run with `--dry-run` and back up both files.
+This workflow needs two database files. Keep the directions shown below: pull
+from the telescope, then push planning settings and reviewed grades back.
+Preview the first run with `--dry-run` and back up both files.
 
 Use sync when one machine grades while another keeps capturing. The commands
 copy selected state between two scheduler databases, given as registry slugs
@@ -594,10 +576,9 @@ dry-run preview before Apply.
 
 ## CLI reference
 
-> [!IMPORTANT]
-> **CLI / NAS.** Desktop users who open one existing database do not need this
-> section. Run `psf-guard --help` for the full command list and use
-> `<command> --help` for command options.
+Desktop users who open one existing database do not need this section. Run
+`psf-guard --help` for the full command list and use `<command> --help` for
+command options.
 
 Common commands:
 
@@ -661,9 +642,8 @@ analysis plus sequence-based cloud detection. Details in
 
 ## Configuration
 
-> [!IMPORTANT]
-> **Server and API setups.** Most desktop users can manage databases in
-> Settings and do not need to edit the registry or server TOML.
+Most desktop users can manage databases in Settings and do not need to edit
+the registry or server TOML. The settings below are for server and API setups.
 
 ### Databases: the registry
 
