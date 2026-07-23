@@ -233,6 +233,9 @@ pub struct ServerInfo {
     /// Whether `/api/databases` accepts mutating requests and database sync.
     /// Frontend hides those controls when false.
     pub allow_database_management: bool,
+    /// Optional plain-text notice displayed across the application.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub banner: Option<crate::config::SiteBannerConfig>,
 }
 
 /// Summary of one configured database, returned by `GET /api/databases`.

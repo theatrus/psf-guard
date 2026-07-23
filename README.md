@@ -705,6 +705,13 @@ host = "0.0.0.0"
 #scan_worker_ratio = 0.5
 #background_worker_ratio = 0.25
 
+# Optional plain-text notice shown below the application header.
+[server.banner]
+title = "Demo site"
+message = "This public demo uses sample data. Changes may be reset."
+link_text = "Learn about PSF Guard"
+link_url = "https://psf-guard.com/"
+
 [cache]
 directory = "./cache"
 file_ttl = "5m"        # 30s, 5m, 1h, 2h30m, 1d ...
@@ -715,6 +722,10 @@ enabled = true
 screen = true          # 1200px previews
 large = false          # 2000px previews
 ```
+
+Omit `[server.banner]` to hide the notice. The title and message are plain
+text. Set both link fields or omit both; links must use `http://` or
+`https://`.
 
 Command-line arguments override the config file. (A legacy
 `[database]`/`[images]` section is still parsed but ignored in server mode —

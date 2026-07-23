@@ -44,6 +44,8 @@ pub struct AppState {
     /// untrustworthy client cannot mutate the user's configuration even if
     /// the server has a registry to persist to.
     pub allow_database_management: RwLock<bool>,
+    /// Optional plain-text notice displayed below the application header.
+    pub site_banner: RwLock<Option<crate::config::SiteBannerConfig>>,
     /// Tuning policy for the parallel scans and background pre-generation (see
     /// `concurrency::WorkerPolicy`). Process-global; sourced from the TOML
     /// `[server]` ratios, otherwise the compiled-in defaults.
@@ -353,6 +355,7 @@ impl AppState {
             cache_dir_root: cache_dir,
             registry_path: RwLock::new(None),
             allow_database_management: RwLock::new(false),
+            site_banner: RwLock::new(None),
             worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
@@ -377,6 +380,14 @@ impl AppState {
 
     pub fn database_management_allowed(&self) -> bool {
         *self.allow_database_management.read().unwrap()
+    }
+
+    pub fn set_site_banner(&self, banner: Option<crate::config::SiteBannerConfig>) {
+        *self.site_banner.write().unwrap() = banner;
+    }
+
+    pub fn site_banner(&self) -> Option<crate::config::SiteBannerConfig> {
+        self.site_banner.read().unwrap().clone()
     }
 
     /// Set the worker tuning policy (from the TOML `[server]` config).
@@ -458,6 +469,7 @@ impl AppState {
             cache_dir_root: "/tmp/psf-guard-test".to_string(),
             registry_path: RwLock::new(None),
             allow_database_management: RwLock::new(false),
+            site_banner: RwLock::new(None),
             worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
@@ -495,6 +507,21 @@ mod tests {
         }
         // Guard dropped -> gauge clears -> background may resume.
         assert!(!state.interactive_job_active());
+    }
+
+    #[test]
+    fn site_banner_round_trips_through_state() {
+        let state = test_state();
+        assert!(state.site_banner().is_none());
+
+        let banner = crate::config::SiteBannerConfig {
+            title: "Demo site".into(),
+            message: "Sample data".into(),
+            link_text: None,
+            link_url: None,
+        };
+        state.set_site_banner(Some(banner.clone()));
+        assert_eq!(state.site_banner(), Some(banner));
     }
 
     #[test]

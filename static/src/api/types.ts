@@ -603,11 +603,20 @@ export interface StackColorCatalog {
   jobs: StackColorJob[];
 }
 
+export interface SiteBanner {
+  title: string;
+  message: string;
+  link_text?: string;
+  link_url?: string;
+}
+
 export interface ServerInfo {
   version: string;
   cache_directory: string;
   /** Whether database mutations and sync are accepted on this server. */
   allow_database_management: boolean;
+  /** Optional plain-text notice configured by the server administrator. */
+  banner?: SiteBanner;
 }
 
 /** One configured database, returned by /api/databases. */

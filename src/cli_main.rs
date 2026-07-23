@@ -988,6 +988,7 @@ pub fn main() -> Result<()> {
             let server_host = app_config.get_host();
             let server_port = app_config.get_port();
             let worker_policy = app_config.get_worker_policy();
+            let site_banner = app_config.get_site_banner()?;
             let databases = db_registry.databases.clone();
             let astrometry_config = db_registry.astrometry.clone();
 
@@ -1002,6 +1003,7 @@ pub fn main() -> Result<()> {
                     pregeneration_config,
                     Some(registry_path),
                     allow_database_management,
+                    site_banner,
                     worker_policy,
                     astrometry_config,
                 )

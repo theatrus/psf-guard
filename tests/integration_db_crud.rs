@@ -84,6 +84,34 @@ async fn json_request(
 }
 
 #[tokio::test]
+async fn server_info_exposes_the_configured_site_banner() {
+    let dir = tempdir().unwrap();
+    let state = Arc::new(
+        AppState::from_databases(
+            vec![],
+            dir.path().join("cache").to_string_lossy().into_owned(),
+            psf_guard::cli::PregenerationConfig::default(),
+        )
+        .unwrap(),
+    );
+    state.set_site_banner(Some(psf_guard::config::SiteBannerConfig {
+        title: "Demo site".into(),
+        message: "Sample data; changes may be reset.".into(),
+        link_text: Some("Learn more".into()),
+        link_url: Some("https://psf-guard.com/".into()),
+    }));
+
+    let (status, body) = json_request(build_app(state), "GET", "/api/info", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["banner"]["title"], "Demo site");
+    assert_eq!(
+        body["data"]["banner"]["message"],
+        "Sample data; changes may be reset."
+    );
+    assert_eq!(body["data"]["banner"]["link_url"], "https://psf-guard.com/");
+}
+
+#[tokio::test]
 async fn crud_lifecycle_adds_uses_and_removes_a_database() {
     let dir = tempdir().unwrap();
     let registry_path = dir.path().join("config.json");

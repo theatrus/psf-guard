@@ -48,6 +48,8 @@ pub struct ServerConfig {
     /// Allow HTTP clients to mutate the configured database list. Off by
     /// default for CLI servers; Tauri always enables it.
     pub allow_database_management: bool,
+    /// Optional notice shown below the application header.
+    pub site_banner: Option<crate::config::SiteBannerConfig>,
     /// Tuning policy for the parallel scans and background pre-generation.
     /// See `concurrency::WorkerPolicy`.
     pub worker_policy: crate::concurrency::WorkerPolicy,
@@ -65,6 +67,7 @@ pub async fn run_server(
     pregeneration_config: PregenerationConfig,
     registry_path: Option<PathBuf>,
     allow_database_management: bool,
+    site_banner: Option<crate::config::SiteBannerConfig>,
     worker_policy: crate::concurrency::WorkerPolicy,
     astrometry_config: Option<crate::astrometry::AstrometryConfig>,
 ) -> anyhow::Result<()> {
@@ -90,6 +93,7 @@ pub async fn run_server(
         pregeneration_config,
         registry_path,
         allow_database_management,
+        site_banner,
         worker_policy,
         astrometry_config,
     };
@@ -156,7 +160,11 @@ async fn run_server_internal(
             tracing::info!("✅ Application state initialized successfully");
             state.set_registry_path(config.registry_path.clone());
             state.set_allow_database_management(config.allow_database_management);
+            state.set_site_banner(config.site_banner.clone());
             state.set_worker_policy(config.worker_policy);
+            if let Some(banner) = &config.site_banner {
+                tracing::info!("📢 Site banner enabled: {}", banner.title);
+            }
             tracing::info!(
                 "📐 Worker ratios — interactive {:.2}, background {:.2} (of {} logical cores)",
                 config.worker_policy.interactive_ratio,

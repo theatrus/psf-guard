@@ -65,6 +65,7 @@ pub async fn get_server_info(
         version: env!("CARGO_PKG_VERSION").to_string(),
         cache_directory: state.cache_dir_root.clone(),
         allow_database_management: state.database_management_allowed(),
+        banner: state.site_banner(),
     };
 
     Ok(Json(ApiResponse::success(info)))

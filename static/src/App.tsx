@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useHotkeys } from 'react-hotkeys-hook';
+import { useQuery } from '@tanstack/react-query';
 import ProjectTargetSelector from './components/ProjectTargetSelector';
 import KeyboardShortcutHelp from './components/KeyboardShortcutHelp';
 import ServerInfoPanel from './components/ServerInfoPanel';
+import SiteBanner from './components/SiteBanner';
 import CacheRefreshStatus from './components/CacheRefreshStatus';
 import AggregatedCacheStatus from './components/AggregatedCacheStatus';
 import TauriSettings from './components/TauriSettings';
@@ -16,6 +18,11 @@ function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const { showStats, setShowStats } = useGridState();
+  const { data: serverInfo } = useQuery({
+    queryKey: ['serverInfo'],
+    queryFn: apiClient.getServerInfo,
+    staleTime: 5 * 60 * 1000,
+  });
 
   // Carry the active (db, project, target, filter…) query context when switching
   // between scoped views, so navigation never drops the ?db= slug and strands
@@ -178,6 +185,8 @@ function App() {
           <ServerInfoPanel />
         </div>
       </header>
+
+      <SiteBanner banner={serverInfo?.banner} />
 
       <main className="app-main">
         <Outlet />
