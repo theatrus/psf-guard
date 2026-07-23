@@ -84,8 +84,22 @@ committing hours to a full calibration and processing workflow.
 
 | Overview Dashboard | Image Grid | Side-by-Side Comparison |
 |:--:|:--:|:--:|
-| ![Overview](docs/overview.png) | ![Grid](docs/image_grid.jpg) | ![Compare](docs/compare.jpg) |
+| ![Overview](docs/overview.png) | ![Flaming Star H-alpha frames in the cleaned image grid](docs/grid-flaming-star-narrowband.png) | ![Compare](docs/compare.jpg) |
 | Project statistics and progress tracking | Grid view with filtering and batch operations | Synchronized zoom and detailed comparison |
+
+The compact grid header keeps project, target, filters, grouping, image size,
+undo/redo, and comparison controls in stable rows. Preview generation, stack
+status, and database refreshes preserve the first visible image instead of
+moving the review position. Arrow keys move the image cursor; `Space` toggles
+its selection in both Grid and Sequence views. Shift+Click selects a range and
+Ctrl/Cmd+Click toggles one frame.
+
+<details>
+<summary>Responsive grid layout</summary>
+
+<img src="docs/grid-flaming-star-responsive.png" width="480" alt="Flaming Star H-alpha grid with the controls wrapped for a narrow window">
+
+</details>
 
 Each Overview project has a **Plan & coordinates** view. It shows the project
 settings and every target's Target Scheduler coordinates and exposure plans.
@@ -96,6 +110,36 @@ means “use the template default.” Start the server with
 `--allow-database-management` to edit; without
 that flag the same view remains available read-only. A sky-map link can use the
 stored coordinates in a later release.
+
+### Build a scheduler database from FITS folders
+
+![New Database from Images with separate background quality analysis](docs/import-from-images.png)
+
+Open **Settings → New Database from Images** to build a Target Scheduler
+database from plain FITS folders. The first pass reads headers only. It creates
+one project per target by default, joins only strong same-rig mosaic panel
+matches, derives target coordinates, and builds shared exposure templates and
+plans from filter, gain, offset, binning, readout mode, and exposure time.
+Pixel work stays off by default, so a large import does not wait for star
+detection or plate solving.
+
+| Narrowband template view | Target coordinates and exposure plans |
+|:--:|:--:|
+| ![Shared B, G, HA, L, OIII, R, and SII exposure templates](docs/project-plan-narrowband.png) | ![Golf of Mexico target coordinates and seven exposure plans](docs/target-plan-narrowband.png) |
+
+Settings shows import progress even after the page is closed or reloaded. Once
+the catalog is ready, **Analyze Missing Quality** fills uncached star,
+photometric, spatial, and pointing evidence in a low-priority job;
+**Rescan All Quality** forces a fresh pass. Importing more folders starts with
+a dry preview, skips basenames already present, and attaches new frames to an
+existing target by name or nearby coordinates before it creates new structure.
+
+The Overview's **Plan & coordinates** dialog lets you correct imported names,
+coordinates, limits, and desired counts. Settings can then pull complete new
+projects from a telescope database or push edited planning fields back without
+changing telescope captures or grades. See the
+**[import and planning guide](docs/IMPORTING.md)** for database paths, grouping
+rules, backfill behavior, and CLI commands.
 
 ### See the evidence behind a quality decision
 
@@ -245,8 +289,12 @@ setups. Open it and you get an overview dashboard (projects, targets, completion
 grading progress), an image grid, and a comparison mode:
 
 - **Grid**: filter by project/target/status/date, multi-select with
-  Shift/Ctrl+Click, accept/reject/unmark with instant feedback, HFR and
-  star-count metadata on every card.
+  Shift/Ctrl/Cmd+Click or `Space`, move through cards with the arrow keys,
+  accept/reject/unmark with instant feedback, and see HFR and star-count
+  metadata on every card. Time-based Session grouping keeps large projects
+  in the same image-first layout.
+- **Stable position**: preview generation, status changes, and database refresh
+  updates keep the visible image anchored instead of moving the page.
 - **Comparison**: side-by-side with synchronized (or independent) zoom and
   pan — grade both frames at once.
 - **Smart loading**: fast previews first, full resolution on zoom; previews
@@ -270,8 +318,10 @@ grading progress), an image grid, and a comparison mode:
 | Key | Action | Key | Action |
 |-----|--------|-----|--------|
 | K / → | Next image | A | Accept |
-| J / ← | Previous | X | Reject |
-| C | Compare | U | Unmark |
+| J / ← | Previous image | X | Reject |
+| ↑ / ↓ | Nearest grid row | Space | Toggle selection |
+| Enter | Open image | C | Compare |
+| Esc | Clear selection / close | U | Unmark |
 | S | Stars overlay | O | Solve / sky overlay |
 | T | Predict / satellite tracks | P | PSF view |
 | + / − | Zoom | Ctrl+Z | Undo |
