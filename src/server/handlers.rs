@@ -382,23 +382,42 @@ pub async fn sync_database_route(
     Path(db_id): Path<String>,
     Json(req): Json<SchedulerSyncRequest>,
 ) -> Result<Json<ApiResponse<SchedulerSyncResponse>>, AppError> {
-    use crate::commands::sync::{sync_planning, sync_pull, PlanningOptions, PullOptions};
+    let _apply_guard = if req.dry_run {
+        None
+    } else {
+        Some(state.sync_apply_lock.lock().await)
+    };
+    let response = execute_scheduler_sync(&state, &db_id, req).await?;
+    Ok(Json(ApiResponse::success(response)))
+}
+
+async fn execute_scheduler_sync(
+    state: &Arc<AppState>,
+    db_id: &str,
+    req: SchedulerSyncRequest,
+) -> Result<SchedulerSyncResponse, AppError> {
+    use crate::commands::sync::{
+        parse_status, sync_grades, sync_planning, sync_pull, PlanningOptions, PullOptions,
+        SyncGradesOptions,
+    };
     use rusqlite::{Connection, OpenFlags};
 
-    require_database_management_allowed(&state)?;
+    require_database_management_allowed(state)?;
     if db_id == req.peer_db_id {
         return Err(AppError::BadRequest(
             "Choose two different databases to sync.".into(),
         ));
     }
 
-    let local = state.get_database(&db_id).ok_or(AppError::NotFound)?;
+    let local = state.get_database(db_id).ok_or(AppError::NotFound)?;
     let peer = state
         .get_database(&req.peer_db_id)
         .ok_or(AppError::NotFound)?;
     let (source_ctx, destination_ctx) = match req.kind {
         SchedulerSyncKind::Pull => (Arc::clone(&peer), Arc::clone(&local)),
-        SchedulerSyncKind::PushPlanning => (Arc::clone(&local), Arc::clone(&peer)),
+        SchedulerSyncKind::PushPlanning | SchedulerSyncKind::PushGrades => {
+            (Arc::clone(&local), Arc::clone(&peer))
+        }
     };
     let source_path = PathBuf::from(&source_ctx.database_path);
     let destination_path = PathBuf::from(&destination_ctx.database_path);
@@ -407,6 +426,17 @@ pub async fn sync_database_route(
     let kind = req.kind;
     let dry_run = req.dry_run;
     let project = req.project;
+    let target = req.target;
+    let status_filter = if matches!(kind, SchedulerSyncKind::PushGrades) {
+        req.status
+            .as_deref()
+            .map(parse_status)
+            .transpose()
+            .map_err(|error| AppError::BadRequest(error.to_string()))?
+    } else {
+        None
+    };
+    let reviewed_only = req.reviewed_only;
     let with_image_data = req.with_image_data.unwrap_or(true);
 
     let response = tokio::task::spawn_blocking(move || -> anyhow::Result<SchedulerSyncResponse> {
@@ -448,6 +478,7 @@ pub async fn sync_database_route(
                     imagedata: summary
                         .imagedata_synced
                         .then(|| (&summary.imagedata).into()),
+                    grades: None,
                     grade_filled: summary.grade_filled,
                     grade_preserved: summary.grade_preserved,
                     imagedata_bytes: summary.imagedata_bytes,
@@ -476,6 +507,7 @@ pub async fn sync_database_route(
                     exposureplan: (&summary.exposureplan).into(),
                     acquiredimage: None,
                     imagedata: None,
+                    grades: None,
                     grade_filled: 0,
                     grade_preserved: 0,
                     imagedata_bytes: 0,
@@ -483,17 +515,201 @@ pub async fn sync_database_route(
                     total_updated: summary.total_updated(),
                 }
             }
+            SchedulerSyncKind::PushGrades => {
+                let summary = sync_grades(
+                    &source,
+                    &destination,
+                    &SyncGradesOptions {
+                        status_filter,
+                        reviewed_only,
+                        project_filter: project,
+                        target_filter: target,
+                        dry_run,
+                    },
+                )?;
+                SchedulerSyncResponse {
+                    kind,
+                    dry_run,
+                    source_db_id: source_id,
+                    destination_db_id: destination_id,
+                    exposuretemplate: SchedulerSyncTableCounts::default(),
+                    project: SchedulerSyncTableCounts::default(),
+                    ruleweight: SchedulerSyncTableCounts::default(),
+                    target: SchedulerSyncTableCounts::default(),
+                    exposureplan: SchedulerSyncTableCounts::default(),
+                    acquiredimage: None,
+                    imagedata: None,
+                    grades: Some(SchedulerSyncGradeCounts {
+                        source_considered: summary.source_considered,
+                        source_no_guid: summary.source_no_guid,
+                        matched: summary.matched,
+                        changed: summary.changed,
+                        unchanged: summary.unchanged,
+                        unmatched_source: summary.unmatched_source,
+                        destination_only: summary.dest_only,
+                        duplicate_guids: summary.duplicate_guids,
+                        transitions: summary.transitions,
+                    }),
+                    grade_filled: 0,
+                    grade_preserved: 0,
+                    imagedata_bytes: 0,
+                    total_inserted: 0,
+                    total_updated: summary.changed,
+                }
+            }
         };
         Ok(response)
     })
     .await
     .map_err(|error| AppError::InternalError(format!("scheduler sync task failed: {error}")))?
-    .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    .map_err(|error| AppError::BadRequest(format!("{error:#}")))?;
 
     if !dry_run {
         let _ = destination_ctx.ensure_cache_available();
     }
-    Ok(Json(ApiResponse::success(response)))
+    Ok(response)
+}
+
+fn sync_endpoint_paths(
+    state: &AppState,
+    local_db_id: &str,
+    request: &SchedulerSyncRequest,
+) -> Result<(PathBuf, PathBuf), AppError> {
+    if local_db_id == request.peer_db_id {
+        return Err(AppError::BadRequest(
+            "Choose two different databases to sync.".into(),
+        ));
+    }
+    let local = state.get_database(local_db_id).ok_or(AppError::NotFound)?;
+    let peer = state
+        .get_database(&request.peer_db_id)
+        .ok_or(AppError::NotFound)?;
+    let (source, destination) = match request.kind {
+        SchedulerSyncKind::Pull => (peer, local),
+        SchedulerSyncKind::PushPlanning | SchedulerSyncKind::PushGrades => (local, peer),
+    };
+    Ok((
+        PathBuf::from(&source.database_path),
+        PathBuf::from(&destination.database_path),
+    ))
+}
+
+fn sync_fingerprint_tables(request: &SchedulerSyncRequest) -> Vec<&'static str> {
+    match request.kind {
+        SchedulerSyncKind::Pull => {
+            let mut tables = vec![
+                "exposuretemplate",
+                "project",
+                "ruleweight",
+                "target",
+                "exposureplan",
+                "acquiredimage",
+            ];
+            if request.with_image_data.unwrap_or(true) {
+                tables.push("imagedata");
+            }
+            tables
+        }
+        SchedulerSyncKind::PushPlanning => vec![
+            "exposuretemplate",
+            "project",
+            "ruleweight",
+            "target",
+            "exposureplan",
+        ],
+        SchedulerSyncKind::PushGrades => vec!["acquiredimage"],
+    }
+}
+
+async fn sync_fingerprint_pair(
+    source_path: PathBuf,
+    destination_path: PathBuf,
+    tables: Vec<&'static str>,
+) -> Result<(String, String), AppError> {
+    tokio::task::spawn_blocking(move || {
+        let source = crate::server::sync_preview::database_fingerprint(&source_path, &tables)?;
+        let destination =
+            crate::server::sync_preview::database_fingerprint(&destination_path, &tables)?;
+        Ok::<_, anyhow::Error>((source, destination))
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("sync fingerprint task failed: {error}")))?
+    .map_err(|error| AppError::BadRequest(format!("{error:#}")))
+}
+
+/// Create a server-owned dry preview. Apply is a separate endpoint keyed by
+/// the returned opaque preview ID.
+pub async fn preview_sync_database_route(
+    State(state): State<Arc<AppState>>,
+    Path(db_id): Path<String>,
+    Json(mut request): Json<SchedulerSyncRequest>,
+) -> Result<Json<ApiResponse<SchedulerSyncPreviewResponse>>, AppError> {
+    require_database_management_allowed(&state)?;
+    request.dry_run = true;
+    let (source_path, destination_path) = sync_endpoint_paths(&state, &db_id, &request)?;
+    let tables = sync_fingerprint_tables(&request);
+    let before = sync_fingerprint_pair(
+        source_path.clone(),
+        destination_path.clone(),
+        tables.clone(),
+    )
+    .await?;
+    let result = execute_scheduler_sync(&state, &db_id, request.clone()).await?;
+    let after = sync_fingerprint_pair(source_path, destination_path, tables).await?;
+    if before != after {
+        return Err(AppError::Conflict(
+            "A source or destination database changed while the preview was running. Preview again."
+                .into(),
+        ));
+    }
+
+    let record = state
+        .sync_previews
+        .store(db_id, request, before.0, before.1, result.clone())
+        .map_err(|error| {
+            AppError::InternalError(format!("saving scheduler sync preview: {error}"))
+        })?;
+    Ok(Json(ApiResponse::success(SchedulerSyncPreviewResponse {
+        preview_id: record.id,
+        created_at: record.created_at,
+        expires_at: record.expires_at,
+        result,
+    })))
+}
+
+/// Apply one unexpired preview after proving that neither catalog changed.
+pub async fn apply_sync_database_preview_route(
+    State(state): State<Arc<AppState>>,
+    Path((db_id, preview_id)): Path<(String, String)>,
+) -> Result<Json<ApiResponse<SchedulerSyncResponse>>, AppError> {
+    require_database_management_allowed(&state)?;
+    let _apply_guard = state.sync_apply_lock.lock().await;
+    let record = state
+        .sync_previews
+        .claim(&preview_id, &db_id)
+        .map_err(|error| AppError::InternalError(format!("loading sync preview: {error}")))?
+        .ok_or(AppError::NotFound)?;
+
+    let (source_path, destination_path) = sync_endpoint_paths(&state, &db_id, &record.request)?;
+    let fingerprints = sync_fingerprint_pair(
+        source_path,
+        destination_path,
+        sync_fingerprint_tables(&record.request),
+    )
+    .await?;
+    if fingerprints.0 != record.source_fingerprint
+        || fingerprints.1 != record.destination_fingerprint
+    {
+        return Err(AppError::Conflict(
+            "This preview is stale because a source or destination database changed. Preview again."
+                .into(),
+        ));
+    }
+
+    let mut request = record.request;
+    request.dry_run = false;
+    let result = execute_scheduler_sync(&state, &db_id, request).await?;
+    Ok(Json(ApiResponse::success(result)))
 }
 
 /// `POST /api/databases` — register a new database. Validates that the file
@@ -3869,6 +4085,7 @@ pub enum AppError {
     NotFound,
     DatabaseError(String),
     BadRequest(String),
+    Conflict(String),
     Forbidden(String),
     InternalError(String),
     NotImplemented,
@@ -3903,6 +4120,14 @@ impl IntoResponse for AppError {
                 tracing::warn!("❌ Bad request: {}", msg);
                 return (
                     StatusCode::BAD_REQUEST,
+                    Json(ApiResponse::<()>::error(msg.clone())),
+                )
+                    .into_response();
+            }
+            AppError::Conflict(msg) => {
+                tracing::warn!("⚠️ Conflict: {}", msg);
+                return (
+                    StatusCode::CONFLICT,
                     Json(ApiResponse::<()>::error(msg.clone())),
                 )
                     .into_response();

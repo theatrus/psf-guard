@@ -14,6 +14,7 @@ pub mod spatial_scan;
 pub mod stack_preview;
 pub mod state;
 pub mod static_file_service;
+pub mod sync_preview;
 
 use anyhow::{Context, Result};
 use axum::{
@@ -389,6 +390,14 @@ async fn run_server_internal(
         .route(
             "/databases/{db_id}/sync",
             post(handlers::sync_database_route),
+        )
+        .route(
+            "/databases/{db_id}/sync/preview",
+            post(handlers::preview_sync_database_route),
+        )
+        .route(
+            "/databases/{db_id}/sync/previews/{preview_id}/apply",
+            post(handlers::apply_sync_database_preview_route),
         )
         .route(
             "/databases/{db_id}",

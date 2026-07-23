@@ -706,7 +706,7 @@ export interface DatabaseSummary {
   image_directories: string[];
 }
 
-export type SchedulerSyncKind = 'pull' | 'push_planning';
+export type SchedulerSyncKind = 'pull' | 'push_planning' | 'push_grades';
 
 export interface SchedulerSyncRequest {
   peer_db_id: string;
@@ -714,6 +714,9 @@ export interface SchedulerSyncRequest {
   dry_run?: boolean;
   with_image_data?: boolean;
   project?: string;
+  target?: string;
+  status?: 'pending' | 'accepted' | 'rejected';
+  reviewed_only?: boolean;
 }
 
 export interface SchedulerSyncTableCounts {
@@ -721,6 +724,18 @@ export interface SchedulerSyncTableCounts {
   updated: number;
   unchanged: number;
   skipped: number;
+}
+
+export interface SchedulerSyncGradeCounts {
+  source_considered: number;
+  source_no_guid: number;
+  matched: number;
+  changed: number;
+  unchanged: number;
+  unmatched_source: number;
+  destination_only: number;
+  duplicate_guids: number;
+  transitions: Record<string, number>;
 }
 
 export interface SchedulerSyncResponse {
@@ -735,11 +750,19 @@ export interface SchedulerSyncResponse {
   exposureplan: SchedulerSyncTableCounts;
   acquiredimage: SchedulerSyncTableCounts | null;
   imagedata: SchedulerSyncTableCounts | null;
+  grades: SchedulerSyncGradeCounts | null;
   grade_filled: number;
   grade_preserved: number;
   imagedata_bytes: number;
   total_inserted: number;
   total_updated: number;
+}
+
+export interface SchedulerSyncPreviewResponse {
+  preview_id: string;
+  created_at: number;
+  expires_at: number;
+  result: SchedulerSyncResponse;
 }
 
 /** Per-project line of an import outcome report. */

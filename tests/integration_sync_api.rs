@@ -29,10 +29,10 @@ fn schema(conn: &Connection) {
     .unwrap();
 }
 
-async fn request(app: Router, body: Value) -> (StatusCode, Value) {
+async fn request(app: Router, uri: &str, body: Value) -> (StatusCode, Value) {
     let response = app
         .oneshot(
-            Request::post("/api/databases/local/sync")
+            Request::post(uri)
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_vec(&body).unwrap()))
                 .unwrap(),
@@ -45,7 +45,7 @@ async fn request(app: Router, body: Value) -> (StatusCode, Value) {
 }
 
 #[tokio::test]
-async fn planning_push_previews_then_keeps_telescope_capture_state() {
+async fn planning_and_grade_pushes_preview_before_writing() {
     let dir = tempdir().unwrap();
     let local_path = dir.path().join("local.sqlite");
     let telescope_path = dir.path().join("telescope.sqlite");
@@ -59,7 +59,8 @@ async fn planning_push_previews_then_keeps_telescope_capture_state() {
          INSERT INTO target VALUES (1,'M42',1,5.5,-5.4,0,1,'target-guid');
          INSERT INTO exposuretemplate VALUES (1,'p','Ha 300','Ha',120,'template-guid');
          INSERT INTO exposureplan VALUES (1,'p',300,40,18,16,1,1,1,'plan-guid');
-         INSERT INTO ruleweight VALUES (1,'Priority',2.5,1);",
+         INSERT INTO ruleweight VALUES (1,'Priority',2.5,1);
+         INSERT INTO acquiredimage VALUES (1,1,1,1000,'Ha',1,'{}',NULL,'p',1,'image-guid');",
         )
         .unwrap();
     telescope
@@ -107,6 +108,14 @@ async fn planning_push_previews_then_keeps_telescope_capture_state() {
             "/api/databases/{db_id}/sync",
             post(handlers::sync_database_route),
         )
+        .route(
+            "/api/databases/{db_id}/sync/preview",
+            post(handlers::preview_sync_database_route),
+        )
+        .route(
+            "/api/databases/{db_id}/sync/previews/{preview_id}/apply",
+            post(handlers::apply_sync_database_preview_route),
+        )
         .with_state(state);
 
     let payload = json!({
@@ -114,7 +123,7 @@ async fn planning_push_previews_then_keeps_telescope_capture_state() {
         "kind": "push_planning",
         "dry_run": true
     });
-    let (status, preview) = request(app.clone(), payload).await;
+    let (status, preview) = request(app.clone(), "/api/databases/local/sync", payload).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(preview["data"]["project"]["updated"], 1);
     let telescope = Connection::open(&telescope_path).unwrap();
@@ -128,7 +137,8 @@ async fn planning_push_previews_then_keeps_telescope_capture_state() {
     drop(telescope);
 
     let (status, applied) = request(
-        app,
+        app.clone(),
+        "/api/databases/local/sync",
         json!({
             "peer_db_id": "scope",
             "kind": "push_planning",
@@ -161,6 +171,99 @@ async fn planning_push_previews_then_keeps_telescope_capture_state() {
             .unwrap(),
         6
     );
+    assert_eq!(
+        telescope
+            .query_row("SELECT gradingStatus FROM acquiredimage", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    drop(telescope);
+
+    // Omitting dry_run is safe: the route previews reviewed grade changes.
+    let (status, preview) = request(
+        app.clone(),
+        "/api/databases/local/sync/preview",
+        json!({
+            "peer_db_id": "scope",
+            "kind": "push_grades"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(preview["data"]["result"]["dry_run"], true);
+    assert_eq!(preview["data"]["result"]["grades"]["changed"], 1);
+    let preview_id = preview["data"]["preview_id"].as_str().unwrap();
+    let telescope = Connection::open(&telescope_path).unwrap();
+    assert_eq!(
+        telescope
+            .query_row("SELECT gradingStatus FROM acquiredimage", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    drop(telescope);
+
+    let (status, applied) = request(
+        app.clone(),
+        &format!("/api/databases/local/sync/previews/{preview_id}/apply"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(applied["data"]["grades"]["changed"], 1);
+    let telescope = Connection::open(&telescope_path).unwrap();
+    assert_eq!(
+        telescope
+            .query_row("SELECT gradingStatus FROM acquiredimage", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    drop(telescope);
+
+    let (status, _) = request(
+        app.clone(),
+        &format!("/api/databases/local/sync/previews/{preview_id}/apply"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, stale_preview) = request(
+        app.clone(),
+        "/api/databases/local/sync/preview",
+        json!({
+            "peer_db_id": "scope",
+            "kind": "push_grades"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let stale_preview_id = stale_preview["data"]["preview_id"].as_str().unwrap();
+
+    let telescope = Connection::open(&telescope_path).unwrap();
+    telescope
+        .execute(
+            "UPDATE acquiredimage SET gradingStatus = 2, rejectreason = 'new cloud'",
+            [],
+        )
+        .unwrap();
+    drop(telescope);
+
+    let (status, stale_apply) = request(
+        app,
+        &format!("/api/databases/local/sync/previews/{stale_preview_id}/apply"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(stale_apply["error"]
+        .as_str()
+        .unwrap()
+        .contains("preview is stale"));
+
+    let telescope = Connection::open(&telescope_path).unwrap();
     assert_eq!(
         telescope
             .query_row("SELECT gradingStatus FROM acquiredimage", [], |row| row

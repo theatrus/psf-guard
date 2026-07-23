@@ -248,23 +248,30 @@ pub struct DatabaseSummary {
 }
 
 /// Database-to-database operations exposed by the management UI.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SchedulerSyncKind {
     /// Telescope → local: structure, captures, and optional image data.
     Pull,
     /// Local → telescope: planning settings only.
     PushPlanning,
+    /// Local → telescope: grading state and reject reasons only.
+    PushGrades,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Body of `POST /api/databases/{db_id}/sync`. `db_id` is the local working
 /// database; `peer_db_id` is the telescope scheduler database.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SchedulerSyncRequest {
     pub peer_db_id: String,
     pub kind: SchedulerSyncKind,
-    /// Plan and count without changing either database.
-    #[serde(default)]
+    /// Plan and count without changing either database. Omitted means true:
+    /// callers must opt in to a live write.
+    #[serde(default = "default_true")]
     pub dry_run: bool,
     /// Pull image-data BLOBs. Defaults to true and has no effect on a planning
     /// push.
@@ -273,10 +280,20 @@ pub struct SchedulerSyncRequest {
     /// Optional project-name substring filter.
     #[serde(default)]
     pub project: Option<String>,
+    /// Optional target-name substring filter for grade pushes.
+    #[serde(default)]
+    pub target: Option<String>,
+    /// Optional exact source grade for grade pushes.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// When no exact status is selected, send Accepted and Rejected rows but
+    /// leave Pending rows alone. Defaults to true.
+    #[serde(default = "default_true")]
+    pub reviewed_only: bool,
 }
 
 /// Insert/update counts for one scheduler table.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct SchedulerSyncTableCounts {
     pub inserted: usize,
     pub updated: usize,
@@ -295,8 +312,22 @@ impl From<&crate::commands::sync::TableCounts> for SchedulerSyncTableCounts {
     }
 }
 
+/// Grade-push counts. Present only for `push_grades`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct SchedulerSyncGradeCounts {
+    pub source_considered: usize,
+    pub source_no_guid: usize,
+    pub matched: usize,
+    pub changed: usize,
+    pub unchanged: usize,
+    pub unmatched_source: usize,
+    pub destination_only: usize,
+    pub duplicate_guids: usize,
+    pub transitions: std::collections::BTreeMap<String, usize>,
+}
+
 /// Result of a database-to-database scheduler sync or dry-run preview.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SchedulerSyncResponse {
     pub kind: SchedulerSyncKind,
     pub dry_run: bool,
@@ -311,11 +342,21 @@ pub struct SchedulerSyncResponse {
     pub acquiredimage: Option<SchedulerSyncTableCounts>,
     /// Present only for a full pull with image-data syncing enabled.
     pub imagedata: Option<SchedulerSyncTableCounts>,
+    /// Present only for a grade push.
+    pub grades: Option<SchedulerSyncGradeCounts>,
     pub grade_filled: usize,
     pub grade_preserved: usize,
     pub imagedata_bytes: u64,
     pub total_inserted: usize,
     pub total_updated: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SchedulerSyncPreviewResponse {
+    pub preview_id: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub result: SchedulerSyncResponse,
 }
 
 /// Body of `POST /api/databases`.

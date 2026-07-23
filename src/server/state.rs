@@ -66,6 +66,11 @@ pub struct AppState {
     /// Process-global, single-flight Seiza catalog installation with progress
     /// that survives closing and reopening the Settings page.
     pub catalog_install: crate::server::catalog_install::CatalogInstallManager,
+    /// Durable, preview-first database transfer state.
+    pub sync_previews: crate::server::sync_preview::SyncPreviewManager,
+    /// Serializes guarded transfer applies so one preview cannot invalidate
+    /// another between its stale check and transaction.
+    pub sync_apply_lock: tokio::sync::Mutex<()>,
     /// Process-global Seiza catalogs and capability diagnostics. Catalogs are
     /// shared across databases and opened lazily on first use.
     pub astrometry: Arc<crate::astrometry::AstrometryContext>,
@@ -355,7 +360,7 @@ impl AppState {
         Ok(Self {
             databases: RwLock::new(map),
             pregeneration_config,
-            cache_dir_root: cache_dir,
+            cache_dir_root: cache_dir.clone(),
             registry_path: RwLock::new(None),
             allow_database_management: RwLock::new(false),
             site_banner: RwLock::new(None),
@@ -364,6 +369,8 @@ impl AppState {
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
             catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
+            sync_previews: crate::server::sync_preview::SyncPreviewManager::new(&cache_dir),
+            sync_apply_lock: tokio::sync::Mutex::new(()),
             astrometry: Arc::new(crate::astrometry::AstrometryContext::new(astrometry_config)),
             satellites: Arc::new(satellites),
         })
@@ -479,6 +486,10 @@ impl AppState {
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
             catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
+            sync_previews: crate::server::sync_preview::SyncPreviewManager::new(
+                "/tmp/psf-guard-test",
+            ),
+            sync_apply_lock: tokio::sync::Mutex::new(()),
             astrometry: Arc::new(crate::astrometry::AstrometryContext::default()),
             satellites: Arc::new(
                 crate::satellites::SatelliteContext::new(
