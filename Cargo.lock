@@ -4766,9 +4766,12 @@ dependencies = [
 
 [[package]]
 name = "seiza-imgproc"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72a58c6c76281e5439f696a80de1dcad51bc47123087e3f1208a7879c95b0d07"
+checksum = "3be616763b4354b830e1cb68222798bc168397c56a53654934f1698adc62e312"
+dependencies = [
+ "rayon",
+]
 
 [[package]]
 name = "seiza-satellites"

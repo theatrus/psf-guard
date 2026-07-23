@@ -252,7 +252,6 @@ fn apply_hotpixel_filter(
     // whole row's min/max ops vectorize. Same median values as sorting each
     // neighborhood, without a per-pixel allocation and sort.
     let ilen = width - 2;
-    let mut p: Vec<Vec<u16>> = vec![vec![0u16; ilen]; 9];
     const NET: [(usize, usize); 19] = [
         (1, 2),
         (4, 5),
@@ -274,39 +273,49 @@ fn apply_hotpixel_filter(
         (6, 4),
         (4, 2),
     ];
-    for y in 1..(height - 1) {
-        for (r, sy) in [y - 1, y, y + 1].into_iter().enumerate() {
-            let srow = &data[sy * width..(sy + 1) * width];
-            p[r * 3].copy_from_slice(&srow[..ilen]);
-            p[r * 3 + 1].copy_from_slice(&srow[1..1 + ilen]);
-            p[r * 3 + 2].copy_from_slice(&srow[2..2 + ilen]);
-        }
-        for &(a, b) in NET.iter() {
-            let (lo, hi) = (a.min(b), a.max(b));
-            let (head, tail) = p.split_at_mut(hi);
-            let (pa, pb) = (&mut head[lo], &mut tail[0]);
-            if a < b {
-                for (x, y) in pa.iter_mut().zip(pb.iter_mut()) {
-                    let (mn, mx) = ((*x).min(*y), (*x).max(*y));
-                    *x = mn;
-                    *y = mx;
+    // Interior rows are independent: split them across threads, with one
+    // 9-row network scratch per thread. Per-pixel arithmetic is unchanged.
+    use rayon::prelude::*;
+    result[width..(height - 1) * width]
+        .par_chunks_exact_mut(width)
+        .enumerate()
+        .for_each_init(
+            || vec![vec![0u16; ilen]; 9],
+            |p, (i, out_row)| {
+                let y = i + 1;
+                for (r, sy) in [y - 1, y, y + 1].into_iter().enumerate() {
+                    let srow = &data[sy * width..(sy + 1) * width];
+                    p[r * 3].copy_from_slice(&srow[..ilen]);
+                    p[r * 3 + 1].copy_from_slice(&srow[1..1 + ilen]);
+                    p[r * 3 + 2].copy_from_slice(&srow[2..2 + ilen]);
                 }
-            } else {
-                for (y, x) in pa.iter_mut().zip(pb.iter_mut()) {
-                    let (mn, mx) = ((*x).min(*y), (*x).max(*y));
-                    *x = mn;
-                    *y = mx;
+                for &(a, b) in NET.iter() {
+                    let (lo, hi) = (a.min(b), a.max(b));
+                    let (head, tail) = p.split_at_mut(hi);
+                    let (pa, pb) = (&mut head[lo], &mut tail[0]);
+                    if a < b {
+                        for (x, y) in pa.iter_mut().zip(pb.iter_mut()) {
+                            let (mn, mx) = ((*x).min(*y), (*x).max(*y));
+                            *x = mn;
+                            *y = mx;
+                        }
+                    } else {
+                        for (y, x) in pa.iter_mut().zip(pb.iter_mut()) {
+                            let (mn, mx) = ((*x).min(*y), (*x).max(*y));
+                            *x = mn;
+                            *y = mx;
+                        }
+                    }
                 }
-            }
-        }
-        let out = &mut result[y * width + 1..y * width + 1 + ilen];
-        let center = &data[y * width + 1..y * width + 1 + ilen];
-        for ((o, &c), &m) in out.iter_mut().zip(center.iter()).zip(p[4].iter()) {
-            if (c as f64 - m as f64).abs() > threshold {
-                *o = m;
-            }
-        }
-    }
+                let out = &mut out_row[1..1 + ilen];
+                let center = &data[y * width + 1..y * width + 1 + ilen];
+                for ((o, &c), &m) in out.iter_mut().zip(center.iter()).zip(p[4].iter()) {
+                    if (c as f64 - m as f64).abs() > threshold {
+                        *o = m;
+                    }
+                }
+            },
+        );
 
     result
 }
@@ -345,25 +354,34 @@ fn apply_gaussian_blur(data: &[u16], width: usize, height: usize, kernel_size: u
     if width < kernel_size || height < kernel_size {
         return result;
     }
+    // Output rows are independent: split them across threads with one row
+    // accumulator per thread. Tap order per output pixel is unchanged.
+    use rayon::prelude::*;
     let ilen = width - 2 * radius;
-    let mut acc = vec![0f64; ilen];
-    for y in radius..(height - radius) {
-        acc.fill(0.0);
-        for ky in 0..kernel_size {
-            let srow = &data[(y + ky - radius) * width..(y + ky - radius + 1) * width];
-            for kx in 0..kernel_size {
-                let kv = kernel[ky * kernel_size + kx];
-                let s = &srow[kx..kx + ilen];
-                for (a, &v) in acc.iter_mut().zip(s.iter()) {
-                    *a += v as f64 * kv;
+    result[radius * width..(height - radius) * width]
+        .par_chunks_exact_mut(width)
+        .enumerate()
+        .for_each_init(
+            || vec![0f64; ilen],
+            |acc, (i, out_row)| {
+                let y = i + radius;
+                acc.fill(0.0);
+                for ky in 0..kernel_size {
+                    let srow = &data[(y + ky - radius) * width..(y + ky - radius + 1) * width];
+                    for kx in 0..kernel_size {
+                        let kv = kernel[ky * kernel_size + kx];
+                        let s = &srow[kx..kx + ilen];
+                        for (a, &v) in acc.iter_mut().zip(s.iter()) {
+                            *a += v as f64 * kv;
+                        }
+                    }
                 }
-            }
-        }
-        let orow = &mut result[y * width + radius..y * width + radius + ilen];
-        for (o, &a) in orow.iter_mut().zip(acc.iter()) {
-            *o = a as u16;
-        }
-    }
+                let orow = &mut out_row[radius..radius + ilen];
+                for (o, &a) in orow.iter_mut().zip(acc.iter()) {
+                    *o = a as u16;
+                }
+            },
+        );
 
     result
 }
@@ -381,15 +399,21 @@ fn create_structure_map(
     // f32, so the f32 entry point skips two full-image f64 conversions
     // while producing bit-identical residuals; the subtraction below is
     // done in f64 exactly as before (each operand widens exactly).
-    let float_data: Vec<f32> = data.iter().map(|&v| v as f32).collect();
+    use rayon::prelude::*;
+    let float_data: Vec<f32> = data.par_iter().map(|&v| v as f32).collect();
     let wavelet_remover = StructureRemover::new(params.structure_layers);
     let residual = wavelet_remover.remove_structures_filtered_f32(&float_data, width, height);
 
     // Subtract residual from original to remove large structures
     let mut structure_map = vec![0f64; data.len()];
-    for i in 0..structure_map.len() {
-        structure_map[i] = (data[i] as f64 - residual[i] as f64).max(0.0);
-    }
+    structure_map
+        .par_chunks_mut(4096)
+        .zip(data.par_chunks(4096).zip(residual.par_chunks(4096)))
+        .for_each(|(out, (d, r))| {
+            for ((o, &dv), &rv) in out.iter_mut().zip(d.iter()).zip(r.iter()) {
+                *o = (dv as f64 - rv as f64).max(0.0);
+            }
+        });
 
     // Debug statistics cost six full passes over the map — only compute
     // them when debug output is actually enabled.
@@ -456,23 +480,32 @@ fn smooth_gaussian(data: &mut [f64], width: usize, height: usize, kernel_size: u
     if width < kernel_size || height < kernel_size {
         return;
     }
+    // Output rows are independent: split them across threads with one row
+    // accumulator per thread. Tap order per output pixel is unchanged.
+    use rayon::prelude::*;
     let original = data.to_vec();
     let ilen = width - 2 * radius;
-    let mut acc = vec![0f64; ilen];
-    for y in radius..(height - radius) {
-        acc.fill(0.0);
-        for ky in 0..kernel_size {
-            let srow = &original[(y + ky - radius) * width..(y + ky - radius + 1) * width];
-            for kx in 0..kernel_size {
-                let kv = kernel[ky * kernel_size + kx];
-                let sr = &srow[kx..kx + ilen];
-                for (a, &v) in acc.iter_mut().zip(sr.iter()) {
-                    *a += v * kv;
+    data[radius * width..(height - radius) * width]
+        .par_chunks_exact_mut(width)
+        .enumerate()
+        .for_each_init(
+            || vec![0f64; ilen],
+            |acc, (i, out_row)| {
+                let y = i + radius;
+                acc.fill(0.0);
+                for ky in 0..kernel_size {
+                    let srow = &original[(y + ky - radius) * width..(y + ky - radius + 1) * width];
+                    for kx in 0..kernel_size {
+                        let kv = kernel[ky * kernel_size + kx];
+                        let sr = &srow[kx..kx + ilen];
+                        for (a, &v) in acc.iter_mut().zip(sr.iter()) {
+                            *a += v * kv;
+                        }
+                    }
                 }
-            }
-        }
-        data[y * width + radius..y * width + radius + ilen].copy_from_slice(&acc);
-    }
+                out_row[radius..radius + ilen].copy_from_slice(acc);
+            },
+        );
 }
 
 /// Kappa-Sigma noise estimation matching HocusFocus implementation

@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// Convert 16-bit data to 8-bit using NINA's exact method
 /// Matches Accord.NET's Convert16bppTo8bpp: *d = (byte)(*s >> 8);
 fn convert_16bpp_to_8bpp_nina(data: &[u16]) -> Vec<u8> {
-    data.iter().map(|&pixel| (pixel >> 8) as u8).collect()
+    use rayon::prelude::*;
+    data.par_iter().map(|&pixel| (pixel >> 8) as u8).collect()
 }
 
 /// Banker's rounding (round half to even) to match .NET's default Math.Round
