@@ -4,6 +4,11 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { apiClient } from '../api/client';
 import { useDbProjectTarget, useFilters, useGridState } from './useUrlState';
 import type { Image } from '../api/types';
+import {
+  groupImagesBySession,
+  imageGroupKey,
+  resolveExpandedGroups,
+} from '../utils/imageGrouping';
 
 /**
  * Hook for navigating between images in the current context
@@ -69,6 +74,10 @@ export function useImageNavigation(currentImageId?: number) {
 
   // Group and sort images the same way as GroupedImageGrid
   const imageGroups = useMemo(() => {
+    if (groupingMode === 'session') {
+      return groupImagesBySession(filteredImages);
+    }
+
     const groups = new Map<string, Image[]>();
     
     filteredImages.forEach(image => {
@@ -125,16 +134,21 @@ export function useImageNavigation(currentImageId?: number) {
     return sorted;
   }, [filteredImages, groupingMode]);
 
+  const visibleExpandedGroups = useMemo(
+    () => resolveExpandedGroups(imageGroups, groupingMode, expandedGroups),
+    [imageGroups, groupingMode, expandedGroups],
+  );
+
   // Create flat list respecting expanded groups (same as GroupedImageGrid)
   const flatImages = useMemo(() => {
     const result: Image[] = [];
     imageGroups.forEach((group) => {
-      if (expandedGroups.has(group.filterName) || expandedGroups.size === 0) {
+      if (visibleExpandedGroups.has(imageGroupKey(group))) {
         result.push(...group.images);
       }
     });
     return result;
-  }, [imageGroups, expandedGroups]);
+  }, [imageGroups, visibleExpandedGroups]);
 
   // Find current image index in the flat list
   const currentIndex = useMemo(() => {

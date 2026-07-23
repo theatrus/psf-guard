@@ -13,6 +13,7 @@ export default function KeyboardShortcutHelp({ onClose }: KeyboardShortcutHelpPr
       { key: 'J', description: 'Previous image' },
       { key: '→', description: 'Next image (alternative)' },
       { key: '←', description: 'Previous image (alternative)' },
+      { key: '↑ / ↓', description: 'Move vertically through images' },
       { key: 'Enter', description: 'Open image detail view' },
       { key: 'ESC', description: 'Close detail view / modal' },
     ]},
@@ -41,6 +42,7 @@ export default function KeyboardShortcutHelp({ onClose }: KeyboardShortcutHelpPr
       { key: 'Click & Drag', description: 'Pan image when zoomed' },
     ]},
     { category: 'Batch Selection', items: [
+      { key: 'Space', description: 'Toggle the current image selection' },
       { key: 'Shift+Click', description: 'Select range of images' },
       { key: 'Ctrl+Click', description: 'Toggle individual image selection' },
       { key: 'ESC', description: 'Clear all selections' },

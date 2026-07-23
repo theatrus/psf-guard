@@ -606,7 +606,7 @@ export interface StackColorCatalog {
 export interface ServerInfo {
   version: string;
   cache_directory: string;
-  /** Whether POST/PUT/DELETE /api/databases are accepted on this server. */
+  /** Whether database mutations and sync are accepted on this server. */
   allow_database_management: boolean;
 }
 
@@ -616,6 +616,42 @@ export interface DatabaseSummary {
   name: string;
   database_path: string;
   image_directories: string[];
+}
+
+export type SchedulerSyncKind = 'pull' | 'push_planning';
+
+export interface SchedulerSyncRequest {
+  peer_db_id: string;
+  kind: SchedulerSyncKind;
+  dry_run?: boolean;
+  with_image_data?: boolean;
+  project?: string;
+}
+
+export interface SchedulerSyncTableCounts {
+  inserted: number;
+  updated: number;
+  unchanged: number;
+  skipped: number;
+}
+
+export interface SchedulerSyncResponse {
+  kind: SchedulerSyncKind;
+  dry_run: boolean;
+  source_db_id: string;
+  destination_db_id: string;
+  exposuretemplate: SchedulerSyncTableCounts;
+  project: SchedulerSyncTableCounts;
+  ruleweight: SchedulerSyncTableCounts;
+  target: SchedulerSyncTableCounts;
+  exposureplan: SchedulerSyncTableCounts;
+  acquiredimage: SchedulerSyncTableCounts | null;
+  imagedata: SchedulerSyncTableCounts | null;
+  grade_filled: number;
+  grade_preserved: number;
+  imagedata_bytes: number;
+  total_inserted: number;
+  total_updated: number;
 }
 
 /** Per-project line of an import outcome report. */
@@ -659,15 +695,12 @@ export interface ImportOutcome {
 /** Progress of the singleton per-DB import job (poll ~1s while running). */
 export interface ImportJobProgress {
   running: boolean;
-  /** scanning | importing | backfill | complete | error | "" (never ran) */
+  /** scanning | importing | complete | error | "" (never ran) */
   stage: string;
   image_dirs: string[];
   total_files: number;
   scanned_files: number;
   outcome?: ImportOutcome | null;
-  backfill_total: number;
-  backfill_done: number;
-  backfill_current_target?: number | null;
   started_at?: number | null;
   finished_at?: number | null;
   error?: string | null;
@@ -777,6 +810,123 @@ export interface TargetOverview {
   date_range: DateRange;
   filters_used: string[];
   coordinates_display?: string;
+}
+
+export interface ExposurePlanDetails {
+  id: number;
+  exposure_template_id: number;
+  template_name: string;
+  filter_name: string;
+  gain: number | null;
+  offset: number | null;
+  bin: number | null;
+  readout_mode: number | null;
+  exposure: number;
+  desired: number;
+  acquired: number;
+  accepted: number;
+  enabled: boolean;
+}
+
+export interface ExposureTemplateDetails {
+  id: number;
+  profile_id: string;
+  name: string;
+  filter_name: string;
+  gain: number | null;
+  offset: number | null;
+  bin: number | null;
+  readout_mode: number | null;
+  twilight_level: number;
+  moon_avoidance_enabled: boolean;
+  moon_avoidance_separation: number;
+  moon_avoidance_width: number;
+  maximum_humidity: number;
+  default_exposure: number;
+  moon_relax_scale: number;
+  moon_relax_max_altitude: number;
+  moon_relax_min_altitude: number;
+  moon_down_enabled: boolean;
+  dither_every: number;
+  minutes_offset: number;
+  plan_count: number;
+}
+
+export interface SchedulerTargetDetails {
+  id: number;
+  name: string;
+  active: boolean;
+  ra_hours: number;
+  dec_degrees: number;
+  epoch_code: number;
+  rotation: number;
+  roi: number;
+  exposure_plans: ExposurePlanDetails[];
+}
+
+export interface ProjectSchedulerDetails {
+  id: number;
+  profile_id: string;
+  name: string;
+  description: string | null;
+  state: number;
+  priority: number;
+  created_at: number | null;
+  active_at: number | null;
+  inactive_at: number | null;
+  minimum_time: number;
+  minimum_altitude: number;
+  maximum_altitude: number;
+  use_custom_horizon: boolean;
+  horizon_offset: number;
+  meridian_window: number;
+  filter_switch_frequency: number;
+  dither_every: number;
+  enable_grader: boolean;
+  is_mosaic: boolean;
+  exposure_templates: ExposureTemplateDetails[];
+  targets: SchedulerTargetDetails[];
+}
+
+export interface ProjectSchedulerUpdate {
+  name?: string;
+  description?: string;
+  state?: number;
+  priority?: number;
+  minimum_time?: number;
+  minimum_altitude?: number;
+  maximum_altitude?: number;
+  use_custom_horizon?: boolean;
+  horizon_offset?: number;
+  meridian_window?: number;
+  filter_switch_frequency?: number;
+  dither_every?: number;
+  enable_grader?: boolean;
+  is_mosaic?: boolean;
+}
+
+export interface TargetSchedulerUpdate {
+  name?: string;
+  project_id?: number;
+  active?: boolean;
+  ra_hours?: number;
+  dec_degrees?: number;
+  epoch_code?: number;
+  rotation?: number;
+  roi?: number;
+}
+
+export interface CreateExposurePlanRequest {
+  exposure_template_id?: number;
+  filter_name?: string;
+  template_name?: string;
+  gain?: number;
+  offset?: number;
+  bin?: number;
+  readout_mode?: number;
+  exposure: number;
+  desired: number;
+  enabled: boolean;
 }
 
 export interface OverallStats {
@@ -941,6 +1091,25 @@ export interface SpatialScanRequest {
   force_spatial?: boolean;
   force_astrometry?: boolean;
   force_satellites?: boolean;
+}
+
+export interface QualityBackfillProgress {
+  running: boolean;
+  force: boolean;
+  total_targets: number;
+  processed_targets: number;
+  current_target_id: number | null;
+  started_at: number | null;
+  finished_at: number | null;
+}
+
+export interface QualityBackfillStatus {
+  started: boolean;
+  progress: QualityBackfillProgress;
+}
+
+export interface QualityBackfillRequest {
+  force?: boolean;
 }
 
 export interface SequenceSummary {

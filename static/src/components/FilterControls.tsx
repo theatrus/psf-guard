@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { GradingStatus } from '../api/types';
 
 export interface FilterOptions {
@@ -26,6 +26,15 @@ interface FilterControlsProps {
 }
 
 export default function FilterControls({ onFilterChange, availableFilters, currentFilters }: FilterControlsProps) {
+  const [showDateFilters, setShowDateFilters] = useState(
+    Boolean(currentFilters.dateRange.start || currentFilters.dateRange.end),
+  );
+  useEffect(() => {
+    if (currentFilters.dateRange.start || currentFilters.dateRange.end) {
+      setShowDateFilters(true);
+    }
+  }, [currentFilters.dateRange.end, currentFilters.dateRange.start]);
+
   // Convert URL state (strings) to component state (Date objects)
   const filters = useMemo(() => ({
     status: currentFilters.status as GradingStatus | 'all',
@@ -75,14 +84,23 @@ export default function FilterControls({ onFilterChange, availableFilters, curre
       searchTerm: '',
     };
     onFilterChange(defaultFilters);
+    setShowDateFilters(false);
   };
+
+  const dateFilterCount = Number(filters.dateRange.start !== null)
+    + Number(filters.dateRange.end !== null);
+  const hasFilters = filters.status !== 'all'
+    || filters.filterName !== 'all'
+    || dateFilterCount > 0
+    || filters.searchTerm !== '';
 
   return (
     <div className="filter-controls compact">
-      <div className="filter-row compact">
+      <div className="filter-row compact filter-primary-row">
         <div className="filter-input-group">
-          <label>Status:</label>
-          <select 
+          <label htmlFor="image-status-filter">Status:</label>
+          <select
+            id="image-status-filter"
             value={filters.status} 
             onChange={(e) => handleStatusChange(e.target.value as GradingStatus | 'all')}
           >
@@ -94,8 +112,9 @@ export default function FilterControls({ onFilterChange, availableFilters, curre
         </div>
 
         <div className="filter-input-group">
-          <label>Filter:</label>
-          <select 
+          <label htmlFor="image-channel-filter">Filter:</label>
+          <select
+            id="image-channel-filter"
             value={filters.filterName} 
             onChange={(e) => handleFilterNameChange(e.target.value)}
           >
@@ -106,28 +125,10 @@ export default function FilterControls({ onFilterChange, availableFilters, curre
           </select>
         </div>
 
-        <div className="filter-input-group date-range">
-          <label>Date Range:</label>
-          <input 
-            type="date" 
-            className="compact-date"
-            value={filters.dateRange.start ? filters.dateRange.start.toISOString().split('T')[0] : ''}
-            onChange={(e) => handleDateChange('start', e.target.value)}
-            placeholder="Start"
-          />
-          <span className="date-separator">to</span>
-          <input 
-            type="date" 
-            className="compact-date"
-            value={filters.dateRange.end ? filters.dateRange.end.toISOString().split('T')[0] : ''}
-            onChange={(e) => handleDateChange('end', e.target.value)}
-            placeholder="End"
-          />
-        </div>
-
-        <div className="filter-input-group">
-          <label>Search:</label>
-          <input 
+        <div className="filter-input-group search-filter">
+          <label htmlFor="image-search-filter">Search:</label>
+          <input
+            id="image-search-filter"
             type="text" 
             placeholder="Target name..."
             value={filters.searchTerm}
@@ -135,10 +136,49 @@ export default function FilterControls({ onFilterChange, availableFilters, curre
           />
         </div>
 
-        <button className="reset-button compact" onClick={resetFilters}>
+        <button
+          type="button"
+          className={`reset-button compact more-filters-button${dateFilterCount > 0 ? ' active' : ''}`}
+          aria-expanded={showDateFilters}
+          aria-controls="image-date-filters"
+          onClick={() => setShowDateFilters(open => !open)}
+        >
+          Dates{dateFilterCount > 0 ? ` (${dateFilterCount})` : ''}
+        </button>
+
+        <button
+          type="button"
+          className="reset-button compact"
+          onClick={resetFilters}
+          disabled={!hasFilters}
+        >
           Reset
         </button>
       </div>
+
+      {showDateFilters && (
+        <div id="image-date-filters" className="filter-row compact filter-secondary-row">
+          <div className="filter-input-group date-range">
+            <label htmlFor="image-date-start">Date range:</label>
+            <input
+              id="image-date-start"
+              type="date"
+              className="compact-date"
+              value={filters.dateRange.start ? filters.dateRange.start.toISOString().split('T')[0] : ''}
+              onChange={(e) => handleDateChange('start', e.target.value)}
+            />
+            <span className="date-separator">to</span>
+            <input
+              id="image-date-end"
+              aria-label="End date"
+              type="date"
+              className="compact-date"
+              value={filters.dateRange.end ? filters.dateRange.end.toISOString().split('T')[0] : ''}
+              onChange={(e) => handleDateChange('end', e.target.value)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

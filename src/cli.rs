@@ -642,14 +642,13 @@ pub enum Commands {
         verbose: bool,
     },
 
-    /// Sync state between two Target Scheduler databases, matched by the stable
-    /// `acquiredimage.guid` (TS plugin schema v22+). Two complementary one-way
-    /// operations: `sync pull` mirrors structure + captured images from a
-    /// telescope DB into your local DB (preserving your local grading), and
-    /// `sync grades` pushes your grading decisions from the local DB back into
-    /// the telescope DB. Use them together — pull to refresh, grade locally,
-    /// push grades back — rather than reversing one direction, which would
-    /// overwrite work.
+    /// Sync state between two Target Scheduler databases, matched by stable
+    /// `guid` fields (TS plugin schema v22+). Three one-way operations: `sync
+    /// pull` mirrors structure + captured images from a telescope DB into your
+    /// local DB (preserving local grading), `sync planning` pushes planning
+    /// settings back without changing telescope capture history, and `sync
+    /// grades` pushes grading decisions back. Use each named direction instead
+    /// of reversing one, which could overwrite work.
     Sync {
         #[command(subcommand)]
         kind: SyncKind,
@@ -789,6 +788,38 @@ pub enum SyncKind {
 
         /// Restrict the pull to projects whose name matches (substring);
         /// cascades to their targets, plans, and images.
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Path to the database registry JSON file (only consulted when
+        /// --from/--to is a slug; defaults to the platform config directory).
+        #[arg(long)]
+        registry: Option<String>,
+
+        /// Verbose: print a per-entity trace of inserts/updates.
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Push planning settings FROM our local DB INTO a telescope DB.
+    ///
+    /// Mirrors projects, targets, exposure templates/plans, and rule weights.
+    /// It never copies captured images or grades. Existing telescope plan
+    /// progress is kept; new plans start with zero acquired/accepted frames.
+    Planning {
+        /// Local database (source, read-only): a registry slug or a .sqlite path.
+        #[arg(long)]
+        from: String,
+
+        /// Telescope database (destination, written): a registry slug or a .sqlite path.
+        #[arg(long)]
+        to: String,
+
+        /// Print the plan without writing to the destination.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Restrict the push to projects whose name matches (substring).
         #[arg(short, long)]
         project: Option<String>,
 

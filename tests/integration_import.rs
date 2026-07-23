@@ -15,6 +15,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use http_body_util::BodyExt;
 use psf_guard::server::handlers;
+use psf_guard::server::scheduler;
 use psf_guard::server::state::AppState;
 use serde_json::Value;
 use tempfile::tempdir;
@@ -32,7 +33,19 @@ fn build_app(state: Arc<AppState>) -> Router {
             "/projects/{project_id}/merge",
             post(handlers::merge_project_route),
         )
+        .route(
+            "/projects/{project_id}/scheduler",
+            get(scheduler::get_project_scheduler),
+        )
         .route("/targets/{target_id}", put(handlers::update_target_route))
+        .route(
+            "/targets/{target_id}/exposure-plans",
+            post(scheduler::create_exposure_plan),
+        )
+        .route(
+            "/exposure-plans/{plan_id}",
+            put(scheduler::update_exposure_plan),
+        )
         .route(
             "/import",
             post(handlers::start_import_route).get(handlers::get_import_progress),
@@ -78,6 +91,7 @@ fn write_fits(path: &std::path::Path, object: &str, filter: &str, date_obs: &str
     card(&mut header, "OFFSET  =                   30");
     card(&mut header, "XBINNING=                    1");
     card(&mut header, "YBINNING=                    1");
+    card(&mut header, "READOUTM=                    2");
     card(&mut header, &format!("RA      = {ra:>20.6}"));
     card(&mut header, "DEC     =            41.268700");
     card(&mut header, "TELESCOP= 'TestScope'");
@@ -138,6 +152,28 @@ async fn wait_for_import(state: &Arc<AppState>, slug: &str) -> Value {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     panic!("import job did not finish in time");
+}
+
+/// Project listing may return a successful `loading` response while its cold
+/// file cache starts. Wait for the first data-bearing response instead of
+/// relying on one platform's cache scan winning the race.
+async fn wait_for_projects(state: &Arc<AppState>, slug: &str) -> Vec<Value> {
+    for _ in 0..300 {
+        let (status, body) = json_request(
+            build_app(state.clone()),
+            "GET",
+            &format!("/api/db/{slug}/projects"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "projects response: {body}");
+        if let Some(projects) = body["data"].as_array() {
+            return projects.clone();
+        }
+        assert_eq!(body["status"], "loading", "projects response: {body}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("project list did not finish loading");
 }
 
 fn state_with_management(dir: &std::path::Path) -> Arc<AppState> {
@@ -214,21 +250,13 @@ async fn create_database_imports_fits_folders() {
     assert_eq!(progress["stage"], "complete", "progress: {progress}");
     let outcome = &progress["outcome"];
     assert_eq!(outcome["imported"], 3);
-    assert_eq!(outcome["projects_created"], 1);
+    assert_eq!(outcome["projects_created"], 2);
     assert_eq!(outcome["targets_created"], 2);
     assert_eq!(outcome["dry_run"], false);
 
     // The DB is live in AppState: per-DB routes serve the imported project.
-    let (status, body) = json_request(
-        build_app(state.clone()),
-        "GET",
-        &format!("/api/db/{slug}/projects"),
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    let projects = body["data"].as_array().unwrap();
-    assert_eq!(projects.len(), 1, "projects: {body}");
+    let projects = wait_for_projects(&state, &slug).await;
+    assert_eq!(projects.len(), 2, "projects: {projects:?}");
 
     // And the file itself is a real v23 Target Scheduler database.
     let conn = rusqlite::Connection::open(&db_path).unwrap();
@@ -477,21 +505,227 @@ async fn concurrent_import_is_refused_while_running() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_scheduler_views_and_updates_plans() {
+    let dir = tempdir().unwrap();
+    let images = dir.path().join("lights");
+    std::fs::create_dir_all(&images).unwrap();
+    write_fits(
+        &images.join("m31_ha_0001.fits"),
+        "M31",
+        "Ha",
+        "2026-01-15T04:00:00.000",
+        10.6847,
+    );
+    let state = state_with_management(dir.path());
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        "/api/databases/create",
+        Some(serde_json::json!({
+            "name": "Scheduler",
+            "image_dirs": [images.to_string_lossy()],
+            "backfill": false,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let slug = body["data"]["database"]["id"].as_str().unwrap();
+    let db_path = body["data"]["database"]["database_path"].as_str().unwrap();
+    wait_for_import(&state, slug).await;
+
+    let conn = rusqlite::Connection::open(db_path).unwrap();
+    let (project_id, target_id): (i32, i32) = conn
+        .query_row(
+            "SELECT p.Id, t.Id FROM project p JOIN target t ON t.projectid = p.Id",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "GET",
+        &format!("/api/db/{slug}/projects/{project_id}/scheduler"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "scheduler view failed: {body}");
+    assert_eq!(body["data"]["targets"][0]["id"], target_id);
+    assert_eq!(body["data"]["targets"][0]["epoch_code"], 2);
+    assert_eq!(
+        body["data"]["targets"][0]["exposure_plans"][0]["filter_name"],
+        "Ha"
+    );
+    let imported_template = &body["data"]["exposure_templates"][0];
+    assert_eq!(imported_template["filter_name"], "Ha");
+    assert_eq!(imported_template["gain"], 100);
+    assert_eq!(imported_template["offset"], 30);
+    assert_eq!(imported_template["bin"], 1);
+    assert_eq!(imported_template["readout_mode"], 2);
+    assert_eq!(imported_template["default_exposure"], 300.0);
+    assert_eq!(imported_template["plan_count"], 1);
+    let imported_template_id = imported_template["id"].as_i64().unwrap();
+
+    // A new plan can select the exact shared template instead of asking the
+    // server to infer one from a duplicate set of capture fields.
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        &format!("/api/db/{slug}/targets/{target_id}/exposure-plans"),
+        Some(serde_json::json!({
+            "exposure_template_id": imported_template_id,
+            "exposure": 120.0,
+            "desired": 5,
+            "enabled": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "template reuse failed: {body}");
+    assert_eq!(body["data"]["exposure_template_id"], imported_template_id);
+
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "PUT",
+        &format!("/api/db/{slug}/projects/{project_id}"),
+        Some(serde_json::json!({
+            "description": "Winter broadband and narrowband",
+            "state": 1,
+            "priority": 2,
+            "minimum_altitude": 35.0,
+            "dither_every": 3,
+            "enable_grader": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "project update failed: {body}");
+
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "PUT",
+        &format!("/api/db/{slug}/targets/{target_id}"),
+        Some(serde_json::json!({
+            "ra_hours": 0.712313,
+            "dec_degrees": 41.2687,
+            "rotation": 12.5,
+            "roi": 85.0,
+            "active": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "target update failed: {body}");
+
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        &format!("/api/db/{slug}/targets/{target_id}/exposure-plans"),
+        Some(serde_json::json!({
+            "filter_name": "OIII",
+            "exposure": 180.0,
+            "desired": 24,
+            "bin": 1,
+            "enabled": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "plan create failed: {body}");
+    let plan_id = body["data"]["id"].as_i64().unwrap();
+    assert_eq!(body["data"]["acquired"], 0);
+    assert_eq!(body["data"]["accepted"], 0);
+
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "PUT",
+        &format!("/api/db/{slug}/exposure-plans/{plan_id}"),
+        Some(serde_json::json!({
+            "exposure": 240.0,
+            "desired": 30,
+            "enabled": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "plan update failed: {body}");
+
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "PUT",
+        &format!("/api/db/{slug}/exposure-plans/{plan_id}"),
+        Some(serde_json::json!({
+            "exposure": -1.0,
+            "desired": 30,
+            "enabled": false
+        })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "template-default exposure failed: {body}"
+    );
+
+    let project: (String, i32, i32, f64, i32, i32) = conn
+        .query_row(
+            "SELECT description, state, priority, minimumaltitude, ditherevery, enablegrader FROM project WHERE Id = ?",
+            [project_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        project,
+        ("Winter broadband and narrowband".into(), 1, 2, 35.0, 3, 0)
+    );
+    let target: (f64, f64, f64, f64) = conn
+        .query_row(
+            "SELECT ra, dec, rotation, roi FROM target WHERE Id = ?",
+            [target_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(target, (0.712313, 41.2687, 12.5, 85.0));
+    let plan: (f64, i32, i32, i32, i32) = conn
+        .query_row(
+            "SELECT exposure, desired, acquired, accepted, enabled FROM exposureplan WHERE Id = ?",
+            [plan_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(plan, (-1.0, 30, 0, 0, 0));
+    let template: (f64, i32, i32, i32) = conn
+        .query_row(
+            "SELECT et.defaultexposure, et.gain, et.offset, et.readoutmode
+             FROM exposuretemplate et
+             JOIN exposureplan ep ON ep.exposureTemplateId = et.Id
+             WHERE ep.Id = ?",
+            [plan_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(template, (60.0, -1, -1, -1));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn organize_rename_move_and_merge() {
     let dir = tempdir().unwrap();
     let images = dir.path().join("lights");
     std::fs::create_dir_all(&images).unwrap();
-    // Two sessions 60 days apart → two projects (same rig, same object name).
+    // Two distinct targets become two projects by default.
     write_fits(
         &images.join("veil_ha_0001.fits"),
-        "Veil",
+        "Veil East",
         "Ha",
         "2026-01-01T02:00:00.000",
         311.0,
     );
     write_fits(
         &images.join("veil_ha_0101.fits"),
-        "Veil",
+        "Veil West",
         "Ha",
         "2026-03-02T02:00:00.000",
         311.0,

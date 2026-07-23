@@ -764,3 +764,12 @@
 .export-link:hover {
   text-decoration: underline;
 }
+.project-meta-link {
+  padding: 0;
+  color: var(--color-primary);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}

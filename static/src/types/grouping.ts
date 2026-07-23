@@ -3,6 +3,7 @@
  */
 export type GroupingMode = 
   | 'filter' 
+  | 'session'
   | 'date' 
   | 'both' 
   | 'project' 
@@ -15,6 +16,7 @@ export type GroupingMode =
  */
 export const SINGLE_PROJECT_MODES: readonly GroupingMode[] = [
   'filter',
+  'session',
   'date', 
   'both'
 ] as const;
@@ -52,6 +54,7 @@ export const DEFAULT_MULTI_PROJECT_MODE: GroupingMode = 'project';
  */
 export const GROUPING_MODE_LABELS: Record<GroupingMode, string> = {
   'filter': 'Filter',
+  'session': 'Session',
   'date': 'Date', 
   'both': 'Filter + Date',
   'project': 'Project',

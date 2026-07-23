@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
@@ -302,6 +302,17 @@ describe('SequenceView: quality display', () => {
     });
   });
 
+  it('renders timeline text without non-uniform SVG scaling', async () => {
+    setupDefaultHandlers();
+
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
+
+    const timeline = await screen.findByRole('img', { name: 'Sequence quality scores' });
+    expect(timeline).not.toHaveAttribute('preserveAspectRatio', 'none');
+    expect(timeline).toHaveAttribute('width', '400');
+    expect(timeline).toHaveAttribute('height', '120');
+  });
+
   it('shows cloud event badges when clouds are detected', async () => {
     server.use(
       http.get('/api/db/:dbId/analysis/sequence', () => {
@@ -390,6 +401,31 @@ describe('SequenceView: interactions', () => {
     expect(cards[0].classList.contains('selected')).toBe(false);
   });
 
+  it('moves the cursor with arrows and toggles selection with Space', async () => {
+    setupDefaultHandlers();
+
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
+
+    await waitFor(() => {
+      expect(document.querySelectorAll('.sequence-image-card')).toHaveLength(10);
+    });
+    const cards = document.querySelectorAll('.sequence-image-card');
+    await waitFor(() => expect(cards[0]).toHaveClass('current-selection'));
+
+    fireEvent.keyDown(document, { key: ' ', code: 'Space' });
+    expect(cards[0]).toHaveClass('selected');
+
+    fireEvent.keyDown(document, { key: 'ArrowRight', code: 'ArrowRight' });
+    await waitFor(() => expect(cards[1]).toHaveClass('current-selection'));
+    expect(cards[0]).toHaveClass('selected');
+
+    fireEvent.keyDown(document, { key: ' ', code: 'Space' });
+    expect(cards[1]).toHaveClass('selected');
+
+    fireEvent.keyDown(document, { key: 'ArrowUp', code: 'ArrowUp' });
+    await waitFor(() => expect(cards[0]).toHaveClass('current-selection'));
+  });
+
   it('selects images below threshold', async () => {
     setupDefaultHandlers();
     const user = userEvent.setup();
@@ -397,7 +433,7 @@ describe('SequenceView: interactions', () => {
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
-      expect(screen.getByText('Select Below Threshold')).toBeInTheDocument();
+      expect(screen.getByLabelText('Select:')).toBeInTheDocument();
     });
 
     // Default threshold is 0.50. With the normal fixture, images below 0.50 would be none.
@@ -409,13 +445,13 @@ describe('SequenceView: interactions', () => {
     const { fireEvent } = await import('@testing-library/react');
     fireEvent.change(slider, { target: { value: '0.80' } });
 
-    await user.click(screen.getByText('Select Below Threshold'));
+    await user.selectOptions(screen.getByLabelText('Select:'), 'threshold');
 
     // Images with quality_score < 0.80: IDs 3 (0.75), 5 (0.70), 7 (0.77), 10 (0.72)
-    // After selecting, the "Reject Selected" button should appear with count
+    // After selecting, the review action should appear with the selected count.
     await waitFor(() => {
-      const rejectButton = screen.queryByText(/Reject Selected/);
-      expect(rejectButton).toBeInTheDocument();
+      expect(screen.getByText('4 selected')).toBeInTheDocument();
+      expect(screen.getByText('Review rejection')).toBeInTheDocument();
     });
   });
 
@@ -447,16 +483,16 @@ describe('SequenceView: interactions', () => {
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
-      expect(screen.getByText('Select Clouded')).toBeInTheDocument();
+      expect(screen.getByLabelText('Select:')).toBeInTheDocument();
     });
 
-    await user.click(screen.getByText('Select Clouded'));
+    await user.selectOptions(screen.getByLabelText('Select:'), 'clouded');
 
     // The cloud fixture has 2 consecutive cloud images (IDs 104, 105)
     // selectCloudedSequence selects runs of >= 2 bad images
     await waitFor(() => {
-      const rejectButton = screen.getByText(/Reject Selected \(2\)/);
-      expect(rejectButton).toBeInTheDocument();
+      expect(screen.getByText('2 selected')).toBeInTheDocument();
+      expect(screen.getByText('Review rejection')).toBeInTheDocument();
     });
   });
 
@@ -488,14 +524,14 @@ describe('SequenceView: interactions', () => {
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
-      expect(screen.getByText('Select Clouded')).toBeInTheDocument();
+      expect(screen.getByLabelText('Select:')).toBeInTheDocument();
     });
 
     // Select clouded images first
-    await user.click(screen.getByText('Select Clouded'));
+    await user.selectOptions(screen.getByLabelText('Select:'), 'clouded');
 
     await waitFor(() => {
-      expect(screen.getByText(/Reject Selected/)).toBeInTheDocument();
+      expect(screen.getByText('Review rejection')).toBeInTheDocument();
     });
 
     // Click Clear
@@ -503,7 +539,7 @@ describe('SequenceView: interactions', () => {
 
     // Reject button should disappear after clearing
     await waitFor(() => {
-      expect(screen.queryByText(/Reject Selected/)).not.toBeInTheDocument();
+      expect(screen.queryByText('Review rejection')).not.toBeInTheDocument();
     });
   });
 });
@@ -535,8 +571,8 @@ describe('SequenceView: multi-session', () => {
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=2') });
 
     await waitFor(() => {
-      // Each tab shows "filter_name (image_count)"
-      const tabs = screen.getAllByText(/L \(5\)/);
+      // Each tab shows the filter, session time, and image count.
+      const tabs = screen.getAllByText(/L · .* \(5\)/);
       expect(tabs).toHaveLength(2);
     });
   });
@@ -569,11 +605,11 @@ describe('SequenceView: multi-session', () => {
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=2') });
 
     await waitFor(() => {
-      const tabs = screen.getAllByText(/L \(5\)/);
+      const tabs = screen.getAllByText(/L · .* \(5\)/);
       expect(tabs).toHaveLength(2);
     });
 
-    const tabs = screen.getAllByText(/L \(5\)/);
+    const tabs = screen.getAllByText(/L · .* \(5\)/);
 
     // First tab should be active by default
     expect(tabs[0].classList.contains('active')).toBe(true);
@@ -638,18 +674,18 @@ describe('SequenceView: batch operations', () => {
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
-      expect(screen.getByText('Select Clouded')).toBeInTheDocument();
+      expect(screen.getByLabelText('Select:')).toBeInTheDocument();
     });
 
     // Select clouded images
-    await user.click(screen.getByText('Select Clouded'));
+    await user.selectOptions(screen.getByLabelText('Select:'), 'clouded');
 
     await waitFor(() => {
-      expect(screen.getByText(/Reject Selected \(2\)/)).toBeInTheDocument();
+      expect(screen.getByText('2 selected')).toBeInTheDocument();
     });
 
     // Open review, verify that no grade has been written yet, then confirm.
-    await user.click(screen.getByText(/Reject Selected \(2\)/));
+    await user.click(screen.getByText('Review rejection'));
     expect(screen.getByRole('dialog', { name: /Review 2 recommended rejections/ })).toBeInTheDocument();
     expect(gradeRequests).toHaveLength(0);
     await user.click(screen.getByText(/Confirm rejection \(2\)/));

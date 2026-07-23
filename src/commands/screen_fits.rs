@@ -729,12 +729,23 @@ fn detect_stars(
                 &params,
             );
             let positions = result.star_list.iter().map(|s| s.position).collect();
-            // The NINA port does not measure flux, so no photometric catalog.
+            let catalog = FrameCatalog {
+                stars: result
+                    .star_list
+                    .iter()
+                    .filter(|s| s.flux > 0.0)
+                    .map(|s| CatalogStar {
+                        x: s.position.0,
+                        y: s.position.1,
+                        flux: s.flux / fits.raw_scale,
+                    })
+                    .collect(),
+            };
             Ok((
                 result.star_list.len(),
                 result.average_hfr,
                 positions,
-                FrameCatalog::default(),
+                catalog,
             ))
         }
         "hocusfocus" => {

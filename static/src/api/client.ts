@@ -11,6 +11,8 @@ import type {
   StarDetectionResponse,
   PreviewOptions,
   ServerInfo,
+  SchedulerSyncRequest,
+  SchedulerSyncResponse,
   DatabaseSummary,
   CreateDatabaseRequest,
   CreateDatabaseResponse,
@@ -20,6 +22,11 @@ import type {
   DirectoryTreeResponse,
   ProjectOverview,
   TargetOverview,
+  ProjectSchedulerDetails,
+  ProjectSchedulerUpdate,
+  TargetSchedulerUpdate,
+  CreateExposurePlanRequest,
+  ExposurePlanDetails,
   OverallStats,
   CacheRefreshProgress,
   SequenceAnalysisRequest,
@@ -27,6 +34,8 @@ import type {
   ImageQualityResponse,
   SpatialScanRequest,
   SpatialScanStatus,
+  QualityBackfillRequest,
+  QualityBackfillStatus,
   PreviewDescriptor,
   GenerationStatus,
   AstrometryAnalysis,
@@ -66,6 +75,10 @@ const initializeApi = async () => {
       (response) => response,
       (error) => {
         console.error('API Error:', error);
+        if (axios.isAxiosError<ApiResponse<unknown>>(error)) {
+          const message = error.response?.data?.error;
+          if (message) return Promise.reject(new Error(message, { cause: error }));
+        }
         return Promise.reject(error);
       }
     );
@@ -168,6 +181,20 @@ export const apiClient = {
     return data.data?.removed ?? false;
   },
 
+  /** Preview or run a safe scheduler database sync. */
+  syncDatabase: async (
+    dbId: string,
+    req: SchedulerSyncRequest
+  ): Promise<SchedulerSyncResponse> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<SchedulerSyncResponse>>(
+      `/databases/${encodeURIComponent(dbId)}/sync`,
+      req
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to sync databases');
+    return data.data;
+  },
+
   /**
    * Create a brand-new Target Scheduler database (full upstream schema) and
    * start a background import of the given FITS folders.
@@ -260,12 +287,16 @@ export const apiClient = {
     return data.data;
   },
 
-  /** Rename a project (organize imported groupings). */
-  updateProject: async (dbId: string, projectId: number, name: string): Promise<void> => {
+  /** Update a project's Target Scheduler fields. */
+  updateProject: async (
+    dbId: string,
+    projectId: number,
+    request: ProjectSchedulerUpdate | string
+  ): Promise<void> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.put<ApiResponse<{ updated: boolean }>>(
       dbPath(dbId, `/projects/${projectId}`),
-      { name }
+      typeof request === 'string' ? { name: request } : request
     );
     if (!data.data) throw new Error(data.error || 'Failed to rename project');
   },
@@ -274,7 +305,7 @@ export const apiClient = {
   updateTarget: async (
     dbId: string,
     targetId: number,
-    req: { name?: string; project_id?: number }
+    req: TargetSchedulerUpdate
   ): Promise<void> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.put<ApiResponse<{ updated: boolean }>>(
@@ -665,6 +696,45 @@ export const apiClient = {
     return data.data || [];
   },
 
+  getProjectScheduler: async (
+    dbId: string,
+    projectId: number
+  ): Promise<ProjectSchedulerDetails> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<ProjectSchedulerDetails>>(
+      dbPath(dbId, `/projects/${projectId}/scheduler`)
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to load project schedule');
+    return data.data;
+  },
+
+  createExposurePlan: async (
+    dbId: string,
+    targetId: number,
+    request: CreateExposurePlanRequest
+  ): Promise<ExposurePlanDetails> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<ExposurePlanDetails>>(
+      dbPath(dbId, `/targets/${targetId}/exposure-plans`),
+      request
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to create exposure plan');
+    return data.data;
+  },
+
+  updateExposurePlan: async (
+    dbId: string,
+    planId: number,
+    request: { exposure: number; desired: number; enabled: boolean }
+  ): Promise<void> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<{ updated: boolean }>>(
+      dbPath(dbId, `/exposure-plans/${planId}`),
+      request
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to update exposure plan');
+  },
+
   getTargetsOverview: async (dbId: string): Promise<TargetOverview[]> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<TargetOverview[]>>(
@@ -732,6 +802,28 @@ export const apiClient = {
       dbPath(dbId, '/analysis/quality-scan')
     );
     if (!data.data) throw new Error('Failed to get spatial scan status');
+    return data.data;
+  },
+
+  startQualityBackfill: async (
+    dbId: string,
+    request: QualityBackfillRequest
+  ): Promise<QualityBackfillStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<QualityBackfillStatus>>(
+      dbPath(dbId, '/analysis/quality-backfill'),
+      request
+    );
+    if (!data.data) throw new Error('Failed to start database quality analysis');
+    return data.data;
+  },
+
+  getQualityBackfillStatus: async (dbId: string): Promise<QualityBackfillStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<QualityBackfillStatus>>(
+      dbPath(dbId, '/analysis/quality-backfill')
+    );
+    if (!data.data) throw new Error('Failed to get database quality status');
     return data.data;
   },
 };

@@ -97,6 +97,11 @@ fn create_test_app(conn: Connection, cache_dir: &std::path::Path) -> (Router, Ar
         .route(
             "/analysis/spatial-scan",
             post(handlers::start_spatial_scan).get(handlers::get_spatial_scan_progress),
+        )
+        .route(
+            "/analysis/quality-backfill",
+            post(handlers::start_quality_backfill_route)
+                .get(handlers::get_quality_backfill_progress),
         );
 
     let app = Router::new()
@@ -136,6 +141,8 @@ fn stored_entry(image_id: i32, filename: &str, dead: f64, bg_spread: f64) -> Sto
     StoredSpatialMetrics {
         image_id,
         filename: filename.to_string(),
+        detector: psf_guard::server::spatial_scan::QUALITY_DETECTOR.to_string(),
+        detector_version: psf_guard::server::spatial_scan::QUALITY_DETECTOR_VERSION,
         star_count: 4000,
         avg_hfr: 2.5,
         dead_cell_fraction: Some(dead),
@@ -213,6 +220,40 @@ async fn spatial_scan_runs_and_reports_missing_files_as_errors() {
 }
 
 #[tokio::test]
+async fn database_quality_backfill_runs_as_a_separate_job() {
+    let conn = Connection::open_in_memory().unwrap();
+    create_test_schema(&conn);
+    seed_target_with_images(&conn, 2);
+    let tmp = tempfile::tempdir().unwrap();
+    let (app, state) = create_test_app(conn, tmp.path());
+
+    let (status, json) = post_json(
+        app.clone(),
+        "/api/db/test/analysis/quality-backfill",
+        &serde_json::json!({"force": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {json}");
+    assert_eq!(json["data"]["started"], true);
+    assert_eq!(json["data"]["progress"]["total_targets"], 1);
+    assert_eq!(json["data"]["progress"]["force"], true);
+
+    let ctx = state.get_database("test").unwrap();
+    for _ in 0..100 {
+        if !ctx.quality_backfill.read().unwrap().progress.running {
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    }
+
+    let (status, json) = get_json(app, "/api/db/test/analysis/quality-backfill").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["progress"]["running"], false);
+    assert_eq!(json["data"]["progress"]["processed_targets"], 1);
+    assert!(json["data"]["progress"]["finished_at"].is_i64());
+}
+
+#[tokio::test]
 async fn scan_start_rejects_unknown_target() {
     let conn = Connection::open_in_memory().unwrap();
     create_test_schema(&conn);
@@ -259,6 +300,14 @@ async fn scanned_metrics_merge_into_sequence_analysis() {
     assert_eq!(status, StatusCode::OK, "body: {}", json);
     let sequences = json["data"]["sequences"].as_array().unwrap();
     assert_eq!(sequences.len(), 1);
+    assert_eq!(
+        sequences[0]["reference_values"]["best_star_count"], 4000.0,
+        "quality cache should replace stale N.I.N.A. star counts"
+    );
+    assert_eq!(
+        sequences[0]["reference_values"]["best_hfr"], 2.5,
+        "quality cache should supply freshly measured HFR"
+    );
     let images = sequences[0]["images"].as_array().unwrap();
 
     let occluded = images
@@ -283,6 +332,45 @@ async fn scanned_metrics_merge_into_sequence_analysis() {
             > 0.9
     );
     assert!(clean["category"].is_null());
+}
+
+#[tokio::test]
+async fn legacy_detector_cache_keeps_scheduler_star_metrics() {
+    let conn = Connection::open_in_memory().unwrap();
+    create_test_schema(&conn);
+    seed_target_with_images(&conn, 10);
+    let tmp = tempfile::tempdir().unwrap();
+    let (app, state) = create_test_app(conn, tmp.path());
+
+    {
+        let ctx = state.get_database("test").unwrap();
+        let mut store = ctx.spatial_metrics.write().unwrap();
+        for i in 0..10i32 {
+            let dead = if matches!(i, 7 | 8) { 0.40 } else { 0.02 };
+            let mut entry = stored_entry(i + 1, &format!("frame_{:04}.fits", i), dead, 0.05);
+            entry.detector.clear();
+            entry.detector_version = 0;
+            entry.star_count = 1;
+            entry.avg_hfr = 99.0;
+            store.metrics.insert(i + 1, entry);
+        }
+    }
+
+    let (status, json) = get_json(app, "/api/db/test/analysis/sequence?target_id=1").await;
+    assert_eq!(status, StatusCode::OK, "body: {json}");
+    let sequence = &json["data"]["sequences"][0];
+    assert_eq!(sequence["reference_values"]["best_star_count"], 4500.0);
+    assert_eq!(sequence["reference_values"]["best_hfr"], 2.5);
+    assert_eq!(
+        sequence["images"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|image| image["image_id"] == 8)
+            .unwrap()["category"],
+        "possible_obstruction",
+        "legacy cache should still supply spatial obstruction evidence"
+    );
 }
 
 #[tokio::test]

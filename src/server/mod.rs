@@ -6,6 +6,8 @@ pub mod extract;
 pub mod handlers;
 pub mod import_job;
 pub mod preview_queue;
+pub mod quality_backfill;
+pub mod scheduler;
 pub mod slug;
 pub mod spatial_scan;
 pub mod stack_preview;
@@ -225,7 +227,19 @@ async fn run_server_internal(
             "/projects/{project_id}/merge",
             post(handlers::merge_project_route),
         )
+        .route(
+            "/projects/{project_id}/scheduler",
+            get(scheduler::get_project_scheduler),
+        )
         .route("/targets/{target_id}", put(handlers::update_target_route))
+        .route(
+            "/targets/{target_id}/exposure-plans",
+            post(scheduler::create_exposure_plan),
+        )
+        .route(
+            "/exposure-plans/{plan_id}",
+            put(scheduler::update_exposure_plan),
+        )
         .route("/projects/overview", get(handlers::get_projects_overview))
         .route("/targets/overview", get(handlers::get_targets_overview))
         .route("/stats/overall", get(handlers::get_overall_stats))
@@ -327,6 +341,11 @@ async fn run_server_internal(
             post(handlers::start_spatial_scan).get(handlers::get_spatial_scan_progress),
         )
         .route(
+            "/analysis/quality-backfill",
+            post(handlers::start_quality_backfill_route)
+                .get(handlers::get_quality_backfill_progress),
+        )
+        .route(
             "/import",
             post(handlers::start_import_route).get(handlers::get_import_progress),
         )
@@ -353,6 +372,10 @@ async fn run_server_internal(
         // be updated/deleted (only POST collides, and POST /databases/create
         // is exactly this route).
         .route("/databases/create", post(handlers::create_database_route))
+        .route(
+            "/databases/{db_id}/sync",
+            post(handlers::sync_database_route),
+        )
         .route(
             "/databases/{db_id}",
             put(handlers::update_database_route).delete(handlers::remove_database_route),

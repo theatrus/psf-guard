@@ -230,8 +230,8 @@ pub struct PreviewOptions {
 pub struct ServerInfo {
     pub version: String,
     pub cache_directory: String,
-    /// Whether `/api/databases` accepts mutating requests (POST/PUT/DELETE).
-    /// Frontend hides add/edit/remove controls when false.
+    /// Whether `/api/databases` accepts mutating requests and database sync.
+    /// Frontend hides those controls when false.
     pub allow_database_management: bool,
 }
 
@@ -242,6 +242,77 @@ pub struct DatabaseSummary {
     pub name: String,
     pub database_path: String,
     pub image_directories: Vec<String>,
+}
+
+/// Database-to-database operations exposed by the management UI.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SchedulerSyncKind {
+    /// Telescope → local: structure, captures, and optional image data.
+    Pull,
+    /// Local → telescope: planning settings only.
+    PushPlanning,
+}
+
+/// Body of `POST /api/databases/{db_id}/sync`. `db_id` is the local working
+/// database; `peer_db_id` is the telescope scheduler database.
+#[derive(Debug, Deserialize)]
+pub struct SchedulerSyncRequest {
+    pub peer_db_id: String,
+    pub kind: SchedulerSyncKind,
+    /// Plan and count without changing either database.
+    #[serde(default)]
+    pub dry_run: bool,
+    /// Pull image-data BLOBs. Defaults to true and has no effect on a planning
+    /// push.
+    #[serde(default)]
+    pub with_image_data: Option<bool>,
+    /// Optional project-name substring filter.
+    #[serde(default)]
+    pub project: Option<String>,
+}
+
+/// Insert/update counts for one scheduler table.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct SchedulerSyncTableCounts {
+    pub inserted: usize,
+    pub updated: usize,
+    pub unchanged: usize,
+    pub skipped: usize,
+}
+
+impl From<&crate::commands::sync::TableCounts> for SchedulerSyncTableCounts {
+    fn from(value: &crate::commands::sync::TableCounts) -> Self {
+        Self {
+            inserted: value.inserted,
+            updated: value.updated,
+            unchanged: value.unchanged,
+            skipped: value.skipped,
+        }
+    }
+}
+
+/// Result of a database-to-database scheduler sync or dry-run preview.
+#[derive(Debug, Serialize)]
+pub struct SchedulerSyncResponse {
+    pub kind: SchedulerSyncKind,
+    pub dry_run: bool,
+    pub source_db_id: String,
+    pub destination_db_id: String,
+    pub exposuretemplate: SchedulerSyncTableCounts,
+    pub project: SchedulerSyncTableCounts,
+    pub ruleweight: SchedulerSyncTableCounts,
+    pub target: SchedulerSyncTableCounts,
+    pub exposureplan: SchedulerSyncTableCounts,
+    /// Present only for a full pull.
+    pub acquiredimage: Option<SchedulerSyncTableCounts>,
+    /// Present only for a full pull with image-data syncing enabled.
+    pub imagedata: Option<SchedulerSyncTableCounts>,
+    pub grade_filled: usize,
+    pub grade_preserved: usize,
+    pub imagedata_bytes: u64,
+    pub total_inserted: usize,
+    pub total_updated: usize,
 }
 
 /// Body of `POST /api/databases`.
@@ -276,7 +347,7 @@ pub struct CreateDatabaseRequest {
     pub time_gap_days: Option<f64>,
     #[serde(default)]
     pub profile_id: Option<String>,
-    /// Run the post-import quality backfill (default true).
+    /// Queue the separate database quality job after import (default false).
     #[serde(default)]
     pub backfill: Option<bool>,
 }
@@ -301,10 +372,10 @@ pub struct ImportRequest {
     #[serde(default)]
     pub profile_id: Option<String>,
     /// Plan + count without writing (the transaction is rolled back). No
-    /// quality backfill runs afterwards.
+    /// quality job is queued afterwards.
     #[serde(default)]
     pub dry_run: bool,
-    /// Run the post-import quality backfill (default true).
+    /// Queue the separate database quality job after import (default false).
     #[serde(default)]
     pub backfill: Option<bool>,
     /// Attach frames to existing targets (name/coordinate match) instead of
@@ -364,10 +435,37 @@ pub struct LocalExportRequest {
     pub dry_run: bool,
 }
 
-/// Body of `PUT /api/db/{db_id}/projects/{project_id}` — rename a project.
-#[derive(Debug, Deserialize)]
+/// Body of `PUT /api/db/{db_id}/projects/{project_id}`.
+#[derive(Debug, Deserialize, Default)]
 pub struct UpdateProjectRequest {
-    pub name: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub state: Option<i32>,
+    #[serde(default)]
+    pub priority: Option<i32>,
+    #[serde(default)]
+    pub minimum_time: Option<i32>,
+    #[serde(default)]
+    pub minimum_altitude: Option<f64>,
+    #[serde(default)]
+    pub maximum_altitude: Option<f64>,
+    #[serde(default)]
+    pub use_custom_horizon: Option<bool>,
+    #[serde(default)]
+    pub horizon_offset: Option<f64>,
+    #[serde(default)]
+    pub meridian_window: Option<i32>,
+    #[serde(default)]
+    pub filter_switch_frequency: Option<i32>,
+    #[serde(default)]
+    pub dither_every: Option<i32>,
+    #[serde(default)]
+    pub enable_grader: Option<bool>,
+    #[serde(default)]
+    pub is_mosaic: Option<bool>,
 }
 
 /// Body of `PUT /api/db/{db_id}/targets/{target_id}` — rename and/or move a
@@ -378,6 +476,18 @@ pub struct UpdateTargetRequest {
     pub name: Option<String>,
     #[serde(default)]
     pub project_id: Option<i32>,
+    #[serde(default)]
+    pub active: Option<bool>,
+    #[serde(default)]
+    pub ra_hours: Option<f64>,
+    #[serde(default)]
+    pub dec_degrees: Option<f64>,
+    #[serde(default)]
+    pub epoch_code: Option<i32>,
+    #[serde(default)]
+    pub rotation: Option<f64>,
+    #[serde(default)]
+    pub roi: Option<f64>,
 }
 
 /// Body of `POST /api/db/{db_id}/projects/{project_id}/merge`.
@@ -521,6 +631,19 @@ pub struct SpatialScanStatusResponse {
     pub progress: crate::server::spatial_scan::SpatialScanProgress,
     /// Total number of images with cached spatial metrics in this database.
     pub cached_count: usize,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct QualityBackfillRequest {
+    /// Recompute cached star, background, photometry, and pointing evidence.
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct QualityBackfillStatusResponse {
+    pub started: bool,
+    pub progress: crate::server::quality_backfill::QualityBackfillProgress,
 }
 
 #[derive(Debug, Serialize)]

@@ -4,16 +4,20 @@
 //!   `acquiredimage.guid`.
 //! - [`sync_pull`] pulls structure + captured images (telescope → our DB),
 //!   matched by guid with FK remapping, preserving local grading work.
+//! - [`sync_planning`] pushes project, target, template, plan, and rule settings
+//!   back to the telescope without changing capture history or grades.
 //!
-//! Both cores are pure DB logic; CLI glue (argument resolution, connection
-//! opening, reporting) lives in `cli_main.rs`. Helpers shared by both kinds —
+//! All three cores are pure DB logic; CLI glue (argument resolution,
+//! connection opening, reporting) lives in `cli_main.rs`. Shared helpers —
 //! `--from`/`--to` resolution, status parsing, the v22 capability guard — live
 //! here in the module root.
 
 mod grades;
+mod planning;
 mod pull;
 
 pub use grades::{sync_grades, GradeChange, SyncGradesOptions, SyncSummary};
+pub use planning::{sync_planning, PlanningOptions, PlanningSummary};
 pub use pull::{sync_pull, PullOptions, PullSummary, TableCounts};
 
 use crate::db_registry::DbRegistry;
@@ -65,6 +69,11 @@ pub const PULL_GUID_TABLES: &[&str] = &[
     "acquiredimage",
 ];
 
+/// Planning tables that must carry stable guids. Unlike a full pull, a
+/// planning push never reads or writes acquired images.
+pub const PLANNING_GUID_TABLES: &[&str] =
+    &["project", "target", "exposuretemplate", "exposureplan"];
+
 /// Return true if `table` has a column named `column` (case-insensitive).
 pub fn table_has_column(conn: &Connection, table: &str, column: &str) -> bool {
     // PRAGMA table_info can't be parameterized; table names here are constants.
@@ -86,7 +95,16 @@ pub fn table_has_column(conn: &Connection, table: &str, column: &str) -> bool {
 /// entity tables (added in TS plugin schema v22). `sync pull` matches rows by
 /// guid, so without it we cannot reliably remap entities across databases.
 pub fn require_pull_capable(conn: &Connection) -> Result<()> {
-    let missing: Vec<&str> = PULL_GUID_TABLES
+    require_guid_tables(conn, PULL_GUID_TABLES, "sync pull")
+}
+
+/// Refuse planning sync when scheduler structure lacks stable guids.
+pub fn require_planning_capable(conn: &Connection) -> Result<()> {
+    require_guid_tables(conn, PLANNING_GUID_TABLES, "sync planning")
+}
+
+fn require_guid_tables(conn: &Connection, tables: &[&'static str], operation: &str) -> Result<()> {
+    let missing: Vec<&str> = tables
         .iter()
         .copied()
         .filter(|t| !table_has_column(conn, t, "guid"))
@@ -94,10 +112,11 @@ pub fn require_pull_capable(conn: &Connection) -> Result<()> {
     if !missing.is_empty() {
         return Err(anyhow!(
             "This Target Scheduler database is missing the `guid` column on: {} \
-             (added in plugin schema v22). `sync pull` matches rows by guid to \
+             (added in plugin schema v22). `{}` matches rows by guid to \
              remap entities across databases.\n\nUpgrade by opening the database \
              in a recent N.I.N.A. + Target Scheduler version.",
-            missing.join(", ")
+            missing.join(", "),
+            operation,
         ));
     }
     Ok(())

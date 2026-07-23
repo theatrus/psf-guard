@@ -242,6 +242,7 @@ fn upsert_guid_table(
     table: &str,
     fk_remaps: &[(&str, &HashMap<i64, i64>)],
     allowed_src_ids: Option<&HashSet<i64>>,
+    preserve_on_update_zero_on_insert: &[&str],
     changes: &mut Vec<String>,
 ) -> Result<GuidUpsert> {
     let cols = shared_columns(src, tx, table)?;
@@ -340,6 +341,14 @@ fn upsert_guid_table(
         match dest_map.get(&guid) {
             Some((dest_id, cur_vals)) => {
                 id_map.insert(src_id, *dest_id);
+                for column in preserve_on_update_zero_on_insert {
+                    if let Some(pos) = write_cols
+                        .iter()
+                        .position(|name| name.eq_ignore_ascii_case(column))
+                    {
+                        write_values[pos] = cur_vals[pos].clone();
+                    }
+                }
                 if values_equal(&write_values, cur_vals) {
                     counts.unchanged += 1;
                 } else {
@@ -353,6 +362,14 @@ fn upsert_guid_table(
                 }
             }
             None => {
+                for column in preserve_on_update_zero_on_insert {
+                    if let Some(pos) = write_cols
+                        .iter()
+                        .position(|name| name.eq_ignore_ascii_case(column))
+                    {
+                        write_values[pos] = Value::Integer(0);
+                    }
+                }
                 ins_stmt.execute(params_from_iter(write_values.iter()))?;
                 let dest_id = tx.last_insert_rowid();
                 id_map.insert(src_id, dest_id);
@@ -639,7 +656,7 @@ fn copy_imagedata(
 }
 
 /// Compute the set of source row Ids in `table` whose `fk_col` is in `parents`.
-fn child_ids(
+pub(super) fn child_ids(
     src: &Connection,
     table: &str,
     fk_col: &str,
@@ -660,16 +677,32 @@ fn child_ids(
     Ok(set)
 }
 
-/// Pull telescope structure + captures into the destination DB.
-pub fn sync_pull(src: &Connection, dest: &Connection, opts: &PullOptions) -> Result<PullSummary> {
-    require_pull_capable(src).context("source database")?;
-    require_pull_capable(dest).context("destination database")?;
+/// Structure sync result plus the FK maps needed by acquired-image syncing.
+pub(super) struct StructureSync {
+    pub exposuretemplate: TableCounts,
+    pub project: TableCounts,
+    pub ruleweight: TableCounts,
+    pub target: TableCounts,
+    pub exposureplan: TableCounts,
+    pub project_map: HashMap<i64, i64>,
+    pub target_map: HashMap<i64, i64>,
+    pub plan_map: HashMap<i64, i64>,
+    /// Source project ids selected by a project filter. `None` means all.
+    pub selected_project_ids: Option<HashSet<i64>>,
+}
 
-    let tx = dest.unchecked_transaction()?;
-    let mut summary = PullSummary::default();
-
-    // Resolve the project filter into cascading source-Id sets.
-    let included_projects: Option<HashSet<i64>> = match &opts.project_filter {
+/// Sync scheduler planning structure in FK order. When `preserve_plan_counts`
+/// is true, existing destination `acquired`/`accepted` counts stay unchanged
+/// and new plans start at zero. This is the safe policy for a local-to-
+/// telescope planning push; a full telescope pull keeps the source counts.
+pub(super) fn sync_structure(
+    src: &Connection,
+    tx: &Transaction,
+    project_filter: Option<&str>,
+    preserve_plan_counts: bool,
+    changes: &mut Vec<String>,
+) -> Result<StructureSync> {
+    let included_projects: Option<HashSet<i64>> = match project_filter {
         Some(sub) => {
             let mut stmt = src.prepare("SELECT Id FROM project WHERE name LIKE ?1")?;
             let ids: HashSet<i64> = stmt
@@ -688,71 +721,93 @@ pub fn sync_pull(src: &Connection, dest: &Connection, opts: &PullOptions) -> Res
         None => None,
     };
 
-    // 1. exposuretemplate — profile-scoped, no FK; synced fully so plan FKs resolve.
-    let tmpl = upsert_guid_table(
-        src,
-        &tx,
-        "exposuretemplate",
-        &[],
-        None,
-        &mut summary.changes,
-    )?;
-    summary.exposuretemplate = tmpl.counts;
+    // Templates are profile-scoped. Sync all of them so every selected plan
+    // can remap its template FK.
+    let tmpl = upsert_guid_table(src, tx, "exposuretemplate", &[], None, &[], changes)?;
     let tmpl_map = tmpl.id_map;
 
-    // 2. project
     let proj = upsert_guid_table(
         src,
-        &tx,
+        tx,
         "project",
         &[],
         included_projects.as_ref(),
-        &mut summary.changes,
+        &[],
+        changes,
     )?;
-    summary.project = proj.counts;
     let proj_map = proj.id_map;
 
-    // 3. ruleweight (children of pulled projects)
-    upsert_ruleweights(
-        src,
-        &tx,
-        &proj_map,
-        &mut summary.ruleweight,
-        &mut summary.changes,
-    )?;
+    let mut ruleweight = TableCounts::default();
+    upsert_ruleweights(src, tx, &proj_map, &mut ruleweight, changes)?;
 
-    // 4. target (remap projectid)
     let tgt = upsert_guid_table(
         src,
-        &tx,
+        tx,
         "target",
         &[("projectid", &proj_map)],
         included_targets.as_ref(),
-        &mut summary.changes,
+        &[],
+        changes,
     )?;
-    summary.target = tgt.counts;
     let tgt_map = tgt.id_map;
 
-    // 5. exposureplan (remap targetid + exposureTemplateId)
+    let plan_runtime_counts: &[&str] = if preserve_plan_counts {
+        &["acquired", "accepted"]
+    } else {
+        &[]
+    };
     let plan = upsert_guid_table(
         src,
-        &tx,
+        tx,
         "exposureplan",
         &[("targetid", &tgt_map), ("exposureTemplateId", &tmpl_map)],
         included_plans.as_ref(),
+        plan_runtime_counts,
+        changes,
+    )?;
+
+    Ok(StructureSync {
+        exposuretemplate: tmpl.counts,
+        project: proj.counts,
+        ruleweight,
+        target: tgt.counts,
+        exposureplan: plan.counts,
+        project_map: proj_map,
+        target_map: tgt_map,
+        plan_map: plan.id_map,
+        selected_project_ids: included_projects,
+    })
+}
+
+/// Pull telescope structure + captures into the destination DB.
+pub fn sync_pull(src: &Connection, dest: &Connection, opts: &PullOptions) -> Result<PullSummary> {
+    require_pull_capable(src).context("source database")?;
+    require_pull_capable(dest).context("destination database")?;
+
+    let tx = dest.unchecked_transaction()?;
+    let mut summary = PullSummary::default();
+
+    let structure = sync_structure(
+        src,
+        &tx,
+        opts.project_filter.as_deref(),
+        false,
         &mut summary.changes,
     )?;
-    summary.exposureplan = plan.counts;
-    let plan_map = plan.id_map;
+    summary.exposuretemplate = structure.exposuretemplate;
+    summary.project = structure.project;
+    summary.ruleweight = structure.ruleweight;
+    summary.target = structure.target;
+    summary.exposureplan = structure.exposureplan;
 
     // 6. acquiredimage (grade fill-if-pending; remap proj/tgt/exposureId)
     let img_map = upsert_acquired_images(
         src,
         &tx,
-        &proj_map,
-        &tgt_map,
-        &plan_map,
-        included_projects.as_ref(),
+        &structure.project_map,
+        &structure.target_map,
+        &structure.plan_map,
+        structure.selected_project_ids.as_ref(),
         &mut summary,
     )?;
 

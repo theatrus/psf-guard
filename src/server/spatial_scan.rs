@@ -14,10 +14,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+use seiza_stretch::{stretch_u16_to_u16, StretchParams};
 use serde::{Deserialize, Serialize};
 
-use crate::hocus_focus_star_detection::{detect_stars_hocus_focus, HocusFocusParams};
 use crate::image_analysis::FitsImage;
+use crate::nina_star_detection::{
+    detect_stars_with_original, NoiseReduction, StarDetectionParams, StarSensitivity,
+};
 use crate::photometry::{CatalogStar, FrameCatalog};
 use crate::spatial_analysis::{compute_spatial_metrics, PixelCalibration, SpatialAnalysisConfig};
 
@@ -28,6 +31,12 @@ pub struct StoredSpatialMetrics {
     /// Basename of the FITS file the metrics were computed from; a changed
     /// filename invalidates the entry.
     pub filename: String,
+    /// Detector used for scheduler-compatible star count and HFR values.
+    #[serde(default)]
+    pub detector: String,
+    /// Bump when detector inputs or measurement rules change.
+    #[serde(default)]
+    pub detector_version: u32,
     pub star_count: usize,
     pub avg_hfr: f64,
     pub dead_cell_fraction: Option<f64>,
@@ -68,6 +77,12 @@ pub struct StoredSpatialMetrics {
 /// Stars kept per stored catalog: matching quality saturates well below full
 /// catalog size, and this keeps spatial_metrics.json compact.
 pub const STORED_CATALOG_STARS: usize = 300;
+
+/// The Target Scheduler database records star count and HFR from N.I.N.A.'s
+/// fast detector. Rescans must use the same detector family so sequence
+/// baselines do not mix incompatible measurements.
+pub const QUALITY_DETECTOR: &str = "nina_fast";
+pub const QUALITY_DETECTOR_VERSION: u32 = 1;
 
 /// Progress of the (singleton per-DB) spatial scan.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -230,6 +245,7 @@ pub fn run_scan(
     cache_dir: &Path,
     work: &[ScanWorkItem],
     workers: usize,
+    wait_for_turn: &(dyn Fn() + Sync),
 ) {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -238,6 +254,7 @@ pub fn run_scan(
 
     // Shared work-stealing pool sized by the caller's worker budget.
     crate::concurrency::parallel_index(work.len(), workers, |i| {
+        wait_for_turn();
         let item = &work[i];
         {
             let mut s = store.write().unwrap();
@@ -347,14 +364,22 @@ fn compute_one(
     let fits = FitsImage::from_file(&item.fits_path)?;
     let stats = fits.calculate_basic_statistics();
 
-    let params = HocusFocusParams::default();
-    let result = detect_stars_hocus_focus(&fits.data, fits.width, fits.height, &params);
-    let positions: Vec<(f64, f64)> = result.stars.iter().map(|s| s.position).collect();
-    // Background-subtracted fluxes in stored units are linear in raw_scale;
-    // divide for cross-frame-comparable ADU.
+    let params = StarDetectionParams {
+        sensitivity: StarSensitivity::Normal,
+        noise_reduction: NoiseReduction::None,
+        use_roi: false,
+    };
+    let stretch_params = StretchParams::default();
+    let stretched = stretch_u16_to_u16(&fits.data, &stats.to_stretch_statistics(), &stretch_params);
+    let result =
+        detect_stars_with_original(&stretched, &fits.data, fits.width, fits.height, &params);
+    let positions: Vec<(f64, f64)> = result.star_list.iter().map(|s| s.position).collect();
+    // N.I.N.A. measures each accepted star on the full-resolution original.
+    // Convert its background-subtracted aperture flux from stored units to
+    // physical ADU for cross-frame photometry.
     let catalog = FrameCatalog {
         stars: result
-            .stars
+            .star_list
             .iter()
             .filter(|s| s.flux > 0.0)
             .map(|s| CatalogStar {
@@ -382,7 +407,9 @@ fn compute_one(
     Ok(StoredSpatialMetrics {
         image_id: item.image_id,
         filename: item.filename.clone(),
-        star_count: result.stars.len(),
+        detector: QUALITY_DETECTOR.to_string(),
+        detector_version: QUALITY_DETECTOR_VERSION,
+        star_count: result.star_list.len(),
         avg_hfr: result.average_hfr,
         dead_cell_fraction: spatial.star_dead_cell_fraction,
         star_uniformity: spatial.star_uniformity,
@@ -415,6 +442,26 @@ pub fn valid_entry(
         .cloned()
 }
 
+/// Look up an entry that contains every field produced by the current quality
+/// scan. Older cache files deserialize successfully, but their defaulted grid
+/// dimensions and cell arrays cannot support photometric screening.
+pub fn valid_quality_entry(
+    store: &RwLock<SpatialMetricsStore>,
+    image_id: i32,
+    filename: &str,
+) -> Option<StoredSpatialMetrics> {
+    valid_entry(store, image_id, filename).filter(|entry| {
+        let cells = entry.grid_cols.saturating_mul(entry.grid_rows);
+        entry.detector == QUALITY_DETECTOR
+            && entry.detector_version == QUALITY_DETECTOR_VERSION
+            && entry.width > 0
+            && entry.height > 0
+            && cells > 0
+            && entry.star_cell_counts.len() == cells
+            && entry.bg_cell_medians.len() == cells
+    })
+}
+
 /// Snapshot of progress plus store size, for the progress endpoint.
 pub fn progress_snapshot(store: &RwLock<SpatialMetricsStore>) -> (SpatialScanProgress, usize) {
     let s = store.read().unwrap();
@@ -438,6 +485,8 @@ mod tests {
         StoredSpatialMetrics {
             image_id,
             filename: filename.to_string(),
+            detector: String::new(),
+            detector_version: 0,
             star_count: 4000,
             avg_hfr: 2.5,
             dead_cell_fraction: Some(0.1),
@@ -464,6 +513,42 @@ mod tests {
         assert!(valid_entry(&store, 1, "a.fits").is_some());
         assert!(valid_entry(&store, 1, "renamed.fits").is_none());
         assert!(valid_entry(&store, 2, "a.fits").is_none());
+    }
+
+    #[test]
+    fn complete_quality_entry_requires_current_photometry_inputs() {
+        let legacy = entry(1, "legacy.fits");
+        let mut current = entry(2, "current.fits");
+        current.detector = QUALITY_DETECTOR.to_string();
+        current.detector_version = QUALITY_DETECTOR_VERSION;
+        current.width = 6248;
+        current.height = 4176;
+        current.star_cell_counts = vec![0.0; 48];
+        current.bg_cell_medians = vec![1000.0; 48];
+        let mut dimensions_only = entry(3, "dimensions-only.fits");
+        dimensions_only.detector = QUALITY_DETECTOR.to_string();
+        dimensions_only.detector_version = QUALITY_DETECTOR_VERSION;
+        dimensions_only.width = 6248;
+        dimensions_only.height = 4176;
+        let store = store_with(vec![legacy, current, dimensions_only]);
+
+        assert!(valid_quality_entry(&store, 1, "legacy.fits").is_none());
+        assert!(valid_quality_entry(&store, 2, "current.fits").is_some());
+        assert!(valid_quality_entry(&store, 3, "dimensions-only.fits").is_none());
+    }
+
+    #[test]
+    fn complete_quality_entry_rejects_other_detector_versions() {
+        let mut old = entry(1, "old.fits");
+        old.detector = QUALITY_DETECTOR.to_string();
+        old.detector_version = QUALITY_DETECTOR_VERSION.saturating_sub(1);
+        old.width = 6248;
+        old.height = 4176;
+        old.star_cell_counts = vec![0.0; 48];
+        old.bg_cell_medians = vec![1000.0; 48];
+
+        let store = store_with(vec![old]);
+        assert!(valid_quality_entry(&store, 1, "old.fits").is_none());
     }
 
     #[test]

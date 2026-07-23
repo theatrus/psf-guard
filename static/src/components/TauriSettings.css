@@ -383,6 +383,8 @@
   display: flex;
   gap: 6px;
   flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .tauri-settings .db-row-actions .remove-button {
@@ -459,4 +461,155 @@
 .tauri-settings .import-confirm-buttons {
   margin-top: 10px;
   justify-content: flex-start;
+}
+
+.tauri-settings .import-confirm-content {
+  width: 100%;
+}
+
+.tauri-settings .import-action-buttons {
+  margin-top: 10px;
+  justify-content: flex-start;
+}
+
+.tauri-settings .quality-analysis-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+.tauri-settings .quality-analysis-option input {
+  margin-top: 3px;
+}
+
+.tauri-settings .quality-analysis-option span,
+.tauri-settings .quality-analysis-option small {
+  display: block;
+}
+
+.tauri-settings .scheduler-sync-empty,
+.tauri-settings .scheduler-sync-controls {
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.tauri-settings .scheduler-sync-controls {
+  border-top: 1px solid var(--color-border, #444);
+  padding-top: 8px;
+}
+
+.tauri-settings .scheduler-sync-controls summary {
+  cursor: pointer;
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.tauri-settings .scheduler-sync-body {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.tauri-settings .scheduler-sync-body > label {
+  display: grid;
+  grid-template-columns: auto minmax(140px, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.tauri-settings .scheduler-sync-body select {
+  min-width: 0;
+  padding: 5px 7px;
+  color: var(--color-text);
+  background: var(--color-bg-input);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+}
+
+.tauri-settings .scheduler-sync-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.tauri-settings .scheduler-sync-actions > div {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 9px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+}
+
+.tauri-settings .scheduler-sync-actions small,
+.tauri-settings .scheduler-sync-preview small {
+  display: block;
+  color: var(--color-text-secondary);
+  line-height: 1.35;
+}
+
+.tauri-settings .scheduler-sync-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tauri-settings .scheduler-sync-preview {
+  padding: 9px;
+  border: 1px solid var(--color-primary);
+  border-radius: 4px;
+}
+
+.tauri-settings .scheduler-sync-confirm {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.tauri-settings .scheduler-sync-confirm button {
+  width: auto;
+}
+
+.tauri-settings .scheduler-sync-status {
+  color: var(--color-primary);
+}
+
+@media (max-width: 760px) {
+  .tauri-settings .scheduler-sync-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+.tauri-settings .quality-backfill-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.tauri-settings .quality-backfill-status {
+  margin-top: 10px;
+  color: var(--color-primary);
+  font-size: 13px;
+}
+
+.tauri-settings .quality-backfill-error {
+  align-self: center;
+  color: var(--color-error);
+  font-size: 12px;
+}
+
+.tauri-settings .quality-analysis-option small {
+  margin-top: 4px;
+  color: var(--color-text-secondary);
+  font-weight: 400;
+  line-height: 1.4;
 }

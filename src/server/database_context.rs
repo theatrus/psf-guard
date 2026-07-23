@@ -184,6 +184,8 @@ pub struct DatabaseContext {
     pub spatial_metrics: crate::server::spatial_scan::SharedSpatialStore,
     /// Per-DB singleton FITS import job state (see `server::import_job`).
     pub import_job: crate::server::import_job::SharedImportJob,
+    /// Database-wide, low-priority quality analysis state.
+    pub quality_backfill: crate::server::quality_backfill::SharedQualityBackfill,
 }
 
 impl DatabaseContext {
@@ -250,6 +252,7 @@ impl DatabaseContext {
             astrometry_evidence: Arc::new(crate::astrometry::AstrometryEvidenceCache::new()),
             spatial_metrics: Arc::new(RwLock::new(Default::default())),
             import_job: Arc::new(RwLock::new(Default::default())),
+            quality_backfill: Arc::new(RwLock::new(Default::default())),
         })
     }
 
@@ -952,6 +955,7 @@ impl DatabaseContext {
             astrometry_evidence: Arc::new(crate::astrometry::AstrometryEvidenceCache::new()),
             spatial_metrics: Arc::new(RwLock::new(Default::default())),
             import_job: Arc::new(RwLock::new(Default::default())),
+            quality_backfill: Arc::new(RwLock::new(Default::default())),
         }
     }
 }
@@ -978,6 +982,7 @@ impl Clone for DatabaseContext {
             astrometry_evidence: self.astrometry_evidence.clone(),
             spatial_metrics: self.spatial_metrics.clone(),
             import_job: self.import_job.clone(),
+            quality_backfill: self.quality_backfill.clone(),
         }
     }
 }

@@ -439,9 +439,20 @@ async fn test_analyze_sequence_session_split() {
     assert_eq!(sequences[0]["image_count"], 5);
     assert_eq!(sequences[1]["image_count"], 5);
 
-    // Session 1 should end before session 2 starts
-    let seq0_end = sequences[0]["session_end"].as_i64().unwrap();
-    let seq1_start = sequences[1]["session_start"].as_i64().unwrap();
+    // The API presents newest sessions first for navigation. Sort the bounds
+    // chronologically here because this test checks splitting, not UI order.
+    let mut bounds = sequences
+        .iter()
+        .map(|sequence| {
+            (
+                sequence["session_start"].as_i64().unwrap(),
+                sequence["session_end"].as_i64().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    bounds.sort_by_key(|(start, _)| *start);
+    let (_, seq0_end) = bounds[0];
+    let (seq1_start, _) = bounds[1];
 
     assert!(
         seq0_end < seq1_start,

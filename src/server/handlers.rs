@@ -24,9 +24,8 @@ use crate::server::state::AppState;
 // Helper function to format RA/Dec coordinates
 fn format_coordinates(ra: Option<f64>, dec: Option<f64>) -> Option<String> {
     match (ra, dec) {
-        (Some(ra_deg), Some(dec_deg)) => {
-            // Convert decimal degrees to hours/degrees, minutes, seconds
-            let ra_hours = ra_deg / 15.0; // RA is in hours
+        (Some(ra_hours), Some(dec_deg)) => {
+            // Target Scheduler stores RA in decimal hours and Dec in degrees.
             let ra_h = ra_hours.floor();
             let ra_m = ((ra_hours - ra_h) * 60.0).floor();
             let ra_s = ((ra_hours - ra_h) * 60.0 - ra_m) * 60.0;
@@ -43,6 +42,19 @@ fn format_coordinates(ra: Option<f64>, dec: Option<f64>) -> Option<String> {
             ))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod coordinate_format_tests {
+    use super::format_coordinates;
+
+    #[test]
+    fn target_scheduler_ra_is_already_in_hours() {
+        assert_eq!(
+            format_coordinates(Some(10.5), Some(-20.25)).as_deref(),
+            Some("RA 10h 30m 00.0s, Dec -20° 15' 00.0\"")
+        );
     }
 }
 
@@ -314,15 +326,15 @@ fn require_registry_path(state: &AppState) -> Result<std::path::PathBuf, AppErro
 
 /// Gate for mutating endpoints on `/api/databases`. Returns 403 when the
 /// server was launched without `--allow-database-management`. Anyone reachable
-/// over the network could otherwise re-point or remove the user's configured
-/// databases.
-fn require_database_management_allowed(state: &AppState) -> Result<(), AppError> {
+/// over the network could otherwise re-point, remove, or sync the user's
+/// configured databases.
+pub(super) fn require_database_management_allowed(state: &AppState) -> Result<(), AppError> {
     if state.database_management_allowed() {
         Ok(())
     } else {
         Err(AppError::Forbidden(
             "database management is disabled on this server. Restart the server \
-             with --allow-database-management to enable runtime add/edit/remove."
+            with --allow-database-management to enable runtime database changes and sync."
                 .into(),
         ))
     }
@@ -335,6 +347,129 @@ fn summary_of(ctx: &crate::server::database_context::DatabaseContext) -> Databas
         database_path: ctx.database_path.clone(),
         image_directories: ctx.image_dirs.clone(),
     }
+}
+
+/// `POST /api/databases/{db_id}/sync` — preview or run one safe scheduler
+/// database sync. The path database is the local working copy. A pull reads
+/// the peer and fills the local copy; a planning push reads the local copy and
+/// updates planning settings in the peer.
+pub async fn sync_database_route(
+    State(state): State<Arc<AppState>>,
+    Path(db_id): Path<String>,
+    Json(req): Json<SchedulerSyncRequest>,
+) -> Result<Json<ApiResponse<SchedulerSyncResponse>>, AppError> {
+    use crate::commands::sync::{sync_planning, sync_pull, PlanningOptions, PullOptions};
+    use rusqlite::{Connection, OpenFlags};
+
+    require_database_management_allowed(&state)?;
+    if db_id == req.peer_db_id {
+        return Err(AppError::BadRequest(
+            "Choose two different databases to sync.".into(),
+        ));
+    }
+
+    let local = state.get_database(&db_id).ok_or(AppError::NotFound)?;
+    let peer = state
+        .get_database(&req.peer_db_id)
+        .ok_or(AppError::NotFound)?;
+    let (source_ctx, destination_ctx) = match req.kind {
+        SchedulerSyncKind::Pull => (Arc::clone(&peer), Arc::clone(&local)),
+        SchedulerSyncKind::PushPlanning => (Arc::clone(&local), Arc::clone(&peer)),
+    };
+    let source_path = PathBuf::from(&source_ctx.database_path);
+    let destination_path = PathBuf::from(&destination_ctx.database_path);
+    let source_id = source_ctx.id.clone();
+    let destination_id = destination_ctx.id.clone();
+    let kind = req.kind;
+    let dry_run = req.dry_run;
+    let project = req.project;
+    let with_image_data = req.with_image_data.unwrap_or(true);
+
+    let response = tokio::task::spawn_blocking(move || -> anyhow::Result<SchedulerSyncResponse> {
+        let source_canon =
+            std::fs::canonicalize(&source_path).unwrap_or_else(|_| source_path.clone());
+        let destination_canon =
+            std::fs::canonicalize(&destination_path).unwrap_or_else(|_| destination_path.clone());
+        anyhow::ensure!(
+            source_canon != destination_canon,
+            "The two configured entries point to the same database file."
+        );
+
+        let source = Connection::open_with_flags(&source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let destination =
+            Connection::open_with_flags(&destination_path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+
+        let response = match kind {
+            SchedulerSyncKind::Pull => {
+                let summary = sync_pull(
+                    &source,
+                    &destination,
+                    &PullOptions {
+                        dry_run,
+                        with_image_data,
+                        project_filter: project,
+                    },
+                )?;
+                SchedulerSyncResponse {
+                    kind,
+                    dry_run,
+                    source_db_id: source_id,
+                    destination_db_id: destination_id,
+                    exposuretemplate: (&summary.exposuretemplate).into(),
+                    project: (&summary.project).into(),
+                    ruleweight: (&summary.ruleweight).into(),
+                    target: (&summary.target).into(),
+                    exposureplan: (&summary.exposureplan).into(),
+                    acquiredimage: Some((&summary.acquiredimage).into()),
+                    imagedata: summary
+                        .imagedata_synced
+                        .then(|| (&summary.imagedata).into()),
+                    grade_filled: summary.grade_filled,
+                    grade_preserved: summary.grade_preserved,
+                    imagedata_bytes: summary.imagedata_bytes,
+                    total_inserted: summary.total_inserted(),
+                    total_updated: summary.total_updated(),
+                }
+            }
+            SchedulerSyncKind::PushPlanning => {
+                let summary = sync_planning(
+                    &source,
+                    &destination,
+                    &PlanningOptions {
+                        dry_run,
+                        project_filter: project,
+                    },
+                )?;
+                SchedulerSyncResponse {
+                    kind,
+                    dry_run,
+                    source_db_id: source_id,
+                    destination_db_id: destination_id,
+                    exposuretemplate: (&summary.exposuretemplate).into(),
+                    project: (&summary.project).into(),
+                    ruleweight: (&summary.ruleweight).into(),
+                    target: (&summary.target).into(),
+                    exposureplan: (&summary.exposureplan).into(),
+                    acquiredimage: None,
+                    imagedata: None,
+                    grade_filled: 0,
+                    grade_preserved: 0,
+                    imagedata_bytes: 0,
+                    total_inserted: summary.total_inserted(),
+                    total_updated: summary.total_updated(),
+                }
+            }
+        };
+        Ok(response)
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("scheduler sync task failed: {error}")))?
+    .map_err(|error| AppError::BadRequest(error.to_string()))?;
+
+    if !dry_run {
+        let _ = destination_ctx.ensure_cache_available();
+    }
+    Ok(Json(ApiResponse::success(response)))
 }
 
 /// `POST /api/databases` — register a new database. Validates that the file
@@ -668,9 +803,7 @@ pub async fn export_local_route(
     Ok(Json(ApiResponse::success(summary)))
 }
 
-/// `PUT /api/db/{db_id}/projects/{project_id}` — rename a project. Used to
-/// correct import-synthesized groupings; management-gated like the rest of
-/// the structural mutations.
+/// `PUT /api/db/{db_id}/projects/{project_id}` — update scheduler fields.
 pub async fn update_project_route(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
@@ -678,23 +811,7 @@ pub async fn update_project_route(
     Json(req): Json<UpdateProjectRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
     require_database_management_allowed(&state)?;
-    let name = req.name.trim();
-    if name.is_empty() {
-        return Err(AppError::BadRequest("name must not be empty".into()));
-    }
-    let renamed = {
-        let conn = ctx.db();
-        let conn = conn.lock().map_err(AppError::db)?;
-        Database::new(&conn)
-            .rename_project(project_id, name)
-            .map_err(AppError::db)?
-    };
-    if !renamed {
-        return Err(AppError::BadRequest(format!(
-            "project {} not found",
-            project_id
-        )));
-    }
+    crate::server::scheduler::update_project(ctx, project_id, req)?;
     Ok(Json(ApiResponse::success(
         serde_json::json!({ "updated": true }),
     )))
@@ -709,7 +826,15 @@ pub async fn update_target_route(
     Json(req): Json<UpdateTargetRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
     require_database_management_allowed(&state)?;
-    if req.name.is_none() && req.project_id.is_none() {
+    if req.name.is_none()
+        && req.project_id.is_none()
+        && req.active.is_none()
+        && req.ra_hours.is_none()
+        && req.dec_degrees.is_none()
+        && req.epoch_code.is_none()
+        && req.rotation.is_none()
+        && req.roi.is_none()
+    {
         return Err(AppError::BadRequest(
             "nothing to update: pass name and/or project_id".into(),
         ));
@@ -738,6 +863,8 @@ pub async fn update_target_route(
             .move_target(target_id, project_id)
             .map_err(|e| AppError::BadRequest(e.to_string()))?;
     }
+
+    crate::server::scheduler::update_target_fields(&db, target_id, &req)?;
 
     Ok(Json(ApiResponse::success(serde_json::json!({
         "updated": true,
@@ -860,7 +987,7 @@ pub async fn create_database_route(
         ctx.clone(),
         req.image_dirs.clone(),
         options,
-        req.backfill.unwrap_or(true),
+        req.backfill.unwrap_or(false),
     );
 
     Ok(Json(ApiResponse::success(CreateDatabaseResponse {
@@ -912,7 +1039,7 @@ pub async fn start_import_route(
         ctx.0.clone(),
         dirs,
         options,
-        req.backfill.unwrap_or(true),
+        req.backfill.unwrap_or(false),
     );
     Ok(Json(ApiResponse::success(ImportStatusResponse {
         started,
@@ -966,7 +1093,8 @@ fn unique_db_file(base: &std::path::Path, stem: &str) -> std::path::PathBuf {
 }
 
 /// Launch the singleton import job for one database: header scan → one-shot
-/// import transaction → chained quality-scan backfill over created targets.
+/// import transaction. Optional quality work starts afterwards with the
+/// background worker budget and does not delay import completion.
 /// Returns false when a job is already running for this database.
 fn spawn_import_job(
     state: &Arc<AppState>,
@@ -1031,24 +1159,17 @@ fn spawn_import_job(
                 target_ids.push(*id);
             }
         }
-        job::set_outcome(&job_store, outcome);
+        job::complete_import(&job_store, outcome);
 
         // New rows reference files the DB-based file cache hasn't seen; kick
         // the normal background refresh so the UI resolves them promptly.
         let _ = ctx.ensure_cache_available();
 
-        // Post-import metric backfill: chain the existing singleton quality
-        // scan over each created target. Failures are logged, never fatal —
-        // the user can always re-run Scan Quality from the SequenceView.
+        // Quality analysis is a general database maintenance job, not an
+        // import stage. An opt-in import only queues the changed targets.
         if backfill && !target_ids.is_empty() {
-            job::begin_backfill(&job_store, target_ids.len());
-            for target_id in target_ids {
-                job::backfill_target(&job_store, target_id);
-                run_backfill_for_target(&state, &ctx, target_id).await;
-                job::backfill_target_done(&job_store);
-            }
+            spawn_quality_backfill(&state, ctx.clone(), target_ids, false);
         }
-        job::finish(&job_store, None);
     });
     true
 }
@@ -1087,29 +1208,32 @@ fn run_import_blocking(
     imp::import_frames(&mut conn, frames, options)
 }
 
-/// Run (or wait for) the quality scan for one imported target. The scan is a
+/// Run (or wait for) the quality scan for one database target. The scan is a
 /// per-DB singleton, so this retries while a previous target's scan is still
 /// running, then waits for its own scan to complete.
-async fn run_backfill_for_target(
+async fn run_quality_scan_for_target(
     state: &Arc<AppState>,
     ctx: &Arc<DatabaseContext>,
     target_id: i32,
+    force: bool,
 ) {
     use crate::server::spatial_scan;
 
     let poll = tokio::time::Duration::from_millis(1500);
     loop {
-        let response = start_spatial_scan(
+        let response = start_spatial_scan_with_priority(
             State(state.clone()),
             DbContext(ctx.clone()),
             Json(SpatialScanRequest {
                 target_id,
                 filter_name: None,
                 force: false,
-                force_spatial: false,
-                force_astrometry: false,
+                force_spatial: force,
+                force_astrometry: force,
                 force_satellites: false,
             }),
+            crate::concurrency::Priority::Background,
+            false,
         )
         .await;
         match response {
@@ -1143,6 +1267,72 @@ async fn run_backfill_for_target(
             break;
         }
     }
+}
+
+fn spawn_quality_backfill(
+    state: &Arc<AppState>,
+    ctx: Arc<DatabaseContext>,
+    target_ids: Vec<i32>,
+    force: bool,
+) -> bool {
+    use crate::server::quality_backfill as job;
+
+    if !job::try_begin(&ctx.quality_backfill, force, target_ids.len()) {
+        return false;
+    }
+    if target_ids.is_empty() {
+        return true;
+    }
+
+    let state = Arc::clone(state);
+    tokio::spawn(async move {
+        tracing::info!(
+            "📐 Database quality {} started for db={} ({} targets)",
+            if force { "rescan" } else { "backfill" },
+            ctx.id,
+            target_ids.len()
+        );
+        for target_id in target_ids {
+            job::begin_target(&ctx.quality_backfill, target_id);
+            run_quality_scan_for_target(&state, &ctx, target_id, force).await;
+            job::finish_target(&ctx.quality_backfill);
+        }
+        job::finish(&ctx.quality_backfill);
+        tracing::info!("📐 Database quality work finished for db={}", ctx.id);
+    });
+    true
+}
+
+pub async fn start_quality_backfill_route(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Json(req): Json<QualityBackfillRequest>,
+) -> Result<Json<ApiResponse<QualityBackfillStatusResponse>>, AppError> {
+    let target_ids = {
+        let conn = ctx.db();
+        let conn = conn.lock().map_err(AppError::db)?;
+        Database::new(&conn)
+            .get_all_targets_with_project_info()
+            .map_err(AppError::db)?
+            .into_iter()
+            .map(|target| target.target.id)
+            .collect::<Vec<_>>()
+    };
+    let started = spawn_quality_backfill(&state, ctx.0.clone(), target_ids, req.force);
+    Ok(Json(ApiResponse::success(QualityBackfillStatusResponse {
+        started,
+        progress: crate::server::quality_backfill::snapshot(&ctx.quality_backfill),
+    })))
+}
+
+pub async fn get_quality_backfill_progress(
+    ctx: DbContext,
+) -> Result<Json<ApiResponse<QualityBackfillStatusResponse>>, AppError> {
+    let progress = crate::server::quality_backfill::snapshot(&ctx.quality_backfill);
+    Ok(Json(ApiResponse::success(QualityBackfillStatusResponse {
+        started: progress.running,
+        progress,
+    })))
 }
 
 pub async fn refresh_file_cache(
@@ -1522,27 +1712,20 @@ pub async fn get_images(
         _ => None,
     });
 
+    let offset = params.offset.unwrap_or(0).max(0) as usize;
+    let limit = params.limit.unwrap_or(100).max(0) as usize;
     let images = db
-        .query_images(status_filter, None, None, None)
+        .query_images_scoped(
+            status_filter,
+            params.project_id,
+            params.target_id,
+            Some(limit),
+            offset,
+        )
         .map_err(AppError::db)?;
 
-    // Filter by project_id and target_id if provided
-    let filtered_images: Vec<_> = images
+    let response: Vec<ImageResponse> = images
         .into_iter()
-        .filter(|(img, _, _)| {
-            params.project_id.is_none_or(|id| img.project_id == id)
-                && params.target_id.is_none_or(|id| img.target_id == id)
-        })
-        .collect();
-
-    // Apply limit and offset
-    let offset = params.offset.unwrap_or(0) as usize;
-    let limit = params.limit.unwrap_or(100) as usize;
-
-    let response: Vec<ImageResponse> = filtered_images
-        .into_iter()
-        .skip(offset)
-        .take(limit)
         .map(|(img, proj_name, target_name)| {
             let metadata: serde_json::Value = serde_json::from_str(&img.metadata)
                 .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
@@ -1595,11 +1778,11 @@ pub async fn get_image(
         let image = images.into_iter().next().ok_or(AppError::NotFound)?;
 
         // Get project and target names
-        let all_images = db
-            .query_images(None, None, None, None)
+        let scoped_images = db
+            .query_images_scoped(None, Some(image.project_id), Some(image.target_id), None, 0)
             .map_err(AppError::db)?;
 
-        let (_, proj_name, target_name) = all_images
+        let (_, proj_name, target_name) = scoped_images
             .into_iter()
             .find(|(img, _, _)| img.id == image_id)
             .ok_or(AppError::NotFound)?;
@@ -2830,7 +3013,7 @@ pub async fn analyze_sequence(
 
         // Query images for this target
         let all_images = db
-            .query_images(None, None, None, None)
+            .query_images_scoped(None, None, Some(target_id), None, 0)
             .map_err(AppError::db)?;
 
         let filtered: Vec<_> = all_images
@@ -2861,8 +3044,8 @@ pub async fn analyze_sequence(
         )));
     }
 
-    // Extract metrics and group by filter. Spatial metrics from a prior
-    // background scan are merged in when the DB metadata lacks them.
+    // Extract metrics and group by filter. A prior quality scan supplies fresh
+    // star/HFR measurements plus the spatial fields N.I.N.A. does not store.
     crate::server::spatial_scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
     let spatial_store = ctx.spatial_metrics.clone();
     let astrometry_cache_dir = ctx.cache_dir_path.clone();
@@ -2937,7 +3120,7 @@ pub async fn analyze_sequence(
     .await
     .map_err(|e| AppError::InternalError(format!("Analysis task failed: {}", e)))?;
 
-    let sequences = result
+    let mut sequences: Vec<_> = result
         .into_iter()
         .map(|seq| crate::server::api::ScoredSequenceResponse {
             target_id: seq.target_id,
@@ -2951,6 +3134,11 @@ pub async fn analyze_sequence(
             summary: seq.summary,
         })
         .collect();
+    sequences.sort_by(|a, b| {
+        b.session_start
+            .cmp(&a.session_start)
+            .then_with(|| a.filter_name.cmp(&b.filter_name))
+    });
 
     Ok(Json(ApiResponse::success(
         crate::server::api::SequenceAnalysisResponse { sequences },
@@ -2984,7 +3172,7 @@ pub async fn get_image_quality(
 
         // Get all images for the same target + filter
         let all_images = db
-            .query_images(None, None, None, None)
+            .query_images_scoped(None, None, Some(target_image.target_id), None, 0)
             .map_err(AppError::db)?;
 
         let filter_images: Vec<_> = all_images
@@ -3111,7 +3299,7 @@ pub(crate) fn stored_entry_for(
     metadata_json: &str,
 ) -> Option<crate::server::spatial_scan::StoredSpatialMetrics> {
     let file_only = filename_from_metadata(metadata_json)?;
-    crate::server::spatial_scan::valid_entry(store, image_id, &file_only)
+    crate::server::spatial_scan::valid_quality_entry(store, image_id, &file_only)
 }
 
 /// Run the cross-frame photometric pass (transparency, localized extinction,
@@ -3198,22 +3386,26 @@ pub(crate) fn merge_photometric_signals(
     }
 }
 
-/// Fill spatial metric fields from the per-DB scan store when the DB
-/// metadata did not provide them (N.I.N.A. never does).
+/// Merge fresh detector and spatial results from the per-DB quality cache.
+/// A quality scan is the source of truth for star count and HFR once present;
+/// the spatial fields fill values that N.I.N.A. does not store.
 pub(crate) fn merge_spatial_metrics(
     metrics: &mut crate::sequence_analysis::ImageMetrics,
     store: &crate::server::spatial_scan::SharedSpatialStore,
     metadata_json: &str,
 ) {
-    if metrics.dead_cell_fraction.is_some() && metrics.bg_cell_spread.is_some() {
-        return;
-    }
     let Some(file_only) = filename_from_metadata(metadata_json) else {
         return;
     };
     if let Some(entry) =
         crate::server::spatial_scan::valid_entry(store, metrics.image_id, &file_only)
     {
+        if entry.detector == crate::server::spatial_scan::QUALITY_DETECTOR
+            && entry.detector_version == crate::server::spatial_scan::QUALITY_DETECTOR_VERSION
+        {
+            metrics.star_count = Some(entry.star_count as f64);
+            metrics.hfr = (entry.avg_hfr > 0.0).then_some(entry.avg_hfr);
+        }
         if metrics.dead_cell_fraction.is_none() {
             metrics.dead_cell_fraction = entry.dead_cell_fraction;
         }
@@ -3264,6 +3456,23 @@ pub async fn start_spatial_scan(
     ctx: DbContext,
     Json(req): Json<SpatialScanRequest>,
 ) -> Result<Json<ApiResponse<SpatialScanStatusResponse>>, AppError> {
+    start_spatial_scan_with_priority(
+        State(state),
+        ctx,
+        Json(req),
+        crate::concurrency::Priority::Interactive,
+        true,
+    )
+    .await
+}
+
+async fn start_spatial_scan_with_priority(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Json(req): Json<SpatialScanRequest>,
+    priority: crate::concurrency::Priority,
+    include_satellites: bool,
+) -> Result<Json<ApiResponse<SpatialScanStatusResponse>>, AppError> {
     use crate::server::spatial_scan as scan;
 
     scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
@@ -3291,7 +3500,7 @@ pub async fn start_spatial_scan(
         let target_name = target.name.clone();
 
         let all_images = db
-            .query_images(None, None, None, None)
+            .query_images_scoped(None, None, Some(req.target_id), None, 0)
             .map_err(AppError::db)?;
 
         let mut resolver =
@@ -3323,8 +3532,8 @@ pub async fn start_spatial_scan(
         let Some(file_only) = filename_from_metadata(&img.metadata) else {
             continue;
         };
-        let spatial_cached =
-            !force_spatial && scan::valid_entry(&ctx.spatial_metrics, img.id, &file_only).is_some();
+        let spatial_cached = !force_spatial
+            && scan::valid_quality_entry(&ctx.spatial_metrics, img.id, &file_only).is_some();
         if spatial_cached {
             skipped_cached += 1;
         }
@@ -3344,11 +3553,12 @@ pub async fn start_spatial_scan(
                     == Some(file_only.as_str())
             });
         let astrometry_cached = cached_astrometry.is_some();
-        let satellite_cached = !force_satellites
-            && cached_astrometry.as_ref().is_some_and(|analysis| {
-                crate::satellites::persisted_analysis(&ctx.cache_dir_path, img.id, analysis)
-                    .is_some()
-            });
+        let satellite_cached = !include_satellites
+            || (!force_satellites
+                && cached_astrometry.as_ref().is_some_and(|analysis| {
+                    crate::satellites::persisted_analysis(&ctx.cache_dir_path, img.id, analysis)
+                        .is_some()
+                }));
         if !spatial_cached || !astrometry_cached || !satellite_cached {
             work.push((
                 img,
@@ -3402,7 +3612,9 @@ pub async fn start_spatial_scan(
     // Mark this as an interactive job for its whole lifetime so background
     // pre-generation yields cores + memory to it. Moved into the blocking task
     // and dropped when the scan returns (or panics).
-    let interactive_guard = state.begin_interactive_job();
+    let interactive_guard = (priority == crate::concurrency::Priority::Interactive)
+        .then(|| state.begin_interactive_job());
+    let scheduling_state = Arc::clone(&state);
     tokio::task::spawn_blocking(move || {
         let _interactive_guard = interactive_guard;
         // Any panic below would be silently swallowed by tokio (the join
@@ -3456,12 +3668,15 @@ pub async fn start_spatial_scan(
             let frame_pixels = spatial_items
                 .first()
                 .and_then(|it| crate::concurrency::probe_frame_pixels(&it.fits_path));
-            let budget = crate::concurrency::plan_workers(
-                None,
-                &worker_policy,
-                crate::concurrency::Priority::Interactive,
-                frame_pixels,
-            );
+            let budget =
+                crate::concurrency::plan_workers(None, &worker_policy, priority, frame_pixels);
+            let wait_for_turn = || {
+                while priority == crate::concurrency::Priority::Background
+                    && scheduling_state.interactive_job_active()
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+            };
             if !spatial_items.is_empty() {
                 tracing::info!(
                     "📐 Spatial scan concurrency: {} worker(s) — {}",
@@ -3473,6 +3688,7 @@ pub async fn start_spatial_scan(
                     &ctx_arc.cache_dir_path,
                     &spatial_items,
                     budget.workers,
+                    &wait_for_turn,
                 );
             }
 
@@ -3486,6 +3702,7 @@ pub async fn start_spatial_scan(
                     astrometry_items.len(),
                 );
                 for (item, expected, _, need_astrometry, need_satellite) in astrometry_items {
+                    wait_for_turn();
                     crate::server::spatial_scan::begin_astrometry_item(
                         &ctx_arc.spatial_metrics,
                         &item.filename,

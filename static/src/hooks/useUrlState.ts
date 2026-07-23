@@ -1,5 +1,5 @@
 import { useSearchParams } from 'react-router-dom';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import { type GroupingMode, DEFAULT_SINGLE_PROJECT_MODE } from '../types/grouping';
 
 /**
@@ -7,6 +7,10 @@ import { type GroupingMode, DEFAULT_SINGLE_PROJECT_MODE } from '../types/groupin
  */
 export function useUrlParams() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const setSearchParamsRef = useRef(setSearchParams);
+  const searchParamsRef = useRef(searchParams);
+  setSearchParamsRef.current = setSearchParams;
+  searchParamsRef.current = searchParams;
   
   const getParam = useCallback((key: string): string | null => {
     return searchParams.get(key);
@@ -23,7 +27,9 @@ export function useUrlParams() {
   
   const getArrayParam = useCallback((key: string): string[] => {
     const value = searchParams.get(key);
-    return value ? value.split(',').filter(Boolean) : [];
+    return value
+      ? value.split(',').filter(Boolean).map((item) => decodeURIComponent(item))
+      : [];
   }, [searchParams]);
   
   const getNumberArrayParam = useCallback((key: string): number[] => {
@@ -32,26 +38,25 @@ export function useUrlParams() {
   }, [searchParams]);
   
   const updateParams = useCallback((updates: Record<string, string | number | boolean | string[] | number[] | null | undefined>) => {
-    setSearchParams(prev => {
-      const newParams = new URLSearchParams(prev);
-      
-      Object.entries(updates).forEach(([key, value]) => {
-        if (value === null || value === undefined || value === '' || value === 'all') {
+    const newParams = new URLSearchParams(searchParamsRef.current);
+
+    Object.entries(updates).forEach(([key, value]) => {
+      if (value === null || value === undefined || value === '' || value === 'all') {
+        newParams.delete(key);
+      } else if (Array.isArray(value)) {
+        if (value.length === 0) {
           newParams.delete(key);
-        } else if (Array.isArray(value)) {
-          if (value.length === 0) {
-            newParams.delete(key);
-          } else {
-            newParams.set(key, value.join(','));
-          }
         } else {
-          newParams.set(key, String(value));
+          newParams.set(key, value.map((item) => encodeURIComponent(String(item))).join(','));
         }
-      });
-      
-      return newParams;
-    }, { replace: true });
-  }, [setSearchParams]);
+      } else {
+        newParams.set(key, String(value));
+      }
+    });
+
+    searchParamsRef.current = newParams;
+    setSearchParamsRef.current(newParams, { replace: true });
+  }, []);
   
   return {
     getParam,
@@ -179,24 +184,17 @@ export function useFilters() {
 export function useGridState() {
   const { getParam, getNumberParam, getBooleanParam, getArrayParam, getNumberArrayParam, updateParams } = useUrlParams();
   
-  const selectedGroupIndex = useMemo(() => getNumberParam('groupIndex') || 0, [getNumberParam]);
-  const selectedImageIndex = useMemo(() => getNumberParam('imageIndex') || 0, [getNumberParam]);
   const groupingMode = useMemo(() => (getParam('grouping') as GroupingMode) || DEFAULT_SINGLE_PROJECT_MODE, [getParam]);
   const imageSize = useMemo(() => getNumberParam('size') || 300, [getNumberParam]);
   const showStats = useMemo(() => getBooleanParam('stats'), [getBooleanParam]);
   const expandedGroups = useMemo(() => new Set(getArrayParam('expanded')), [getArrayParam]);
+  const currentImageId = useMemo(() => getNumberParam('current'), [getNumberParam]);
   const selectedImages = useMemo(() => new Set(getNumberArrayParam('selected')), [getNumberArrayParam]);
-  
-  const setSelectedGroupIndex = useCallback((index: number) => {
-    updateParams({ groupIndex: index });
-  }, [updateParams]);
-  
-  const setSelectedImageIndex = useCallback((index: number) => {
-    updateParams({ imageIndex: index });
-  }, [updateParams]);
+  const selectedImagesRef = useRef(selectedImages);
+  selectedImagesRef.current = selectedImages;
   
   const setGroupingMode = useCallback((mode: GroupingMode) => {
-    updateParams({ grouping: mode });
+    updateParams({ grouping: mode, expanded: null });
   }, [updateParams]);
   
   const setImageSize = useCallback((size: number) => {
@@ -213,25 +211,42 @@ export function useGridState() {
   }, [updateParams, expandedGroups]);
   
   const setSelectedImages = useCallback((images: Set<number> | ((prev: Set<number>) => Set<number>)) => {
-    const newImages = typeof images === 'function' ? images(selectedImages) : images;
-    updateParams({ selected: Array.from(newImages) });
-  }, [updateParams, selectedImages]);
+    const newImages = typeof images === 'function' ? images(selectedImagesRef.current) : images;
+    selectedImagesRef.current = new Set(newImages);
+    updateParams({ selected: Array.from(selectedImagesRef.current) });
+  }, [updateParams]);
+
+  const setCurrentImageId = useCallback((imageId: number) => {
+    updateParams({
+      current: imageId,
+      groupIndex: null,
+      imageIndex: null,
+    });
+  }, [updateParams]);
+
+  const setCurrentImageSelection = useCallback((imageId: number) => {
+    selectedImagesRef.current = new Set([imageId]);
+    updateParams({
+      current: imageId,
+      groupIndex: null,
+      imageIndex: null,
+      selected: [imageId],
+    });
+  }, [updateParams]);
 
   return {
-    selectedGroupIndex,
-    selectedImageIndex,
     groupingMode,
     imageSize,
     showStats,
     expandedGroups,
+    currentImageId,
     selectedImages,
-    setSelectedGroupIndex,
-    setSelectedImageIndex,
     setGroupingMode,
     setImageSize,
     setShowStats,
     setExpandedGroups,
     setSelectedImages,
+    setCurrentImageId,
+    setCurrentImageSelection,
   };
 }
-

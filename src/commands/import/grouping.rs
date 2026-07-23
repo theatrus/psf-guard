@@ -3,9 +3,9 @@
 //! Grouping rules (see CREATE_IMPORT_PLAN.md §2):
 //! - Frames never share a project across different equipment signatures
 //!   (telescope, camera, focal length, binning).
-//! - Within a signature, a gap larger than `time_gap_days` between
-//!   consecutive frames starts a new project.
-//! - Within a project, each distinct OBJECT is a target.
+//! - Each distinct OBJECT becomes its own project and target by default.
+//! - Targets with a shared panel-style name, nearby coordinates, and nearby
+//!   capture dates share one project as a likely mosaic.
 //! - Within a target, each distinct (filter, gain, offset, binning, readout,
 //!   exposure) is one exposure plan referencing a shared exposure template.
 //!
@@ -159,6 +159,18 @@ impl ImportPlan {
 }
 
 pub const DEFAULT_TIME_GAP_DAYS: f64 = 14.0;
+pub const DEFAULT_MOSAIC_RADIUS_DEG: f64 = 5.0;
+
+#[derive(Debug)]
+struct TargetGroup {
+    name: String,
+    frames: Vec<usize>,
+    start_ts: Option<i64>,
+    end_ts: Option<i64>,
+    ra_deg: Option<f64>,
+    dec_deg: Option<f64>,
+    mosaic_root: Option<(String, String)>,
+}
 
 /// Build the import plan. `frames` should already be filtered to readable
 /// light frames; indices in the plan refer into this slice.
@@ -172,57 +184,78 @@ pub fn build_plan(frames: &[FrameMeta], time_gap_days: f64) -> ImportPlan {
             .push(idx);
     }
 
-    let gap_secs = (time_gap_days.max(0.0) * 86_400.0) as i64;
+    let mosaic_gap_secs = (time_gap_days.max(0.0) * 86_400.0) as i64;
     let mut projects = Vec::new();
 
-    for (signature, mut indices) in by_signature {
-        // 2. Sort by timestamp; frames without one keep scan order and sort
-        //    first so they join the earliest session rather than fabricating
-        //    a "future" one.
-        indices.sort_by_key(|&i| (frames[i].timestamp.unwrap_or(i64::MIN), i));
-
-        // 3. Split into sessions on the time gap. Timestamp-less frames never
-        //    open a gap (their MIN sentinel is skipped for gap math).
-        let mut buckets: Vec<Vec<usize>> = Vec::new();
-        let mut last_ts: Option<i64> = None;
+    for (signature, indices) in by_signature {
+        // Build one target group per exact OBJECT across the full archive.
+        // A target remains one scheduler project even when captures span
+        // multiple sessions; session splitting belongs to later analysis.
+        let mut by_object: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         for idx in indices {
-            let ts = frames[idx].timestamp;
-            let new_bucket = match (last_ts, ts) {
-                (Some(prev), Some(now)) => now.saturating_sub(prev) > gap_secs,
-                _ => false,
-            } || buckets.is_empty();
-            if new_bucket {
-                buckets.push(Vec::new());
-            }
-            buckets.last_mut().unwrap().push(idx);
-            if ts.is_some() {
-                last_ts = ts;
+            let object = frames[idx]
+                .object
+                .clone()
+                .unwrap_or_else(|| "Unknown Target".to_string());
+            by_object.entry(object).or_default().push(idx);
+        }
+
+        let target_groups = by_object
+            .into_iter()
+            .map(|(name, mut target_frames)| {
+                target_frames.sort_by_key(|&i| (frames[i].timestamp.unwrap_or(i64::MIN), i));
+                TargetGroup {
+                    start_ts: target_frames
+                        .iter()
+                        .filter_map(|&i| frames[i].timestamp)
+                        .min(),
+                    end_ts: target_frames
+                        .iter()
+                        .filter_map(|&i| frames[i].timestamp)
+                        .max(),
+                    ra_deg: median(target_frames.iter().filter_map(|&i| frames[i].ra_deg)),
+                    dec_deg: median(target_frames.iter().filter_map(|&i| frames[i].dec_deg)),
+                    mosaic_root: mosaic_root(&name),
+                    name,
+                    frames: target_frames,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // Start with one project per target, then combine only strong mosaic
+        // candidates: a shared panel-style root, nearby centers, and nearby
+        // capture ranges. The name clue keeps unrelated neighboring objects
+        // from being merged merely because they share a wide field.
+        let mut project_groups: Vec<Vec<TargetGroup>> = Vec::new();
+        for target in target_groups {
+            let matching_project = project_groups.iter().position(|group| {
+                group
+                    .iter()
+                    .any(|other| likely_mosaic_pair(other, &target, mosaic_gap_secs))
+            });
+            if let Some(index) = matching_project {
+                project_groups[index].push(target);
+            } else {
+                project_groups.push(vec![target]);
             }
         }
 
-        // 4. Each bucket is a project; group by OBJECT within it.
-        for bucket in buckets {
-            let start_ts = bucket.iter().filter_map(|&i| frames[i].timestamp).min();
-            let end_ts = bucket.iter().filter_map(|&i| frames[i].timestamp).max();
-
-            let mut by_object: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-            for &idx in &bucket {
-                let object = frames[idx]
-                    .object
-                    .clone()
-                    .unwrap_or_else(|| "Unknown Target".to_string());
-                by_object.entry(object).or_default().push(idx);
-            }
-
-            let targets = by_object
-                .into_iter()
-                .map(|(name, target_frames)| build_target(frames, name, target_frames))
-                .collect();
-
-            let name = match start_ts.map(format_month) {
-                Some(month) => format!("{} — {}", signature.describe(), month),
-                None => signature.describe(),
+        for group in project_groups {
+            let start_ts = group.iter().filter_map(|target| target.start_ts).min();
+            let end_ts = group.iter().filter_map(|target| target.end_ts).max();
+            let name = if group.len() > 1 {
+                group[0]
+                    .mosaic_root
+                    .as_ref()
+                    .map(|(_, display)| display.clone())
+                    .unwrap_or_else(|| group[0].name.clone())
+            } else {
+                group[0].name.clone()
             };
+            let targets = group
+                .into_iter()
+                .map(|target| build_target(frames, target.name, target.frames))
+                .collect();
             projects.push(PlannedProject {
                 name,
                 signature: signature.clone(),
@@ -245,6 +278,90 @@ pub fn build_plan(frames: &[FrameMeta], time_gap_days: f64) -> ImportPlan {
     }
 
     ImportPlan { projects }
+}
+
+fn mosaic_root(name: &str) -> Option<(String, String)> {
+    let tokens = name
+        .split(|c: char| c.is_whitespace() || matches!(c, '-' | '_' | '(' | ')' | '[' | ']'))
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    if tokens.len() < 2 {
+        return None;
+    }
+
+    let panel_index = tokens.iter().rposition(|token| {
+        matches!(
+            token.to_ascii_lowercase().as_str(),
+            "panel" | "pane" | "tile"
+        )
+    });
+    let root_len = if let Some(index) = panel_index {
+        let suffix = &tokens[index + 1..];
+        if index == 0
+            || suffix.is_empty()
+            || !suffix
+                .iter()
+                .all(|part| part.chars().all(|c| c.is_ascii_digit()))
+        {
+            return None;
+        }
+        index
+    } else {
+        let last = tokens.last().unwrap().to_ascii_lowercase();
+        if last.len() > 1 && last.starts_with('p') && last[1..].chars().all(|c| c.is_ascii_digit())
+        {
+            tokens.len() - 1
+        } else {
+            return None;
+        }
+    };
+
+    let display = tokens[..root_len].join(" ");
+    Some((display.to_ascii_lowercase(), display))
+}
+
+fn likely_mosaic_pair(a: &TargetGroup, b: &TargetGroup, max_time_gap_secs: i64) -> bool {
+    let (Some((a_root, _)), Some((b_root, _))) = (&a.mosaic_root, &b.mosaic_root) else {
+        return false;
+    };
+    if a_root != b_root || !capture_ranges_near(a, b, max_time_gap_secs) {
+        return false;
+    }
+    let (Some(a_ra), Some(a_dec), Some(b_ra), Some(b_dec)) =
+        (a.ra_deg, a.dec_deg, b.ra_deg, b.dec_deg)
+    else {
+        return false;
+    };
+    angular_distance_deg(a_ra, a_dec, b_ra, b_dec) <= DEFAULT_MOSAIC_RADIUS_DEG
+}
+
+fn capture_ranges_near(a: &TargetGroup, b: &TargetGroup, max_gap: i64) -> bool {
+    let (Some(a_start), Some(a_end), Some(b_start), Some(b_end)) =
+        (a.start_ts, a.end_ts, b.start_ts, b.end_ts)
+    else {
+        return false;
+    };
+    if a_start <= b_end && b_start <= a_end {
+        return true;
+    }
+    let gap = if a_end < b_start {
+        b_start - a_end
+    } else {
+        a_start - b_end
+    };
+    gap <= max_gap
+}
+
+fn angular_distance_deg(ra1: f64, dec1: f64, ra2: f64, dec2: f64) -> f64 {
+    let (ra1, dec1, ra2, dec2) = (
+        ra1.to_radians(),
+        dec1.to_radians(),
+        ra2.to_radians(),
+        dec2.to_radians(),
+    );
+    let cosine =
+        (dec1.sin() * dec2.sin() + dec1.cos() * dec2.cos() * (ra1 - ra2).cos()).clamp(-1.0, 1.0);
+    cosine.acos().to_degrees()
 }
 
 fn build_target(frames: &[FrameMeta], name: String, indices: Vec<usize>) -> PlannedTarget {
@@ -291,15 +408,6 @@ fn median(values: impl Iterator<Item = f64>) -> Option<f64> {
     Some(values[values.len() / 2])
 }
 
-fn format_month(ts: i64) -> String {
-    use chrono::TimeZone;
-    chrono::Utc
-        .timestamp_opt(ts, 0)
-        .single()
-        .map(|dt| dt.format("%Y-%m").to_string())
-        .unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,16 +443,18 @@ mod tests {
     const DAY: i64 = 86_400;
 
     #[test]
-    fn groups_objects_into_targets_within_one_project() {
+    fn maps_each_object_to_its_own_project_by_default() {
         let frames = vec![
             frame("M31", "Ha", 1_000, "EdgeHD", 1960.0, 300.0),
             frame("M31", "OIII", 2_000, "EdgeHD", 1960.0, 300.0),
             frame("M33", "Ha", 3_000, "EdgeHD", 1960.0, 300.0),
         ];
         let plan = build_plan(&frames, 14.0);
-        assert_eq!(plan.projects.len(), 1);
-        let project = &plan.projects[0];
-        assert_eq!(project.targets.len(), 2);
+        assert_eq!(plan.projects.len(), 2);
+        assert!(plan
+            .projects
+            .iter()
+            .all(|project| project.targets.len() == 1));
         assert_eq!(plan.frame_count(), 3);
         // Two templates (Ha + OIII), three plans total across two targets.
         assert_eq!(plan.template_keys().len(), 2);
@@ -361,7 +471,7 @@ mod tests {
     }
 
     #[test]
-    fn large_time_gap_splits_projects() {
+    fn one_target_remains_one_project_across_session_gaps() {
         let frames = vec![
             frame("M31", "Ha", 0, "EdgeHD", 1960.0, 300.0),
             frame("M31", "Ha", 5 * DAY, "EdgeHD", 1960.0, 300.0),
@@ -369,10 +479,8 @@ mod tests {
             frame("M31", "Ha", 65 * DAY, "EdgeHD", 1960.0, 300.0),
         ];
         let plan = build_plan(&frames, 14.0);
-        assert_eq!(plan.projects.len(), 2);
-        assert_eq!(plan.projects[0].frame_count(), 2);
-        assert_eq!(plan.projects[1].frame_count(), 1);
-        assert_ne!(plan.projects[0].name, plan.projects[1].name);
+        assert_eq!(plan.projects.len(), 1);
+        assert_eq!(plan.projects[0].frame_count(), 3);
     }
 
     #[test]
@@ -409,5 +517,43 @@ mod tests {
         let plan = build_plan(&frames, 14.0);
         // The None-timestamp frame must not manufacture a 100-day gap.
         assert_eq!(plan.projects.len(), 1);
+    }
+
+    #[test]
+    fn nearby_panel_targets_share_a_mosaic_project() {
+        let mut panel_1 = frame("NGC 7000 - Panel 1", "Ha", DAY, "RedCat", 250.0, 300.0);
+        panel_1.ra_deg = Some(312.0);
+        panel_1.dec_deg = Some(44.0);
+        let mut panel_2 = frame(
+            "NGC 7000 - Panel 2",
+            "OIII",
+            2 * DAY,
+            "RedCat",
+            250.0,
+            300.0,
+        );
+        panel_2.ra_deg = Some(314.0);
+        panel_2.dec_deg = Some(44.5);
+
+        let plan = build_plan(&[panel_1, panel_2], 14.0);
+        assert_eq!(plan.projects.len(), 1);
+        assert_eq!(plan.projects[0].name, "NGC 7000");
+        assert_eq!(plan.projects[0].targets.len(), 2);
+    }
+
+    #[test]
+    fn panel_names_do_not_merge_when_coordinates_or_dates_are_distant() {
+        let mut near = frame("Veil Panel 1", "Ha", DAY, "RedCat", 250.0, 300.0);
+        near.ra_deg = Some(312.0);
+        near.dec_deg = Some(30.0);
+        let mut distant_sky = frame("Veil Panel 2", "Ha", 2 * DAY, "RedCat", 250.0, 300.0);
+        distant_sky.ra_deg = Some(40.0);
+        distant_sky.dec_deg = Some(-20.0);
+        let mut distant_time = frame("Veil Panel 3", "Ha", 40 * DAY, "RedCat", 250.0, 300.0);
+        distant_time.ra_deg = Some(313.0);
+        distant_time.dec_deg = Some(30.5);
+
+        let plan = build_plan(&[near, distant_sky, distant_time], 14.0);
+        assert_eq!(plan.projects.len(), 3);
     }
 }
