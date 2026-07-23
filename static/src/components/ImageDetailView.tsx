@@ -13,6 +13,7 @@ import AstrometryPanel from './AstrometryPanel';
 import AstrometryOverlay from './AstrometryOverlay';
 import SatellitePanel from './SatellitePanel';
 import SatelliteTrackOverlay from './SatelliteTrackOverlay';
+import ImageFileLocation from './ImageFileLocation';
 
 interface ImageDetailViewProps {
   dbId: string;
@@ -698,6 +699,16 @@ export default function ImageDetailView({
                   </>
                 )}
               </dl>
+
+              <ImageFileLocation
+                dbId={dbId}
+                filesystemPath={image.filesystem_path}
+                catalogPath={
+                  typeof image.metadata?.FileName === 'string'
+                    ? image.metadata.FileName
+                    : null
+                }
+              />
               
               {image.reject_reason && (
                 <div className="reject-reason">

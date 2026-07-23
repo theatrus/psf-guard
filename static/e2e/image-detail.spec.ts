@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import {
+  fixtureImageDir,
   registerFixtureDb,
   resetDatabases,
   waitForCacheReady,
@@ -195,6 +196,17 @@ test('detail view loads the large preview and renders pixels', async ({
   }));
   expect(dims.natW).toBeGreaterThan(500);
   expect(dims.natH).toBeGreaterThan(500);
+});
+
+test('detail view shows the resolved file path', async ({ page }) => {
+  await page.goto(`/#/detail/1?db=${encodeURIComponent(dbId)}&project=1`);
+
+  const filePath = page.getByTestId('image-file-path');
+  await expect(filePath).toBeVisible({ timeout: 15_000 });
+  await expect(filePath).toContainText(fixtureImageDir());
+  await expect(filePath).toContainText('.fits');
+  await expect(page.getByRole('button', { name: 'Copy path' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Show in folder' })).toHaveCount(0);
 });
 
 test('detail view supports pinch zoom around a moving midpoint', async ({

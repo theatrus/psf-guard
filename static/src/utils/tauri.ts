@@ -115,6 +115,16 @@ export const tauriFileSystem = {
     }
   },
 
+  // Show a resolved image file in Finder, Explorer, or the Linux file manager.
+  showImageInFolder: async (dbId: string, path: string): Promise<void> => {
+    if (!isTauriApp()) {
+      throw new Error('Showing files is available only in the desktop app.');
+    }
+
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('show_image_in_folder', { dbId, path });
+  },
+
   // Get default N.I.N.A. database path (Windows only)
   getDefaultNinaPath: async (): Promise<string | null> => {
     if (!isTauriApp()) return null;
