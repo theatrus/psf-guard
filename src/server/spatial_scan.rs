@@ -14,10 +14,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+use seiza_stretch::{stretch_u16_to_u16, StretchParams};
 use serde::{Deserialize, Serialize};
 
 use crate::image_analysis::FitsImage;
-use crate::mtf_stretch::{stretch_image, StretchParameters};
 use crate::nina_star_detection::{
     detect_stars_with_original, NoiseReduction, StarDetectionParams, StarSensitivity,
 };
@@ -369,13 +369,8 @@ fn compute_one(
         noise_reduction: NoiseReduction::None,
         use_roi: false,
     };
-    let stretch_params = StretchParameters::default();
-    let stretched = stretch_image(
-        &fits.data,
-        &stats,
-        stretch_params.factor,
-        stretch_params.black_clipping,
-    );
+    let stretch_params = StretchParams::default();
+    let stretched = stretch_u16_to_u16(&fits.data, &stats.to_stretch_statistics(), &stretch_params);
     let result =
         detect_stars_with_original(&stretched, &fits.data, fits.width, fits.height, &params);
     let positions: Vec<(f64, f64)> = result.star_list.iter().map(|s| s.position).collect();
