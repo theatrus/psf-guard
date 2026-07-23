@@ -499,7 +499,7 @@ measurements also provide calibrated flux for photometry.
 
 | Astrometry quality results | Guarded rejection review |
 |:--:|:--:|
-| ![Quality scan with one off-target frame](docs/sequence-quality-astrometry.png) | ![Review proposed astrometry rejection](docs/sequence-quality-review.png) |
+| ![Quality scan across a varied ten-frame sequence](docs/sequence-quality-astrometry.png) | ![Review proposed astrometry rejection](docs/sequence-quality-review.png) |
 
 **From the CLI:** screen folders in a batch without a database. Add
 `--regrade-db` to load the intended target, run fresh Seiza solves, and preview
