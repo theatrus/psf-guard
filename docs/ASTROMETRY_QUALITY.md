@@ -6,7 +6,7 @@ signals. It identifies images that were captured away from the intended
 Target Scheduler field, sequences that lost tracking, and frames whose pixels
 could not be matched to the sky.
 
-![Sequence quality analysis showing ten solved frames with varied quality scores](sequence-quality-astrometry.png)
+![Sequence quality analysis showing eleven solved frames with two poor outliers](sequence-quality-astrometry.png)
 
 ## Run a quality scan
 
