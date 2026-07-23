@@ -241,29 +241,67 @@ fn apply_hotpixel_filter(
     let mut result = data.to_vec();
     let max_adu = 65535.0;
     let threshold = threshold_percent * max_adu;
+    if width < 3 || height < 3 {
+        return result;
+    }
 
+    // Median of each interior 3x3 neighborhood via Devillard's 19-op
+    // sorting network, applied elementwise over shifted row slices so the
+    // whole row's min/max ops vectorize. Same median values as sorting each
+    // neighborhood, without a per-pixel allocation and sort.
+    let ilen = width - 2;
+    let mut p: Vec<Vec<u16>> = vec![vec![0u16; ilen]; 9];
+    const NET: [(usize, usize); 19] = [
+        (1, 2),
+        (4, 5),
+        (7, 8),
+        (0, 1),
+        (3, 4),
+        (6, 7),
+        (1, 2),
+        (4, 5),
+        (7, 8),
+        (0, 3),
+        (5, 8),
+        (4, 7),
+        (3, 6),
+        (1, 4),
+        (2, 5),
+        (4, 7),
+        (4, 2),
+        (6, 4),
+        (4, 2),
+    ];
     for y in 1..(height - 1) {
-        for x in 1..(width - 1) {
-            let idx = y * width + x;
-            let center = data[idx] as f64;
-
-            // Get 3x3 neighborhood including center for median
-            let mut neighbors = Vec::with_capacity(9);
-            for dy in -1i32..=1 {
-                for dx in -1i32..=1 {
-                    let ny = (y as i32 + dy) as usize;
-                    let nx = (x as i32 + dx) as usize;
-                    neighbors.push(data[ny * width + nx] as f64);
+        for (r, sy) in [y - 1, y, y + 1].into_iter().enumerate() {
+            let srow = &data[sy * width..(sy + 1) * width];
+            p[r * 3].copy_from_slice(&srow[..ilen]);
+            p[r * 3 + 1].copy_from_slice(&srow[1..1 + ilen]);
+            p[r * 3 + 2].copy_from_slice(&srow[2..2 + ilen]);
+        }
+        for &(a, b) in NET.iter() {
+            let (lo, hi) = (a.min(b), a.max(b));
+            let (head, tail) = p.split_at_mut(hi);
+            let (pa, pb) = (&mut head[lo], &mut tail[0]);
+            if a < b {
+                for (x, y) in pa.iter_mut().zip(pb.iter_mut()) {
+                    let (mn, mx) = ((*x).min(*y), (*x).max(*y));
+                    *x = mn;
+                    *y = mx;
+                }
+            } else {
+                for (y, x) in pa.iter_mut().zip(pb.iter_mut()) {
+                    let (mn, mx) = ((*x).min(*y), (*x).max(*y));
+                    *x = mn;
+                    *y = mx;
                 }
             }
-
-            // Calculate median of 3x3 region
-            neighbors.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            let median = neighbors[4]; // Middle of 9 elements
-
-            // Apply thresholding if enabled
-            if (center - median).abs() > threshold {
-                result[idx] = median as u16;
+        }
+        let out = &mut result[y * width + 1..y * width + 1 + ilen];
+        let center = &data[y * width + 1..y * width + 1 + ilen];
+        for ((o, &c), &m) in out.iter_mut().zip(center.iter()).zip(p[4].iter()) {
+            if (c as f64 - m as f64).abs() > threshold {
+                *o = m;
             }
         }
     }
@@ -295,19 +333,33 @@ fn apply_gaussian_blur(data: &[u16], width: usize, height: usize, kernel_size: u
         *k /= sum;
     }
 
-    // Apply convolution
+    // Apply convolution. HocusFocus uses the full 2D kernel (not a
+    // separable pair), so keep it — but accumulate axis-swapped: for each
+    // tap, add tap * shifted-row elementwise into a row accumulator. Every
+    // output pixel still receives its terms in the same (ky, kx) order as
+    // the naive per-pixel loop, so the result is bit-identical, and the
+    // inner loop vectorizes instead of doing k*k scalar ops per pixel.
     let mut result = vec![0u16; width * height];
+    if width < kernel_size || height < kernel_size {
+        return result;
+    }
+    let ilen = width - 2 * radius;
+    let mut acc = vec![0f64; ilen];
     for y in radius..(height - radius) {
-        for x in radius..(width - radius) {
-            let mut sum = 0.0;
-            for ky in 0..kernel_size {
-                for kx in 0..kernel_size {
-                    let sy = y + ky - radius;
-                    let sx = x + kx - radius;
-                    sum += data[sy * width + sx] as f64 * kernel[ky * kernel_size + kx];
+        acc.fill(0.0);
+        for ky in 0..kernel_size {
+            let srow = &data[(y + ky - radius) * width..(y + ky - radius + 1) * width];
+            for kx in 0..kernel_size {
+                let kv = kernel[ky * kernel_size + kx];
+                let s = &srow[kx..kx + ilen];
+                for (a, &v) in acc.iter_mut().zip(s.iter()) {
+                    *a += v as f64 * kv;
                 }
             }
-            result[y * width + x] = sum as u16;
+        }
+        let orow = &mut result[y * width + radius..y * width + radius + ilen];
+        for (o, &a) in orow.iter_mut().zip(acc.iter()) {
+            *o = a as u16;
         }
     }
 
@@ -321,17 +373,20 @@ fn create_structure_map(
     height: usize,
     params: &HocusFocusParams,
 ) -> Result<Vec<f64>, Box<dyn std::error::Error>> {
-    let float_data: Vec<f64> = data.iter().map(|&v| v as f64).collect();
-
     // Multi-scale structure removal (Gaussian + domain-transform layers,
     // reproducing the former OpenCV filter pipeline bit-for-bit in intent).
+    // The pipeline is f32 internally and u16 camera values are exact in
+    // f32, so the f32 entry point skips two full-image f64 conversions
+    // while producing bit-identical residuals; the subtraction below is
+    // done in f64 exactly as before (each operand widens exactly).
+    let float_data: Vec<f32> = data.iter().map(|&v| v as f32).collect();
     let wavelet_remover = StructureRemover::new(params.structure_layers);
-    let residual = wavelet_remover.remove_structures_filtered(&float_data, width, height);
+    let residual = wavelet_remover.remove_structures_filtered_f32(&float_data, width, height);
 
     // Subtract residual from original to remove large structures
-    let mut structure_map = float_data.clone();
+    let mut structure_map = vec![0f64; data.len()];
     for i in 0..structure_map.len() {
-        structure_map[i] = (structure_map[i] - residual[i]).max(0.0);
+        structure_map[i] = (data[i] as f64 - residual[i] as f64).max(0.0);
     }
 
     // Debug: Check structure map statistics
@@ -471,14 +526,17 @@ fn kappa_sigma_noise_estimate(
 
 /// Calculate median of data
 fn calculate_median(data: &[f64]) -> f64 {
-    let mut sorted: Vec<f64> = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-
-    let len = sorted.len();
+    // Selection instead of a full sort: same median value, O(n) not
+    // O(n log n) — this runs over the entire structure map.
+    let mut values: Vec<f64> = data.to_vec();
+    let len = values.len();
+    let (lower, upper, _) =
+        values.select_nth_unstable_by(len / 2, |a, b| a.partial_cmp(b).unwrap());
     if len.is_multiple_of(2) {
-        (sorted[len / 2 - 1] + sorted[len / 2]) / 2.0
+        let below = lower.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        (below + *upper) / 2.0
     } else {
-        sorted[len / 2]
+        *upper
     }
 }
 
@@ -912,4 +970,138 @@ fn validate_star(
     }
 
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lcg_u16(len: usize, mut state: u64) -> Vec<u16> {
+        (0..len)
+            .map(|_| {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                (state >> 48) as u16
+            })
+            .collect()
+    }
+
+    /// The retired per-pixel implementation, kept as the reference the
+    /// vectorized network must match exactly.
+    fn hotpixel_reference(
+        data: &[u16],
+        width: usize,
+        height: usize,
+        threshold_percent: f64,
+    ) -> Vec<u16> {
+        let mut result = data.to_vec();
+        let threshold = threshold_percent * 65535.0;
+        for y in 1..(height - 1) {
+            for x in 1..(width - 1) {
+                let idx = y * width + x;
+                let center = data[idx] as f64;
+                let mut neighbors = Vec::with_capacity(9);
+                for dy in -1i32..=1 {
+                    for dx in -1i32..=1 {
+                        let ny = (y as i32 + dy) as usize;
+                        let nx = (x as i32 + dx) as usize;
+                        neighbors.push(data[ny * width + nx] as f64);
+                    }
+                }
+                neighbors.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let median = neighbors[4];
+                if (center - median).abs() > threshold {
+                    result[idx] = median as u16;
+                }
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn hotpixel_network_matches_per_pixel_sort() {
+        for (w, h, seed) in [(17usize, 11usize, 3u64), (32, 8, 99), (5, 5, 7)] {
+            let data = lcg_u16(w * h, seed);
+            for threshold in [0.0, 0.001, 0.1, 0.5] {
+                assert_eq!(
+                    apply_hotpixel_filter(&data, w, h, threshold),
+                    hotpixel_reference(&data, w, h, threshold),
+                    "w={w} h={h} threshold={threshold}"
+                );
+            }
+        }
+    }
+
+    /// The retired per-pixel convolution, kept as the reference the
+    /// axis-swapped accumulation must match bit for bit.
+    fn blur_reference(data: &[u16], width: usize, height: usize, kernel_size: usize) -> Vec<u16> {
+        let radius = kernel_size / 2;
+        let mut kernel = vec![0.0; kernel_size * kernel_size];
+        let sigma = radius as f64 / 2.0;
+        let two_sigma_sq = 2.0 * sigma * sigma;
+        let mut sum = 0.0;
+        for y in 0..kernel_size {
+            for x in 0..kernel_size {
+                let dx = x as f64 - radius as f64;
+                let dy = y as f64 - radius as f64;
+                let value = (-((dx * dx + dy * dy) / two_sigma_sq)).exp();
+                kernel[y * kernel_size + x] = value;
+                sum += value;
+            }
+        }
+        for k in kernel.iter_mut() {
+            *k /= sum;
+        }
+        let mut result = vec![0u16; width * height];
+        for y in radius..(height - radius) {
+            for x in radius..(width - radius) {
+                let mut sum = 0.0;
+                for ky in 0..kernel_size {
+                    for kx in 0..kernel_size {
+                        let sy = y + ky - radius;
+                        let sx = x + kx - radius;
+                        sum += data[sy * width + sx] as f64 * kernel[ky * kernel_size + kx];
+                    }
+                }
+                result[y * width + x] = sum as u16;
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn axis_swapped_blur_is_bit_identical() {
+        for (w, h, k, seed) in [
+            (24usize, 13usize, 9usize, 5u64),
+            (16, 16, 3, 11),
+            (31, 9, 5, 42),
+        ] {
+            let data = lcg_u16(w * h, seed);
+            assert_eq!(
+                apply_gaussian_blur(&data, w, h, k),
+                blur_reference(&data, w, h, k),
+                "w={w} h={h} k={k}"
+            );
+        }
+    }
+
+    #[test]
+    fn median_selection_matches_full_sort() {
+        let mut state = 12345u64;
+        for len in [1usize, 2, 3, 100, 101, 10_000] {
+            let data: Vec<f64> = (0..len)
+                .map(|_| {
+                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    ((state >> 40) as f64) / 256.0
+                })
+                .collect();
+            let mut sorted = data.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let expected = if len.is_multiple_of(2) {
+                (sorted[len / 2 - 1] + sorted[len / 2]) / 2.0
+            } else {
+                sorted[len / 2]
+            };
+            assert_eq!(calculate_median(&data), expected, "len={len}");
+        }
+    }
 }
