@@ -86,10 +86,17 @@ test('preview images load with per-DB-nested URLs and render pixels', async ({
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
 
   const cards = page.locator('.image-card');
-  await expect(cards.first()).toBeVisible({ timeout: 15_000 });
+  const firstCard = cards.first();
+  await expect(firstCard).toBeVisible({ timeout: 15_000 });
+
+  // Stack previews can put the grid below the initial viewport. Image cards
+  // defer their preview until they intersect the viewport (plus root margin),
+  // so scroll to the card before expecting its <img> to exist.
+  await firstCard.scrollIntoViewIfNeeded();
 
   // The src should be db-nested at `/api/db/<slug>/images/<id>/preview`.
-  const firstImg = cards.first().locator('img').first();
+  const firstImg = firstCard.locator('img').first();
+  await expect(firstImg).toBeAttached({ timeout: 15_000 });
   const src = await firstImg.getAttribute('src');
   expect(src, 'preview src should be db-nested').toContain(
     `/api/db/${dbId}/images/`
@@ -102,7 +109,10 @@ test('preview images load with per-DB-nested URLs and render pixels', async ({
   await page.waitForLoadState('networkidle');
   const cardCount = await cards.count();
   for (let i = 0; i < cardCount; i++) {
-    const img = cards.nth(i).locator('img').first();
+    const card = cards.nth(i);
+    await card.scrollIntoViewIfNeeded();
+    const img = card.locator('img').first();
+    await expect(img).toBeAttached({ timeout: 15_000 });
     await page.waitForFunction(
       (el) =>
         el instanceof HTMLImageElement &&

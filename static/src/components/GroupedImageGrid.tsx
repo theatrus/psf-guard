@@ -527,48 +527,99 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     () => ({ enabled: isGridRoute, preventDefault: true }),
     [isGridRoute],
   );
+  // React Router updates the hash before this component rerenders. Guard each
+  // callback against that live value too, so a key pressed just after opening
+  // detail/compare cannot reach one stale grid listener.
+  const isLiveGridRoute = useCallback(
+    () => window.location.hash.slice(1).split('?')[0] === '/grid',
+    [],
+  );
+  const onLiveGridRoute = useCallback((action: () => void) => {
+    if (isLiveGridRoute()) action();
+  }, [isLiveGridRoute]);
 
-  useHotkeys('k', () => navigateImages('next'), gridHotkeyOptions, [navigateImages]);
-  useHotkeys('j', () => navigateImages('prev'), gridHotkeyOptions, [navigateImages]);
-  useHotkeys('right', () => navigateImages('next'), gridArrowHotkeyOptions, [navigateImages]);
-  useHotkeys('left', () => navigateImages('prev'), gridArrowHotkeyOptions, [navigateImages]);
-  useHotkeys('down', () => navigateImages('down'), gridArrowHotkeyOptions, [navigateImages]);
-  useHotkeys('up', () => navigateImages('up'), gridArrowHotkeyOptions, [navigateImages]);
-  useHotkeys('space', toggleCurrentImageSelection, gridArrowHotkeyOptions, [toggleCurrentImageSelection]);
+  useHotkeys(
+    'k',
+    () => onLiveGridRoute(() => navigateImages('next')),
+    gridHotkeyOptions,
+    [navigateImages, onLiveGridRoute],
+  );
+  useHotkeys(
+    'j',
+    () => onLiveGridRoute(() => navigateImages('prev')),
+    gridHotkeyOptions,
+    [navigateImages, onLiveGridRoute],
+  );
+  useHotkeys(
+    'right',
+    () => onLiveGridRoute(() => navigateImages('next')),
+    gridArrowHotkeyOptions,
+    [navigateImages, onLiveGridRoute],
+  );
+  useHotkeys(
+    'left',
+    () => onLiveGridRoute(() => navigateImages('prev')),
+    gridArrowHotkeyOptions,
+    [navigateImages, onLiveGridRoute],
+  );
+  useHotkeys(
+    'down',
+    () => onLiveGridRoute(() => navigateImages('down')),
+    gridArrowHotkeyOptions,
+    [navigateImages, onLiveGridRoute],
+  );
+  useHotkeys(
+    'up',
+    () => onLiveGridRoute(() => navigateImages('up')),
+    gridArrowHotkeyOptions,
+    [navigateImages, onLiveGridRoute],
+  );
+  useHotkeys(
+    'space',
+    () => onLiveGridRoute(toggleCurrentImageSelection),
+    gridArrowHotkeyOptions,
+    [toggleCurrentImageSelection, onLiveGridRoute],
+  );
   useHotkeys('a', () => {
+    if (!isLiveGridRoute()) return;
     if (selectedImages.size > 1) {
       gradeBatch('accepted');
     } else {
       gradeImage('accepted');
     }
-  }, gridHotkeyOptions, [gradeImage, gradeBatch, selectedImages.size]);
+  }, gridHotkeyOptions, [gradeImage, gradeBatch, selectedImages.size, isLiveGridRoute]);
   useHotkeys('x', () => {
+    if (!isLiveGridRoute()) return;
     if (selectedImages.size > 1) {
       gradeBatch('rejected');
     } else {
       gradeImage('rejected');
     }
-  }, gridHotkeyOptions, [gradeImage, gradeBatch, selectedImages.size]);
+  }, gridHotkeyOptions, [gradeImage, gradeBatch, selectedImages.size, isLiveGridRoute]);
   useHotkeys('u', () => {
+    if (!isLiveGridRoute()) return;
     if (selectedImages.size > 1) {
       gradeBatch('pending');
     } else {
       gradeImage('pending');
     }
-  }, gridHotkeyOptions, [gradeImage, gradeBatch, selectedImages.size]);
+  }, gridHotkeyOptions, [gradeImage, gradeBatch, selectedImages.size, isLiveGridRoute]);
   useHotkeys('enter', () => {
+    if (!isLiveGridRoute()) return;
     if (lastSelectedImageId) {
       navigateToDetail(lastSelectedImageId);
     }
-  }, gridHotkeyOptions, [lastSelectedImageId, navigateToDetail]);
+  }, gridHotkeyOptions, [lastSelectedImageId, navigateToDetail, isLiveGridRoute]);
   useHotkeys('escape', () => {
+    if (!isLiveGridRoute()) return;
     // Just clear selection on escape (we're already in grid view)
     setSelectedImages(new Set());
     setLastSelectedImageId(null);
-  }, gridHotkeyOptions, [setSelectedImages]);
+  }, gridHotkeyOptions, [setSelectedImages, isLiveGridRoute]);
   
   // Add comparison keyboard shortcut
   useHotkeys('c', () => {
+    if (!isLiveGridRoute()) return;
     // Only allow comparison from grid view
     if (selectedImages.size === 2) {
       // Use the two selected images for comparison
@@ -591,17 +642,18 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
         }
       }
     }
-  }, gridHotkeyOptions, [selectedImages, lastSelectedImageId, flatImages, navigateToComparison]);
+  }, gridHotkeyOptions, [selectedImages, lastSelectedImageId, flatImages, navigateToComparison, isLiveGridRoute]);
   
   // Grouping mode shortcuts
   useHotkeys('g', () => {
+    if (!isLiveGridRoute()) return;
     // Cycle through grouping modes based on mode (single project vs multi-project)
     if (isMultiProjectMode) {
       setGroupingMode(getNextMultiProjectMode(groupingMode));
     } else {
       setGroupingMode(getNextSingleProjectMode(groupingMode));
     }
-  }, gridHotkeyOptions, [groupingMode, isMultiProjectMode, setGroupingMode]);
+  }, gridHotkeyOptions, [groupingMode, isMultiProjectMode, setGroupingMode, isLiveGridRoute]);
 
   if (isLoading) {
     return <div className="loading">Loading images...</div>;

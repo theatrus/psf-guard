@@ -166,6 +166,13 @@ test('grid shows a generating indicator, batch-polls status, and resolves to rea
 
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
 
+  // Stack previews can put the image grid below the initial viewport. Bring
+  // the first row into view so lazy previews join the generation queue.
+  const cards = page.locator('.image-card');
+  const firstCard = cards.first();
+  await expect(firstCard).toBeVisible();
+  await firstCard.scrollIntoViewIfNeeded();
+
   // While the queue works, the "Generating…" placeholder is shown.
   await expect(page.locator('.preview-status-box').first()).toBeVisible({
     timeout: 15_000,
@@ -173,12 +180,13 @@ test('grid shows a generating indicator, batch-polls status, and resolves to rea
 
   // Every card's preview eventually decodes to real pixels (would be
   // naturalWidth 0 if the poll → reload path were broken).
-  const cards = page.locator('.image-card');
-  await expect(cards.first()).toBeVisible();
   const count = await cards.count();
   expect(count).toBeGreaterThan(1);
   for (let i = 0; i < count; i++) {
-    const img = cards.nth(i).locator('img').first();
+    const card = cards.nth(i);
+    await card.scrollIntoViewIfNeeded();
+    const img = card.locator('img').first();
+    await expect(img).toBeAttached({ timeout: 15_000 });
     await page.waitForFunction(
       (el) =>
         el instanceof HTMLImageElement && el.complete && el.naturalWidth > 0,
