@@ -6,6 +6,10 @@ Last updated: 2026-07-19
 Baseline: PSF Guard 0.5.0; Seiza 0.10.0; seiza-fits 0.1.6;
 `@seiza/astro-overlay` 0.5.0
 
+> **Historical baseline.** Later work added FITS-folder catalog creation and
+> newer published Seiza crates. Use `Cargo.toml`, `CLAUDE.md`, and the main
+> `README.md` for current versions and behavior.
+
 ## 1. Goal
 
 Integrate Seiza as PSF Guard's offline astronomy layer so the application can:

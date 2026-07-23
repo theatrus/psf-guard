@@ -19,7 +19,7 @@ only that channel's remembered result; the other channel cards remain intact.
 - A multi-selection of two or more images is the input when one exists.
 - Otherwise the current visible set is used, including the status, channel,
   date, target, and search filters shown above the grid.
-- The server always separates inputs by exact Target Scheduler target and
+- The server always separates inputs by exact catalog target and
   filter/channel. It never combines different targets or filters.
 - **Accepted only** removes Pending frames. By default both Accepted and usable
   Pending frames are eligible.
@@ -44,7 +44,7 @@ rebuild never replaces the last successful result.
 PSF Guard owns project policy; Seiza owns image registration and integration.
 Before handing frames to Seiza, PSF Guard excludes:
 
-1. images marked Rejected in the scheduler database;
+1. images marked Rejected in the catalog;
 2. Pending images when **Accepted only** is enabled; and
 3. images for which the current sequence analysis has a `regrade_reason`,
    including confirmed cloud/obstruction, off-target, tracking-loss, and

@@ -5,12 +5,15 @@ Owner: psf-guard maintainers
 Last updated: 2026-07-18
 Baseline: PSF Guard main at `14c63b8` (on-demand Seiza plate solving)
 
+> **Historical implementation plan.** See
+> `docs/ASTROMETRY_QUALITY.md` for current user behavior.
+
 ## 1. Goal
 
 Use pixel-derived plate solutions together with the existing sequence,
 occlusion, photometry, guiding, and grading systems to identify:
 
-- frames captured far from their intended Target Scheduler field;
+- frames captured far from their intended catalog target;
 - frames where pointing jumps or progressively drifts, including lost
   tracking;
 - frames whose pixels cannot be plate solved, as a useful but explicitly

@@ -5,12 +5,19 @@
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-64748b.svg)](https://github.com/theatrus/psf-guard/releases/latest)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-**Image grading and quality screening for [N.I.N.A.](https://nighttime-imaging.eu/)
-astrophotography with the Target Scheduler plugin.**
+**An astrophotography image catalog, grader, and quality workbench.**
 
-The common setup is simple: open the desktop app, add one Target Scheduler
-database and its FITS folders in Settings, then review a project. You do not
-need the command line, an import, or a second database for this path.
+Create a catalog from folders of FITS files, or open an existing
+[N.I.N.A.](https://nighttime-imaging.eu/) Target Scheduler database. PSF Guard
+groups frames by target, session, and filter; lets you inspect and grade them;
+finds quality problems; builds stack previews; and exports clean data for
+processing. Your image files stay where they are.
+
+> **Like Lightroom Classic, but for astrophotography data:** PSF Guard catalogs
+> files in place instead of moving them into a managed library. It reads FITS
+> metadata and stores its image map, plans, and grades in a catalog based on the
+> Target Scheduler database structure. Target Scheduler integration is
+> optional.
 
 **[⬇️ Download](https://github.com/theatrus/psf-guard/releases/latest)**
 · **[📖 Documentation](https://psf-guard.atpn.co/docs/)**
@@ -20,16 +27,20 @@ need the command line, an import, or a second database for this path.
 
 | | Start here when… | What to do |
 |:--:|---|---|
-| 🗃️ | **You have one Target Scheduler database** | Add it in the desktop app and start reviewing. This is the normal path. |
-| 📥 | **You have FITS folders** | Create a database or import missing frames. Header import runs first; quality analysis can run later. |
+| 📥 | **You have FITS folders** | Build a catalog from the folders. Header import runs first; quality analysis can run later. |
+| 🗃️ | **You have a Target Scheduler database** | Open the existing catalog in the desktop app and start reviewing. |
 | 🌐 | **You need a CLI or NAS setup** | Serve the UI, screen folders, export files, or automate jobs. |
 | 🔄 | **You keep two database files** | Pull from the telescope copy, then push plans and grades back. Skip sync when PSF Guard opens the telescope database directly. |
 
-> **Before the first write:** back up the Target Scheduler database. Grading
-> updates it; import and sync preview wider changes before applying them.
+> **Opening a Target Scheduler database?** Back it up before the first write.
+> Grading updates it; import and sync preview wider changes before applying
+> them.
 
 ## ✨ What PSF Guard does
 
+- **Organize every frame** in a catalog built from FITS folders or inherited
+  from Target Scheduler. Browse by target, session, filter, date, and grade
+  while the source files stay in place.
 - **Review frames quickly** in the desktop app or browser with stretched
   previews, zoom and pan, comparison, batch grading, keyboard controls, and
   undo.
@@ -54,19 +65,20 @@ need the command line, an import, or a second database for this path.
 PSF Guard runs as a desktop app on Windows, macOS, and Linux, as a self-hosted
 web server for Docker or a NAS, and as a standalone CLI.
 
-## 🚀 Start with one existing database
+## 🚀 Start your catalog
 
 1. Install the desktop app from the
    [latest release](https://github.com/theatrus/psf-guard/releases/latest).
-2. Open **Settings → Add Database**.
-3. Select the Target Scheduler SQLite file and add its FITS folders. On
-   Windows, the usual database path is
-   `%LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite`.
+2. In Settings, choose **New Database from Images** to build a catalog from FITS
+   folders, or **Add Database** to open an existing Target Scheduler catalog.
+3. Add the folders that hold the FITS files.
 4. Choose a project on Overview, then open Images or Sequence.
 
 PSF Guard reads images in place; it does not copy the FITS library. Image
 folders can stay read-only. The database must be writable to save grades or
-planning changes.
+planning changes. See [Import and Planning](docs/IMPORTING.md) for a new
+catalog, or the [Getting Started guide](https://psf-guard.atpn.co/docs/) for
+both paths.
 
 ## 📷 See it in practice
 
@@ -96,29 +108,29 @@ Ctrl/Cmd+Click toggles one frame.
 </details>
 
 Each Overview project has a **Plan & coordinates** view. It shows the project
-settings and every target's Target Scheduler coordinates and exposure plans.
-RA uses Target Scheduler's decimal-hour convention; Dec uses degrees. New plans
-reuse an exact matching profile template or create one with Target Scheduler
-defaults. The plan table keeps Target Scheduler's `-1` exposure value, which
-means “use the template default.” The desktop app can edit these fields. The
-web server needs `--allow-database-management`; without it, the view stays
-read-only.
+settings and every target's catalog coordinates and exposure plans. The
+inherited Target Scheduler mapping stores RA as decimal hours and Dec as
+degrees. New plans reuse an exact matching profile template or create one with
+Target Scheduler-compatible defaults. The plan table keeps the schema's `-1`
+exposure value, which means “use the template default.” The desktop app can
+edit these fields. The web server needs `--allow-database-management`; without
+it, the view stays read-only.
 
-### Build a scheduler database from FITS folders
+### Build an image catalog from FITS folders
 
-**Import is optional.** Use it when no scheduler database exists or when frames
-are missing from an existing database. The normal one-database review flow
-does not need it.
+Use this path when no catalog exists or when frames are missing from one you
+already use.
 
 ![New Database from Images with separate background quality analysis](docs/import-from-images.png)
 
-Open **Settings → New Database from Images** to build a Target Scheduler
-database from plain FITS folders. The first pass reads headers only. It creates
-one project per target by default, joins only strong same-rig mosaic panel
-matches, derives target coordinates, and builds shared exposure templates and
-plans from filter, gain, offset, binning, readout mode, and exposure time.
-Pixel work stays off by default, so a large import does not wait for star
-detection or plate solving.
+Open **Settings → New Database from Images** to build a catalog from plain FITS
+folders. PSF Guard uses the Target Scheduler database structure, but does not
+require Target Scheduler. The first pass reads headers only. It creates one
+project per target by default, joins only strong same-rig mosaic panel matches,
+derives target coordinates, and builds shared exposure templates and plans from
+filter, gain, offset, binning, readout mode, and exposure time. Pixel work stays
+off by default, so a large import does not wait for star detection or plate
+solving.
 
 | Narrowband template view | Target coordinates and exposure plans |
 |:--:|:--:|
@@ -151,7 +163,7 @@ directly.
 The sequence analyzer brings global image statistics, spatial and photometric
 screening, pixel-derived plate solves, and cached satellite evidence into a
 per-frame score. Recommendations remain reviewable before PSF Guard writes a
-grade back to Target Scheduler.
+grade to the active catalog.
 
 ### Preview a stack without leaving the grader
 
@@ -197,9 +209,9 @@ Grab the installer for your platform from the
 | macOS (Apple Silicon) | `PSF.Guard_<version>_aarch64.dmg` |
 | Linux x64 | `PSF.Guard_<version>_amd64.deb` or `.AppImage` |
 
-Install, launch, and point the settings panel at your scheduler database and
-image directories. Releases after v0.3.0 also include a Windows NSIS
-installer (`-setup.exe`) that also installs a console
+Install and launch the app, then build a catalog from FITS folders or open an
+existing Target Scheduler database. Releases after v0.3.0 also include a
+Windows NSIS installer (`-setup.exe`) that installs a console
 `psf-guard-cli.exe` and adds it to your user `PATH`, so the full CLI works
 from any terminal.
 
@@ -210,7 +222,7 @@ command-line tools. Desktop review does not require them.
 
 ```bash
 docker run -d -p 3000:3000 \
-  -v /path/to/schedulerdb.sqlite:/data/database.sqlite \
+  -v /path/to/catalog.sqlite:/data/database.sqlite \
   -v /path/to/images:/images:ro \
   ghcr.io/theatrus/psf-guard:latest
 ```
@@ -234,7 +246,7 @@ These version-independent links point at the latest release:
 ```bash
 # Linux / macOS
 chmod +x psf-guard-*
-./psf-guard-linux-x64 server schedulerdb.sqlite /path/to/images/
+./psf-guard-linux-x64 server catalog.sqlite /path/to/images/
 ```
 
 ```bat
@@ -276,7 +288,7 @@ release steps.
 git clone https://github.com/theatrus/psf-guard.git
 cd psf-guard
 cargo build --release
-./target/release/psf-guard server schedulerdb.sqlite /path/to/images/
+./target/release/psf-guard server catalog.sqlite /path/to/images/
 ```
 
 The build needs Rust and Node.js/npm; it embeds the React frontend. Image
@@ -330,14 +342,14 @@ the image grid and comparison tools:
 | + / − | Zoom | Ctrl+Z | Undo |
 | Ctrl+Y | Redo | | |
 
-Grades are written to the Target Scheduler database, so the
-scheduler's acquired-image counts stay accurate and rejected frames get
-re-shot.
+Grades are written to the active catalog. If that catalog is an existing
+Target Scheduler database—or you sync grades to one—the scheduler can keep its
+acquired-image counts accurate and replace rejected frames.
 
 ## 🌌 Sky context, plate solving, and overlays
 
 Open an image and the **Sky context** panel immediately reads its FITS headers
-and Target Scheduler coordinates. With `objects.bin` installed, PSF Guard can
+and catalog target coordinates. With `objects.bin` installed, PSF Guard can
 list catalog objects expected near those coordinates without decoding pixels
 or running a solver. Treat that initial list as pointing context, not proof
 that each object is visible in the image.
@@ -399,7 +411,7 @@ For Docker, mount the same directory read-only and point Seiza at the mount:
 docker run -d -p 3000:3000 \
   -e SEIZA_CATALOG_DIR=/catalogs \
   -v /path/to/seiza-data:/catalogs:ro \
-  -v /path/to/schedulerdb.sqlite:/data/database.sqlite \
+  -v /path/to/catalog.sqlite:/data/database.sqlite \
   -v /path/to/images:/images:ro \
   ghcr.io/theatrus/psf-guard:latest
 ```
@@ -514,7 +526,7 @@ psf-guard screen-fits "/path/to/2026-06-30/LIGHT"
 # Render annotated diagnostics showing WHY each frame was flagged
 psf-guard screen-fits "/path/to/LIGHT" --annotate /tmp/diagnostics
 
-# Write [Auto] rejections into the scheduler DB, then archive the files
+# Write supported [Auto] rejections into the catalog, then archive the files
 psf-guard screen-fits "/path/to/LIGHT" --regrade-db my-db --dry-run
 psf-guard screen-fits "/path/to/LIGHT" --regrade-db my-db
 psf-guard move-rejects --db my-db
@@ -622,7 +634,7 @@ psf-guard screen-fits ./lights --annotate ./diagnostics
 psf-guard screen-fits ./lights --regrade-db my-db --dry-run
 psf-guard screen-fits ./lights --format json         # or table, csv
 
-# Create a new Target Scheduler database from folders of FITS lights
+# Create and register a compatible image catalog from folders of FITS lights
 psf-guard create-db new.sqlite ./lights1 ./lights2 [--name "My Rig"] [--dry-run]
 # Top up later: attaches to EXISTING targets (name/coordinate match); only
 # unmatched frames create new projects. Preview with --dry-run first.
@@ -675,7 +687,8 @@ the registry or server TOML. The settings below are for server and API setups.
 
 ### Databases: the registry
 
-The server manages any number of scheduler databases. The list lives in a
+The server manages any number of image catalogs. Each catalog uses the
+inherited Target Scheduler database mapping, and the list lives in a
 JSON registry at the platform config location — not in the TOML:
 
 | Platform | Registry path |
@@ -797,17 +810,17 @@ curl -X POST "localhost:3000/api/databases/my-db/sync" \
 
 ## ⚠️ Known limitations
 
-- **Monochrome only.** PSF Guard does not debayer color or OSC FITS files.
-  Sample FITS files for future support are welcome at psf-guard@theatr.us.
-- **Target Scheduler required.** Images are located via the scheduler
-  database rather than by walking N.I.N.A.'s standard file layout.
+- **OSC display is luminance-first.** Raw one-shot-color FITS files with a
+  recognized `BAYERPAT` header are debayered, then reduced to luminance for
+  grading and quality measurements. The single-frame grader does not yet
+  provide a full-color rendition of an OSC exposure.
 - **Path assumptions.** Directory layouts matching
   `%DATEMINUS12%/%TARGETNAME%/%DATEMINUS12%/LIGHT/...` (with or without the
   leading date) are detected reliably. Other patterns may need support; open
   an issue with an example.
-- **Make backups.** Back up the scheduler database, and back up FITS files
-  before using file-moving commands. `move-rejects` records reversible moves,
-  but a backup remains the last line of recovery.
+- **Make backups.** Back up any catalog before broad edits, and back up FITS
+  files before using file-moving commands. `move-rejects` records reversible
+  moves, but a backup remains the last line of recovery.
 
 ## 🛠️ Development
 

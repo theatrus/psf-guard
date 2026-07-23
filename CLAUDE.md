@@ -167,7 +167,7 @@ Implementation tracker and design rationale: [MULTI_DB_PLAN.md](./MULTI_DB_PLAN.
   per-target/filter uncalibrated integrations with `seiza-stacking`. The latest
   successful result for each channel is durable below
   `<cache>/<db>/stack-previews/`; channel rebuilds do not replace sibling
-  results. Selection policy excludes scheduler rejects and current sequence
+  results. Selection policy excludes catalog rejects and current sequence
   regrade recommendations before Seiza registration/admission.
 - **Color add-on**: `src/server/stack_preview/color.rs` discovers unambiguous
   L/R/G/B and Ha/OIII/SII roles from the durable mono stacks. On-demand LRGB

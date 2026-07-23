@@ -1,5 +1,8 @@
 # Create-and-Import Plan
 
+> **Implemented; retained as the design record.** See `docs/IMPORTING.md` for
+> the current catalog workflow.
+
 Let users create a brand-new, fully-faithful Target Scheduler (TS) database and
 populate it by importing folders of FITS images — **without** requiring an
 existing N.I.N.A. scheduler DB. Available from the CLI and from the

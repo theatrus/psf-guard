@@ -1,5 +1,10 @@
 # Integration Test Plan: Sequence Analysis API
 
+> **Implemented test plan.** The current coverage lives in
+> `tests/integration_sequence_analysis.rs` and related spatial, astrometry, and
+> browser tests. The proposed file and line references below describe the
+> implementation stage.
+
 ## Approach Decision
 
 ### Strategy: In-Process Router Testing with `tower::ServiceExt`

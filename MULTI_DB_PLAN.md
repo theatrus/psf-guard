@@ -1,8 +1,13 @@
 # Multi-Database Support — Design & Implementation Plan
 
-Status: **Draft / not started**
-Owner: TBD
-Last updated: 2026-05-18
+Status: **Implemented; retained as the original design record**
+Owner: psf-guard maintainers
+Last updated: 2026-07-23
+
+> This document records the design before implementation. Sections titled
+> “Current state” describe the old single-database code and are not current
+> documentation. See `CLAUDE.md` and the main `README.md` for the live
+> architecture and user workflow.
 
 ## 1. Goal
 
@@ -418,7 +423,7 @@ Update inline as work progresses. `[ ]` pending, `[~]` in progress, `[x]` done.
 
 ---
 
-## 12. Key file references (current code, single-DB)
+## 12. Key file references (pre-implementation snapshot)
 
 For reviewers tracking the diff:
 

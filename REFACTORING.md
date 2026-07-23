@@ -1,5 +1,9 @@
 # Code Refactoring Summary
 
+> **Historical note.** This file records an early command-line refactor. The
+> source tree has changed since then; use `CLAUDE.md` for the current
+> architecture.
+
 ## Overview
 
 The codebase has been refactored from a single monolithic `main.rs` file (~1100 lines) into a well-organized modular structure. This improves maintainability, testability, and code organization.

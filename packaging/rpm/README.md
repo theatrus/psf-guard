@@ -44,8 +44,9 @@ The package ships a `psf-guard.service` unit that runs the web server
 sudoedit /etc/psf-guard/server.conf
 sudo systemctl enable --now psf-guard
 
-# Register a scheduler database + image directories (or do it from the web UI,
-# which is enabled by the default --allow-database-management):
+# Register an existing catalog and its image directories. You can instead use
+# the web UI to build a catalog from FITS folders; the packaged service enables
+# database management by default.
 sudo -u psfguard psf-guard server \
     --registry /var/lib/psf-guard/registry.json \
     /path/to/schedulerdb.sqlite /path/to/images

@@ -1,6 +1,7 @@
-# PSF Guard Web Interface
+# PSF Guard web interface
 
-This is the React-based web interface for PSF Guard, providing an efficient image grading workflow for astronomical images.
+This React app is the shared PSF Guard interface. The desktop app embeds it,
+and `psf-guard server` serves the same files to a browser.
 
 ## Development
 
@@ -25,7 +26,7 @@ The development server runs on http://localhost:5173 and proxies API requests to
 
 1. Start the backend server:
    ```bash
-   cargo run -- server schedulerdb.sqlite /path/to/images
+   cargo run -- server catalog.sqlite /path/to/images
    ```
 
 2. Start the frontend dev server:
@@ -34,57 +35,34 @@ The development server runs on http://localhost:5173 and proxies API requests to
    npm run dev
    ```
 
-## Production Build
-
-### Using Make (Recommended)
-
-From the project root:
+## Production build
 
 ```bash
-# Build everything (frontend + backend)
-make build
-
-# Build only frontend
-make build-frontend
-
-# Clean and rebuild
-make clean build
-```
-
-### Manual Build
-
-```bash
-# From the static directory
+# From static/
 npm run build
-
-# Copy to dist
-mkdir -p ../dist/static
-cp -r dist/* ../dist/static/
 ```
 
-### Serving Production Build
+`cargo build` also runs this build when the frontend sources are newer than
+`static/dist`, then embeds that directory in the binary.
 
-After building, run the server with the static directory:
+To test the loose files instead of the embedded copy:
 
 ```bash
-cargo run --release -- server schedulerdb.sqlite /path/to/images --static-dir dist/static
+cargo run --release -- server catalog.sqlite /path/to/images \
+  --static-dir static/dist
 ```
 
 ## Features
 
-- **Keyboard-First Navigation**: Optimized for efficient image grading
-  - `j`/`k` or arrow keys: Navigate images
-  - `a`: Accept image
-  - `r`: Reject image
-  - `u`: Unmark (set to pending)
-  - `s`: Toggle star overlay
-  - `?`: Show help
-
-- **Image Grouping**: Images are automatically grouped by filter type
-- **Adjustable Thumbnails**: Slider to resize images from 150px to 1200px
-- **Image Preloading**: Smooth navigation with automatic preloading
-- **Full Image View**: Double-click or Enter to see full details
-- **Statistics**: HFR and star count displayed for each image
+- **Catalog overview** across every configured database.
+- **Grid and sequence review** with project, target, grade, filter, date,
+  search, and grouping controls.
+- **Keyboard-first grading**: arrows or `J`/`K` navigate, `Space` toggles
+  selection, `A` accepts, `X` rejects, and `U` returns a frame to Pending.
+- **Full image inspection** with pan, wheel/pinch zoom, fit, and 1:1 views.
+- **Comparison, star, PSF, sky, and satellite overlays** from the detail view.
+- **Quality scanning, stack previews, planning, import, export, and catalog
+  management** through the same API as the desktop app.
 
 ## Architecture
 
@@ -93,7 +71,10 @@ cargo run --release -- server schedulerdb.sqlite /path/to/images --static-dir di
 - **React Query** for server state management
 - **Axios** for API communication
 - **react-hotkeys-hook** for keyboard shortcuts
+- **Playwright** and **Vitest** for browser and component tests
 
 ## API Integration
 
-The frontend expects the backend API to be available at `/api`. In development, this is proxied to `http://localhost:3000`. In production, the backend serves both the API and static files.
+The frontend expects the backend API at `/api`. Vite proxies this to
+`http://localhost:3000` in development. In production, the Rust server serves
+both the API and the embedded frontend.

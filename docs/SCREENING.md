@@ -7,19 +7,18 @@ dim the whole frame, errant light, and static glow at the field edge. Every
 verdict can be rendered as an annotated diagnostic image showing exactly
 which part of the frame drove the decision.
 
-When the scan has Target Scheduler context, fresh pixel-derived plate
+When the scan has catalog target context, fresh pixel-derived plate
 solutions also catch images captured away from the intended field, pointing
 jumps, tracking drift, and deterministic solve failures. See
 [Astrometry quality grading](ASTROMETRY_QUALITY.md) for target provenance,
 failure semantics, score caps, and the guarded regrade workflow.
 
 All pixel detections are classical statistics — no machine learning or
-training data. Quality scans do not use the network: satellite prediction
-joins only when orbital elements are already cached. The explicit on-demand
-satellite action is the one path that may refresh those elements. Thresholds
-were calibrated against real sessions (measured clean-frame envelopes across
-multiple nights and filters), and each detector carries regression tests
-pinning its behavior.
+training data. An explicit server **Scan Quality** may download and retain
+orbital elements needed for satellite checks. Merely opening Sequence Analysis
+and CLI regrading remain cache-only. Thresholds were calibrated against real
+sessions (measured clean-frame envelopes across multiple nights and filters),
+and each detector carries regression tests pinning its behavior.
 
 ## Why global metrics are not enough
 
@@ -205,7 +204,9 @@ Safety properties worth knowing:
 - The photometric reference requires stars present in ≥50% of a session's
   frames, so it is blind to regions occluded for *most* of a sequence — by
   design; that case belongs to the dead-cell metric.
-- Monochrome FITS only (as with the rest of PSF Guard).
+- Raw one-shot-color FITS files need a recognized `BAYERPAT` header. PSF Guard
+  debayers them to luminance for quality measurements; the diagnostics remain
+  luminance views.
 - The glow ADU floor is rig- and exposure-profile-specific. A future
   extension is cross-session rig-signature baselining (comparing each cell's
   residual pattern against the archive's own signature).

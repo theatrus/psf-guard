@@ -3,15 +3,15 @@
 PSF Guard's **Scan Quality** workflow combines fresh Seiza plate solutions
 with the existing sequence, occlusion, photometry, guiding, and grading
 signals. It identifies images that were captured away from the intended
-Target Scheduler field, sequences that lost tracking, and frames whose pixels
-could not be matched to the sky.
+catalog target, sequences that lost tracking, and frames whose pixels could not
+be matched to the sky.
 
 ![Sequence quality analysis showing eleven solved frames with two poor outliers](sequence-quality-astrometry.png)
 
 ## Run a quality scan
 
-Open a Target Scheduler target in the **Sequence Analysis** view and press
-**Scan Quality**. The background job runs two stages:
+Open a catalog target in the **Sequence Analysis** view and press **Scan
+Quality**. The background job runs two stages:
 
 1. spatial and photometric screening for clouds, occlusion, transparency, and
    errant light; and
@@ -47,10 +47,9 @@ pointing jump. Drift is fitted separately inside each contiguous segment.
 ## Where the intended target comes from
 
 PSF Guard reads a schema-adaptive acquisition context without changing the
-Target Scheduler database. Current TS target RA/Dec fields are preferred;
-equivalent target metadata and capture-specific intended coordinates are
-fallbacks when present. Absolute grading only runs for supported coordinate
-epochs (J2000/unspecified today).
+catalog schema. Target RA/Dec fields are preferred; equivalent target metadata
+and capture-specific intended coordinates are fallbacks when present. Absolute
+grading only runs for supported coordinate epochs (J2000/unspecified today).
 
 If no authoritative target is available, solved centers still support
 **relative** jump and drift analysis. PSF Guard uses a gnomonic tangent plane
