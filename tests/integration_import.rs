@@ -154,6 +154,28 @@ async fn wait_for_import(state: &Arc<AppState>, slug: &str) -> Value {
     panic!("import job did not finish in time");
 }
 
+/// Project listing may return a successful `loading` response while its cold
+/// file cache starts. Wait for the first data-bearing response instead of
+/// relying on one platform's cache scan winning the race.
+async fn wait_for_projects(state: &Arc<AppState>, slug: &str) -> Vec<Value> {
+    for _ in 0..300 {
+        let (status, body) = json_request(
+            build_app(state.clone()),
+            "GET",
+            &format!("/api/db/{slug}/projects"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "projects response: {body}");
+        if let Some(projects) = body["data"].as_array() {
+            return projects.clone();
+        }
+        assert_eq!(body["status"], "loading", "projects response: {body}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("project list did not finish loading");
+}
+
 fn state_with_management(dir: &std::path::Path) -> Arc<AppState> {
     let registry_path = dir.join("config.json");
     let cache_dir = dir.join("cache");
@@ -233,16 +255,8 @@ async fn create_database_imports_fits_folders() {
     assert_eq!(outcome["dry_run"], false);
 
     // The DB is live in AppState: per-DB routes serve the imported project.
-    let (status, body) = json_request(
-        build_app(state.clone()),
-        "GET",
-        &format!("/api/db/{slug}/projects"),
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    let projects = body["data"].as_array().unwrap();
-    assert_eq!(projects.len(), 2, "projects: {body}");
+    let projects = wait_for_projects(&state, &slug).await;
+    assert_eq!(projects.len(), 2, "projects: {projects:?}");
 
     // And the file itself is a real v23 Target Scheduler database.
     let conn = rusqlite::Connection::open(&db_path).unwrap();
