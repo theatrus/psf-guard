@@ -1065,6 +1065,7 @@
   position: relative;
   overflow: hidden;
   cursor: grab;
+  touch-action: none;
   outline: none;
   border: 2px solid transparent;
   transition: border-color 0.3s ease;

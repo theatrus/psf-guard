@@ -72,6 +72,10 @@ export default function StackPreviewInspector({
           onMouseMove={zoom.handleMouseMove}
           onMouseUp={zoom.handleMouseUp}
           onMouseLeave={zoom.handleMouseUp}
+          onTouchStart={zoom.handleTouchStart}
+          onTouchMove={zoom.handleTouchMove}
+          onTouchEnd={zoom.handleTouchEnd}
+          onTouchCancel={zoom.handleTouchEnd}
           onKeyDown={zoom.handleKeyDown}
           tabIndex={0}
         >

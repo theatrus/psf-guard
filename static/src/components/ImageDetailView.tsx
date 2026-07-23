@@ -437,6 +437,10 @@ export default function ImageDetailView({
               onMouseMove={zoom.handleMouseMove}
               onMouseUp={zoom.handleMouseUp}
               onMouseLeave={zoom.handleMouseUp}
+              onTouchStart={zoom.handleTouchStart}
+              onTouchMove={zoom.handleTouchMove}
+              onTouchEnd={zoom.handleTouchEnd}
+              onTouchCancel={zoom.handleTouchEnd}
               tabIndex={0}
               onKeyDown={zoom.handleKeyDown}
             >

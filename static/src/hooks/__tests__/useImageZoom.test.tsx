@@ -59,6 +59,17 @@ function panBy(
   });
 }
 
+function touchEvent(points: Array<{ x: number; y: number }>) {
+  const preventDefault = vi.fn();
+  return {
+    event: {
+      touches: points.map(({ x, y }) => ({ clientX: x, clientY: y })),
+      preventDefault,
+    } as unknown as React.TouchEvent,
+    preventDefault,
+  };
+}
+
 describe('useImageZoom applyBitmapDimensions', () => {
   it("fit mode centers the bitmap at the container's fit scale", () => {
     const { result } = setup();
@@ -242,6 +253,62 @@ describe('useImageZoom view-mode notifications', () => {
 
     act(() => result.current.zoomTo100());
     expect(onViewModeChange).toHaveBeenLastCalledWith('user');
+  });
+});
+
+describe('useImageZoom touch gestures', () => {
+  it('pinches around the moving midpoint and reports user intent', () => {
+    const onViewModeChange = vi.fn();
+    const { result } = setup(onViewModeChange);
+
+    act(() => {
+      result.current.applyBitmapDimensions(2000, 1333, 'fit');
+    });
+
+    const start = touchEvent([
+      { x: 310, y: 310 },
+      { x: 510, y: 310 },
+    ]);
+    const move = touchEvent([
+      { x: 260, y: 330 },
+      { x: 660, y: 330 },
+    ]);
+
+    act(() => result.current.handleTouchStart(start.event));
+    act(() => result.current.handleTouchMove(move.event));
+
+    const state = result.current.zoomState;
+    expect(state.scale).toBeCloseTo(0.8, 5);
+    expect(state.offsetX).toBeCloseTo(-340, 5);
+    expect(state.offsetY).toBeCloseTo(-203.2, 1);
+    expect(start.preventDefault).toHaveBeenCalled();
+    expect(move.preventDefault).toHaveBeenCalled();
+    expect(onViewModeChange).toHaveBeenLastCalledWith('user');
+  });
+
+  it('pans a zoomed image with one finger', () => {
+    const { result } = setup();
+
+    act(() => {
+      result.current.applyBitmapDimensions(2000, 1333, 'fit');
+      result.current.zoomIn();
+    });
+    const before = result.current.zoomState;
+    const start = touchEvent([{ x: 400, y: 300 }]);
+    const move = touchEvent([{ x: 300, y: 220 }]);
+
+    act(() => result.current.handleTouchStart(start.event));
+    act(() => result.current.handleTouchMove(move.event));
+
+    expect(result.current.zoomState.offsetX).toBeCloseTo(
+      before.offsetX - 100,
+      5
+    );
+    expect(result.current.zoomState.offsetY).toBeCloseTo(
+      before.offsetY - 80,
+      5
+    );
+    expect(move.preventDefault).toHaveBeenCalled();
   });
 });
 

@@ -197,6 +197,85 @@ test('detail view loads the large preview and renders pixels', async ({
   expect(dims.natH).toBeGreaterThan(500);
 });
 
+test('detail view supports pinch zoom around a moving midpoint', async ({
+  page,
+}) => {
+  await page.goto(`/#/detail/1?db=${encodeURIComponent(dbId)}&project=1`);
+
+  const container = page.locator('.zoom-container').first();
+  const img = container.locator('img.detail-main-image').first();
+  await expect(img).toBeVisible({ timeout: 15_000 });
+  await page.waitForFunction(
+    (el) =>
+      el instanceof HTMLImageElement && el.complete && el.naturalWidth > 0,
+    await img.elementHandle(),
+    { timeout: 30_000 }
+  );
+
+  const before = await readDetailViewportAnchor(page);
+  const box = await container.boundingBox();
+  expect(box).not.toBeNull();
+  expect(await container.evaluate((el) => getComputedStyle(el).touchAction))
+    .toBe('none');
+
+  const startCenter = {
+    x: box!.x + box!.width / 2,
+    y: box!.y + box!.height / 2,
+  };
+  const movedCenter = {
+    x: startCenter.x + 30,
+    y: startCenter.y + 20,
+  };
+
+  await container.evaluate((el, center) => {
+    const event = new Event('touchstart', {
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(event, 'touches', {
+      value: [
+        { clientX: center.x - 80, clientY: center.y },
+        { clientX: center.x + 80, clientY: center.y },
+      ],
+    });
+    el.dispatchEvent(event);
+  }, startCenter);
+  await container.evaluate((el, center) => {
+    const event = new Event('touchmove', {
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(event, 'touches', {
+      value: [
+        { clientX: center.x - 120, clientY: center.y },
+        { clientX: center.x + 120, clientY: center.y },
+      ],
+    });
+    el.dispatchEvent(event);
+  }, movedCenter);
+  await container.evaluate((el) => {
+    const event = new Event('touchend', {
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(event, 'touches', { value: [] });
+    el.dispatchEvent(event);
+  });
+
+  await expect.poll(async () => (await readDetailViewportAnchor(page)).scale)
+    .toBeGreaterThan(before.scale * 1.45);
+
+  const after = await readDetailViewportAnchor(page);
+  const imageX =
+    (box!.width / 2 - before.offsetX) / before.scale;
+  const imageY =
+    (box!.height / 2 - before.offsetY) / before.scale;
+  expect(after.offsetX + imageX * after.scale)
+    .toBeCloseTo(box!.width / 2 + 30, 1);
+  expect(after.offsetY + imageY * after.scale)
+    .toBeCloseTo(box!.height / 2 + 20, 1);
+});
+
 test('detail view hides the pending image while arrow-key navigation generates it', async ({
   page,
 }) => {
