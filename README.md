@@ -355,7 +355,14 @@ toggles the overlay instead of solving again.
 ### Install the Seiza catalogs
 
 PSF Guard embeds Seiza 0.12.0's solver but does not bundle its multi-gigabyte
-catalog data. Install the `seiza` CLI from the
+catalog data. The desktop app can install and update these files from
+**Settings → Seiza Catalogs**. The same controls appear in a browser when the
+server starts with `--allow-database-management`. Settings shows which
+features are ready, keeps download progress across page reloads, and can
+validate every installed file. Catalog packages are additive; **Blind
+solving** is the recommended default.
+
+For a manual or headless install, get the `seiza` CLI from the
 [Seiza releases](https://github.com/theatrus/seiza/releases) or with
 `cargo install seiza-cli --version 0.12.0`, then download a bundle once:
 

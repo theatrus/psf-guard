@@ -3930,6 +3930,7 @@ dependencies = [
  "seiza",
  "seiza-background",
  "seiza-deconvolution",
+ "seiza-download",
  "seiza-fits",
  "seiza-imgproc",
  "seiza-satellites",

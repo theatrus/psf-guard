@@ -130,6 +130,51 @@ export const handlers = [
       status: 'ready',
     })
   ),
+  http.get('/api/astrometry/capabilities', () =>
+    HttpResponse.json({
+      success: true,
+      data: {
+        seiza_version: 'test',
+        seiza_fits_version: 'test',
+        resources: {
+          objects: { name: 'objects', status: 'not_configured' },
+          stars: { name: 'stars', status: 'not_configured' },
+          star_identifiers: { name: 'star_identifiers', status: 'not_configured' },
+          blind_index: { name: 'blind_index', status: 'not_configured' },
+          transients: { name: 'transients', status: 'not_configured' },
+          minor_bodies: { name: 'minor_bodies', status: 'not_configured' },
+        },
+        features: {
+          object_association: false,
+          object_name_search: false,
+          stellar_name_search: false,
+          hinted_solve: false,
+          blind_solve: false,
+          transient_annotations: false,
+          minor_body_annotations: false,
+        },
+      },
+      error: null,
+      status: 'ready',
+    })
+  ),
+  http.get('/api/astrometry/catalogs/install', () =>
+    HttpResponse.json({
+      success: true,
+      data: {
+        started: false,
+        progress: {
+          running: false,
+          phase: 'idle',
+          message: 'No catalog installation has run.',
+          files_completed: 0,
+          files_total: 0,
+        },
+      },
+      error: null,
+      status: 'ready',
+    })
+  ),
   http.get('/api/db/:dbId/cache-progress', () =>
     HttpResponse.json({
       success: true,

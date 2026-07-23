@@ -1,5 +1,6 @@
 pub mod api;
 pub mod cache;
+pub mod catalog_install;
 pub mod database_context;
 pub mod embedded_static;
 pub mod extract;
@@ -370,6 +371,11 @@ async fn run_server_internal(
         .route(
             "/astrometry/catalogs/validate",
             post(handlers::validate_astrometry_catalogs),
+        )
+        .route(
+            "/astrometry/catalogs/install",
+            get(handlers::get_astrometry_catalog_install)
+                .post(handlers::start_astrometry_catalog_install),
         )
         .route(
             "/databases",

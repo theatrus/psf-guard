@@ -25,6 +25,11 @@ fn build_app(state: Arc<AppState>) -> Router {
             "/api/astrometry/catalogs/validate",
             post(handlers::validate_astrometry_catalogs),
         )
+        .route(
+            "/api/astrometry/catalogs/install",
+            get(handlers::get_astrometry_catalog_install)
+                .post(handlers::start_astrometry_catalog_install),
+        )
         .with_state(state)
 }
 
@@ -167,4 +172,53 @@ async fn missing_catalog_is_a_successful_diagnostic_response() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["data"]["resources"]["objects"]["status"], "missing");
     assert_eq!(body["data"]["features"]["object_association"], false);
+}
+
+#[tokio::test]
+async fn catalog_install_requires_database_management_permission() {
+    let directory = tempdir().unwrap();
+    let state = Arc::new(
+        AppState::from_databases_with_astrometry(
+            vec![],
+            directory
+                .path()
+                .join("cache")
+                .to_string_lossy()
+                .into_owned(),
+            psf_guard::cli::PregenerationConfig::default(),
+            Some(AstrometryConfig {
+                data_dir: Some(
+                    directory
+                        .path()
+                        .join("catalogs")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+                ..Default::default()
+            }),
+        )
+        .unwrap(),
+    );
+
+    let (status, body) = request(
+        build_app(Arc::clone(&state)),
+        "GET",
+        "/api/astrometry/catalogs/install",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["progress"]["phase"], "idle");
+
+    let response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/astrometry/catalogs/install")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"preset":"blind_deep"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }

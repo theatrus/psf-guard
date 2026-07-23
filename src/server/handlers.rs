@@ -104,6 +104,29 @@ pub async fn validate_astrometry_catalogs(
     Ok(Json(ApiResponse::success(report)))
 }
 
+/// Report the current background Seiza catalog installation.
+pub async fn get_astrometry_catalog_install(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<crate::server::catalog_install::CatalogInstallStatus>>, AppError> {
+    Ok(Json(ApiResponse::success(state.catalog_install.status())))
+}
+
+/// Download and install one hosted Seiza catalog package. This writes to the
+/// configured catalog directory, so it uses the same trust gate as database
+/// management. The work continues after the request returns.
+pub async fn start_astrometry_catalog_install(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<crate::server::catalog_install::CatalogInstallRequest>,
+) -> Result<Json<ApiResponse<crate::server::catalog_install::CatalogInstallStatus>>, AppError> {
+    require_database_management_allowed(&state)?;
+    let output_dir = state.astrometry.catalog_install_dir();
+    let guard = state.begin_interactive_job();
+    let status = state
+        .catalog_install
+        .start(request.preset, output_dir, guard);
+    Ok(Json(ApiResponse::success(status)))
+}
+
 /// Header-only catalog association and embedded-WCS overlay geometry for one
 /// image. This stays separate from image metadata so provenance, partial
 /// capability, and later plate-solve results retain a typed contract.

@@ -63,6 +63,9 @@ pub struct AppState {
     /// Process-global, single-flight project stacking preview jobs. Full-frame
     /// stacking is memory intensive, so groups and databases share one permit.
     pub stack_previews: crate::server::stack_preview::StackPreviewManager,
+    /// Process-global, single-flight Seiza catalog installation with progress
+    /// that survives closing and reopening the Settings page.
+    pub catalog_install: crate::server::catalog_install::CatalogInstallManager,
     /// Process-global Seiza catalogs and capability diagnostics. Catalogs are
     /// shared across databases and opened lazily on first use.
     pub astrometry: Arc<crate::astrometry::AstrometryContext>,
@@ -360,6 +363,7 @@ impl AppState {
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
+            catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
             astrometry: Arc::new(crate::astrometry::AstrometryContext::new(astrometry_config)),
             satellites: Arc::new(satellites),
         })
@@ -474,6 +478,7 @@ impl AppState {
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
+            catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
             astrometry: Arc::new(crate::astrometry::AstrometryContext::default()),
             satellites: Arc::new(
                 crate::satellites::SatelliteContext::new(

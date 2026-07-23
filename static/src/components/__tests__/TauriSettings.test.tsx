@@ -19,6 +19,17 @@ function createWrapper() {
 }
 
 describe('TauriSettings import state', () => {
+  it('hides catalog management on a read-only server', async () => {
+    render(<TauriSettings isOpen onClose={() => undefined} />, {
+      wrapper: createWrapper(),
+    });
+
+    expect(
+      await screen.findByText('🔒 Database management is read-only')
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Seiza Catalogs' })).not.toBeInTheDocument();
+  });
+
   it('resumes a server-side import scan when settings opens', async () => {
     server.use(
       http.get('/api/info', () =>

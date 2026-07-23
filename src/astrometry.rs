@@ -572,6 +572,17 @@ impl AstrometryContext {
         &self.config
     }
 
+    /// Directory used by the in-app catalog installer. An explicit bundle
+    /// directory wins; otherwise use the same platform path as `seiza setup`.
+    pub fn catalog_install_dir(&self) -> PathBuf {
+        self.config
+            .data_dir
+            .as_deref()
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(seiza::data_paths::default_catalog_dir)
+    }
+
     pub fn object_catalog(&self) -> Result<Arc<ObjectCatalog>, String> {
         self.load_object_catalog().map(|loaded| loaded.value)
     }
@@ -2548,6 +2559,10 @@ mod tests {
             data_dir: Some(directory.path().to_string_lossy().into_owned()),
             ..Default::default()
         };
+        assert_eq!(
+            AstrometryContext::new(config.clone()).catalog_install_dir(),
+            directory.path()
+        );
         assert_eq!(
             config.objects_path().unwrap().unwrap(),
             directory.path().join("objects.bin")
