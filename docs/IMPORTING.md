@@ -1,12 +1,12 @@
-# Importing FITS folders
+# Adding FITS folders
 
 PSF Guard can start from an existing N.I.N.A. Target Scheduler database or
-build a new, compatible database from folders of FITS light frames. The first
+build a compatible image catalog from folders of FITS light frames. The first
 import reads FITS headers only. It does not decode every image or run quality
-analysis, so a large library becomes usable without waiting for star detection,
-photometry, or plate solving.
+analysis, so a large library becomes usable without waiting for star
+detection, photometry, or plate solving.
 
-## Create a database in the UI
+## Create a catalog in the UI
 
 The desktop app always allows database management. For the web server, bind to
 a trusted interface and opt in:
@@ -28,7 +28,7 @@ Then open **Settings** and choose **New Database from Images**.
    progress. If you close or reload the page, opening Settings finds the active
    server job and resumes the progress view.
 
-The UI stores the new SQLite file under `databases/` beside the PSF Guard
+The UI stores the new catalog as a SQLite file under `databases/` beside the PSF Guard
 registry. Its name comes from the display name, with `-2`, `-3`, and so on added
 when needed. The database row in Settings shows the exact path. The CLI form
 creates the database at the path you give it instead:
@@ -44,8 +44,9 @@ the shared registry.
 
 ## What the header import builds
 
-PSF Guard writes a full Target Scheduler schema, not a private catalog. It
-creates:
+PSF Guard writes a full Target Scheduler-compatible schema. This inherited
+mapping lets it open an existing Scheduler database directly, but Target
+Scheduler is not required. The import creates:
 
 - one profile for the imported rig;
 - projects and targets;

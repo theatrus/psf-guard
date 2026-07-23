@@ -1,285 +1,151 @@
-# Statistical Grading Documentation
+# Statistical grading
 
-## Overview
+This older database-metric grader finds HFR and star-count outliers in values
+already stored in the catalog. It does not read image pixels.
 
-The statistical grading feature in PSF Guard provides advanced image quality analysis beyond the basic accept/reject status stored in the database. It uses statistical methods to identify outliers and detect transient issues like clouds that may affect image quality.
+Use [Screening and sequence quality](SCREENING.md) for the current pixel-based
+checks, including plate solving, photometry, occlusion, and stray light.
+The `regrade` command remains useful for quick checks of stored measurements.
+The `filter-rejected` command still supports these flags, but
+`move-rejects` now handles rejected-file archiving.
 
-## Key Features
+## What it checks
 
-### 1. Per-Target Analysis
-All statistical analysis is performed on a per-target basis, grouping images by both target and filter. This ensures that:
-- Different targets with varying star densities are analyzed appropriately
-- Sky conditions specific to each target's location are considered
-- Filter-specific characteristics are preserved
+The grader groups images by target and filter. Each group needs at least three
+images.
 
-### 2. Distribution-Based Outlier Detection
+### HFR and star-count outliers
 
-#### HFR (Half Flux Radius) Analysis
-- Detects images with focus quality significantly different from the target's baseline
-- Uses standard deviation (σ) for normally distributed data
-- Switches to Median Absolute Deviation (MAD) for skewed distributions
-- Default threshold: 2.0σ (configurable)
+- HFR outliers can reveal poor focus, seeing, or tracking.
+- Star-count outliers can reveal cloud, haze, tracking errors, or field
+  rotation.
+- The default limit is 2 standard deviations.
+- If the median and mean differ enough, the distribution check also uses
+  median absolute deviation (MAD).
 
-#### Star Count Analysis
-- Identifies images with abnormal star detection counts
-- Useful for detecting:
-  - Partial clouds or haze
-  - Tracking errors
-  - Field rotation issues
-- Default threshold: 2.0σ (configurable)
+These checks use catalog measurements. They do not replace a fresh
+**Scan Quality** run.
 
-### 3. Cloud Detection (Sequence Analysis)
+### Sequence cloud check
 
-The cloud detection algorithm monitors image sequences for sudden deterioration in quality that indicates clouds:
+The sequence check watches for a sudden loss of detected stars or a rise in
+HFR.
 
-#### How It Works
-1. **Baseline Establishment**: The first N images (default: 5) establish a baseline median
-2. **Continuous Monitoring**: Each subsequent image is compared to the rolling baseline
-3. **Cloud Detection**: 
-   - HFR increase > threshold (default: 20%) indicates clouds
-   - Star count decrease > threshold (default: 20%) indicates clouds
-4. **Recovery**: After a cloud event, a new baseline must be established before accepting images
+1. The first N images, five by default, set the rolling median.
+2. Each later image is compared with that median.
+3. A star-count drop or HFR rise above the limit is rejected.
+4. A rejected value does not enter the baseline.
+5. After `2 × N` consecutive anomalies, the grader treats the change as a new
+   stable state and seeds a new baseline from the end of that run.
 
-#### Detection Metrics
-- **Primary**: HFR increase (higher HFR = worse seeing/clouds)
-- **Secondary**: Star count decrease (fewer stars = obscuration)
+Star-count loss is the primary signal. HFR rise runs as a second check.
 
-## Configuration Options
+## Options
 
-### Command Line Arguments
-
-```bash
-# Enable all statistical features
+```text
 --enable-statistical
 
-# HFR outlier detection
---stat-hfr                    # Enable HFR analysis
---hfr-stddev <value>         # Standard deviations threshold (default: 2.0)
+--stat-hfr
+--hfr-stddev <value>             # default: 2.0
 
-# Star count outlier detection  
---stat-stars                  # Enable star count analysis
---star-stddev <value>        # Standard deviations threshold (default: 2.0)
+--stat-stars
+--star-stddev <value>            # default: 2.0
 
-# Distribution analysis
---stat-distribution           # Enable median/mean shift detection
---median-shift-threshold <value>  # Threshold for distribution skew (default: 0.1)
+--stat-distribution
+--median-shift-threshold <value> # default: 0.1
 
-# Cloud detection
---stat-clouds                 # Enable cloud detection
---cloud-threshold <value>     # Sensitivity threshold (default: 0.2 = 20%)
---cloud-baseline-count <n>    # Images for baseline (default: 5)
+--stat-clouds
+--cloud-threshold <value>        # default: 0.2
+--cloud-baseline-count <n>       # default: 5
 ```
 
-## Usage Examples
+`--enable-statistical` enables the configured statistical checks. The
+individual `--stat-*` flags let you choose checks.
 
-### Basic Statistical Analysis
+## Regrade a catalog
+
+Start with a dry run:
+
 ```bash
-# Dry run with HFR and star count analysis
-psf-guard filter-rejected mydb.sqlite ./images --dry-run \
+psf-guard regrade catalog.sqlite --dry-run \
   --enable-statistical --stat-hfr --stat-stars
 ```
 
-### Cloud Detection Only
+Write the same results:
+
 ```bash
-# Focus on cloud detection with custom sensitivity
-psf-guard filter-rejected mydb.sqlite ./images --dry-run \
+psf-guard regrade catalog.sqlite \
+  --enable-statistical --stat-hfr --stat-stars
+```
+
+Run only the sequence cloud check:
+
+```bash
+psf-guard regrade catalog.sqlite --dry-run \
   --enable-statistical --stat-clouds --cloud-threshold 0.15
 ```
 
-### Full Analysis with Custom Thresholds
-```bash
-# Conservative settings for critical data
-psf-guard filter-rejected mydb.sqlite ./images --dry-run \
-  --enable-statistical \
-  --stat-hfr --hfr-stddev 1.5 \
-  --stat-stars --star-stddev 1.5 \
-  --stat-clouds --cloud-threshold 0.1 --cloud-baseline-count 10
-```
+Limit the work to one target:
 
-### Target-Specific Analysis
 ```bash
-# Analyze specific target with all features
-psf-guard filter-rejected mydb.sqlite ./images --dry-run \
+psf-guard regrade catalog.sqlite --dry-run \
   --target "M31" \
   --enable-statistical --stat-hfr --stat-stars --stat-clouds
 ```
 
-## Understanding the Output
+Automatic rejection reasons start with `[Auto]`, such as:
 
-### Statistical Rejection Messages
-
-1. **HFR Outlier**:
-   ```
-   Image 123: Statistical HFR - HFR 3.456 is 2.5σ from mean 2.890 (threshold: 2.0σ)
-   ```
-
-2. **Star Count Outlier**:
-   ```
-   Image 456: Statistical Stars - Star count 150 is 3.1σ from mean 420 (threshold: 2.0σ)
-   ```
-
-3. **Distribution-Based (MAD)**:
-   ```
-   Image 789: Distribution HFR - HFR 4.123 deviates 2.8 MAD from median 3.100 (threshold: 2.0)
-   ```
-
-4. **Cloud Detection**:
-   ```
-   Image 321: Cloud Detection - HFR 3.890 is 25% above baseline 3.112 (threshold: 20%)
-   Image 654: Cloud Detection (Stars) - Star count 210 is 35% below baseline 323 (threshold: 20%)
-   ```
-
-## Best Practices
-
-### 1. Start with Dry Runs
-Always use `--dry-run` first to preview what would be rejected before moving files.
-
-### 2. Tune Thresholds Gradually
-- Start with defaults (2.0σ)
-- Review rejected images
-- Adjust thresholds based on your quality requirements
-- More aggressive: 1.5σ
-- More conservative: 2.5σ or 3.0σ
-
-### 3. Cloud Detection Sensitivity
-- Default 20% works well for obvious clouds
-- 10-15% for detecting thin clouds or haze
-- 25-30% for only severe cloud events
-
-### 4. Baseline Count Considerations
-- Default 5 images works for most scenarios
-- Increase to 10+ for:
-  - Rapidly changing conditions
-  - High-cadence imaging
-  - Critical data where false positives must be minimized
-- Decrease to 3 for:
-  - Slow-cadence imaging
-  - Stable conditions
-  - When you want faster cloud recovery
-
-### 5. Combining Features
-- Use HFR + Stars for comprehensive quality control
-- Add cloud detection for unattended/automated sessions
-- Distribution analysis helps with non-normal data
-
-## Algorithm Details
-
-### Standard Deviation Method
-Used when data is normally distributed:
-```
-z-score = |value - mean| / stddev
-reject if z-score > threshold
+```text
+[Auto] Statistical HFR - HFR 3.456 is 2.5σ from mean 2.890
+[Auto] Cloud Detection (Stars) - Star count 210 is 35% below baseline 323
 ```
 
-### Median Absolute Deviation (MAD)
-Used when median significantly differs from mean (skewed distribution):
-```
-MAD = median(|xi - median|) × 1.4826
-z-score = |value - median| / MAD
-reject if z-score > threshold
-```
+### Reset existing grades
 
-### Cloud Detection Algorithm
-```
-1. Sort images by timestamp within target/filter group
-2. Establish baseline from first N images
-3. For each subsequent image:
-   - Calculate % change from baseline median
-   - If change > threshold:
-     - Mark as cloud-affected
-     - Reset baseline collection
-   - Else:
-     - Update rolling baseline
-```
+`--reset` accepts:
 
-## Troubleshooting
+- `none` — keep all grades and add new rejections
+- `automatic` — reset grades whose reason starts with `[Auto]`
+- `all` — reset every matching image to pending
 
-### Too Many False Positives
-- Increase stddev thresholds (e.g., 2.5 or 3.0)
-- Increase cloud threshold (e.g., 0.25 or 0.3)
-- Increase baseline count for more stable baseline
-
-### Missing Obvious Problems
-- Decrease stddev thresholds (e.g., 1.5)
-- Decrease cloud threshold (e.g., 0.15)
-- Check if --enable-statistical flag is set
-
-### Different Results Than Expected
-- Remember analysis is per-target
-- Check if distribution analysis is triggering (MAD vs stddev)
-- Verify chronological ordering for cloud detection
-
-## Database Regrading
-
-The `regrade` command allows you to apply statistical grading directly to the database, updating image statuses based on analysis results.
-
-### Basic Usage
-```bash
-# Dry run - see what would change
-psf-guard regrade mydb.sqlite --dry-run --enable-statistical --stat-hfr --stat-stars
-
-# Actually update the database
-psf-guard regrade mydb.sqlite --enable-statistical --stat-hfr --stat-stars
-```
-
-### Reset Options
-
-The `--reset` parameter controls how existing grades are handled:
-
-1. **none** (default): Keep existing grades, only add new rejections
-2. **automatic**: Reset automatically graded images to pending (preserves manual grades)
-3. **all**: Reset all images to pending status
+The default date range is 90 days. Use `--days`, `--project`, or `--target` to
+narrow it.
 
 ```bash
-# Reset automatic grades from last 30 days
-psf-guard regrade mydb.sqlite --reset automatic --days 30
+psf-guard regrade catalog.sqlite --dry-run \
+  --reset automatic --days 30
 
-# Reset all grades for a specific target
-psf-guard regrade mydb.sqlite --reset all --target "NGC 7000" --days 7
+psf-guard regrade catalog.sqlite \
+  --reset all --target "NGC 7000" --days 7
 ```
 
-### Automatic Grade Markers
+Resets and new rejections commit in one transaction.
 
-When the regrade command rejects an image, it prefixes the rejection reason with `[Auto]` to distinguish from manual grades:
-- `[Auto] Statistical HFR - HFR 3.456 is 2.5σ from mean...`
-- `[Auto] Cloud Detection - HFR 3.890 is 25% above baseline...`
+## Legacy file-moving command
 
-This allows the `--reset automatic` option to identify and reset only these automatic grades.
+`filter-rejected` can still combine this grading pass with its old file-moving
+workflow:
 
-### Safety Features
-
-1. **Always use dry-run first**: Check what will be changed before updating
-2. **Date filtering**: Default 90 days prevents analyzing very old data
-3. **Preserves manual grades**: With `--reset automatic`, manual rejections are kept
-4. **Atomic updates**: Each rejection is updated individually with error handling
-
-### Workflow Examples
-
-#### Initial Statistical Grading
 ```bash
-# First time - add statistical grades to ungraded images
-psf-guard regrade mydb.sqlite --enable-statistical --stat-hfr --stat-stars
+psf-guard filter-rejected catalog.sqlite ./images --dry-run \
+  --enable-statistical --stat-hfr --stat-stars
 ```
 
-#### Periodic Reanalysis
-```bash
-# Weekly regrade with updated baselines
-psf-guard regrade mydb.sqlite --reset automatic --days 7 \
-  --enable-statistical --stat-hfr --stat-stars --stat-clouds
-```
+Use it only for an existing workflow that depends on its old layout. For new
+archive work, grade first and use `move-rejects --db <slug>`.
 
-#### Target-Specific Tuning
-```bash
-# Aggressive grading for critical target
-psf-guard regrade mydb.sqlite --target "SN 2023xyz" \
-  --enable-statistical --stat-hfr --hfr-stddev 1.5 \
-  --stat-stars --star-stddev 1.5
-```
+## Tuning
 
-## Performance Considerations
+- Begin with `--dry-run`.
+- Raise a standard-deviation limit to reject fewer images.
+- Lower it to reject more.
+- Raise `--cloud-threshold` to ignore smaller changes.
+- A larger baseline changes more slowly.
+- Review several target and filter groups before adopting one set of limits.
 
-- Statistical analysis requires loading all images into memory
-- For large datasets (10,000+ images), expect increased processing time
-- Cloud detection requires chronological sorting, adding overhead
-- Consider filtering by project/target to reduce dataset size
-- Database updates are performed individually for safety
+## Performance
+
+- The command loads the matching catalog rows and metadata into memory. It does
+  not decode FITS pixels.
+- Large catalogs take longer to query, sort, and group.
+- Use `--project`, `--target`, or `--days` to narrow the work.

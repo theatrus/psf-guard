@@ -1,5 +1,9 @@
 # Export ("take out") Plan
 
+> **Implemented for light frames; retained as the design record.** Calibration
+> frame export remains deferred. See the main `README.md` for the current
+> workflow.
+
 Get non-rejected lights out of the graded library and into a stacking
 pipeline — as a folder (CLI) or a download (server). Rejects are **never**
 exported; ungraded (Pending) frames are opt-in.

@@ -1,5 +1,10 @@
 # Cloud Detection and Image Quality Scoring -- Design Document
 
+> **Historical design.** The implementation now includes spatial screening,
+> photometry, fresh astrometry, and optional satellite evidence. See
+> [SCREENING.md](SCREENING.md) for current behavior. The original v1 goals and
+> non-goals below remain for design history.
+
 > **Addendum (2026-07): spatial occlusion screening.** The v1 non-goal
 > "per-pixel spatial analysis" has been revisited: validation against four
 > nights of progressively tree/stray-light-occluded frames (NGC 6820,
