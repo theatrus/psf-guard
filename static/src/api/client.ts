@@ -50,6 +50,10 @@ import type {
   StackNarrowbandPalette,
   StackStretchPreview,
   StackViewProcessingRequest,
+  AstrometryCapabilities,
+  AstrometryValidationReport,
+  CatalogInstallPreset,
+  CatalogInstallStatus,
 } from './types';
 
 // Store the initialized API instance and server URL
@@ -130,6 +134,43 @@ export const apiClient = {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<ServerInfo>>('/info');
     if (!data.data) throw new Error('Failed to get server info');
+    return data.data;
+  },
+
+  getAstrometryCapabilities: async (): Promise<AstrometryCapabilities> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<AstrometryCapabilities>>(
+      '/astrometry/capabilities'
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to inspect Seiza catalogs');
+    return data.data;
+  },
+
+  validateAstrometryCatalogs: async (): Promise<AstrometryValidationReport> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<AstrometryValidationReport>>(
+      '/astrometry/catalogs/validate'
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to validate Seiza catalogs');
+    return data.data;
+  },
+
+  getCatalogInstallStatus: async (): Promise<CatalogInstallStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<CatalogInstallStatus>>(
+      '/astrometry/catalogs/install'
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to get catalog install status');
+    return data.data;
+  },
+
+  installCatalogs: async (preset: CatalogInstallPreset): Promise<CatalogInstallStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<CatalogInstallStatus>>(
+      '/astrometry/catalogs/install',
+      { preset }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to start catalog installation');
     return data.data;
   },
 

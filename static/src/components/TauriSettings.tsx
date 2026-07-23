@@ -7,6 +7,7 @@ import type { DatabaseSummary } from '../api/types';
 import { describeImportProgress, useImportJob } from '../hooks/useImportJob';
 import QualityBackfillControls from './QualityBackfillControls';
 import SchedulerSyncControls from './SchedulerSyncControls';
+import SeizaCatalogControls from './SeizaCatalogControls';
 import './TauriSettings.css';
 
 interface TauriSettingsProps {
@@ -441,6 +442,8 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
               </p>
             </div>
           )}
+
+          {managementAllowed && <SeizaCatalogControls />}
 
           <div className="settings-section">
             <h3>Configured Databases {hasDatabases && <span className="muted">({databases.length})</span>}</h3>

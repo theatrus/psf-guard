@@ -603,11 +603,99 @@ export interface StackColorCatalog {
   jobs: StackColorJob[];
 }
 
+export interface SiteBanner {
+  title: string;
+  message: string;
+  link_text?: string;
+  link_url?: string;
+}
+
+export type AstrometryResourceStatus =
+  | 'not_configured'
+  | 'missing'
+  | 'available'
+  | 'invalid';
+
+export interface AstrometryResourceCapability {
+  name: string;
+  status: AstrometryResourceStatus;
+  path?: string;
+  format?: string;
+  size_bytes?: number;
+  modified_unix_seconds?: number;
+  error?: string;
+}
+
+export interface AstrometryCapabilities {
+  seiza_version: string;
+  seiza_fits_version: string;
+  data_dir?: string;
+  resources: {
+    objects: AstrometryResourceCapability;
+    stars: AstrometryResourceCapability;
+    star_identifiers: AstrometryResourceCapability;
+    blind_index: AstrometryResourceCapability;
+    transients: AstrometryResourceCapability;
+    minor_bodies: AstrometryResourceCapability;
+  };
+  features: {
+    object_association: boolean;
+    object_name_search: boolean;
+    stellar_name_search: boolean;
+    hinted_solve: boolean;
+    blind_solve: boolean;
+    transient_annotations: boolean;
+    minor_body_annotations: boolean;
+  };
+}
+
+export interface AstrometryValidationReport {
+  all_configured_valid: boolean;
+  resources: Array<{
+    name: string;
+    status: AstrometryResourceStatus;
+    path?: string;
+    validated: boolean;
+    error?: string;
+  }>;
+}
+
+export type CatalogInstallPreset =
+  | 'solver_lite'
+  | 'solver_gaia'
+  | 'blind_deep'
+  | 'blind_deep_gaia20';
+
+export interface CatalogInstallProgress {
+  running: boolean;
+  phase: 'idle' | 'manifest' | 'downloading' | 'installing' | 'complete' | 'error';
+  message: string;
+  preset?: CatalogInstallPreset;
+  output_dir?: string;
+  file_name?: string;
+  files_completed: number;
+  files_total: number;
+  bytes_completed?: number;
+  bytes_total?: number;
+  written_bytes?: number;
+  installed_version?: string;
+  error?: string;
+  started_at?: number;
+  finished_at?: number;
+}
+
+export interface CatalogInstallStatus {
+  started: boolean;
+  progress: CatalogInstallProgress;
+}
+
 export interface ServerInfo {
   version: string;
   cache_directory: string;
   /** Whether database mutations and sync are accepted on this server. */
   allow_database_management: boolean;
+  /** Optional plain-text notice configured by the server administrator. */
+  banner?: SiteBanner;
 }
 
 /** One configured database, returned by /api/databases. */

@@ -96,6 +96,44 @@
   padding: 0.6rem 1rem;
 }
 
+.site-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  flex: 0 0 auto;
+  padding: 0.65rem 1rem;
+  color: #ede9fe;
+  background:
+    linear-gradient(90deg, rgba(109, 40, 217, 0.35), rgba(37, 99, 235, 0.28)),
+    var(--color-bg-surface);
+  border-bottom: 1px solid rgba(196, 181, 253, 0.45);
+  line-height: 1.4;
+}
+
+.site-banner__title {
+  color: #ddd6fe;
+  white-space: nowrap;
+}
+
+.site-banner__message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.site-banner__link {
+  flex: 0 0 auto;
+  color: #bfdbfe;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+  white-space: nowrap;
+}
+
+.site-banner__link:hover {
+  color: #ffffff;
+}
+
 .header-brand {
   grid-area: brand;
 }
@@ -328,6 +366,27 @@
 }
 
 @media (max-width: 760px) {
+  .site-banner {
+    align-items: flex-start;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.6rem;
+    padding: 0.55rem 0.75rem;
+    font-size: 0.85rem;
+  }
+
+  .site-banner__title {
+    white-space: normal;
+  }
+
+  .site-banner__message {
+    flex-basis: calc(100% - 7rem);
+  }
+
+  .site-banner__link {
+    margin-left: auto;
+  }
+
   .selector-group.compact label {
     display: none;
   }

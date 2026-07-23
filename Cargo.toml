@@ -32,6 +32,7 @@ uuid = { version = "1", features = ["v4"] }
 regex = "1.12"
 byteorder = "1.5"
 seiza = "0.12.0"
+seiza-download = "0.6.0"
 seiza-imgproc = { version = "0.3.0", features = ["parallel"] }
 seiza-fits = "=0.2.0"
 seiza-satellites = { version = "0.4.2", features = ["serde"] }

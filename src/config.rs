@@ -44,6 +44,87 @@ pub struct ServerConfig {
     /// an interactive scan is running. See `concurrency::WorkerPolicy`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_worker_ratio: Option<f64>,
+    /// Optional notice shown below the application header on every page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub banner: Option<SiteBannerConfig>,
+}
+
+/// Plain-text site notice configured by the server administrator.
+///
+/// The frontend never renders these values as HTML. An optional link must use
+/// HTTP(S), which prevents a config typo from exposing a script URL.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SiteBannerConfig {
+    pub title: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_url: Option<String>,
+}
+
+impl SiteBannerConfig {
+    fn normalized(&self) -> Result<Self> {
+        let title = self.title.trim();
+        let message = self.message.trim();
+        if title.is_empty() {
+            return Err(anyhow::anyhow!("server.banner.title must not be empty"));
+        }
+        if title.chars().count() > 80 {
+            return Err(anyhow::anyhow!(
+                "server.banner.title must be 80 characters or fewer"
+            ));
+        }
+        if message.is_empty() {
+            return Err(anyhow::anyhow!("server.banner.message must not be empty"));
+        }
+        if message.chars().count() > 500 {
+            return Err(anyhow::anyhow!(
+                "server.banner.message must be 500 characters or fewer"
+            ));
+        }
+
+        let link_text = self
+            .link_text
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let link_url = self
+            .link_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if link_text.is_some() != link_url.is_some() {
+            return Err(anyhow::anyhow!(
+                "server.banner.link_text and link_url must be set together"
+            ));
+        }
+        if link_text.is_some_and(|value| value.chars().count() > 80) {
+            return Err(anyhow::anyhow!(
+                "server.banner.link_text must be 80 characters or fewer"
+            ));
+        }
+        if let Some(url) = link_url {
+            if url.chars().count() > 2048 {
+                return Err(anyhow::anyhow!(
+                    "server.banner.link_url must be 2048 characters or fewer"
+                ));
+            }
+            if !(url.starts_with("https://") || url.starts_with("http://")) {
+                return Err(anyhow::anyhow!(
+                    "server.banner.link_url must start with http:// or https://"
+                ));
+            }
+        }
+
+        Ok(Self {
+            title: title.to_string(),
+            message: message.to_string(),
+            link_text: link_text.map(ToOwned::to_owned),
+            link_url: link_url.map(ToOwned::to_owned),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +169,7 @@ impl Default for ServerConfig {
             cors: Some(true),
             scan_worker_ratio: None,
             background_worker_ratio: None,
+            banner: None,
         }
     }
 }
@@ -176,6 +258,15 @@ impl Config {
 
     pub fn get_cors_enabled(&self) -> bool {
         self.server.cors.unwrap_or(true)
+    }
+
+    /// Validated, whitespace-normalized site banner for the server API.
+    pub fn get_site_banner(&self) -> Result<Option<SiteBannerConfig>> {
+        self.server
+            .banner
+            .as_ref()
+            .map(SiteBannerConfig::normalized)
+            .transpose()
     }
 
     /// Effective worker tuning policy for the parallel scans and background
@@ -279,6 +370,8 @@ impl Config {
                 .with_context(|| format!("Invalid directory_ttl format: {}", dir_ttl_str))?;
         }
 
+        self.get_site_banner()?;
+
         Ok(())
     }
 }
@@ -300,6 +393,7 @@ mod tests {
         assert_eq!(config.get_cache_directory(), "./cache");
         assert_eq!(config.get_file_ttl(), Duration::from_secs(300));
         assert_eq!(config.get_directory_ttl(), Duration::from_secs(300));
+        assert!(config.get_site_banner().unwrap().is_none());
     }
 
     #[test]
@@ -313,6 +407,7 @@ mod tests {
         assert!(!toml_string.contains("[database]"));
         assert!(!toml_string.contains("[images]"));
         assert!(toml_string.contains("[cache]"));
+        assert!(!toml_string.contains("[server.banner]"));
 
         // Parse back
         let parsed: Config = toml_edit::de::from_str(&toml_string).unwrap();
@@ -498,6 +593,52 @@ directory = "./cache"
             !json.contains("scan_worker_ratio") && !json.contains("background_worker_ratio"),
             "default config should not write the keys: {json}"
         );
+    }
+
+    #[test]
+    fn site_banner_parses_and_normalizes() {
+        let toml = r#"
+[server]
+port = 3000
+
+[server.banner]
+title = "  Demo site  "
+message = "  Sample data; changes may be reset.  "
+link_text = "  Learn more  "
+link_url = "  https://psf-guard.com/  "
+
+[cache]
+directory = "./cache"
+"#;
+        let config: Config = toml_edit::de::from_str(toml).unwrap();
+        let banner = config.get_site_banner().unwrap().unwrap();
+        assert_eq!(banner.title, "Demo site");
+        assert_eq!(banner.message, "Sample data; changes may be reset.");
+        assert_eq!(banner.link_text.as_deref(), Some("Learn more"));
+        assert_eq!(banner.link_url.as_deref(), Some("https://psf-guard.com/"));
+    }
+
+    #[test]
+    fn site_banner_rejects_incomplete_or_unsafe_links() {
+        let mut config = Config::default();
+        config.server.banner = Some(SiteBannerConfig {
+            title: "Demo".into(),
+            message: "Sample data".into(),
+            link_text: Some("Learn more".into()),
+            link_url: None,
+        });
+        assert!(config
+            .get_site_banner()
+            .unwrap_err()
+            .to_string()
+            .contains("must be set together"));
+
+        config.server.banner.as_mut().unwrap().link_url = Some("javascript:alert(1)".into());
+        assert!(config
+            .get_site_banner()
+            .unwrap_err()
+            .to_string()
+            .contains("must start with http:// or https://"));
     }
 
     #[test]

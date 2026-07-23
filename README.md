@@ -355,7 +355,16 @@ toggles the overlay instead of solving again.
 ### Install the Seiza catalogs
 
 PSF Guard embeds Seiza 0.12.0's solver but does not bundle its multi-gigabyte
-catalog data. Install the `seiza` CLI from the
+catalog data. The desktop app can install and update these files from
+**Settings → Seiza Catalogs**. The same controls appear in a browser when the
+server starts with `--allow-database-management`. Settings shows which
+features are ready, keeps download progress across page reloads, and can
+validate every installed file. Catalog packages are additive; **Blind
+solving** is the recommended default.
+
+![Settings showing Seiza catalog readiness, package installation, validation, and database quality actions](docs/settings-catalog-quality.png)
+
+For a manual or headless install, get the `seiza` CLI from the
 [Seiza releases](https://github.com/theatrus/seiza/releases) or with
 `cargo install seiza-cli --version 0.12.0`, then download a bundle once:
 
@@ -492,7 +501,7 @@ measurements also provide calibrated flux for photometry.
 
 | Astrometry quality results | Guarded rejection review |
 |:--:|:--:|
-| ![Quality scan with one off-target frame](docs/sequence-quality-astrometry.png) | ![Review proposed astrometry rejection](docs/sequence-quality-review.png) |
+| ![Quality scan across a varied eleven-frame sequence](docs/sequence-quality-astrometry.png) | ![Review proposed astrometry rejection](docs/sequence-quality-review.png) |
 
 **From the CLI:** screen folders in a batch without a database. Add
 `--regrade-db` to load the intended target, run fresh Seiza solves, and preview
@@ -520,6 +529,24 @@ score caps, cache safety, and CLI behavior:
 
 Full documentation — the detection stack, annotated diagnostic examples,
 tuning, and safety properties: **[docs/SCREENING.md](docs/SCREENING.md)**.
+
+## 📤 Export accepted frames for stacking
+
+After grading, expand a project on **Overview** and choose **⬇ Export**. The
+desktop app writes a WBPP-style target/filter tree to a folder you choose. A
+browser downloads the same tree as a ZIP. Rejected frames never enter the
+export.
+
+![Overview project card with the Export action](docs/export-overview.png)
+
+You can export a whole project or one target. The action appears when PSF Guard
+has found at least one accepted source file. The CLI offers the same filters
+and a dry run:
+
+```bash
+psf-guard export my-db --dest ./stacking --dry-run
+psf-guard export my-db --dest ./stacking
+```
 
 ## 🗂️ Managing rejected files
 
@@ -705,6 +732,13 @@ host = "0.0.0.0"
 #scan_worker_ratio = 0.5
 #background_worker_ratio = 0.25
 
+# Optional plain-text notice shown below the application header.
+[server.banner]
+title = "Demo site"
+message = "This public demo uses sample data. Changes may be reset."
+link_text = "Learn about PSF Guard"
+link_url = "https://psf-guard.com/"
+
 [cache]
 directory = "./cache"
 file_ttl = "5m"        # 30s, 5m, 1h, 2h30m, 1d ...
@@ -715,6 +749,10 @@ enabled = true
 screen = true          # 1200px previews
 large = false          # 2000px previews
 ```
+
+Omit `[server.banner]` to hide the notice. The title and message are plain
+text. Set both link fields or omit both; links must use `http://` or
+`https://`.
 
 Command-line arguments override the config file. (A legacy
 `[database]`/`[images]` section is still parsed but ignored in server mode —

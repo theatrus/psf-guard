@@ -25,6 +25,15 @@ host = "0.0.0.0"
 # Enable CORS (default: true)
 cors = true
 
+# Optional notice shown below the application header on every page.
+# Values are plain text. Set both link fields or omit both.
+#
+# [server.banner]
+# title = "Demo site"
+# message = "This public demo uses sample data. Changes may be reset."
+# link_text = "Learn about PSF Guard"
+# link_url = "https://psf-guard.com/"
+
 [cache]
 # Cache directory path (default: "./cache")
 directory = "./cache"

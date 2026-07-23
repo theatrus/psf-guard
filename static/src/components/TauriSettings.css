@@ -613,3 +613,204 @@
   font-weight: 400;
   line-height: 1.4;
 }
+
+.tauri-settings .catalog-settings {
+  padding: 18px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  background: var(--color-bg-secondary);
+}
+
+.tauri-settings .catalog-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.tauri-settings .catalog-heading p {
+  margin-bottom: 0;
+}
+
+.tauri-settings .catalog-feature-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.tauri-settings .catalog-feature-summary span {
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.tauri-settings .catalog-feature-summary span.ready {
+  border-color: var(--color-border-success);
+  color: var(--color-success);
+}
+
+.tauri-settings .catalog-resource-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.tauri-settings .catalog-resource {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 5px;
+  background: var(--color-bg-tertiary);
+}
+
+.tauri-settings .catalog-resource > span:last-child {
+  min-width: 0;
+}
+
+.tauri-settings .catalog-resource strong,
+.tauri-settings .catalog-resource small {
+  display: block;
+}
+
+.tauri-settings .catalog-resource strong {
+  font-size: 13px;
+}
+
+.tauri-settings .catalog-resource small {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tauri-settings .catalog-status-dot {
+  width: 9px;
+  height: 9px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  flex: 0 0 auto;
+}
+
+.tauri-settings .catalog-status-available {
+  background: var(--color-success);
+}
+
+.tauri-settings .catalog-status-invalid {
+  background: var(--color-error);
+}
+
+.tauri-settings .catalog-status-missing {
+  background: var(--color-warning);
+}
+
+.tauri-settings .catalog-install-controls {
+  display: grid;
+  grid-template-columns: max-content minmax(220px, 1fr);
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.tauri-settings .catalog-install-controls label {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.tauri-settings .catalog-install-controls select {
+  min-width: 0;
+  padding: 8px 10px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-input);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 4px;
+}
+
+.tauri-settings .catalog-install-controls > small,
+.tauri-settings .catalog-actions {
+  grid-column: 2;
+}
+
+.tauri-settings .catalog-install-controls > small,
+.tauri-settings .catalog-footnote {
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+.tauri-settings .catalog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tauri-settings .catalog-progress,
+.tauri-settings .catalog-error,
+.tauri-settings .catalog-valid {
+  display: grid;
+  gap: 5px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 5px;
+  font-size: 13px;
+}
+
+.tauri-settings .catalog-progress-complete,
+.tauri-settings .catalog-valid {
+  border-color: var(--color-border-success);
+  color: var(--color-success);
+}
+
+.tauri-settings .catalog-progress-error,
+.tauri-settings .catalog-error {
+  border-color: var(--color-border-error);
+  color: var(--color-error);
+}
+
+.tauri-settings .catalog-progress progress {
+  width: 100%;
+}
+
+.tauri-settings .catalog-progress code {
+  overflow-wrap: anywhere;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.tauri-settings .catalog-footnote {
+  margin: 12px 0 0 !important;
+  font-size: 12px;
+}
+
+@media (max-width: 820px) {
+  .tauri-settings .catalog-heading {
+    display: block;
+  }
+
+  .tauri-settings .catalog-feature-summary {
+    justify-content: flex-start;
+    margin-top: 12px;
+  }
+
+  .tauri-settings .catalog-resource-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tauri-settings .catalog-install-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .tauri-settings .catalog-install-controls > small,
+  .tauri-settings .catalog-actions {
+    grid-column: 1;
+  }
+}
