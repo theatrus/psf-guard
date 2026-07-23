@@ -65,7 +65,23 @@ wavelets / structure removal.
   path runtime-dispatches FMA on x86-64 (`is_x86_feature_detected!`) and is
   native-FMA on aarch64, mirroring OpenCV's own dispatch. Single-core
   throughput is on par with single-threaded OpenCV (canny ~1.2x, otsu
-  faster); frame-level parallelism stays in psf-guard's worker pools.
+  faster).
+- **Intra-frame parallelism (2026-07)**: psf-guard enables seiza-imgproc's
+  opt-in `parallel` feature (rayon), and the HocusFocus preprocessing
+  passes in `hocus_focus_star_detection.rs` (hot-pixel filter, noise blur,
+  edge blend, structure-map build) split by row bands on rayon's global
+  pool. All splits are bit-exact: rows/columns are independent and
+  per-pixel operation order is unchanged. Kappa-sigma and the structure-map
+  median stay serial ON PURPOSE — they are order-sensitive f64 reductions
+  and parallelizing them changes bits. Frame-level parallelism still comes
+  from psf-guard's worker pools; rayon's shared global pool bounds the
+  intra-frame threads regardless of how many frames run at once. Measured:
+  HocusFocus on a 61 MP frame went 21.8 s (pre-optimization) -> 8.0 s
+  (bit-exact single-thread rewrites) -> ~3 s (parallel); detection output
+  identical throughout (1076 stars, sigma 50.771, threshold 1584.803).
+  Removing the structure-removal passes was measured and REJECTED: they
+  are behavior-load-bearing (without them sigma drops 50.8 -> 22.6 and
+  detections jump 1076 -> 1919).
 - The old `--features opencv` flag, build.rs probing, and all CI OpenCV
   installs (vcpkg/brew/apt) are gone; `default = []` now.
 
