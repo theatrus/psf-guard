@@ -193,10 +193,14 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   await stretchControls.getByRole('spinbutton', { name: 'Deconvolution Iterations' }).fill('1');
   await stretchControls.getByRole('spinbutton', { name: 'Alpha M44 B Target median' }).fill('0.25');
   await stretchControls.getByRole('button', { name: 'Apply processing' }).click();
-  await expect.poll(() => preview.getAttribute('src')).toMatch(
+  await expect(stretchControls).toContainText(
+    '3.1px deconv · Auto MTF applied',
+    { timeout: 30_000 }
+  );
+  await expect(preview).toHaveAttribute(
+    'src',
     /\/stack-previews\/stretch\/[a-f0-9]{64}\/preview$/
   );
-  await expect(stretchControls).toContainText('3.1px deconv · Auto MTF applied');
   if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
     const docs = path.resolve(process.cwd(), '..', 'docs');
     fs.mkdirSync(docs, { recursive: true });

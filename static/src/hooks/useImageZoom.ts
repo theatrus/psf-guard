@@ -32,6 +32,9 @@ export interface UseImageZoomReturn {
   handleMouseDown: (e: React.MouseEvent) => void;
   handleMouseMove: (e: React.MouseEvent) => void;
   handleMouseUp: (e: React.MouseEvent) => void;
+  handleTouchStart: (e: React.TouchEvent) => void;
+  handleTouchMove: (e: React.TouchEvent) => void;
+  handleTouchEnd: (e: React.TouchEvent) => void;
   handleKeyDown: (e: React.KeyboardEvent) => void;
   zoomIn: () => void;
   zoomOut: () => void;
@@ -75,6 +78,13 @@ export function useImageZoom(options: UseImageZoomOptions = DEFAULT_BOUNDS): Use
   const imageRef = useRef<HTMLImageElement>(null);
   const isPanningRef = useRef(false);
   const lastMousePosRef = useRef({ x: 0, y: 0 });
+  const lastTouchPosRef = useRef<{ x: number; y: number } | null>(null);
+  const pinchRef = useRef<{
+    distance: number;
+    centerX: number;
+    centerY: number;
+    state: ZoomState;
+  } | null>(null);
   const initialFitScaleRef = useRef(1);
 
   // Latest onViewModeChange without forcing callers to memoize it.
@@ -381,6 +391,128 @@ export function useImageZoom(options: UseImageZoomOptions = DEFAULT_BOUNDS): Use
     isPanningRef.current = false;
   }, []);
 
+  const beginPinch = useCallback((touches: React.TouchList, state: ZoomState) => {
+    const container = containerRef.current;
+    if (!container || touches.length < 2) return;
+
+    const rect = container.getBoundingClientRect();
+    const first = touches[0];
+    const second = touches[1];
+    const deltaX = second.clientX - first.clientX;
+    const deltaY = second.clientY - first.clientY;
+
+    pinchRef.current = {
+      distance: Math.hypot(deltaX, deltaY),
+      centerX: (first.clientX + second.clientX) / 2 - rect.left,
+      centerY: (first.clientY + second.clientY) / 2 - rect.top,
+      state,
+    };
+    lastTouchPosRef.current = null;
+  }, []);
+
+  // Touch uses one finger to pan and two fingers to zoom around their
+  // midpoint. The paired touch-action rule on .zoom-container keeps the
+  // browser from taking over the gesture.
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length >= 2) {
+      e.preventDefault();
+      beginPinch(e.touches, zoomState);
+      return;
+    }
+
+    if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      lastTouchPosRef.current = { x: touch.clientX, y: touch.clientY };
+      pinchRef.current = null;
+    }
+  }, [beginPinch, zoomState]);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    if (e.touches.length >= 2) {
+      e.preventDefault();
+
+      if (!pinchRef.current) {
+        beginPinch(e.touches, zoomState);
+        return;
+      }
+
+      const first = e.touches[0];
+      const second = e.touches[1];
+      const rect = container.getBoundingClientRect();
+      const deltaX = second.clientX - first.clientX;
+      const deltaY = second.clientY - first.clientY;
+      const distance = Math.hypot(deltaX, deltaY);
+      const centerX = (first.clientX + second.clientX) / 2 - rect.left;
+      const centerY = (first.clientY + second.clientY) / 2 - rect.top;
+      const pinch = pinchRef.current;
+
+      if (pinch.distance <= 0) return;
+
+      const newScale = clampScale(
+        pinch.state.scale * (distance / pinch.distance)
+      );
+      const imageX =
+        (pinch.centerX - pinch.state.offsetX) / pinch.state.scale;
+      const imageY =
+        (pinch.centerY - pinch.state.offsetY) / pinch.state.scale;
+      const constrained = constrainPan(
+        centerX - imageX * newScale,
+        centerY - imageY * newScale,
+        newScale
+      );
+
+      intentionalZoomRef.current = true;
+      onViewModeChangeRef.current?.('user');
+      setZoomState({
+        scale: newScale,
+        offsetX: constrained.offsetX,
+        offsetY: constrained.offsetY,
+      });
+      return;
+    }
+
+    if (e.touches.length === 1 && lastTouchPosRef.current) {
+      e.preventDefault();
+      const touch = e.touches[0];
+      const deltaX = touch.clientX - lastTouchPosRef.current.x;
+      const deltaY = touch.clientY - lastTouchPosRef.current.y;
+
+      if (deltaX !== 0 || deltaY !== 0) {
+        onViewModeChangeRef.current?.('user');
+        setZoomState(prevState => {
+          const constrained = constrainPan(
+            prevState.offsetX + deltaX,
+            prevState.offsetY + deltaY,
+            prevState.scale
+          );
+          return {
+            ...prevState,
+            offsetX: constrained.offsetX,
+            offsetY: constrained.offsetY,
+          };
+        });
+      }
+
+      lastTouchPosRef.current = { x: touch.clientX, y: touch.clientY };
+    }
+  }, [beginPinch, clampScale, constrainPan, zoomState]);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length >= 2) {
+      beginPinch(e.touches, zoomState);
+    } else if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      pinchRef.current = null;
+      lastTouchPosRef.current = { x: touch.clientX, y: touch.clientY };
+    } else {
+      pinchRef.current = null;
+      lastTouchPosRef.current = null;
+    }
+  }, [beginPinch, zoomState]);
+
   // Zoom in function
   const zoomIn = useCallback(() => {
     // Mark this as an intentional zoom operation
@@ -640,6 +772,9 @@ export function useImageZoom(options: UseImageZoomOptions = DEFAULT_BOUNDS): Use
     handleMouseDown,
     handleMouseMove,
     handleMouseUp,
+    handleTouchStart,
+    handleTouchMove,
+    handleTouchEnd,
     handleKeyDown,
     zoomIn,
     zoomOut,

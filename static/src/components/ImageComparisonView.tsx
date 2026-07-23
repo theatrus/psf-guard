@@ -425,6 +425,38 @@ export default function ImageComparisonView({
     }
   }, [leftZoom, rightZoom, syncZoom]);
 
+  const routeRightTouch = useCallback((
+    e: React.TouchEvent,
+    phase: 'start' | 'move' | 'end'
+  ) => {
+    if (!syncZoom) {
+      if (phase === 'start') rightZoom.handleTouchStart(e);
+      if (phase === 'move') rightZoom.handleTouchMove(e);
+      if (phase === 'end') rightZoom.handleTouchEnd(e);
+      return;
+    }
+
+    const leftContainer = leftZoom.containerRef.current;
+    const rightContainer = rightZoom.containerRef.current;
+    if (!leftContainer || !rightContainer) return;
+
+    const leftRect = leftContainer.getBoundingClientRect();
+    const rightRect = rightContainer.getBoundingClientRect();
+    const touches = Array.from(e.touches, touch => ({
+      clientX: touch.clientX - rightRect.left + leftRect.left,
+      clientY: touch.clientY - rightRect.top + leftRect.top,
+    }));
+    const adjustedEvent = {
+      touches,
+      preventDefault: () => e.preventDefault(),
+      stopPropagation: () => e.stopPropagation(),
+    } as unknown as React.TouchEvent;
+
+    if (phase === 'start') leftZoom.handleTouchStart(adjustedEvent);
+    if (phase === 'move') leftZoom.handleTouchMove(adjustedEvent);
+    if (phase === 'end') leftZoom.handleTouchEnd(adjustedEvent);
+  }, [leftZoom, rightZoom, syncZoom]);
+
   const getStatusClass = (image: Image | null | undefined) => {
     if (!image) return '';
     switch (image.grading_status) {
@@ -505,6 +537,10 @@ export default function ImageComparisonView({
                 onMouseMove={handleLeftMouseMove}
                 onMouseUp={leftZoom.handleMouseUp}
                 onMouseLeave={leftZoom.handleMouseUp}
+                onTouchStart={leftZoom.handleTouchStart}
+                onTouchMove={leftZoom.handleTouchMove}
+                onTouchEnd={leftZoom.handleTouchEnd}
+                onTouchCancel={leftZoom.handleTouchEnd}
               >
                 {asyncLeft.state === 'error' ? (
                   <div className="comparison-image-error" style={{
@@ -674,6 +710,10 @@ export default function ImageComparisonView({
                     onMouseMove={handleRightMouseMove}
                     onMouseUp={syncZoom ? leftZoom.handleMouseUp : rightZoom.handleMouseUp}
                     onMouseLeave={syncZoom ? leftZoom.handleMouseUp : rightZoom.handleMouseUp}
+                    onTouchStart={(e) => routeRightTouch(e, 'start')}
+                    onTouchMove={(e) => routeRightTouch(e, 'move')}
+                    onTouchEnd={(e) => routeRightTouch(e, 'end')}
+                    onTouchCancel={(e) => routeRightTouch(e, 'end')}
                   >
                     {asyncRight.state === 'error' ? (
                       <div className="comparison-image-error" style={{
