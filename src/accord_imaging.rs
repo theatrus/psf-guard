@@ -28,7 +28,14 @@ impl DetectionUtility {
     }
 }
 
-/// Use image crate for bicubic interpolation
+/// Catmull-Rom (bicubic) resize, bit-identical to
+/// `image::imageops::resize(..., FilterType::CatmullRom)` for `Luma<u8>`
+/// but several times faster: the vertical pass accumulates per kernel tap
+/// across whole rows (each output pixel still receives its terms in tap
+/// order, so sums match the per-pixel loop exactly), horizontal kernel
+/// weights are computed once per output column instead of being
+/// interleaved with the pixel loop, and the input is read in place. The
+/// unit test below asserts exact equality against the image crate.
 fn resize_bicubic_image_crate(
     image: &[u8],
     width: usize,
@@ -36,23 +43,93 @@ fn resize_bicubic_image_crate(
     new_width: usize,
     new_height: usize,
 ) -> Vec<u8> {
-    use image::{ImageBuffer, Luma};
+    if width == 0 || height == 0 || new_width == 0 || new_height == 0 {
+        return vec![0u8; new_width * new_height];
+    }
 
-    // Create an ImageBuffer from our data
-    let img =
-        ImageBuffer::<Luma<u8>, Vec<u8>>::from_vec(width as u32, height as u32, image.to_vec())
-            .expect("Failed to create image buffer");
+    // Kernel weights and source bounds for one output coordinate, exactly
+    // as image-0.25's horizontal_sample/vertical_sample compute them.
+    fn taps(out: usize, in_len: usize, new_len: usize, ws: &mut Vec<f32>) -> usize {
+        let ratio = in_len as f32 / new_len as f32;
+        let sratio = if ratio < 1.0 { 1.0 } else { ratio };
+        let src_support = 2.0 * sratio;
 
-    // Resize using bicubic interpolation
-    let resized = image::imageops::resize(
-        &img,
-        new_width as u32,
-        new_height as u32,
-        image::imageops::FilterType::CatmullRom,
-    );
+        let input = (out as f32 + 0.5) * ratio;
+        let left = (input - src_support).floor() as i64;
+        let left = left.clamp(0, in_len as i64 - 1) as usize;
+        let right = (input + src_support).ceil() as i64;
+        let right = right.clamp(left as i64 + 1, in_len as i64) as usize;
+        let input = input - 0.5;
 
-    // Convert back to Vec<u8>
-    resized.into_raw()
+        ws.clear();
+        let mut sum = 0.0f32;
+        for i in left..right {
+            let w = catmullrom_kernel((i as f32 - input) / sratio);
+            ws.push(w);
+            sum += w;
+        }
+        for w in ws.iter_mut() {
+            *w /= sum;
+        }
+        left
+    }
+
+    // Vertical pass: u8 rows -> f32 intermediate of size width x new_height.
+    let mut intermediate = vec![0f32; width * new_height];
+    let mut ws = Vec::new();
+    for outy in 0..new_height {
+        let left = taps(outy, height, new_height, &mut ws);
+        let acc = &mut intermediate[outy * width..(outy + 1) * width];
+        acc.fill(0.0);
+        for (i, &w) in ws.iter().enumerate() {
+            let srow = &image[(left + i) * width..(left + i + 1) * width];
+            for (a, &v) in acc.iter_mut().zip(srow.iter()) {
+                *a += v as f32 * w;
+            }
+        }
+    }
+
+    // Horizontal pass: weights once per output column, then row-major
+    // per-pixel tap sums (same term order as the reference), rounded the
+    // way image's FloatNearest rounds.
+    let mut columns: Vec<(usize, Vec<f32>)> = Vec::with_capacity(new_width);
+    for outx in 0..new_width {
+        let left = taps(outx, width, new_width, &mut ws);
+        columns.push((left, ws.clone()));
+    }
+    let mut out = vec![0u8; new_width * new_height];
+    for y in 0..new_height {
+        let irow = &intermediate[y * width..(y + 1) * width];
+        let orow = &mut out[y * new_width..(y + 1) * new_width];
+        for (o, (left, ws)) in orow.iter_mut().zip(columns.iter()) {
+            let mut t = 0.0f32;
+            for (i, &w) in ws.iter().enumerate() {
+                t += irow[left + i] * w;
+            }
+            *o = t.clamp(0.0, 255.0).round() as u8;
+        }
+    }
+    out
+}
+
+/// The Catmull-Rom cubic spline, exactly as image-0.25 evaluates it
+/// (`bc_cubic_spline(x, 0.0, 0.5)` in f32).
+fn catmullrom_kernel(x: f32) -> f32 {
+    let (b, c) = (0.0f32, 0.5f32);
+    let a = x.abs();
+    let k = if a < 1.0 {
+        (12.0 - 9.0 * b - 6.0 * c) * a.powi(3)
+            + (-18.0 + 12.0 * b + 6.0 * c) * a.powi(2)
+            + (6.0 - 2.0 * b)
+    } else if a < 2.0 {
+        (-b - 6.0 * c) * a.powi(3)
+            + (6.0 * b + 30.0 * c) * a.powi(2)
+            + (-12.0 * b - 48.0 * c) * a
+            + (8.0 * b + 24.0 * c)
+    } else {
+        0.0
+    };
+    k / 6.0
 }
 
 /// Blob representation
@@ -261,6 +338,37 @@ mod tests {
         for blob in blobs {
             assert_eq!(blob.rectangle.width, 2);
             assert_eq!(blob.rectangle.height, 2);
+        }
+    }
+
+    #[test]
+    fn resize_is_bit_identical_to_image_crate_catmullrom() {
+        use image::{ImageBuffer, Luma};
+        let mut state = 0x1234_5678_9abc_def0u64;
+        for (w, h, nw, nh) in [
+            (97usize, 61usize, 16usize, 10usize), // ~6x downscale like N.I.N.A.
+            (64, 64, 33, 21),
+            (33, 47, 8, 40),  // downscale one axis, upscale the other
+            (16, 16, 31, 31), // upscale
+            (5, 3, 2, 2),
+        ] {
+            let data: Vec<u8> = (0..w * h)
+                .map(|_| {
+                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    (state >> 56) as u8
+                })
+                .collect();
+            let ours = resize_bicubic_image_crate(&data, w, h, nw, nh);
+            let img = ImageBuffer::<Luma<u8>, Vec<u8>>::from_vec(w as u32, h as u32, data.clone())
+                .unwrap();
+            let reference = image::imageops::resize(
+                &img,
+                nw as u32,
+                nh as u32,
+                image::imageops::FilterType::CatmullRom,
+            )
+            .into_raw();
+            assert_eq!(ours, reference, "{w}x{h} -> {nw}x{nh}");
         }
     }
 }
