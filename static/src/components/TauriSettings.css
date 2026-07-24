@@ -859,6 +859,8 @@
 }
 
 .tauri-settings .calibration-summary {
+  display: grid;
+  gap: 5px;
   margin-top: 10px;
   padding: 9px 11px;
   border: 1px solid var(--color-border);
@@ -867,10 +869,32 @@
   font-size: 12px;
 }
 
+.tauri-settings .calibration-summary-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .tauri-settings .calibration-summary-title {
-  margin-bottom: 5px;
   color: var(--color-text-primary);
   font-weight: 650;
+}
+
+.tauri-settings .calibration-manage-button {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  color: var(--color-primary);
+  background: transparent;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.tauri-settings .calibration-manage-button:hover {
+  background: var(--color-bg-tertiary);
+  border-color: var(--color-primary);
 }
 
 .tauri-settings .calibration-rig {
@@ -883,6 +907,237 @@
 .tauri-settings .calibration-summary-error {
   border-color: var(--color-border-error);
   color: var(--color-error);
+}
+
+.tauri-settings .calibration-library-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--color-bg-primary) 72%, transparent);
+  backdrop-filter: blur(4px);
+}
+
+.tauri-settings .calibration-library-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(1180px, 100%);
+  max-height: min(860px, calc(100vh - 48px));
+  overflow: hidden;
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 14px;
+  box-shadow: 0 24px 70px rgb(0 0 0 / 45%);
+}
+
+.tauri-settings .calibration-library-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tauri-settings .calibration-library-header h2,
+.tauri-settings .calibration-library-header p {
+  margin: 0;
+}
+
+.tauri-settings .calibration-library-header h2 {
+  font-size: 22px;
+}
+
+.tauri-settings .calibration-library-header p {
+  margin-top: 4px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.tauri-settings .calibration-library-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  padding: 14px 24px;
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tauri-settings .calibration-library-toolbar > label:not(.calibration-missing-filter) {
+  display: grid;
+  gap: 4px;
+  min-width: 150px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tauri-settings .calibration-library-toolbar select {
+  min-height: 34px;
+  padding: 5px 30px 5px 9px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-input);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+}
+
+.tauri-settings .calibration-missing-filter {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.tauri-settings .calibration-library-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.tauri-settings .calibration-library-notice,
+.tauri-settings .calibration-library-error {
+  margin: 12px 24px 0;
+  padding: 10px 12px;
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.tauri-settings .calibration-library-notice {
+  color: var(--color-text-secondary);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+}
+
+.tauri-settings .calibration-library-error {
+  color: var(--color-error);
+  background: var(--color-error-alpha-10);
+  border: 1px solid var(--color-border-error);
+}
+
+.tauri-settings .calibration-library-content {
+  min-height: 220px;
+  overflow: auto;
+  padding: 0 24px 24px;
+}
+
+.tauri-settings .calibration-library-empty {
+  display: grid;
+  min-height: 220px;
+  place-items: center;
+  padding: 24px;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.tauri-settings .calibration-frame-table {
+  width: 100%;
+  margin-top: 14px;
+  border-spacing: 0;
+  border-collapse: separate;
+  font-size: 12px;
+}
+
+.tauri-settings .calibration-frame-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 9px 10px;
+  color: var(--color-text-muted);
+  background: var(--color-bg-primary);
+  border-bottom: 1px solid var(--color-border-secondary);
+  text-align: left;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.tauri-settings .calibration-frame-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+
+.tauri-settings .calibration-frame-table tr.missing {
+  background: color-mix(in srgb, var(--color-error) 6%, transparent);
+}
+
+.tauri-settings .calibration-frame-table td strong,
+.tauri-settings .calibration-frame-table td span,
+.tauri-settings .calibration-frame-table td small {
+  display: block;
+}
+
+.tauri-settings .calibration-frame-table td small {
+  margin-top: 3px;
+  color: var(--color-text-muted);
+}
+
+.tauri-settings .calibration-frame-path {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tauri-settings .calibration-library-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 14px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.tauri-settings .calibration-kind {
+  display: inline-block !important;
+  padding: 3px 7px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.tauri-settings .calibration-source-ready {
+  color: var(--color-success);
+}
+
+.tauri-settings .calibration-source-missing {
+  color: var(--color-warning);
+}
+
+@media (max-width: 760px) {
+  .tauri-settings .calibration-library-overlay {
+    padding: 0;
+  }
+
+  .tauri-settings .calibration-library-dialog {
+    width: 100%;
+    max-height: 100vh;
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .tauri-settings .calibration-library-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .tauri-settings .calibration-frame-table th:nth-child(3),
+  .tauri-settings .calibration-frame-table td:nth-child(3) {
+    display: none;
+  }
 }
 
 .tauri-settings .catalog-actions {

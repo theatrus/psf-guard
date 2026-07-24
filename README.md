@@ -578,7 +578,9 @@ psf-guard export my-db --dest ./stacking
 ```
 
 See **[Calibration libraries](docs/CALIBRATION_LIBRARY.md)** for import,
-matching, stack-master, export, cache, and database-sync rules.
+matching, stack-master, export, cache, and database-sync rules. Each database
+in Settings also has a library manager for finding missing files, reviewing
+match settings, forgetting bad records, and clearing generated masters.
 
 ## 🗂️ Managing rejected files
 

@@ -52,6 +52,22 @@ const idleSpatialScan = {
 };
 
 export const handlers = [
+  http.get('/api/db/:dbId/calibrations/details', () =>
+    HttpResponse.json({
+      success: true,
+      data: {
+        summary: {
+          schema_version: 1,
+          frame_count: 0,
+          master_count: 0,
+          rigs: [],
+        },
+        frames: [],
+      },
+      error: null,
+      status: 'ready',
+    })
+  ),
   http.get('/api/db/:dbId/calibrations', () =>
     HttpResponse.json({
       success: true,
@@ -61,6 +77,22 @@ export const handlers = [
         master_count: 0,
         rigs: [],
       },
+      error: null,
+      status: 'ready',
+    })
+  ),
+  http.delete('/api/db/:dbId/calibrations/frames/:frameUuid', () =>
+    HttpResponse.json({
+      success: true,
+      data: { frames_removed: 1, masters_removed: 0 },
+      error: null,
+      status: 'ready',
+    })
+  ),
+  http.delete('/api/db/:dbId/calibrations/masters', () =>
+    HttpResponse.json({
+      success: true,
+      data: { frames_removed: 0, masters_removed: 0 },
       error: null,
       status: 'ready',
     })

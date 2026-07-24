@@ -130,6 +130,41 @@ pub struct CalibrationLibrarySummary {
     pub rigs: Vec<CalibrationRigSummary>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct CalibrationFrameSummary {
+    pub frame_uuid: String,
+    pub rig_uuid: String,
+    pub kind: CalibrationKind,
+    pub source_path: String,
+    pub source_exists: bool,
+    pub captured_at: Option<i64>,
+    pub camera: Option<String>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub binning_x: Option<i64>,
+    pub binning_y: Option<i64>,
+    pub gain: Option<i64>,
+    pub offset: Option<i64>,
+    pub readout_mode: Option<i64>,
+    pub bayer_pattern: Option<String>,
+    pub exposure_s: Option<f64>,
+    pub camera_temp: Option<f64>,
+    pub filter: Option<String>,
+    pub focal_length_mm: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CalibrationLibraryDetails {
+    pub summary: CalibrationLibrarySummary,
+    pub frames: Vec<CalibrationFrameSummary>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct CalibrationMutationOutcome {
+    pub frames_removed: usize,
+    pub masters_removed: usize,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CalibrationSyncCounts {
     pub inserted: usize,
@@ -483,6 +518,156 @@ pub fn library_summary(conn: &Connection) -> Result<CalibrationLibrarySummary> {
         frame_count: rigs.iter().map(|rig| rig.frame_count).sum(),
         master_count,
         rigs,
+    })
+}
+
+pub fn library_details(conn: &Connection) -> Result<CalibrationLibraryDetails> {
+    let summary = library_summary(conn)?;
+    if !schema_exists(conn) {
+        return Ok(CalibrationLibraryDetails {
+            summary,
+            frames: Vec::new(),
+        });
+    }
+    let mut statement = conn.prepare(
+        r#"
+        SELECT id, frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
+               captured_at, telescope, camera, width, height, channels,
+               binning_x, binning_y, gain, offset, readout_mode, bayer_pattern,
+               exposure_s, camera_temp, filter_name, focal_length_mm
+        FROM psf_guard_calibration_frame
+        ORDER BY kind, captured_at DESC, source_path COLLATE NOCASE
+        "#,
+    )?;
+    let frames = statement
+        .query_map([], row_to_frame)?
+        .map(|row| {
+            row.map(|frame| CalibrationFrameSummary {
+                frame_uuid: frame.frame_uuid,
+                rig_uuid: frame.rig_uuid,
+                kind: frame.kind,
+                // The server checks paths after releasing the shared database
+                // connection so slow storage cannot block unrelated queries.
+                source_exists: false,
+                source_path: frame.source_path.to_string_lossy().into_owned(),
+                captured_at: frame.captured_at,
+                camera: frame.camera,
+                width: frame.width,
+                height: frame.height,
+                binning_x: frame.binning_x,
+                binning_y: frame.binning_y,
+                gain: frame.gain,
+                offset: frame.offset,
+                readout_mode: frame.readout_mode,
+                bayer_pattern: frame.bayer_pattern,
+                exposure_s: frame.exposure_s,
+                camera_temp: frame.camera_temp,
+                filter: frame.filter,
+                focal_length_mm: frame.focal_length_mm,
+            })
+        })
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(CalibrationLibraryDetails { summary, frames })
+}
+
+pub fn forget_frame(conn: &mut Connection, frame_uuid: &str) -> Result<CalibrationMutationOutcome> {
+    if !schema_exists(conn) {
+        return Ok(CalibrationMutationOutcome::default());
+    }
+    let transaction = conn.transaction()?;
+    let frame_exists = transaction
+        .query_row(
+            "SELECT 1 FROM psf_guard_calibration_frame WHERE frame_uuid = ?1",
+            [frame_uuid],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !frame_exists {
+        return Ok(CalibrationMutationOutcome::default());
+    }
+
+    #[derive(Debug)]
+    struct MasterLink {
+        uuid: String,
+        sources: Vec<String>,
+        bias: Option<String>,
+        dark: Option<String>,
+    }
+    let raw_links = {
+        let mut statement = transaction.prepare(
+            "SELECT master_uuid, source_frame_uuids, bias_master_uuid, dark_master_uuid
+             FROM psf_guard_calibration_master",
+        )?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let links = raw_links
+        .into_iter()
+        .map(|(uuid, sources_json, bias, dark)| {
+            Ok(MasterLink {
+                uuid,
+                sources: serde_json::from_str(&sources_json)
+                    .context("reading calibration master source provenance")?,
+                bias,
+                dark,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut invalid = links
+        .iter()
+        .filter(|master| master.sources.iter().any(|source| source == frame_uuid))
+        .map(|master| master.uuid.clone())
+        .collect::<std::collections::HashSet<_>>();
+    loop {
+        let before = invalid.len();
+        for master in &links {
+            if master
+                .bias
+                .iter()
+                .chain(master.dark.iter())
+                .any(|dependency| invalid.contains(dependency))
+            {
+                invalid.insert(master.uuid.clone());
+            }
+        }
+        if invalid.len() == before {
+            break;
+        }
+    }
+    for master_uuid in &invalid {
+        transaction.execute(
+            "DELETE FROM psf_guard_calibration_master WHERE master_uuid = ?1",
+            [master_uuid],
+        )?;
+    }
+    let frames_removed = transaction.execute(
+        "DELETE FROM psf_guard_calibration_frame WHERE frame_uuid = ?1",
+        [frame_uuid],
+    )?;
+    transaction.commit()?;
+    Ok(CalibrationMutationOutcome {
+        frames_removed,
+        masters_removed: invalid.len(),
+    })
+}
+
+pub fn clear_generated_masters(conn: &Connection) -> Result<CalibrationMutationOutcome> {
+    if !schema_exists(conn) {
+        return Ok(CalibrationMutationOutcome::default());
+    }
+    let masters_removed = conn.execute("DELETE FROM psf_guard_calibration_master", [])?;
+    Ok(CalibrationMutationOutcome {
+        frames_removed: 0,
+        masters_removed,
     })
 }
 
@@ -1893,6 +2078,19 @@ mod tests {
         let (_, reused) = resolve_or_build_masters(&conn, &cache, &light_path, None).unwrap();
         assert_eq!(reused.fingerprint, applied.fingerprint);
         assert_eq!(library_summary(&conn).unwrap().master_count, 4);
+
+        let bias_uuid: String = conn
+            .query_row(
+                "SELECT frame_uuid FROM psf_guard_calibration_frame
+                 WHERE kind = 'bias' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let forgotten = forget_frame(&mut conn, &bias_uuid).unwrap();
+        assert_eq!(forgotten.frames_removed, 1);
+        assert_eq!(forgotten.masters_removed, 4);
+        assert_eq!(library_summary(&conn).unwrap().master_count, 0);
     }
 
     #[test]

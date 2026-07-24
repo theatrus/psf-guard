@@ -119,28 +119,76 @@ test('grade transfer requires a dry preview before Apply appears', async ({
 });
 
 test('settings shows calibration coverage for each database rig', async ({ page }) => {
+  const summary = {
+    schema_version: 1,
+    frame_count: 42,
+    master_count: 3,
+    rigs: [
+      {
+        rig_uuid: 'rig-1',
+        name: 'Ultracat · TestCam',
+        profile_id: 'profile',
+        telescope: 'Ultracat',
+        camera: 'TestCam',
+        frame_count: 42,
+        bias: 10,
+        dark: 12,
+        dark_flat: 8,
+        flat: 12,
+      },
+    ],
+  };
   await page.route('**/api/db/review/calibrations', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         success: true,
+        data: summary,
+        error: null,
+        status: 'ready',
+      }),
+    });
+  });
+  await page.route('**/api/db/review/calibrations/details', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
         data: {
-          schema_version: 1,
-          frame_count: 42,
-          master_count: 3,
-          rigs: [
+          summary,
+          frames: [
             {
+              frame_uuid: 'frame-dark',
               rig_uuid: 'rig-1',
-              name: 'Ultracat · TestCam',
-              profile_id: 'profile',
-              telescope: 'Ultracat',
+              kind: 'dark',
+              source_path: '/archive/calibration/dark-300s.fits',
+              source_exists: true,
+              captured_at: 1_752_000_000,
               camera: 'TestCam',
-              frame_count: 42,
-              bias: 10,
-              dark: 12,
-              dark_flat: 8,
-              flat: 12,
+              width: 6248,
+              height: 4176,
+              binning_x: 1,
+              binning_y: 1,
+              gain: 100,
+              offset: 30,
+              exposure_s: 300,
+              camera_temp: -10,
+            },
+            {
+              frame_uuid: 'frame-flat',
+              rig_uuid: 'rig-1',
+              kind: 'flat',
+              source_path: '/old-host/calibration/flat-ha.fits',
+              source_exists: false,
+              camera: 'TestCam',
+              width: 6248,
+              height: 4176,
+              binning_x: 1,
+              binning_y: 1,
+              gain: 100,
+              filter: 'Ha',
             },
           ],
         },
@@ -157,6 +205,17 @@ test('settings shows calibration coverage for each database rig', async ({ page 
   await expect(review.getByText(/Calibration library · 42 frames · 3 cached masters/)).toBeVisible();
   await expect(review.getByText('Ultracat · TestCam')).toBeVisible();
   await expect(review.getByText(/10 bias · 12 dark · 8 dark-flat · 12 flat/)).toBeVisible();
+  await review.getByRole('button', { name: 'Manage' }).click();
+
+  const library = page.getByRole('dialog', { name: 'Calibration library' });
+  await expect(library).toBeVisible();
+  await expect(library.getByText('dark-300s.fits', { exact: true })).toBeVisible();
+  await expect(library.getByText('flat-ha.fits', { exact: true })).toBeVisible();
+  await expect(library.getByText('⚠ Missing')).toBeVisible();
+  await expect(library.getByRole('button', { name: 'Clear generated masters' })).toBeVisible();
+  await library.getByLabel('Missing files only').check();
+  await expect(library.getByText('dark-300s.fits', { exact: true })).toBeHidden();
+  await expect(library.getByText('flat-ha.fits', { exact: true })).toBeVisible();
 });
 
 test('data transfer controls fit a compact settings view', async ({ page }) => {

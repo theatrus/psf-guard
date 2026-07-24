@@ -859,6 +859,38 @@ export interface CalibrationLibrarySummary {
   rigs: CalibrationRigSummary[];
 }
 
+export interface CalibrationFrameSummary {
+  frame_uuid: string;
+  rig_uuid: string;
+  kind: 'bias' | 'dark' | 'dark_flat' | 'flat';
+  source_path: string;
+  source_exists: boolean;
+  captured_at?: number | null;
+  camera?: string | null;
+  width?: number | null;
+  height?: number | null;
+  binning_x?: number | null;
+  binning_y?: number | null;
+  gain?: number | null;
+  offset?: number | null;
+  readout_mode?: number | null;
+  bayer_pattern?: string | null;
+  exposure_s?: number | null;
+  camera_temp?: number | null;
+  filter?: string | null;
+  focal_length_mm?: number | null;
+}
+
+export interface CalibrationLibraryDetails {
+  summary: CalibrationLibrarySummary;
+  frames: CalibrationFrameSummary[];
+}
+
+export interface CalibrationMutationOutcome {
+  frames_removed: number;
+  masters_removed: number;
+}
+
 /** Progress of the singleton per-DB import job (poll ~1s while running). */
 export interface ImportJobProgress {
   running: boolean;

@@ -590,7 +590,12 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                       Remote receive: {entry.remote_image_upload.image_dir}
                     </div>
                   )}
-                  <CalibrationLibrarySummary dbId={entry.id} />
+                  <CalibrationLibrarySummary
+                    dbId={entry.id}
+                    dbName={entry.name}
+                    canManage={managementAllowed}
+                    onImport={() => handleImport(entry)}
+                  />
                   <QualityBackfillControls dbId={entry.id} />
                 </div>
                 {managementAllowed && (

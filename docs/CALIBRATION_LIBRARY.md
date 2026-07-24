@@ -40,6 +40,19 @@ with that rig. Target Scheduler row IDs are not used as calibration identity.
 Settings shows each rig and its bias, dark, dark-flat, and flat coverage. A
 database copy carries this catalog with its projects and grades.
 
+Choose **Manage** on a database's calibration summary to inspect every frame.
+The library view filters by rig and frame type, marks paths that no longer
+exist, and shows the settings used for matching. With database management
+enabled, it can:
+
+- scan the database's configured folders again;
+- forget a wrong or stale catalog entry without deleting its FITS file;
+- clear generated masters while keeping all raw frames and catalog records.
+
+Forgetting a frame also drops every master record that used it, including
+downstream masters that used one of those masters. Clearing masters waits for
+any active stack preview and rebuilds them on demand later.
+
 ## Safe matching
 
 PSF Guard only uses candidates that agree with every known hard setting:

@@ -198,6 +198,15 @@ impl StackPreviewManager {
         self.jobs.lock().unwrap().get(job_id).cloned()
     }
 
+    pub(crate) async fn acquire_maintenance_permit(
+        &self,
+    ) -> Result<tokio::sync::OwnedSemaphorePermit, String> {
+        Arc::clone(&self.permit)
+            .acquire_owned()
+            .await
+            .map_err(|_| "stack preview worker has stopped".to_string())
+    }
+
     fn insert(&self, job: StackPreviewJob) -> bool {
         let mut jobs = self.jobs.lock().unwrap();
         if jobs.len() >= MAX_REMEMBERED_JOBS && !jobs.contains_key(&job.job_id) {
