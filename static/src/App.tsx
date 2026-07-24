@@ -12,6 +12,7 @@ import TauriSettings from './components/TauriSettings';
 import { useGridState } from './hooks/useUrlState';
 import { isTauriApp, tauriConfig } from './utils/tauri';
 import { apiClient } from './api/client';
+import psfGuardLogo from '../icons/32x32.png';
 import './App.css';
 
 function App() {
@@ -107,7 +108,13 @@ function App() {
             onClick={() => navigate('/')}
             title="Go to Overview"
           >
-            PSF Guard
+            <img
+              className="brand-logo"
+              src={psfGuardLogo}
+              alt=""
+              aria-hidden="true"
+            />
+            <span>PSF Guard</span>
           </button>
         </div>
 
