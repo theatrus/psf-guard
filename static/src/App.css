@@ -665,6 +665,106 @@
   margin-top: 4rem;
 }
 
+.project-pick-prompt {
+  display: flex;
+  align-items: center;
+  gap: 1.4rem;
+  width: min(640px, calc(100% - 2rem));
+  margin: 4rem auto 0;
+  padding: 1.6rem 1.8rem;
+  border: 1px solid var(--color-primary);
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, var(--color-primary-alpha-10), transparent 60%),
+    var(--color-bg-secondary);
+  box-shadow: 0 14px 40px rgb(0 0 0 / 18%);
+}
+
+.project-pick-icon {
+  display: grid;
+  grid-template-columns: repeat(2, 30px);
+  gap: 5px;
+  flex: none;
+  padding: 10px;
+  border: 1px solid var(--color-primary);
+  border-radius: 10px;
+  background: var(--color-primary-alpha-10);
+}
+
+.project-pick-icon span {
+  width: 30px;
+  height: 25px;
+  border-radius: 4px;
+  background: var(--color-primary-alpha-20);
+}
+
+.project-pick-icon span:first-child {
+  grid-row: span 2;
+  height: 55px;
+  background: var(--color-primary);
+}
+
+.project-pick-eyebrow {
+  color: var(--color-primary);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.project-pick-prompt h2 {
+  margin: 0.18rem 0 0.4rem;
+  color: var(--color-text-primary);
+  font-size: 1.45rem;
+}
+
+.project-pick-prompt p {
+  margin: 0 0 1rem;
+  color: var(--color-text-muted);
+  line-height: 1.45;
+}
+
+.project-pick-prompt button {
+  padding: 0.55rem 0.85rem;
+  border: 1px solid var(--color-primary);
+  border-radius: 6px;
+  background: var(--color-primary);
+  color: var(--color-text-dark);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.project-pick-prompt button:hover {
+  background: var(--color-primary-alpha-80);
+}
+
+.project-pick-prompt button:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+
+@media (max-width: 600px) {
+  .project-pick-prompt {
+    align-items: flex-start;
+    margin-top: 2rem;
+    padding: 1.2rem;
+  }
+
+  .project-pick-icon {
+    grid-template-columns: repeat(2, 20px);
+  }
+
+  .project-pick-icon span {
+    width: 20px;
+    height: 18px;
+  }
+
+  .project-pick-icon span:first-child {
+    height: 41px;
+  }
+}
+
 .loading {
   text-align: center;
   color: var(--color-primary);

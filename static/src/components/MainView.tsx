@@ -11,7 +11,7 @@ export default function MainView() {
   const params = useParams();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { dbId, projectId } = useDbProjectTarget();
+  const { dbId } = useDbProjectTarget();
 
   // Determine current view mode from URL
   const isDetailView = location.pathname.startsWith('/detail/');
@@ -117,13 +117,31 @@ export default function MainView() {
       [navigation.allImages[navigation.currentIndex - 1]?.id].filter(Boolean) : [],
   };
 
-  // Show empty state only when user hasn't made any project selection
-  // null = "All Projects", number = specific project, both are valid
-  if (projectId === undefined) {
+  // A DB with project=null means "All Projects" and is valid. No DB means
+  // the user has not picked a project scope yet.
+  if (!dbId) {
+    const focusProjectPicker = () => {
+      document.querySelector<HTMLSelectElement>('#project-select')?.focus();
+    };
+
     return (
-      <div className="empty-state">
-        Select a project to begin grading images
-      </div>
+      <section className="project-pick-prompt" aria-labelledby="project-pick-title">
+        <div className="project-pick-icon" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </div>
+        <div>
+          <span className="project-pick-eyebrow">Images</span>
+          <h2 id="project-pick-title">Choose a project</h2>
+          <p>
+            Pick a project from the menu above to browse, compare, and grade its frames.
+          </p>
+          <button type="button" onClick={focusProjectPicker}>
+            Choose a project <span aria-hidden="true">↑</span>
+          </button>
+        </div>
+      </section>
     );
   }
 

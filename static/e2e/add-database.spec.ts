@@ -41,7 +41,7 @@ test('add a database via settings → see it in the Overview', async ({ page }) 
   // settle after the registry mutation.
   await page.getByRole('button', { name: 'Done' }).click();
   await expect(
-    page.getByRole('heading', { name: /e2e Rig/i })
+    page.getByRole('button', { name: /e2e Rig.*2 projects/i })
   ).toBeVisible({ timeout: 15_000 });
 });
 

@@ -900,6 +900,17 @@ export interface ProjectOverview {
   files_missing: number;
   date_range: DateRange;
   filters_used: string[];
+  recent_images: ProjectRecentImage[];
+}
+
+export interface ProjectRecentImage {
+  id: number;
+  project_id: number;
+  target_id: number;
+  target_name: string;
+  acquired_date: number | null;
+  filter_name: string;
+  grading_status: number;
 }
 
 export interface TargetOverview {

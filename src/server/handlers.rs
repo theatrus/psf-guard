@@ -3063,6 +3063,14 @@ pub async fn get_projects_overview(
         let cache = ctx.file_check_cache.read().unwrap();
         cache.projects_with_files.clone()
     };
+    let mut recent_images_by_project: HashMap<i32, Vec<crate::models::RecentImageSummary>> =
+        HashMap::new();
+    for image in db.get_recent_images_by_project(3).map_err(AppError::db)? {
+        recent_images_by_project
+            .entry(image.project_id)
+            .or_default()
+            .push(image);
+    }
 
     let mut response = Vec::new();
     let show_profile = profile_count > 1;
@@ -3140,6 +3148,9 @@ pub async fn get_projects_overview(
                 span_days,
             },
             filters_used: stats.filters_used,
+            recent_images: recent_images_by_project
+                .remove(&project.id)
+                .unwrap_or_default(),
         });
     }
 
