@@ -242,5 +242,14 @@ describe('TauriSettings import state', () => {
       'placeholder',
       'Unchanged'
     );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
+    const generatedToken = screen.getByLabelText('Upload token:');
+    expect(generatedToken).toHaveAttribute('type', 'text');
+    expect((generatedToken as HTMLInputElement).value).toMatch(/^[0-9a-f]{64}$/);
+    expect(
+      screen.getByText('Copy this token now. It will not be shown again after saving.')
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeEnabled();
   });
 });

@@ -178,6 +178,28 @@
   background-color: var(--color-bg-hover);
 }
 
+.tauri-settings .remote-upload-token-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.tauri-settings .remote-upload-token-row .browse-button {
+  min-width: 78px;
+}
+
+.tauri-settings .remote-upload-token-notice {
+  display: block;
+  margin-top: 8px;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+.tauri-settings .remote-upload-token-notice.error {
+  color: var(--color-error);
+}
+
 .tauri-settings .path-info {
   font-size: 12px;
   color: var(--color-text-muted);
@@ -882,6 +904,14 @@
 }
 
 @media (max-width: 820px) {
+  .tauri-settings .remote-upload-token-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .tauri-settings .remote-upload-token-row .file-path-input {
+    grid-column: 1 / -1;
+  }
+
   .tauri-settings .catalog-heading {
     display: block;
   }

@@ -58,6 +58,10 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
   const [formRemoteUploadToken, setFormRemoteUploadToken] = useState('');
   const [formRemoteUploadTokenConfigured, setFormRemoteUploadTokenConfigured] =
     useState(false);
+  const [formRemoteUploadTokenRevealed, setFormRemoteUploadTokenRevealed] =
+    useState(false);
+  const [formRemoteUploadTokenCopyState, setFormRemoteUploadTokenCopyState] =
+    useState<'idle' | 'copied' | 'failed'>('idle');
   const [showAddForm, setShowAddForm] = useState(false);
   // true = "create a brand-new TS database from image folders" flow (no
   // existing .sqlite required; the server bootstraps the full TS schema).
@@ -172,6 +176,8 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setFormRemoteUploadDir('');
     setFormRemoteUploadToken('');
     setFormRemoteUploadTokenConfigured(false);
+    setFormRemoteUploadTokenRevealed(false);
+    setFormRemoteUploadTokenCopyState('idle');
     setShowAddForm(false);
     setCreateMode(false);
     setCreateAnalyzeQuality(false);
@@ -191,6 +197,8 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
       entry.remote_image_upload?.token_configured ??
         Boolean(entry.remote_image_upload?.token_sha256)
     );
+    setFormRemoteUploadTokenRevealed(false);
+    setFormRemoteUploadTokenCopyState('idle');
     setShowAddForm(true);
     setCreateMode(false);
   };
@@ -204,6 +212,8 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setFormRemoteUploadDir('');
     setFormRemoteUploadToken('');
     setFormRemoteUploadTokenConfigured(false);
+    setFormRemoteUploadTokenRevealed(false);
+    setFormRemoteUploadTokenCopyState('idle');
     setShowAddForm(true);
     setCreateMode(true);
     setCreateAnalyzeQuality(false);
@@ -217,6 +227,8 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setFormRemoteUploadDir('');
     setFormRemoteUploadToken('');
     setFormRemoteUploadTokenConfigured(false);
+    setFormRemoteUploadTokenRevealed(false);
+    setFormRemoteUploadTokenCopyState('idle');
     setShowAddForm(true);
     setCreateMode(false);
     setFormDbPath('');
@@ -280,6 +292,27 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setFormImageDirs(remaining);
     if (formRemoteUploadDir === removed) {
       setFormRemoteUploadDir(remaining[0] ?? '');
+    }
+  };
+
+  const handleGenerateRemoteUploadToken = () => {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    const token = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join(
+      ''
+    );
+    setFormRemoteUploadToken(token);
+    setFormRemoteUploadTokenRevealed(true);
+    setFormRemoteUploadTokenCopyState('idle');
+  };
+
+  const handleCopyRemoteUploadToken = async () => {
+    try {
+      await navigator.clipboard.writeText(formRemoteUploadToken);
+      setFormRemoteUploadTokenCopyState('copied');
+    } catch (error) {
+      console.error('Failed to copy remote upload token:', error);
+      setFormRemoteUploadTokenCopyState('failed');
     }
   };
 
@@ -825,19 +858,55 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                         ))}
                       </select>
                       <label htmlFor="remote-upload-token">Upload token:</label>
-                      <input
-                        id="remote-upload-token"
-                        type="password"
-                        value={formRemoteUploadToken}
-                        onChange={(event) => setFormRemoteUploadToken(event.target.value)}
-                        placeholder={
-                          formRemoteUploadTokenConfigured
-                            ? 'Unchanged'
-                            : 'At least 24 characters'
-                        }
-                        className="file-path-input"
-                        autoComplete="new-password"
-                      />
+                      <div className="remote-upload-token-row">
+                        <input
+                          id="remote-upload-token"
+                          type={formRemoteUploadTokenRevealed ? 'text' : 'password'}
+                          value={formRemoteUploadToken}
+                          onChange={(event) => {
+                            setFormRemoteUploadToken(event.target.value);
+                            setFormRemoteUploadTokenCopyState('idle');
+                          }}
+                          placeholder={
+                            formRemoteUploadTokenConfigured
+                              ? 'Unchanged'
+                              : 'At least 24 characters'
+                          }
+                          className="file-path-input"
+                          autoComplete="new-password"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleGenerateRemoteUploadToken}
+                          className="browse-button"
+                        >
+                          Generate
+                        </button>
+                        {formRemoteUploadTokenRevealed &&
+                          formRemoteUploadToken.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={handleCopyRemoteUploadToken}
+                              className="browse-button"
+                            >
+                              {formRemoteUploadTokenCopyState === 'copied'
+                                ? 'Copied'
+                                : 'Copy'}
+                            </button>
+                          )}
+                      </div>
+                      {formRemoteUploadTokenRevealed && (
+                        <small
+                          className={`remote-upload-token-notice ${
+                            formRemoteUploadTokenCopyState === 'failed' ? 'error' : ''
+                          }`}
+                          role="status"
+                        >
+                          {formRemoteUploadTokenCopyState === 'failed'
+                            ? 'Copy failed. Select and copy the token manually.'
+                            : 'Copy this token now. It will not be shown again after saving.'}
+                        </small>
+                      )}
                     </>
                   )}
                 </div>
