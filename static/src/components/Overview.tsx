@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { apiClient } from '../api/client';
@@ -11,6 +11,13 @@ import {
   type WithDb,
 } from '../hooks/useDatabases';
 import { isTauriApp, tauriFileSystem } from '../utils/tauri';
+import {
+  loadProjectSeenState,
+  markerForProject,
+  newImageCount,
+  projectSeenKey,
+  saveProjectSeenState,
+} from '../utils/projectRecency';
 import ProjectSchedulerDialog from './ProjectSchedulerDialog';
 import './Overview.css';
 
@@ -27,6 +34,7 @@ export default function Overview() {
   const [organizing, setOrganizing] = useState<Organizing | null>(null);
   const [organizeBusy, setOrganizeBusy] = useState(false);
   const [organizeError, setOrganizeError] = useState('');
+  const [seenProjects, setSeenProjects] = useState(loadProjectSeenState);
   const [schedulerProject, setSchedulerProject] = useState<{
     dbId: string;
     id: number;
@@ -43,6 +51,27 @@ export default function Overview() {
   const { data: projects, isLoading: projectsLoading } = useMergedProjectsOverview();
   const { data: targets, isLoading: targetsLoading } = useMergedTargetsOverview();
   const organizeAllowed = serverInfo?.allow_database_management ?? false;
+
+  // The first time this browser sees a project, record its current image
+  // count without calling the whole back catalog new. Later refreshes compare
+  // against that marker until the user opens the project.
+  useEffect(() => {
+    setSeenProjects((current) => {
+      const next = { ...current };
+      let changed = false;
+
+      for (const project of projects) {
+        const key = projectSeenKey(project.db_id, project.id);
+        if (!next[key]) {
+          next[key] = markerForProject(project);
+          changed = true;
+        }
+      }
+
+      if (changed) saveProjectSeenState(next);
+      return changed ? next : current;
+    });
+  }, [projects]);
 
   // Desktop mode: export straight to a local folder (hardlink-or-copy) via
   // the native picker — the server IS this machine, so downloading a zip of
@@ -167,11 +196,28 @@ export default function Overview() {
 
   // Navigation handlers. Each click carries the project's db_id so the scoped
   // view knows which database to query.
+  const markProjectSeen = (project: WithDb<ProjectOverview>) => {
+    setSeenProjects((current) => {
+      const next = {
+        ...current,
+        [projectSeenKey(project.db_id, project.id)]: markerForProject(project),
+      };
+      saveProjectSeenState(next);
+      return next;
+    });
+  };
+
   const handleSelectProject = (project: WithDb<ProjectOverview>) => {
+    markProjectSeen(project);
     navigate(`/grid?db=${encodeURIComponent(project.db_id)}&project=${project.id}`);
   };
 
   const handleSelectTarget = (target: WithDb<TargetOverview>) => {
+    const project = projects.find(
+      (candidate) =>
+        candidate.db_id === target.db_id && candidate.id === target.project_id
+    );
+    if (project) markProjectSeen(project);
     navigate(
       `/grid?db=${encodeURIComponent(target.db_id)}&project=${target.project_id}&target=${target.id}`
     );
@@ -237,50 +283,60 @@ export default function Overview() {
 
   return (
     <div className="overview">
-      <div className="overview-header">
-      </div>
-
       {/* Overall Statistics */}
       {overallStats && (
-        <div className="stats-section">
-          <h2>Overall Statistics</h2>
-          <div className="stats-grid">
-            <div className="stat-card">
-              <h3>Projects</h3>
-              <div className="stat-main">{overallStats.active_projects}</div>
-              <div className="stat-sub">of {overallStats.total_projects} total</div>
-            </div>
-            <div className="stat-card">
-              <h3>Targets</h3>
-              <div className="stat-main">{overallStats.active_targets}</div>
-              <div className="stat-sub">of {overallStats.total_targets} total</div>
-            </div>
-            <div className="stat-card">
-              <h3>Images</h3>
-              <div className="stat-main">{overallStats.total_images.toLocaleString()}</div>
-              <div className="stat-sub">{overallStats.accepted_images} accepted of {overallStats.total_desired} desired</div>
-            </div>
-            <div className="stat-card">
-              <h3>Completion</h3>
-              <div className="stat-main">{getDesiredProgress(overallStats.accepted_images, overallStats.total_desired)}%</div>
-              <div className="stat-sub">{overallStats.accepted_images} / {overallStats.total_desired}</div>
-            </div>
-            <div className="stat-card">
-              <h3>Files</h3>
-              <div className="stat-main">{overallStats.files_found.toLocaleString()}</div>
-              <div className="stat-sub">{overallStats.files_missing > 0 ? `${overallStats.files_missing} missing` : 'All found'}</div>
-            </div>
-            <div className="stat-card">
-              <h3>Filters</h3>
-              <div className="stat-main">{overallStats.unique_filters.length}</div>
-              <div className="stat-sub">{formatDateRange(overallStats.date_range).split(' ').slice(0, 3).join(' ')}</div>
-            </div>
+        <section className="overview-summary" aria-label="Catalog summary">
+          <div className="summary-lead">
+            <span>Catalog</span>
+            <strong>{overallStats.total_images.toLocaleString()} images</strong>
           </div>
-
-          {/* Progress bar for overall grading */}
-          <div className="overall-progress">
-            <h4>Overall Grading Progress</h4>
-            <div className="progress-bar">
+          <dl className="summary-metrics">
+            <div>
+              <dt>Projects</dt>
+              <dd>
+                {overallStats.active_projects}
+                <span> / {overallStats.total_projects}</span>
+              </dd>
+            </div>
+            <div>
+              <dt>Targets</dt>
+              <dd>
+                {overallStats.active_targets}
+                <span> / {overallStats.total_targets}</span>
+              </dd>
+            </div>
+            <div>
+              <dt>Accepted</dt>
+              <dd>{overallStats.accepted_images.toLocaleString()}</dd>
+            </div>
+            <div className={overallStats.pending_images > 0 ? 'summary-needs-review' : ''}>
+              <dt>To review</dt>
+              <dd>{overallStats.pending_images.toLocaleString()}</dd>
+            </div>
+            <div className={overallStats.files_missing > 0 ? 'summary-has-warning' : ''}>
+              <dt>Files</dt>
+              <dd>
+                {overallStats.files_missing > 0
+                  ? `${overallStats.files_missing} missing`
+                  : 'All found'}
+              </dd>
+            </div>
+          </dl>
+          <div className="summary-grading">
+            <div className="summary-progress-label">
+              <span>Grading</span>
+              <span>
+                {getGradingProgress(
+                  overallStats.accepted_images,
+                  overallStats.rejected_images,
+                  overallStats.pending_images
+                ).acceptedPct}% accepted
+              </span>
+            </div>
+            <div
+              className="summary-progress-bar"
+              aria-label={`${overallStats.accepted_images} accepted, ${overallStats.rejected_images} rejected, ${overallStats.pending_images} pending`}
+            >
               <div 
                 className="progress-accepted" 
                 style={{ 
@@ -312,32 +368,8 @@ export default function Overview() {
                 }}
               />
             </div>
-            <div className="progress-legend">
-              <span className="legend-accepted">
-                {overallStats.accepted_images} Accepted ({getGradingProgress(
-                  overallStats.accepted_images, 
-                  overallStats.rejected_images, 
-                  overallStats.pending_images
-                ).acceptedPct}%)
-              </span>
-              <span className="legend-rejected">
-                {overallStats.rejected_images} Rejected ({getGradingProgress(
-                  overallStats.accepted_images, 
-                  overallStats.rejected_images, 
-                  overallStats.pending_images
-                ).rejectedPct}%)
-              </span>
-              <span className="legend-pending">
-                {overallStats.pending_images} Pending ({getGradingProgress(
-                  overallStats.accepted_images, 
-                  overallStats.rejected_images, 
-                  overallStats.pending_images
-                ).pendingPct}%)
-              </span>
-            </div>
           </div>
-
-        </div>
+        </section>
       )}
 
       <div className="content-grid">
@@ -348,14 +380,26 @@ export default function Overview() {
             const isCollapsed = collapsedDbs.has(db.id);
             return (
               <section key={db.id} className="db-section">
-                <h2 className="db-section-header" onClick={() => toggleDb(db.id)}>
-                  <span className={`expand-toggle ${isCollapsed ? '' : 'expanded'}`}>▶</span>
-                  <span>{db.name}</span>
-                  <span className="db-section-count">
-                    {dbProjects.length} project{dbProjects.length === 1 ? '' : 's'}
-                  </span>
-                  <code className="db-section-slug">{db.id}</code>
-                </h2>
+                <div className="db-section-heading">
+                  <button
+                    type="button"
+                    className="db-section-toggle"
+                    onClick={() => toggleDb(db.id)}
+                    aria-expanded={!isCollapsed}
+                  >
+                    <span
+                      className={`expand-toggle ${isCollapsed ? '' : 'expanded'}`}
+                      aria-hidden="true"
+                    >
+                      ▶
+                    </span>
+                    <span className="db-section-name">{db.name}</span>
+                    <span className="db-section-count">
+                      {dbProjects.length} project{dbProjects.length === 1 ? '' : 's'}
+                    </span>
+                  </button>
+                  <code className="db-section-slug" title="Database ID">{db.id}</code>
+                </div>
                 {!isCollapsed && dbProjects.length === 0 && (
                   <div className="empty-state">No projects with images in this database yet.</div>
                 )}
@@ -370,18 +414,35 @@ export default function Overview() {
               const key = projectKey(project.db_id, project.id);
               const projectTargets = targetsByProject[key] || [];
               const isExpanded = expandedProjects.has(key);
+              const projectNewImages = newImageCount(project, seenProjects);
 
               return (
-                <div key={key} className={`project-card ${!project.has_files ? 'no-files' : ''}`}>
-                  <div className="project-header" onClick={() => toggleProject(key)}>
-                    <div style={{ display: 'flex', alignItems: 'center' }}>
-                      <h3>{project.display_name}</h3>
-                      {projectTargets.length > 0 && (
-                        <span className="target-count">{projectTargets.length} targets</span>
+                <div
+                  key={key}
+                  className={[
+                    'project-card',
+                    !project.has_files ? 'no-files' : '',
+                    projectNewImages > 0 ? 'has-new-images' : '',
+                  ].filter(Boolean).join(' ')}
+                >
+                  <div className="project-header">
+                    <button
+                      type="button"
+                      className="project-open-main"
+                      onClick={() => project.has_files && handleSelectProject(project)}
+                      disabled={!project.has_files}
+                      aria-label={`Open ${project.display_name} images`}
+                    >
+                      <span className="project-title">{project.display_name}</span>
+                      {projectNewImages > 0 && (
+                        <span className="new-images-badge">
+                          <span aria-hidden="true" />
+                          {projectNewImages} new
+                        </span>
                       )}
-                      <span className={`expand-toggle ${isExpanded ? 'expanded' : ''}`}>▶</span>
-                    </div>
-                    <div>
+                      <span className="project-open-arrow" aria-hidden="true">→</span>
+                    </button>
+                    <div className="project-header-actions">
                       {!project.has_files && <span className="no-files-badge">No Files</span>}
                       {organizeAllowed && (
                         <button
@@ -400,6 +461,25 @@ export default function Overview() {
                           }}
                         >
                           ✏️
+                        </button>
+                      )}
+                      {projectTargets.length > 0 && (
+                        <button
+                          type="button"
+                          className="project-target-toggle"
+                          onClick={() => toggleProject(key)}
+                          aria-expanded={isExpanded}
+                          aria-label={`${isExpanded ? 'Hide' : 'Show'} targets for ${project.display_name}`}
+                          aria-controls={`project-targets-${project.db_id}-${project.id}`}
+                        >
+                          {projectTargets.length} target
+                          {projectTargets.length === 1 ? '' : 's'}
+                          <span
+                            className={`expand-toggle ${isExpanded ? 'expanded' : ''}`}
+                            aria-hidden="true"
+                          >
+                            ▶
+                          </span>
                         </button>
                       )}
                     </div>
@@ -462,10 +542,14 @@ export default function Overview() {
                   <div className="project-stats">
                     <div className="stat-row">
                       <span>{project.total_images} images</span>
-                      <span>{project.accepted_images} / {project.total_desired} desired</span>
-                      <span className="completion-badge">
-                        {getDesiredProgress(project.accepted_images, project.total_desired)}% complete
-                      </span>
+                      {project.total_desired > 0 && (
+                        <>
+                          <span>{project.accepted_images} / {project.total_desired} desired</span>
+                          <span className="completion-badge">
+                            {getDesiredProgress(project.accepted_images, project.total_desired)}% complete
+                          </span>
+                        </>
+                      )}
                     </div>
                     <div className="stat-row">
                       <span>{project.accepted_images} accepted</span>
@@ -481,15 +565,17 @@ export default function Overview() {
                   </div>
                   
                   {/* Desired Progress Bar */}
-                  <div className="project-desired-progress">
-                    <div className="progress-label">Desired Progress:</div>
-                    <div className="desired-progress-bar">
-                      <div 
-                        className="desired-progress-fill"
-                        style={{ width: `${getDesiredProgress(project.accepted_images, project.total_desired)}%` }}
-                      />
+                  {project.total_desired > 0 && (
+                    <div className="project-desired-progress">
+                      <div className="progress-label">Desired Progress:</div>
+                      <div className="desired-progress-bar">
+                        <div
+                          className="desired-progress-fill"
+                          style={{ width: `${getDesiredProgress(project.accepted_images, project.total_desired)}%` }}
+                        />
+                      </div>
                     </div>
-                  </div>
+                  )}
                   
                   {/* Grading Progress Bar */}
                   <div className="project-mini-progress">
@@ -527,17 +613,6 @@ export default function Overview() {
                     >
                       Plan &amp; coordinates
                     </button>
-                    {project.has_files && (
-                      <span 
-                        style={{ color: 'var(--color-primary)', cursor: 'pointer', textDecoration: 'underline' }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleSelectProject(project);
-                        }}
-                      >
-                        View Project →
-                      </span>
-                    )}
                     {project.has_files && project.accepted_images > 0 && (
                       isTauri ? (
                         <span
@@ -573,7 +648,10 @@ export default function Overview() {
 
                   {/* Nested Targets */}
                   {projectTargets.length > 0 && (
-                    <div className={`targets-nested ${!isExpanded ? 'collapsed' : ''}`}>
+                    <div
+                      id={`project-targets-${project.db_id}-${project.id}`}
+                      className={`targets-nested ${!isExpanded ? 'collapsed' : ''}`}
+                    >
                       {projectTargets.map((target) => {
                         const targetProgress = getGradingProgress(
                           target.accepted_count,
