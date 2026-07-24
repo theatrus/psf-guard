@@ -1490,6 +1490,104 @@
   flex: 1;
 }
 
+.image-file-location {
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--color-bg-tertiary);
+}
+
+.image-file-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.45rem;
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.file-path-resolved,
+.file-path-catalog,
+.file-path-unavailable {
+  padding: 0.08rem 0.4rem;
+  border: 1px solid var(--color-bg-input);
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.file-path-resolved {
+  border-color: var(--color-success);
+  color: var(--color-success-light);
+}
+
+.file-path-catalog {
+  color: var(--color-warning-light);
+}
+
+.file-path-unavailable {
+  color: var(--color-text-muted);
+}
+
+.image-file-path {
+  display: block;
+  max-width: 100%;
+  padding: 0.55rem 0.65rem;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--color-bg-tertiary);
+  border-radius: 4px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  user-select: text;
+}
+
+.image-file-note,
+.image-file-unavailable,
+.image-file-feedback {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+}
+
+.image-file-note {
+  margin: 0.45rem 0 0;
+}
+
+.image-file-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.55rem;
+}
+
+.image-file-actions button {
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--color-bg-input);
+  border-radius: 4px;
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-size: 0.72rem;
+}
+
+.image-file-actions button:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.image-file-actions button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.image-file-feedback {
+  min-height: 1rem;
+  margin-top: 0.3rem;
+  color: var(--color-error-light);
+}
+
 .detail-actions {
   display: flex;
   gap: 0.5rem;

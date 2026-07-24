@@ -43,7 +43,8 @@ processing. Your image files stay where they are.
   while the source files stay in place.
 - **Review frames quickly** in the desktop app or browser with stretched
   previews, zoom and pan, comparison, batch grading, keyboard controls, and
-  undo.
+  undo. Image details show the resolved or recorded file path; the desktop app
+  can reveal a resolved file in Finder, Explorer, or the Linux file manager.
 - **Screen image quality** with spatial metrics, cross-frame photometry, and
   fresh pixel-derived plate solutions. The evidence can expose clouds,
   occlusion, stray light, off-target frames, and lost tracking.
@@ -315,6 +316,9 @@ the image grid and comparison tools:
 - **Smart loading**: fast previews first, full resolution on zoom; previews
   generate on demand in the background, so a fresh install is browsable
   immediately.
+- **File location**: image details show the resolved path when the source file
+  is present and fall back to the path recorded in the catalog. Copy any shown
+  path, or use **Show in folder** in the desktop app.
 - **Stack previews**: in a single project, build an uncalibrated registered
   preview from an explicit multi-selection or the current visible filters.
   PSF Guard excludes rejected and regrade-recommended frames before Seiza
