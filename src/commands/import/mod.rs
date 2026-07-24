@@ -84,6 +84,8 @@ pub struct ImportOutcome {
     pub scanned: usize,
     pub unreadable: usize,
     pub non_light: usize,
+    /// Calibration frames stored in PSF Guard's sibling tables.
+    pub calibration: crate::calibration::CalibrationImportOutcome,
     pub skipped_existing: usize,
     pub imported: usize,
     /// Frames attached to targets that already existed in the database.
@@ -185,11 +187,15 @@ pub fn import_frames(
         .collect();
     let existing = existing_basenames(&tx, &candidate_basenames)?;
     let mut lights: Vec<FrameMeta> = Vec::new();
+    let mut calibrations: Vec<FrameMeta> = Vec::new();
     for frame in frames {
         if !frame.readable {
             outcome.unreadable += 1;
         } else if !frame.is_light() {
             outcome.non_light += 1;
+            if crate::calibration::kind_from_meta(&frame).is_some() {
+                calibrations.push(frame);
+            }
         } else if existing.contains(&frame.basename().to_lowercase()) {
             outcome.skipped_existing += 1;
         } else {
@@ -245,6 +251,12 @@ pub fn import_frames(
     } else {
         resolve_profile(&tx, options)?
     };
+    let calibration_profile = options
+        .profile_id
+        .as_deref()
+        .or((!profile_id.is_empty()).then_some(profile_id.as_str()));
+    outcome.calibration =
+        crate::calibration::import_calibration_frames(&tx, &calibrations, calibration_profile)?;
     let template_ids = ensure_templates(&tx, &plan, &profile_id, &mut outcome)?;
 
     for project in &plan.projects {
@@ -1006,6 +1018,22 @@ pub fn print_outcome(outcome: &ImportOutcome) {
     if outcome.non_light > 0 {
         println!("  Non-light frames: {}", outcome.non_light);
     }
+    if outcome.calibration.imported > 0
+        || outcome.calibration.updated > 0
+        || outcome.calibration.skipped_existing > 0
+    {
+        println!(
+            "  Calibration:      {} new, {} updated, {} unchanged \
+             ({} bias / {} dark / {} dark-flat / {} flat)",
+            outcome.calibration.imported,
+            outcome.calibration.updated,
+            outcome.calibration.skipped_existing,
+            outcome.calibration.bias,
+            outcome.calibration.dark,
+            outcome.calibration.dark_flat,
+            outcome.calibration.flat,
+        );
+    }
     if outcome.skipped_existing > 0 {
         println!("  Already in DB:    {}", outcome.skipped_existing);
     }
@@ -1237,13 +1265,45 @@ mod tests {
     }
 
     #[test]
-    fn calibration_frames_are_skipped() {
+    fn calibration_frames_are_cataloged_without_scheduler_rows() {
         let mut conn = fresh_conn();
         let mut dark = light("M31", "Ha", 1_000);
         dark.image_type = Some("DARK".into());
         let outcome = import_frames(&mut conn, vec![dark], &ImportOptions::default()).unwrap();
         assert_eq!(outcome.non_light, 1);
         assert_eq!(outcome.imported, 0);
+        assert_eq!(outcome.calibration.imported, 1);
+        assert_eq!(outcome.calibration.dark, 1);
+        let scheduler_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM acquiredimage", [], |row| row.get(0))
+            .unwrap();
+        let calibration_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM psf_guard_calibration_frame",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(scheduler_rows, 0);
+        assert_eq!(calibration_rows, 1);
+    }
+
+    #[test]
+    fn calibration_dry_run_leaves_no_sibling_tables() {
+        let mut conn = fresh_conn();
+        let mut bias = light("M31", "Ha", 1_000);
+        bias.image_type = Some("BIAS".into());
+        let outcome = import_frames(
+            &mut conn,
+            vec![bias],
+            &ImportOptions {
+                dry_run: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome.calibration.imported, 1);
+        assert!(!crate::calibration::schema_exists(&conn));
     }
 
     #[test]

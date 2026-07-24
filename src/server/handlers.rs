@@ -71,6 +71,17 @@ pub async fn get_server_info(
     Ok(Json(ApiResponse::success(info)))
 }
 
+/// Summarize PSF Guard's calibration library in this scheduler database.
+/// Reading an untouched database does not create any sibling tables.
+pub async fn get_calibration_library(
+    ctx: DbContext,
+) -> Result<Json<ApiResponse<crate::calibration::CalibrationLibrarySummary>>, AppError> {
+    let conn = ctx.db();
+    let conn = conn.lock().map_err(AppError::db)?;
+    let summary = crate::calibration::library_summary(&conn).map_err(AppError::db)?;
+    Ok(Json(ApiResponse::success(summary)))
+}
+
 /// Report which Seiza resources are configured and can be opened. Normal
 /// capability checks are bounded header/index opens, not exhaustive scans.
 pub async fn get_astrometry_capabilities(
@@ -1019,11 +1030,11 @@ pub async fn remove_database_route(
     }))))
 }
 
-/// `GET /api/db/{db_id}/export` — stream the selected non-rejected lights as
-/// an uncompressed (store-mode) zip, laid out exactly like the CLI export
-/// (`<target>/LIGHT/<filter>/<basename>`). FITS doesn't compress, so store
-/// mode streams at wire speed with no server-side staging. Read-only, so it
-/// is not management-gated.
+/// `GET /api/db/{db_id}/export` — stream selected non-rejected lights and
+/// safely matched raw calibration frames as an uncompressed (store-mode) zip,
+/// laid out exactly like the CLI export. FITS doesn't compress, so store mode
+/// streams at wire speed with no server-side staging. Read-only, so it is not
+/// management-gated.
 pub async fn export_archive_route(
     ctx: DbContext,
     Query(query): Query<ExportQuery>,

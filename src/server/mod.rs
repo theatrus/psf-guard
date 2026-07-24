@@ -231,6 +231,7 @@ async fn run_server_internal(
             put(handlers::refresh_directory_tree_cache),
         )
         .route("/projects", get(handlers::list_projects))
+        .route("/calibrations", get(handlers::get_calibration_library))
         .route(
             "/projects/{project_id}",
             put(handlers::update_project_route),

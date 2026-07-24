@@ -118,6 +118,47 @@ test('grade transfer requires a dry preview before Apply appears', async ({
   });
 });
 
+test('settings shows calibration coverage for each database rig', async ({ page }) => {
+  await page.route('**/api/db/review/calibrations', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
+        data: {
+          schema_version: 1,
+          frame_count: 42,
+          master_count: 3,
+          rigs: [
+            {
+              rig_uuid: 'rig-1',
+              name: 'Ultracat · TestCam',
+              profile_id: 'profile',
+              telescope: 'Ultracat',
+              camera: 'TestCam',
+              frame_count: 42,
+              bias: 10,
+              dark: 12,
+              dark_flat: 8,
+              flat: 12,
+            },
+          ],
+        },
+        error: null,
+        status: 'ready',
+      }),
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings' }).click();
+
+  const review = page.locator('.db-row').filter({ hasText: 'Review copy' });
+  await expect(review.getByText(/Calibration library · 42 frames · 3 cached masters/)).toBeVisible();
+  await expect(review.getByText('Ultracat · TestCam')).toBeVisible();
+  await expect(review.getByText(/10 bias · 12 dark · 8 dark-flat · 12 flat/)).toBeVisible();
+});
+
 test('data transfer controls fit a compact settings view', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');

@@ -60,9 +60,17 @@ export function describeImportProgress(
           ? `${o.imported - o.attached} into ${o.projects_created} NEW project(s)`
           : '';
       const detail = [attached, fresh].filter(Boolean).join(', ') || 'nothing new';
+      const calibration = o.calibration;
+      const calibrationChanged = calibration.imported + calibration.updated;
+      const calibrationText =
+        calibrationChanged > 0
+          ? `, ${calibrationChanged} calibration frame(s)`
+          : calibration.skipped_existing > 0
+            ? `, ${calibration.skipped_existing} calibration frame(s) unchanged`
+            : '';
       return o.dry_run
-        ? `Preview: would import ${o.imported} frame(s) — ${detail}${skipped}.`
-        : `Imported ${o.imported} frame(s) — ${detail}${skipped}.`;
+        ? `Preview: would import ${o.imported} light frame(s) — ${detail}${skipped}${calibrationText}.`
+        : `Imported ${o.imported} light frame(s) — ${detail}${skipped}${calibrationText}.`;
     }
     case 'error':
       return `Import failed: ${progress.error ?? 'unknown error'}`;

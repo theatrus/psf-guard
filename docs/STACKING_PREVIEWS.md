@@ -3,8 +3,8 @@
 PSF Guard can build an on-demand integration directly from the image grid.
 This is a fast visual answer to “what does this project/channel look like so
 far?”, with the grading and registration evidence kept beside the result. It
-is deliberately labeled **Uncalibrated stack preview**: it is not a replacement
-for a calibrated science or final-processing workflow.
+can apply cataloged calibration data, but it remains a quick-look result rather
+than a final-processing workflow.
 
 ![A three-frame B-channel stack preview in the project grid](stack-preview.png)
 
@@ -38,6 +38,30 @@ to build it. The card is marked **Out of date**—without hiding the usable olde
 preview—when the current filter/selection changes the image set, an image is
 accepted/rejected/pended, or the **Accepted only** policy changes. A failed
 rebuild never replaces the last successful result.
+
+## Calibration before registration
+
+Before Seiza registers the reference, PSF Guard matches the light against the
+calibration library in the same database. It builds and caches sigma-clipped
+masters from two or more matching inputs, then supplies the bias, dark, and
+flat masters to Seiza. Raw CFA data is calibrated before debayering.
+
+The card reports the calibration phase, input counts, whether a complete or
+partial set was applied, and missing-file or coverage warnings. The stack job
+key includes the matched calibration files and their current file
+fingerprints. Adding, replacing, or removing a matching frame therefore marks
+the prior preview out of date instead of silently reusing it.
+
+PSF Guard does not cross a known camera, dimensions, channel count, binning,
+gain, offset, readout mode, or Bayer mismatch. Darks also match exposure and
+temperature; flats match filter, telescope, and focal length when those values
+exist. It prefers the nearest captures in time and caps each master at 64
+inputs. Missing required metadata causes that candidate to abstain rather than
+guess.
+
+If no safe set exists, the card says that calibration is absent or incomplete.
+PSF Guard never labels an uncalibrated preview as calibrated. See
+[Calibration libraries](CALIBRATION_LIBRARY.md) for the full rules.
 
 ## Frame selection and admission
 
@@ -281,8 +305,9 @@ Artifacts live below the database cache directory:
 
 The content-addressed job ID includes the database/project, exact ordered
 inputs and grouping, grades, quality scores and regrade reasons, source path
-fingerprints, an explicit PSF Guard cache-policy version, Seiza stacking
-revision, processing parameters, and preview format. Restoration and prepared
+fingerprints, matched calibration fingerprints, an explicit PSF Guard
+cache-policy version, Seiza stacking revision, processing parameters, and
+preview format. Restoration and prepared
 color-input caches use narrower keys so display-only edits can reuse earlier
 linear work. Repeating an unchanged request loads the persistent result. A
 rebuild bypasses that lookup and atomically replaces the PNG, FITS, and
@@ -293,9 +318,10 @@ immutable cached response for the rebuilt output.
 
 ## Deliberate limits
 
-- No bias, dark, or flat masters are applied in this first version.
-- The retained FITS is still an uncalibrated preview integration, not a final
-  science product.
+- Calibration selection is automatic and conservative. There is not yet a UI
+  for forcing a different master set.
+- The retained FITS is a quick-look integration, whether calibrated or not. It
+  is not a final science product.
 - Color is a visual channel combination, not photometric or
   spectrophotometric calibration. There is no custom mixing matrix UI, star
   removal, mosaic, drizzle, or cross-target integration.

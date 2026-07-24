@@ -52,6 +52,19 @@ const idleSpatialScan = {
 };
 
 export const handlers = [
+  http.get('/api/db/:dbId/calibrations', () =>
+    HttpResponse.json({
+      success: true,
+      data: {
+        schema_version: 1,
+        frame_count: 0,
+        master_count: 0,
+        rigs: [],
+      },
+      error: null,
+      status: 'ready',
+    })
+  ),
   // Sequence analysis endpoint
   http.get('/api/db/:dbId/analysis/sequence', () => {
     return HttpResponse.json(emptySequenceAnalysis);

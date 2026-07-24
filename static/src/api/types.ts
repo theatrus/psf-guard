@@ -306,6 +306,7 @@ export interface StackGroupStatus {
   target_name: string;
   filter_name: string;
   state: StackGroupState;
+  phase: string;
   total_candidates: number;
   eligible_frames: number;
   quality_excluded: number;
@@ -319,8 +320,23 @@ export interface StackGroupStatus {
   preview_url: string | null;
   fits_url: string | null;
   error: string | null;
+  calibration: AppliedCalibration;
   input_images: StackInputImage[];
   frames: StackFrameDecision[];
+}
+
+export interface AppliedCalibration {
+  state: 'none' | 'matching' | 'incomplete' | 'applied';
+  bias_frames: number;
+  dark_frames: number;
+  dark_flat_frames: number;
+  flat_frames: number;
+  bias_master: string | null;
+  dark_master: string | null;
+  dark_flat_master: string | null;
+  flat_master: string | null;
+  warning: string | null;
+  fingerprint: string;
 }
 
 export interface StackPreviewJob {
@@ -793,6 +809,7 @@ export interface ImportOutcome {
   scanned: number;
   unreadable: number;
   non_light: number;
+  calibration: CalibrationImportOutcome;
   skipped_existing: number;
   imported: number;
   /** Frames attached to targets that already existed. */
@@ -808,6 +825,38 @@ export interface ImportOutcome {
   attach_summaries: ImportAttachSummary[];
   created_target_ids: number[];
   attached_target_ids: number[];
+}
+
+export interface CalibrationImportOutcome {
+  imported: number;
+  updated: number;
+  skipped_existing: number;
+  bias: number;
+  dark: number;
+  dark_flat: number;
+  flat: number;
+}
+
+export interface CalibrationRigSummary {
+  rig_uuid: string;
+  name: string;
+  profile_id?: string | null;
+  telescope?: string | null;
+  camera?: string | null;
+  frame_count: number;
+  bias: number;
+  dark: number;
+  dark_flat: number;
+  flat: number;
+  oldest_at?: number | null;
+  newest_at?: number | null;
+}
+
+export interface CalibrationLibrarySummary {
+  schema_version: number;
+  frame_count: number;
+  master_count: number;
+  rigs: CalibrationRigSummary[];
 }
 
 /** Progress of the singleton per-DB import job (poll ~1s while running). */

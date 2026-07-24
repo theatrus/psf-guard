@@ -858,6 +858,33 @@
   line-height: 1.4;
 }
 
+.tauri-settings .calibration-summary {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-secondary);
+  font-size: 12px;
+}
+
+.tauri-settings .calibration-summary-title {
+  margin-bottom: 5px;
+  color: var(--color-text-primary);
+  font-weight: 650;
+}
+
+.tauri-settings .calibration-rig {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.tauri-settings .calibration-summary-error {
+  border-color: var(--color-border-error);
+  color: var(--color-error);
+}
+
 .tauri-settings .catalog-actions {
   display: flex;
   flex-wrap: wrap;

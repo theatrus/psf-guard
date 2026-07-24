@@ -1,9 +1,9 @@
 //! Project-scoped, per-target/per-filter stacking previews.
 //!
 //! PSF Guard owns frame selection and provenance. `seiza-stacking` owns
-//! calibration-free FITS decoding, registration, normalization, admission,
-//! and ordered accumulation. Jobs are process-global and run one at a time so
-//! a multi-database server cannot multiply the stacker's full-frame buffers.
+//! FITS decoding, calibration, registration, normalization, admission, and
+//! ordered accumulation. Jobs are process-global and run one at a time so a
+//! multi-database server cannot multiply the stacker's full-frame buffers.
 
 pub mod color;
 pub mod stretch;
@@ -118,6 +118,8 @@ pub struct StackGroupStatus {
     pub target_name: String,
     pub filter_name: String,
     pub state: StackGroupState,
+    #[serde(default)]
+    pub phase: String,
     pub total_candidates: usize,
     pub eligible_frames: usize,
     pub quality_excluded: usize,
@@ -132,6 +134,8 @@ pub struct StackGroupStatus {
     pub preview_url: Option<String>,
     pub fits_url: Option<String>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub calibration: crate::calibration::AppliedCalibration,
     #[serde(default)]
     pub input_images: Vec<StackInputImage>,
     pub frames: Vec<StackFrameDecision>,
@@ -662,6 +666,20 @@ fn prepare_job(
         if frames.len() > 1 {
             frames[1..].sort_by_key(|frame| (frame.acquired_date.unwrap_or(0), frame.image_id));
         }
+        if !frames.is_empty() {
+            let directory_tree = ctx.get_directory_tree().map_err(AppError::db)?;
+            let conn = ctx.db();
+            let conn = conn.lock().map_err(AppError::db)?;
+            for frame in &frames {
+                let fingerprint = crate::calibration::selection_fingerprint(
+                    &conn,
+                    &frame.path,
+                    Some(&directory_tree),
+                )
+                .map_err(AppError::db)?;
+                hasher.update(fingerprint.as_bytes());
+            }
+        }
         let eligible_frames = frames.len();
         public_groups.push(StackGroupStatus {
             index,
@@ -672,6 +690,11 @@ fn prepare_job(
                 StackGroupState::Queued
             } else {
                 StackGroupState::Skipped
+            },
+            phase: if eligible_frames >= 2 {
+                "queued".into()
+            } else {
+                "skipped".into()
             },
             total_candidates,
             eligible_frames,
@@ -686,6 +709,7 @@ fn prepare_job(
             preview_url: None,
             fits_url: None,
             error: (eligible_frames < 2).then(|| "Fewer than two eligible FITS frames".to_string()),
+            calibration: crate::calibration::AppliedCalibration::default(),
             input_images,
             frames: decisions,
         });
@@ -880,6 +904,7 @@ fn enqueue_job(state: Arc<AppState>, prepared: PreparedJob) {
 
 fn run_job(state: &Arc<AppState>, prepared: PreparedJob) {
     let job_id = prepared.public.job_id.clone();
+    let database_id = prepared.public.database_id.clone();
     let PreparedJob {
         public: _,
         groups,
@@ -896,12 +921,24 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob) {
             }
             state.stack_previews.update(&job_id, |job| {
                 job.groups[group.index].state = StackGroupState::Running;
+                job.groups[group.index].phase = "calibration".into();
             });
-            let result = run_group(state, &job_id, &cache_root, group.clone(), &worker_policy);
+            let result = run_group(
+                state,
+                &database_id,
+                &job_id,
+                &cache_root,
+                group.clone(),
+                &worker_policy,
+            );
             state.stack_previews.update(&job_id, |job| match result {
-                Ok(()) => job.groups[group.index].state = StackGroupState::Ready,
+                Ok(()) => {
+                    job.groups[group.index].state = StackGroupState::Ready;
+                    job.groups[group.index].phase = "ready".into();
+                }
                 Err(error) => {
                     job.groups[group.index].state = StackGroupState::Error;
+                    job.groups[group.index].phase = "error".into();
                     job.groups[group.index].error = Some(error);
                 }
             });
@@ -929,16 +966,45 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob) {
 
 fn run_group(
     state: &Arc<AppState>,
+    database_id: &str,
     job_id: &str,
     cache_root: &FsPath,
     group: PreparedGroup,
     worker_policy: &crate::concurrency::WorkerPolicy,
 ) -> Result<(), String> {
     use seiza_stacking::{
-        CalibrationMasters, FitsFrame, FrameDisposition, LiveStacker, NormalizationMode,
-        StackOptions,
+        FitsFrame, FrameDisposition, LiveStacker, NormalizationMode, StackOptions,
     };
 
+    let ctx = state
+        .get_database(database_id)
+        .ok_or_else(|| format!("Database {database_id} is no longer configured"))?;
+    let calibration_conn = rusqlite::Connection::open(&ctx.database_path)
+        .map_err(|error| format!("Opening calibration catalog: {error}"))?;
+    calibration_conn
+        .busy_timeout(std::time::Duration::from_secs(60))
+        .map_err(|error| format!("Configuring calibration catalog: {error}"))?;
+    let directory_tree = ctx
+        .get_directory_tree()
+        .map_err(|error| format!("Indexing calibration folders: {error}"))?;
+    let light_paths = group
+        .frames
+        .iter()
+        .map(|frame| frame.path.clone())
+        .collect::<Vec<_>>();
+    let (calibration_masters, applied_calibration) =
+        crate::calibration::resolve_or_build_masters_for_group(
+            &calibration_conn,
+            cache_root,
+            &light_paths,
+            Some(&directory_tree),
+        )
+        .map_err(|error| error.to_string())?;
+    state.stack_previews.update(job_id, |job| {
+        let status = &mut job.groups[group.index];
+        status.calibration = applied_calibration;
+        status.phase = "stacking".into();
+    });
     let reference_frame =
         FitsFrame::open(&group.frames[0].path).map_err(|error| error.to_string())?;
     let output_channels = if reference_frame.bayer.is_some() {
@@ -983,7 +1049,7 @@ fn run_group(
             normalization: NormalizationMode::Global,
             ..StackOptions::default()
         };
-        let mut stacker = LiveStacker::new(reference_frame, CalibrationMasters::default(), options)
+        let mut stacker = LiveStacker::new(reference_frame, calibration_masters, options)
             .map_err(|error| error.to_string())?;
         state.stack_previews.update(job_id, |job| {
             let status = &mut job.groups[group.index];
@@ -1060,6 +1126,9 @@ fn run_group(
                 status.frames.push(decision);
             });
         }
+        state.stack_previews.update(job_id, |job| {
+            job.groups[group.index].phase = "rendering".into();
+        });
         let reference_headers = stacker.reference_headers().to_vec();
         let snapshot = stacker.into_snapshot().map_err(|error| error.to_string())?;
         let fits_destination = fits_path(cache_root, job_id, group.index);
@@ -1198,6 +1267,7 @@ mod tests {
             target_name: format!("Target {target_id}"),
             filter_name: filter_name.into(),
             state: StackGroupState::Ready,
+            phase: "ready".into(),
             total_candidates: 2,
             eligible_frames: 2,
             quality_excluded: 0,
@@ -1211,6 +1281,7 @@ mod tests {
             preview_url: None,
             fits_url: None,
             error: None,
+            calibration: crate::calibration::AppliedCalibration::default(),
             input_images: vec![StackInputImage {
                 image_id,
                 grading_status: 1,
