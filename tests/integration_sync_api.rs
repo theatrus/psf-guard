@@ -95,6 +95,7 @@ async fn planning_and_grade_pushes_preview_before_writing() {
             db_path: local_path.to_string_lossy().into_owned(),
             image_dirs: vec![image_dir.to_string_lossy().into_owned()],
             reject_archive: None,
+            remote_image_upload: None,
         },
         DbEntry {
             id: "scope".into(),
@@ -102,6 +103,7 @@ async fn planning_and_grade_pushes_preview_before_writing() {
             db_path: telescope_path.to_string_lossy().into_owned(),
             image_dirs: vec![image_dir.to_string_lossy().into_owned()],
             reject_archive: None,
+            remote_image_upload: None,
         },
     ];
     let state = Arc::new(

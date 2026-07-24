@@ -151,6 +151,8 @@ pub struct DatabaseContext {
     pub database_path: String,
     pub image_dirs: Vec<String>,
     pub image_dir_paths: Vec<PathBuf>,
+    pub remote_image_upload: Option<crate::db_registry::RemoteImageUploadConfig>,
+    pub remote_image_upload_dir: Option<PathBuf>,
     /// Per-DB cache directory: `<cache_root>/<slug>/`. Created on construction.
     /// All preview/annotated/PSF artifacts for this database live below here,
     /// so two DBs with overlapping image IDs do not collide.
@@ -186,6 +188,9 @@ pub struct DatabaseContext {
     pub import_job: crate::server::import_job::SharedImportJob,
     /// Database-wide, low-priority quality analysis state.
     pub quality_backfill: crate::server::quality_backfill::SharedQualityBackfill,
+    /// Serializes publish/import for remotely posted images within one
+    /// database, keeping basename checks and database inserts coherent.
+    pub image_import_mutex: Arc<TokioMutex<()>>,
 }
 
 impl DatabaseContext {
@@ -196,6 +201,7 @@ impl DatabaseContext {
         name: String,
         db_path: String,
         image_dirs: Vec<String>,
+        remote_image_upload: Option<crate::db_registry::RemoteImageUploadConfig>,
         cache_root: String,
     ) -> Result<Self> {
         use std::path::Path;
@@ -219,6 +225,12 @@ impl DatabaseContext {
             ));
         }
 
+        let remote_image_upload_dir = remote_image_upload
+            .as_ref()
+            .filter(|config| config.enabled)
+            .map(|config| config.validated_image_dir(&image_dirs))
+            .transpose()?;
+
         let cache_dir_path = PathBuf::from(&cache_root).join(&id);
         std::fs::create_dir_all(&cache_dir_path).map_err(|e| {
             anyhow::anyhow!(
@@ -238,6 +250,8 @@ impl DatabaseContext {
             database_path: db_path,
             image_dirs,
             image_dir_paths,
+            remote_image_upload,
+            remote_image_upload_dir,
             cache_dir,
             cache_dir_path,
             db_connection: Arc::new(Mutex::new(conn)),
@@ -253,6 +267,7 @@ impl DatabaseContext {
             spatial_metrics: Arc::new(RwLock::new(Default::default())),
             import_job: Arc::new(RwLock::new(Default::default())),
             quality_backfill: Arc::new(RwLock::new(Default::default())),
+            image_import_mutex: Arc::new(TokioMutex::new(())),
         })
     }
 
@@ -941,6 +956,8 @@ impl DatabaseContext {
             database_path: ":memory:".to_string(),
             image_dirs: vec![],
             image_dir_paths: vec![],
+            remote_image_upload: None,
+            remote_image_upload_dir: None,
             cache_dir: "/tmp/psf-guard-test".to_string(),
             cache_dir_path: PathBuf::from("/tmp/psf-guard-test"),
             db_connection: Arc::new(Mutex::new(conn)),
@@ -956,6 +973,7 @@ impl DatabaseContext {
             spatial_metrics: Arc::new(RwLock::new(Default::default())),
             import_job: Arc::new(RwLock::new(Default::default())),
             quality_backfill: Arc::new(RwLock::new(Default::default())),
+            image_import_mutex: Arc::new(TokioMutex::new(())),
         }
     }
 }
@@ -968,6 +986,8 @@ impl Clone for DatabaseContext {
             database_path: self.database_path.clone(),
             image_dirs: self.image_dirs.clone(),
             image_dir_paths: self.image_dir_paths.clone(),
+            remote_image_upload: self.remote_image_upload.clone(),
+            remote_image_upload_dir: self.remote_image_upload_dir.clone(),
             cache_dir: self.cache_dir.clone(),
             cache_dir_path: self.cache_dir_path.clone(),
             db_connection: self.db_connection.clone(),
@@ -983,6 +1003,7 @@ impl Clone for DatabaseContext {
             spatial_metrics: self.spatial_metrics.clone(),
             import_job: self.import_job.clone(),
             quality_backfill: self.quality_backfill.clone(),
+            image_import_mutex: self.image_import_mutex.clone(),
         }
     }
 }
@@ -1093,6 +1114,7 @@ mod tests {
             "Test".into(),
             db_path.to_string_lossy().into_owned(),
             vec![img_dir.to_string_lossy().into_owned()],
+            None,
             dir.join("cache").to_string_lossy().into_owned(),
         )
         .unwrap()

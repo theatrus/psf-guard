@@ -8,6 +8,7 @@ pub mod handlers;
 pub mod import_job;
 pub mod preview_queue;
 pub mod quality_backfill;
+pub mod remote_upload;
 pub mod scheduler;
 pub mod slug;
 pub mod spatial_scan;
@@ -18,6 +19,7 @@ pub mod sync_preview;
 
 use anyhow::{Context, Result};
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, post, put},
     Router,
 };
@@ -307,6 +309,11 @@ async fn run_server_internal(
             get(stack_preview::color::download_stack_color_fits),
         )
         .route("/images", get(handlers::get_images))
+        .route(
+            "/images/upload",
+            post(remote_upload::upload_image)
+                .layer(DefaultBodyLimit::max(remote_upload::MAX_MULTIPART_BYTES)),
+        )
         .route("/images/{image_id}", get(handlers::get_image))
         .route(
             "/images/{image_id}/astrometry",

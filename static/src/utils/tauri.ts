@@ -59,6 +59,12 @@ export interface DbEntry {
   db_path: string;
   image_dirs: string[];
   reject_archive?: RejectArchiveOverrides;
+  remote_image_upload?: {
+    enabled: boolean;
+    image_dir?: string;
+    token_sha256?: string;
+    token_configured?: boolean;
+  };
 }
 
 // Process-global Seiza catalog paths. data_dir configures a complete bundle;

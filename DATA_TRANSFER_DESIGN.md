@@ -26,6 +26,8 @@ on the destination. File transfer can be added later as a separate action.
 The repository already has most of the local merge rules:
 
 - FITS import scans headers and runs a dry preview before the UI offers Apply.
+- Per-database remote FITS ingest is opt-in, authenticated, and imports one
+  verified light frame through the same target-resolution path.
 - `sync pull` merges scheduler structure and captures by stable GUID.
 - Pull keeps a reviewed destination grade and only fills a Pending grade.
 - `sync planning` sends projects, targets, templates, plans, and rule weights
@@ -294,6 +296,37 @@ The plugin can:
 The first plugin release should remain manual and preview-first. Automatic
 background sync can follow after the audit trail and conflict behavior have
 real use.
+
+### Remote image ingest
+
+Image transfer is independent of Target Scheduler catalog sync. A capture
+client can post a light frame directly to one opted-in PSF Guard database:
+
+```http
+POST /api/db/{db_id}/images/upload
+Authorization: Bearer <per-database-upload-token>
+X-PSF-Guard-Database-ID: <db_id>
+X-Content-SHA256: <64 lowercase hexadecimal characters>
+Content-Type: multipart/form-data
+
+image=@capture.fits
+```
+
+The database settings select one of that database's registered image roots as
+the receive directory. The server requires the URL slug and echoed database ID
+to agree, authenticates with the selected database's salted token hash, streams
+at most 512 MiB to a sibling temporary file, verifies SHA-256 and FITS headers,
+and publishes without overwriting an existing basename.
+
+The normal one-frame importer then resolves an existing target by object name
+or coordinates and reuses its exposure plan. If no target matches, it builds
+the project, target, template, and plan from FITS headers. This path therefore
+works with an existing Target Scheduler catalog and with a fresh PSF Guard
+catalog whose user never installed Target Scheduler.
+
+Identical retries are idempotent. The response returns the resolved database,
+project, target, and image IDs. A basename already registered elsewhere or an
+existing receive file with different content returns `409 Conflict`.
 
 ## Security
 

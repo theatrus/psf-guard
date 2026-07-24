@@ -177,7 +177,13 @@ pub fn import_frames(
 
     let tx = conn.transaction().context("starting import transaction")?;
 
-    let existing = existing_basenames(&tx)?;
+    let candidate_basenames: HashSet<String> = frames
+        .iter()
+        .map(FrameMeta::basename)
+        .map(|basename| basename.to_lowercase())
+        .filter(|basename| !basename.is_empty())
+        .collect();
+    let existing = existing_basenames(&tx, &candidate_basenames)?;
     let mut lights: Vec<FrameMeta> = Vec::new();
     for frame in frames {
         if !frame.readable {
@@ -544,27 +550,52 @@ fn attach_frames_to_target(
 }
 
 /// Basenames (lowercased) of every FileName already present in the DB.
-fn existing_basenames(conn: &Connection) -> Result<HashSet<String>> {
+fn existing_basenames(
+    conn: &Connection,
+    candidate_basenames: &HashSet<String>,
+) -> Result<HashSet<String>> {
     let mut set = HashSet::new();
-    let mut stmt = conn.prepare("SELECT metadata FROM acquiredimage")?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-    for metadata in rows.flatten() {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&metadata)
-            && let Some(file_name) = value.get("FileName").and_then(|v| v.as_str())
-        {
-            // TS stores Windows paths; take the basename across either
-            // separator convention.
-            let base = file_name
-                .rsplit(['/', '\\'])
-                .next()
-                .unwrap_or(file_name)
-                .to_lowercase();
-            if !base.is_empty() {
-                set.insert(base);
+    if candidate_basenames.len() <= 16 {
+        let mut stmt =
+            conn.prepare("SELECT metadata FROM acquiredimage WHERE metadata LIKE ?1 ESCAPE '!'")?;
+        for candidate in candidate_basenames {
+            let pattern = format!("%{}%", escape_like(candidate));
+            let rows = stmt.query_map([pattern], |row| row.get::<_, String>(0))?;
+            for metadata in rows.flatten() {
+                add_metadata_basename(&mut set, &metadata);
             }
+        }
+    } else {
+        let mut stmt = conn.prepare("SELECT metadata FROM acquiredimage")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        for metadata in rows.flatten() {
+            add_metadata_basename(&mut set, &metadata);
         }
     }
     Ok(set)
+}
+
+fn add_metadata_basename(set: &mut HashSet<String>, metadata: &str) {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(metadata)
+        && let Some(file_name) = value.get("FileName").and_then(|value| value.as_str())
+    {
+        // TS stores Windows paths; take the basename across either separator.
+        let basename = file_name
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(file_name)
+            .to_lowercase();
+        if !basename.is_empty() {
+            set.insert(basename);
+        }
+    }
+}
+
+fn escape_like(value: &str) -> String {
+    value
+        .replace('!', "!!")
+        .replace('%', "!%")
+        .replace('_', "!_")
 }
 
 /// Pick (or create) the profile the imported rows belong to.
