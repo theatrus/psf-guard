@@ -3044,6 +3044,8 @@ pub async fn get_psf_visualization(
 pub async fn get_projects_overview(
     ctx: DbContext,
 ) -> Result<Json<ApiResponse<Vec<ProjectOverviewResponse>>>, AppError> {
+    const RECENT_IMAGES_PER_PROJECT: usize = 6;
+
     tracing::debug!("📋 Getting projects overview");
 
     let conn = ctx.db();
@@ -3065,7 +3067,10 @@ pub async fn get_projects_overview(
     };
     let mut recent_images_by_project: HashMap<i32, Vec<crate::models::RecentImageSummary>> =
         HashMap::new();
-    for image in db.get_recent_images_by_project(3).map_err(AppError::db)? {
+    for image in db
+        .get_recent_images_by_project(RECENT_IMAGES_PER_PROJECT)
+        .map_err(AppError::db)?
+    {
         recent_images_by_project
             .entry(image.project_id)
             .or_default()
