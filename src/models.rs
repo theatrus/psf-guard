@@ -68,6 +68,18 @@ pub struct ProjectOverviewStats {
     pub latest_date: Option<i64>,
 }
 
+/// Small image record for project overview thumbnails.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RecentImageSummary {
+    pub id: i32,
+    pub project_id: i32,
+    pub target_id: i32,
+    pub target_name: String,
+    pub acquired_date: Option<i64>,
+    pub filter_name: String,
+    pub grading_status: i32,
+}
+
 /// Overall system statistics
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OverallStats {

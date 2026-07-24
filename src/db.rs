@@ -1,7 +1,7 @@
 use crate::models::{
     AcquiredImage, GradingStatus, OverallDesiredStats, OverallStats, Profile, Project,
-    ProjectDesiredStats, ProjectOverviewStats, ProjectWithProfile, Target, TargetWithDesiredStats,
-    TargetWithStats,
+    ProjectDesiredStats, ProjectOverviewStats, ProjectWithProfile, RecentImageSummary, Target,
+    TargetWithDesiredStats, TargetWithStats,
 };
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
@@ -447,6 +447,51 @@ impl<'a> Database<'a> {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(images)
+    }
+
+    /// Fetch the newest few images for every project in one query.
+    ///
+    /// The overview uses these small records for its thumbnail strip. Keeping
+    /// this as one ranked query avoids a request and a SQLite round trip for
+    /// each project.
+    pub fn get_recent_images_by_project(
+        &self,
+        limit_per_project: usize,
+    ) -> Result<Vec<RecentImageSummary>> {
+        if limit_per_project == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT Id, projectId, targetId, target_name, acquireddate,
+                    filtername, gradingStatus
+             FROM (
+                 SELECT ai.Id, ai.projectId, ai.targetId, t.name AS target_name,
+                        ai.acquireddate, ai.filtername, ai.gradingStatus,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY ai.projectId
+                            ORDER BY ai.acquireddate DESC, ai.Id DESC
+                        ) AS recent_rank
+                 FROM acquiredimage ai
+                 JOIN target t ON ai.targetId = t.Id
+             )
+             WHERE recent_rank <= ?
+             ORDER BY projectId, acquireddate DESC, Id DESC",
+        )?;
+
+        let rows = stmt.query_map([limit_per_project as i64], |row| {
+            Ok(RecentImageSummary {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                target_id: row.get(2)?,
+                target_name: row.get(3)?,
+                acquired_date: row.get(4)?,
+                filter_name: row.get(5)?,
+                grading_status: row.get(6)?,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn query_images(
@@ -1318,6 +1363,41 @@ mod tests {
             .query_images_scoped(None, Some(1), None, Some(1), 1)
             .unwrap();
         assert_eq!(second_project_row[0].0.id, 2);
+    }
+
+    #[test]
+    fn recent_images_are_limited_and_sorted_per_project() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE target (
+                Id INTEGER PRIMARY KEY, name TEXT NOT NULL, projectId INTEGER NOT NULL
+             );
+             CREATE TABLE acquiredimage (
+                Id INTEGER PRIMARY KEY, projectId INTEGER NOT NULL,
+                targetId INTEGER NOT NULL, acquireddate INTEGER,
+                filtername TEXT NOT NULL, gradingStatus INTEGER NOT NULL
+             );
+             INSERT INTO target VALUES
+                (10, 'Alpha', 1),
+                (20, 'Beta', 2);
+             INSERT INTO acquiredimage VALUES
+                (1, 1, 10, 100, 'R', 0),
+                (2, 1, 10, 200, 'G', 1),
+                (3, 1, 10, 300, 'B', 2),
+                (4, 2, 20, 150, 'Ha', 0),
+                (5, 2, 20, 250, 'OIII', 1);",
+        )
+        .unwrap();
+
+        let db = Database::new(&conn);
+        let rows = db.get_recent_images_by_project(2).unwrap();
+        assert_eq!(
+            rows.iter().map(|image| image.id).collect::<Vec<_>>(),
+            vec![3, 2, 5, 4]
+        );
+        assert_eq!(rows[0].target_name, "Alpha");
+        assert_eq!(rows[2].filter_name, "OIII");
+        assert!(db.get_recent_images_by_project(0).unwrap().is_empty());
     }
 
     #[test]

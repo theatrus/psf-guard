@@ -99,6 +99,7 @@ pub struct ProjectOverviewResponse {
     pub files_missing: i32,
     pub date_range: DateRange,
     pub filters_used: Vec<String>,
+    pub recent_images: Vec<crate::models::RecentImageSummary>,
 }
 
 #[derive(Debug, Serialize)]

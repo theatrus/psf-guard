@@ -139,6 +139,18 @@ export default async function globalSetup() {
       rejectreason TEXT,
       profileId TEXT
     );
+    CREATE TABLE exposuretemplate (
+      Id INTEGER PRIMARY KEY,
+      filtername TEXT NOT NULL
+    );
+    CREATE TABLE exposureplan (
+      Id INTEGER PRIMARY KEY,
+      targetid INTEGER NOT NULL,
+      exposureTemplateId INTEGER NOT NULL,
+      desired INTEGER NOT NULL DEFAULT 0,
+      acquired INTEGER NOT NULL DEFAULT 0,
+      accepted INTEGER NOT NULL DEFAULT 0
+    );
 
     INSERT INTO project (Id, profileId, name, description) VALUES
       (1, 'default', 'Project Alpha', '3-image B-filter sequence'),
