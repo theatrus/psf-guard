@@ -135,17 +135,20 @@ header name grouped them poorly.
 
 ## Sync with the telescope database
 
-Add both the local and telescope databases in Settings, then expand
-**Scheduler database sync**:
+Add both the local and telescope databases in Settings, then use
+**Data Transfer**:
 
-- **Preview full pull** copies new or changed projects, targets, templates,
-  plans, captures, and grades from the telescope database into the local one.
-  Local reviewed grades win.
-- **Preview planning push** sends project, target, template, plan, and rule
-  settings back to the telescope database. It does not change telescope image
-  rows, capture counts, or grades.
+- **Merge catalogs** copies new or changed projects, targets, templates, plans,
+  captures, and grades from the selected source into the destination. Reviewed
+  grades already at the destination win.
+- **Send planning** sends project, target, template, plan, and rule settings.
+  It does not change destination image rows, capture counts, or grades.
+- **Send reviewed grades** sends Accepted and Rejected grades and reject
+  reasons for matching image GUIDs. Pending source rows are skipped.
 
-Both actions show a dry preview before **Apply**. The CLI equivalents are:
+All three actions create a server-owned preview before **Apply**. The preview
+expires after 30 minutes. It keeps the source state you reviewed and becomes
+stale if the destination changes. The CLI equivalents are:
 
 ```bash
 psf-guard sync pull --from telescope.sqlite --to archive.sqlite --dry-run
@@ -154,3 +157,7 @@ psf-guard sync grades --from archive.sqlite --to telescope.sqlite --dry-run
 ```
 
 Back up both databases before the first write.
+
+See [the data-transfer design](../DATA_TRANSFER_DESIGN.md) for planned native
+one-off file handles, versioned remote bundles, remote peers, and the N.I.N.A.
+plugin endpoint.

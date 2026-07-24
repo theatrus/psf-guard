@@ -494,66 +494,150 @@
   display: block;
 }
 
-.tauri-settings .scheduler-sync-empty,
-.tauri-settings .scheduler-sync-controls {
+.tauri-settings .scheduler-sync-empty {
   margin-top: 10px;
   font-size: 13px;
 }
 
-.tauri-settings .scheduler-sync-controls {
-  border-top: 1px solid var(--color-border, #444);
-  padding-top: 8px;
-}
-
-.tauri-settings .scheduler-sync-controls summary {
-  cursor: pointer;
-  color: var(--color-primary);
-  font-weight: 600;
-}
-
-.tauri-settings .scheduler-sync-body {
+.tauri-settings .scheduler-sync-workspace {
   display: grid;
-  gap: 10px;
-  margin-top: 10px;
+  gap: 14px;
 }
 
-.tauri-settings .scheduler-sync-body > label {
-  display: grid;
-  grid-template-columns: auto minmax(140px, 1fr);
+.tauri-settings .scheduler-sync-heading {
+  display: flex;
+  justify-content: space-between;
   align-items: center;
-  gap: 8px;
+  gap: 16px;
 }
 
-.tauri-settings .scheduler-sync-body select {
+.tauri-settings .scheduler-sync-heading h3,
+.tauri-settings .scheduler-sync-heading p {
+  margin: 0;
+}
+
+.tauri-settings .scheduler-sync-heading p {
+  margin-top: 4px;
+  color: var(--color-text-secondary);
+}
+
+.tauri-settings .scheduler-sync-safety {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  color: var(--color-primary);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 55%, transparent);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tauri-settings .scheduler-sync-operation {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 4px;
+  background: var(--color-bg-input);
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+}
+
+.tauri-settings .scheduler-sync-operation button {
+  padding: 8px 10px;
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  font-weight: 650;
+}
+
+.tauri-settings .scheduler-sync-operation button.active {
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-primary) 20%, var(--color-bg-input));
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--color-primary) 50%, transparent);
+}
+
+.tauri-settings .scheduler-sync-endpoints {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.tauri-settings .scheduler-sync-endpoints label {
+  display: grid;
+  gap: 5px;
   min-width: 0;
-  padding: 5px 7px;
+}
+
+.tauri-settings .scheduler-sync-endpoints label > span {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tauri-settings .scheduler-sync-endpoints select {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 9px;
   color: var(--color-text);
   background: var(--color-bg-input);
   border: 1px solid var(--color-border);
   border-radius: 4px;
 }
 
-.tauri-settings .scheduler-sync-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+.tauri-settings .scheduler-sync-endpoints small {
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.tauri-settings .scheduler-sync-actions > div {
+.tauri-settings .scheduler-sync-swap {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: var(--color-primary);
+  background: var(--color-bg-input);
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  font-size: 20px;
+}
+
+.tauri-settings .scheduler-sync-description {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 6px;
-  padding: 9px;
+  gap: 5px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--color-bg-input) 70%, transparent);
   border: 1px solid var(--color-border);
-  border-radius: 4px;
+  border-radius: 6px;
 }
 
-.tauri-settings .scheduler-sync-actions small,
+.tauri-settings .scheduler-sync-description span,
 .tauri-settings .scheduler-sync-preview small {
   display: block;
   color: var(--color-text-secondary);
   line-height: 1.35;
+}
+
+.tauri-settings .scheduler-sync-primary-action {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.tauri-settings .scheduler-sync-primary-action button {
+  width: auto;
+}
+
+.tauri-settings .scheduler-sync-transitions {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--color-text-secondary);
 }
 
 .tauri-settings .scheduler-sync-check {
@@ -583,8 +667,14 @@
 }
 
 @media (max-width: 760px) {
-  .tauri-settings .scheduler-sync-actions {
+  .tauri-settings .scheduler-sync-operation,
+  .tauri-settings .scheduler-sync-endpoints {
     grid-template-columns: 1fr;
+  }
+
+  .tauri-settings .scheduler-sync-swap {
+    justify-self: center;
+    transform: rotate(90deg);
   }
 }
 

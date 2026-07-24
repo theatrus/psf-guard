@@ -12,6 +12,7 @@ import type {
   PreviewOptions,
   ServerInfo,
   SchedulerSyncRequest,
+  SchedulerSyncPreviewResponse,
   SchedulerSyncResponse,
   DatabaseSummary,
   CreateDatabaseRequest,
@@ -233,6 +234,53 @@ export const apiClient = {
       req
     );
     if (!data.data) throw new Error(data.error || 'Failed to sync databases');
+    return data.data;
+  },
+
+  /** Create a server-owned dry preview that must be applied by its ID. */
+  previewDatabaseSync: async (
+    dbId: string,
+    req: SchedulerSyncRequest
+  ): Promise<SchedulerSyncPreviewResponse> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<SchedulerSyncPreviewResponse>>(
+      `/databases/${encodeURIComponent(dbId)}/sync/preview`,
+      req
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to preview database sync');
+    return data.data;
+  },
+
+  /** Reload one durable preview after the Settings UI closes or reloads. */
+  getDatabaseSyncPreview: async (
+    dbId: string,
+    previewId: string
+  ): Promise<SchedulerSyncPreviewResponse> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<SchedulerSyncPreviewResponse>>(
+      `/databases/${encodeURIComponent(dbId)}/sync/previews/${encodeURIComponent(previewId)}`
+    );
+    if (!data.data) throw new Error(data.error || 'Database sync preview not found');
+    return data.data;
+  },
+
+  deleteDatabaseSyncPreview: async (dbId: string, previewId: string): Promise<void> => {
+    const apiInstance = await getApi();
+    await apiInstance.delete(
+      `/databases/${encodeURIComponent(dbId)}/sync/previews/${encodeURIComponent(previewId)}`
+    );
+  },
+
+  /** Apply one unexpired server-owned preview. */
+  applyDatabaseSyncPreview: async (
+    dbId: string,
+    previewId: string
+  ): Promise<SchedulerSyncResponse> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<SchedulerSyncResponse>>(
+      `/databases/${encodeURIComponent(dbId)}/sync/previews/${encodeURIComponent(previewId)}/apply`
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to apply database sync preview');
     return data.data;
   },
 

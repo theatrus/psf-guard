@@ -785,11 +785,29 @@ pub fn sync_pull(src: &Connection, dest: &Connection, opts: &PullOptions) -> Res
     require_pull_capable(dest).context("destination database")?;
 
     let tx = dest.unchecked_transaction()?;
+    let summary = sync_pull_in_transaction(src, &tx, opts)?;
+    if opts.dry_run {
+        tx.rollback()?;
+    } else {
+        tx.commit()?;
+    }
+    Ok(summary)
+}
+
+/// Stage one full pull inside a transaction owned by the caller.
+pub(crate) fn sync_pull_in_transaction(
+    src: &Connection,
+    tx: &Transaction<'_>,
+    opts: &PullOptions,
+) -> Result<PullSummary> {
+    require_pull_capable(src).context("source database")?;
+    require_pull_capable(tx).context("destination database")?;
+
     let mut summary = PullSummary::default();
 
     let structure = sync_structure(
         src,
-        &tx,
+        tx,
         opts.project_filter.as_deref(),
         false,
         &mut summary.changes,
@@ -803,7 +821,7 @@ pub fn sync_pull(src: &Connection, dest: &Connection, opts: &PullOptions) -> Res
     // 6. acquiredimage (grade fill-if-pending; remap proj/tgt/exposureId)
     let img_map = upsert_acquired_images(
         src,
-        &tx,
+        tx,
         &structure.project_map,
         &structure.target_map,
         &structure.plan_map,
@@ -815,7 +833,7 @@ pub fn sync_pull(src: &Connection, dest: &Connection, opts: &PullOptions) -> Res
     if opts.with_image_data {
         copy_imagedata(
             src,
-            &tx,
+            tx,
             &img_map,
             &mut summary.imagedata,
             &mut summary.imagedata_bytes,
@@ -824,11 +842,6 @@ pub fn sync_pull(src: &Connection, dest: &Connection, opts: &PullOptions) -> Res
         summary.imagedata_synced = true;
     }
 
-    if opts.dry_run {
-        tx.rollback()?;
-    } else {
-        tx.commit()?;
-    }
     Ok(summary)
 }
 

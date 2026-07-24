@@ -13,13 +13,17 @@ use crate::commands::reject_archive::require_target_scheduler_guid;
 use crate::db::Database;
 use crate::models::GradingStatus;
 use anyhow::{anyhow, Context, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Knobs for a one-way grade push.
 pub struct SyncGradesOptions {
     /// Only consider source rows with this grade (None = all).
     pub status_filter: Option<GradingStatus>,
+    /// When no exact status filter is set, skip Pending rows. This is the safe
+    /// default for UI-driven grade pushes: an unreviewed source row must not
+    /// erase a decision already made at the destination.
+    pub reviewed_only: bool,
     /// Restrict to source rows whose project name matches (substring).
     pub project_filter: Option<String>,
     /// Restrict to source rows whose target name matches (substring).
@@ -89,8 +93,27 @@ pub fn sync_grades(
     require_target_scheduler_guid(src).context("source database")?;
     require_target_scheduler_guid(dest).context("destination database")?;
 
+    let tx = dest.unchecked_transaction()?;
+    let summary = sync_grades_in_transaction(src, &tx, opts)?;
+    if opts.dry_run {
+        tx.rollback()?;
+    } else {
+        tx.commit()?;
+    }
+    Ok(summary)
+}
+
+/// Stage one grade push inside a transaction owned by the caller.
+pub(crate) fn sync_grades_in_transaction(
+    src: &Connection,
+    tx: &Transaction<'_>,
+    opts: &SyncGradesOptions,
+) -> Result<SyncSummary> {
+    require_target_scheduler_guid(src).context("source database")?;
+    require_target_scheduler_guid(tx).context("destination database")?;
+
     let src_db = Database::new(src);
-    let dest_db = Database::new(dest);
+    let dest_db = Database::new(tx);
 
     let src_rows = src_db.query_images(
         opts.status_filter,
@@ -152,6 +175,12 @@ pub fn sync_grades(
     let mut updates: Vec<(i32, GradingStatus, Option<String>)> = Vec::new();
 
     for (img, _, _) in &src_rows {
+        if opts.status_filter.is_none()
+            && opts.reviewed_only
+            && img.grading_status == GradingStatus::Pending as i32
+        {
+            continue;
+        }
         let guid = match img.guid.as_deref() {
             Some(g) if !g.is_empty() => g,
             _ => {
@@ -205,10 +234,14 @@ pub fn sync_grades(
         .filter(|g| !matched_dest.contains(g.as_str()))
         .count();
 
-    if !opts.dry_run && !updates.is_empty() {
-        dest_db
-            .batch_update_grading_status(&updates)
-            .context("applying grade updates to destination")?;
+    if !opts.dry_run {
+        for (id, status, reason) in updates {
+            tx.execute(
+                "UPDATE acquiredimage SET gradingStatus = ?1, rejectreason = ?2 WHERE Id = ?3",
+                rusqlite::params![status as i32, reason.as_deref(), id],
+            )
+            .context("applying grade update to destination")?;
+        }
     }
 
     Ok(summary)
@@ -263,6 +296,7 @@ mod tests {
     fn opts() -> SyncGradesOptions {
         SyncGradesOptions {
             status_filter: None,
+            reviewed_only: false,
             project_filter: None,
             target_filter: None,
             dry_run: false,
@@ -359,6 +393,39 @@ mod tests {
         assert_eq!(summary.changed, 1);
         assert_eq!(grade_of(&dest, "g1"), (2, Some("x".to_string())));
         assert_eq!(grade_of(&dest, "g2"), (0, None)); // not pushed (filtered out)
+    }
+
+    #[test]
+    fn reviewed_only_does_not_clear_a_destination_grade() {
+        let src = setup_db(
+            &[
+                (1, 0, Some("pending"), None),
+                (2, 1, Some("accepted"), None),
+                (3, 2, Some("rejected"), Some("clouds")),
+            ],
+            true,
+        );
+        let dest = setup_db(
+            &[
+                (10, 2, Some("pending"), Some("tracking")),
+                (20, 0, Some("accepted"), None),
+                (30, 0, Some("rejected"), None),
+            ],
+            true,
+        );
+
+        let mut o = opts();
+        o.reviewed_only = true;
+        let summary = sync_grades(&src, &dest, &o).unwrap();
+
+        assert_eq!(summary.source_considered, 2);
+        assert_eq!(summary.changed, 2);
+        assert_eq!(
+            grade_of(&dest, "pending"),
+            (2, Some("tracking".to_string()))
+        );
+        assert_eq!(grade_of(&dest, "accepted"), (1, None));
+        assert_eq!(grade_of(&dest, "rejected"), (2, Some("clouds".to_string())));
     }
 
     #[test]

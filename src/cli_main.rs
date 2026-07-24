@@ -702,6 +702,7 @@ pub fn main() -> Result<()> {
 
                 let options = SyncGradesOptions {
                     status_filter,
+                    reviewed_only: false,
                     project_filter: project,
                     target_filter: target,
                     dry_run,

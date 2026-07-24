@@ -611,8 +611,15 @@ Pull complete new projects and captures, edit plans or grade locally, then
 push planning settings and grades back. All three commands support
 `--project` filters and `--dry-run` (`grades` also supports `--target` and
 `--status`), open the source read-only, and run in one transaction. The
-Settings panel offers the same full-pull and planning-push actions with a
-dry-run preview before Apply.
+Settings has one Data Transfer workspace with explicit source and destination
+catalogs. It offers merge, planning, and reviewed-grade actions with a
+server-owned preview before Apply. The preview keeps a frozen source snapshot
+and returns after a page reload. Apply rejects destination changes before it
+writes. Pending grades are excluded from the UI grade push by default.
+
+Native one-off file handles, versioned remote bundles, the remote protocol,
+and the future N.I.N.A. plugin boundary are tracked in
+[DATA_TRANSFER_DESIGN.md](./DATA_TRANSFER_DESIGN.md).
 
 ## ⌨️ CLI reference
 
@@ -806,6 +813,15 @@ curl -X POST "localhost:3000/api/databases/my-db/sync" \
 curl -X POST "localhost:3000/api/databases/my-db/sync" \
   -H "Content-Type: application/json" \
   -d '{"peer_db_id":"telescope","kind":"push_planning","dry_run":true}'
+
+# Create a server-owned preview of reviewed grade changes.
+curl -X POST "localhost:3000/api/databases/my-db/sync/preview" \
+  -H "Content-Type: application/json" \
+  -d '{"peer_db_id":"telescope","kind":"push_grades"}'
+
+# Apply only the preview you reviewed (use preview_id from the prior response).
+curl -X POST \
+  "localhost:3000/api/databases/my-db/sync/previews/<preview_id>/apply"
 ```
 
 ## ⚠️ Known limitations

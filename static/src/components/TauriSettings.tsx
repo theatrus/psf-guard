@@ -445,6 +445,10 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
 
           {managementAllowed && <SeizaCatalogControls />}
 
+          {managementAllowed && (
+            <SchedulerSyncControls databases={databases} disabled={isApplying} />
+          )}
+
           <div className="settings-section">
             <h3>Configured Databases {hasDatabases && <span className="muted">({databases.length})</span>}</h3>
 
@@ -470,13 +474,6 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                     </div>
                   )}
                   <QualityBackfillControls dbId={entry.id} />
-                  {managementAllowed && (
-                    <SchedulerSyncControls
-                      database={entry}
-                      databases={databases}
-                      disabled={isApplying}
-                    />
-                  )}
                 </div>
                 {managementAllowed && (
                   <div className="db-row-actions">
