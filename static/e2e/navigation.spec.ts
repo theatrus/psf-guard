@@ -15,7 +15,7 @@ test.beforeEach(async ({ request }) => {
   });
   dbId = entry.id;
   // Wait for the background cache refresh to settle so has_files flips true
-  // and the View Project link actually shows up on the overview.
+  // and the image-grid action becomes available on the overview.
   await waitForCacheReady(request, dbId);
 });
 
@@ -23,27 +23,31 @@ test('overview groups projects under the configured DB section', async ({
   page,
 }) => {
   await page.goto('/');
-  // The DB section header carries the display name. Use a regex match because
-  // the h2 also contains the slug badge and project count.
+  // The database section toggle carries the display name and project count.
   await expect(
-    page.getByRole('heading', { name: /Imaging Rig e2e/i })
+    page.getByRole('button', { name: /Imaging Rig e2e.*2 projects/i })
   ).toBeVisible({ timeout: 15_000 });
   // Fixture defines two projects (Alpha + Beta) under this DB.
   await expect(page.getByText(/2 projects/)).toBeVisible();
-  await expect(page.getByRole('heading', { name: /Project Alpha/i })).toBeVisible();
-  await expect(page.getByRole('heading', { name: /Project Beta/i })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Open Project Alpha image grid' })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Open Project Beta image grid' })
+  ).toBeVisible();
 });
 
-test('click View Project from overview lands on the grid scoped to that DB', async ({
+test('open a project image grid from overview with the correct DB scope', async ({
   page,
 }) => {
   await page.goto('/');
   await expect(
-    page.getByRole('heading', { name: /Imaging Rig e2e/i })
+    page.getByRole('button', { name: /Imaging Rig e2e.*2 projects/i })
   ).toBeVisible({ timeout: 15_000 });
 
-  // Click the Alpha project's "View Project" link (first one in the list).
-  await page.getByText('View Project →').first().click();
+  await page
+    .getByRole('button', { name: 'Open Project Alpha image grid' })
+    .click();
 
   // URL carries both the db slug and a project id atomically.
   await expect(page).toHaveURL(/[#?].*db=imaging-rig-e2e/);
