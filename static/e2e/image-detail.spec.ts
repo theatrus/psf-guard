@@ -288,6 +288,73 @@ test('detail view supports pinch zoom around a moving midpoint', async ({
     .toBeCloseTo(box!.height / 2 + 20, 1);
 });
 
+test('detail view keeps trackpad pinch out of the page viewport', async ({
+  page,
+}) => {
+  await page.goto(`/#/detail/1?db=${encodeURIComponent(dbId)}&project=1`);
+
+  const container = page.locator('.zoom-container').first();
+  const img = container.locator('img.detail-main-image').first();
+  await expect(img).toBeVisible({ timeout: 15_000 });
+  await page.waitForFunction(
+    (el) =>
+      el instanceof HTMLImageElement && el.complete && el.naturalWidth > 0,
+    await img.elementHandle(),
+    { timeout: 30_000 }
+  );
+
+  const before = await readDetailViewportAnchor(page);
+  const viewportScaleBefore = await page.evaluate(
+    () => window.visualViewport?.scale ?? 1
+  );
+  const box = await container.boundingBox();
+  expect(box).not.toBeNull();
+  const center = {
+    x: box!.x + box!.width / 2,
+    y: box!.y + box!.height / 2,
+  };
+
+  const wheelCanceled = await container.evaluate((el, point) => {
+    const event = new WheelEvent('wheel', {
+      bubbles: true,
+      cancelable: true,
+      clientX: point.x,
+      clientY: point.y,
+      ctrlKey: true,
+      deltaY: -200,
+    });
+    return !el.dispatchEvent(event) && event.defaultPrevented;
+  }, center);
+
+  expect(wheelCanceled).toBe(true);
+  await expect.poll(async () => (await readDetailViewportAnchor(page)).scale)
+    .toBeGreaterThan(before.scale);
+
+  const afterWheel = await readDetailViewportAnchor(page);
+  const gestureCanceled = await container.evaluate((el, point) => {
+    const dispatchGesture = (type: string, scale: number) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperties(event, {
+        clientX: { value: point.x },
+        clientY: { value: point.y },
+        scale: { value: scale },
+      });
+      return !el.dispatchEvent(event) && event.defaultPrevented;
+    };
+
+    const start = dispatchGesture('gesturestart', 1);
+    const change = dispatchGesture('gesturechange', 1.5);
+    dispatchGesture('gestureend', 1.5);
+    return start && change;
+  }, center);
+
+  expect(gestureCanceled).toBe(true);
+  await expect.poll(async () => (await readDetailViewportAnchor(page)).scale)
+    .toBeGreaterThan(afterWheel.scale * 1.4);
+  expect(await page.evaluate(() => window.visualViewport?.scale ?? 1))
+    .toBe(viewportScaleBefore);
+});
+
 test('detail view hides the pending image while arrow-key navigation generates it', async ({
   page,
 }) => {

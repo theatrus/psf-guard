@@ -60,6 +60,13 @@ const DEFAULT_BOUNDS: ZoomBounds = {
 
 const ZOOM_STEP = 0.1;
 const KEYBOARD_ZOOM_STEP = 0.2;
+const WHEEL_SCALE_PER_DELTA = ZOOM_STEP * 0.01;
+
+type SafariGestureEvent = Event & {
+  clientX?: number;
+  clientY?: number;
+  scale?: number;
+};
 
 export function useImageZoom(options: UseImageZoomOptions = DEFAULT_BOUNDS): UseImageZoomReturn {
   const bounds: ZoomBounds = options;
@@ -85,7 +92,14 @@ export function useImageZoom(options: UseImageZoomOptions = DEFAULT_BOUNDS): Use
     centerY: number;
     state: ZoomState;
   } | null>(null);
+  const touchPinchActiveRef = useRef(false);
+  const safariGestureRef = useRef<{
+    initialScale: number;
+    dispatchedScale: number;
+  } | null>(null);
   const initialFitScaleRef = useRef(1);
+  const zoomStateRef = useRef(zoomState);
+  zoomStateRef.current = zoomState;
 
   // Latest onViewModeChange without forcing callers to memoize it.
   const onViewModeChangeRef = useRef(options.onViewModeChange);
@@ -328,8 +342,9 @@ export function useImageZoom(options: UseImageZoomOptions = DEFAULT_BOUNDS): Use
     onViewModeChangeRef.current?.('user');
 
     setZoomState(prevState => {
-      const delta = -e.deltaY * 0.01;
-      const newScale = clampScale(prevState.scale + delta * ZOOM_STEP);
+      const newScale = clampScale(
+        prevState.scale - e.deltaY * WHEEL_SCALE_PER_DELTA
+      );
       
       if (newScale === prevState.scale) return prevState;
 
@@ -415,12 +430,14 @@ export function useImageZoom(options: UseImageZoomOptions = DEFAULT_BOUNDS): Use
   // browser from taking over the gesture.
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (e.touches.length >= 2) {
+      touchPinchActiveRef.current = true;
       e.preventDefault();
       beginPinch(e.touches, zoomState);
       return;
     }
 
     if (e.touches.length === 1) {
+      touchPinchActiveRef.current = false;
       const touch = e.touches[0];
       lastTouchPosRef.current = { x: touch.clientX, y: touch.clientY };
       pinchRef.current = null;
@@ -432,6 +449,7 @@ export function useImageZoom(options: UseImageZoomOptions = DEFAULT_BOUNDS): Use
     if (!container) return;
 
     if (e.touches.length >= 2) {
+      touchPinchActiveRef.current = true;
       e.preventDefault();
 
       if (!pinchRef.current) {
@@ -501,6 +519,8 @@ export function useImageZoom(options: UseImageZoomOptions = DEFAULT_BOUNDS): Use
   }, [beginPinch, clampScale, constrainPan, zoomState]);
 
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    touchPinchActiveRef.current = e.touches.length >= 2;
+
     if (e.touches.length >= 2) {
       beginPinch(e.touches, zoomState);
     } else if (e.touches.length === 1) {
@@ -512,6 +532,83 @@ export function useImageZoom(options: UseImageZoomOptions = DEFAULT_BOUNDS): Use
       lastTouchPosRef.current = null;
     }
   }, [beginPinch, zoomState]);
+
+  // React delegates wheel events at the root. Browsers may make that listener
+  // passive, which means preventDefault() in the React handler cannot stop a
+  // trackpad pinch from also zooming the whole page. A non-passive listener
+  // on this container keeps the gesture local. The touch path is already
+  // covered by touch-action: none on .zoom-container.
+  //
+  // Safari on macOS reports trackpad pinch as gesture events. Translate each
+  // change into the same wheel path used by every viewer, including synced
+  // comparison panes.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const listenerOptions: AddEventListenerOptions = { passive: false };
+    const preventWheelDefault = (event: WheelEvent) => {
+      event.preventDefault();
+    };
+    const handleGestureStart = (rawEvent: Event) => {
+      const event = rawEvent as SafariGestureEvent;
+      event.preventDefault();
+      if (touchPinchActiveRef.current) return;
+
+      safariGestureRef.current = {
+        initialScale: zoomStateRef.current.scale,
+        dispatchedScale: zoomStateRef.current.scale,
+      };
+    };
+    const handleGestureChange = (rawEvent: Event) => {
+      const event = rawEvent as SafariGestureEvent;
+      event.preventDefault();
+      if (touchPinchActiveRef.current) return;
+
+      const gesture = safariGestureRef.current;
+      const gestureScale = event.scale;
+      if (
+        !gesture ||
+        typeof gestureScale !== 'number' ||
+        !Number.isFinite(gestureScale) ||
+        gestureScale <= 0
+      ) {
+        return;
+      }
+
+      const rect = container.getBoundingClientRect();
+      const targetScale = clampScale(gesture.initialScale * gestureScale);
+      const deltaY =
+        -(targetScale - gesture.dispatchedScale) / WHEEL_SCALE_PER_DELTA;
+      gesture.dispatchedScale = targetScale;
+
+      if (deltaY === 0) return;
+
+      container.dispatchEvent(new WheelEvent('wheel', {
+        bubbles: true,
+        cancelable: true,
+        clientX: event.clientX ?? rect.left + rect.width / 2,
+        clientY: event.clientY ?? rect.top + rect.height / 2,
+        ctrlKey: true,
+        deltaY,
+      }));
+    };
+    const handleGestureEnd = () => {
+      safariGestureRef.current = null;
+    };
+
+    container.addEventListener('wheel', preventWheelDefault, listenerOptions);
+    container.addEventListener('gesturestart', handleGestureStart, listenerOptions);
+    container.addEventListener('gesturechange', handleGestureChange, listenerOptions);
+    container.addEventListener('gestureend', handleGestureEnd, listenerOptions);
+
+    return () => {
+      container.removeEventListener('wheel', preventWheelDefault);
+      container.removeEventListener('gesturestart', handleGestureStart);
+      container.removeEventListener('gesturechange', handleGestureChange);
+      container.removeEventListener('gestureend', handleGestureEnd);
+    };
+  }, [clampScale]);
 
   // Zoom in function
   const zoomIn = useCallback(() => {
