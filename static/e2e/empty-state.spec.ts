@@ -46,10 +46,10 @@ test('header shows the PSF Guard logo', async ({ page }) => {
     .getByRole('button', { name: 'PSF Guard' })
     .locator('.brand-logo');
   await expect(logo).toBeVisible();
-  await expect(logo).toHaveAttribute('src', /^data:image\/png;base64,/);
+  await expect(logo).toHaveAttribute('src', '/psf-guard.svg');
   await expect
     .poll(() => logo.evaluate((image: HTMLImageElement) => image.naturalWidth))
-    .toBe(32);
+    .toBe(64);
 });
 
 test('GET /api/info advertises database management is enabled', async ({
