@@ -143,11 +143,21 @@
   background: none;
   border: 0;
   padding: 0.25rem 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
   font-size: 1.2rem;
   font-weight: 700;
   color: var(--color-primary);
   white-space: nowrap;
   cursor: pointer;
+}
+
+.brand-logo {
+  display: block;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
 }
 
 .brand-button:focus-visible,
@@ -476,6 +486,13 @@
 
   .brand-button {
     font-size: 0.85rem;
+    gap: 0.4rem;
+  }
+
+  .brand-logo {
+    width: 28px;
+    height: 28px;
+    border-radius: 5px;
   }
 
   .header-view-tabs,

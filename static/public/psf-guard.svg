@@ -1,0 +1,43 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="64"
+  height="64"
+  viewBox="0 0 64 64"
+  role="img"
+  aria-labelledby="title"
+>
+  <title id="title">PSF Guard</title>
+  <path
+    d="M32 4 52 12v17c0 13.2-7.8 23.8-20 30C19.8 52.8 12 42.2 12 29V12L32 4Z"
+    fill="#17242c"
+    stroke="#61dafb"
+    stroke-width="3"
+    stroke-linejoin="round"
+  />
+  <circle
+    cx="32"
+    cy="28"
+    r="13"
+    fill="none"
+    stroke="#61dafb"
+    stroke-width="2"
+    opacity=".42"
+  />
+  <circle
+    cx="32"
+    cy="28"
+    r="7"
+    fill="none"
+    stroke="#61dafb"
+    stroke-width="2"
+    opacity=".78"
+  />
+  <path
+    d="M32 18v20M22 28h20"
+    stroke="#f4fbff"
+    stroke-width="2"
+    stroke-linecap="round"
+    opacity=".9"
+  />
+  <circle cx="32" cy="28" r="3.5" fill="#f4fbff" />
+</svg>

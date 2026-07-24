@@ -39,6 +39,19 @@ test('header Settings button is present in browser mode', async ({ page }) => {
   ).toBeVisible();
 });
 
+test('header shows the PSF Guard logo', async ({ page }) => {
+  await page.goto('/');
+
+  const logo = page
+    .getByRole('button', { name: 'PSF Guard' })
+    .locator('.brand-logo');
+  await expect(logo).toBeVisible();
+  await expect(logo).toHaveAttribute('src', '/psf-guard.svg');
+  await expect
+    .poll(() => logo.evaluate((image: HTMLImageElement) => image.naturalWidth))
+    .toBe(64);
+});
+
 test('GET /api/info advertises database management is enabled', async ({
   request,
 }) => {

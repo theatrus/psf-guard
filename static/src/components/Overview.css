@@ -477,7 +477,7 @@
 
 .project-recent-frames {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 150px));
+  grid-template-columns: repeat(auto-fit, minmax(125px, 150px));
   gap: 8px;
 }
 

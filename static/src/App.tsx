@@ -107,7 +107,13 @@ function App() {
             onClick={() => navigate('/')}
             title="Go to Overview"
           >
-            PSF Guard
+            <img
+              className="brand-logo"
+              src="/psf-guard.svg"
+              alt=""
+              aria-hidden="true"
+            />
+            <span>PSF Guard</span>
           </button>
         </div>
 
