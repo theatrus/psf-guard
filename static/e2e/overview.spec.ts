@@ -188,5 +188,5 @@ test('image grid prompts for a project before showing an empty result', async ({
   await expect(page.getByText('No images found')).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Choose a project' }).click();
-  await expect(page.locator('#project-select')).toBeFocused();
+  await expect(page.locator('#scope-select')).toBeFocused();
 });

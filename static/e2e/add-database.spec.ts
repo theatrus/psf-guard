@@ -36,13 +36,20 @@ test('add a database via settings → see it in the Overview', async ({ page }) 
   await expect(page.getByText('Saved.')).toBeVisible();
   await expect(page.getByText('e2e Rig').first()).toBeVisible();
 
-  // Close the modal and verify the Overview reflects the new DB section. The
-  // merged-overview hooks fan out per-DB queries; give them a moment to
-  // settle after the registry mutation.
+  // Close the modal and verify the Overview reflects both projects from the
+  // new database. The merged-overview hooks fan out per-DB queries; give them
+  // a moment to settle after the registry mutation.
   await page.getByRole('button', { name: 'Done' }).click();
+  await expect(page.getByRole('heading', { name: 'Earlier work' })).toBeVisible({
+    timeout: 15_000,
+  });
   await expect(
-    page.getByRole('button', { name: /e2e Rig.*2 projects/i })
-  ).toBeVisible({ timeout: 15_000 });
+    page.getByRole('button', { name: 'Open Project Alpha image grid' })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Open Project Beta image grid' })
+  ).toBeVisible();
+  await expect(page.locator('.project-database', { hasText: 'e2e Rig' })).toHaveCount(2);
 });
 
 test('add then remove a database', async ({ page }) => {

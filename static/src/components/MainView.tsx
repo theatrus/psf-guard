@@ -121,7 +121,7 @@ export default function MainView() {
   // the user has not picked a project scope yet.
   if (!dbId) {
     const focusProjectPicker = () => {
-      document.querySelector<HTMLSelectElement>('#project-select')?.focus();
+      document.querySelector<HTMLButtonElement>('#scope-select')?.focus();
     };
 
     return (

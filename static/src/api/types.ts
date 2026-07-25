@@ -8,6 +8,8 @@ export interface Project {
   display_name: string;
   description: string | null;
   has_files: boolean;
+  state: number;
+  latest_image_date: number | null;
 }
 
 export interface Target {
@@ -19,6 +21,14 @@ export interface Target {
   image_count: number;
   accepted_count: number;
   rejected_count: number;
+  has_files: boolean;
+}
+
+export interface TargetNavigation {
+  id: number;
+  project_id: number;
+  name: string;
+  active: boolean;
   has_files: boolean;
 }
 
@@ -980,6 +990,7 @@ export interface ProjectOverview {
   display_name: string;
   description?: string;
   has_files: boolean;
+  state: number;
   target_count: number;
   total_images: number;
   accepted_images: number;

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Route } from '@playwright/test';
 import {
   registerFixtureDb,
   resetDatabases,
@@ -19,16 +19,14 @@ test.beforeEach(async ({ request }) => {
   await waitForCacheReady(request, dbId);
 });
 
-test('overview groups projects under the configured DB section', async ({
+test('overview groups projects by activity and labels their database', async ({
   page,
 }) => {
   await page.goto('/');
-  // The database section toggle carries the display name and project count.
-  await expect(
-    page.getByRole('button', { name: /Imaging Rig e2e.*2 projects/i })
-  ).toBeVisible({ timeout: 15_000 });
-  // Fixture defines two projects (Alpha + Beta) under this DB.
-  await expect(page.getByText(/2 projects/)).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Earlier work' })).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(page.getByText('Imaging Rig e2e')).toHaveCount(2);
   await expect(
     page.getByRole('button', { name: 'Open Project Alpha image grid' })
   ).toBeVisible();
@@ -41,9 +39,9 @@ test('open a project image grid from overview with the correct DB scope', async 
   page,
 }) => {
   await page.goto('/');
-  await expect(
-    page.getByRole('button', { name: /Imaging Rig e2e.*2 projects/i })
-  ).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole('heading', { name: 'Earlier work' })).toBeVisible({
+    timeout: 15_000,
+  });
 
   await page
     .getByRole('button', { name: 'Open Project Alpha image grid' })
@@ -56,6 +54,113 @@ test('open a project image grid from overview with the correct DB scope', async 
   // With auto-expand on first data arrival, the cards mount directly.
   const firstCard = page.locator('.image-card').first();
   await expect(firstCard).toBeVisible({ timeout: 15_000 });
+});
+
+test('combined project tree expands and finds targets as the user types', async ({ page }) => {
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+  await expect(page.locator('.image-card')).toHaveCount(3, { timeout: 15_000 });
+
+  await page.locator('#scope-select').click();
+  const picker = page.getByRole('dialog', { name: 'Choose a project or target' });
+  await expect(picker).toBeVisible();
+  const stackingLayers = await page.evaluate(() => ({
+    header: Number.parseInt(getComputedStyle(document.querySelector('.app-header')!).zIndex, 10),
+    controls: Number.parseInt(
+      getComputedStyle(document.querySelector('.image-controls.sticky')!).zIndex,
+      10
+    ),
+  }));
+  expect(stackingLayers.header).toBeGreaterThan(stackingLayers.controls);
+  await expect(picker.getByRole('button', { name: /^Alpha M44/ })).toBeVisible();
+  await expect(picker.locator('[aria-current="true"]')).toHaveCount(1);
+  await expect(picker.getByRole('button', { name: /^All images/ })).toHaveAttribute(
+    'aria-current',
+    'true'
+  );
+
+  const search = page.getByLabel('Search projects or targets');
+  await search.fill('Beta Field');
+  const betaProject = picker.getByRole('button', { name: /^Project Beta/ });
+  await expect(betaProject).toBeVisible();
+  await expect(picker.getByRole('button', { name: /^Project Alpha/ })).toHaveCount(0);
+  await expect(betaProject).toHaveAttribute('aria-expanded', 'true');
+  await betaProject.click();
+  await expect(betaProject).toHaveAttribute('aria-expanded', 'false');
+  await expect(picker.getByRole('button', { name: /^Beta Field/ })).toHaveCount(0);
+  await betaProject.click();
+  await picker.getByRole('button', { name: /^Beta Field/ }).click();
+  await expect(page).toHaveURL(new RegExp(`db=${dbId}.*project=2.*target=2`));
+});
+
+test('combined project tree reports target loading failures', async ({ page }) => {
+  await page.route(`**/api/db/${dbId}/targets`, (route) =>
+    route.fulfill({ status: 500, json: { success: false, error: 'fixture failure' } })
+  );
+
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+  await expect(page.locator('.image-card')).toHaveCount(3, { timeout: 15_000 });
+  await page.locator('#scope-select').click();
+
+  const picker = page.getByRole('dialog', { name: 'Choose a project or target' });
+  await expect(picker.getByRole('alert')).toContainText('Some targets could not be loaded.', {
+    timeout: 15_000,
+  });
+  await expect(picker.getByRole('button', { name: 'Retry' })).toBeVisible();
+  await expect(picker.getByText('No matching targets.')).toHaveCount(0);
+});
+
+test('recent projects rise to a highlighted group', async ({ page }) => {
+  const now = Math.floor(Date.now() / 1000);
+  await page.route(`**/api/db/${dbId}/projects/overview`, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    const beta = body.data.find((project: { id: number }) => project.id === 2);
+    beta.date_range.latest = now;
+    beta.recent_images[0].acquired_date = now;
+    await route.fulfill({ response, json: body });
+  });
+
+  await page.goto('/');
+  const recentGroup = page.locator('.project-activity-group.is-recent');
+  await expect(
+    recentGroup.getByRole('heading', { name: 'Last 7 days' })
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(recentGroup).toContainText('Project Beta');
+  await expect(recentGroup).not.toContainText('Project Alpha');
+  await expect(recentGroup.getByText('Recent', { exact: true })).toHaveCount(2);
+});
+
+test('closed projects stay in collapsed archives', async ({ page }) => {
+  const markBetaClosed = async (route: Route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.data.find((project: { id: number }) => project.id === 2).state = 3;
+    await route.fulfill({ response, json: body });
+  };
+  await page.route(`**/api/db/${dbId}/projects/overview`, markBetaClosed);
+  await page.route(`**/api/db/${dbId}/projects`, markBetaClosed);
+
+  await page.goto('/');
+  await expect(
+    page.getByRole('button', { name: 'Open Project Alpha image grid' })
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(
+    page.getByRole('button', { name: 'Open Project Beta image grid' })
+  ).toHaveCount(0);
+
+  const overviewArchive = page.getByRole('button', { name: /Archived projects.*1/ });
+  await expect(overviewArchive).toHaveAttribute('aria-expanded', 'false');
+  await overviewArchive.click();
+  await expect(page.locator('.project-archive-item')).toContainText('Project Beta');
+
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+  await page.locator('#scope-select').click();
+  const selectorArchive = page.locator('.selector-archive');
+  await expect(selectorArchive).not.toHaveAttribute('open', '');
+  await selectorArchive.locator('summary').click();
+  await expect(
+    selectorArchive.getByRole('button', { name: /^Project Beta/ })
+  ).toBeVisible();
 });
 
 test('direct deep link to the grid loads when ?db= matches a configured DB', async ({

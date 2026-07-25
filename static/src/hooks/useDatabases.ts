@@ -5,6 +5,7 @@ import type {
   DatabaseSummary,
   Project,
   ProjectOverview,
+  TargetNavigation,
   TargetOverview,
   OverallStats,
 } from '../api/types';
@@ -87,6 +88,24 @@ export function useMergedProjects() {
   return {
     ...merged,
     databases,
+    isLoading: dbsLoading || merged.isLoading,
+  };
+}
+
+/** Lightweight targets across every configured database for header navigation. */
+export function useMergedTargets() {
+  const { data: databases, isLoading: dbsLoading } = useAllDatabases();
+  const merged = useMergedPerDb<TargetNavigation>(
+    databases,
+    'target-navigation',
+    apiClient.getTargetNavigation,
+    {
+      refetchInterval: 30_000,
+      refetchIntervalInBackground: true,
+    }
+  );
+  return {
+    ...merged,
     isLoading: dbsLoading || merged.isLoading,
   };
 }

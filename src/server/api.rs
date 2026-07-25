@@ -78,6 +78,8 @@ pub struct ProjectResponse {
     pub display_name: String, // "Profile -> Project" or just "Project"
     pub description: Option<String>,
     pub has_files: bool,
+    pub state: i32,
+    pub latest_image_date: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -89,6 +91,7 @@ pub struct ProjectOverviewResponse {
     pub display_name: String, // "Profile -> Project" or just "Project"
     pub description: Option<String>,
     pub has_files: bool,
+    pub state: i32,
     pub target_count: i32,
     pub total_images: i32,
     pub accepted_images: i32,
@@ -112,6 +115,15 @@ pub struct TargetResponse {
     pub image_count: i32,
     pub accepted_count: i32,
     pub rejected_count: i32,
+    pub has_files: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TargetNavigationResponse {
+    pub id: i32,
+    pub project_id: i32,
+    pub name: String,
+    pub active: bool,
     pub has_files: bool,
 }
 

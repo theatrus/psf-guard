@@ -26,6 +26,14 @@ import {
   saveProjectSeenState,
 } from '../utils/projectRecency';
 import { formatRelativeTime } from '../utils/relativeTime';
+import {
+  groupProjectsByActivity,
+  isArchivedProject,
+  isRecentProject,
+  projectMatchesSearch,
+  sortProjects,
+  type ProjectSort,
+} from '../utils/projectNavigation';
 import ProjectSchedulerDialog from './ProjectSchedulerDialog';
 import PreviewImage from './PreviewImage';
 import './Overview.css';
@@ -42,7 +50,9 @@ function recentImageKey(dbId: string, projectId: number, imageId: number): strin
 export default function Overview() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [collapsedDbs, setCollapsedDbs] = useState<Set<string>>(new Set());
+  const [projectSearch, setProjectSearch] = useState('');
+  const [projectSort, setProjectSort] = useState<ProjectSort>('recent');
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const [organizing, setOrganizing] = useState<Organizing | null>(null);
   const [organizeBusy, setOrganizeBusy] = useState(false);
   const [organizeError, setOrganizeError] = useState('');
@@ -152,14 +162,43 @@ export default function Overview() {
     return map;
   }, [targets]);
 
-  // Group projects by their source DB so each section renders together.
   const projectsByDb = useMemo(() => {
     const map: Record<string, WithDb<ProjectOverview>[]> = {};
-    for (const p of projects) {
-      (map[p.db_id] ||= []).push(p);
+    for (const project of projects) {
+      (map[project.db_id] ||= []).push(project);
     }
     return map;
   }, [projects]);
+
+  const filteredProjects = useMemo(() => {
+    const search = projectSearch.trim().toLocaleLowerCase();
+    return projects.filter((project) => {
+      if (projectMatchesSearch(project, projectSearch)) return true;
+      if (!search) return true;
+      return (targetsByProject[`${project.db_id}:${project.id}`] || []).some((target) =>
+        target.name.toLocaleLowerCase().includes(search)
+      );
+    });
+  }, [projectSearch, projects, targetsByProject]);
+
+  const activeProjectGroups = useMemo(
+    () =>
+      groupProjectsByActivity(
+        filteredProjects.filter((project) => !isArchivedProject(project)),
+        relativeNow,
+        projectSort
+      ),
+    [filteredProjects, projectSort, relativeNow]
+  );
+
+  const archivedProjects = useMemo(
+    () =>
+      sortProjects(
+        filteredProjects.filter(isArchivedProject),
+        projectSort
+      ),
+    [filteredProjects, projectSort]
+  );
 
   const newestImageKey = useMemo(() => {
     let newest: { key: string; acquiredDate: number } | null = null;
@@ -307,13 +346,6 @@ export default function Overview() {
 
   const projectKey = (dbId: string, projectId: number) => `${dbId}:${projectId}`;
 
-  const toggleDb = (dbId: string) => {
-    const next = new Set(collapsedDbs);
-    if (next.has(dbId)) next.delete(dbId);
-    else next.add(dbId);
-    setCollapsedDbs(next);
-  };
-
   if (statsLoading || projectsLoading || targetsLoading) {
     return <div className="overview-loading">Loading overview...</div>;
   }
@@ -445,39 +477,61 @@ export default function Overview() {
       )}
 
       <div className="content-grid">
-        {/* Projects grouped by database. Each section is collapsible. */}
         <div className="projects-section">
-          {databases.map((db) => {
-            const dbProjects = projectsByDb[db.id] || [];
-            const isCollapsed = collapsedDbs.has(db.id);
+          <div className="projects-toolbar">
+            <div>
+              <h2>Projects</h2>
+              <p>Grouped by the latest captured frame.</p>
+            </div>
+            <div className="projects-toolbar-controls">
+              <label className="project-search">
+                <span className="sr-only">Search projects or targets</span>
+                <input
+                  type="search"
+                  value={projectSearch}
+                  onChange={(event) => setProjectSearch(event.target.value)}
+                  placeholder="Search projects or targets"
+                  aria-label="Search projects or targets"
+                />
+              </label>
+              <label className="project-sort">
+                <span>Sort within groups</span>
+                <select
+                  value={projectSort}
+                  onChange={(event) => setProjectSort(event.target.value as ProjectSort)}
+                >
+                  <option value="recent">Newest first</option>
+                  <option value="name">Name A–Z</option>
+                  <option value="images">Most images</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          {activeProjectGroups.length === 0 && archivedProjects.length === 0 && (
+            <div className="empty-state">
+              {projectSearch ? 'No projects or targets match your search.' : 'No projects with images yet.'}
+            </div>
+          )}
+
+          {activeProjectGroups.map((group) => {
             return (
-              <section key={db.id} className="db-section">
-                <div className="db-section-heading">
-                  <button
-                    type="button"
-                    className="db-section-toggle"
-                    onClick={() => toggleDb(db.id)}
-                    aria-expanded={!isCollapsed}
-                  >
-                    <span
-                      className={`expand-toggle ${isCollapsed ? '' : 'expanded'}`}
-                      aria-hidden="true"
-                    >
-                      ▶
-                    </span>
-                    <span className="db-section-name">{db.name}</span>
-                    <span className="db-section-count">
-                      {dbProjects.length} project{dbProjects.length === 1 ? '' : 's'}
-                    </span>
-                  </button>
-                  <code className="db-section-slug" title="Database ID">{db.id}</code>
+              <section
+                key={group.id}
+                className={`project-activity-group ${group.id === 'recent' ? 'is-recent' : ''}`}
+              >
+                <div className="project-activity-heading">
+                  <div>
+                    <h3>{group.label}</h3>
+                    {group.id === 'recent' && <span className="recent-group-badge">Recent</span>}
+                  </div>
+                  <span>
+                    {group.projects.length} project{group.projects.length === 1 ? '' : 's'}
+                  </span>
                 </div>
-                {!isCollapsed && dbProjects.length === 0 && (
-                  <div className="empty-state">No projects with images in this database yet.</div>
-                )}
-                {!isCollapsed && (
                 <div className="projects-list">
-            {dbProjects.map((project) => {
+            {group.projects.map((project) => {
+              const dbProjects = projectsByDb[project.db_id] || [];
               const progress = getGradingProgress(
                 project.accepted_images,
                 project.rejected_images,
@@ -513,6 +567,12 @@ export default function Overview() {
                       aria-label={`Open ${project.display_name} image grid`}
                     >
                       <span className="project-title">{project.display_name}</span>
+                      <span className="project-database" title={`Database ID: ${project.db_id}`}>
+                        {project.db_name}
+                      </span>
+                      {isRecentProject(project, relativeNow) && (
+                        <span className="project-recent-badge">Recent</span>
+                      )}
                       {projectNewImages > 0 && (
                         <span className="new-images-badge">
                           <span aria-hidden="true" />
@@ -984,10 +1044,53 @@ export default function Overview() {
               );
             })}
                 </div>
-                )}
               </section>
             );
           })}
+
+          {archivedProjects.length > 0 && (
+            <section className="project-archive">
+              <button
+                type="button"
+                className="project-archive-toggle"
+                onClick={() => setArchivedOpen((open) => !open)}
+                aria-expanded={archivedOpen || Boolean(projectSearch)}
+              >
+                <span
+                  className={`expand-toggle ${archivedOpen || projectSearch ? 'expanded' : ''}`}
+                  aria-hidden="true"
+                >
+                  ▶
+                </span>
+                <span>Archived projects</span>
+                <span>{archivedProjects.length}</span>
+              </button>
+              {(archivedOpen || Boolean(projectSearch)) && (
+                <div className="project-archive-list">
+                  {archivedProjects.map((project) => (
+                    <button
+                      key={`${project.db_id}:${project.id}`}
+                      type="button"
+                      className="project-archive-item"
+                      onClick={() => project.has_files && handleSelectProject(project)}
+                      disabled={!project.has_files}
+                    >
+                      <span>
+                        <strong>{project.display_name}</strong>
+                        <small>{project.db_name}</small>
+                      </span>
+                      <span>
+                        {project.total_images} images
+                        {project.date_range.latest
+                          ? ` · ${formatRelativeTime(project.date_range.latest, relativeNow)}`
+                          : ''}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
         </div>
       </div>
 

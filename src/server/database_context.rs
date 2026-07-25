@@ -628,6 +628,7 @@ impl DatabaseContext {
         })?;
 
         let mut project_cache_updates = std::collections::HashMap::new();
+        let mut project_latest_image_updates = std::collections::HashMap::new();
         let mut target_cache_updates = std::collections::HashMap::new();
         let mut projects_with_files = 0;
         let mut targets_with_files = 0;
@@ -653,6 +654,13 @@ impl DatabaseContext {
                     anyhow::anyhow!("Failed to get images for project {}: {}", project.id, e)
                 })?
             };
+            if let Some(latest) = images
+                .iter()
+                .filter_map(|(image, _, _)| image.acquired_date)
+                .max()
+            {
+                project_latest_image_updates.insert(project.id, latest);
+            }
 
             // target_id -> (files found, files missing)
             let mut per_target: std::collections::HashMap<i32, (usize, usize)> =
@@ -726,6 +734,7 @@ impl DatabaseContext {
         {
             let mut cache = self.file_check_cache.write().unwrap();
             cache.projects_with_files = project_cache_updates;
+            cache.project_latest_image_dates = project_latest_image_updates;
             cache.targets_with_files = target_cache_updates;
             cache.last_updated = std::time::Instant::now();
             cache.has_initial_data = true;
@@ -1135,6 +1144,7 @@ mod tests {
         assert_eq!((checked, found, missing), (4, 2, 2));
         let cache = ctx.file_check_cache.read().unwrap();
         assert_eq!(cache.projects_with_files.get(&1), Some(&true));
+        assert_eq!(cache.project_latest_image_dates.get(&1), Some(&3000));
         assert_eq!(cache.targets_with_files.len(), 3);
         assert_eq!(cache.targets_with_files.get(&10), Some(&true));
         assert_eq!(cache.targets_with_files.get(&20), Some(&false));

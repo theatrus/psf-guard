@@ -1,16 +1,18 @@
 use crate::models::{
     AcquiredImage, GradingStatus, OverallDesiredStats, OverallStats, Profile, Project,
-    ProjectDesiredStats, ProjectOverviewStats, ProjectWithProfile, RecentImageSummary, Target,
-    TargetWithDesiredStats, TargetWithStats,
+    ProjectDesiredStats, ProjectNavigationMetadata, ProjectOverviewStats, ProjectWithProfile,
+    RecentImageSummary, Target, TargetNavigation, TargetWithDesiredStats, TargetWithStats,
 };
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 
 /// Schema version detection - checks if guid columns exist
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SchemaCapabilities {
     pub has_acquiredimage_guid: bool,
     pub has_project_guid: bool,
+    pub has_project_state: bool,
     pub has_target_guid: bool,
 }
 
@@ -20,6 +22,7 @@ impl SchemaCapabilities {
         Self {
             has_acquiredimage_guid: Self::table_has_column(conn, "acquiredimage", "guid"),
             has_project_guid: Self::table_has_column(conn, "project", "guid"),
+            has_project_state: Self::table_has_column(conn, "project", "state"),
             has_target_guid: Self::table_has_column(conn, "target", "guid"),
         }
     }
@@ -166,6 +169,51 @@ impl<'a> Database<'a> {
         Ok(projects)
     }
 
+    /// Load project identity and scheduler state for the header picker.
+    ///
+    /// This stays on the small `project` table. The file cache supplies latest
+    /// capture dates after its existing background image walk.
+    pub fn get_projects_for_navigation(&self) -> Result<Vec<(ProjectWithProfile, i32)>> {
+        let guid = if self.schema.has_project_guid {
+            ", guid"
+        } else {
+            ""
+        };
+        let state = if self.schema.has_project_state {
+            "COALESCE(state, 1)"
+        } else {
+            "1"
+        };
+        let query = format!(
+            "SELECT Id, profileId, name, description{guid}, {state}
+             FROM project
+             ORDER BY profileId, name"
+        );
+        let mut stmt = self.conn.prepare(&query)?;
+        let has_guid = self.schema.has_project_guid;
+        let projects = stmt
+            .query_map([], |row| {
+                let project = Project {
+                    id: row.get(0)?,
+                    profile_id: row.get(1)?,
+                    name: row.get(2)?,
+                    description: row.get(3)?,
+                    guid: if has_guid { row.get(4)? } else { None },
+                };
+                let state_column = if has_guid { 5 } else { 4 };
+                Ok((
+                    ProjectWithProfile {
+                        profile_name: project.profile_id.clone(),
+                        project,
+                    },
+                    row.get(state_column)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(projects)
+    }
+
     pub fn get_projects_with_images_and_profile_info(&self) -> Result<Vec<ProjectWithProfile>> {
         let query = if self.schema.has_project_guid {
             "SELECT DISTINCT p.Id, p.profileId, p.name, p.description, p.guid
@@ -200,6 +248,38 @@ impl<'a> Database<'a> {
         Ok(projects)
     }
 
+    /// Load the scheduler state and last captured frame for every project.
+    ///
+    /// Older and lightweight databases may not have the scheduler `state`
+    /// column. Treat those projects as active instead of hiding them.
+    pub fn get_project_navigation_metadata(
+        &self,
+    ) -> Result<HashMap<i32, ProjectNavigationMetadata>> {
+        let state = if self.schema.has_project_state {
+            "COALESCE(p.state, 1)"
+        } else {
+            "1"
+        };
+        let query = format!(
+            "SELECT p.Id, {state}, MAX(ai.acquireddate)
+             FROM project p
+             LEFT JOIN acquiredimage ai ON ai.projectId = p.Id
+             GROUP BY p.Id"
+        );
+        let mut stmt = self.conn.prepare(&query)?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i32>(0)?,
+                ProjectNavigationMetadata {
+                    state: row.get(1)?,
+                    latest_image_date: row.get(2)?,
+                },
+            ))
+        })?;
+
+        Ok(rows.collect::<Result<HashMap<_, _>, _>>()?)
+    }
+
     pub fn find_project_id_by_name(&self, name: &str) -> Result<i32> {
         let mut stmt = self.conn.prepare("SELECT Id FROM project WHERE name = ?")?;
         stmt.query_row([name], |row| row.get(0))
@@ -207,6 +287,30 @@ impl<'a> Database<'a> {
     }
 
     // Target queries
+    /// Load the small target fields needed by the cross-project picker.
+    ///
+    /// This query must stay independent of `acquiredimage`: the header polls
+    /// it for every configured database, including databases on slow storage.
+    pub fn get_target_navigation(&self) -> Result<Vec<TargetNavigation>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT Id, projectId, name, active
+             FROM target
+             ORDER BY name",
+        )?;
+        let targets = stmt
+            .query_map([], |row| {
+                Ok(TargetNavigation {
+                    id: row.get(0)?,
+                    project_id: row.get(1)?,
+                    name: row.get(2)?,
+                    active: row.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(targets)
+    }
+
     pub fn get_targets_with_stats(&self, project_id: i32) -> Result<Vec<(Target, i32, i32, i32)>> {
         let query = if self.schema.has_target_guid {
             "SELECT t.Id, t.name, t.active, t.ra, t.dec, t.guid,
@@ -1398,6 +1502,108 @@ mod tests {
         assert_eq!(rows[0].target_name, "Alpha");
         assert_eq!(rows[2].filter_name, "OIII");
         assert!(db.get_recent_images_by_project(0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn project_navigation_metadata_includes_state_and_latest_capture() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE project (Id INTEGER PRIMARY KEY, state INTEGER);
+             CREATE TABLE acquiredimage (
+                Id INTEGER PRIMARY KEY, projectId INTEGER NOT NULL, acquireddate INTEGER
+             );
+             INSERT INTO project VALUES (1, 1), (2, 3);
+             INSERT INTO acquiredimage VALUES (1, 1, 100), (2, 1, 300), (3, 2, 200);",
+        )
+        .unwrap();
+
+        let db = Database::new(&conn);
+        let metadata = db.get_project_navigation_metadata().unwrap();
+        assert_eq!(metadata[&1].state, 1);
+        assert_eq!(metadata[&1].latest_image_date, Some(300));
+        assert_eq!(metadata[&2].state, 3);
+        assert_eq!(metadata[&2].latest_image_date, Some(200));
+    }
+
+    #[test]
+    fn project_navigation_metadata_defaults_state_for_old_schemas() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE project (Id INTEGER PRIMARY KEY);
+             CREATE TABLE acquiredimage (
+                Id INTEGER PRIMARY KEY, projectId INTEGER NOT NULL, acquireddate INTEGER
+             );
+             INSERT INTO project VALUES (1);
+             INSERT INTO acquiredimage VALUES (1, 1, 100);",
+        )
+        .unwrap();
+
+        let db = Database::new(&conn);
+        let metadata = db.get_project_navigation_metadata().unwrap();
+        assert_eq!(metadata[&1].state, 1);
+        assert_eq!(metadata[&1].latest_image_date, Some(100));
+    }
+
+    #[test]
+    fn project_picker_navigation_does_not_require_the_acquisition_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE project (
+                Id INTEGER PRIMARY KEY,
+                profileId TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                state INTEGER
+             );
+             INSERT INTO project VALUES
+                (2, 'rig', 'Closed', NULL, 3),
+                (1, 'rig', 'Active', 'description', 1);",
+        )
+        .unwrap();
+
+        let projects = Database::new(&conn).get_projects_for_navigation().unwrap();
+        assert_eq!(projects.len(), 2);
+        assert_eq!(projects[0].0.project.name, "Active");
+        assert_eq!(projects[0].1, 1);
+        assert_eq!(projects[1].0.project.name, "Closed");
+        assert_eq!(projects[1].1, 3);
+    }
+
+    #[test]
+    fn target_navigation_does_not_require_the_acquisition_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE target (
+                Id INTEGER PRIMARY KEY,
+                projectId INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                active INTEGER NOT NULL
+             );
+             INSERT INTO target VALUES
+                (20, 2, 'Zeta Field', 0),
+                (10, 1, 'Alpha Field', 1);",
+        )
+        .unwrap();
+
+        let db = Database::new(&conn);
+        let targets = db.get_target_navigation().unwrap();
+        assert_eq!(
+            targets,
+            vec![
+                TargetNavigation {
+                    id: 10,
+                    project_id: 1,
+                    name: "Alpha Field".into(),
+                    active: true,
+                },
+                TargetNavigation {
+                    id: 20,
+                    project_id: 2,
+                    name: "Zeta Field".into(),
+                    active: false,
+                },
+            ]
+        );
     }
 
     #[test]

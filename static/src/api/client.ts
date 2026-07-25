@@ -5,6 +5,7 @@ import type {
   ApiResponse,
   Project,
   Target,
+  TargetNavigation,
   Image,
   ImageQuery,
   UpdateGradeRequest,
@@ -494,6 +495,14 @@ export const apiClient = {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<Target[]>>(
       dbPath(dbId, `/projects/${projectId}/targets`)
+    );
+    return data.data || [];
+  },
+
+  getTargetNavigation: async (dbId: string): Promise<TargetNavigation[]> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<TargetNavigation[]>>(
+      dbPath(dbId, '/targets')
     );
     return data.data || [];
   },
