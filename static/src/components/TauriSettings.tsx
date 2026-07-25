@@ -374,11 +374,19 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
           return;
         }
         if (
-          formRemoteUploadEnabled &&
-          !formRemoteUploadTokenConfigured &&
+          formRemoteUploadToken.length > 0 &&
           formRemoteUploadToken.length < 24
         ) {
-          setStatusMessage('Remote upload token must be at least 24 characters');
+          setStatusMessage('Remote API key must be at least 24 characters');
+          setIsApplying(false);
+          return;
+        }
+        if (
+          formRemoteUploadEnabled &&
+          !formRemoteUploadTokenConfigured &&
+          formRemoteUploadToken.length === 0
+        ) {
+          setStatusMessage('Generate a remote API key before enabling image uploads');
           setIsApplying(false);
           return;
         }
@@ -843,6 +851,56 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
 
               {editingId && (
                 <div className="database-config">
+                  <label htmlFor="remote-upload-token">Remote API key:</label>
+                  <div className="remote-upload-token-row">
+                    <input
+                      id="remote-upload-token"
+                      type={formRemoteUploadTokenRevealed ? 'text' : 'password'}
+                      value={formRemoteUploadToken}
+                      onChange={(event) => {
+                        setFormRemoteUploadToken(event.target.value);
+                        setFormRemoteUploadTokenCopyState('idle');
+                      }}
+                      placeholder={
+                        formRemoteUploadTokenConfigured
+                          ? 'Unchanged'
+                          : 'At least 24 characters'
+                      }
+                      className="file-path-input"
+                      autoComplete="new-password"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleGenerateRemoteUploadToken}
+                      className="browse-button"
+                    >
+                      Generate
+                    </button>
+                    {formRemoteUploadTokenRevealed &&
+                      formRemoteUploadToken.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleCopyRemoteUploadToken}
+                          className="browse-button"
+                        >
+                          {formRemoteUploadTokenCopyState === 'copied'
+                            ? 'Copied'
+                            : 'Copy'}
+                        </button>
+                      )}
+                  </div>
+                  {formRemoteUploadTokenRevealed && (
+                    <small
+                      className={`remote-upload-token-notice ${
+                        formRemoteUploadTokenCopyState === 'failed' ? 'error' : ''
+                      }`}
+                      role="status"
+                    >
+                      {formRemoteUploadTokenCopyState === 'failed'
+                        ? 'Copy failed. Select and copy the key manually.'
+                        : 'Copy this key now. It will not be shown again after saving.'}
+                    </small>
+                  )}
                   <label className="quality-analysis-option">
                     <input
                       type="checkbox"
@@ -871,56 +929,6 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                           </option>
                         ))}
                       </select>
-                      <label htmlFor="remote-upload-token">Upload token:</label>
-                      <div className="remote-upload-token-row">
-                        <input
-                          id="remote-upload-token"
-                          type={formRemoteUploadTokenRevealed ? 'text' : 'password'}
-                          value={formRemoteUploadToken}
-                          onChange={(event) => {
-                            setFormRemoteUploadToken(event.target.value);
-                            setFormRemoteUploadTokenCopyState('idle');
-                          }}
-                          placeholder={
-                            formRemoteUploadTokenConfigured
-                              ? 'Unchanged'
-                              : 'At least 24 characters'
-                          }
-                          className="file-path-input"
-                          autoComplete="new-password"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleGenerateRemoteUploadToken}
-                          className="browse-button"
-                        >
-                          Generate
-                        </button>
-                        {formRemoteUploadTokenRevealed &&
-                          formRemoteUploadToken.length > 0 && (
-                            <button
-                              type="button"
-                              onClick={handleCopyRemoteUploadToken}
-                              className="browse-button"
-                            >
-                              {formRemoteUploadTokenCopyState === 'copied'
-                                ? 'Copied'
-                                : 'Copy'}
-                            </button>
-                          )}
-                      </div>
-                      {formRemoteUploadTokenRevealed && (
-                        <small
-                          className={`remote-upload-token-notice ${
-                            formRemoteUploadTokenCopyState === 'failed' ? 'error' : ''
-                          }`}
-                          role="status"
-                        >
-                          {formRemoteUploadTokenCopyState === 'failed'
-                            ? 'Copy failed. Select and copy the token manually.'
-                            : 'Copy this token now. It will not be shown again after saving.'}
-                        </small>
-                      )}
                     </>
                   )}
                 </div>

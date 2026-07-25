@@ -8,6 +8,7 @@ pub mod handlers;
 pub mod import_job;
 pub mod preview_queue;
 pub mod quality_backfill;
+pub mod remote_sync;
 pub mod remote_upload;
 pub mod scheduler;
 pub mod slug;
@@ -428,6 +429,22 @@ async fn run_server_internal(
             "/databases/{db_id}",
             put(handlers::update_database_route).delete(handlers::remove_database_route),
         )
+        .route("/sync/v1/capabilities", get(remote_sync::capabilities))
+        .route(
+            "/sync/v1/previews",
+            post(remote_sync::create_preview)
+                .layer(DefaultBodyLimit::max(remote_sync::MAX_SYNC_BODY_BYTES)),
+        )
+        .route(
+            "/sync/v1/previews/{preview_id}",
+            get(remote_sync::get_preview),
+        )
+        .route(
+            "/sync/v1/previews/{preview_id}/apply",
+            post(remote_sync::apply_preview),
+        )
+        .route("/sync/v1/exports", post(remote_sync::create_export))
+        .route("/sync/v1/exports/{export_id}", get(remote_sync::get_export))
         .nest("/db/{db_id}", db_routes)
         .with_state(state);
 

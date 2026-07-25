@@ -17,7 +17,7 @@ The design must not require Syncthing, Dropbox, or another file copier to move
 a live SQLite database. N.I.N.A. may write that file while an outside process
 copies it, and a copied database gives neither side a useful conflict preview.
 
-Original FITS files are outside the first remote-sync protocol. A transfer can
+Original FITS files are outside the database-bundle protocol. A transfer can
 copy database rows and stored thumbnails, then report which image files resolve
 on the destination. File transfer can be added later as a separate action.
 
@@ -280,8 +280,8 @@ than guessing.
 
 ## N.I.N.A. plugin
 
-A later N.I.N.A. plugin can implement the remote protocol at the telescope.
-The plugin does not need to expose the SQLite file.
+A N.I.N.A. plugin can implement the remote protocol at the telescope without
+exposing the SQLite file.
 
 The plugin can:
 
@@ -304,7 +304,7 @@ client can post a light frame directly to one opted-in PSF Guard database:
 
 ```http
 POST /api/db/{db_id}/images/upload
-Authorization: Bearer <per-database-upload-token>
+Authorization: Bearer <per-database-remote-api-key>
 X-PSF-Guard-Database-ID: <db_id>
 X-Content-SHA256: <64 lowercase hexadecimal characters>
 Content-Type: multipart/form-data
@@ -379,14 +379,15 @@ transactional, so it cannot leave half a merge committed.
 
 ### Phase 4: remote PSF Guard peers
 
-- Add scoped peer credentials and capability discovery.
-- Add compressed export bundles and remote preview/apply.
+- [x] Add scoped per-database credentials and capability discovery.
+- [x] Add JSON export bundles and remote preview/apply.
 - Test interrupted transfers, limits, stale previews, and retries.
 
 ### Phase 5: N.I.N.A. plugin
 
-- Implement the same capability, export, preview, apply, and job contract.
-- Add capture notifications and image-history manifests.
+- [x] Implement the same capability, export, preview, apply, and job contract.
+- [x] Add durable capture bundle notifications and direct FITS upload.
+- Add image-history manifests.
 
 ## Verification
 

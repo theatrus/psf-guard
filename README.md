@@ -149,11 +149,16 @@ existing target by name or nearby coordinates before it creates new structure.
 
 Remote acquisition clients can send one FITS light at a time without sharing
 the image folder or running Target Scheduler. Edit a database in Settings,
-enable **Accept remote image uploads**, select its receive directory, and set a
-long upload token. The authenticated `/api/db/{db_id}/images/upload` endpoint
+generate its per-database **Remote API key**, enable **Accept remote image
+uploads**, and select its receive directory. The authenticated
+`/api/db/{db_id}/images/upload` endpoint
 verifies the database identity and file digest, saves without overwriting, and
 runs the same name/coordinate target resolution used by folder import. See
 [the remote image ingest contract](DATA_TRANSFER_DESIGN.md#remote-image-ingest).
+
+The same key authenticates `/api/sync/v1/*` for remote Target Scheduler
+export, preview, and apply. It is scoped to exactly one configured database;
+image upload remains independently disabled unless its checkbox is enabled.
 
 The Overview's **Plan & coordinates** dialog lets you correct imported names,
 coordinates, limits, and desired counts. See the

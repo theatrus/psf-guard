@@ -491,7 +491,7 @@ async fn execute_scheduler_sync(
         .map(|(response, _)| response)
 }
 
-enum SyncGuardMode {
+pub(crate) enum SyncGuardMode {
     None,
     Preview,
     Apply { destination_fingerprint: String },
@@ -515,13 +515,6 @@ async fn execute_scheduler_sync_guarded(
     source_override: Option<PathBuf>,
     guard_mode: SyncGuardMode,
 ) -> Result<(SchedulerSyncResponse, Option<String>), AppError> {
-    use crate::commands::sync::{
-        parse_status, sync_grades, sync_grades_in_transaction, sync_planning,
-        sync_planning_in_transaction, sync_pull, sync_pull_in_transaction, PlanningOptions,
-        PullOptions, SyncGradesOptions,
-    };
-    use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
-
     require_database_management_allowed(state)?;
     if db_id == req.peer_db_id {
         return Err(AppError::BadRequest(
@@ -541,8 +534,34 @@ async fn execute_scheduler_sync_guarded(
     };
     let source_path = source_override.unwrap_or_else(|| PathBuf::from(&source_ctx.database_path));
     let destination_path = PathBuf::from(&destination_ctx.database_path);
-    let source_id = source_ctx.id.clone();
-    let destination_id = destination_ctx.id.clone();
+    execute_scheduler_sync_paths(
+        state,
+        source_path,
+        destination_path,
+        source_ctx.id.clone(),
+        destination_ctx.id.clone(),
+        req,
+        guard_mode,
+    )
+    .await
+}
+
+pub(crate) async fn execute_scheduler_sync_paths(
+    state: &Arc<AppState>,
+    source_path: PathBuf,
+    destination_path: PathBuf,
+    source_id: String,
+    destination_id: String,
+    req: SchedulerSyncRequest,
+    guard_mode: SyncGuardMode,
+) -> Result<(SchedulerSyncResponse, Option<String>), AppError> {
+    use crate::commands::sync::{
+        parse_status, sync_grades, sync_grades_in_transaction, sync_planning,
+        sync_planning_in_transaction, sync_pull, sync_pull_in_transaction, PlanningOptions,
+        PullOptions, SyncGradesOptions,
+    };
+    use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
+
     let fingerprint_queries = crate::server::sync_preview::fingerprint_queries(&req);
     let kind = req.kind;
     let dry_run = req.dry_run;
@@ -559,6 +578,7 @@ async fn execute_scheduler_sync_guarded(
     };
     let reviewed_only = req.reviewed_only;
     let with_image_data = req.with_image_data.unwrap_or(true);
+    let destination_id_for_cache = destination_id.clone();
 
     let response = tokio::task::spawn_blocking(
         move || -> anyhow::Result<(SchedulerSyncResponse, Option<String>)> {
@@ -737,7 +757,7 @@ async fn execute_scheduler_sync_guarded(
         }
     })?;
 
-    if !dry_run {
+    if !dry_run && let Some(destination_ctx) = state.get_database(&destination_id_for_cache) {
         let _ = destination_ctx.ensure_cache_available();
     }
     Ok(response)
