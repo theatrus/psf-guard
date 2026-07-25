@@ -55,46 +55,48 @@ export default function ImageFileLocation({
   };
 
   return (
-    <div className="image-file-location">
-      <div className="image-file-heading">
+    <details className="image-file-location" data-testid="image-file-location">
+      <summary className="image-file-heading">
         <span>File path</span>
         <span className={pathState.className}>{pathState.label}</span>
-      </div>
+      </summary>
 
-      {path ? (
-        <code className="image-file-path" data-testid="image-file-path" title={path}>
-          {path}
-        </code>
-      ) : (
-        <span className="image-file-unavailable">No file path is recorded.</span>
-      )}
+      <div className="image-file-body">
+        {path ? (
+          <code className="image-file-path" data-testid="image-file-path" title={path}>
+            {path}
+          </code>
+        ) : (
+          <span className="image-file-unavailable">No file path is recorded.</span>
+        )}
 
-      {!filesystemPath && catalogPath && (
-        <p className="image-file-note">
-          This catalog path does not resolve in the configured image folders.
-        </p>
-      )}
+        {!filesystemPath && catalogPath && (
+          <p className="image-file-note">
+            This catalog path does not resolve in the configured image folders.
+          </p>
+        )}
 
-      {path && (
-        <div className="image-file-actions">
-          <button type="button" onClick={copyPath}>
-            {actionState === 'copied' ? 'Copied' : 'Copy path'}
-          </button>
-          {canReveal && (
-            <button
-              type="button"
-              onClick={showInFolder}
-              disabled={actionState === 'opening'}
-            >
-              {actionState === 'opening' ? 'Opening…' : 'Show in folder'}
+        {path && (
+          <div className="image-file-actions">
+            <button type="button" onClick={copyPath}>
+              {actionState === 'copied' ? 'Copied' : 'Copy path'}
             </button>
-          )}
-        </div>
-      )}
+            {canReveal && (
+              <button
+                type="button"
+                onClick={showInFolder}
+                disabled={actionState === 'opening'}
+              >
+                {actionState === 'opening' ? 'Opening…' : 'Show in folder'}
+              </button>
+            )}
+          </div>
+        )}
 
-      <div className="image-file-feedback" aria-live="polite">
-        {error}
+        <div className="image-file-feedback" aria-live="polite">
+          {error}
+        </div>
       </div>
-    </div>
+    </details>
   );
 }
