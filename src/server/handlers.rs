@@ -105,11 +105,10 @@ pub async fn get_calibration_library_details(
 }
 
 pub async fn forget_calibration_frame(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, frame_uuid)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<crate::calibration::CalibrationMutationOutcome>>, AppError> {
-    require_database_management_allowed(&state)?;
     let conn = ctx.db();
     let mut conn = conn.lock().map_err(AppError::db)?;
     let outcome = crate::calibration::forget_frame(&mut conn, &frame_uuid).map_err(AppError::db)?;
@@ -123,7 +122,6 @@ pub async fn clear_calibration_masters(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
 ) -> Result<Json<ApiResponse<crate::calibration::CalibrationMutationOutcome>>, AppError> {
-    require_database_management_allowed(&state)?;
     let _permit = state
         .stack_previews
         .acquire_maintenance_permit()
@@ -186,9 +184,10 @@ pub async fn get_astrometry_catalog_install(
     Ok(Json(ApiResponse::success(state.catalog_install.status())))
 }
 
-/// Download and install one hosted Seiza catalog package. This writes to the
-/// configured catalog directory, so it uses the same trust gate as database
-/// management. The work continues after the request returns.
+/// Download and install one hosted Seiza catalog package. The destination is
+/// the server's own configured catalog directory, so this leaks no path — but
+/// it does let a caller start a multi-gigabyte download, so it keeps the
+/// management gate. The work continues after the request returns.
 pub async fn start_astrometry_catalog_install(
     State(state): State<Arc<AppState>>,
     Json(request): Json<crate::server::catalog_install::CatalogInstallRequest>,
@@ -424,17 +423,23 @@ fn require_registry_path(state: &AppState) -> Result<std::path::PathBuf, AppErro
     })
 }
 
-/// Gate for mutating endpoints on `/api/databases`. Returns 403 when the
-/// server was launched without `--allow-database-management`. Anyone reachable
-/// over the network could otherwise re-point, remove, or sync the user's
-/// configured databases.
+/// Gate for endpoints that let a caller name a server filesystem path:
+/// registry CRUD, database creation, local export, and folder import. Those
+/// requests choose which files the server reads and writes, so anyone
+/// reachable over the network could otherwise register an arbitrary path and
+/// read it back through the normal API.
+///
+/// It deliberately does NOT cover writes that stay inside an already
+/// configured database — grading, project and target edits, exposure plans,
+/// and sync. Those touch only data the operator already pointed the server at.
 pub(super) fn require_database_management_allowed(state: &AppState) -> Result<(), AppError> {
     if state.database_management_allowed() {
         Ok(())
     } else {
         Err(AppError::Forbidden(
             "database management is disabled on this server. Restart the server \
-            with --allow-database-management to enable runtime database changes and sync."
+            with --allow-database-management to register, create, import, or \
+            export databases."
                 .into(),
         ))
     }
@@ -460,6 +465,7 @@ fn remote_image_upload_summary(
             .map(|config| config.image_dir.clone())
             .filter(|directory| !directory.is_empty()),
         token_configured: config.is_some_and(|config| config.token_is_configured()),
+        sync_enabled: config.is_some_and(|config| config.sync_enabled),
     }
 }
 
@@ -515,7 +521,6 @@ async fn execute_scheduler_sync_guarded(
     source_override: Option<PathBuf>,
     guard_mode: SyncGuardMode,
 ) -> Result<(SchedulerSyncResponse, Option<String>), AppError> {
-    require_database_management_allowed(state)?;
     if db_id == req.peer_db_id {
         return Err(AppError::BadRequest(
             "Choose two different databases to sync.".into(),
@@ -794,7 +799,6 @@ pub async fn preview_sync_database_route(
     Path(db_id): Path<String>,
     Json(mut request): Json<SchedulerSyncRequest>,
 ) -> Result<Json<ApiResponse<SchedulerSyncPreviewResponse>>, AppError> {
-    require_database_management_allowed(&state)?;
     request.dry_run = true;
     let (source_path, _destination_path) = sync_endpoint_paths(&state, &db_id, &request)?;
     let source_snapshot_file = state
@@ -851,7 +855,6 @@ pub async fn get_sync_database_preview_route(
     State(state): State<Arc<AppState>>,
     Path((db_id, preview_id)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<SchedulerSyncPreviewResponse>>, AppError> {
-    require_database_management_allowed(&state)?;
     let record = state
         .sync_previews
         .get(&preview_id)
@@ -870,7 +873,6 @@ pub async fn delete_sync_database_preview_route(
     State(state): State<Arc<AppState>>,
     Path((db_id, preview_id)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<bool>>, AppError> {
-    require_database_management_allowed(&state)?;
     let deleted = state
         .sync_previews
         .discard(&preview_id, &db_id)
@@ -883,7 +885,6 @@ pub async fn apply_sync_database_preview_route(
     State(state): State<Arc<AppState>>,
     Path((db_id, preview_id)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<SchedulerSyncResponse>>, AppError> {
-    require_database_management_allowed(&state)?;
     let _apply_guard = state.sync_apply_lock.lock().await;
     let record = state
         .sync_previews
@@ -1079,6 +1080,14 @@ fn apply_remote_image_upload_update(
         config
             .set_token(token)
             .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    }
+    if let Some(sync_enabled) = update.sync_enabled {
+        config.sync_enabled = sync_enabled;
+    }
+    if config.sync_enabled && !config.token_is_configured() {
+        return Err(AppError::BadRequest(
+            "generate a remote API key before enabling remote scheduler sync".into(),
+        ));
     }
     if config.enabled {
         config
@@ -1284,12 +1293,11 @@ pub async fn export_local_route(
 
 /// `PUT /api/db/{db_id}/projects/{project_id}` — update scheduler fields.
 pub async fn update_project_route(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, project_id)): Path<(String, i32)>,
     Json(req): Json<UpdateProjectRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
-    require_database_management_allowed(&state)?;
     crate::server::scheduler::update_project(ctx, project_id, req)?;
     Ok(Json(ApiResponse::success(
         serde_json::json!({ "updated": true }),
@@ -1299,12 +1307,11 @@ pub async fn update_project_route(
 /// `PUT /api/db/{db_id}/targets/{target_id}` — rename a target and/or move it
 /// to another project (same profile; images follow the target).
 pub async fn update_target_route(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, target_id)): Path<(String, i32)>,
     Json(req): Json<UpdateTargetRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
-    require_database_management_allowed(&state)?;
     if req.name.is_none()
         && req.project_id.is_none()
         && req.active.is_none()
@@ -1354,12 +1361,11 @@ pub async fn update_target_route(
 /// `POST /api/db/{db_id}/projects/{project_id}/merge` — merge this project's
 /// targets and images into another project, then delete it.
 pub async fn merge_project_route(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, project_id)): Path<(String, i32)>,
     Json(req): Json<MergeProjectRequest>,
 ) -> Result<Json<ApiResponse<MergeProjectResponse>>, AppError> {
-    require_database_management_allowed(&state)?;
     let (targets_moved, images_moved) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
@@ -1483,10 +1489,15 @@ pub async fn start_import_route(
     ctx: DbContext,
     Json(req): Json<ImportRequest>,
 ) -> Result<Json<ApiResponse<ImportStatusResponse>>, AppError> {
-    require_database_management_allowed(&state)?;
-
+    // Importing into a configured database is ordinary work. Naming the
+    // directories to read is not: that is a caller-chosen server path, so it
+    // needs the same consent as registry CRUD. Without the flag we import
+    // only from directories the operator already configured.
     let dirs = match req.image_dirs {
-        Some(dirs) if !dirs.is_empty() => dirs,
+        Some(dirs) if !dirs.is_empty() => {
+            require_database_management_allowed(&state)?;
+            dirs
+        }
         _ => ctx.image_dirs.clone(),
     };
     if dirs.is_empty() {
@@ -4340,6 +4351,9 @@ pub async fn get_spatial_scan_progress(
 #[derive(Debug)]
 pub enum AppError {
     NotFound,
+    /// 404 that explains itself — for resources that legitimately disappear,
+    /// where "Resource not found" would read as an auth failure.
+    NotFoundMessage(String),
     DatabaseError(String),
     BadRequest(String),
     Conflict(String),
@@ -4364,6 +4378,14 @@ impl IntoResponse for AppError {
             AppError::NotFound => {
                 tracing::warn!("🔍 Resource not found");
                 (StatusCode::NOT_FOUND, "Resource not found")
+            }
+            AppError::NotFoundMessage(msg) => {
+                tracing::warn!("🔍 Resource not found: {}", msg);
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(ApiResponse::<()>::error(msg.clone())),
+                )
+                    .into_response();
             }
             AppError::DatabaseError(msg) => {
                 tracing::error!("💾 Database error: {}", msg);

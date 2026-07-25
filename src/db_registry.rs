@@ -57,6 +57,12 @@ pub struct RemoteImageUploadConfig {
     pub token_salt: String,
     #[serde(default)]
     pub token_sha256: String,
+    /// Opt this database into the remote scheduler sync protocol
+    /// (`/api/sync/v1`). Independent of `enabled`, which covers image upload
+    /// only. Defaults to false, so a token configured for uploads before the
+    /// sync protocol existed does not silently gain merge and apply rights.
+    #[serde(default)]
+    pub sync_enabled: bool,
 }
 
 impl RemoteImageUploadConfig {

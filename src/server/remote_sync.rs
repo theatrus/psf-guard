@@ -1,9 +1,16 @@
 //! Token-authenticated database sync for remote N.I.N.A. clients.
 //!
 //! The wire format is deliberately database-shaped: a client freezes selected
-//! Target Scheduler tables into a signed JSON bundle, while PSF Guard
-//! materializes that bundle as a temporary SQLite source and delegates every
-//! merge decision to the existing local database sync engine.
+//! Target Scheduler tables into a JSON bundle, while PSF Guard materializes
+//! that bundle as a temporary SQLite source and delegates every merge
+//! decision to the existing local database sync engine.
+//!
+//! `payload_sha256` is a courtesy checksum, not a credential. It carries no
+//! key, so it proves nothing about who built the bundle — the bearer token
+//! does that, and TLS plus `Content-Length` already cover truncation. We
+//! therefore accept it, echo it on export, and do not verify it: enforcing it
+//! would mean pinning a canonical JSON encoding, so reordering one struct
+//! field would reject every plugin already in the field.
 
 use axum::{
     extract::{Path, State},
@@ -22,7 +29,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap},
     path::{Path as FsPath, PathBuf},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex},
 };
 use uuid::Uuid;
 
@@ -36,9 +43,12 @@ use crate::server::{
     state::AppState,
 };
 
-pub const MAX_SYNC_BODY_BYTES: usize = 128 * 1024 * 1024;
-const MAX_BUNDLE_ROWS: usize = 250_000;
+pub const MAX_SYNC_BODY_BYTES: usize = 512 * 1024 * 1024;
+const MAX_BUNDLE_ROWS: usize = 1_000_000;
 const PROTOCOL_VERSION: u32 = 1;
+/// How long a built export stays fetchable, matching the preview lifetime.
+const EXPORT_LIFETIME_SECS: i64 = 30 * 60;
+const MAX_RETAINED_EXPORTS: usize = 16;
 const PLANNING_TABLES: &[&str] = &[
     "exposuretemplate",
     "project",
@@ -179,7 +189,72 @@ pub struct SyncExport {
     pub error: Option<String>,
 }
 
-static EXPORTS: OnceLock<Mutex<HashMap<String, (String, SyncExport)>>> = OnceLock::new();
+struct StoredExport {
+    catalog_id: String,
+    created_at: i64,
+    export: SyncExport,
+}
+
+/// Built export bundles, held so a client can re-fetch one it lost. Bundles
+/// carry whole tables, so this is capacity-bound and time-bound: expired
+/// entries go first, then the oldest, never an arbitrary hash-order victim.
+#[derive(Default)]
+pub struct ExportStore {
+    entries: Mutex<HashMap<String, StoredExport>>,
+}
+
+impl ExportStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn insert(&self, catalog_id: String, export: SyncExport) -> Result<(), AppError> {
+        let now = unix_seconds();
+        let mut entries = self.lock()?;
+        entries.retain(|_, stored| stored.created_at + EXPORT_LIFETIME_SECS > now);
+        while entries.len() >= MAX_RETAINED_EXPORTS {
+            let Some(oldest) = entries
+                .iter()
+                .min_by_key(|(id, stored)| (stored.created_at, (*id).clone()))
+                .map(|(id, _)| id.clone())
+            else {
+                break;
+            };
+            entries.remove(&oldest);
+        }
+        entries.insert(
+            export.export_id.clone(),
+            StoredExport {
+                catalog_id,
+                created_at: now,
+                export,
+            },
+        );
+        Ok(())
+    }
+
+    fn get(&self, id: &str, catalog_id: &str) -> Result<Option<SyncExport>, AppError> {
+        let now = unix_seconds();
+        let mut entries = self.lock()?;
+        let Some(stored) = entries.get(id) else {
+            return Ok(None);
+        };
+        if stored.created_at + EXPORT_LIFETIME_SECS <= now {
+            entries.remove(id);
+            return Ok(None);
+        }
+        if stored.catalog_id != catalog_id {
+            return Ok(None);
+        }
+        Ok(Some(stored.export.clone()))
+    }
+
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<String, StoredExport>>, AppError> {
+        self.entries.lock().map_err(|error| {
+            AppError::InternalError(format!("remote export lock poisoned: {error}"))
+        })
+    }
+}
 
 pub async fn capabilities(
     State(state): State<Arc<AppState>>,
@@ -373,19 +448,9 @@ pub async fn create_export(
         bundle: Some(bundle),
         error: None,
     };
-    let mut exports = exports().lock().map_err(|error| {
-        AppError::InternalError(format!("remote export lock poisoned: {error}"))
-    })?;
-    if exports.len() >= 16
-        && let Some(key) = exports.keys().next().cloned()
-    {
-        exports.remove(&key);
-    }
-    exports.insert(
-        export.export_id.clone(),
-        (catalog.id.clone(), export.clone()),
-    );
-    drop(exports);
+    state
+        .remote_exports
+        .insert(catalog.id.clone(), export.clone())?;
     Ok(Json(ApiResponse::success(export)))
 }
 
@@ -395,14 +460,16 @@ pub async fn get_export(
     Path(export_id): Path<String>,
 ) -> Result<Json<ApiResponse<SyncExport>>, AppError> {
     let catalog = authenticated_catalog(&state, &headers)?;
-    let exports = exports().lock().map_err(|error| {
-        AppError::InternalError(format!("remote export lock poisoned: {error}"))
-    })?;
-    let export = exports
-        .get(&export_id)
-        .filter(|(catalog_id, _)| catalog_id == &catalog.id)
-        .map(|(_, export)| export.clone())
-        .ok_or(AppError::NotFound)?;
+    let export = state
+        .remote_exports
+        .get(&export_id, &catalog.id)?
+        .ok_or_else(|| {
+            AppError::NotFoundMessage(
+                "no such export. Exports are kept for 30 minutes and capped, so \
+                 an older one may have been dropped — create a new export."
+                    .into(),
+            )
+        })?;
     Ok(Json(ApiResponse::success(export)))
 }
 
@@ -431,6 +498,18 @@ fn authenticated_catalog(
     if matches.next().is_some() {
         return Err(AppError::Forbidden(
             "API token is configured for more than one database".into(),
+        ));
+    }
+    // Sync is a separate grant from image upload. A key configured before
+    // this protocol existed authenticates, but reaches nothing until the
+    // operator opts the database in.
+    if !catalog
+        .remote_image_upload
+        .as_ref()
+        .is_some_and(|config| config.sync_enabled)
+    {
+        return Err(AppError::Forbidden(
+            "remote scheduler sync is disabled for this database".into(),
         ));
     }
     Ok(catalog)
@@ -467,18 +546,12 @@ fn validate_bundle(bundle: &CatalogBundle) -> Result<(), AppError> {
             "Target Scheduler schema 22 or newer is required".into(),
         ));
     }
-    let digest = bundle
-        .payload_sha256
-        .as_deref()
-        .filter(|digest| digest.len() == 64)
-        .ok_or_else(|| AppError::BadRequest("bundle digest is missing".into()))?;
-    let mut unsigned = bundle.clone();
-    unsigned.payload_sha256 = None;
-    let payload = serde_json::to_vec(&unsigned)
-        .map_err(|error| AppError::BadRequest(format!("serializing bundle: {error}")))?;
-    let actual = digest_hex(&payload);
-    if !constant_time_eq(actual.as_bytes(), digest.as_bytes()) {
-        return Err(AppError::BadRequest("bundle digest is invalid".into()));
+    for required in required_tables(bundle.operation) {
+        if !bundle.tables.contains_key(*required) {
+            return Err(AppError::BadRequest(format!(
+                "bundle is missing the {required} table, which this operation needs"
+            )));
+        }
     }
 
     let allowed = allowed_tables(bundle.operation);
@@ -524,12 +597,23 @@ fn materialize_bundle(
 ) -> anyhow::Result<()> {
     let connection = Connection::open(path)?;
     connection.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA foreign_keys=OFF;")?;
+    let mut template = None;
     for table_name in allowed_tables(bundle.operation) {
         if let Some(table) = bundle.tables.get(*table_name) {
             create_bundle_table(&connection, table_name, table)?;
             insert_bundle_rows(&connection, table_name, table)?;
-        } else if bundle.operation != SyncOperation::PushGrades {
-            create_empty_table_from_template(&connection, template_path, table_name)?;
+        } else {
+            // An omitted optional table still has to exist for the sync
+            // engine to read, so borrow the destination's own DDL. One
+            // connection serves every miss.
+            if template.is_none() {
+                template = Some(Connection::open_with_flags(
+                    template_path,
+                    OpenFlags::SQLITE_OPEN_READ_ONLY,
+                )?);
+            }
+            let template = template.as_ref().expect("template connection is open");
+            create_empty_table_from_template(&connection, template, table_name)?;
         }
     }
     connection.pragma_update(None, "user_version", bundle.source.schema_version)?;
@@ -569,10 +653,9 @@ fn create_bundle_table(
 
 fn create_empty_table_from_template(
     destination: &Connection,
-    template_path: &FsPath,
+    template: &Connection,
     name: &str,
 ) -> anyhow::Result<()> {
-    let template = Connection::open_with_flags(template_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let sql: String = template.query_row(
         "SELECT sql FROM sqlite_master WHERE type='table' AND lower(name)=lower(?1)",
         [name],
@@ -655,6 +738,7 @@ fn export_bundle(
         "Target Scheduler schema 22 or newer is required"
     );
     let mut tables = BTreeMap::new();
+    let mut row_count = 0usize;
     for name in allowed_tables(operation) {
         let selected = if operation == SyncOperation::PushGrades {
             Some(&["guid", "gradingStatus", "rejectreason"][..])
@@ -663,10 +747,18 @@ fn export_bundle(
         };
         let where_clause = (operation == SyncOperation::PushGrades && reviewed_only)
             .then_some("gradingStatus <> 0");
-        tables.insert(
-            (*name).to_string(),
-            read_bundle_table(&connection, name, selected, where_clause)?,
+        let table = read_bundle_table(&connection, name, selected, where_clause)?;
+        // Bound the export the same way we bound an import. A merge pulls
+        // every acquiredimage row and every imagedata blob, so an unbounded
+        // build is how the server runs itself out of memory answering one
+        // request.
+        row_count = row_count.saturating_add(table.rows.len());
+        anyhow::ensure!(
+            row_count <= MAX_BUNDLE_ROWS,
+            "this database exceeds the {MAX_BUNDLE_ROWS} row export limit; \
+             narrow the operation or sync in smaller pieces"
         );
+        tables.insert((*name).to_string(), table);
     }
     let mut bundle = CatalogBundle {
         protocol_version: PROTOCOL_VERSION,
@@ -840,6 +932,17 @@ fn allowed_tables(operation: SyncOperation) -> &'static [&'static str] {
     }
 }
 
+/// Tables without which the operation is a silent no-op. Anything else in
+/// `allowed_tables` may be omitted; the materializer creates it empty from the
+/// destination schema, and the sync engine then finds nothing to do.
+fn required_tables(operation: SyncOperation) -> &'static [&'static str] {
+    match operation {
+        SyncOperation::Merge => &["project", "target", "acquiredimage"],
+        SyncOperation::PushPlanning => &["project", "target", "exposureplan"],
+        SyncOperation::PushGrades => &["acquiredimage"],
+    }
+}
+
 fn sqlite_affinity(declared_type: &str) -> &'static str {
     let upper = declared_type.to_ascii_uppercase();
     if upper.contains("INT") {
@@ -867,16 +970,6 @@ fn quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    left.iter()
-        .zip(right)
-        .fold(0u8, |difference, (left, right)| difference | (left ^ right))
-        == 0
-}
-
 fn digest_hex(value: &[u8]) -> String {
     use std::fmt::Write as _;
 
@@ -888,14 +981,17 @@ fn digest_hex(value: &[u8]) -> String {
     result
 }
 
+fn unix_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
 fn unix_timestamp(value: i64) -> String {
     DateTime::<Utc>::from_timestamp(value, 0)
         .expect("sync preview timestamps are valid")
         .to_rfc3339_opts(SecondsFormat::Secs, true)
-}
-
-fn exports() -> &'static Mutex<HashMap<String, (String, SyncExport)>> {
-    EXPORTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn internal(error: impl std::fmt::Display) -> AppError {
@@ -906,27 +1002,67 @@ fn internal(error: impl std::fmt::Display) -> AppError {
 mod tests {
     use super::*;
 
-    #[test]
-    fn accepts_the_plugin_canonical_digest_fixture() {
-        let json = r#"{
+    fn grades_bundle(tables: &str, digest: &str) -> CatalogBundle {
+        let json = format!(
+            r#"{{
             "protocol_version":1,
             "bundle_id":"b03b8ab1-ce43-4a87-a4fb-68497394cedb",
             "created_at_utc":"2026-07-23T12:00:00+00:00",
             "operation":"push_grades",
-            "source":{
+            "source":{{
                 "id":"source",
                 "product":"Target Scheduler",
                 "product_version":"5.9.6.0",
                 "schema_version":23
-            },
-            "tables":{},
-            "payload_sha256":"5d18d681485f57377c33dffc26dd1b08d79448ec2c819dee08ebdd22ad278d42"
-        }"#;
-        let bundle: CatalogBundle = serde_json::from_str(json).unwrap();
-        validate_bundle(&bundle).unwrap();
+            }},
+            "tables":{tables}
+            {digest}
+        }}"#
+        );
+        serde_json::from_str(&json).unwrap()
+    }
 
-        let mut changed = bundle;
-        changed.source.product_version = "different".into();
-        assert!(validate_bundle(&changed).is_err());
+    const ACQUIRED_IMAGE: &str = r#"{
+        "acquiredimage":{
+            "columns":[{"name":"guid","declared_type":"TEXT","not_null":false,"primary_key":false}],
+            "rows":[{"values":[{"kind":"text","value":"a-guid"}]}]
+        }
+    }"#;
+
+    #[test]
+    fn accepts_a_bundle_whose_digest_is_absent_or_stale() {
+        // The digest is advisory. A plugin that omits it, or that computes it
+        // over a different JSON encoding than ours, still syncs.
+        validate_bundle(&grades_bundle(ACQUIRED_IMAGE, "")).unwrap();
+        validate_bundle(&grades_bundle(
+            ACQUIRED_IMAGE,
+            r#","payload_sha256":"0000000000000000000000000000000000000000000000000000000000000000""#,
+        ))
+        .unwrap();
+    }
+
+    #[test]
+    fn rejects_a_bundle_missing_the_table_its_operation_needs() {
+        let error = validate_bundle(&grades_bundle("{}", "")).unwrap_err();
+        assert!(
+            matches!(&error, AppError::BadRequest(message) if message.contains("acquiredimage")),
+            "expected a 400 naming the table, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_table_outside_the_operation() {
+        let error = validate_bundle(&grades_bundle(
+            r#"{
+                "project":{"columns":[{"name":"guid","declared_type":"TEXT","not_null":false,"primary_key":false}],"rows":[]},
+                "acquiredimage":{"columns":[{"name":"guid","declared_type":"TEXT","not_null":false,"primary_key":false}],"rows":[]}
+            }"#,
+            "",
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(&error, AppError::BadRequest(message) if message.contains("project")),
+            "expected a 400 naming the table, got {error:?}"
+        );
     }
 }

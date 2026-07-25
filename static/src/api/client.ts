@@ -210,6 +210,7 @@ export const apiClient = {
         enabled: boolean;
         image_directory?: string;
         token?: string;
+        sync_enabled?: boolean;
       };
     }
   ): Promise<DatabaseSummary> => {

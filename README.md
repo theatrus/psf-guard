@@ -115,9 +115,9 @@ settings and every target's catalog coordinates and exposure plans. The
 inherited Target Scheduler mapping stores RA as decimal hours and Dec as
 degrees. New plans reuse an exact matching profile template or create one with
 Target Scheduler-compatible defaults. The plan table keeps the schema's `-1`
-exposure value, which means “use the template default.” The desktop app can
-edit these fields. The web server needs `--allow-database-management`; without
-it, the view stays read-only.
+exposure value, which means “use the template default.” Both the desktop app
+and the web server can edit these fields: they change rows inside a database
+you already configured, so they need no extra flag.
 
 ### Build an image catalog from FITS folders
 
@@ -157,8 +157,11 @@ runs the same name/coordinate target resolution used by folder import. See
 [the remote image ingest contract](DATA_TRANSFER_DESIGN.md#remote-image-ingest).
 
 The same key authenticates `/api/sync/v1/*` for remote Target Scheduler
-export, preview, and apply. It is scoped to exactly one configured database;
-image upload remains independently disabled unless its checkbox is enabled.
+export, preview, and apply, but only after you tick **Accept remote scheduler
+sync** on that database. The two grants are separate: a key may carry either,
+both, or neither, and a key configured before this protocol existed reaches
+nothing until you opt in. Either way the key is scoped to exactly one
+configured database.
 
 The Overview's **Plan & coordinates** dialog lets you correct imported names,
 coordinates, limits, and desired counts. See the

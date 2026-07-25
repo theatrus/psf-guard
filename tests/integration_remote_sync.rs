@@ -41,9 +41,17 @@ fn schema(connection: &Connection) {
 fn api_config(token: &str) -> RemoteImageUploadConfig {
     let mut config = RemoteImageUploadConfig {
         enabled: false,
+        sync_enabled: true,
         ..Default::default()
     };
     config.set_token(token).unwrap();
+    config
+}
+
+/// A key configured for image upload only, from before the sync protocol.
+fn upload_only_config(token: &str) -> RemoteImageUploadConfig {
+    let mut config = api_config(token);
+    config.sync_enabled = false;
     config
 }
 
@@ -263,4 +271,55 @@ async fn token_scoped_export_previews_and_applies_to_the_selected_database() {
         .query_row("SELECT description FROM project", [], |row| row.get(0))
         .unwrap();
     assert_eq!(description, "remote settings");
+}
+
+/// A key that predates the sync protocol authenticates but reaches nothing.
+/// Upgrading PSF Guard must not hand an existing upload token the power to
+/// merge into the user's scheduler database.
+#[tokio::test]
+async fn an_upload_only_key_cannot_reach_the_sync_protocol() {
+    let directory = tempdir().unwrap();
+    let database_path = directory.path().join("catalog.sqlite");
+    let image_path = directory.path().join("images");
+    std::fs::create_dir(&image_path).unwrap();
+    let connection = Connection::open(&database_path).unwrap();
+    schema(&connection);
+    drop(connection);
+
+    let state = Arc::new(
+        AppState::from_databases(
+            vec![DbEntry {
+                id: "catalog".into(),
+                name: "Catalog".into(),
+                db_path: database_path.to_string_lossy().into_owned(),
+                image_dirs: vec![image_path.to_string_lossy().into_owned()],
+                reject_archive: None,
+                remote_image_upload: Some(upload_only_config(SOURCE_TOKEN)),
+            }],
+            directory
+                .path()
+                .join("cache")
+                .to_string_lossy()
+                .into_owned(),
+            PregenerationConfig::default(),
+        )
+        .unwrap(),
+    );
+    let router = app(state);
+
+    for (method, uri) in [
+        ("GET", "/api/sync/v1/capabilities"),
+        ("POST", "/api/sync/v1/exports"),
+    ] {
+        let body = (method == "POST").then(|| {
+            json!({
+                "protocol_version": 1,
+                "catalog_id": "catalog",
+                "operation": "push_planning",
+                "reviewed_only": false
+            })
+        });
+        let (status, response) = call(router.clone(), method, uri, Some(SOURCE_TOKEN), body).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{uri}: {response:#}");
+    }
 }

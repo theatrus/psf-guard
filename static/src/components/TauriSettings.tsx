@@ -55,6 +55,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
   const [formDbPath, setFormDbPath] = useState('');
   const [formImageDirs, setFormImageDirs] = useState<string[]>([]);
   const [formRemoteUploadEnabled, setFormRemoteUploadEnabled] = useState(false);
+  const [formRemoteSyncEnabled, setFormRemoteSyncEnabled] = useState(false);
   const [formRemoteUploadDir, setFormRemoteUploadDir] = useState('');
   const [formRemoteUploadToken, setFormRemoteUploadToken] = useState('');
   const [formRemoteUploadTokenConfigured, setFormRemoteUploadTokenConfigured] =
@@ -106,6 +107,8 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                   image_dir: summary.remote_image_upload?.image_directory,
                   token_configured:
                     summary.remote_image_upload?.token_configured ?? false,
+                  sync_enabled:
+                    summary.remote_image_upload?.sync_enabled ?? false,
                 },
               };
             }),
@@ -124,6 +127,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
               enabled: s.remote_image_upload?.enabled ?? false,
               image_dir: s.remote_image_upload?.image_directory,
               token_configured: s.remote_image_upload?.token_configured ?? false,
+              sync_enabled: s.remote_image_upload?.sync_enabled ?? false,
             },
           })),
         };
@@ -190,6 +194,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setFormDbPath(entry.db_path);
     setFormImageDirs(entry.image_dirs);
     setFormRemoteUploadEnabled(entry.remote_image_upload?.enabled ?? false);
+    setFormRemoteSyncEnabled(entry.remote_image_upload?.sync_enabled ?? false);
     setFormRemoteUploadDir(
       entry.remote_image_upload?.image_dir ?? entry.image_dirs[0] ?? ''
     );
@@ -390,6 +395,15 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
           setIsApplying(false);
           return;
         }
+        if (
+          formRemoteSyncEnabled &&
+          !formRemoteUploadTokenConfigured &&
+          formRemoteUploadToken.length === 0
+        ) {
+          setStatusMessage('Generate a remote API key before enabling scheduler sync');
+          setIsApplying(false);
+          return;
+        }
         await apiClient.updateDatabase(editingId, {
           name: inferredName,
           db_path: formDbPath.trim(),
@@ -398,6 +412,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
             enabled: formRemoteUploadEnabled,
             image_directory: formRemoteUploadDir || undefined,
             token: formRemoteUploadToken || undefined,
+            sync_enabled: formRemoteSyncEnabled,
           },
         });
       } else {
@@ -901,6 +916,22 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                         : 'Copy this key now. It will not be shown again after saving.'}
                     </small>
                   )}
+                  <label className="quality-analysis-option">
+                    <input
+                      type="checkbox"
+                      checked={formRemoteSyncEnabled}
+                      onChange={(event) =>
+                        setFormRemoteSyncEnabled(event.target.checked)
+                      }
+                    />
+                    <span>
+                      <strong>Accept remote scheduler sync</strong>
+                      <small>
+                        Lets a holder of this key merge projects, targets,
+                        plans, and grades into this database.
+                      </small>
+                    </span>
+                  </label>
                   <label className="quality-analysis-option">
                     <input
                       type="checkbox"

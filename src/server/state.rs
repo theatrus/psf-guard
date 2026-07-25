@@ -71,6 +71,8 @@ pub struct AppState {
     /// Serializes guarded transfer applies so one preview cannot invalidate
     /// another between its stale check and transaction.
     pub sync_apply_lock: tokio::sync::Mutex<()>,
+    /// Export bundles built for remote sync clients, capacity- and time-bound.
+    pub remote_exports: crate::server::remote_sync::ExportStore,
     /// Process-global Seiza catalogs and capability diagnostics. Catalogs are
     /// shared across databases and opened lazily on first use.
     pub astrometry: Arc<crate::astrometry::AstrometryContext>,
@@ -372,6 +374,7 @@ impl AppState {
             catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
             sync_previews: crate::server::sync_preview::SyncPreviewManager::new(&cache_dir),
             sync_apply_lock: tokio::sync::Mutex::new(()),
+            remote_exports: crate::server::remote_sync::ExportStore::new(),
             astrometry: Arc::new(crate::astrometry::AstrometryContext::new(astrometry_config)),
             satellites: Arc::new(satellites),
         })
@@ -492,6 +495,7 @@ impl AppState {
                 "/tmp/psf-guard-test",
             ),
             sync_apply_lock: tokio::sync::Mutex::new(()),
+            remote_exports: crate::server::remote_sync::ExportStore::new(),
             astrometry: Arc::new(crate::astrometry::AstrometryContext::default()),
             satellites: Arc::new(
                 crate::satellites::SatelliteContext::new(

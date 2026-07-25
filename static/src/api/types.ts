@@ -727,6 +727,8 @@ export interface RemoteImageUploadSummary {
   enabled: boolean;
   image_directory?: string;
   token_configured: boolean;
+  /** Remote scheduler sync is a separate grant from image upload. */
+  sync_enabled: boolean;
 }
 
 export type SchedulerSyncKind = 'pull' | 'push_planning' | 'push_grades';

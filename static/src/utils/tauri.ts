@@ -64,6 +64,7 @@ export interface DbEntry {
     image_dir?: string;
     token_sha256?: string;
     token_configured?: boolean;
+    sync_enabled?: boolean;
   };
 }
 

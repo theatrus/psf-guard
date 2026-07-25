@@ -272,11 +272,28 @@ The bundle is compressed and contains:
 - rows keyed by stable GUID;
 - optional stored-thumbnail chunks;
 - source snapshot metadata; and
-- a payload digest.
+- an optional payload digest.
 
 The protocol sets compressed and expanded size limits, row limits, timeouts,
 and a bounded thumbnail budget. It rejects unknown required features rather
 than guessing.
+
+The digest is a courtesy checksum, not a credential. It carries no key, so it
+says nothing about who built the bundle; the bearer token does that, and TLS
+already covers truncation. The receiver therefore accepts a bundle whose
+digest is absent or stale. Enforcing it would pin one canonical JSON encoding,
+and reordering a single field would then reject every plugin already shipped.
+
+A bundle must carry the tables its operation acts on — `acquiredimage` for
+grades, `project`/`target`/`exposureplan` for planning, and both sets for a
+merge. Other tables in the operation's set may be omitted; the receiver
+creates them empty from its own schema, and the merge finds nothing to do.
+The current receiver accepts up to 512 MiB and one million rows per bundle,
+and bounds the exports it builds by the same row limit.
+
+Each database opts into this protocol on its own. Holding a valid key is not
+enough: the operator ticks **Accept remote scheduler sync** for that database,
+separately from **Accept remote image uploads**.
 
 ## N.I.N.A. plugin
 
