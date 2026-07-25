@@ -35,6 +35,13 @@ test('overview puts projects ahead of a compact catalog summary', async ({
   await expect(alphaCard).toHaveCount(1);
   await expect(alphaCard.getByText('Open image grid')).toBeVisible();
   await expect(alphaCard.locator('.project-frame')).toHaveCount(3);
+  await expect(page.locator('.project-frame-age')).toHaveCount(4);
+  await expect(page.locator('.project-frame-age').first()).toContainText('Captured');
+  await expect(page.locator('.project-frame-age').first()).toContainText(/ago$/);
+  const newestFrame = page.locator('.project-frame.is-newest');
+  await expect(newestFrame).toHaveCount(1);
+  await expect(newestFrame.getByText('Newest', { exact: true })).toBeVisible();
+  await expect(newestFrame).toHaveAttribute('aria-label', /Beta Field/);
   await expect(
     alphaCard.getByRole('button', { name: 'Plan & coordinates' })
   ).toBeVisible();
