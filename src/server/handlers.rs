@@ -334,6 +334,7 @@ pub async fn list_databases(
             name: ctx.name.clone(),
             database_path: ctx.database_path.clone(),
             image_directories: ctx.image_dirs.clone(),
+            remote_image_upload: remote_image_upload_summary(ctx),
         })
         .collect();
     summaries.sort_by(|a, b| a.id.cmp(&b.id));
@@ -370,6 +371,20 @@ fn summary_of(ctx: &crate::server::database_context::DatabaseContext) -> Databas
         name: ctx.name.clone(),
         database_path: ctx.database_path.clone(),
         image_directories: ctx.image_dirs.clone(),
+        remote_image_upload: remote_image_upload_summary(ctx),
+    }
+}
+
+fn remote_image_upload_summary(
+    ctx: &crate::server::database_context::DatabaseContext,
+) -> RemoteImageUploadSummary {
+    let config = ctx.remote_image_upload.as_ref();
+    RemoteImageUploadSummary {
+        enabled: ctx.remote_image_upload_dir.is_some(),
+        image_directory: config
+            .map(|config| config.image_dir.clone())
+            .filter(|directory| !directory.is_empty()),
+        token_configured: config.is_some_and(|config| config.token_is_configured()),
     }
 }
 
@@ -833,6 +848,7 @@ pub async fn add_database_route(
             entry.name.clone(),
             entry.db_path.clone(),
             entry.image_dirs.clone(),
+            entry.remote_image_upload.clone(),
             state.cache_dir_root.clone(),
         )
         .map_err(|e| AppError::BadRequest(format!("opening database: {}", e)))?,
@@ -885,6 +901,16 @@ pub async fn update_database_route(
 
     // Pull the entry back out (post-rename) so we can rebuild the context.
     let new_id = req.slug.clone().unwrap_or_else(|| db_id.clone());
+    if let Some(update) = req.remote_image_upload.as_ref() {
+        let entry = reg
+            .databases
+            .iter_mut()
+            .find(|entry| entry.id == new_id)
+            .ok_or(AppError::InternalError(
+                "registry update lost the entry".into(),
+            ))?;
+        apply_remote_image_upload_update(entry, update)?;
+    }
     let entry = reg
         .find(&new_id)
         .ok_or(AppError::InternalError(
@@ -922,6 +948,7 @@ pub async fn update_database_route(
             entry.name.clone(),
             entry.db_path.clone(),
             entry.image_dirs.clone(),
+            entry.remote_image_upload.clone(),
             state.cache_dir_root.clone(),
         )
         .map_err(|e| AppError::BadRequest(format!("opening database: {}", e)))?,
@@ -942,6 +969,29 @@ pub async fn update_database_route(
     let _ = new_ctx.ensure_cache_available();
 
     Ok(Json(ApiResponse::success(summary_of(&new_ctx))))
+}
+
+fn apply_remote_image_upload_update(
+    entry: &mut crate::db_registry::DbEntry,
+    update: &RemoteImageUploadUpdate,
+) -> Result<(), AppError> {
+    let mut config = entry.remote_image_upload.clone().unwrap_or_default();
+    config.enabled = update.enabled;
+    if let Some(directory) = update.image_directory.as_ref() {
+        config.image_dir = directory.trim().to_string();
+    }
+    if let Some(token) = update.token.as_ref() {
+        config
+            .set_token(token)
+            .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    }
+    if config.enabled {
+        config
+            .validated_image_dir(&entry.image_dirs)
+            .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    }
+    entry.remote_image_upload = Some(config);
+    Ok(())
 }
 
 /// `DELETE /api/databases/{db_id}` — drop the registered database. Returns
@@ -1294,6 +1344,7 @@ pub async fn create_database_route(
             entry.name.clone(),
             entry.db_path.clone(),
             entry.image_dirs.clone(),
+            entry.remote_image_upload.clone(),
             state.cache_dir_root.clone(),
         )
         .map_err(|e| AppError::InternalError(format!("opening new database: {}", e)))?,
@@ -1452,6 +1503,7 @@ fn spawn_import_job(
     let state = state.clone();
     tokio::spawn(async move {
         let job_store = ctx.import_job.clone();
+        let _import_guard = ctx.image_import_mutex.lock().await;
 
         let blocking_ctx = ctx.clone();
         let blocking_options = options.clone();

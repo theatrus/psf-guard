@@ -704,6 +704,13 @@ export interface DatabaseSummary {
   name: string;
   database_path: string;
   image_directories: string[];
+  remote_image_upload: RemoteImageUploadSummary;
+}
+
+export interface RemoteImageUploadSummary {
+  enabled: boolean;
+  image_directory?: string;
+  token_configured: boolean;
 }
 
 export type SchedulerSyncKind = 'pull' | 'push_planning' | 'push_grades';

@@ -246,6 +246,46 @@ pub struct DatabaseSummary {
     pub name: String,
     pub database_path: String,
     pub image_directories: Vec<String>,
+    pub remote_image_upload: RemoteImageUploadSummary,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RemoteImageUploadSummary {
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_directory: Option<String>,
+    pub token_configured: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RemoteImageUploadUpdate {
+    pub enabled: bool,
+    #[serde(default)]
+    pub image_directory: Option<String>,
+    /// Plaintext is accepted only by this management-gated settings route and
+    /// is immediately replaced by its salted SHA-256 digest in the registry.
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RemoteImageResolution {
+    pub image_id: i64,
+    pub project_id: i64,
+    pub project_name: String,
+    pub target_id: i64,
+    pub target_name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RemoteImageUploadResponse {
+    pub database_id: String,
+    pub filename: String,
+    pub bytes: u64,
+    pub sha256: String,
+    pub already_present: bool,
+    pub resolution: RemoteImageResolution,
+    pub import: crate::commands::import::ImportOutcome,
 }
 
 /// Database-to-database operations exposed by the management UI.
@@ -560,6 +600,8 @@ pub struct UpdateDatabaseRequest {
     pub db_path: Option<String>,
     #[serde(default)]
     pub image_dirs: Option<Vec<String>>,
+    #[serde(default)]
+    pub remote_image_upload: Option<RemoteImageUploadUpdate>,
 }
 
 #[derive(Debug, Serialize)]

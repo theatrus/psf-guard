@@ -12,6 +12,8 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::server::slug::{compute_default_slug, validate_slug};
@@ -38,6 +40,121 @@ pub struct DbEntry {
     /// "no per-DB overrides — use CLI flags or defaults entirely."
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reject_archive: Option<RejectArchiveOverrides>,
+    /// Opt-in receiver for images posted by a remote N.I.N.A. instance or
+    /// another acquisition client. The token is stored only as a salted
+    /// SHA-256 digest; plaintext exists only in the management request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_image_upload: Option<RemoteImageUploadConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct RemoteImageUploadConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub image_dir: String,
+    #[serde(default)]
+    pub token_salt: String,
+    #[serde(default)]
+    pub token_sha256: String,
+}
+
+impl RemoteImageUploadConfig {
+    pub const MIN_TOKEN_LENGTH: usize = 24;
+    pub const MAX_TOKEN_LENGTH: usize = 256;
+
+    pub fn set_token(&mut self, token: &str) -> Result<()> {
+        if token.len() < Self::MIN_TOKEN_LENGTH || token.len() > Self::MAX_TOKEN_LENGTH {
+            anyhow::bail!(
+                "remote image upload token must be {}-{} characters",
+                Self::MIN_TOKEN_LENGTH,
+                Self::MAX_TOKEN_LENGTH
+            );
+        }
+        if token.chars().any(char::is_control) {
+            anyhow::bail!("remote image upload token cannot contain control characters");
+        }
+        self.token_salt = uuid::Uuid::new_v4().simple().to_string();
+        self.token_sha256 = salted_token_sha256(&self.token_salt, token);
+        Ok(())
+    }
+
+    pub fn token_is_configured(&self) -> bool {
+        self.token_salt.len() == 32
+            && self.token_salt.bytes().all(|byte| byte.is_ascii_hexdigit())
+            && self.token_sha256.len() == 64
+            && self
+                .token_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+    }
+
+    pub fn token_matches(&self, token: &str) -> bool {
+        let candidate = salted_token_sha256(&self.token_salt, token);
+        constant_time_eq(self.token_sha256.as_bytes(), candidate.as_bytes())
+    }
+
+    /// Resolve the selected receive directory and prove that it is exactly
+    /// one of this database's configured image roots.
+    pub fn validated_image_dir(&self, image_dirs: &[String]) -> Result<PathBuf> {
+        if !self.enabled {
+            anyhow::bail!("remote image upload is disabled");
+        }
+        if !self.token_is_configured() {
+            anyhow::bail!("remote image upload token is not configured");
+        }
+        if self.image_dir.trim().is_empty() {
+            anyhow::bail!("remote image upload directory is not configured");
+        }
+
+        let selected = dunce::canonicalize(&self.image_dir).with_context(|| {
+            format!("resolving remote image upload directory {}", self.image_dir)
+        })?;
+        if !selected.is_dir() {
+            anyhow::bail!(
+                "remote image upload directory is not a directory: {}",
+                selected.display()
+            );
+        }
+
+        let is_registered_root = image_dirs.iter().any(|root| {
+            dunce::canonicalize(root)
+                .map(|root| root == selected)
+                .unwrap_or(false)
+        });
+        if !is_registered_root {
+            anyhow::bail!("remote image upload directory must be one of the database's image_dirs");
+        }
+        Ok(selected)
+    }
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut difference = 0u8;
+    for (&left, &right) in left.iter().zip(right) {
+        difference |= left ^ right;
+    }
+    difference == 0
+}
+
+fn salted_token_sha256(salt: &str, token: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(salt.as_bytes());
+    hasher.update([0]);
+    hasher.update(token.as_bytes());
+    sha256_digest_hex(hasher.finalize())
+}
+
+fn sha256_digest_hex(digest: impl AsRef<[u8]>) -> String {
+    let digest = digest.as_ref();
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(encoded, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    encoded
 }
 
 /// Persisted per-DB override block for the reject archive. All fields are
@@ -161,6 +278,7 @@ impl DbRegistry {
                 db_path,
                 image_dirs: v1.image_directories,
                 reject_archive: None,
+                remote_image_upload: None,
             });
         }
         reg.save(path)?;
@@ -227,6 +345,7 @@ impl DbRegistry {
             db_path,
             image_dirs,
             reject_archive: None,
+            remote_image_upload: None,
         });
         Ok(self.databases.last().unwrap())
     }
@@ -478,6 +597,51 @@ mod tests {
             !json.contains("reject_archive"),
             "default config should not write the key: {json}"
         );
+    }
+
+    #[test]
+    fn remote_upload_round_trip_stores_only_a_token_digest() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let images = dir.path().join("images");
+        std::fs::create_dir(&images).unwrap();
+        let token = "a-long-random-upload-token-123456";
+        let mut config = RemoteImageUploadConfig {
+            enabled: true,
+            image_dir: images.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        config.set_token(token).unwrap();
+        assert!(config.token_matches(token));
+        assert!(!config.token_matches("a-different-long-upload-token"));
+        assert_eq!(
+            config
+                .validated_image_dir(&[images.to_string_lossy().into_owned()])
+                .unwrap(),
+            dunce::canonicalize(&images).unwrap()
+        );
+
+        let mut registry = DbRegistry::default();
+        registry
+            .add(
+                "Remote".into(),
+                "/tmp/remote.sqlite".into(),
+                vec![images.to_string_lossy().into_owned()],
+                Some("remote".into()),
+            )
+            .unwrap();
+        registry.databases[0].remote_image_upload = Some(config);
+        registry.save(&path).unwrap();
+
+        let serialized = std::fs::read_to_string(&path).unwrap();
+        assert!(!serialized.contains(token));
+        assert!(serialized.contains("token_sha256"));
+        let loaded = DbRegistry::load_or_init(&path).unwrap();
+        assert!(loaded.databases[0]
+            .remote_image_upload
+            .as_ref()
+            .unwrap()
+            .token_matches(token));
     }
 
     #[test]

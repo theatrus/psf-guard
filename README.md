@@ -144,6 +144,14 @@ photometric, spatial, and pointing evidence in a low-priority job;
 a dry preview, skips basenames already present, and attaches new frames to an
 existing target by name or nearby coordinates before it creates new structure.
 
+Remote acquisition clients can send one FITS light at a time without sharing
+the image folder or running Target Scheduler. Edit a database in Settings,
+enable **Accept remote image uploads**, select its receive directory, and set a
+long upload token. The authenticated `/api/db/{db_id}/images/upload` endpoint
+verifies the database identity and file digest, saves without overwriting, and
+runs the same name/coordinate target resolution used by folder import. See
+[the remote image ingest contract](DATA_TRANSFER_DESIGN.md#remote-image-ingest).
+
 The Overview's **Plan & coordinates** dialog lets you correct imported names,
 coordinates, limits, and desired counts. See the
 **[import and planning guide](docs/IMPORTING.md)** for database paths, grouping

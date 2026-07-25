@@ -203,6 +203,11 @@ export const apiClient = {
       slug?: string;
       db_path?: string;
       image_dirs?: string[];
+      remote_image_upload?: {
+        enabled: boolean;
+        image_directory?: string;
+        token?: string;
+      };
     }
   ): Promise<DatabaseSummary> => {
     const apiInstance = await getApi();

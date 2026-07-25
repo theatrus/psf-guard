@@ -163,6 +163,35 @@ async fn crud_lifecycle_adds_uses_and_removes_a_database() {
     assert_eq!(body["data"].as_array().unwrap().len(), 1);
     assert_eq!(body["data"][0]["id"], slug);
 
+    let upload_token = "test-remote-upload-token-123456";
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "PUT",
+        &format!("/api/databases/{}", slug),
+        Some(serde_json::json!({
+            "remote_image_upload": {
+                "enabled": true,
+                "image_directory": image_dir.to_string_lossy(),
+                "token": upload_token,
+            }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["remote_image_upload"]["enabled"], true);
+    assert_eq!(
+        body["data"]["remote_image_upload"]["image_directory"],
+        image_dir.to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        body["data"]["remote_image_upload"]["token_configured"],
+        true
+    );
+    assert!(!body.to_string().contains(upload_token));
+    assert!(!std::fs::read_to_string(&registry_path)
+        .unwrap()
+        .contains(upload_token));
+
     // 4) Hit a per-DB endpoint for the new DB — should be reachable.
     let (status, _) = json_request(
         build_app(state.clone()),
@@ -214,6 +243,7 @@ async fn crud_lifecycle_adds_uses_and_removes_a_database() {
     let dbs = parsed["databases"].as_array().unwrap();
     assert_eq!(dbs.len(), 1);
     assert_eq!(dbs[0]["id"], "renamed-rig");
+    assert_eq!(dbs[0]["remote_image_upload"]["enabled"], true);
 
     // 8) Remove it.
     let (status, body) = json_request(

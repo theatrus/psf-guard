@@ -53,6 +53,15 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
   const [formName, setFormName] = useState('');
   const [formDbPath, setFormDbPath] = useState('');
   const [formImageDirs, setFormImageDirs] = useState<string[]>([]);
+  const [formRemoteUploadEnabled, setFormRemoteUploadEnabled] = useState(false);
+  const [formRemoteUploadDir, setFormRemoteUploadDir] = useState('');
+  const [formRemoteUploadToken, setFormRemoteUploadToken] = useState('');
+  const [formRemoteUploadTokenConfigured, setFormRemoteUploadTokenConfigured] =
+    useState(false);
+  const [formRemoteUploadTokenRevealed, setFormRemoteUploadTokenRevealed] =
+    useState(false);
+  const [formRemoteUploadTokenCopyState, setFormRemoteUploadTokenCopyState] =
+    useState<'idle' | 'copied' | 'failed'>('idle');
   const [showAddForm, setShowAddForm] = useState(false);
   // true = "create a brand-new TS database from image folders" flow (no
   // existing .sqlite required; the server bootstraps the full TS schema).
@@ -75,11 +84,34 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
       // schema_version and active_db_id); fall back to the HTTP listing
       // which gives us enough to render the UI.
       let reg: DbRegistry | null = null;
+      const summaries: DatabaseSummary[] = await apiClient.getDatabases();
       if (isTauri) {
         reg = await tauriConfig.getCurrentConfiguration();
+        if (reg) {
+          reg = {
+            ...reg,
+            databases: summaries.map((summary) => {
+              const persisted = reg?.databases.find(
+                (entry) => entry.id === summary.id
+              );
+              return {
+                ...persisted,
+                id: summary.id,
+                name: summary.name,
+                db_path: summary.database_path,
+                image_dirs: summary.image_directories,
+                remote_image_upload: {
+                  enabled: summary.remote_image_upload?.enabled ?? false,
+                  image_dir: summary.remote_image_upload?.image_directory,
+                  token_configured:
+                    summary.remote_image_upload?.token_configured ?? false,
+                },
+              };
+            }),
+          };
+        }
       }
       if (!reg) {
-        const summaries: DatabaseSummary[] = await apiClient.getDatabases();
         reg = {
           schema_version: 2,
           databases: summaries.map((s) => ({
@@ -87,6 +119,11 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
             name: s.name,
             db_path: s.database_path,
             image_dirs: s.image_directories,
+            remote_image_upload: {
+              enabled: s.remote_image_upload?.enabled ?? false,
+              image_dir: s.remote_image_upload?.image_directory,
+              token_configured: s.remote_image_upload?.token_configured ?? false,
+            },
           })),
         };
       }
@@ -135,6 +172,12 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setFormName('');
     setFormDbPath('');
     setFormImageDirs([]);
+    setFormRemoteUploadEnabled(false);
+    setFormRemoteUploadDir('');
+    setFormRemoteUploadToken('');
+    setFormRemoteUploadTokenConfigured(false);
+    setFormRemoteUploadTokenRevealed(false);
+    setFormRemoteUploadTokenCopyState('idle');
     setShowAddForm(false);
     setCreateMode(false);
     setCreateAnalyzeQuality(false);
@@ -145,6 +188,17 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setFormName(entry.name);
     setFormDbPath(entry.db_path);
     setFormImageDirs(entry.image_dirs);
+    setFormRemoteUploadEnabled(entry.remote_image_upload?.enabled ?? false);
+    setFormRemoteUploadDir(
+      entry.remote_image_upload?.image_dir ?? entry.image_dirs[0] ?? ''
+    );
+    setFormRemoteUploadToken('');
+    setFormRemoteUploadTokenConfigured(
+      entry.remote_image_upload?.token_configured ??
+        Boolean(entry.remote_image_upload?.token_sha256)
+    );
+    setFormRemoteUploadTokenRevealed(false);
+    setFormRemoteUploadTokenCopyState('idle');
     setShowAddForm(true);
     setCreateMode(false);
   };
@@ -154,6 +208,12 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setFormName('');
     setFormDbPath('');
     setFormImageDirs([]);
+    setFormRemoteUploadEnabled(false);
+    setFormRemoteUploadDir('');
+    setFormRemoteUploadToken('');
+    setFormRemoteUploadTokenConfigured(false);
+    setFormRemoteUploadTokenRevealed(false);
+    setFormRemoteUploadTokenCopyState('idle');
     setShowAddForm(true);
     setCreateMode(true);
     setCreateAnalyzeQuality(false);
@@ -163,6 +223,12 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setEditingId(null);
     setFormName('');
     setFormImageDirs([]);
+    setFormRemoteUploadEnabled(false);
+    setFormRemoteUploadDir('');
+    setFormRemoteUploadToken('');
+    setFormRemoteUploadTokenConfigured(false);
+    setFormRemoteUploadTokenRevealed(false);
+    setFormRemoteUploadTokenCopyState('idle');
     setShowAddForm(true);
     setCreateMode(false);
     setFormDbPath('');
@@ -221,7 +287,33 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
   };
 
   const handleRemoveImageDir = (index: number) => {
-    setFormImageDirs(formImageDirs.filter((_, i) => i !== index));
+    const removed = formImageDirs[index];
+    const remaining = formImageDirs.filter((_, i) => i !== index);
+    setFormImageDirs(remaining);
+    if (formRemoteUploadDir === removed) {
+      setFormRemoteUploadDir(remaining[0] ?? '');
+    }
+  };
+
+  const handleGenerateRemoteUploadToken = () => {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    const token = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join(
+      ''
+    );
+    setFormRemoteUploadToken(token);
+    setFormRemoteUploadTokenRevealed(true);
+    setFormRemoteUploadTokenCopyState('idle');
+  };
+
+  const handleCopyRemoteUploadToken = async () => {
+    try {
+      await navigator.clipboard.writeText(formRemoteUploadToken);
+      setFormRemoteUploadTokenCopyState('copied');
+    } catch (error) {
+      console.error('Failed to copy remote upload token:', error);
+      setFormRemoteUploadTokenCopyState('failed');
+    }
   };
 
   const handleSaveForm = async () => {
@@ -275,10 +367,29 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
       // mode, and updating live `AppState.databases` rather than waiting for
       // a server restart.
       if (editingId) {
+        if (formRemoteUploadEnabled && !formRemoteUploadDir) {
+          setStatusMessage('Select an image directory for remote uploads');
+          setIsApplying(false);
+          return;
+        }
+        if (
+          formRemoteUploadEnabled &&
+          !formRemoteUploadTokenConfigured &&
+          formRemoteUploadToken.length < 24
+        ) {
+          setStatusMessage('Remote upload token must be at least 24 characters');
+          setIsApplying(false);
+          return;
+        }
         await apiClient.updateDatabase(editingId, {
           name: inferredName,
           db_path: formDbPath.trim(),
           image_dirs: formImageDirs,
+          remote_image_upload: {
+            enabled: formRemoteUploadEnabled,
+            image_directory: formRemoteUploadDir || undefined,
+            token: formRemoteUploadToken || undefined,
+          },
         });
       } else {
         await apiClient.addDatabase({
@@ -471,6 +582,11 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                   {entry.image_dirs.length > 0 && (
                     <div className="path-info muted">
                       {entry.image_dirs.join(', ')}
+                    </div>
+                  )}
+                  {entry.remote_image_upload?.enabled && (
+                    <div className="path-info muted">
+                      Remote receive: {entry.remote_image_upload.image_dir}
                     </div>
                   )}
                   <QualityBackfillControls dbId={entry.id} />
@@ -710,6 +826,91 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                   </div>
                 )}
               </div>
+
+              {editingId && (
+                <div className="database-config">
+                  <label className="quality-analysis-option">
+                    <input
+                      type="checkbox"
+                      checked={formRemoteUploadEnabled}
+                      onChange={(event) =>
+                        setFormRemoteUploadEnabled(event.target.checked)
+                      }
+                    />
+                    <span>
+                      <strong>Accept remote image uploads</strong>
+                    </span>
+                  </label>
+                  {formRemoteUploadEnabled && (
+                    <>
+                      <label htmlFor="remote-upload-directory">Receive directory:</label>
+                      <select
+                        id="remote-upload-directory"
+                        value={formRemoteUploadDir}
+                        onChange={(event) => setFormRemoteUploadDir(event.target.value)}
+                        className="file-path-input"
+                      >
+                        <option value="">Select an image directory</option>
+                        {formImageDirs.map((directory) => (
+                          <option key={directory} value={directory}>
+                            {directory}
+                          </option>
+                        ))}
+                      </select>
+                      <label htmlFor="remote-upload-token">Upload token:</label>
+                      <div className="remote-upload-token-row">
+                        <input
+                          id="remote-upload-token"
+                          type={formRemoteUploadTokenRevealed ? 'text' : 'password'}
+                          value={formRemoteUploadToken}
+                          onChange={(event) => {
+                            setFormRemoteUploadToken(event.target.value);
+                            setFormRemoteUploadTokenCopyState('idle');
+                          }}
+                          placeholder={
+                            formRemoteUploadTokenConfigured
+                              ? 'Unchanged'
+                              : 'At least 24 characters'
+                          }
+                          className="file-path-input"
+                          autoComplete="new-password"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleGenerateRemoteUploadToken}
+                          className="browse-button"
+                        >
+                          Generate
+                        </button>
+                        {formRemoteUploadTokenRevealed &&
+                          formRemoteUploadToken.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={handleCopyRemoteUploadToken}
+                              className="browse-button"
+                            >
+                              {formRemoteUploadTokenCopyState === 'copied'
+                                ? 'Copied'
+                                : 'Copy'}
+                            </button>
+                          )}
+                      </div>
+                      {formRemoteUploadTokenRevealed && (
+                        <small
+                          className={`remote-upload-token-notice ${
+                            formRemoteUploadTokenCopyState === 'failed' ? 'error' : ''
+                          }`}
+                          role="status"
+                        >
+                          {formRemoteUploadTokenCopyState === 'failed'
+                            ? 'Copy failed. Select and copy the token manually.'
+                            : 'Copy this token now. It will not be shown again after saving.'}
+                        </small>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
 
               {createMode && (
                 <label className="quality-analysis-option">

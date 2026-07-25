@@ -523,6 +523,7 @@ mod tests {
                 db_path: root.join("catalog.sqlite").display().to_string(),
                 image_dirs: vec![root.display().to_string()],
                 reject_archive: None,
+                remote_image_upload: None,
             }],
             active_db_id: None,
             astrometry: None,
