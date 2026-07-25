@@ -819,6 +819,9 @@ pub fn main() -> Result<()> {
                 } else {
                     println!("  imagedata        skipped (--no-image-data)");
                 }
+                tc("calibration rigs", &summary.calibration_rigs);
+                tc("rig bindings", &summary.calibration_rig_bindings);
+                tc("calibration FITS", &summary.calibration_frames);
 
                 // Human-readable byte size.
                 let human = |n: u64| -> String {

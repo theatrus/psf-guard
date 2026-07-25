@@ -8,6 +8,7 @@ import { describeImportProgress, useImportJob } from '../hooks/useImportJob';
 import QualityBackfillControls from './QualityBackfillControls';
 import SchedulerSyncControls from './SchedulerSyncControls';
 import SeizaCatalogControls from './SeizaCatalogControls';
+import CalibrationLibrarySummary from './CalibrationLibrarySummary';
 import './TauriSettings.css';
 
 interface TauriSettingsProps {
@@ -589,6 +590,12 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                       Remote receive: {entry.remote_image_upload.image_dir}
                     </div>
                   )}
+                  <CalibrationLibrarySummary
+                    dbId={entry.id}
+                    dbName={entry.name}
+                    canManage={managementAllowed}
+                    onImport={() => handleImport(entry)}
+                  />
                   <QualityBackfillControls dbId={entry.id} />
                 </div>
                 {managementAllowed && (
@@ -672,9 +679,12 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                       confirmImport &&
                       importDbId === confirmImport.id && (
                         <div className="modal-buttons import-confirm-buttons">
-                          {importProgress.outcome.imported > 0 ? (
+                          {importProgress.outcome.imported +
+                            importProgress.outcome.calibration.imported +
+                            importProgress.outcome.calibration.updated >
+                          0 ? (
                             <div className="import-confirm-content">
-                              <label className="quality-analysis-option">
+                              {importProgress.outcome.imported > 0 && <label className="quality-analysis-option">
                                 <input
                                   type="checkbox"
                                   checked={importAnalyzeQuality}
@@ -691,14 +701,18 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                                     database&apos;s settings.
                                   </small>
                                 </span>
-                              </label>
+                              </label>}
                               <div className="modal-buttons import-action-buttons">
                               <button
                                 className="save-button"
                                 onClick={handleConfirmImport}
                                 disabled={isApplying}
                               >
-                                Import {importProgress.outcome.imported} frame(s)
+                                Import{' '}
+                                {importProgress.outcome.imported +
+                                  importProgress.outcome.calibration.imported +
+                                  importProgress.outcome.calibration.updated}{' '}
+                                frame(s)
                               </button>
                               <button
                                 className="cancel-button"

@@ -8,12 +8,10 @@
 //! <dest>/<target>/LIGHT/<filter>/<basename>.fits
 //! ```
 //!
-//! Rejected frames are never exported. The layout deliberately reserves
-//! sibling trees for calibration frames — `<target>/FLAT/<filter>/`,
-//! `<dest>/DARK/<exposure>_G<gain>/`, `<dest>/BIAS/` — via [`FrameKind`]:
-//! a future matcher (flathistory-guided flats, header-scanned darks) only
-//! has to emit more [`ExportItem`]s; planning, placement, idempotency and
-//! the server's archive streaming all work per-item already.
+//! Rejected frames are never exported. Matching calibration frames from the
+//! PSF Guard library join the same plan under `<target>/FLAT/<filter>/`,
+//! `<dest>/DARK/<exposure>_G<gain>/`, `<dest>/DARKFLAT/...`, and
+//! `<dest>/BIAS/`.
 //!
 //! Placement is copy (default) or hardlink (`--link`, same-filesystem);
 //! existing destination files with matching size are skipped, so re-running
@@ -24,22 +22,23 @@ use crate::directory_tree::DirectoryTree;
 use crate::models::GradingStatus;
 use anyhow::{Context, Result};
 use rusqlite::Connection;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-/// What a frame is for the stacking pipeline. Only lights are selected
-/// today; the calibration kinds define where future matches will land.
+/// What a frame is for the stacking pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameKind {
     Light,
     Flat,
     Dark,
+    DarkFlat,
     Bias,
 }
 
 #[derive(Debug, Clone)]
 pub struct ExportItem {
     pub image_id: i32,
+    pub calibration_frame_id: Option<i64>,
     pub kind: FrameKind,
     pub source: PathBuf,
     /// Path below the destination root (also the archive entry name).
@@ -135,6 +134,7 @@ pub fn plan_export(
     // Guard against two source files mapping onto one destination name
     // (same basename for a target+filter, e.g. after a manual file copy).
     let mut used_dests: HashMap<PathBuf, usize> = HashMap::new();
+    let mut calibration_items = Vec::new();
 
     for (image, _project_name, target_name) in rows {
         if options.project_id.is_some_and(|id| image.project_id != id)
@@ -156,6 +156,18 @@ pub fn plan_export(
             continue;
         };
         let size_bytes = std::fs::metadata(&source).map(|m| m.len()).unwrap_or(0);
+        let light_meta = crate::commands::import::headers::read_frame_meta(&source);
+        if light_meta.readable {
+            calibration_items.extend(
+                crate::calibration::export_destinations(
+                    conn,
+                    &light_meta,
+                    &target_name,
+                    Some(&tree),
+                )
+                .context("matching export calibration frames")?,
+            );
+        }
 
         // The basename comes from the row's metadata JSON; sanitize it too so
         // a degenerate FileName (e.g. "..") can never shift the destination
@@ -180,8 +192,53 @@ pub fn plan_export(
 
         plan.items.push(ExportItem {
             image_id: image.id,
+            calibration_frame_id: None,
             kind: FrameKind::Light,
             source,
+            relative_dest,
+            size_bytes,
+        });
+    }
+
+    let mut seen = HashSet::new();
+    for (kind, frame, mut relative_dest) in calibration_items {
+        if !seen.insert((frame.source_path.clone(), relative_dest.clone())) {
+            continue;
+        }
+        if !frame.source_verified || !frame.source_path.is_file() {
+            plan.missing
+                .push((0, frame.source_path.to_string_lossy().into_owned()));
+            continue;
+        }
+        let clashes = used_dests.entry(relative_dest.clone()).or_insert(0);
+        *clashes += 1;
+        if *clashes > 1 {
+            let stem = frame
+                .source_path
+                .file_stem()
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "calibration".into());
+            let extension = frame
+                .source_path
+                .extension()
+                .map(|value| format!(".{}", value.to_string_lossy()))
+                .unwrap_or_default();
+            relative_dest = relative_dest.with_file_name(format!("{stem}.{}{extension}", *clashes));
+        }
+        let size_bytes = std::fs::metadata(&frame.source_path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        let frame_kind = match kind {
+            crate::calibration::CalibrationKind::Bias => FrameKind::Bias,
+            crate::calibration::CalibrationKind::Dark => FrameKind::Dark,
+            crate::calibration::CalibrationKind::DarkFlat => FrameKind::DarkFlat,
+            crate::calibration::CalibrationKind::Flat => FrameKind::Flat,
+        };
+        plan.items.push(ExportItem {
+            image_id: 0,
+            calibration_frame_id: Some(frame.id),
+            kind: frame_kind,
+            source: frame.source_path,
             relative_dest,
             size_bytes,
         });
@@ -260,6 +317,35 @@ pub fn execute_plan(
 mod tests {
     use super::*;
     use crate::ts_schema;
+    use std::io::Write;
+
+    fn fits_card(output: &mut Vec<u8>, value: &str) {
+        let mut card = value.as_bytes().to_vec();
+        card.resize(80, b' ');
+        output.extend(card);
+    }
+
+    fn write_test_fits(path: &Path, kind: &str) {
+        let mut header = Vec::new();
+        fits_card(&mut header, "SIMPLE  =                    T");
+        fits_card(&mut header, "BITPIX  =                   16");
+        fits_card(&mut header, "NAXIS   =                    2");
+        fits_card(&mut header, "NAXIS1  =                   10");
+        fits_card(&mut header, "NAXIS2  =                   10");
+        fits_card(&mut header, &format!("IMAGETYP= '{kind}'"));
+        fits_card(&mut header, "FILTER  = 'Ha'");
+        fits_card(&mut header, "EXPTIME =                300.0");
+        fits_card(&mut header, "GAIN    =                  100");
+        fits_card(&mut header, "OFFSET  =                   30");
+        fits_card(&mut header, "XBINNING=                    1");
+        fits_card(&mut header, "YBINNING=                    1");
+        fits_card(&mut header, "INSTRUME= 'TestCam'");
+        fits_card(&mut header, "END");
+        header.resize(header.len().div_ceil(2880) * 2880, b' ');
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(&header).unwrap();
+        file.write_all(&[0_u8; 2880]).unwrap();
+    }
 
     /// Fresh v23 DB with one project/target and three graded images whose
     /// FileName points into `dir`.
@@ -360,6 +446,47 @@ mod tests {
         let plan = plan_export(&conn, &dirs, &ExportOptions::default()).unwrap();
         let s = execute_plan(&plan, &dest, true, false);
         assert_eq!((s.linked, s.copied, s.errors), (1, 0, 0));
+    }
+
+    #[test]
+    fn plan_adds_matching_calibration_frames() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = seed(dir.path());
+        let light_path = dir.path().join("acc_Ha_0001.fits");
+        write_test_fits(&light_path, "LIGHT");
+        let mut calibration = Vec::new();
+        for index in 0..2 {
+            let path = dir.path().join(format!("bias-{index}.fits"));
+            write_test_fits(&path, "BIAS");
+            calibration.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        {
+            let tx = conn.transaction().unwrap();
+            crate::calibration::import_calibration_frames(&tx, &calibration, Some("p")).unwrap();
+            tx.commit().unwrap();
+        }
+
+        let dirs = vec![dir.path().to_string_lossy().into_owned()];
+        let plan = plan_export(&conn, &dirs, &ExportOptions::default()).unwrap();
+        assert_eq!(
+            plan.items
+                .iter()
+                .filter(|item| item.kind == FrameKind::Light)
+                .count(),
+            1
+        );
+        assert_eq!(
+            plan.items
+                .iter()
+                .filter(|item| item.kind == FrameKind::Bias)
+                .count(),
+            2
+        );
+        assert!(plan
+            .items
+            .iter()
+            .filter(|item| item.kind == FrameKind::Bias)
+            .all(|item| item.relative_dest.starts_with("BIAS")));
     }
 
     #[test]

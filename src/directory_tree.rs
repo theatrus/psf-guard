@@ -122,10 +122,7 @@ impl DirectoryTree {
         // Skip certain directories to avoid unwanted areas
         if let Some(dir_name) = dir.file_name() {
             let name = dir_name.to_string_lossy();
-            if matches!(
-                name.as_ref(),
-                "DARK" | "FLAT" | "BIAS" | ".git" | "node_modules" | "target" | ".cache"
-            ) {
+            if matches!(name.as_ref(), ".git" | "node_modules" | "target" | ".cache") {
                 tracing::trace!("⏭️  Skipping directory: {:?}", dir);
                 return Ok(());
             }
@@ -314,11 +311,11 @@ mod tests {
     }
 
     #[test]
-    fn test_directory_tree_skipped_dirs() -> Result<()> {
+    fn test_directory_tree_includes_calibration_but_skips_internal_dirs() -> Result<()> {
         let temp_dir = TempDir::new()?;
         let root = temp_dir.path();
 
-        // Create directories that should be skipped
+        // Calibration folders are data; internal folders are still skipped.
         fs::create_dir_all(root.join("DARK"))?;
         fs::create_dir_all(root.join(".git"))?;
         fs::create_dir_all(root.join("valid"))?;
@@ -330,9 +327,9 @@ mod tests {
 
         let tree = DirectoryTree::build(root)?;
 
-        // Should only find the file in the valid directory
+        // Both light and calibration data are indexed.
         assert!(tree.find_file("good.fits").is_some());
-        assert!(tree.find_file("dark1.fits").is_none());
+        assert!(tree.find_file("dark1.fits").is_some());
         assert!(tree.find_file("config").is_none());
 
         Ok(())

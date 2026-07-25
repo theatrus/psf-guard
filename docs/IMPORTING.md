@@ -1,7 +1,7 @@
 # Adding FITS folders
 
 PSF Guard can start from an existing N.I.N.A. Target Scheduler database or
-build a compatible image catalog from folders of FITS light frames. The first
+build a compatible image catalog from folders of FITS frames. The first
 import reads FITS headers only. It does not decode every image or run quality
 analysis, so a large library becomes usable without waiting for star
 detection, photometry, or plate solving.
@@ -54,6 +54,11 @@ Scheduler is not required. The import creates:
 - exposure plans; and
 - acquired-image rows, initially graded Pending.
 
+Bias, dark, dark-flat, and flat frames go into PSF Guard-owned
+`psf_guard_*` tables in the same SQLite file. They never become
+`acquiredimage` rows or projects. Settings shows the frame count for each
+detected rig. The raw files remain in place.
+
 The grouping rules stay conservative:
 
 - FITS `OBJECT` names define targets. Frames from different telescope, camera,
@@ -92,6 +97,10 @@ The matching rules prevent common duplicates and splits:
 - an `OBJECT` name match attaches to the existing target;
 - otherwise, coordinates within 0.5 degrees attach to the existing target; and
 - unmatched frames create new project and target rows.
+
+The same scan catalogs calibration frames and deduplicates them by canonical
+path and file fingerprint. A dry run reports those changes but rolls back the
+PSF Guard tables with the scheduler changes.
 
 The CLI exposes the same path:
 
@@ -139,8 +148,9 @@ Add both the local and telescope databases in Settings, then use
 **Data Transfer**:
 
 - **Merge catalogs** copies new or changed projects, targets, templates, plans,
-  captures, and grades from the selected source into the destination. Reviewed
-  grades already at the destination win.
+  captures, grades, rigs, and raw calibration-frame records from the selected
+  source into the destination. Reviewed grades already at the destination win.
+  Generated master paths stay local and rebuild on demand.
 - **Send planning** sends project, target, template, plan, and rule settings.
   It does not change destination image rows, capture counts, or grades.
 - **Send reviewed grades** sends Accepted and Rejected grades and reject

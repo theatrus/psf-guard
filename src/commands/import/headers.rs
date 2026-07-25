@@ -30,6 +30,12 @@ pub struct FrameMeta {
     pub binning_x: Option<i64>,
     pub binning_y: Option<i64>,
     pub readout_mode: Option<i64>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub channels: Option<i64>,
+    pub bayer_pattern: Option<String>,
+    pub bayer_x_offset: Option<i64>,
+    pub bayer_y_offset: Option<i64>,
     pub ra_deg: Option<f64>,
     pub dec_deg: Option<f64>,
     pub telescope: Option<String>,
@@ -123,6 +129,12 @@ pub fn read_frame_meta(path: &Path) -> FrameMeta {
     // N.I.N.A. writes READOUTM as the mode's display *name*; only a numeric
     // value can round-trip into TS's integer column.
     meta.readout_mode = i64_of(&["READOUTM", "READOUT", "READMODE"]);
+    meta.width = i64_of(&["NAXIS1"]).filter(|v| *v > 0);
+    meta.height = i64_of(&["NAXIS2"]).filter(|v| *v > 0);
+    meta.channels = i64_of(&["NAXIS3"]).filter(|v| *v > 0).or(Some(1));
+    meta.bayer_pattern = text(&["BAYERPAT"]).map(|value| value.to_ascii_uppercase());
+    meta.bayer_x_offset = i64_of(&["XBAYROFF"]);
+    meta.bayer_y_offset = i64_of(&["YBAYROFF"]);
     meta.ra_deg = coordinate(&["RA", "OBJCTRA", "OBJRA", "TELRA"], parse_ra_deg);
     meta.dec_deg = coordinate(&["DEC", "OBJCTDEC", "OBJDEC", "TELDEC"], parse_dec_deg);
     meta.telescope = text(&["TELESCOP"]);

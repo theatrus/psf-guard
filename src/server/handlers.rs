@@ -71,6 +71,81 @@ pub async fn get_server_info(
     Ok(Json(ApiResponse::success(info)))
 }
 
+/// Summarize PSF Guard's calibration library in this scheduler database.
+/// Reading an untouched database does not create any sibling tables.
+pub async fn get_calibration_library(
+    ctx: DbContext,
+) -> Result<Json<ApiResponse<crate::calibration::CalibrationLibrarySummary>>, AppError> {
+    let conn = ctx.db();
+    let conn = conn.lock().map_err(AppError::db)?;
+    let summary = crate::calibration::library_summary(&conn).map_err(AppError::db)?;
+    Ok(Json(ApiResponse::success(summary)))
+}
+
+pub async fn get_calibration_library_details(
+    ctx: DbContext,
+) -> Result<Json<ApiResponse<crate::calibration::CalibrationLibraryDetails>>, AppError> {
+    let details = {
+        let conn = ctx.db();
+        let conn = conn.lock().map_err(AppError::db)?;
+        crate::calibration::library_details(&conn).map_err(AppError::db)?
+    };
+    let details = tokio::task::spawn_blocking(move || {
+        let mut details = details;
+        for frame in &mut details.frames {
+            frame.source_exists = std::path::Path::new(&frame.source_path).is_file();
+        }
+        details
+    })
+    .await
+    .map_err(|error| {
+        AppError::InternalError(format!("calibration source check failed: {error}"))
+    })?;
+    Ok(Json(ApiResponse::success(details)))
+}
+
+pub async fn forget_calibration_frame(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, frame_uuid)): Path<(String, String)>,
+) -> Result<Json<ApiResponse<crate::calibration::CalibrationMutationOutcome>>, AppError> {
+    require_database_management_allowed(&state)?;
+    let conn = ctx.db();
+    let mut conn = conn.lock().map_err(AppError::db)?;
+    let outcome = crate::calibration::forget_frame(&mut conn, &frame_uuid).map_err(AppError::db)?;
+    if outcome.frames_removed == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(Json(ApiResponse::success(outcome)))
+}
+
+pub async fn clear_calibration_masters(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Result<Json<ApiResponse<crate::calibration::CalibrationMutationOutcome>>, AppError> {
+    require_database_management_allowed(&state)?;
+    let _permit = state
+        .stack_previews
+        .acquire_maintenance_permit()
+        .await
+        .map_err(AppError::Conflict)?;
+    let master_root = ctx.cache_dir_path.join("calibration-masters");
+    if master_root.exists() {
+        tokio::fs::remove_dir_all(&master_root)
+            .await
+            .map_err(|error| {
+                AppError::InternalError(format!(
+                    "removing cached calibration masters at {}: {error}",
+                    master_root.display()
+                ))
+            })?;
+    }
+    let conn = ctx.db();
+    let conn = conn.lock().map_err(AppError::db)?;
+    let outcome = crate::calibration::clear_generated_masters(&conn).map_err(AppError::db)?;
+    Ok(Json(ApiResponse::success(outcome)))
+}
+
 /// Report which Seiza resources are configured and can be opened. Normal
 /// capability checks are bounded header/index opens, not exhaustive scans.
 pub async fn get_astrometry_capabilities(
@@ -1019,11 +1094,11 @@ pub async fn remove_database_route(
     }))))
 }
 
-/// `GET /api/db/{db_id}/export` — stream the selected non-rejected lights as
-/// an uncompressed (store-mode) zip, laid out exactly like the CLI export
-/// (`<target>/LIGHT/<filter>/<basename>`). FITS doesn't compress, so store
-/// mode streams at wire speed with no server-side staging. Read-only, so it
-/// is not management-gated.
+/// `GET /api/db/{db_id}/export` — stream selected non-rejected lights and
+/// safely matched raw calibration frames as an uncompressed (store-mode) zip,
+/// laid out exactly like the CLI export. FITS doesn't compress, so store mode
+/// streams at wire speed with no server-side staging. Read-only, so it is not
+/// management-gated.
 pub async fn export_archive_route(
     ctx: DbContext,
     Query(query): Query<ExportQuery>,

@@ -375,7 +375,7 @@ export default function StackPreviewPanel({
               <span>
                 {displayKeys.length} target/channel group{displayKeys.length === 1 ? '' : 's'}
               </span>
-              <span>Uncalibrated stack preview</span>
+              <span>Stack preview</span>
               {staleCount > 0 && (
                 <span className="stack-preview-outdated-count">{staleCount} out of date</span>
               )}
@@ -412,6 +412,7 @@ export default function StackPreviewPanel({
                   activeGroup?.state === 'queued' || activeGroup?.state === 'running';
                 const canBuildChannel = (current?.images.length ?? 0) >= 2;
                 const progressGroup = activeGroup ?? artifact?.group;
+                const calibration = progressGroup?.calibration;
                 const progressState = progressGroup?.state ?? 'not-built';
                 const processedFrames = progressGroup?.processed_frames ?? 0;
                 const eligibleFrames =
@@ -428,9 +429,13 @@ export default function StackPreviewPanel({
                       ? 'Rebuild queued'
                       : 'Waiting for stacker'
                     : progressState === 'running'
-                      ? artifact
-                        ? 'Rebuilding stack'
-                        : 'Registering frames'
+                      ? progressGroup?.phase === 'calibration'
+                        ? 'Building calibration masters'
+                        : progressGroup?.phase === 'rendering'
+                          ? 'Rendering preview'
+                          : artifact
+                            ? 'Rebuilding stack'
+                            : 'Registering frames'
                       : progressState === 'ready'
                         ? 'Stack ready'
                         : progressState === 'skipped'
@@ -511,7 +516,7 @@ export default function StackPreviewPanel({
                           src={appliedStretch?.preview_url ?? apiClient.getStackPreviewUrl(
                             dbId, artifact.jobId, artifact.group.index, artifact.artifactRevision
                           )}
-                          alt={`${targetName} ${filterName} uncalibrated stack preview`}
+                          alt={`${targetName} ${filterName} stack preview`}
                         />
                       </div>
                     )}
@@ -539,7 +544,13 @@ export default function StackPreviewPanel({
                     {!artifact && groupBusy && (
                       <div className="stack-preview-placeholder">
                         <span className="stack-preview-spinner" aria-hidden="true" />
-                        {activeGroup?.state === 'queued' ? 'Waiting for stacker' : 'Registering frames'}
+                        {activeGroup?.state === 'queued'
+                          ? 'Waiting for stacker'
+                          : activeGroup?.phase === 'calibration'
+                            ? 'Matching and building calibration masters'
+                            : activeGroup?.phase === 'rendering'
+                              ? 'Rendering preview'
+                              : 'Registering frames'}
                       </div>
                     )}
                     {!artifact && !groupBusy && (
@@ -579,6 +590,23 @@ export default function StackPreviewPanel({
                         <div><strong>{progressGroup.rejected_frames}</strong><span>stack rejects</span></div>
                         <div><strong>{progressGroup.quality_excluded}</strong><span>quality excluded</span></div>
                         <div><strong>{formatExposure(progressGroup.total_exposure_seconds)}</strong><span>exposure</span></div>
+                      </div>
+                    )}
+
+                    {calibration && calibration.state !== 'none' && (
+                      <div className="stack-preview-calibration">
+                        <strong>
+                          {calibration.state === 'applied'
+                            ? 'Calibration applied'
+                            : calibration.state === 'incomplete'
+                              ? 'Calibration set incomplete'
+                              : 'Matching calibration'}
+                        </strong>
+                        <span>
+                          {calibration.bias_frames} bias · {calibration.dark_frames} dark ·{' '}
+                          {calibration.dark_flat_frames} dark-flat · {calibration.flat_frames} flat
+                        </span>
+                        {calibration.warning && <span>{calibration.warning}</span>}
                       </div>
                     )}
 

@@ -55,6 +55,9 @@ import type {
   AstrometryValidationReport,
   CatalogInstallPreset,
   CatalogInstallStatus,
+  CalibrationLibraryDetails,
+  CalibrationLibrarySummary,
+  CalibrationMutationOutcome,
 } from './types';
 
 // Store the initialized API instance and server URL
@@ -324,10 +327,47 @@ export const apiClient = {
     return data.data;
   },
 
-  /**
-   * Absolute URL for the streaming export zip (non-rejected lights, laid out
-   * `<target>/LIGHT/<filter>/…`). Used as a plain download link.
-   */
+  /** Calibration frames and generated masters cataloged beside one database. */
+  getCalibrationLibrary: async (dbId: string): Promise<CalibrationLibrarySummary> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<CalibrationLibrarySummary>>(
+      dbPath(dbId, '/calibrations')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read calibration library');
+    return data.data;
+  },
+
+  getCalibrationLibraryDetails: async (dbId: string): Promise<CalibrationLibraryDetails> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<CalibrationLibraryDetails>>(
+      dbPath(dbId, '/calibrations/details')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read calibration frames');
+    return data.data;
+  },
+
+  forgetCalibrationFrame: async (
+    dbId: string,
+    frameUuid: string
+  ): Promise<CalibrationMutationOutcome> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.delete<ApiResponse<CalibrationMutationOutcome>>(
+      dbPath(dbId, `/calibrations/frames/${encodeURIComponent(frameUuid)}`)
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to forget calibration frame');
+    return data.data;
+  },
+
+  clearCalibrationMasters: async (dbId: string): Promise<CalibrationMutationOutcome> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.delete<ApiResponse<CalibrationMutationOutcome>>(
+      dbPath(dbId, '/calibrations/masters')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to clear calibration masters');
+    return data.data;
+  },
+
+  /** Absolute URL for the streaming light and calibration export zip. */
   exportDownloadUrl: (
     dbId: string,
     params: { project_id?: number; target_id?: number; include_pending?: boolean }

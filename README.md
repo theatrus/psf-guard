@@ -52,12 +52,14 @@ processing. Your image files stay where they are.
   object overlays, target offsets, and satellite-track checks that keep orbital
   predictions separate from trails found in the pixels.
 - **Build stack previews** per target and channel, inspect admission decisions,
+  apply matching bias, dark, and flat masters when the catalog has them,
   combine RGB, LRGB, or narrowband palettes, adjust the processing stack, and
   download the cached linear or processed FITS result.
 - **Review plans and imports** with project settings, target coordinates,
   shared exposure templates, and exposure plans derived from FITS headers.
 - **Take data out safely** by exporting non-rejected lights for stacking or by
-  moving rejected files and sidecars into a recorded, reversible archive.
+  exporting them with matched calibration frames, or by moving rejected files
+  and sidecars into a recorded, reversible archive.
 - **Sync separate copies** by pulling telescope projects and captures, then
   pushing edited plans and reviewed grades back in the named direction.
 - **Run analysis tools** for N.I.N.A. Fast and HocusFocus star detection,
@@ -131,7 +133,8 @@ project per target by default, joins only strong same-rig mosaic panel matches,
 derives target coordinates, and builds shared exposure templates and plans from
 filter, gain, offset, binning, readout mode, and exposure time. Pixel work stays
 off by default, so a large import does not wait for star detection or plate
-solving.
+solving. Bias, dark, dark-flat, and flat frames do not enter the scheduler
+image table. PSF Guard catalogs them in its own tables in the same database.
 
 | Narrowband template view | Target coordinates and exposure plans |
 |:--:|:--:|
@@ -179,7 +182,7 @@ grade to the active catalog.
 | Stack Preview | Full-size Inspection | Stack Admission Decisions |
 |:--:|:--:|:--:|
 | ![A three-frame B-channel project stack preview](docs/stack-preview.png) | ![Native-resolution stack inspection](docs/stack-preview-inspection.png) | ![Per-frame Seiza registration and admission details](docs/stack-preview-decisions.png) |
-| Uncalibrated, on-demand integration grouped by exact target and channel | Familiar zoom, pan, fit, and one-pixel-per-pixel controls | Quality exclusions, reference choice, matches, registration RMS, and rejection reasons |
+| On-demand integration grouped by exact target and channel, with matched calibration when available | Familiar zoom, pan, fit, and one-pixel-per-pixel controls | Quality exclusions, reference choice, matches, registration RMS, and rejection reasons |
 
 This real M44 example was built from three B-channel acquisitions. Each input's
 quality exclusion, registration match count, residual, and admission decision
@@ -327,8 +330,9 @@ the image grid and comparison tools:
 - **File location**: image details show the resolved path when the source file
   is present and fall back to the path recorded in the catalog. Copy any shown
   path, or use **Show in folder** in the desktop app.
-- **Stack previews**: in a single project, build an uncalibrated registered
-  preview from an explicit multi-selection or the current visible filters.
+- **Stack previews**: in a single project, build a registered preview from an
+  explicit multi-selection or the current visible filters. Matching cataloged
+  bias, dark, and flat masters apply before registration.
   PSF Guard excludes rejected and regrade-recommended frames before Seiza
   performs registration and admission, and retains a downloadable linear FITS
   beside the display PNG. Completed R/G/B, L/R/G/B, or Ha/OIII/SII stacks can
@@ -559,7 +563,8 @@ tuning, and safety properties: **[docs/SCREENING.md](docs/SCREENING.md)**.
 After grading, expand a project on **Overview** and choose **⬇ Export**. The
 desktop app writes a WBPP-style target/filter tree to a folder you choose. A
 browser downloads the same tree as a ZIP. Rejected frames never enter the
-export.
+export. When the calibration library contains a safe match, the export also
+includes raw `BIAS`, `DARK`, `DARKFLAT`, and target/filter `FLAT` folders.
 
 ![Overview project card with the Export action](docs/export-overview.png)
 
@@ -571,6 +576,11 @@ and a dry run:
 psf-guard export my-db --dest ./stacking --dry-run
 psf-guard export my-db --dest ./stacking
 ```
+
+See **[Calibration libraries](docs/CALIBRATION_LIBRARY.md)** for import,
+matching, stack-master, export, cache, and database-sync rules. Each database
+in Settings also has a library manager for finding missing files, reviewing
+match settings, forgetting bad records, and clearing generated masters.
 
 ## 🗂️ Managing rejected files
 
@@ -660,8 +670,8 @@ psf-guard create-db new.sqlite ./lights1 ./lights2 [--name "My Rig"] [--dry-run]
 psf-guard import <slug-or-path> ./more-lights [--dry-run] [--no-attach]
 psf-guard remove-imported <slug-or-path> [--dry-run]  # undo an import's projects
 
-# Export ("take out") non-rejected lights for stacking — WBPP-style layout
-# <dest>/<target>/LIGHT/<filter>/; rejects are never exported
+# Export non-rejected lights and safely matched calibration frames
+# in a WBPP-style layout; rejects are never exported
 psf-guard export <slug-or-path> --dest ./stacking [--include-pending]
 psf-guard export my-db --dest ./stacking --target "M 31" --link  # hardlinks
 

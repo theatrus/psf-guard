@@ -20,7 +20,7 @@ pub mod sync_preview;
 use anyhow::{Context, Result};
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Router,
 };
 use std::path::PathBuf;
@@ -231,6 +231,19 @@ async fn run_server_internal(
             put(handlers::refresh_directory_tree_cache),
         )
         .route("/projects", get(handlers::list_projects))
+        .route("/calibrations", get(handlers::get_calibration_library))
+        .route(
+            "/calibrations/details",
+            get(handlers::get_calibration_library_details),
+        )
+        .route(
+            "/calibrations/frames/{frame_uuid}",
+            delete(handlers::forget_calibration_frame),
+        )
+        .route(
+            "/calibrations/masters",
+            delete(handlers::clear_calibration_masters),
+        )
         .route(
             "/projects/{project_id}",
             put(handlers::update_project_route),

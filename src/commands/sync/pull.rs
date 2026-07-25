@@ -58,6 +58,10 @@ pub struct PullSummary {
     pub imagedata_bytes: u64,
     /// True when imagedata was synced (else it was left untouched).
     pub imagedata_synced: bool,
+    /// PSF Guard-owned calibration metadata. Cached masters stay local.
+    pub calibration_rigs: TableCounts,
+    pub calibration_rig_bindings: TableCounts,
+    pub calibration_frames: TableCounts,
     /// Per-entity trace lines (for `--verbose`).
     pub changes: Vec<String>,
 }
@@ -72,6 +76,9 @@ impl PullSummary {
             + self.exposureplan.inserted
             + self.acquiredimage.inserted
             + self.imagedata.inserted
+            + self.calibration_rigs.inserted
+            + self.calibration_rig_bindings.inserted
+            + self.calibration_frames.inserted
     }
 
     /// Total rows updated across every table.
@@ -83,6 +90,9 @@ impl PullSummary {
             + self.exposureplan.updated
             + self.acquiredimage.updated
             + self.imagedata.updated
+            + self.calibration_rigs.updated
+            + self.calibration_rig_bindings.updated
+            + self.calibration_frames.updated
     }
 }
 
@@ -841,6 +851,26 @@ pub(crate) fn sync_pull_in_transaction(
         )?;
         summary.imagedata_synced = true;
     }
+
+    let calibration = crate::calibration::sync_library(src, tx)?;
+    summary.calibration_rigs = TableCounts {
+        inserted: calibration.rigs.inserted,
+        updated: calibration.rigs.updated,
+        unchanged: calibration.rigs.unchanged,
+        skipped: 0,
+    };
+    summary.calibration_rig_bindings = TableCounts {
+        inserted: calibration.rig_bindings.inserted,
+        updated: calibration.rig_bindings.updated,
+        unchanged: calibration.rig_bindings.unchanged,
+        skipped: 0,
+    };
+    summary.calibration_frames = TableCounts {
+        inserted: calibration.frames.inserted,
+        updated: calibration.frames.updated,
+        unchanged: calibration.frames.unchanged,
+        skipped: 0,
+    };
 
     Ok(summary)
 }

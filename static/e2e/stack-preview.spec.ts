@@ -158,9 +158,9 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   await expect(progress).toContainText('3/3 frames');
   await expect(panel).toContainText('Alpha M44');
   await expect(panel.locator('.stack-preview-channel')).toHaveText('B');
-  await expect(panel).toContainText('Uncalibrated stack preview');
+  await expect(panel).toContainText('Stack preview');
 
-  const preview = panel.getByRole('img', { name: /uncalibrated stack preview/i });
+  const preview = panel.getByRole('img', { name: /stack preview/i });
   await expect(preview).toBeVisible();
   await page.waitForFunction(
     (element) =>
@@ -337,7 +337,7 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   await acceptedOnly.check();
   await expect(panel.locator('.stack-preview-card')).toHaveAttribute('data-outdated', 'true');
   await expect(panel.locator('.stack-preview-outdated')).toContainText('Accepted only changed');
-  await expect(panel.getByRole('img', { name: /uncalibrated stack preview/i })).toBeVisible();
+  await expect(panel.getByRole('img', { name: /stack preview/i })).toBeVisible();
   await acceptedOnly.uncheck();
   await expect(panel.locator('.stack-preview-card')).toHaveAttribute('data-outdated', 'false');
 
@@ -347,23 +347,23 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   await expect(page.locator('.stack-preview-outdated')).toContainText(
     'not in the current input'
   );
-  await expect(page.getByRole('img', { name: /uncalibrated stack preview/i })).toBeVisible();
+  await expect(page.getByRole('img', { name: /stack preview/i })).toBeVisible();
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
   await expect(page.locator('.stack-preview-card')).toHaveAttribute('data-outdated', 'false');
 
   // The last successful per-channel result survives navigation and restart-like
   // page reloads without starting another stack job.
   const rememberedSrc = await panel
-    .getByRole('img', { name: /uncalibrated stack preview/i })
+    .getByRole('img', { name: /stack preview/i })
     .getAttribute('src');
   await page.reload();
   const reloadedPanel = page.locator('.stack-preview-panel');
   await expect(reloadedPanel.locator('.stack-preview-results')).toHaveAttribute(
     'data-job-state', 'remembered'
   );
-  await expect(reloadedPanel.getByRole('img', { name: /uncalibrated stack preview/i })).toBeVisible();
+  await expect(reloadedPanel.getByRole('img', { name: /stack preview/i })).toBeVisible();
   expect(
-    await reloadedPanel.getByRole('img', { name: /uncalibrated stack preview/i }).getAttribute('src')
+    await reloadedPanel.getByRole('img', { name: /stack preview/i }).getAttribute('src')
   ).toBe(rememberedSrc);
 
   // Scheduler grade changes are independently detected even when the set of
@@ -390,7 +390,7 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   // Rebuild just this channel. Its content-addressed job stays the same, but
   // the forced run receives a fresh artifact revision.
   const cachedSrc = await page.locator('.stack-preview-panel')
-    .getByRole('img', { name: /uncalibrated stack preview/i })
+    .getByRole('img', { name: /stack preview/i })
     .getAttribute('src');
   await page.locator('.stack-preview-panel')
     .getByRole('button', { name: 'Rebuild channel', exact: true })
@@ -401,7 +401,7 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
     { timeout: 210_000 }
   );
   const rebuiltSrc = await page.locator('.stack-preview-panel')
-    .getByRole('img', { name: /uncalibrated stack preview/i })
+    .getByRole('img', { name: /stack preview/i })
     .getAttribute('src');
   expect(rebuiltSrc).not.toBe(cachedSrc);
 });
