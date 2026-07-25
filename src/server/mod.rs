@@ -267,6 +267,7 @@ async fn run_server_internal(
             put(scheduler::update_exposure_plan),
         )
         .route("/projects/overview", get(handlers::get_projects_overview))
+        .route("/targets", get(handlers::list_all_targets))
         .route("/targets/overview", get(handlers::get_targets_overview))
         .route("/stats/overall", get(handlers::get_overall_stats))
         .route(

@@ -14,6 +14,7 @@ export interface Project {
 
 export interface Target {
   id: number;
+  project_id: number;
   name: string;
   ra: number;
   dec: number;

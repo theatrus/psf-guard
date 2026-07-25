@@ -498,6 +498,12 @@ export const apiClient = {
     return data.data || [];
   },
 
+  getAllTargets: async (dbId: string): Promise<Target[]> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<Target[]>>(dbPath(dbId, '/targets'));
+    return data.data || [];
+  },
+
   startStackPreviews: async (
     dbId: string,
     projectId: number,

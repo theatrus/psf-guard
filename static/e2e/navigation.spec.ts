@@ -56,12 +56,13 @@ test('open a project image grid from overview with the correct DB scope', async 
   await expect(firstCard).toBeVisible({ timeout: 15_000 });
 });
 
-test('project and target menus filter as the user types', async ({ page }) => {
+test('combined project tree expands and finds targets as the user types', async ({ page }) => {
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
   await expect(page.locator('.image-card')).toHaveCount(3, { timeout: 15_000 });
 
-  await page.locator('#project-select').click();
-  await expect(page.getByRole('dialog', { name: 'Choose a project' })).toBeVisible();
+  await page.locator('#scope-select').click();
+  const picker = page.getByRole('dialog', { name: 'Choose a project or target' });
+  await expect(picker).toBeVisible();
   const stackingLayers = await page.evaluate(() => ({
     header: Number.parseInt(getComputedStyle(document.querySelector('.app-header')!).zIndex, 10),
     controls: Number.parseInt(
@@ -70,28 +71,14 @@ test('project and target menus filter as the user types', async ({ page }) => {
     ),
   }));
   expect(stackingLayers.header).toBeGreaterThan(stackingLayers.controls);
-  const projectSearch = page.getByLabel('Search projects');
-  await projectSearch.fill('Beta');
-  const beta = page
-    .locator('.project-selector-popover')
-    .getByRole('button', { name: /Project Beta/ });
-  await expect(beta).toBeVisible();
-  await expect(
-    page.locator('.project-selector-popover').getByRole('button', {
-      name: /Project Alpha/,
-    })
-  ).toHaveCount(0);
-  await beta.click();
-  await expect(page).toHaveURL(new RegExp(`db=${dbId}.*project=2`));
+  await expect(picker.getByRole('button', { name: /^Alpha M44/ })).toBeVisible();
 
-  await page.locator('#target-select').click();
-  await expect(page.getByRole('dialog', { name: 'Choose a target' })).toBeVisible();
-  await page.getByLabel('Search targets').fill('Beta Field');
-  await page
-    .locator('.target-selector-popover')
-    .getByRole('button', { name: /Beta Field/ })
-    .click();
-  await expect(page).toHaveURL(new RegExp('target=2'));
+  const search = page.getByLabel('Search projects or targets');
+  await search.fill('Beta Field');
+  await expect(picker.getByRole('button', { name: /^Project Beta/ })).toBeVisible();
+  await expect(picker.getByRole('button', { name: /^Project Alpha/ })).toHaveCount(0);
+  await picker.getByRole('button', { name: /^Beta Field/ }).click();
+  await expect(page).toHaveURL(new RegExp(`db=${dbId}.*project=2.*target=2`));
 });
 
 test('recent projects rise to a highlighted group', async ({ page }) => {
@@ -139,12 +126,12 @@ test('closed projects stay in collapsed archives', async ({ page }) => {
   await expect(page.locator('.project-archive-item')).toContainText('Project Beta');
 
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
-  await page.locator('#project-select').click();
+  await page.locator('#scope-select').click();
   const selectorArchive = page.locator('.selector-archive');
   await expect(selectorArchive).not.toHaveAttribute('open', '');
   await selectorArchive.locator('summary').click();
   await expect(
-    selectorArchive.getByRole('button', { name: /Project Beta/ })
+    selectorArchive.getByRole('button', { name: /^Project Beta/ })
   ).toBeVisible();
 });
 

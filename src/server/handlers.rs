@@ -2166,6 +2166,7 @@ pub async fn list_targets(
         .into_iter()
         .map(|(target, img_count, accepted, rejected)| TargetResponse {
             id: target.id,
+            project_id: target.project_id,
             name: target.name,
             ra: target.ra,
             dec: target.dec,
@@ -2184,6 +2185,59 @@ pub async fn list_targets(
     );
 
     // Get current status for response
+    let api_status = {
+        let cache = ctx.file_check_cache.read().unwrap();
+        crate::server::api::ApiRefreshStatus::from(cache.get_refresh_status())
+    };
+
+    Ok(Json(ApiResponse::success_with_status(response, api_status)))
+}
+
+pub async fn list_all_targets(
+    ctx: DbContext,
+) -> Result<Json<ApiResponse<Vec<TargetResponse>>>, AppError> {
+    tracing::debug!("🎯 Listing targets across all projects");
+
+    let refresh_status = ctx.ensure_cache_available();
+    if matches!(
+        refresh_status,
+        crate::server::state::RefreshStatus::InProgressWait
+    ) {
+        return Ok(Json(crate::server::api::ApiResponse::loading()));
+    }
+
+    let file_existence_map: HashMap<i32, bool> = {
+        let cache = ctx.file_check_cache.read().unwrap();
+        cache.targets_with_files.clone()
+    };
+
+    let targets = {
+        let conn = ctx.db();
+        let conn = conn.lock().map_err(AppError::db)?;
+        let db = Database::new(&conn);
+        db.get_all_targets_with_project_info()
+            .map_err(AppError::db)?
+    };
+
+    let response = targets
+        .into_iter()
+        .map(|target| TargetResponse {
+            id: target.target.id,
+            project_id: target.target.project_id,
+            name: target.target.name,
+            ra: target.target.ra,
+            dec: target.target.dec,
+            active: target.target.active,
+            image_count: target.total_images,
+            accepted_count: target.accepted_images,
+            rejected_count: target.rejected_images,
+            has_files: file_existence_map
+                .get(&target.target.id)
+                .copied()
+                .unwrap_or(false),
+        })
+        .collect();
+
     let api_status = {
         let cache = ctx.file_check_cache.read().unwrap();
         crate::server::api::ApiRefreshStatus::from(cache.get_refresh_status())

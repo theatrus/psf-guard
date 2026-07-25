@@ -108,6 +108,7 @@ pub struct ProjectOverviewResponse {
 #[derive(Debug, Serialize)]
 pub struct TargetResponse {
     pub id: i32,
+    pub project_id: i32,
     pub name: String,
     pub ra: Option<f64>,
     pub dec: Option<f64>,

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
+import type { Project, Target } from '../api/types';
 import { useDbProjectTarget } from '../hooks/useUrlState';
-import { useMergedProjects } from '../hooks/useDatabases';
+import { useMergedProjects, useMergedTargets, type WithDb } from '../hooks/useDatabases';
 import {
   groupProjectsByActivity,
   isArchivedProject,
@@ -12,25 +13,137 @@ import {
 } from '../utils/projectNavigation';
 import { formatRelativeTime } from '../utils/relativeTime';
 
+type NavigationProject = WithDb<Project>;
+type NavigationTarget = WithDb<Target>;
+
+function projectKey(project: NavigationProject): string {
+  return `${project.db_id}:${project.id}`;
+}
+
+interface ProjectTreeOptionProps {
+  project: NavigationProject;
+  targets: NavigationTarget[];
+  targetsLoading: boolean;
+  expanded: boolean;
+  selectedDbId: string | null;
+  selectedProjectId: number | null;
+  selectedTargetId: number | null;
+  relativeNow: number;
+  onToggle: () => void;
+  onChooseProject: () => void;
+  onChooseTarget: (target: NavigationTarget) => void;
+}
+
+function ProjectTreeOption({
+  project,
+  targets,
+  targetsLoading,
+  expanded,
+  selectedDbId,
+  selectedProjectId,
+  selectedTargetId,
+  relativeNow,
+  onToggle,
+  onChooseProject,
+  onChooseTarget,
+}: ProjectTreeOptionProps) {
+  const latest = projectLastWorkedAt(project);
+  const projectSelected =
+    selectedDbId === project.db_id &&
+    selectedProjectId === project.id &&
+    selectedTargetId === null;
+
+  return (
+    <div className="selector-project-tree">
+      <div className="selector-project-row">
+        <button
+          type="button"
+          className={`selector-option ${projectSelected ? 'is-selected' : ''}`}
+          aria-current={projectSelected ? 'true' : undefined}
+          disabled={!project.has_files}
+          onClick={onChooseProject}
+        >
+          <span>{project.display_name}</span>
+          <small>
+            {project.db_name}
+            {latest !== null ? ` · ${formatRelativeTime(latest, relativeNow)}` : ''}
+            {!project.has_files ? ' · no files' : ''}
+          </small>
+        </button>
+        <button
+          type="button"
+          className="selector-expand-button"
+          aria-label={`${expanded ? 'Hide' : 'Show'} targets for ${project.display_name}`}
+          aria-expanded={expanded}
+          onClick={onToggle}
+        >
+          <span className={expanded ? 'expanded' : ''} aria-hidden="true">
+            ▶
+          </span>
+        </button>
+      </div>
+
+      {expanded && (
+        <div className="selector-project-targets">
+          <button
+            type="button"
+            className={`selector-option selector-target-option ${projectSelected ? 'is-selected' : ''}`}
+            aria-current={projectSelected ? 'true' : undefined}
+            disabled={!project.has_files}
+            onClick={onChooseProject}
+          >
+            <span>All images</span>
+            <small>{project.display_name}</small>
+          </button>
+
+          {targets.map((target) => {
+            const selected =
+              selectedDbId === target.db_id &&
+              selectedProjectId === target.project_id &&
+              selectedTargetId === target.id;
+            return (
+              <button
+                key={`${target.db_id}:${target.id}`}
+                type="button"
+                className={`selector-option selector-target-option ${selected ? 'is-selected' : ''}`}
+                aria-current={selected ? 'true' : undefined}
+                disabled={!target.has_files}
+                onClick={() => onChooseTarget(target)}
+              >
+                <span>{target.name}</span>
+                <small>
+                  {target.accepted_count}/{target.image_count} accepted
+                  {!target.has_files ? ' · no files' : ''}
+                </small>
+              </button>
+            );
+          })}
+
+          {targetsLoading && <p className="selector-empty">Loading targets…</p>}
+          {!targetsLoading && targets.length === 0 && (
+            <p className="selector-empty">No matching targets.</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ProjectTargetSelector() {
   const {
     dbId,
     projectId: selectedProjectId,
     targetId: selectedTargetId,
     setDbProjectTarget,
-    setTargetId,
   } = useDbProjectTarget();
   const queryClient = useQueryClient();
   const rootRef = useRef<HTMLDivElement>(null);
-  const projectTriggerRef = useRef<HTMLButtonElement>(null);
-  const targetTriggerRef = useRef<HTMLButtonElement>(null);
-  const projectSearchRef = useRef<HTMLInputElement>(null);
-  const targetSearchRef = useRef<HTMLInputElement>(null);
-  const [projectOpen, setProjectOpen] = useState(false);
-  const [targetOpen, setTargetOpen] = useState(false);
-  const [projectArchiveOpen, setProjectArchiveOpen] = useState(false);
-  const [projectSearch, setProjectSearch] = useState('');
-  const [targetSearch, setTargetSearch] = useState('');
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState('');
   const [relativeNow, setRelativeNow] = useState(Date.now);
 
   const invalidateAllForDb = () => {
@@ -54,13 +167,7 @@ export default function ProjectTargetSelector() {
   });
 
   const { data: projects, databases, isLoading: projectsLoading } = useMergedProjects();
-  const { data: targets = [], isLoading: targetsLoading } = useQuery({
-    queryKey: ['db', dbId, 'targets', selectedProjectId],
-    queryFn: () => apiClient.getTargets(dbId!, selectedProjectId!),
-    enabled: !!dbId && !!selectedProjectId,
-    refetchInterval: 30000,
-    refetchIntervalInBackground: true,
-  });
+  const { data: targets, isLoading: targetsLoading } = useMergedTargets();
 
   useEffect(() => {
     const timer = window.setInterval(() => setRelativeNow(Date.now()), 60_000);
@@ -68,45 +175,63 @@ export default function ProjectTargetSelector() {
   }, []);
 
   useEffect(() => {
-    const closeMenus = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setProjectOpen(false);
-        setTargetOpen(false);
-      }
+    const closePicker = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setPickerOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setProjectOpen(false);
-        setTargetOpen(false);
-        if (projectOpen) projectTriggerRef.current?.focus();
-        else if (targetOpen) targetTriggerRef.current?.focus();
+      if (event.key === 'Escape' && pickerOpen) {
+        setPickerOpen(false);
+        triggerRef.current?.focus();
       }
     };
-    document.addEventListener('pointerdown', closeMenus);
+    document.addEventListener('pointerdown', closePicker);
     document.addEventListener('keydown', closeOnEscape);
     return () => {
-      document.removeEventListener('pointerdown', closeMenus);
+      document.removeEventListener('pointerdown', closePicker);
       document.removeEventListener('keydown', closeOnEscape);
     };
-  }, [projectOpen, targetOpen]);
+  }, [pickerOpen]);
 
   useEffect(() => {
-    if (projectOpen) projectSearchRef.current?.focus();
-  }, [projectOpen]);
+    if (pickerOpen) searchRef.current?.focus();
+  }, [pickerOpen]);
 
-  useEffect(() => {
-    if (targetOpen) targetSearchRef.current?.focus();
-  }, [targetOpen]);
+  const targetsByProject = useMemo(() => {
+    const map = new Map<string, NavigationTarget[]>();
+    for (const target of targets) {
+      const key = `${target.db_id}:${target.project_id}`;
+      const items = map.get(key) ?? [];
+      items.push(target);
+      map.set(key, items);
+    }
+    for (const items of map.values()) {
+      items.sort((left, right) => left.name.localeCompare(right.name));
+    }
+    return map;
+  }, [targets]);
 
-  const selectedProject = projects.find(
-    (project) => project.db_id === dbId && project.id === selectedProjectId
-  );
-  const selectedDatabase = databases?.find((database) => database.id === dbId);
-  const selectedTarget = targets.find((target) => target.id === selectedTargetId);
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const targetMatchesSearch = (target: NavigationTarget) =>
+    !normalizedSearch || target.name.toLocaleLowerCase().includes(normalizedSearch);
+  const projectTargets = (project: NavigationProject) =>
+    targetsByProject.get(projectKey(project)) ?? [];
+  const visibleTargets = (project: NavigationProject) => {
+    const projectMatch = projectMatchesSearch(project, search);
+    const allTargets = projectTargets(project);
+    return projectMatch ? allTargets : allTargets.filter(targetMatchesSearch);
+  };
 
   const matchingProjects = useMemo(
-    () => projects.filter((project) => projectMatchesSearch(project, projectSearch)),
-    [projectSearch, projects]
+    () => {
+      const query = search.trim().toLocaleLowerCase();
+      return projects.filter((project) => {
+        if (projectMatchesSearch(project, search)) return true;
+        return (targetsByProject.get(projectKey(project)) ?? []).some((target) =>
+          target.name.toLocaleLowerCase().includes(query)
+        );
+      });
+    },
+    [projects, search, targetsByProject]
   );
   const projectGroups = useMemo(
     () =>
@@ -120,84 +245,125 @@ export default function ProjectTargetSelector() {
     () => sortProjects(matchingProjects.filter(isArchivedProject), 'recent'),
     [matchingProjects]
   );
-  const matchingDatabases = useMemo(() => {
-    const search = projectSearch.trim().toLocaleLowerCase();
-    return (databases ?? []).filter(
-      (database) =>
-        !search ||
-        database.name.toLocaleLowerCase().includes(search) ||
-        database.id.toLocaleLowerCase().includes(search)
-    );
-  }, [databases, projectSearch]);
-  const matchingTargets = useMemo(() => {
-    const search = targetSearch.trim().toLocaleLowerCase();
-    return targets.filter((target) => !search || target.name.toLocaleLowerCase().includes(search));
-  }, [targetSearch, targets]);
+  const matchingDatabases = useMemo(
+    () =>
+      (databases ?? []).filter(
+        (database) =>
+          !normalizedSearch ||
+          database.name.toLocaleLowerCase().includes(normalizedSearch) ||
+          database.id.toLocaleLowerCase().includes(normalizedSearch)
+      ),
+    [databases, normalizedSearch]
+  );
+
+  const selectedProject = projects.find(
+    (project) => project.db_id === dbId && project.id === selectedProjectId
+  );
+  const selectedDatabase = databases?.find((database) => database.id === dbId);
+  const selectedTarget = targets.find(
+    (target) => target.db_id === dbId && target.id === selectedTargetId
+  );
 
   const chooseProject = (nextDbId: string | null, nextProjectId: number | null) => {
     setDbProjectTarget(nextDbId, nextProjectId, null);
-    setProjectOpen(false);
-    setProjectSearch('');
+    setPickerOpen(false);
+    setSearch('');
   };
 
-  const chooseTarget = (targetId: number | null) => {
-    setTargetId(targetId);
-    setTargetOpen(false);
-    setTargetSearch('');
+  const chooseTarget = (target: NavigationTarget) => {
+    setDbProjectTarget(target.db_id, target.project_id, target.id);
+    setPickerOpen(false);
+    setSearch('');
   };
 
-  const projectLabel = projectsLoading
+  const toggleProject = (project: NavigationProject) => {
+    const key = projectKey(project);
+    setExpandedProjects((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const openPicker = () => {
+    setPickerOpen((open) => {
+      const next = !open;
+      if (next && selectedProject) {
+        setExpandedProjects((current) => new Set(current).add(projectKey(selectedProject)));
+      }
+      return next;
+    });
+  };
+
+  const scopeLabel = projectsLoading
     ? 'Loading projects…'
-    : selectedProject?.display_name ??
-      (selectedDatabase ? `All projects · ${selectedDatabase.name}` : 'Choose project');
-  const targetLabel =
-    selectedProjectId === null
-      ? 'All targets'
-      : targetsLoading
-        ? 'Loading targets…'
-        : selectedTarget?.name ?? 'All targets';
+    : selectedTarget && selectedProject
+      ? `${selectedProject.display_name} · ${selectedTarget.name}`
+      : selectedProject?.display_name ??
+        (selectedDatabase ? `All projects · ${selectedDatabase.name}` : 'Choose project or target');
   const refreshPending = refreshCacheMutation.isPending || refreshBothCachesMutation.isPending;
 
+  const renderProject = (project: NavigationProject) => {
+    const targetsForProject = visibleTargets(project);
+    const searchFindsTarget =
+      Boolean(normalizedSearch) && projectTargets(project).some(targetMatchesSearch);
+    const expanded = expandedProjects.has(projectKey(project)) || searchFindsTarget;
+    return (
+      <ProjectTreeOption
+        key={projectKey(project)}
+        project={project}
+        targets={targetsForProject}
+        targetsLoading={targetsLoading}
+        expanded={expanded}
+        selectedDbId={dbId}
+        selectedProjectId={selectedProjectId}
+        selectedTargetId={selectedTargetId}
+        relativeNow={relativeNow}
+        onToggle={() => toggleProject(project)}
+        onChooseProject={() => chooseProject(project.db_id, project.id)}
+        onChooseTarget={chooseTarget}
+      />
+    );
+  };
+
   return (
-    <div ref={rootRef} className="project-target-selector compact">
+    <div ref={rootRef} className="project-target-selector compact combined-selector">
       <div className="selector-group compact selector-picker">
-        <label id="project-select-label" htmlFor="project-select">
-          Project:
+        <label id="scope-select-label" htmlFor="scope-select">
+          Project / target:
         </label>
         <button
-          ref={projectTriggerRef}
-          id="project-select"
+          ref={triggerRef}
+          id="scope-select"
           type="button"
           className="compact-select selector-trigger"
-          aria-labelledby="project-select-label project-select"
+          aria-labelledby="scope-select-label scope-select"
           aria-haspopup="dialog"
-          aria-expanded={projectOpen}
+          aria-expanded={pickerOpen}
           disabled={projectsLoading}
-          onClick={() => {
-            setProjectOpen((open) => !open);
-            setTargetOpen(false);
-          }}
+          onClick={openPicker}
         >
-          <span>{projectLabel}</span>
+          <span>{scopeLabel}</span>
           <span aria-hidden="true">▾</span>
         </button>
 
-        {projectOpen && (
+        {pickerOpen && (
           <div
-            className="selector-popover project-selector-popover"
+            className="selector-popover combined-selector-popover"
             role="dialog"
-            aria-label="Choose a project"
+            aria-label="Choose a project or target"
           >
             <input
-              ref={projectSearchRef}
+              ref={searchRef}
               type="search"
               className="selector-search"
-              value={projectSearch}
-              onChange={(event) => setProjectSearch(event.target.value)}
-              placeholder="Type to find a project"
-              aria-label="Search projects"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Type to find a project or target"
+              aria-label="Search projects or targets"
             />
-            <div className="selector-options" aria-label="Projects">
+            <div className="selector-options" aria-label="Projects and targets">
               <button
                 type="button"
                 className={`selector-option ${dbId === null ? 'is-selected' : ''}`}
@@ -232,136 +398,28 @@ export default function ProjectTargetSelector() {
                     <span>{group.label}</span>
                     <span>{group.projects.length}</span>
                   </div>
-                  {group.projects.map((project) => {
-                    const latest = projectLastWorkedAt(project);
-                    return (
-                      <button
-                        key={`${project.db_id}:${project.id}`}
-                        type="button"
-                        className={`selector-option ${dbId === project.db_id && selectedProjectId === project.id ? 'is-selected' : ''}`}
-                        aria-current={
-                          dbId === project.db_id && selectedProjectId === project.id
-                            ? 'true'
-                            : undefined
-                        }
-                        disabled={!project.has_files}
-                        onClick={() => chooseProject(project.db_id, project.id)}
-                      >
-                        <span>{project.display_name}</span>
-                        <small>
-                          {project.db_name}
-                          {latest !== null ? ` · ${formatRelativeTime(latest, relativeNow)}` : ''}
-                          {!project.has_files ? ' · no files' : ''}
-                        </small>
-                      </button>
-                    );
-                  })}
+                  {group.projects.map(renderProject)}
                 </section>
               ))}
 
               {archivedProjects.length > 0 && (
                 <details
                   className="selector-archive"
-                  open={projectArchiveOpen || Boolean(projectSearch)}
-                  onToggle={(event) => setProjectArchiveOpen(event.currentTarget.open)}
+                  open={archiveOpen || Boolean(search)}
+                  onToggle={(event) => setArchiveOpen(event.currentTarget.open)}
                 >
-                  <summary>Archived projects <span>{archivedProjects.length}</span></summary>
-                  {archivedProjects.map((project) => (
-                    <button
-                      key={`${project.db_id}:${project.id}`}
-                      type="button"
-                      className="selector-option"
-                      aria-current={
-                        dbId === project.db_id && selectedProjectId === project.id
-                          ? 'true'
-                          : undefined
-                      }
-                      disabled={!project.has_files}
-                      onClick={() => chooseProject(project.db_id, project.id)}
-                    >
-                      <span>{project.display_name}</span>
-                      <small>{project.db_name}</small>
-                    </button>
-                  ))}
+                  <summary>
+                    Archived projects <span>{archivedProjects.length}</span>
+                  </summary>
+                  {archivedProjects.map(renderProject)}
                 </details>
               )}
 
               {projectGroups.length === 0 &&
                 archivedProjects.length === 0 &&
                 matchingDatabases.length === 0 && (
-                  <p className="selector-empty">No projects match.</p>
+                  <p className="selector-empty">No projects or targets match.</p>
                 )}
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="selector-group compact selector-picker">
-        <label id="target-select-label" htmlFor="target-select">
-          Target:
-        </label>
-        <button
-          ref={targetTriggerRef}
-          id="target-select"
-          type="button"
-          className="compact-select selector-trigger"
-          aria-labelledby="target-select-label target-select"
-          aria-haspopup="dialog"
-          aria-expanded={targetOpen}
-          disabled={!selectedProjectId || targetsLoading}
-          onClick={() => {
-            setTargetOpen((open) => !open);
-            setProjectOpen(false);
-          }}
-        >
-          <span>{targetLabel}</span>
-          <span aria-hidden="true">▾</span>
-        </button>
-
-        {targetOpen && (
-          <div
-            className="selector-popover target-selector-popover"
-            role="dialog"
-            aria-label="Choose a target"
-          >
-            <input
-              ref={targetSearchRef}
-              type="search"
-              className="selector-search"
-              value={targetSearch}
-              onChange={(event) => setTargetSearch(event.target.value)}
-              placeholder="Type to find a target"
-              aria-label="Search targets"
-            />
-            <div className="selector-options" aria-label="Targets">
-              <button
-                type="button"
-                className={`selector-option ${selectedTargetId === null ? 'is-selected' : ''}`}
-                aria-current={selectedTargetId === null ? 'true' : undefined}
-                onClick={() => chooseTarget(null)}
-              >
-                <span>All targets</span>
-                <small>{selectedProject?.display_name}</small>
-              </button>
-              {matchingTargets.map((target) => (
-                <button
-                  key={target.id}
-                  type="button"
-                  className={`selector-option ${selectedTargetId === target.id ? 'is-selected' : ''}`}
-                  aria-current={selectedTargetId === target.id ? 'true' : undefined}
-                  disabled={!target.has_files}
-                  onClick={() => chooseTarget(target.id)}
-                >
-                  <span>{target.name}</span>
-                  <small>
-                    {target.accepted_count}/{target.image_count} accepted
-                    {!target.has_files ? ' · no files' : ''}
-                  </small>
-                </button>
-              ))}
-              {matchingTargets.length === 0 && (
-                <p className="selector-empty">No targets match.</p>
-              )}
             </div>
           </div>
         )}
