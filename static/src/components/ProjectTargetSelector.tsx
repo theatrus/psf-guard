@@ -1,9 +1,16 @@
-import { useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import { useDbProjectTarget } from '../hooks/useUrlState';
-import { useMergedProjects, type WithDb } from '../hooks/useDatabases';
-import type { Project } from '../api/types';
+import { useMergedProjects } from '../hooks/useDatabases';
+import {
+  groupProjectsByActivity,
+  isArchivedProject,
+  projectMatchesSearch,
+  projectLastWorkedAt,
+  sortProjects,
+} from '../utils/projectNavigation';
+import { formatRelativeTime } from '../utils/relativeTime';
 
 export default function ProjectTargetSelector() {
   const {
@@ -14,178 +21,357 @@ export default function ProjectTargetSelector() {
     setTargetId,
   } = useDbProjectTarget();
   const queryClient = useQueryClient();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const projectSearchRef = useRef<HTMLInputElement>(null);
+  const targetSearchRef = useRef<HTMLInputElement>(null);
+  const [projectOpen, setProjectOpen] = useState(false);
+  const [targetOpen, setTargetOpen] = useState(false);
+  const [projectArchiveOpen, setProjectArchiveOpen] = useState(false);
+  const [projectSearch, setProjectSearch] = useState('');
+  const [targetSearch, setTargetSearch] = useState('');
+  const [relativeNow, setRelativeNow] = useState(Date.now);
 
   const invalidateAllForDb = () => {
     if (!dbId) return;
     queryClient.invalidateQueries({ queryKey: ['db', dbId] });
   };
 
-  // Refresh file cache mutation
   const refreshCacheMutation = useMutation({
     mutationFn: () => apiClient.refreshFileCache(dbId!),
-    onSuccess: () => {
-      console.log('🔄 Manual file cache refresh completed, invalidating queries...');
-      invalidateAllForDb();
-    },
-    onError: (error) => {
-      console.error('File cache refresh failed:', error);
-    },
+    onSuccess: invalidateAllForDb,
+    onError: (error) => console.error('File cache refresh failed:', error),
   });
 
-  // Refresh directory cache mutation
   const refreshDirectoryCacheMutation = useMutation({
     mutationFn: () => apiClient.refreshDirectoryCache(dbId!),
-    onSuccess: () => {
-      console.log('🌳 Directory cache refresh completed, invalidating queries...');
-      invalidateAllForDb();
-    },
-    onError: (error) => {
-      console.error('Directory cache refresh failed:', error);
-    },
+    onSuccess: invalidateAllForDb,
+    onError: (error) => console.error('Directory cache refresh failed:', error),
   });
 
-  // Combined refresh for shift-click
   const refreshBothCachesMutation = useMutation({
     mutationFn: async () => {
-      // Refresh directory cache first, then file cache
       await apiClient.refreshDirectoryCache(dbId!);
       await apiClient.refreshFileCache(dbId!);
     },
-    onSuccess: () => {
-      console.log('🔄 Combined cache refresh completed, invalidating queries...');
-      invalidateAllForDb();
-    },
-    onError: (error) => {
-      console.error('Combined cache refresh failed:', error);
-    },
+    onSuccess: invalidateAllForDb,
+    onError: (error) => console.error('Combined cache refresh failed:', error),
   });
 
-  // Fetch projects from EVERY configured database so the dropdown spans DBs.
   const { data: projects, databases, isLoading: projectsLoading } = useMergedProjects();
-
-  // Group projects by their source DB so each renders under its own optgroup.
-  const projectsByDb = useMemo(() => {
-    const map: Record<string, WithDb<Project>[]> = {};
-    for (const p of projects) {
-      (map[p.db_id] ||= []).push(p);
-    }
-    return map;
-  }, [projects]);
-
-  // Fetch targets for selected project with periodic refresh
   const { data: targets = [], isLoading: targetsLoading } = useQuery({
     queryKey: ['db', dbId, 'targets', selectedProjectId],
     queryFn: () => apiClient.getTargets(dbId!, selectedProjectId!),
     enabled: !!dbId && !!selectedProjectId,
-    refetchInterval: 30000, // Refresh every 30 seconds
+    refetchInterval: 30000,
     refetchIntervalInBackground: true,
   });
 
-  // Option values encode the source DB since project IDs collide across DBs:
-  //   ""              -> placeholder (clears the scope)
-  //   "<db>:all"      -> all projects in that DB
-  //   "<db>:<number>" -> a specific project in that DB
-  const handleProjectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const value = e.target.value;
-    if (!value) {
-      setDbProjectTarget(null, null, null);
-      return;
-    }
-    const sep = value.indexOf(':');
-    const db = value.slice(0, sep);
-    const rest = value.slice(sep + 1);
-    const projectId = rest === 'all' ? null : Number(rest);
-    // Switching project (or DB) always resets the target.
-    setDbProjectTarget(db, projectId, null);
+  useEffect(() => {
+    const timer = window.setInterval(() => setRelativeNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const closeMenus = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setProjectOpen(false);
+        setTargetOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setProjectOpen(false);
+        setTargetOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', closeMenus);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeMenus);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (projectOpen) projectSearchRef.current?.focus();
+  }, [projectOpen]);
+
+  useEffect(() => {
+    if (targetOpen) targetSearchRef.current?.focus();
+  }, [targetOpen]);
+
+  const selectedProject = projects.find(
+    (project) => project.db_id === dbId && project.id === selectedProjectId
+  );
+  const selectedDatabase = databases?.find((database) => database.id === dbId);
+  const selectedTarget = targets.find((target) => target.id === selectedTargetId);
+
+  const matchingProjects = useMemo(
+    () => projects.filter((project) => projectMatchesSearch(project, projectSearch)),
+    [projectSearch, projects]
+  );
+  const projectGroups = useMemo(
+    () =>
+      groupProjectsByActivity(
+        matchingProjects.filter((project) => !isArchivedProject(project)),
+        relativeNow
+      ),
+    [matchingProjects, relativeNow]
+  );
+  const archivedProjects = useMemo(
+    () => sortProjects(matchingProjects.filter(isArchivedProject), 'recent'),
+    [matchingProjects]
+  );
+  const matchingDatabases = useMemo(() => {
+    const search = projectSearch.trim().toLocaleLowerCase();
+    return (databases ?? []).filter(
+      (database) =>
+        !search ||
+        database.name.toLocaleLowerCase().includes(search) ||
+        database.id.toLocaleLowerCase().includes(search)
+    );
+  }, [databases, projectSearch]);
+  const matchingTargets = useMemo(() => {
+    const search = targetSearch.trim().toLocaleLowerCase();
+    return targets.filter((target) => !search || target.name.toLocaleLowerCase().includes(search));
+  }, [targetSearch, targets]);
+
+  const chooseProject = (nextDbId: string | null, nextProjectId: number | null) => {
+    setDbProjectTarget(nextDbId, nextProjectId, null);
+    setProjectOpen(false);
+    setProjectSearch('');
   };
 
-  // Reflect the current (db, project) selection back onto the <select> value.
-  const projectValue =
-    dbId == null
-      ? ''
-      : selectedProjectId === null
-        ? `${dbId}:all`
-        : selectedProjectId
-          ? `${dbId}:${selectedProjectId}`
-          : '';
-
-  const handleTargetChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const targetId = e.target.value ? Number(e.target.value) : null;
+  const chooseTarget = (targetId: number | null) => {
     setTargetId(targetId);
+    setTargetOpen(false);
+    setTargetSearch('');
   };
+
+  const projectLabel = projectsLoading
+    ? 'Loading projects…'
+    : selectedProject?.display_name ??
+      (selectedDatabase ? `All projects · ${selectedDatabase.name}` : 'Choose project');
+  const targetLabel =
+    selectedProjectId === null
+      ? 'All targets'
+      : targetsLoading
+        ? 'Loading targets…'
+        : selectedTarget?.name ?? 'All targets';
+  const refreshPending =
+    refreshCacheMutation.isPending ||
+    refreshDirectoryCacheMutation.isPending ||
+    refreshBothCachesMutation.isPending;
 
   return (
-    <div className="project-target-selector compact">
-      <div className="selector-group compact">
-        <label htmlFor="project-select">Project:</label>
-        <select
+    <div ref={rootRef} className="project-target-selector compact">
+      <div className="selector-group compact selector-picker">
+        <label id="project-select-label" htmlFor="project-select">Project:</label>
+        <button
           id="project-select"
-          className="compact-select"
-          value={projectValue}
-          onChange={handleProjectChange}
+          type="button"
+          className="compact-select selector-trigger"
+          aria-labelledby="project-select-label project-select"
+          aria-haspopup="listbox"
+          aria-expanded={projectOpen}
           disabled={projectsLoading}
+          onClick={() => {
+            setProjectOpen((open) => !open);
+            setTargetOpen(false);
+          }}
         >
-          <option value="">Select project</option>
-          {(databases ?? []).map(db => (
-            <optgroup key={db.id} label={db.name}>
-              <option value={`${db.id}:all`}>- All Projects -</option>
-              {(projectsByDb[db.id] ?? []).map(project => (
-                <option
-                  key={`${db.id}:${project.id}`}
-                  value={`${db.id}:${project.id}`}
-                  disabled={!project.has_files}
+          <span>{projectLabel}</span>
+          <span aria-hidden="true">▾</span>
+        </button>
+
+        {projectOpen && (
+          <div className="selector-popover project-selector-popover">
+            <input
+              ref={projectSearchRef}
+              type="search"
+              className="selector-search"
+              value={projectSearch}
+              onChange={(event) => setProjectSearch(event.target.value)}
+              placeholder="Type to find a project"
+              aria-label="Search projects"
+            />
+            <div className="selector-options" role="listbox" aria-label="Projects">
+              <button
+                type="button"
+                className={`selector-option ${dbId === null ? 'is-selected' : ''}`}
+                role="option"
+                aria-selected={dbId === null}
+                onClick={() => chooseProject(null, null)}
+              >
+                <span>Choose a project</span>
+                <small>Show all databases</small>
+              </button>
+              {matchingDatabases.map((database) => (
+                <button
+                  key={`${database.id}:all`}
+                  type="button"
+                  className={`selector-option ${dbId === database.id && selectedProjectId === null ? 'is-selected' : ''}`}
+                  role="option"
+                  aria-selected={dbId === database.id && selectedProjectId === null}
+                  onClick={() => chooseProject(database.id, null)}
                 >
-                  {project.display_name} {!project.has_files && '(no files)'}
-                </option>
+                  <span>All projects</span>
+                  <small>{database.name}</small>
+                </button>
               ))}
-            </optgroup>
-          ))}
-        </select>
+
+              {projectGroups.map((group) => (
+                <section
+                  key={group.id}
+                  className={`selector-option-group ${group.id === 'recent' ? 'is-recent' : ''}`}
+                  aria-label={group.label}
+                >
+                  <div className="selector-group-heading">
+                    <span>{group.label}</span>
+                    <span>{group.projects.length}</span>
+                  </div>
+                  {group.projects.map((project) => {
+                    const latest = projectLastWorkedAt(project);
+                    return (
+                      <button
+                        key={`${project.db_id}:${project.id}`}
+                        type="button"
+                        className={`selector-option ${dbId === project.db_id && selectedProjectId === project.id ? 'is-selected' : ''}`}
+                        role="option"
+                        aria-selected={dbId === project.db_id && selectedProjectId === project.id}
+                        disabled={!project.has_files}
+                        onClick={() => chooseProject(project.db_id, project.id)}
+                      >
+                        <span>{project.display_name}</span>
+                        <small>
+                          {project.db_name}
+                          {latest !== null ? ` · ${formatRelativeTime(latest, relativeNow)}` : ''}
+                          {!project.has_files ? ' · no files' : ''}
+                        </small>
+                      </button>
+                    );
+                  })}
+                </section>
+              ))}
+
+              {archivedProjects.length > 0 && (
+                <details
+                  className="selector-archive"
+                  open={projectArchiveOpen || Boolean(projectSearch)}
+                  onToggle={(event) => setProjectArchiveOpen(event.currentTarget.open)}
+                >
+                  <summary>Archived projects <span>{archivedProjects.length}</span></summary>
+                  {archivedProjects.map((project) => (
+                    <button
+                      key={`${project.db_id}:${project.id}`}
+                      type="button"
+                      className="selector-option"
+                      role="option"
+                      aria-selected={dbId === project.db_id && selectedProjectId === project.id}
+                      disabled={!project.has_files}
+                      onClick={() => chooseProject(project.db_id, project.id)}
+                    >
+                      <span>{project.display_name}</span>
+                      <small>{project.db_name}</small>
+                    </button>
+                  ))}
+                </details>
+              )}
+
+              {projectGroups.length === 0 &&
+                archivedProjects.length === 0 &&
+                matchingDatabases.length === 0 && (
+                  <p className="selector-empty">No projects match.</p>
+                )}
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="selector-group compact">
-        <label htmlFor="target-select">Target:</label>
-        <select
+      <div className="selector-group compact selector-picker">
+        <label id="target-select-label" htmlFor="target-select">Target:</label>
+        <button
           id="target-select"
-          className="compact-select"
-          value={selectedTargetId || ''}
-          onChange={handleTargetChange}
-          disabled={selectedProjectId === null || !selectedProjectId || targetsLoading}
+          type="button"
+          className="compact-select selector-trigger"
+          aria-labelledby="target-select-label target-select"
+          aria-haspopup="listbox"
+          aria-expanded={targetOpen}
+          disabled={!selectedProjectId || targetsLoading}
+          onClick={() => {
+            setTargetOpen((open) => !open);
+            setProjectOpen(false);
+          }}
         >
-          <option value="">{selectedProjectId === null ? 'All projects selected' : 'All targets'}</option>
-          {selectedProjectId !== null && targets.map(target => (
-            <option 
-              key={target.id} 
-              value={target.id}
-              disabled={!target.has_files}
-            >
-              {target.name} ({target.accepted_count}/{target.image_count})
-            </option>
-          ))}
-        </select>
+          <span>{targetLabel}</span>
+          <span aria-hidden="true">▾</span>
+        </button>
+
+        {targetOpen && (
+          <div className="selector-popover target-selector-popover">
+            <input
+              ref={targetSearchRef}
+              type="search"
+              className="selector-search"
+              value={targetSearch}
+              onChange={(event) => setTargetSearch(event.target.value)}
+              placeholder="Type to find a target"
+              aria-label="Search targets"
+            />
+            <div className="selector-options" role="listbox" aria-label="Targets">
+              <button
+                type="button"
+                className={`selector-option ${selectedTargetId === null ? 'is-selected' : ''}`}
+                role="option"
+                aria-selected={selectedTargetId === null}
+                onClick={() => chooseTarget(null)}
+              >
+                <span>All targets</span>
+                <small>{selectedProject?.display_name}</small>
+              </button>
+              {matchingTargets.map((target) => (
+                <button
+                  key={target.id}
+                  type="button"
+                  className={`selector-option ${selectedTargetId === target.id ? 'is-selected' : ''}`}
+                  role="option"
+                  aria-selected={selectedTargetId === target.id}
+                  disabled={!target.has_files}
+                  onClick={() => chooseTarget(target.id)}
+                >
+                  <span>{target.name}</span>
+                  <small>
+                    {target.accepted_count}/{target.image_count} accepted
+                    {!target.has_files ? ' · no files' : ''}
+                  </small>
+                </button>
+              ))}
+              {matchingTargets.length === 0 && (
+                <p className="selector-empty">No targets match.</p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       <button
         className="refresh-button compact"
-        onClick={(e) => {
-          if (e.shiftKey) {
-            refreshBothCachesMutation.mutate();
-          } else {
-            refreshCacheMutation.mutate();
-          }
+        onClick={(event) => {
+          if (event.shiftKey) refreshBothCachesMutation.mutate();
+          else refreshCacheMutation.mutate();
         }}
-        disabled={!dbId || refreshCacheMutation.isPending || refreshDirectoryCacheMutation.isPending || refreshBothCachesMutation.isPending}
+        disabled={!dbId || refreshPending}
         title={
-          refreshBothCachesMutation.isPending 
+          refreshBothCachesMutation.isPending
             ? 'Refreshing directory and file caches...'
             : refreshDirectoryCacheMutation.isPending
-            ? 'Refreshing directory cache...'
-            : refreshCacheMutation.isPending
-            ? 'Refreshing file cache...'
-            : 'Refresh file cache (Shift+Click for directory + file cache)'
+              ? 'Refreshing directory cache...'
+              : refreshCacheMutation.isPending
+                ? 'Refreshing file cache...'
+                : 'Refresh file cache (Shift+Click for directory + file cache)'
         }
       >
-        {(refreshCacheMutation.isPending || refreshDirectoryCacheMutation.isPending || refreshBothCachesMutation.isPending) ? '⟳' : '↻'}
+        {refreshPending ? '⟳' : '↻'}
       </button>
     </div>
   );

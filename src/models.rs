@@ -22,6 +22,12 @@ pub struct ProjectWithProfile {
     pub profile_name: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectNavigationMetadata {
+    pub state: i32,
+    pub latest_image_date: Option<i64>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Target {
     pub id: i32,

@@ -2060,7 +2060,7 @@ pub async fn list_projects(
     };
 
     // Get ALL projects with profile info from database (not just those with files)
-    let (projects, profile_count) = {
+    let (projects, profile_count, navigation_metadata) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
@@ -2069,8 +2069,9 @@ pub async fn list_projects(
             .get_projects_with_images_and_profile_info()
             .map_err(AppError::db)?;
         let profile_count = db.get_profile_count().map_err(AppError::db)?;
+        let navigation_metadata = db.get_project_navigation_metadata().map_err(AppError::db)?;
 
-        (projects, profile_count)
+        (projects, profile_count, navigation_metadata)
     };
 
     let show_profile = profile_count > 1;
@@ -2096,6 +2097,13 @@ pub async fn list_projects(
                     .get(&project.id)
                     .copied()
                     .unwrap_or(false),
+                state: navigation_metadata
+                    .get(&project.id)
+                    .map(|metadata| metadata.state)
+                    .unwrap_or(1),
+                latest_image_date: navigation_metadata
+                    .get(&project.id)
+                    .and_then(|metadata| metadata.latest_image_date),
             }
         })
         .collect();
@@ -3214,6 +3222,7 @@ pub async fn get_projects_overview(
     let projects = db
         .get_projects_with_images_and_profile_info()
         .map_err(AppError::db)?;
+    let navigation_metadata = db.get_project_navigation_metadata().map_err(AppError::db)?;
 
     // Get profile count to determine display format
     let profile_count = db.get_profile_count().map_err(AppError::db)?;
@@ -3297,6 +3306,10 @@ pub async fn get_projects_overview(
                 .get(&project.id)
                 .copied()
                 .unwrap_or(false),
+            state: navigation_metadata
+                .get(&project.id)
+                .map(|metadata| metadata.state)
+                .unwrap_or(1),
             target_count,
             total_images: stats.total_images,
             accepted_images: stats.accepted_images,

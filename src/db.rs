@@ -1,16 +1,18 @@
 use crate::models::{
     AcquiredImage, GradingStatus, OverallDesiredStats, OverallStats, Profile, Project,
-    ProjectDesiredStats, ProjectOverviewStats, ProjectWithProfile, RecentImageSummary, Target,
-    TargetWithDesiredStats, TargetWithStats,
+    ProjectDesiredStats, ProjectNavigationMetadata, ProjectOverviewStats, ProjectWithProfile,
+    RecentImageSummary, Target, TargetWithDesiredStats, TargetWithStats,
 };
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 
 /// Schema version detection - checks if guid columns exist
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SchemaCapabilities {
     pub has_acquiredimage_guid: bool,
     pub has_project_guid: bool,
+    pub has_project_state: bool,
     pub has_target_guid: bool,
 }
 
@@ -20,6 +22,7 @@ impl SchemaCapabilities {
         Self {
             has_acquiredimage_guid: Self::table_has_column(conn, "acquiredimage", "guid"),
             has_project_guid: Self::table_has_column(conn, "project", "guid"),
+            has_project_state: Self::table_has_column(conn, "project", "state"),
             has_target_guid: Self::table_has_column(conn, "target", "guid"),
         }
     }
@@ -198,6 +201,38 @@ impl<'a> Database<'a> {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(projects)
+    }
+
+    /// Load the scheduler state and last captured frame for every project.
+    ///
+    /// Older and lightweight databases may not have the scheduler `state`
+    /// column. Treat those projects as active instead of hiding them.
+    pub fn get_project_navigation_metadata(
+        &self,
+    ) -> Result<HashMap<i32, ProjectNavigationMetadata>> {
+        let state = if self.schema.has_project_state {
+            "COALESCE(p.state, 1)"
+        } else {
+            "1"
+        };
+        let query = format!(
+            "SELECT p.Id, {state}, MAX(ai.acquireddate)
+             FROM project p
+             LEFT JOIN acquiredimage ai ON ai.projectId = p.Id
+             GROUP BY p.Id"
+        );
+        let mut stmt = self.conn.prepare(&query)?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i32>(0)?,
+                ProjectNavigationMetadata {
+                    state: row.get(1)?,
+                    latest_image_date: row.get(2)?,
+                },
+            ))
+        })?;
+
+        Ok(rows.collect::<Result<HashMap<_, _>, _>>()?)
     }
 
     pub fn find_project_id_by_name(&self, name: &str) -> Result<i32> {
@@ -1398,6 +1433,46 @@ mod tests {
         assert_eq!(rows[0].target_name, "Alpha");
         assert_eq!(rows[2].filter_name, "OIII");
         assert!(db.get_recent_images_by_project(0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn project_navigation_metadata_includes_state_and_latest_capture() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE project (Id INTEGER PRIMARY KEY, state INTEGER);
+             CREATE TABLE acquiredimage (
+                Id INTEGER PRIMARY KEY, projectId INTEGER NOT NULL, acquireddate INTEGER
+             );
+             INSERT INTO project VALUES (1, 1), (2, 3);
+             INSERT INTO acquiredimage VALUES (1, 1, 100), (2, 1, 300), (3, 2, 200);",
+        )
+        .unwrap();
+
+        let db = Database::new(&conn);
+        let metadata = db.get_project_navigation_metadata().unwrap();
+        assert_eq!(metadata[&1].state, 1);
+        assert_eq!(metadata[&1].latest_image_date, Some(300));
+        assert_eq!(metadata[&2].state, 3);
+        assert_eq!(metadata[&2].latest_image_date, Some(200));
+    }
+
+    #[test]
+    fn project_navigation_metadata_defaults_state_for_old_schemas() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE project (Id INTEGER PRIMARY KEY);
+             CREATE TABLE acquiredimage (
+                Id INTEGER PRIMARY KEY, projectId INTEGER NOT NULL, acquireddate INTEGER
+             );
+             INSERT INTO project VALUES (1);
+             INSERT INTO acquiredimage VALUES (1, 1, 100);",
+        )
+        .unwrap();
+
+        let db = Database::new(&conn);
+        let metadata = db.get_project_navigation_metadata().unwrap();
+        assert_eq!(metadata[&1].state, 1);
+        assert_eq!(metadata[&1].latest_image_date, Some(100));
     }
 
     #[test]

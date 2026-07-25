@@ -80,6 +80,8 @@
 
 /* Header */
 .app-header {
+  position: relative;
+  z-index: 200;
   background: var(--color-bg-secondary);
   padding: 0.6rem 1rem;
   display: grid;
@@ -290,6 +292,10 @@
   min-width: 0;
 }
 
+.selector-picker {
+  position: relative;
+}
+
 .selector-group.compact label {
   font-size: 0.85rem;
   font-weight: 500;
@@ -310,6 +316,22 @@
   width: 100%;
 }
 
+.selector-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  overflow: hidden;
+  cursor: pointer;
+  text-align: left;
+}
+
+.selector-trigger > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .compact-select:focus {
   outline: none;
   border-color: var(--color-primary);
@@ -324,6 +346,143 @@
 .compact-select option:disabled {
   color: var(--color-text-hint);
   font-style: italic;
+}
+
+.selector-popover {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(430px, calc(100vw - 24px));
+  padding: 8px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 9px;
+  background: var(--color-bg-secondary);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 35%);
+}
+
+.target-selector-popover {
+  width: min(360px, calc(100vw - 24px));
+}
+
+.selector-search {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: var(--color-bg-input);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 0.84rem;
+}
+
+.selector-search:focus {
+  border-color: var(--color-primary);
+  outline: 2px solid var(--color-primary-alpha-20);
+}
+
+.selector-options {
+  max-height: min(62vh, 480px);
+  margin-top: 7px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.selector-option-group {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid var(--color-border-secondary);
+}
+
+.selector-option-group.is-recent {
+  margin-right: -3px;
+  margin-left: -3px;
+  padding: 7px 3px 3px;
+  border-radius: 6px;
+  background: var(--color-primary-alpha-10);
+}
+
+.selector-group-heading {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 8px 5px;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.selector-option {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+}
+
+.selector-option:hover,
+.selector-option:focus-visible {
+  background: var(--color-bg-hover);
+  outline: none;
+}
+
+.selector-option.is-selected {
+  background: var(--color-primary-alpha-20);
+  color: var(--color-primary);
+}
+
+.selector-option small {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 0.69rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selector-option:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.selector-archive {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--color-border-secondary);
+}
+
+.selector-archive summary {
+  display: flex;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.selector-archive summary:hover {
+  background: var(--color-bg-hover);
+}
+
+.selector-archive summary span {
+  margin-left: auto;
+  color: var(--color-text-muted);
+}
+
+.selector-empty {
+  margin: 12px 8px;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
 }
 
 .refresh-button.compact {

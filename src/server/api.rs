@@ -78,6 +78,8 @@ pub struct ProjectResponse {
     pub display_name: String, // "Profile -> Project" or just "Project"
     pub description: Option<String>,
     pub has_files: bool,
+    pub state: i32,
+    pub latest_image_date: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -89,6 +91,7 @@ pub struct ProjectOverviewResponse {
     pub display_name: String, // "Profile -> Project" or just "Project"
     pub description: Option<String>,
     pub has_files: bool,
+    pub state: i32,
     pub target_count: i32,
     pub total_images: i32,
     pub accepted_images: i32,
