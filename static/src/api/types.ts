@@ -14,7 +14,6 @@ export interface Project {
 
 export interface Target {
   id: number;
-  project_id: number;
   name: string;
   ra: number;
   dec: number;
@@ -22,6 +21,14 @@ export interface Target {
   image_count: number;
   accepted_count: number;
   rejected_count: number;
+  has_files: boolean;
+}
+
+export interface TargetNavigation {
+  id: number;
+  project_id: number;
+  name: string;
+  active: boolean;
   has_files: boolean;
 }
 

@@ -95,6 +95,7 @@ impl Drop for InteractiveJobGuard {
 #[derive(Clone)]
 pub struct FileCheckCache {
     pub projects_with_files: HashMap<i32, bool>,
+    pub project_latest_image_dates: HashMap<i32, i64>,
     pub targets_with_files: HashMap<i32, bool>,
     pub last_updated: Instant,
     pub cache_duration: Duration,
@@ -265,6 +266,7 @@ impl FileCheckCache {
     pub fn new() -> Self {
         Self {
             projects_with_files: HashMap::new(),
+            project_latest_image_dates: HashMap::new(),
             targets_with_files: HashMap::new(),
             last_updated: Instant::now(),
             cache_duration: Duration::from_secs(60), // 1 minute cache
@@ -280,6 +282,7 @@ impl FileCheckCache {
 
     pub fn clear(&mut self) {
         self.projects_with_files.clear();
+        self.project_latest_image_dates.clear();
         self.targets_with_files.clear();
         self.last_updated = Instant::now();
         self.refresh_in_progress = false;

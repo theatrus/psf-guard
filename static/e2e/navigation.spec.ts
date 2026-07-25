@@ -72,13 +72,41 @@ test('combined project tree expands and finds targets as the user types', async 
   }));
   expect(stackingLayers.header).toBeGreaterThan(stackingLayers.controls);
   await expect(picker.getByRole('button', { name: /^Alpha M44/ })).toBeVisible();
+  await expect(picker.locator('[aria-current="true"]')).toHaveCount(1);
+  await expect(picker.getByRole('button', { name: /^All images/ })).toHaveAttribute(
+    'aria-current',
+    'true'
+  );
 
   const search = page.getByLabel('Search projects or targets');
   await search.fill('Beta Field');
-  await expect(picker.getByRole('button', { name: /^Project Beta/ })).toBeVisible();
+  const betaProject = picker.getByRole('button', { name: /^Project Beta/ });
+  await expect(betaProject).toBeVisible();
   await expect(picker.getByRole('button', { name: /^Project Alpha/ })).toHaveCount(0);
+  await expect(betaProject).toHaveAttribute('aria-expanded', 'true');
+  await betaProject.click();
+  await expect(betaProject).toHaveAttribute('aria-expanded', 'false');
+  await expect(picker.getByRole('button', { name: /^Beta Field/ })).toHaveCount(0);
+  await betaProject.click();
   await picker.getByRole('button', { name: /^Beta Field/ }).click();
   await expect(page).toHaveURL(new RegExp(`db=${dbId}.*project=2.*target=2`));
+});
+
+test('combined project tree reports target loading failures', async ({ page }) => {
+  await page.route(`**/api/db/${dbId}/targets`, (route) =>
+    route.fulfill({ status: 500, json: { success: false, error: 'fixture failure' } })
+  );
+
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+  await expect(page.locator('.image-card')).toHaveCount(3, { timeout: 15_000 });
+  await page.locator('#scope-select').click();
+
+  const picker = page.getByRole('dialog', { name: 'Choose a project or target' });
+  await expect(picker.getByRole('alert')).toContainText('Some targets could not be loaded.', {
+    timeout: 15_000,
+  });
+  await expect(picker.getByRole('button', { name: 'Retry' })).toBeVisible();
+  await expect(picker.getByText('No matching targets.')).toHaveCount(0);
 });
 
 test('recent projects rise to a highlighted group', async ({ page }) => {

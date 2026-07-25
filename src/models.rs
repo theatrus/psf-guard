@@ -40,6 +40,18 @@ pub struct Target {
     pub guid: Option<String>,
 }
 
+/// Small target record for cross-project navigation.
+///
+/// Keep this separate from [`Target`] so the header can list targets without
+/// reading coordinates, GUIDs, or the much larger acquisition table.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TargetNavigation {
+    pub id: i32,
+    pub project_id: i32,
+    pub name: String,
+    pub active: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcquiredImage {
     pub id: i32,

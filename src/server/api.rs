@@ -108,7 +108,6 @@ pub struct ProjectOverviewResponse {
 #[derive(Debug, Serialize)]
 pub struct TargetResponse {
     pub id: i32,
-    pub project_id: i32,
     pub name: String,
     pub ra: Option<f64>,
     pub dec: Option<f64>,
@@ -116,6 +115,15 @@ pub struct TargetResponse {
     pub image_count: i32,
     pub accepted_count: i32,
     pub rejected_count: i32,
+    pub has_files: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TargetNavigationResponse {
+    pub id: i32,
+    pub project_id: i32,
+    pub name: String,
+    pub active: bool,
     pub has_files: bool,
 }
 

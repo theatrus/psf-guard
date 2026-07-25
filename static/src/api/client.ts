@@ -5,6 +5,7 @@ import type {
   ApiResponse,
   Project,
   Target,
+  TargetNavigation,
   Image,
   ImageQuery,
   UpdateGradeRequest,
@@ -498,9 +499,11 @@ export const apiClient = {
     return data.data || [];
   },
 
-  getAllTargets: async (dbId: string): Promise<Target[]> => {
+  getTargetNavigation: async (dbId: string): Promise<TargetNavigation[]> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.get<ApiResponse<Target[]>>(dbPath(dbId, '/targets'));
+    const { data } = await apiInstance.get<ApiResponse<TargetNavigation[]>>(
+      dbPath(dbId, '/targets')
+    );
     return data.data || [];
   },
 

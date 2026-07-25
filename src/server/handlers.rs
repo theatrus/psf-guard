@@ -2054,31 +2054,40 @@ pub async fn list_projects(
     }
 
     // Get file existence info from cache (may be stale, but that's okay)
-    let file_existence_map: HashMap<i32, bool> = {
+    let (file_existence_map, latest_image_dates) = {
         let cache = ctx.file_check_cache.read().unwrap();
-        cache.projects_with_files.clone()
+        (
+            cache.projects_with_files.clone(),
+            cache.project_latest_image_dates.clone(),
+        )
     };
 
-    // Get ALL projects with profile info from database (not just those with files)
-    let (projects, profile_count, navigation_metadata) = {
+    // Keep this request on the small project table. The background file scan
+    // already walks the images and supplies the latest capture date above.
+    let projects = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
-
-        let projects = db
-            .get_projects_with_images_and_profile_info()
-            .map_err(AppError::db)?;
-        let profile_count = db.get_profile_count().map_err(AppError::db)?;
-        let navigation_metadata = db.get_project_navigation_metadata().map_err(AppError::db)?;
-
-        (projects, profile_count, navigation_metadata)
+        db.get_projects_for_navigation().map_err(AppError::db)?
     };
+    // `projects_with_files` has one entry for every project that owns an
+    // acquisition, even when no source file was found. Keep the picker's old
+    // scope without querying `acquiredimage` again here.
+    let projects = projects
+        .into_iter()
+        .filter(|(project, _)| file_existence_map.contains_key(&project.project.id))
+        .collect::<Vec<_>>();
 
-    let show_profile = profile_count > 1;
+    let show_profile = projects
+        .iter()
+        .map(|(project, _)| project.project.profile_id.as_str())
+        .collect::<std::collections::HashSet<_>>()
+        .len()
+        > 1;
 
     let response: Vec<ProjectResponse> = projects
         .into_iter()
-        .map(|project_with_profile| {
+        .map(|(project_with_profile, state)| {
             let project = &project_with_profile.project;
             let display_name = if show_profile {
                 format!("{} → {}", project_with_profile.profile_name, project.name)
@@ -2097,13 +2106,8 @@ pub async fn list_projects(
                     .get(&project.id)
                     .copied()
                     .unwrap_or(false),
-                state: navigation_metadata
-                    .get(&project.id)
-                    .map(|metadata| metadata.state)
-                    .unwrap_or(1),
-                latest_image_date: navigation_metadata
-                    .get(&project.id)
-                    .and_then(|metadata| metadata.latest_image_date),
+                state,
+                latest_image_date: latest_image_dates.get(&project.id).copied(),
             }
         })
         .collect();
@@ -2166,7 +2170,6 @@ pub async fn list_targets(
         .into_iter()
         .map(|(target, img_count, accepted, rejected)| TargetResponse {
             id: target.id,
-            project_id: target.project_id,
             name: target.name,
             ra: target.ra,
             dec: target.dec,
@@ -2195,46 +2198,34 @@ pub async fn list_targets(
 
 pub async fn list_all_targets(
     ctx: DbContext,
-) -> Result<Json<ApiResponse<Vec<TargetResponse>>>, AppError> {
+) -> Result<Json<ApiResponse<Vec<TargetNavigationResponse>>>, AppError> {
     tracing::debug!("🎯 Listing targets across all projects");
 
-    let refresh_status = ctx.ensure_cache_available();
-    if matches!(
-        refresh_status,
-        crate::server::state::RefreshStatus::InProgressWait
-    ) {
-        return Ok(Json(crate::server::api::ApiResponse::loading()));
-    }
+    // Start a cache refresh if needed, but do not hide the target rows while
+    // the first file scan runs. Navigation itself needs only the target table.
+    ctx.ensure_cache_available();
 
-    let file_existence_map: HashMap<i32, bool> = {
+    let (file_existence_map, cache_ready): (HashMap<i32, bool>, bool) = {
         let cache = ctx.file_check_cache.read().unwrap();
-        cache.targets_with_files.clone()
+        (cache.targets_with_files.clone(), cache.has_initial_data)
     };
 
     let targets = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
-        db.get_all_targets_with_project_info()
-            .map_err(AppError::db)?
+        db.get_target_navigation().map_err(AppError::db)?
     };
 
     let response = targets
         .into_iter()
-        .map(|target| TargetResponse {
-            id: target.target.id,
-            project_id: target.target.project_id,
-            name: target.target.name,
-            ra: target.target.ra,
-            dec: target.target.dec,
-            active: target.target.active,
-            image_count: target.total_images,
-            accepted_count: target.accepted_images,
-            rejected_count: target.rejected_images,
-            has_files: file_existence_map
-                .get(&target.target.id)
-                .copied()
-                .unwrap_or(false),
+        .filter(|target| !cache_ready || file_existence_map.contains_key(&target.id))
+        .map(|target| TargetNavigationResponse {
+            id: target.id,
+            project_id: target.project_id,
+            name: target.name,
+            active: target.active,
+            has_files: file_existence_map.get(&target.id).copied().unwrap_or(false),
         })
         .collect();
 
