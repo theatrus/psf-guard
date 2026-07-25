@@ -3910,6 +3910,7 @@ dependencies = [
  "anyhow",
  "async_zip",
  "axum",
+ "base64 0.22.1",
  "bumpalo",
  "byteorder",
  "chrono",

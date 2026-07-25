@@ -17,7 +17,7 @@ The design must not require Syncthing, Dropbox, or another file copier to move
 a live SQLite database. N.I.N.A. may write that file while an outside process
 copies it, and a copied database gives neither side a useful conflict preview.
 
-Original FITS files are outside the first remote-sync protocol. A transfer can
+Original FITS files are outside the database-bundle protocol. A transfer can
 copy database rows and stored thumbnails, then report which image files resolve
 on the destination. File transfer can be added later as a separate action.
 
@@ -272,16 +272,33 @@ The bundle is compressed and contains:
 - rows keyed by stable GUID;
 - optional stored-thumbnail chunks;
 - source snapshot metadata; and
-- a payload digest.
+- an optional payload digest.
 
 The protocol sets compressed and expanded size limits, row limits, timeouts,
 and a bounded thumbnail budget. It rejects unknown required features rather
 than guessing.
 
+The digest is a courtesy checksum, not a credential. It carries no key, so it
+says nothing about who built the bundle; the bearer token does that, and TLS
+already covers truncation. The receiver therefore accepts a bundle whose
+digest is absent or stale. Enforcing it would pin one canonical JSON encoding,
+and reordering a single field would then reject every plugin already shipped.
+
+A bundle must carry the tables its operation acts on — `acquiredimage` for
+grades, `project`/`target`/`exposureplan` for planning, and both sets for a
+merge. Other tables in the operation's set may be omitted; the receiver
+creates them empty from its own schema, and the merge finds nothing to do.
+The current receiver accepts up to 512 MiB and one million rows per bundle,
+and bounds the exports it builds by the same row limit.
+
+Each database opts into this protocol on its own. Holding a valid key is not
+enough: the operator ticks **Accept remote scheduler sync** for that database,
+separately from **Accept remote image uploads**.
+
 ## N.I.N.A. plugin
 
-A later N.I.N.A. plugin can implement the remote protocol at the telescope.
-The plugin does not need to expose the SQLite file.
+A N.I.N.A. plugin can implement the remote protocol at the telescope without
+exposing the SQLite file.
 
 The plugin can:
 
@@ -304,7 +321,7 @@ client can post a light frame directly to one opted-in PSF Guard database:
 
 ```http
 POST /api/db/{db_id}/images/upload
-Authorization: Bearer <per-database-upload-token>
+Authorization: Bearer <per-database-remote-api-key>
 X-PSF-Guard-Database-ID: <db_id>
 X-Content-SHA256: <64 lowercase hexadecimal characters>
 Content-Type: multipart/form-data
@@ -379,14 +396,15 @@ transactional, so it cannot leave half a merge committed.
 
 ### Phase 4: remote PSF Guard peers
 
-- Add scoped peer credentials and capability discovery.
-- Add compressed export bundles and remote preview/apply.
+- [x] Add scoped per-database credentials and capability discovery.
+- [x] Add JSON export bundles and remote preview/apply.
 - Test interrupted transfers, limits, stale previews, and retries.
 
 ### Phase 5: N.I.N.A. plugin
 
-- Implement the same capability, export, preview, apply, and job contract.
-- Add capture notifications and image-history manifests.
+- [x] Implement the same capability, export, preview, apply, and job contract.
+- [x] Add durable capture bundle notifications and direct FITS upload.
+- Add image-history manifests.
 
 ## Verification
 

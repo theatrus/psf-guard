@@ -12,7 +12,7 @@ use std::sync::Arc;
 use crate::db::Database;
 use crate::server::api::{ApiResponse, UpdateProjectRequest, UpdateTargetRequest};
 use crate::server::extract::DbContext;
-use crate::server::handlers::{require_database_management_allowed, AppError};
+use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
 #[derive(Debug, Serialize)]
@@ -548,12 +548,11 @@ pub fn update_target_fields(
 }
 
 pub async fn create_exposure_plan(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, target_id)): Path<(String, i32)>,
     Json(req): Json<CreateExposurePlanRequest>,
 ) -> Result<Json<ApiResponse<ExposurePlanResponse>>, AppError> {
-    require_database_management_allowed(&state)?;
     let filter_name = req.filter_name.as_deref().unwrap_or_default().trim();
     if req.exposure_template_id.is_none() && filter_name.is_empty() {
         return Err(AppError::BadRequest("filter name must not be empty".into()));
@@ -685,12 +684,11 @@ pub async fn create_exposure_plan(
 }
 
 pub async fn update_exposure_plan(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, plan_id)): Path<(String, i32)>,
     Json(req): Json<UpdateExposurePlanRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
-    require_database_management_allowed(&state)?;
     validate_plan_values(req.exposure, req.desired)?;
     let conn = ctx.db();
     let conn = conn.lock().map_err(AppError::db)?;

@@ -255,6 +255,7 @@ pub struct RemoteImageUploadSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_directory: Option<String>,
     pub token_configured: bool,
+    pub sync_enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -266,6 +267,11 @@ pub struct RemoteImageUploadUpdate {
     /// is immediately replaced by its salted SHA-256 digest in the registry.
     #[serde(default)]
     pub token: Option<String>,
+    /// Opt this database into the remote scheduler sync protocol. Separate
+    /// from `enabled` so a key can grant image upload without granting sync,
+    /// or the reverse. Absent means "leave the stored setting alone".
+    #[serde(default)]
+    pub sync_enabled: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]

@@ -55,6 +55,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
   const [formDbPath, setFormDbPath] = useState('');
   const [formImageDirs, setFormImageDirs] = useState<string[]>([]);
   const [formRemoteUploadEnabled, setFormRemoteUploadEnabled] = useState(false);
+  const [formRemoteSyncEnabled, setFormRemoteSyncEnabled] = useState(false);
   const [formRemoteUploadDir, setFormRemoteUploadDir] = useState('');
   const [formRemoteUploadToken, setFormRemoteUploadToken] = useState('');
   const [formRemoteUploadTokenConfigured, setFormRemoteUploadTokenConfigured] =
@@ -106,6 +107,8 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                   image_dir: summary.remote_image_upload?.image_directory,
                   token_configured:
                     summary.remote_image_upload?.token_configured ?? false,
+                  sync_enabled:
+                    summary.remote_image_upload?.sync_enabled ?? false,
                 },
               };
             }),
@@ -124,6 +127,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
               enabled: s.remote_image_upload?.enabled ?? false,
               image_dir: s.remote_image_upload?.image_directory,
               token_configured: s.remote_image_upload?.token_configured ?? false,
+              sync_enabled: s.remote_image_upload?.sync_enabled ?? false,
             },
           })),
         };
@@ -190,6 +194,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
     setFormDbPath(entry.db_path);
     setFormImageDirs(entry.image_dirs);
     setFormRemoteUploadEnabled(entry.remote_image_upload?.enabled ?? false);
+    setFormRemoteSyncEnabled(entry.remote_image_upload?.sync_enabled ?? false);
     setFormRemoteUploadDir(
       entry.remote_image_upload?.image_dir ?? entry.image_dirs[0] ?? ''
     );
@@ -374,11 +379,28 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
           return;
         }
         if (
-          formRemoteUploadEnabled &&
-          !formRemoteUploadTokenConfigured &&
+          formRemoteUploadToken.length > 0 &&
           formRemoteUploadToken.length < 24
         ) {
-          setStatusMessage('Remote upload token must be at least 24 characters');
+          setStatusMessage('Remote API key must be at least 24 characters');
+          setIsApplying(false);
+          return;
+        }
+        if (
+          formRemoteUploadEnabled &&
+          !formRemoteUploadTokenConfigured &&
+          formRemoteUploadToken.length === 0
+        ) {
+          setStatusMessage('Generate a remote API key before enabling image uploads');
+          setIsApplying(false);
+          return;
+        }
+        if (
+          formRemoteSyncEnabled &&
+          !formRemoteUploadTokenConfigured &&
+          formRemoteUploadToken.length === 0
+        ) {
+          setStatusMessage('Generate a remote API key before enabling scheduler sync');
           setIsApplying(false);
           return;
         }
@@ -390,6 +412,7 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
             enabled: formRemoteUploadEnabled,
             image_directory: formRemoteUploadDir || undefined,
             token: formRemoteUploadToken || undefined,
+            sync_enabled: formRemoteSyncEnabled,
           },
         });
       } else {
@@ -843,6 +866,72 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
 
               {editingId && (
                 <div className="database-config">
+                  <label htmlFor="remote-upload-token">Remote API key:</label>
+                  <div className="remote-upload-token-row">
+                    <input
+                      id="remote-upload-token"
+                      type={formRemoteUploadTokenRevealed ? 'text' : 'password'}
+                      value={formRemoteUploadToken}
+                      onChange={(event) => {
+                        setFormRemoteUploadToken(event.target.value);
+                        setFormRemoteUploadTokenCopyState('idle');
+                      }}
+                      placeholder={
+                        formRemoteUploadTokenConfigured
+                          ? 'Unchanged'
+                          : 'At least 24 characters'
+                      }
+                      className="file-path-input"
+                      autoComplete="new-password"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleGenerateRemoteUploadToken}
+                      className="browse-button"
+                    >
+                      Generate
+                    </button>
+                    {formRemoteUploadTokenRevealed &&
+                      formRemoteUploadToken.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleCopyRemoteUploadToken}
+                          className="browse-button"
+                        >
+                          {formRemoteUploadTokenCopyState === 'copied'
+                            ? 'Copied'
+                            : 'Copy'}
+                        </button>
+                      )}
+                  </div>
+                  {formRemoteUploadTokenRevealed && (
+                    <small
+                      className={`remote-upload-token-notice ${
+                        formRemoteUploadTokenCopyState === 'failed' ? 'error' : ''
+                      }`}
+                      role="status"
+                    >
+                      {formRemoteUploadTokenCopyState === 'failed'
+                        ? 'Copy failed. Select and copy the key manually.'
+                        : 'Copy this key now. It will not be shown again after saving.'}
+                    </small>
+                  )}
+                  <label className="quality-analysis-option">
+                    <input
+                      type="checkbox"
+                      checked={formRemoteSyncEnabled}
+                      onChange={(event) =>
+                        setFormRemoteSyncEnabled(event.target.checked)
+                      }
+                    />
+                    <span>
+                      <strong>Accept remote scheduler sync</strong>
+                      <small>
+                        Lets a holder of this key merge projects, targets,
+                        plans, and grades into this database.
+                      </small>
+                    </span>
+                  </label>
                   <label className="quality-analysis-option">
                     <input
                       type="checkbox"
@@ -871,56 +960,6 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
                           </option>
                         ))}
                       </select>
-                      <label htmlFor="remote-upload-token">Upload token:</label>
-                      <div className="remote-upload-token-row">
-                        <input
-                          id="remote-upload-token"
-                          type={formRemoteUploadTokenRevealed ? 'text' : 'password'}
-                          value={formRemoteUploadToken}
-                          onChange={(event) => {
-                            setFormRemoteUploadToken(event.target.value);
-                            setFormRemoteUploadTokenCopyState('idle');
-                          }}
-                          placeholder={
-                            formRemoteUploadTokenConfigured
-                              ? 'Unchanged'
-                              : 'At least 24 characters'
-                          }
-                          className="file-path-input"
-                          autoComplete="new-password"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleGenerateRemoteUploadToken}
-                          className="browse-button"
-                        >
-                          Generate
-                        </button>
-                        {formRemoteUploadTokenRevealed &&
-                          formRemoteUploadToken.length > 0 && (
-                            <button
-                              type="button"
-                              onClick={handleCopyRemoteUploadToken}
-                              className="browse-button"
-                            >
-                              {formRemoteUploadTokenCopyState === 'copied'
-                                ? 'Copied'
-                                : 'Copy'}
-                            </button>
-                          )}
-                      </div>
-                      {formRemoteUploadTokenRevealed && (
-                        <small
-                          className={`remote-upload-token-notice ${
-                            formRemoteUploadTokenCopyState === 'failed' ? 'error' : ''
-                          }`}
-                          role="status"
-                        >
-                          {formRemoteUploadTokenCopyState === 'failed'
-                            ? 'Copy failed. Select and copy the token manually.'
-                            : 'Copy this token now. It will not be shown again after saving.'}
-                        </small>
-                      )}
                     </>
                   )}
                 </div>

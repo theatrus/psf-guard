@@ -119,6 +119,17 @@ impl SyncPreviewManager {
         Ok(filename)
     }
 
+    /// Reserve a durable snapshot path for a remote bundle materializer.
+    pub fn create_empty_source_snapshot(&self) -> Result<String> {
+        fs::create_dir_all(&self.directory).with_context(|| {
+            format!(
+                "creating sync preview directory {}",
+                self.directory.display()
+            )
+        })?;
+        Ok(format!("{}.source.sqlite", Uuid::new_v4()))
+    }
+
     pub fn source_snapshot_path(&self, record: &SyncPreviewRecord) -> Result<PathBuf> {
         self.source_snapshot_path_for_file(&record.source_snapshot_file)
     }
