@@ -8,7 +8,7 @@ export interface Project {
   display_name: string;
   description: string | null;
   has_files: boolean;
-  state?: number;
+  state: number;
   latest_image_date: number | null;
 }
 
@@ -982,7 +982,7 @@ export interface ProjectOverview {
   display_name: string;
   description?: string;
   has_files: boolean;
-  state?: number;
+  state: number;
   target_count: number;
   total_images: number;
   accepted_images: number;

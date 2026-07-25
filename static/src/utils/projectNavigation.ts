@@ -11,7 +11,7 @@ export interface NavigableProject {
   db_name: string;
   display_name: string;
   name: string;
-  state?: number;
+  state: number;
   latest_image_date?: number | null;
   date_range?: { latest?: number };
   total_images?: number;
@@ -24,8 +24,8 @@ export interface ProjectActivityGroup<T extends NavigableProject> {
 }
 
 const ACTIVITY_GROUPS: Array<{ id: ProjectActivityGroupId; label: string }> = [
-  { id: 'recent', label: 'Worked on this week' },
-  { id: 'month', label: 'Worked on this month' },
+  { id: 'recent', label: 'Last 7 days' },
+  { id: 'month', label: 'Last 30 days' },
   { id: 'earlier', label: 'Earlier work' },
   { id: 'undated', label: 'Date unknown' },
 ];
@@ -44,8 +44,8 @@ export function isRecentProject(
 ): boolean {
   const latest = projectLastWorkedAt(project);
   if (latest === null) return false;
-  const age = nowMilliseconds / 1000 - latest;
-  return age >= 0 && age <= RECENT_PROJECT_SECONDS;
+  const age = Math.max(0, nowMilliseconds / 1000 - latest);
+  return age <= RECENT_PROJECT_SECONDS;
 }
 
 export function projectMatchesSearch(project: NavigableProject, search: string): boolean {

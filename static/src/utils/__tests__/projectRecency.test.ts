@@ -19,6 +19,7 @@ const project: ProjectOverview & { db_id: string } = {
   name: 'Flaming Star',
   display_name: 'Flaming Star',
   has_files: true,
+  state: 1,
   target_count: 1,
   total_images: 12,
   accepted_images: 8,

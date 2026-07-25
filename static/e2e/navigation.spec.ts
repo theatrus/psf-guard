@@ -61,6 +61,7 @@ test('project and target menus filter as the user types', async ({ page }) => {
   await expect(page.locator('.image-card')).toHaveCount(3, { timeout: 15_000 });
 
   await page.locator('#project-select').click();
+  await expect(page.getByRole('dialog', { name: 'Choose a project' })).toBeVisible();
   const stackingLayers = await page.evaluate(() => ({
     header: Number.parseInt(getComputedStyle(document.querySelector('.app-header')!).zIndex, 10),
     controls: Number.parseInt(
@@ -73,10 +74,10 @@ test('project and target menus filter as the user types', async ({ page }) => {
   await projectSearch.fill('Beta');
   const beta = page
     .locator('.project-selector-popover')
-    .getByRole('option', { name: /Project Beta/ });
+    .getByRole('button', { name: /Project Beta/ });
   await expect(beta).toBeVisible();
   await expect(
-    page.locator('.project-selector-popover').getByRole('option', {
+    page.locator('.project-selector-popover').getByRole('button', {
       name: /Project Alpha/,
     })
   ).toHaveCount(0);
@@ -84,10 +85,11 @@ test('project and target menus filter as the user types', async ({ page }) => {
   await expect(page).toHaveURL(new RegExp(`db=${dbId}.*project=2`));
 
   await page.locator('#target-select').click();
+  await expect(page.getByRole('dialog', { name: 'Choose a target' })).toBeVisible();
   await page.getByLabel('Search targets').fill('Beta Field');
   await page
     .locator('.target-selector-popover')
-    .getByRole('option', { name: /Beta Field/ })
+    .getByRole('button', { name: /Beta Field/ })
     .click();
   await expect(page).toHaveURL(new RegExp('target=2'));
 });
@@ -106,7 +108,7 @@ test('recent projects rise to a highlighted group', async ({ page }) => {
   await page.goto('/');
   const recentGroup = page.locator('.project-activity-group.is-recent');
   await expect(
-    recentGroup.getByRole('heading', { name: 'Worked on this week' })
+    recentGroup.getByRole('heading', { name: 'Last 7 days' })
   ).toBeVisible({ timeout: 15_000 });
   await expect(recentGroup).toContainText('Project Beta');
   await expect(recentGroup).not.toContainText('Project Alpha');
@@ -142,7 +144,7 @@ test('closed projects stay in collapsed archives', async ({ page }) => {
   await expect(selectorArchive).not.toHaveAttribute('open', '');
   await selectorArchive.locator('summary').click();
   await expect(
-    selectorArchive.getByRole('option', { name: /Project Beta/ })
+    selectorArchive.getByRole('button', { name: /Project Beta/ })
   ).toBeVisible();
 });
 

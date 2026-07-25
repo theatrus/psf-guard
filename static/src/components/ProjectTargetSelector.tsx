@@ -22,6 +22,8 @@ export default function ProjectTargetSelector() {
   } = useDbProjectTarget();
   const queryClient = useQueryClient();
   const rootRef = useRef<HTMLDivElement>(null);
+  const projectTriggerRef = useRef<HTMLButtonElement>(null);
+  const targetTriggerRef = useRef<HTMLButtonElement>(null);
   const projectSearchRef = useRef<HTMLInputElement>(null);
   const targetSearchRef = useRef<HTMLInputElement>(null);
   const [projectOpen, setProjectOpen] = useState(false);
@@ -40,12 +42,6 @@ export default function ProjectTargetSelector() {
     mutationFn: () => apiClient.refreshFileCache(dbId!),
     onSuccess: invalidateAllForDb,
     onError: (error) => console.error('File cache refresh failed:', error),
-  });
-
-  const refreshDirectoryCacheMutation = useMutation({
-    mutationFn: () => apiClient.refreshDirectoryCache(dbId!),
-    onSuccess: invalidateAllForDb,
-    onError: (error) => console.error('Directory cache refresh failed:', error),
   });
 
   const refreshBothCachesMutation = useMutation({
@@ -82,6 +78,8 @@ export default function ProjectTargetSelector() {
       if (event.key === 'Escape') {
         setProjectOpen(false);
         setTargetOpen(false);
+        if (projectOpen) projectTriggerRef.current?.focus();
+        else if (targetOpen) targetTriggerRef.current?.focus();
       }
     };
     document.addEventListener('pointerdown', closeMenus);
@@ -90,7 +88,7 @@ export default function ProjectTargetSelector() {
       document.removeEventListener('pointerdown', closeMenus);
       document.removeEventListener('keydown', closeOnEscape);
     };
-  }, []);
+  }, [projectOpen, targetOpen]);
 
   useEffect(() => {
     if (projectOpen) projectSearchRef.current?.focus();
@@ -158,21 +156,21 @@ export default function ProjectTargetSelector() {
       : targetsLoading
         ? 'Loading targets…'
         : selectedTarget?.name ?? 'All targets';
-  const refreshPending =
-    refreshCacheMutation.isPending ||
-    refreshDirectoryCacheMutation.isPending ||
-    refreshBothCachesMutation.isPending;
+  const refreshPending = refreshCacheMutation.isPending || refreshBothCachesMutation.isPending;
 
   return (
     <div ref={rootRef} className="project-target-selector compact">
       <div className="selector-group compact selector-picker">
-        <label id="project-select-label" htmlFor="project-select">Project:</label>
+        <label id="project-select-label" htmlFor="project-select">
+          Project:
+        </label>
         <button
+          ref={projectTriggerRef}
           id="project-select"
           type="button"
           className="compact-select selector-trigger"
           aria-labelledby="project-select-label project-select"
-          aria-haspopup="listbox"
+          aria-haspopup="dialog"
           aria-expanded={projectOpen}
           disabled={projectsLoading}
           onClick={() => {
@@ -185,7 +183,11 @@ export default function ProjectTargetSelector() {
         </button>
 
         {projectOpen && (
-          <div className="selector-popover project-selector-popover">
+          <div
+            className="selector-popover project-selector-popover"
+            role="dialog"
+            aria-label="Choose a project"
+          >
             <input
               ref={projectSearchRef}
               type="search"
@@ -195,12 +197,11 @@ export default function ProjectTargetSelector() {
               placeholder="Type to find a project"
               aria-label="Search projects"
             />
-            <div className="selector-options" role="listbox" aria-label="Projects">
+            <div className="selector-options" aria-label="Projects">
               <button
                 type="button"
                 className={`selector-option ${dbId === null ? 'is-selected' : ''}`}
-                role="option"
-                aria-selected={dbId === null}
+                aria-current={dbId === null ? 'true' : undefined}
                 onClick={() => chooseProject(null, null)}
               >
                 <span>Choose a project</span>
@@ -211,8 +212,9 @@ export default function ProjectTargetSelector() {
                   key={`${database.id}:all`}
                   type="button"
                   className={`selector-option ${dbId === database.id && selectedProjectId === null ? 'is-selected' : ''}`}
-                  role="option"
-                  aria-selected={dbId === database.id && selectedProjectId === null}
+                  aria-current={
+                    dbId === database.id && selectedProjectId === null ? 'true' : undefined
+                  }
                   onClick={() => chooseProject(database.id, null)}
                 >
                   <span>All projects</span>
@@ -237,8 +239,11 @@ export default function ProjectTargetSelector() {
                         key={`${project.db_id}:${project.id}`}
                         type="button"
                         className={`selector-option ${dbId === project.db_id && selectedProjectId === project.id ? 'is-selected' : ''}`}
-                        role="option"
-                        aria-selected={dbId === project.db_id && selectedProjectId === project.id}
+                        aria-current={
+                          dbId === project.db_id && selectedProjectId === project.id
+                            ? 'true'
+                            : undefined
+                        }
                         disabled={!project.has_files}
                         onClick={() => chooseProject(project.db_id, project.id)}
                       >
@@ -266,8 +271,11 @@ export default function ProjectTargetSelector() {
                       key={`${project.db_id}:${project.id}`}
                       type="button"
                       className="selector-option"
-                      role="option"
-                      aria-selected={dbId === project.db_id && selectedProjectId === project.id}
+                      aria-current={
+                        dbId === project.db_id && selectedProjectId === project.id
+                          ? 'true'
+                          : undefined
+                      }
                       disabled={!project.has_files}
                       onClick={() => chooseProject(project.db_id, project.id)}
                     >
@@ -289,13 +297,16 @@ export default function ProjectTargetSelector() {
       </div>
 
       <div className="selector-group compact selector-picker">
-        <label id="target-select-label" htmlFor="target-select">Target:</label>
+        <label id="target-select-label" htmlFor="target-select">
+          Target:
+        </label>
         <button
+          ref={targetTriggerRef}
           id="target-select"
           type="button"
           className="compact-select selector-trigger"
           aria-labelledby="target-select-label target-select"
-          aria-haspopup="listbox"
+          aria-haspopup="dialog"
           aria-expanded={targetOpen}
           disabled={!selectedProjectId || targetsLoading}
           onClick={() => {
@@ -308,7 +319,11 @@ export default function ProjectTargetSelector() {
         </button>
 
         {targetOpen && (
-          <div className="selector-popover target-selector-popover">
+          <div
+            className="selector-popover target-selector-popover"
+            role="dialog"
+            aria-label="Choose a target"
+          >
             <input
               ref={targetSearchRef}
               type="search"
@@ -318,12 +333,11 @@ export default function ProjectTargetSelector() {
               placeholder="Type to find a target"
               aria-label="Search targets"
             />
-            <div className="selector-options" role="listbox" aria-label="Targets">
+            <div className="selector-options" aria-label="Targets">
               <button
                 type="button"
                 className={`selector-option ${selectedTargetId === null ? 'is-selected' : ''}`}
-                role="option"
-                aria-selected={selectedTargetId === null}
+                aria-current={selectedTargetId === null ? 'true' : undefined}
                 onClick={() => chooseTarget(null)}
               >
                 <span>All targets</span>
@@ -334,8 +348,7 @@ export default function ProjectTargetSelector() {
                   key={target.id}
                   type="button"
                   className={`selector-option ${selectedTargetId === target.id ? 'is-selected' : ''}`}
-                  role="option"
-                  aria-selected={selectedTargetId === target.id}
+                  aria-current={selectedTargetId === target.id ? 'true' : undefined}
                   disabled={!target.has_files}
                   onClick={() => chooseTarget(target.id)}
                 >
@@ -364,11 +377,9 @@ export default function ProjectTargetSelector() {
         title={
           refreshBothCachesMutation.isPending
             ? 'Refreshing directory and file caches...'
-            : refreshDirectoryCacheMutation.isPending
-              ? 'Refreshing directory cache...'
-              : refreshCacheMutation.isPending
-                ? 'Refreshing file cache...'
-                : 'Refresh file cache (Shift+Click for directory + file cache)'
+            : refreshCacheMutation.isPending
+              ? 'Refreshing file cache...'
+              : 'Refresh file cache (Shift+Click for directory + file cache)'
         }
       >
         {refreshPending ? '⟳' : '↻'}

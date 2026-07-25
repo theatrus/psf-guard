@@ -48,6 +48,12 @@ describe('project navigation', () => {
       ['earlier', 'Old'],
       ['undated', 'Unknown'],
     ]);
+    expect(groups.map((group) => group.label)).toEqual([
+      'Last 7 days',
+      'Last 30 days',
+      'Earlier work',
+      'Date unknown',
+    ]);
   });
 
   it('sorts by date, name, or image count', () => {
@@ -64,5 +70,11 @@ describe('project navigation', () => {
     expect(projectMatchesSearch(closed, 'flaming')).toBe(true);
     expect(projectMatchesSearch(closed, 'demo catalog')).toBe(true);
     expect(projectMatchesSearch(closed, 'veil')).toBe(false);
+  });
+
+  it('keeps a slightly future capture in the recent group and badge', () => {
+    const future = project(-1, 'Clock skew', -1);
+    expect(isRecentProject(future, NOW)).toBe(true);
+    expect(groupProjectsByActivity([future], NOW)[0]?.id).toBe('recent');
   });
 });
