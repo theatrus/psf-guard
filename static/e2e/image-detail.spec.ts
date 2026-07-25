@@ -198,11 +198,17 @@ test('detail view loads the large preview and renders pixels', async ({
   expect(dims.natH).toBeGreaterThan(500);
 });
 
-test('detail view shows the resolved file path', async ({ page }) => {
+test('detail view reveals the resolved file path on demand', async ({ page }) => {
   await page.goto(`/#/detail/1?db=${encodeURIComponent(dbId)}&project=1`);
 
+  const disclosure = page.getByTestId('image-file-location');
+  await expect(disclosure).toBeVisible({ timeout: 15_000 });
+
   const filePath = page.getByTestId('image-file-path');
-  await expect(filePath).toBeVisible({ timeout: 15_000 });
+  await expect(filePath).toBeHidden();
+
+  await disclosure.getByText('File path').click();
+  await expect(filePath).toBeVisible();
   await expect(filePath).toContainText(fixtureImageDir());
   await expect(filePath).toContainText('.fits');
   await expect(page.getByRole('button', { name: 'Copy path' })).toBeVisible();
