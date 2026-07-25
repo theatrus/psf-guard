@@ -25,6 +25,7 @@ import {
   projectSeenKey,
   saveProjectSeenState,
 } from '../utils/projectRecency';
+import { formatRelativeTime } from '../utils/relativeTime';
 import ProjectSchedulerDialog from './ProjectSchedulerDialog';
 import PreviewImage from './PreviewImage';
 import './Overview.css';
@@ -34,6 +35,10 @@ type Organizing =
   | { kind: 'project'; dbId: string; id: number; name: string; mergeInto: string }
   | { kind: 'target'; dbId: string; id: number; name: string; moveTo: string };
 
+function recentImageKey(dbId: string, projectId: number, imageId: number): string {
+  return `${dbId}:${projectId}:${imageId}`;
+}
+
 export default function Overview() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -42,6 +47,7 @@ export default function Overview() {
   const [organizeBusy, setOrganizeBusy] = useState(false);
   const [organizeError, setOrganizeError] = useState('');
   const [seenProjects, setSeenProjects] = useState(loadProjectSeenState);
+  const [relativeNow, setRelativeNow] = useState(Date.now);
   const [schedulerProject, setSchedulerProject] = useState<{
     dbId: string;
     id: number;
@@ -58,6 +64,11 @@ export default function Overview() {
   const { data: projects, isLoading: projectsLoading } = useMergedProjectsOverview();
   const { data: targets, isLoading: targetsLoading } = useMergedTargetsOverview();
   const organizeAllowed = serverInfo?.allow_database_management ?? false;
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setRelativeNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   // Desktop mode: export straight to a local folder (hardlink-or-copy) via
   // the native picker — the server IS this machine, so downloading a zip of
@@ -148,6 +159,24 @@ export default function Overview() {
       (map[p.db_id] ||= []).push(p);
     }
     return map;
+  }, [projects]);
+
+  const newestImageKey = useMemo(() => {
+    let newest: { key: string; acquiredDate: number } | null = null;
+    for (const project of projects) {
+      for (const image of project.recent_images) {
+        if (image.acquired_date === null) continue;
+        const key = recentImageKey(project.db_id, project.id, image.id);
+        if (
+          newest === null ||
+          image.acquired_date > newest.acquiredDate ||
+          (image.acquired_date === newest.acquiredDate && key > newest.key)
+        ) {
+          newest = { key, acquiredDate: image.acquired_date };
+        }
+      }
+    }
+    return newest?.key ?? null;
   }, [projects]);
 
   // Seed both project and target baselines the first time this browser sees
@@ -605,12 +634,23 @@ export default function Overview() {
                       <div className="project-recent-frames">
                         {project.recent_images.map((image, index) => {
                           const isNew = index < displayedNewImages;
+                          const isNewest =
+                            recentImageKey(project.db_id, project.id, image.id) ===
+                            newestImageKey;
                           const filter = image.filter_name || 'No filter';
+                          const relativeTime = formatRelativeTime(
+                            image.acquired_date,
+                            relativeNow
+                          );
                           return (
                             <button
                               key={image.id}
                               type="button"
-                              className={`project-frame ${isNew ? 'is-new' : ''}`}
+                              className={[
+                                'project-frame',
+                                isNew ? 'is-new' : '',
+                                isNewest ? 'is-newest' : '',
+                              ].filter(Boolean).join(' ')}
                               onClick={() => handleSelectImage(project, image)}
                               aria-label={`Open ${image.target_name}, ${filter} frame`}
                             >
@@ -634,10 +674,33 @@ export default function Overview() {
                                   }
                                 />
                                 {isNew && <span className="project-frame-new">New</span>}
+                                {isNewest && (
+                                  <span
+                                    className="project-frame-newest"
+                                    title="Newest frame across all databases"
+                                  >
+                                    Newest
+                                  </span>
+                                )}
                               </span>
                               <span className="project-frame-caption">
-                                <strong>{image.target_name}</strong>
-                                <span>{filter}</span>
+                                <span className="project-frame-caption-main">
+                                  <strong>{image.target_name}</strong>
+                                  <span>{filter}</span>
+                                </span>
+                                {image.acquired_date === null ? (
+                                  <span className="project-frame-age">{relativeTime}</span>
+                                ) : (
+                                  <time
+                                    className="project-frame-age"
+                                    dateTime={new Date(image.acquired_date * 1000).toISOString()}
+                                    title={`Captured ${new Date(
+                                      image.acquired_date * 1000
+                                    ).toLocaleString()}`}
+                                  >
+                                    Captured {relativeTime}
+                                  </time>
+                                )}
                               </span>
                             </button>
                           );
