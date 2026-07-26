@@ -12,6 +12,11 @@ import AggregatedCacheStatus from './components/AggregatedCacheStatus';
 import TauriSettings from './components/TauriSettings';
 import { useGridState } from './hooks/useUrlState';
 import { isTauriApp, tauriConfig } from './utils/tauri';
+import {
+  OPEN_SETTINGS_EVENT,
+  settingsIntentOf,
+  type SettingsIntent,
+} from './utils/settingsIntent';
 import { apiClient } from './api/client';
 import './App.css';
 
@@ -32,6 +37,11 @@ function App() {
     location.search ? `${path}${location.search}` : path;
   const [showHelp, setShowHelp] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  // Which form the settings modal should land on. Set by whoever asked for
+  // the modal; read once when it mounts.
+  const [settingsIntent, setSettingsIntent] = useState<SettingsIntent | null>(
+    null
+  );
   // We track this only to short-circuit checks against Tauri-only commands;
   // the modal itself is shown regardless of mode.
   const [, setIsTauri] = useState(false);
@@ -81,13 +91,16 @@ function App() {
 
     // Let any component request opening settings via a window event (e.g.
     // the Overview empty-state button).
-    const openHandler = () => setShowSettings(true);
-    window.addEventListener('psf-guard:open-settings', openHandler);
+    const openHandler = (event: Event) => {
+      setSettingsIntent(settingsIntentOf(event));
+      setShowSettings(true);
+    };
+    window.addEventListener(OPEN_SETTINGS_EVENT, openHandler);
 
     return () => {
       cancelled = true;
       clearTimeout(handle);
-      window.removeEventListener('psf-guard:open-settings', openHandler);
+      window.removeEventListener(OPEN_SETTINGS_EVENT, openHandler);
     };
   }, []);
 
@@ -207,7 +220,11 @@ function App() {
       {showSettings && (
         <TauriSettings
           isOpen={showSettings}
-          onClose={() => setShowSettings(false)}
+          initialIntent={settingsIntent}
+          onClose={() => {
+            setShowSettings(false);
+            setSettingsIntent(null);
+          }}
         />
       )}
     </div>

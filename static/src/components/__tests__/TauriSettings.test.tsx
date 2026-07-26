@@ -253,3 +253,85 @@ describe('TauriSettings import state', () => {
     expect(screen.getByRole('button', { name: 'Copy' })).toBeEnabled();
   });
 });
+
+describe('TauriSettings first run', () => {
+  function serveEmptyRegistry() {
+    server.use(
+      http.get('/api/info', () =>
+        HttpResponse.json({
+          success: true,
+          data: {
+            version: 'test',
+            cache_directory: '/tmp/cache',
+            allow_database_management: true,
+          },
+          error: null,
+          status: 'ready',
+        })
+      ),
+      http.get('/api/databases', () =>
+        HttpResponse.json({
+          success: true,
+          data: [],
+          error: null,
+          status: 'ready',
+        })
+      )
+    );
+  }
+
+  it('offers importing images as well as opening an existing database', async () => {
+    serveEmptyRegistry();
+
+    render(<TauriSettings isOpen onClose={() => undefined} />, {
+      wrapper: createWrapper(),
+    });
+
+    expect(
+      await screen.findByRole('button', { name: /New Database from Images/ })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Add Existing Database/ })
+    ).toBeInTheDocument();
+
+    // Nothing that needs an existing catalog should sit between the welcome
+    // banner and those two buttons.
+    expect(
+      screen.queryByText('Add a catalog before syncing with a remote PSF Guard.')
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        'Add a second catalog to merge data or send planning and grades.'
+      )
+    ).not.toBeInTheDocument();
+  });
+
+  it('opens straight onto the create form when the caller asks for it', async () => {
+    serveEmptyRegistry();
+
+    render(
+      <TauriSettings isOpen initialIntent="create" onClose={() => undefined} />,
+      { wrapper: createWrapper() }
+    );
+
+    expect(
+      await screen.findByRole('heading', { name: 'New Database from Images' })
+    ).toBeInTheDocument();
+    // The create flow bootstraps its own database, so it never asks for one.
+    expect(screen.queryByText('N.I.N.A. Database File:')).not.toBeInTheDocument();
+  });
+
+  it('opens straight onto the add form when the caller asks for it', async () => {
+    serveEmptyRegistry();
+
+    render(
+      <TauriSettings isOpen initialIntent="add" onClose={() => undefined} />,
+      { wrapper: createWrapper() }
+    );
+
+    expect(
+      await screen.findByRole('heading', { name: 'Add Database' })
+    ).toBeInTheDocument();
+    expect(screen.getByText('N.I.N.A. Database File:')).toBeInTheDocument();
+  });
+});

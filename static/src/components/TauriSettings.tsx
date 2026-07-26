@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
 import type { DbEntry, DbRegistry } from '../utils/tauri';
 import { apiClient } from '../api/client';
+import type { SettingsIntent } from '../utils/settingsIntent';
 import type { DatabaseSummary } from '../api/types';
 import { describeImportProgress, useImportJob } from '../hooks/useImportJob';
 import QualityBackfillControls from './QualityBackfillControls';
@@ -15,6 +16,12 @@ import './TauriSettings.css';
 interface TauriSettingsProps {
   isOpen: boolean;
   onClose: () => void;
+  /**
+   * Form to land on when the modal opens. Lets the overview's empty state
+   * send the user straight to "add an existing database" or "build one from
+   * image folders" instead of dropping them at the top of the modal.
+   */
+  initialIntent?: SettingsIntent | null;
 }
 
 /**
@@ -32,7 +39,11 @@ interface TauriSettingsProps {
  *   same UI is usable when the server was launched via `psf-guard server`.
  *   The file pickers degrade to plain text inputs.
  */
-export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
+export default function TauriSettings({
+  isOpen,
+  onClose,
+  initialIntent = null,
+}: TauriSettingsProps) {
   const isTauri = isTauriApp();
   const queryClient = useQueryClient();
   const { data: serverInfo } = useQuery({
@@ -157,15 +168,17 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
         setConfirmImport(runningImport);
       }
 
-      // If empty AND we're allowed to mutate, default to showing the add
-      // form so the welcome flow lands somewhere usable.
-      setShowAddForm((!reg || reg.databases.length === 0) && managementAllowed);
+      // Deliberately no form is forced open on an empty registry. Doing that
+      // picked "add an existing N.I.N.A. database" for the user and, because
+      // the choice buttons hide behind an open form, removed "build one from
+      // image folders" from the first run altogether. The welcome banner
+      // offers both instead.
     } catch (err) {
       console.error('Failed to load registry:', err);
     } finally {
       setIsLoading(false);
     }
-  }, [isTauri, managementAllowed]);
+  }, [isTauri]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -250,6 +263,15 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
       }
     }
   };
+
+  // Land on the form the caller asked for. This runs once, at mount: App
+  // unmounts the modal when it closes, so re-opening with a fresh intent
+  // mounts a fresh component and the effect fires again.
+  useEffect(() => {
+    if (initialIntent === 'create') startCreate();
+    if (initialIntent === 'add') void startAdd();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handlePickDbPath = async () => {
     if (!isTauri) {
@@ -558,7 +580,40 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
           {!hasDatabases && managementAllowed && (
             <div className="welcome-message">
               <h3>🚀 Welcome to PSF Guard!</h3>
-              <p>Configure one or more N.I.N.A. scheduler databases to get started.</p>
+              <p>
+                Start from folders of FITS images, or from a N.I.N.A. scheduler
+                database you already have. You can add more catalogs later.
+              </p>
+              {!showAddForm && (
+                <div className="welcome-choices">
+                  <button
+                    className="add-directory-button"
+                    onClick={startCreate}
+                    disabled={isApplying}
+                  >
+                    <span className="welcome-choice-title">
+                      ✨ New Database from Images
+                    </span>
+                    <span className="welcome-choice-detail">
+                      Pick folders of FITS files. PSF Guard builds a Target
+                      Scheduler database and imports them.
+                    </span>
+                  </button>
+                  <button
+                    className="add-directory-button"
+                    onClick={startAdd}
+                    disabled={isApplying}
+                  >
+                    <span className="welcome-choice-title">
+                      + Add Existing Database
+                    </span>
+                    <span className="welcome-choice-detail">
+                      Open a N.I.N.A. Target Scheduler database and point it at
+                      your image folders.
+                    </span>
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -581,7 +636,10 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
 
           {managementAllowed && <SeizaCatalogControls />}
 
-          {managementAllowed && (
+          {/* Both panels can only say "add a catalog first" until one exists.
+              On a first run that is two dead ends between the welcome banner
+              and the buttons that actually do something. */}
+          {managementAllowed && hasDatabases && (
             <>
               <SchedulerSyncControls databases={databases} disabled={isApplying} />
               <RemotePeerSync databases={databases} disabled={isApplying} />
@@ -655,7 +713,9 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
               </div>
             ))}
 
-            {managementAllowed && !showAddForm && (
+            {/* With no databases yet the welcome banner carries these same two
+                actions, so rendering them here too would just duplicate them. */}
+            {managementAllowed && hasDatabases && !showAddForm && (
               <div className="db-add-buttons">
                 <button
                   className="add-directory-button"

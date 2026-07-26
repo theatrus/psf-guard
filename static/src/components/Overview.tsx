@@ -16,6 +16,7 @@ import {
   type WithDb,
 } from '../hooks/useDatabases';
 import { isTauriApp, tauriFileSystem } from '../utils/tauri';
+import { openSettings } from '../utils/settingsIntent';
 import {
   loadProjectSeenState,
   markerForProject,
@@ -359,13 +360,24 @@ export default function Overview() {
         <h2>No databases configured</h2>
         {managementAllowed ? (
           <>
-            <p>Add a N.I.N.A. scheduler database to get started.</p>
-            <button
-              className="action-button primary"
-              onClick={() => window.dispatchEvent(new CustomEvent('psf-guard:open-settings'))}
-            >
-              Open Settings
-            </button>
+            <p>
+              Build a catalog from folders of FITS images, or open a N.I.N.A.
+              scheduler database you already have.
+            </p>
+            <div className="overview-empty-actions">
+              <button
+                className="action-button primary"
+                onClick={() => openSettings('create')}
+              >
+                New Database from Images
+              </button>
+              <button
+                className="action-button"
+                onClick={() => openSettings('add')}
+              >
+                Add Existing Database
+              </button>
+            </div>
           </>
         ) : (
           <>

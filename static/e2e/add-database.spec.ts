@@ -11,6 +11,12 @@ test('add a database via settings → see it in the Overview', async ({ page }) 
   // Wait for settings to auto-open (gated on a couple of async API calls).
   await page.getByRole('heading', { name: /Welcome to PSF Guard/i }).waitFor();
 
+  // First run offers two starting points and picks neither for you.
+  await page
+    .locator('.tauri-settings')
+    .getByRole('button', { name: /Add Existing Database/i })
+    .click();
+
   // The form is now visible. Fill the inputs.
   await page
     .getByPlaceholder('e.g. Imaging Rig (defaults to filename)')
@@ -55,6 +61,10 @@ test('add a database via settings → see it in the Overview', async ({ page }) 
 test('add then remove a database', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('heading', { name: /Welcome to PSF Guard/i }).waitFor();
+  await page
+    .locator('.tauri-settings')
+    .getByRole('button', { name: /Add Existing Database/i })
+    .click();
 
   await page.getByPlaceholder('Select or enter database path').fill(fixtureDbPath());
   // The backend rejects a DB without image dirs, so populate one.
@@ -73,9 +83,14 @@ test('add then remove a database', async ({ page }) => {
   await row.getByRole('button', { name: 'Remove' }).click();
 
   // After removing the only DB, the registry is empty again and the welcome
-  // banner + add form reappear.
+  // banner returns with both starting points on offer.
   await expect(page.getByText(/Removed/i)).toBeVisible();
   await expect(
     page.getByRole('heading', { name: /Welcome to PSF Guard/i })
+  ).toBeVisible();
+  await expect(
+    page
+      .locator('.tauri-settings')
+      .getByRole('button', { name: /New Database from Images/i })
   ).toBeVisible();
 });

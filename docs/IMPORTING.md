@@ -15,7 +15,10 @@ a trusted interface and opt in:
 psf-guard server --host 127.0.0.1 --allow-database-management
 ```
 
-Then open **Settings** and choose **New Database from Images**.
+Then open **Settings** and choose **New Database from Images**. On a first run
+PSF Guard has no catalogs yet, so it opens Settings for you and the welcome
+banner offers this alongside **Add Existing Database**. The overview's empty
+state offers the same two starting points.
 
 ![New Database from Images form](import-from-images.png)
 
