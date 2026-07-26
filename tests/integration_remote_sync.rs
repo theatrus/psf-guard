@@ -593,6 +593,174 @@ async fn a_rejected_token_is_recorded_without_naming_a_catalog() {
     assert_eq!(entries[0]["detail"], "Invalid API token");
 }
 
+#[tokio::test]
+async fn merge_carries_image_data_blobs_across() {
+    // imagedata is the only table whose payload is not text or numbers, so the
+    // base64 wire encoding is reachable through merge and nothing else.
+    let harness = Harness::new(
+        &format!(
+            "{OBSERVED}
+         INSERT INTO imagedata VALUES (1,'thumb',X'89504E470D0A1A0A0000FFFE',1,64,48);"
+        ),
+        "",
+    );
+
+    let bundle = harness.export("merge").await;
+    let preview_id = harness.preview("merge", bundle).await;
+    let (status, applied) = harness.apply(&preview_id).await;
+    assert_eq!(status, StatusCode::OK, "{applied:#}");
+
+    let destination = harness.destination();
+    let (blob, image_id): (Vec<u8>, i64) = destination
+        .query_row(
+            "SELECT imagedata, acquiredimageid FROM imagedata",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        blob,
+        vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0xff, 0xfe],
+        "a blob must survive base64 without gaining or losing a byte"
+    );
+    let owner: String = destination
+        .query_row(
+            "SELECT guid FROM acquiredimage WHERE Id = ?1",
+            [image_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        owner, "image-one",
+        "the thumbnail must follow its remapped Id"
+    );
+}
+
+#[tokio::test]
+async fn a_bundle_that_omits_optional_tables_still_merges() {
+    // What a third-party plugin sends: the tables the operation needs and
+    // nothing else. The receiver creates the rest empty from its own schema.
+    let harness = Harness::new(OBSERVED, "");
+    let mut bundle = harness.export("merge").await;
+    bundle["tables"]
+        .as_object_mut()
+        .unwrap()
+        .retain(|name, _| ["project", "target", "acquiredimage"].contains(&name.as_str()));
+
+    let preview_id = harness.preview("merge", bundle).await;
+    let (status, applied) = harness.apply(&preview_id).await;
+    assert_eq!(status, StatusCode::OK, "{applied:#}");
+    let destination = harness.destination();
+    assert_eq!(count(&destination, "acquiredimage"), 2);
+    assert_eq!(count(&destination, "project"), 1);
+    // Nothing invents rows for the tables the client left out.
+    assert_eq!(count(&destination, "ruleweight"), 0);
+    assert_eq!(count(&destination, "imagedata"), 0);
+}
+
+#[tokio::test]
+async fn an_export_is_refetchable_only_with_the_token_that_built_it() {
+    let harness = Harness::new(OBSERVED, "");
+
+    let (status, exported) = call(
+        harness.router.clone(),
+        "POST",
+        "/api/sync/v1/exports",
+        Some(SOURCE_TOKEN),
+        Some(json!({
+            "protocol_version": 1,
+            "catalog_id": "source",
+            "operation": "merge",
+            "reviewed_only": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{exported:#}");
+    let export_id = exported["data"]["export_id"].as_str().unwrap();
+
+    // A client that dropped the response can ask for the same bundle again.
+    let (status, refetched) = call(
+        harness.router.clone(),
+        "GET",
+        &format!("/api/sync/v1/exports/{export_id}"),
+        Some(SOURCE_TOKEN),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{refetched:#}");
+    assert_eq!(refetched["data"]["bundle"], exported["data"]["bundle"]);
+
+    // The other catalog's key must not read it, even with the right ID.
+    let (status, _) = call(
+        harness.router.clone(),
+        "GET",
+        &format!("/api/sync/v1/exports/{export_id}"),
+        Some(DESTINATION_TOKEN),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // The store is capped, so a client that keeps building loses its oldest.
+    // Say so in the 404 rather than leaving it looking like an auth failure.
+    for _ in 0..16 {
+        let (status, _) = call(
+            harness.router.clone(),
+            "POST",
+            "/api/sync/v1/exports",
+            Some(SOURCE_TOKEN),
+            Some(json!({
+                "protocol_version": 1,
+                "catalog_id": "source",
+                "operation": "merge",
+                "reviewed_only": false
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let (status, dropped) = call(
+        harness.router.clone(),
+        "GET",
+        &format!("/api/sync/v1/exports/{export_id}"),
+        Some(SOURCE_TOKEN),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(
+        dropped["error"]
+            .as_str()
+            .unwrap()
+            .contains("create a new export"),
+        "{dropped:#}"
+    );
+}
+
+#[tokio::test]
+async fn a_reviewed_only_grade_export_still_carries_the_tables_it_joins_against() {
+    // reviewed_only narrows the captures, not the structure the read needs.
+    let harness = Harness::new(OBSERVED, "");
+    let (status, exported) = call(
+        harness.router.clone(),
+        "POST",
+        "/api/sync/v1/exports",
+        Some(SOURCE_TOKEN),
+        Some(json!({
+            "protocol_version": 1,
+            "catalog_id": "source",
+            "operation": "push_grades",
+            "reviewed_only": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{exported:#}");
+    let tables = &exported["data"]["bundle"]["tables"];
+    assert_eq!(tables["project"]["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(tables["target"]["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(tables["acquiredimage"]["rows"].as_array().unwrap().len(), 2);
+}
+
 fn count(connection: &Connection, table: &str) -> i64 {
     connection
         .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {

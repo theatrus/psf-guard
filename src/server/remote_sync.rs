@@ -201,15 +201,20 @@ pub struct SyncExport {
 struct StoredExport {
     catalog_id: String,
     created_at: i64,
+    /// Insertion order. `created_at` is whole seconds, so a burst of exports
+    /// all carry the same one and cannot be ranked by it — ordering on the
+    /// timestamp alone would evict by UUID, which is to say at random.
+    sequence: u64,
     export: SyncExport,
 }
 
 /// Built export bundles, held so a client can re-fetch one it lost. Bundles
 /// carry whole tables, so this is capacity-bound and time-bound: expired
-/// entries go first, then the oldest, never an arbitrary hash-order victim.
+/// entries go first, then the least recently built.
 #[derive(Default)]
 pub struct ExportStore {
     entries: Mutex<HashMap<String, StoredExport>>,
+    next_sequence: std::sync::atomic::AtomicU64,
 }
 
 impl ExportStore {
@@ -219,12 +224,15 @@ impl ExportStore {
 
     fn insert(&self, catalog_id: String, export: SyncExport) -> Result<(), AppError> {
         let now = unix_seconds();
+        let sequence = self
+            .next_sequence
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut entries = self.lock()?;
         entries.retain(|_, stored| stored.created_at + EXPORT_LIFETIME_SECS > now);
         while entries.len() >= MAX_RETAINED_EXPORTS {
             let Some(oldest) = entries
                 .iter()
-                .min_by_key(|(id, stored)| (stored.created_at, (*id).clone()))
+                .min_by_key(|(_, stored)| stored.sequence)
                 .map(|(id, _)| id.clone())
             else {
                 break;
@@ -236,6 +244,7 @@ impl ExportStore {
             StoredExport {
                 catalog_id,
                 created_at: now,
+                sequence,
                 export,
             },
         );
