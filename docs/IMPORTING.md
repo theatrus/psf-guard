@@ -170,6 +170,6 @@ psf-guard sync grades --from archive.sqlite --to telescope.sqlite --dry-run
 
 Back up both databases before the first write.
 
-See [the data-transfer design](../DATA_TRANSFER_DESIGN.md) for planned native
+See [the data-transfer design](design/data-transfer.md) for planned native
 one-off file handles, versioned remote bundles, remote peers, and the N.I.N.A.
 plugin endpoint.

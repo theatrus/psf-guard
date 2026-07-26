@@ -1,7 +1,8 @@
 # Data transfer, database merge, and remote sync
 
-Status: design approved in principle. The first implementation slice adds
-local grade push and server-owned preview IDs with expiry and stale checks.
+Status: local and remote merge, planning, grade, and image-upload paths are
+implemented. Native one-off file handles and the N.I.N.A. plugin remain
+follow-up work.
 
 ## Purpose
 
@@ -17,9 +18,10 @@ The design must not require Syncthing, Dropbox, or another file copier to move
 a live SQLite database. N.I.N.A. may write that file while an outside process
 copies it, and a copied database gives neither side a useful conflict preview.
 
-Original FITS files are outside the database-bundle protocol. A transfer can
+Original FITS files stay outside the database-bundle protocol. A transfer can
 copy database rows and stored thumbnails, then report which image files resolve
-on the destination. File transfer can be added later as a separate action.
+on the destination. The remote intake endpoint handles FITS upload as a
+separate action.
 
 ## Current state
 
@@ -35,13 +37,12 @@ The repository already has most of the local merge rules:
 - `sync grades` sends grading state and reject reasons by image GUID.
 - The management API and Settings UI expose local pull and planning push.
 
-The missing pieces are:
+The remaining pieces are:
 
 - one clear transfer workspace instead of controls repeated under each catalog;
 - durable job and preview state;
 - local-file selection without first keeping a catalog in the registry;
-- remote peers, authentication, and a versioned wire format; and
-- an endpoint that a future N.I.N.A. plugin can implement.
+- a N.I.N.A. plugin that calls the remote sync and intake endpoints.
 
 ## Terms
 

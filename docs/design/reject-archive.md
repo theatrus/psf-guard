@@ -1,4 +1,4 @@
-# Out-of-Tree Reject Archive — Design & Implementation Plan
+# Out-of-tree reject archive
 
 Status: **Implemented (A1–A8); retained as the original design record**
 Owner: psf-guard maintainers
@@ -6,7 +6,7 @@ Last updated: 2026-07-23
 
 > The task tracker near the end records the final state. Earlier references to
 > restore as future work describe the design sequence, not the current
-> product. See the main `README.md` for current commands.
+> product. See the main [README](../../README.md) for current commands.
 
 ## 1. Goal
 

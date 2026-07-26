@@ -213,8 +213,8 @@ pub enum Commands {
     /// to `<image_dir>/<P>/REJECT/<rest>` by default. Idempotent: re-runs
     /// skip rows already recorded in the `psf_guard_archive` sibling table.
     ///
-    /// See REJECT_ARCHIVE_PLAN.md for the full design. Eventually deprecates
-    /// `filter-rejected`.
+    /// See `docs/design/reject-archive.md` for the safety model. Replaces
+    /// `filter-rejected` for normal archive work.
     MoveRejects {
         /// Slug of the database (from the registry) to operate on.
         #[arg(long)]

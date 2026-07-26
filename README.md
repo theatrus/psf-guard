@@ -154,7 +154,7 @@ uploads**, and select its receive directory. The authenticated
 `/api/db/{db_id}/images/upload` endpoint
 verifies the database identity and file digest, saves without overwriting, and
 runs the same name/coordinate target resolution used by folder import. See
-[the remote image ingest contract](DATA_TRANSFER_DESIGN.md#remote-image-ingest).
+[the remote image ingest contract](docs/design/data-transfer.md#remote-image-ingest).
 
 The same key authenticates `/api/sync/v1/*` for remote Target Scheduler
 export, preview, and apply, but only after you tick **Accept remote scheduler
@@ -675,7 +675,7 @@ writes. Pending grades are excluded from the UI grade push by default.
 
 Native one-off file handles, versioned remote bundles, the remote protocol,
 and the future N.I.N.A. plugin boundary are tracked in
-[DATA_TRANSFER_DESIGN.md](./DATA_TRANSFER_DESIGN.md).
+[data-transfer design](docs/design/data-transfer.md).
 
 ## ⌨️ CLI reference
 
@@ -903,7 +903,8 @@ cd static && npm run dev                   # frontend dev server
 cd static && npm run test:e2e              # Playwright end-to-end suite
 ```
 
-Architecture notes live in [CLAUDE.md](CLAUDE.md).
+Contributor rules live in [CLAUDE.md](CLAUDE.md). Detailed user and engineering
+guides start at [docs/README.md](docs/README.md).
 
 ## 📄 License
 
