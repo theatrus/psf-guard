@@ -1365,3 +1365,39 @@ export interface ImageQualityResponse {
   sequence_image_count?: number;
   reference_values?: ReferenceValues;
 }
+
+/** A remote PSF Guard this instance can sync with. The key never leaves the server. */
+export interface PeerSummary {
+  id: string;
+  name: string;
+  base_url: string;
+  catalog_id: string | null;
+  token_configured: boolean;
+}
+
+export interface PeerCheck {
+  reachable: boolean;
+  product: string | null;
+  product_version: string | null;
+  protocol_version: number | null;
+  catalogs: string[];
+  capabilities: string[];
+  error: string | null;
+}
+
+export type RemoteSyncDirection = 'pull' | 'push_planning' | 'push_grades';
+
+export interface RemoteSyncRequest {
+  peer_id: string;
+  direction: RemoteSyncDirection;
+  dry_run: boolean;
+  reviewed_only?: boolean;
+  with_image_data?: boolean;
+}
+
+export interface RemoteSyncResult {
+  applied: boolean;
+  peer_product: string;
+  peer_catalog: string;
+  summary: Record<string, number>;
+}

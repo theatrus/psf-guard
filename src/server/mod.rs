@@ -6,6 +6,7 @@ pub mod embedded_static;
 pub mod extract;
 pub mod handlers;
 pub mod import_job;
+pub mod peers;
 pub mod preview_queue;
 pub mod quality_backfill;
 pub mod remote_audit;
@@ -430,6 +431,16 @@ async fn run_server_internal(
         .route(
             "/databases/{db_id}",
             put(handlers::update_database_route).delete(handlers::remove_database_route),
+        )
+        .route("/peers", get(peers::list_peers).post(peers::add_peer))
+        .route(
+            "/peers/{peer_id}",
+            put(peers::update_peer).delete(peers::remove_peer),
+        )
+        .route("/peers/{peer_id}/check", post(peers::check_peer))
+        .route(
+            "/databases/{db_id}/sync/remote",
+            post(peers::sync_with_peer),
         )
         .route("/sync/v1/capabilities", get(remote_sync::capabilities))
         .route(

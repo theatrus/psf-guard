@@ -301,6 +301,31 @@ Each database opts into this protocol on its own. Holding a valid key is not
 enough: the operator ticks **Accept remote scheduler sync** for that database,
 separately from **Accept remote image uploads**.
 
+### Speaking the protocol, not only answering it
+
+`server/remote_sync.rs` answers `/api/sync/v1`; `sync_client.rs` speaks it.
+Without both, a PSF Guard could only ever be the far end of somebody else's
+sync — which left the two-instance arrangement this design is for unreachable
+except through a script.
+
+The client is one type over `reqwest`, and the directions sit on top of it in
+`commands/sync/remote.rs`:
+
+- **Pull**: fetch a bundle from the peer, stage it as a throwaway SQLite
+  source, and hand it to the same merge engine a local `sync pull` runs. The
+  write is local, so the preview is too.
+- **Push**: build a bundle from the local database, send it for review, and
+  apply the preview ID the peer returns. Nothing is written there until that
+  ID is named, and a peer whose catalog moved under the preview refuses.
+
+Two surfaces drive it. `psf-guard sync remote` for a terminal or a cron job,
+and `POST /api/databases/{id}/sync/remote` for the Settings panel, which reads
+its peers from `/api/peers`. Peers live in the registry beside the databases:
+name, base URL, key, optional catalog. Unlike an incoming key, which is stored
+as a digest because the server only needs to check it, an outgoing key must be
+presented on every request and is therefore kept in the clear — the registry
+file is a credential store, and the API never returns a key to a browser.
+
 ### Granting access without a Settings panel
 
 The desktop app has Settings; a server run from the command line does not, and

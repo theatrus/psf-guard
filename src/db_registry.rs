@@ -185,6 +185,28 @@ pub struct RejectArchiveOverrides {
     pub sidecar_exts: Option<Vec<String>>,
 }
 
+/// A remote PSF Guard this instance can sync with.
+///
+/// Unlike an incoming key, which is stored as a digest because the server only
+/// ever needs to *check* it, an outgoing key has to be presented on every
+/// request — so it is kept in the clear. That makes the registry file a
+/// credential store: it is the user's own config, but it should be readable
+/// only by them. The API never returns the key to a browser.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PeerEntry {
+    /// URL-safe slug used in `/api/peers/{id}`.
+    pub id: String,
+    pub name: String,
+    /// Base URL, e.g. `https://telescope.example:3000`.
+    pub base_url: String,
+    #[serde(default)]
+    pub token: String,
+    /// Which of the peer's catalogs to use. Absent means "whichever its key
+    /// opens", which is the only one it will accept anyway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_id: Option<String>,
+}
+
 /// Persisted shape of the database registry on disk (v2+).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DbRegistry {
@@ -200,6 +222,10 @@ pub struct DbRegistry {
     /// standard environment, executable-adjacent, and platform data paths.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub astrometry: Option<crate::astrometry::AstrometryConfig>,
+    /// Remote PSF Guard instances this one can sync with. Additive within
+    /// registry v2; absent means none are configured.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub peers: Vec<PeerEntry>,
 }
 
 impl Default for DbRegistry {
@@ -209,6 +235,7 @@ impl Default for DbRegistry {
             databases: Vec::new(),
             active_db_id: None,
             astrometry: None,
+            peers: Vec::new(),
         }
     }
 }

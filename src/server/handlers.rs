@@ -415,7 +415,7 @@ pub async fn list_databases(
     Ok(Json(ApiResponse::success(summaries)))
 }
 
-fn require_registry_path(state: &AppState) -> Result<std::path::PathBuf, AppError> {
+pub(crate) fn require_registry_path(state: &AppState) -> Result<std::path::PathBuf, AppError> {
     state.registry_path.read().unwrap().clone().ok_or_else(|| {
         AppError::BadRequest(
             "database registry persistence is not configured for this server".into(),

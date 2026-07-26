@@ -6,6 +6,7 @@ import { apiClient } from '../api/client';
 import type { DatabaseSummary } from '../api/types';
 import { describeImportProgress, useImportJob } from '../hooks/useImportJob';
 import QualityBackfillControls from './QualityBackfillControls';
+import RemotePeerSync from './RemotePeerSync';
 import SchedulerSyncControls from './SchedulerSyncControls';
 import SeizaCatalogControls from './SeizaCatalogControls';
 import CalibrationLibrarySummary from './CalibrationLibrarySummary';
@@ -581,7 +582,10 @@ export default function TauriSettings({ isOpen, onClose }: TauriSettingsProps) {
           {managementAllowed && <SeizaCatalogControls />}
 
           {managementAllowed && (
-            <SchedulerSyncControls databases={databases} disabled={isApplying} />
+            <>
+              <SchedulerSyncControls databases={databases} disabled={isApplying} />
+              <RemotePeerSync databases={databases} disabled={isApplying} />
+            </>
           )}
 
           <div className="settings-section">

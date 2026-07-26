@@ -1216,3 +1216,79 @@
     grid-column: 1;
   }
 }
+
+/* Remote PSF Guard peers — the sending half of the sync protocol. */
+.remote-peer-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.remote-peer-list > label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 16rem;
+  flex: 1 1 16rem;
+}
+
+.remote-peer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.remote-peer-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+}
+
+.remote-peer-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.remote-peer-local {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-width: 24rem;
+  margin: 0.75rem 0;
+}
+
+.remote-peer-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.remote-peer-run {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.remote-peer-preview {
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border-left: 3px solid var(--accent-color, #4a9eff);
+  background: rgba(74, 158, 255, 0.08);
+}
+
+.remote-peer-preview p {
+  margin: 0.35rem 0 0;
+}
+
+.remote-peer-check,
+.remote-peer-message {
+  margin: 0.5rem 0 0;
+}
