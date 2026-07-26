@@ -35,6 +35,10 @@ pub enum GenKind {
         midtone: f64,
         shadow: f64,
         max_dimensions: Option<(u32, u32)>,
+        /// Render a one-shot-color mosaic in colour rather than luminance.
+        /// A frame with no `BAYERPAT` falls back to greyscale, so this can be
+        /// asked for on a mixed rig without breaking the mono frames.
+        color: bool,
     },
     Annotated {
         max_stars: usize,
@@ -216,14 +220,14 @@ pub fn generate(job: &GenJob) -> anyhow::Result<()> {
             midtone,
             shadow,
             max_dimensions,
-        } => crate::commands::stretch_to_png::stretch_to_png_with_resize(
-            &job.fits_path.to_string_lossy(),
-            Some(tmp.to_string_lossy().into_owned()),
+            color,
+        } => generate_preview(
+            &job.fits_path,
+            &tmp,
             *midtone,
             *shadow,
-            false, // logarithmic
-            false, // invert
             *max_dimensions,
+            *color,
         ),
         GenKind::Annotated { max_stars, size } => {
             generate_annotated(&job.fits_path, &tmp, size, *max_stars)
@@ -239,6 +243,39 @@ pub fn generate(job: &GenJob) -> anyhow::Result<()> {
             Err(e)
         }
     }
+}
+
+/// Render one preview, in colour when asked for it and the frame is a mosaic.
+fn generate_preview(
+    fits_path: &Path,
+    output: &Path,
+    midtone: f64,
+    shadow: f64,
+    max_dimensions: Option<(u32, u32)>,
+    color: bool,
+) -> anyhow::Result<()> {
+    let source = fits_path.to_string_lossy();
+    let destination = output.to_string_lossy().into_owned();
+    if color
+        && crate::commands::stretch_to_png::color_to_png_with_resize(
+            &source,
+            Some(destination.clone()),
+            midtone,
+            shadow,
+            max_dimensions,
+        )?
+    {
+        return Ok(());
+    }
+    crate::commands::stretch_to_png::stretch_to_png_with_resize(
+        &source,
+        Some(destination),
+        midtone,
+        shadow,
+        false, // logarithmic
+        false, // invert
+        max_dimensions,
+    )
 }
 
 /// Unique sibling temp path for atomic-rename generation.

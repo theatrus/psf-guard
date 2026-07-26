@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
-use crate::image_analysis::FitsImage;
+use crate::image_analysis::{ColorFrame, FitsImage};
 
 pub fn stretch_to_png(
     fits_path: &str,
@@ -24,6 +24,111 @@ pub fn stretch_to_png(
         logarithmic,
         invert,
         None, // No resize
+    )
+}
+
+/// Render a one-shot-color frame in colour, or report that it is not a mosaic.
+///
+/// Returns `Ok(false)` for a frame with no `BAYERPAT`, leaving the caller to
+/// fall back to the greyscale path — a mono camera has no colour to show, and
+/// refusing outright would make the option useless on a mixed rig.
+///
+/// The transfer is the same midtone stretch the greyscale preview uses, so a
+/// colour and a mono rendition of the same exposure sit at the same
+/// brightness. It is measured once on luminance and applied identically to
+/// red, green, and blue: that keeps the ratios between channels, and with
+/// them the colour. Stretching each channel against its own statistics would
+/// pull all three toward a common median and wash the image out.
+pub fn color_to_png_with_resize(
+    fits_path: &str,
+    output: Option<String>,
+    midtone_factor: f64,
+    shadow_clipping: f64,
+    max_dimensions: Option<(u32, u32)>,
+) -> Result<bool> {
+    use seiza_stretch::{stretch_u16_to_u16, StretchParams};
+
+    let path = Path::new(fits_path);
+    let Some(frame) = ColorFrame::from_file(path)
+        .with_context(|| format!("Failed to load FITS file: {}", path.display()))?
+    else {
+        return Ok(false);
+    };
+
+    // Statistics come from luminance so every channel shares one transfer.
+    let luminance = FitsImage {
+        width: frame.width,
+        height: frame.height,
+        data: frame.luminance(),
+        raw_min: 0.0,
+        raw_scale: 1.0,
+        bzero: 0.0,
+    };
+    let statistics = luminance
+        .calculate_basic_statistics()
+        .to_stretch_statistics();
+    let params = StretchParams {
+        target_median: midtone_factor,
+        shadows_clip: shadow_clipping,
+    };
+
+    let planes: Vec<Vec<u16>> = (0..3)
+        .map(|channel| stretch_u16_to_u16(&frame.channel(channel), &statistics, &params))
+        .collect();
+    let mut interleaved = Vec::with_capacity(frame.width * frame.height * 3);
+    for pixel in 0..frame.width * frame.height {
+        for plane in &planes {
+            interleaved.push((plane[pixel] >> 8) as u8);
+        }
+    }
+
+    let buffer = image::RgbImage::from_raw(frame.width as u32, frame.height as u32, interleaved)
+        .context("Failed to create colour image buffer")?;
+    let buffer = match max_dimensions {
+        Some((max_width, max_height)) => resize_to_fit(buffer, max_width, max_height),
+        None => buffer,
+    };
+
+    let output_path = output.map_or_else(
+        || {
+            let mut path = path.to_path_buf();
+            path.set_extension("png");
+            path
+        },
+        PathBuf::from,
+    );
+    let file = File::create(&output_path)
+        .with_context(|| format!("Failed to create output file: {}", output_path.display()))?;
+    PngEncoder::new_with_quality(
+        BufWriter::new(file),
+        CompressionType::Fast,
+        FilterType::NoFilter,
+    )
+    .write_image(
+        buffer.as_raw(),
+        buffer.width(),
+        buffer.height(),
+        ColorType::Rgb8.into(),
+    )
+    .context("Failed to encode colour PNG")?;
+    Ok(true)
+}
+
+/// Scale down to fit a box, keeping the aspect ratio. Never scales up: an
+/// enlarged preview costs bytes and shows nothing extra.
+fn resize_to_fit(buffer: image::RgbImage, max_width: u32, max_height: u32) -> image::RgbImage {
+    let scale =
+        (max_width as f32 / buffer.width() as f32).min(max_height as f32 / buffer.height() as f32);
+    if scale >= 1.0 {
+        return buffer;
+    }
+    let width = ((buffer.width() as f32 * scale) as u32).max(1);
+    let height = ((buffer.height() as f32 * scale) as u32).max(1);
+    image::imageops::resize(
+        &buffer,
+        width,
+        height,
+        image::imageops::FilterType::Lanczos3,
     )
 }
 

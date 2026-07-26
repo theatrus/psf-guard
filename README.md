@@ -880,12 +880,32 @@ curl -X POST \
   "localhost:3000/api/databases/my-db/sync/previews/<preview_id>/apply"
 ```
 
+## One-shot-color frames
+
+A raw OSC file with a recognized `BAYERPAT` header is debayered, and what
+happens next depends on whether you are looking or measuring.
+
+**Looking.** The image viewer shows colour by default. Press `C` or use the
+**Color** button for the luminance rendition instead. Stacks of OSC frames are
+colour throughout: the stacker debayers on ingest and integrates all three
+channels, so the preview and the exported FITS are RGB.
+
+**Measuring.** Grading and quality metrics use luminance, always. Star metrics
+on a bare colour filter array are distorted by the per-channel sampling, and
+N.I.N.A. measures the debayered frame, so this keeps our numbers comparable to
+the ones Target Scheduler recorded. Switching the viewer to colour changes what
+you see and nothing that is scored.
+
+The colour stretch is measured once on luminance and applied identically to
+red, green, and blue. That keeps the ratios between channels, and with them the
+colour balance — stretching each channel against its own statistics would pull
+all three toward a common median and wash the frame out.
+
+A frame with no `BAYERPAT` — a mono camera behind a filter wheel — has no
+colour to recover and renders greyscale either way.
+
 ## ⚠️ Known limitations
 
-- **OSC display is luminance-first.** Raw one-shot-color FITS files with a
-  recognized `BAYERPAT` header are debayered, then reduced to luminance for
-  grading and quality measurements. The single-frame grader does not yet
-  provide a full-color rendition of an OSC exposure.
 - **Path assumptions.** Directory layouts matching
   `%DATEMINUS12%/%TARGETNAME%/%DATEMINUS12%/LIGHT/...` (with or without the
   leading date) are detected reliably. Other patterns may need support; open

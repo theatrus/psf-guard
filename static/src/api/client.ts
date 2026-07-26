@@ -767,6 +767,7 @@ export const apiClient = {
         midtone: d.midtone,
         shadow: d.shadow,
         max_stars: d.maxStars,
+        color: d.color,
       })),
     };
     const { data } = await apiInstance.post<
@@ -782,6 +783,9 @@ export const apiClient = {
     if (options?.stretch !== undefined) params.append('stretch', String(options.stretch));
     if (options?.midtone !== undefined) params.append('midtone', String(options.midtone));
     if (options?.shadow !== undefined) params.append('shadow', String(options.shadow));
+    // Only sent when asked for, so a mono viewer's URLs — and the artifacts
+    // already cached against them — stay exactly as they were.
+    if (options?.color) params.append('color', 'true');
 
     const queryString = params.toString();
     const basePath = serverUrl ? `${serverUrl}/api` : '/api';

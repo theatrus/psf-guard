@@ -839,6 +839,10 @@ async fn pregenerate_preview(
             midtone: 0.2,
             shadow: -2.8,
             max_dimensions,
+            // Warm what the viewer will actually ask for. A mono frame
+            // renders the same either way, so this costs those rigs nothing
+            // beyond the cache key.
+            color: true,
         },
     };
     tokio::task::spawn_blocking(move || crate::server::preview_queue::generate(&job)).await??;

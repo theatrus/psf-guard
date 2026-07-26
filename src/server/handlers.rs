@@ -2522,6 +2522,7 @@ fn resolve_image_meta(
 /// Cache key for a stretched preview PNG. Must stay identical between the
 /// preview handler, the status endpoint, and the pre-generation path so all
 /// three address the same file.
+#[allow(clippy::too_many_arguments)]
 fn preview_cache_key(
     image: &crate::models::AcquiredImage,
     file_only: &str,
@@ -2529,9 +2530,12 @@ fn preview_cache_key(
     stretch: bool,
     midtone: f64,
     shadow: f64,
+    color: bool,
 ) -> String {
+    // The colour marker only appears when colour was asked for, so every
+    // greyscale preview already on disk keeps its key and stays valid.
     format!(
-        "{}_{}_{}_{}_{}_{}_{}_{}_{}",
+        "{}_{}_{}_{}_{}_{}_{}_{}_{}{}",
         image.id,
         image.project_id,
         image.target_id,
@@ -2541,6 +2545,7 @@ fn preview_cache_key(
         if stretch { "stretch" } else { "linear" },
         (midtone * 10000.0) as i32,
         (shadow * 10000.0) as i32,
+        if color { "_color" } else { "" },
     )
 }
 
@@ -2622,9 +2627,10 @@ pub async fn get_image_preview(
     let stretch = options.stretch.unwrap_or(true);
     let midtone = options.midtone.unwrap_or(0.2);
     let shadow = options.shadow.unwrap_or(-2.8);
+    let color = options.color.unwrap_or(true);
 
     let (image, file_only, target_name) = resolve_image_meta(&ctx, image_id)?;
-    let cache_key = preview_cache_key(&image, &file_only, size, stretch, midtone, shadow);
+    let cache_key = preview_cache_key(&image, &file_only, size, stretch, midtone, shadow, color);
     let cache_path = artifact_cache_path(&ctx, "previews", &cache_key)?;
 
     if cache_path.exists() {
@@ -2641,6 +2647,7 @@ pub async fn get_image_preview(
             midtone,
             shadow,
             max_dimensions: crate::server::preview_queue::max_dimensions_for_size(size),
+            color,
         },
     });
     Ok(generating_response())
@@ -2957,6 +2964,10 @@ pub struct GenStatusItem {
     pub shadow: Option<f64>,
     #[serde(default)]
     pub max_stars: Option<u32>,
+    /// Must match the flag the `<img>` requested, or the poll would report on
+    /// a different artifact than the one the browser is waiting for.
+    #[serde(default)]
+    pub color: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3063,7 +3074,8 @@ fn status_for_item(
             let stretch = item.stretch.unwrap_or(true);
             let midtone = item.midtone.unwrap_or(0.2);
             let shadow = item.shadow.unwrap_or(-2.8);
-            let key = preview_cache_key(image, &file_only, &size, stretch, midtone, shadow);
+            let color = item.color.unwrap_or(true);
+            let key = preview_cache_key(image, &file_only, &size, stretch, midtone, shadow, color);
             match artifact_cache_path(ctx, "previews", &key) {
                 Ok(p) => (
                     p,
@@ -3073,6 +3085,7 @@ fn status_for_item(
                         max_dimensions: crate::server::preview_queue::max_dimensions_for_size(
                             &size,
                         ),
+                        color,
                     },
                 ),
                 Err(_) => return err("cache error"),

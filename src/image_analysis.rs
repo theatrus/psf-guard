@@ -49,6 +49,62 @@ pub struct FitsImage {
     pub bzero: f64,
 }
 
+/// A debayered one-shot-color frame, kept in colour.
+///
+/// [`FitsImage::from_file`] deliberately collapses a mosaic to luminance,
+/// because that is what the measurements want. Display wants the opposite, so
+/// this is the other half of the same decision rather than a replacement for
+/// it: nothing that grades an image goes through here.
+pub struct ColorFrame {
+    pub width: usize,
+    pub height: usize,
+    /// `width * height * 3` samples, RGB interleaved, row-major.
+    pub data: Vec<u16>,
+}
+
+impl ColorFrame {
+    /// Load a frame as colour, or `None` when it is not a mosaic.
+    ///
+    /// A camera without a `BAYERPAT` header — a mono camera behind a filter
+    /// wheel — has no colour to recover, and answering `None` lets the caller
+    /// fall back to the ordinary greyscale rendition rather than inventing
+    /// one.
+    pub fn from_file(path: &Path) -> Result<Option<Self>> {
+        let fits = seiza_fits::FitsImage::open(path)
+            .map_err(|e| anyhow::anyhow!("Failed to open FITS file {}: {e:?}", path.display()))?;
+        Ok(fits.debayer().map(|rgb| Self {
+            width: rgb.width,
+            height: rgb.height,
+            data: rgb.data,
+        }))
+    }
+
+    /// The luminance the stretch is measured on.
+    ///
+    /// One transfer derived from luminance and applied to all three channels
+    /// keeps their ratios, and so the colour balance. Stretching each channel
+    /// against its own statistics would drag the three towards a common
+    /// median and grey the image out — which is the usual way a colour
+    /// autostretch goes wrong.
+    pub fn luminance(&self) -> Vec<u16> {
+        self.data
+            .chunks_exact(3)
+            .map(|pixel| {
+                ((u32::from(pixel[0]) + 2 * u32::from(pixel[1]) + u32::from(pixel[2])) / 4) as u16
+            })
+            .collect()
+    }
+
+    /// View one channel as a plane, for handing to a transfer that works on
+    /// single-channel data.
+    pub fn channel(&self, index: usize) -> Vec<u16> {
+        self.data
+            .chunks_exact(3)
+            .map(|pixel| pixel[index])
+            .collect()
+    }
+}
+
 impl FitsImage {
     /// Extract temperature from FITS headers
     pub fn extract_temperature(path: &Path) -> Option<f64> {

@@ -237,6 +237,13 @@ pub struct PreviewOptions {
     pub midtone: Option<f64>,
     pub shadow: Option<f64>,
     pub max_stars: Option<u32>, // Max number of stars to annotate
+    /// Render a one-shot-color mosaic in colour instead of luminance.
+    ///
+    /// On by default — a colour camera's frame should look like what it
+    /// recorded. Pass `color=false` for the luminance rendition, which is
+    /// what the grader measures. A frame with no `BAYERPAT` has no colour to
+    /// show and renders greyscale either way.
+    pub color: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]

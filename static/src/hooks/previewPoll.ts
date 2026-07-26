@@ -53,6 +53,7 @@ export function descriptorKey(d: PreviewDescriptor): string {
     d.midtone ?? '',
     d.shadow ?? '',
     d.maxStars ?? '',
+    d.color ? 'color' : '',
   ].join('|');
 }
 
