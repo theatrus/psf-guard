@@ -110,5 +110,8 @@ mock -r fedora-44-x86_64 ~/rpmbuild/SRPMS/psf-guard-*.src.rpm
 2. Add a `%changelog` entry.
 3. Regenerate sources for the tag: `./scripts/make-rpm-sources.sh --ref vX.Y.Z`.
 
-CI (`.github/workflows/rpm.yml`) builds the RPMs in Fedora 43 and 44 containers
-on every push and pull request and uploads them as artifacts.
+CI (`.github/workflows/rpm.yml`) builds the RPMs in a Fedora 44 container on
+every push and pull request and uploads them as artifacts. The local
+`build-in-podman.sh` still covers other releases; CI builds one because each
+container compiles the whole tree from cold and 43 never caught anything 44
+missed.
