@@ -31,7 +31,7 @@ pub struct DbEntry {
     #[serde(default)]
     pub image_dirs: Vec<String>,
     /// Per-DB overrides for the out-of-tree reject-archive feature (see
-    /// REJECT_ARCHIVE_PLAN.md). All fields optional; absent values fall
+    /// `docs/design/reject-archive.md`). All fields optional; absent values fall
     /// back to the CLI flag, then the compiled-in defaults
     /// (`segment_name = "REJECT"`, `depth = 1`,
     /// `sidecar_exts = [".xisf", ".json", ".txt"]`).

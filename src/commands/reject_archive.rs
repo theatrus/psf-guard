@@ -6,11 +6,8 @@
 //! keyed on the upstream `acquiredimage.guid` so it stays joinable across
 //! TS exports/reimports.
 //!
-//! The plan, history, and design rationale live in
-//! [REJECT_ARCHIVE_PLAN.md](../../../REJECT_ARCHIVE_PLAN.md). Phase A1 is
-//! this module: schema bootstrap + read helpers + a schema-version guard.
-//! Subsequent phases add destination computation (A3), sidecar discovery
-//! (A4), the `move-rejects` CLI handler (A5), and an integration test (A7).
+//! The safety model and design rationale live in
+//! `docs/design/reject-archive.md`.
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -24,7 +21,8 @@ use crate::models::GradingStatus;
 
 /// Compiled-in defaults for the reject-archive feature. Overridden by
 /// per-DB registry fields (`DbEntry.reject_archive`), then by per-invocation
-/// CLI flags. See REJECT_ARCHIVE_PLAN.md §4.2 for the precedence rules.
+/// CLI flags. See `docs/design/reject-archive.md` §4.2 for the precedence
+/// rules.
 pub const DEFAULT_SEGMENT_NAME: &str = "REJECT";
 pub const DEFAULT_DEPTH: u32 = 1;
 pub const DEFAULT_SIDECAR_EXTS: &[&str] = &[".xisf", ".json", ".txt"];
@@ -356,7 +354,7 @@ pub struct ArchiveRecord {
 ///
 /// Safe to call repeatedly — the statements are `IF NOT EXISTS`. Schema is
 /// owned by psf-guard; no migrations from upstream Target Scheduler touch
-/// it. See REJECT_ARCHIVE_PLAN.md §4.4 for the rationale.
+/// it. See `docs/design/reject-archive.md` §4.4 for the rationale.
 pub fn ensure_archive_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         r#"

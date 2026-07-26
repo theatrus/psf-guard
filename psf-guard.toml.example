@@ -9,8 +9,8 @@
 # it lives in the database registry (JSON), by default at
 # <config>/psf-guard/config.json. Register a database with:
 #   psf-guard server <db.sqlite> <image-dir>...
-# or manage them from the web UI / Tauri app. See REJECT_ARCHIVE_PLAN.md and
-# the "Multi-database support" section of CLAUDE.md for details.
+# or manage them from the web UI / Tauri app. See docs/design/reject-archive.md
+# and docs/design/multi-database.md for details.
 #
 # A legacy [database]/[images] section is still parsed for backward
 # compatibility, but it is IGNORED in server mode -- do not add it here.

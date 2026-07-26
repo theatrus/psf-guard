@@ -1,6 +1,6 @@
 //! Group scanned frames into a Target Scheduler project/target/exposure plan.
 //!
-//! Grouping rules (see CREATE_IMPORT_PLAN.md §2):
+//! Grouping rules (see `docs/IMPORTING.md`):
 //! - Frames never share a project across different equipment signatures
 //!   (telescope, camera, focal length, binning).
 //! - Each distinct OBJECT becomes its own project and target by default.

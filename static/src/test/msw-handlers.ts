@@ -24,7 +24,7 @@ const emptyList = {
 
 // Default handlers for every endpoint a component might fall through to
 // without registering its own mock. Path-nested under `/api/db/:dbId/...`
-// to match production routing (see B2 in MULTI_DB_PLAN.md). Per-test
+// to match production routing. Per-test
 // `server.use(...)` overrides win for whatever the spec cares about; these
 // fill in the gaps so MSW's `onUnhandledRequest: 'error'` doesn't trip
 // every time a side-effect query fires.
