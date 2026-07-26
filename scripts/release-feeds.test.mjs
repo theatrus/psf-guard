@@ -51,6 +51,10 @@ test('builds signed updater and server notice feeds', async () => {
     feeds.updater.platforms['linux-x86_64'].url,
     'https://github.com/theatrus/psf-guard/releases/download/v1.2.3/PSF-Guard-1.2.3-linux-x86_64.AppImage',
   );
+  assert.equal(
+    feeds.updater.platforms['linux-x86_64'].signature,
+    'sig-PSF-Guard-1.2.3-linux-x86_64.AppImage',
+  );
   assert.deepEqual(feeds.notice, {
     schema_version: 1,
     version,

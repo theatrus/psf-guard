@@ -50,12 +50,18 @@ forces an install.
 
 A `v*` tag runs `.github/workflows/release.yml`. The job:
 
-1. checks that the tag matches `tauri.conf.json`;
-2. builds the normal CLI and desktop packages;
-3. signs stable Tauri updater payloads for Windows, macOS, and Linux;
-4. builds `updater.json` from the three signatures;
-5. builds `notice.json`; and
-6. attaches both feeds and the signed payloads to the GitHub release.
+1. signs a small probe on each runner to check the GitHub signing secrets;
+2. checks that the tag matches `tauri.conf.json`;
+3. builds the normal CLI and desktop packages;
+4. signs stable Tauri updater payloads for Windows, macOS, and Linux;
+5. requires a non-empty signature beside each payload;
+6. builds `updater.json` from the three signatures;
+7. builds `notice.json`; and
+8. attaches both feeds and the signed payloads to the GitHub release.
+
+Tauri does not sign `updater.json` itself. The manifest carries one signature
+for each platform payload. The app checks that signature with the public key
+embedded in `tauri.conf.json` before it installs the downloaded file.
 
 The workflow does not publish to `updates.psf-guard.com`. Keep that release
 sync in a separate job or repository.

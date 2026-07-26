@@ -101,6 +101,19 @@ jobs:
       run: cargo install tauri-cli --version "^2.0" --locked
       continue-on-error: true
 
+    - name: Verify updater signing credentials
+      shell: bash
+      env:
+        TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      run: |
+        test -n "$TAURI_SIGNING_PRIVATE_KEY"
+        test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+        probe="$RUNNER_TEMP/psf-guard-updater-signing-probe"
+        printf 'PSF Guard updater signing probe\n' > "$probe"
+        cargo tauri signer sign "$probe"
+        test -s "$probe.sig"
+
     - name: Check tag matches app version
       shell: bash
       run: |
@@ -272,6 +285,9 @@ jobs:
       uses: actions/setup-node@v7
       with:
         node-version: '24'
+
+    - name: Test update feed generation
+      run: node --test scripts/release-feeds.test.mjs
 
     - name: Download signed updater assets
       env:
