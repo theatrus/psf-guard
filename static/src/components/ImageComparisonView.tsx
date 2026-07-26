@@ -6,6 +6,7 @@ import { GradingStatus, type Image, type PreviewDescriptor } from '../api/types'
 import { useImageZoom } from '../hooks/useImageZoom';
 import { useAsyncImage } from '../hooks/useAsyncImage';
 import { ensurePreviewReady } from '../hooks/previewPoll';
+import { useColorPreview } from '../hooks/useColorPreview';
 
 interface ImageComparisonViewProps {
   dbId: string;
@@ -33,6 +34,9 @@ export default function ImageComparisonView({
   onSwapImages,
 }: ImageComparisonViewProps) {
   const [showStars, setShowStars] = useState(false);
+  // Same shared preference as the grid and the detail view: comparing two
+  // frames is pointless if one arrives rendered differently from the other.
+  const color = useColorPreview();
   const [syncZoom, setSyncZoom] = useState(true);
   const [maxStars] = useState(1000);
   
@@ -125,10 +129,10 @@ export default function ImageComparisonView({
       : 'large';
   const leftSrc = showStars
     ? apiClient.getAnnotatedUrl(dbId, leftImageId, leftSize, maxStars)
-    : apiClient.getPreviewUrl(dbId, leftImageId, { size: leftSize });
+    : apiClient.getPreviewUrl(dbId, leftImageId, { size: leftSize, color });
   const leftDescriptor: PreviewDescriptor = showStars
     ? { imageId: leftImageId, kind: 'annotated', size: leftSize, maxStars }
-    : { imageId: leftImageId, kind: 'preview', size: leftSize };
+    : { imageId: leftImageId, kind: 'preview', size: leftSize, color };
   const asyncLeft = useAsyncImage(dbId, leftSrc, leftDescriptor);
 
   const rightSize: 'large' | 'original' =
@@ -136,10 +140,10 @@ export default function ImageComparisonView({
   const rightIdForUrl = rightImageId ?? 0;
   const rightSrc = showStars
     ? apiClient.getAnnotatedUrl(dbId, rightIdForUrl, rightSize, maxStars)
-    : apiClient.getPreviewUrl(dbId, rightIdForUrl, { size: rightSize });
+    : apiClient.getPreviewUrl(dbId, rightIdForUrl, { size: rightSize, color });
   const rightDescriptor: PreviewDescriptor = showStars
     ? { imageId: rightIdForUrl, kind: 'annotated', size: rightSize, maxStars }
-    : { imageId: rightIdForUrl, kind: 'preview', size: rightSize };
+    : { imageId: rightIdForUrl, kind: 'preview', size: rightSize, color };
   const asyncRight = useAsyncImage(dbId, rightSrc, rightDescriptor);
   const hideLeftImage = asyncLeft.state !== 'ready' || loadedLeftSrc !== asyncLeft.src;
   const hideRightImage = asyncRight.state !== 'ready' || loadedRightSrc !== asyncRight.src;
@@ -233,10 +237,10 @@ export default function ImageComparisonView({
       leftOriginalRef.current = new Image(); // guard: preload only once
       const originalUrl = showStars
         ? apiClient.getAnnotatedUrl(dbId, leftImageId, 'original', maxStars)
-        : apiClient.getPreviewUrl(dbId, leftImageId, { size: 'original' });
+        : apiClient.getPreviewUrl(dbId, leftImageId, { size: 'original', color });
       const descriptor: PreviewDescriptor = showStars
         ? { imageId: leftImageId, kind: 'annotated', size: 'original', maxStars }
-        : { imageId: leftImageId, kind: 'preview', size: 'original' };
+        : { imageId: leftImageId, kind: 'preview', size: 'original', color };
 
       // Route through the interactive queue so an uncached 'original' is
       // generated (its 202 is not a failure); only flip once it's ready.
@@ -297,10 +301,10 @@ export default function ImageComparisonView({
       rightOriginalRef.current = new Image(); // guard: preload only once
       const originalUrl = showStars
         ? apiClient.getAnnotatedUrl(dbId, rightImageId, 'original', maxStars)
-        : apiClient.getPreviewUrl(dbId, rightImageId, { size: 'original' });
+        : apiClient.getPreviewUrl(dbId, rightImageId, { size: 'original', color });
       const descriptor: PreviewDescriptor = showStars
         ? { imageId: rightImageId, kind: 'annotated', size: 'original', maxStars }
-        : { imageId: rightImageId, kind: 'preview', size: 'original' };
+        : { imageId: rightImageId, kind: 'preview', size: 'original', color };
 
       void ensurePreviewReady(dbId, originalUrl, descriptor).then((ok) => {
         if (!ok) return;

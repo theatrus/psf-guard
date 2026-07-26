@@ -14,6 +14,11 @@ import AstrometryOverlay from './AstrometryOverlay';
 import SatellitePanel from './SatellitePanel';
 import SatelliteTrackOverlay from './SatelliteTrackOverlay';
 import ImageFileLocation from './ImageFileLocation';
+import {
+  colorPreviewEnabled,
+  setColorPreview,
+  useColorPreview,
+} from '../hooks/useColorPreview';
 
 interface ImageDetailViewProps {
   dbId: string;
@@ -49,6 +54,11 @@ export default function ImageDetailView({
 }: ImageDetailViewProps) {
   const queryClient = useQueryClient();
   const [showStars, setShowStars] = useState(false);
+  // Shared with the grid and the overview, so a frame does not change
+  // appearance on the way into the detail view. On by default; off gives the
+  // luminance rendition the grader measures, and a mono frame looks the same
+  // either way.
+  const showColor = useColorPreview();
   const [showPsf, setShowPsf] = useState(false);
   const [psfImageLoading, setPsfImageLoading] = useState(false);
   const [maxStars] = useState(1000);
@@ -67,7 +77,9 @@ export default function ImageDetailView({
   const imageStateRef = useRef<'large' | 'switching-to-original' | 'original'>('large');
   // Guard: request original-resolution generation at most once per image.
   const originalRequestedRef = useRef(false);
-  const mainImageKey = `${dbId}:${imageId}:${showStars ? 'stars' : 'preview'}:${maxStars}`;
+  const mainImageKey = `${dbId}:${imageId}:${showStars ? 'stars' : 'preview'}:${maxStars}:${
+    showColor ? 'color' : 'mono'
+  }`;
   const mainImageKeyRef = useRef(mainImageKey);
   mainImageKeyRef.current = mainImageKey;
 
@@ -108,16 +120,19 @@ export default function ImageDetailView({
   // endpoint and is not queued here). On a cache miss the server returns 202
   // and this drives a "Generating…" indicator, then reloads when ready.
   const mainSize: 'large' | 'original' = useOriginalImage ? 'original' : 'large';
+  // The star overlay is drawn in colour, so it stays on a greyscale frame:
+  // markers over a colour image compete with the pixels they annotate.
+  const colorPreview = showColor && !showStars;
   const largeNonPsfSrc = showStars
     ? apiClient.getAnnotatedUrl(dbId, imageId, 'large', maxStars)
-    : apiClient.getPreviewUrl(dbId, imageId, { size: 'large' });
+    : apiClient.getPreviewUrl(dbId, imageId, { size: 'large', color: colorPreview });
   const originalNonPsfSrc = showStars
     ? apiClient.getAnnotatedUrl(dbId, imageId, 'original', maxStars)
-    : apiClient.getPreviewUrl(dbId, imageId, { size: 'original' });
+    : apiClient.getPreviewUrl(dbId, imageId, { size: 'original', color: colorPreview });
   const nonPsfSrc = mainSize === 'original' ? originalNonPsfSrc : largeNonPsfSrc;
   const nonPsfDescriptor: PreviewDescriptor = showStars
     ? { imageId, kind: 'annotated', size: mainSize, maxStars }
-    : { imageId, kind: 'preview', size: mainSize };
+    : { imageId, kind: 'preview', size: mainSize, color: colorPreview };
   const asyncImg = useAsyncImage(dbId, nonPsfSrc, nonPsfDescriptor);
   // `src` is what the <img> renders (may carry a `v=` cache-buster after a
   // generation-triggered reload); `baseSrc` is the stable identity used to
@@ -236,6 +251,9 @@ export default function ImageDetailView({
     setShowAstrometry(false);
     setShowSatellites(false);
   }, [showStars]);
+  // Colour is a view of the same exposure, not a different analysis, so it
+  // does not turn off the overlays the way stars and PSF turn off each other.
+  useHotkeys('c', () => setColorPreview(!colorPreviewEnabled()), []);
   useHotkeys('p', () => {
     const newPsfState = !showPsf;
     setShowPsf(newPsfState);
@@ -303,10 +321,10 @@ export default function ImageDetailView({
       originalRequestedRef.current = true;
       const originalUrl = showStars
         ? apiClient.getAnnotatedUrl(dbId, imageId, 'original', maxStars)
-        : apiClient.getPreviewUrl(dbId, imageId, { size: 'original' });
+        : apiClient.getPreviewUrl(dbId, imageId, { size: 'original', color: colorPreview });
       const originalDescriptor: PreviewDescriptor = showStars
         ? { imageId, kind: 'annotated', size: 'original', maxStars }
-        : { imageId, kind: 'preview', size: 'original' };
+        : { imageId, kind: 'preview', size: 'original', color: colorPreview };
 
       const requestedKey = mainImageKey;
       void ensurePreviewReady(dbId, originalUrl, originalDescriptor).then((ok) => {
@@ -838,6 +856,19 @@ export default function ImageDetailView({
                   title="Zoom In (+)"
                 >
                   +
+                </button>
+                <button
+                  className={`zoom-btn-compact${showColor ? ' active' : ''}`}
+                  onClick={() => setColorPreview(!showColor)}
+                  aria-pressed={showColor}
+                  disabled={showStars}
+                  title={
+                    showStars
+                      ? 'Star markers are drawn over a greyscale frame'
+                      : 'One-shot-color rendition (C) — off shows the luminance the grader measures'
+                  }
+                >
+                  Color
                 </button>
               </div>
             </div>

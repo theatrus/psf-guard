@@ -4,6 +4,7 @@ import type { Image, ImageQualityResult } from '../api/types';
 import { GradingStatus } from '../api/types';
 import { apiClient } from '../api/client';
 import PreviewImage from './PreviewImage';
+import { useColorPreview } from '../hooks/useColorPreview';
 import { ensurePreviewReady } from '../hooks/previewPoll';
 
 export interface ImageCardProps {
@@ -29,6 +30,7 @@ export default function ImageCard({
   selectionEffects = true,
   className = '',
 }: ImageCardProps) {
+  const color = useColorPreview();
   const shouldDeferPreview = lazyPreview && typeof IntersectionObserver !== 'undefined';
   const { ref: inViewRef, inView } = useInView({
     threshold: 0,
@@ -47,8 +49,8 @@ export default function ImageCard({
     if (selectionEffects && isSelected && image.id) {
       void ensurePreviewReady(
         dbId,
-        apiClient.getPreviewUrl(dbId, image.id, { size: 'large' }),
-        { imageId: image.id, kind: 'preview', size: 'large' }
+        apiClient.getPreviewUrl(dbId, image.id, { size: 'large', color }),
+        { imageId: image.id, kind: 'preview', size: 'large', color }
       );
     }
   }, [isSelected, image.id, dbId, selectionEffects]);
@@ -104,8 +106,8 @@ export default function ImageCard({
         {shouldLoadPreview ? (
           <PreviewImage
             dbId={dbId}
-            src={apiClient.getPreviewUrl(dbId, image.id, { size: 'screen' })}
-            descriptor={{ imageId: image.id, kind: 'preview', size: 'screen' }}
+            src={apiClient.getPreviewUrl(dbId, image.id, { size: 'screen', color })}
+            descriptor={{ imageId: image.id, kind: 'preview', size: 'screen', color }}
             alt={`${image.target_name} - ${image.filter_name || 'No filter'}`}
             loading="lazy"
           />

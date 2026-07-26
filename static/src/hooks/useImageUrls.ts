@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { apiClient } from '../api/client';
+import { colorPreviewEnabled } from './useColorPreview';
 import type { PreviewOptions } from '../api/types';
 
 export const useImageUrls = (dbId: string, imageId: number) => {
@@ -12,7 +13,11 @@ export const useImageUrls = (dbId: string, imageId: number) => {
     const loadUrls = async () => {
       try {
         const [preview, annotated, psf] = await Promise.all([
-          apiClient.getPreviewUrl(dbId, imageId, { size: 'screen', stretch: true }),
+          apiClient.getPreviewUrl(dbId, imageId, {
+            size: 'screen',
+            stretch: true,
+            color: colorPreviewEnabled(),
+          }),
           apiClient.getAnnotatedUrl(dbId, imageId, 'large'),
           apiClient.getPsfUrl(dbId, imageId),
         ]);

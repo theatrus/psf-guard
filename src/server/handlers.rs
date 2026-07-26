@@ -2522,16 +2522,25 @@ fn resolve_image_meta(
 /// Cache key for a stretched preview PNG. Must stay identical between the
 /// preview handler, the status endpoint, and the pre-generation path so all
 /// three address the same file.
-fn preview_cache_key(
+/// Cache key for a preview PNG.
+///
+/// Shared with background pre-generation rather than reimplemented there:
+/// two constructions of one key drift, and when they do the mismatch is
+/// silent — the wrong artifact is served, or a warmed one is never found.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn preview_cache_key(
     image: &crate::models::AcquiredImage,
     file_only: &str,
     size: &str,
     stretch: bool,
     midtone: f64,
     shadow: f64,
+    color: bool,
 ) -> String {
+    // The colour marker only appears when colour was asked for, so every
+    // greyscale preview already on disk keeps its key and stays valid.
     format!(
-        "{}_{}_{}_{}_{}_{}_{}_{}_{}",
+        "{}_{}_{}_{}_{}_{}_{}_{}_{}{}",
         image.id,
         image.project_id,
         image.target_id,
@@ -2541,6 +2550,7 @@ fn preview_cache_key(
         if stretch { "stretch" } else { "linear" },
         (midtone * 10000.0) as i32,
         (shadow * 10000.0) as i32,
+        if color { "_color" } else { "" },
     )
 }
 
@@ -2565,18 +2575,25 @@ fn annotated_cache_key(
 
 /// Resolve the on-disk cache path for a preview/annotated artifact, creating
 /// the category dir. `category` is `"previews"` or `"annotated"`.
+/// Where an artifact lives, in the format new ones are written in.
+///
+/// The extension differs per format, so a PNG cache and a JPEG cache coexist:
+/// changing the setting misses and regenerates rather than serving one as the
+/// other, and changing it back finds the originals still valid.
 fn artifact_cache_path(
     ctx: &DatabaseContext,
     category: &str,
     key: &str,
+    encoding: crate::preview_format::PreviewEncoding,
 ) -> Result<PathBuf, AppError> {
     let cm = crate::server::cache::CacheManager::new(PathBuf::from(&ctx.cache_dir));
     cm.ensure_category_dir(category)
         .map_err(|e| AppError::InternalError(format!("Failed to create cache directory: {}", e)))?;
-    Ok(cm.get_cached_path(category, key, "png"))
+    Ok(cm.get_cached_path(category, key, encoding.extension()))
 }
 
-/// Serve a cached PNG from disk.
+/// Serve a cached image, labelled as whatever it was written as rather than as
+/// whatever the setting says now.
 async fn serve_cached_png(cache_path: &std::path::Path) -> Result<Response, AppError> {
     let buffer = tokio::fs::read(cache_path)
         .await
@@ -2584,7 +2601,10 @@ async fn serve_cached_png(cache_path: &std::path::Path) -> Result<Response, AppE
     Ok((
         StatusCode::OK,
         [
-            (CONTENT_TYPE, "image/png"),
+            (
+                CONTENT_TYPE,
+                crate::preview_format::PreviewFormat::of_path(cache_path).content_type(),
+            ),
             (CACHE_CONTROL, "max-age=86400"),
         ],
         buffer,
@@ -2622,10 +2642,13 @@ pub async fn get_image_preview(
     let stretch = options.stretch.unwrap_or(true);
     let midtone = options.midtone.unwrap_or(0.2);
     let shadow = options.shadow.unwrap_or(-2.8);
+    let color = options
+        .color
+        .unwrap_or_else(|| state.preview_color_default());
 
     let (image, file_only, target_name) = resolve_image_meta(&ctx, image_id)?;
-    let cache_key = preview_cache_key(&image, &file_only, size, stretch, midtone, shadow);
-    let cache_path = artifact_cache_path(&ctx, "previews", &cache_key)?;
+    let cache_key = preview_cache_key(&image, &file_only, size, stretch, midtone, shadow, color);
+    let cache_path = artifact_cache_path(&ctx, "previews", &cache_key, state.preview_encoding())?;
 
     if cache_path.exists() {
         return serve_cached_png(&cache_path).await;
@@ -2641,7 +2664,9 @@ pub async fn get_image_preview(
             midtone,
             shadow,
             max_dimensions: crate::server::preview_queue::max_dimensions_for_size(size),
+            color,
         },
+        encoding: state.preview_encoding(),
     });
     Ok(generating_response())
 }
@@ -2921,7 +2946,7 @@ pub async fn get_annotated_image(
 
     let (image, file_only, target_name) = resolve_image_meta(&ctx, image_id)?;
     let cache_key = annotated_cache_key(&image, &file_only, size, max_stars);
-    let cache_path = artifact_cache_path(&ctx, "annotated", &cache_key)?;
+    let cache_path = artifact_cache_path(&ctx, "annotated", &cache_key, state.preview_encoding())?;
 
     if cache_path.exists() {
         return serve_cached_png(&cache_path).await;
@@ -2935,6 +2960,7 @@ pub async fn get_annotated_image(
             max_stars,
             size: size.to_string(),
         },
+        encoding: state.preview_encoding(),
     });
     Ok(generating_response())
 }
@@ -2957,6 +2983,10 @@ pub struct GenStatusItem {
     pub shadow: Option<f64>,
     #[serde(default)]
     pub max_stars: Option<u32>,
+    /// Must match the flag the `<img>` requested, or the poll would report on
+    /// a different artifact than the one the browser is waiting for.
+    #[serde(default)]
+    pub color: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3032,6 +3062,10 @@ fn status_for_item(
         state: GenerationState::Error,
         error: Some(msg.to_string()),
     };
+    // One read of each, used for both the path this polls and the job it may
+    // enqueue, so a setting change mid-request cannot split the two.
+    let encoding = state.preview_encoding();
+    let color_default = state.preview_color_default();
 
     let Some(image) = images_by_id.get(&item.image_id) else {
         return err("image not found");
@@ -3048,7 +3082,7 @@ fn status_for_item(
         Some("annotated") => {
             let max_stars = item.max_stars.unwrap_or(1000) as usize;
             let key = annotated_cache_key(image, &file_only, &size, max_stars);
-            match artifact_cache_path(ctx, "annotated", &key) {
+            match artifact_cache_path(ctx, "annotated", &key, encoding) {
                 Ok(p) => (
                     p,
                     GenKind::Annotated {
@@ -3063,8 +3097,9 @@ fn status_for_item(
             let stretch = item.stretch.unwrap_or(true);
             let midtone = item.midtone.unwrap_or(0.2);
             let shadow = item.shadow.unwrap_or(-2.8);
-            let key = preview_cache_key(image, &file_only, &size, stretch, midtone, shadow);
-            match artifact_cache_path(ctx, "previews", &key) {
+            let color = item.color.unwrap_or(color_default);
+            let key = preview_cache_key(image, &file_only, &size, stretch, midtone, shadow, color);
+            match artifact_cache_path(ctx, "previews", &key, encoding) {
                 Ok(p) => (
                     p,
                     GenKind::Preview {
@@ -3073,6 +3108,7 @@ fn status_for_item(
                         max_dimensions: crate::server::preview_queue::max_dimensions_for_size(
                             &size,
                         ),
+                        color,
                     },
                 ),
                 Err(_) => return err("cache error"),
@@ -3091,6 +3127,7 @@ fn status_for_item(
                 fits_path,
                 cache_path,
                 kind,
+                encoding,
             });
             GenerationStatus {
                 state: GenerationState::Generating,
@@ -4507,5 +4544,74 @@ impl IntoResponse for AppError {
             Json(ApiResponse::<()>::error(error_message.to_string())),
         )
             .into_response()
+    }
+}
+
+#[cfg(test)]
+mod preview_cache_key_tests {
+    use super::preview_cache_key;
+    use crate::models::AcquiredImage;
+
+    fn image() -> AcquiredImage {
+        AcquiredImage {
+            id: 42,
+            project_id: 7,
+            target_id: 3,
+            acquired_date: Some(1_750_000_000),
+            filter_name: "OSC".into(),
+            grading_status: 0,
+            metadata: "{}".into(),
+            reject_reason: None,
+            profile_id: None,
+            guid: None,
+        }
+    }
+
+    #[test]
+    fn colour_and_greyscale_are_different_artifacts() {
+        // They are rendered differently, so serving one for the other shows
+        // the wrong pixels rather than a stale copy of the right ones.
+        let mono = preview_cache_key(&image(), "one.fits", "screen", true, 0.2, -2.8, false);
+        let color = preview_cache_key(&image(), "one.fits", "screen", true, 0.2, -2.8, true);
+        assert_ne!(mono, color);
+        assert!(color.ends_with("_color"), "{color}");
+    }
+
+    #[test]
+    fn greyscale_keys_are_unchanged_by_the_colour_option() {
+        // Previews already on disk were written before colour existed. The
+        // marker only appears on the colour variant so those stay valid.
+        assert!(
+            !preview_cache_key(&image(), "one.fits", "screen", true, 0.2, -2.8, false)
+                .contains("color"),
+        );
+    }
+
+    #[test]
+    fn pre_generation_warms_the_key_the_request_path_looks_up() {
+        // Pre-generation used to build this key with its own `format!`, which
+        // drifted the moment colour arrived: it wrote a colour PNG under the
+        // greyscale key, so the viewer never found what had been warmed and
+        // anything asking for greyscale was served colour.
+        //
+        // Both renditions are checked, because the colour default is now a
+        // server setting: whichever one this server serves, that is the one
+        // pre-generation must warm.
+        for color in [true, false] {
+            let warmed = preview_cache_key(
+                &image(),
+                "one.fits",
+                "screen",
+                true,
+                crate::server::PREGENERATE_MIDTONE,
+                crate::server::PREGENERATE_SHADOW,
+                color,
+            );
+            // What `get_image_preview` computes for a caller taking every
+            // default on a server configured that way.
+            let requested =
+                preview_cache_key(&image(), "one.fits", "screen", true, 0.2, -2.8, color);
+            assert_eq!(warmed, requested);
+        }
     }
 }

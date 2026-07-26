@@ -833,6 +833,7 @@ export const apiClient = {
         midtone: d.midtone,
         shadow: d.shadow,
         max_stars: d.maxStars,
+        color: d.color,
       })),
     };
     const { data } = await apiInstance.post<
@@ -848,6 +849,9 @@ export const apiClient = {
     if (options?.stretch !== undefined) params.append('stretch', String(options.stretch));
     if (options?.midtone !== undefined) params.append('midtone', String(options.midtone));
     if (options?.shadow !== undefined) params.append('shadow', String(options.shadow));
+    // Sent explicitly either way, so the URL states what it wants rather than
+    // depending on the server's default staying put.
+    if (options?.color !== undefined) params.append('color', String(options.color));
 
     const queryString = params.toString();
     const basePath = serverUrl ? `${serverUrl}/api` : '/api';

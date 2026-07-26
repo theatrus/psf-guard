@@ -35,6 +35,10 @@ pub enum GenKind {
         midtone: f64,
         shadow: f64,
         max_dimensions: Option<(u32, u32)>,
+        /// Render a one-shot-color mosaic in colour rather than luminance.
+        /// A frame with no `BAYERPAT` falls back to greyscale, so this can be
+        /// asked for on a mixed rig without breaking the mono frames.
+        color: bool,
     },
     Annotated {
         max_stars: usize,
@@ -48,6 +52,9 @@ pub struct GenJob {
     pub fits_path: PathBuf,
     pub cache_path: PathBuf,
     pub kind: GenKind,
+    /// Carried on the job rather than read from state at write time, so the
+    /// bytes written always match the extension the path was chosen for.
+    pub encoding: crate::preview_format::PreviewEncoding,
 }
 
 /// Readiness of a cache artifact, as reported to the polling frontend.
@@ -216,17 +223,23 @@ pub fn generate(job: &GenJob) -> anyhow::Result<()> {
             midtone,
             shadow,
             max_dimensions,
-        } => crate::commands::stretch_to_png::stretch_to_png_with_resize(
-            &job.fits_path.to_string_lossy(),
-            Some(tmp.to_string_lossy().into_owned()),
+            color,
+        } => generate_preview(
+            &job.fits_path,
+            &tmp,
             *midtone,
             *shadow,
+            *max_dimensions,
+            *color,
+            // Neither is reachable from the API today. Passed through rather
+            // than hardcoded so that when one is, it arrives at a renderer
+            // that honours it instead of being dropped here.
             false, // logarithmic
             false, // invert
-            *max_dimensions,
+            job.encoding,
         ),
         GenKind::Annotated { max_stars, size } => {
-            generate_annotated(&job.fits_path, &tmp, size, *max_stars)
+            generate_annotated(&job.fits_path, &tmp, size, *max_stars, job.encoding)
         }
     };
 
@@ -239,6 +252,47 @@ pub fn generate(job: &GenJob) -> anyhow::Result<()> {
             Err(e)
         }
     }
+}
+
+/// Render one preview, in colour when asked for it and the frame is a mosaic.
+#[allow(clippy::too_many_arguments)]
+fn generate_preview(
+    fits_path: &Path,
+    output: &Path,
+    midtone: f64,
+    shadow: f64,
+    max_dimensions: Option<(u32, u32)>,
+    color: bool,
+    logarithmic: bool,
+    invert: bool,
+    encoding: crate::preview_format::PreviewEncoding,
+) -> anyhow::Result<()> {
+    let source = fits_path.to_string_lossy();
+    let destination = output.to_string_lossy().into_owned();
+    if color
+        && !logarithmic
+        && !invert
+        && crate::commands::stretch_to_png::render_color_preview(
+            &source,
+            Some(destination.clone()),
+            midtone,
+            shadow,
+            max_dimensions,
+            encoding,
+        )?
+    {
+        return Ok(());
+    }
+    crate::commands::stretch_to_png::render_preview(
+        &source,
+        Some(destination),
+        midtone,
+        shadow,
+        logarithmic,
+        invert,
+        max_dimensions,
+        encoding,
+    )
 }
 
 /// Unique sibling temp path for atomic-rename generation.
@@ -261,22 +315,22 @@ pub fn generate_annotated(
     out_path: &Path,
     size: &str,
     max_stars: usize,
+    encoding: crate::preview_format::PreviewEncoding,
 ) -> anyhow::Result<()> {
     use crate::commands::annotate_stars_common::create_annotated_image;
     use crate::image_analysis::FitsImage;
-    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-    use image::{ColorType, ImageEncoder, Rgb};
+    use image::{ColorType, Rgb};
 
     let fits = FitsImage::from_file(fits_path)?;
     let rgb = create_annotated_image(&fits, max_stars, 0.2, -2.8, Rgb([255, 255, 0]))?;
     let final_image = resize_rgb_for_size(rgb, fits.width, fits.height, size);
 
-    let file = std::fs::File::create(out_path)?;
-    let writer = std::io::BufWriter::new(file);
-    let encoder = PngEncoder::new_with_quality(writer, CompressionType::Best, FilterType::Adaptive);
     let (w, h) = final_image.dimensions();
-    encoder.write_image(&final_image, w, h, ColorType::Rgb8.into())?;
-    Ok(())
+    // The markers are line art, where JPEG rings hardest. An operator who
+    // chose JPEG for the cache gets it here too rather than a surprising
+    // exception, but that is the place to look first if a marker seems to
+    // have a halo.
+    encoding.write(out_path, &final_image, w, h, ColorType::Rgb8)
 }
 
 /// Resize an RGB image to the requested size bucket (matches the preview

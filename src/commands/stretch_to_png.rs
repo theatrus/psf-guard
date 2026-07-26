@@ -1,12 +1,10 @@
 use anyhow::{Context, Result};
-use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-use image::{ColorType, ImageEncoder};
+use image::ColorType;
 use image::{ImageBuffer, Luma};
-use std::fs::File;
-use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
-use crate::image_analysis::FitsImage;
+use crate::image_analysis::{ColorFrame, FitsImage};
+use crate::preview_format::PreviewEncoding;
 
 pub fn stretch_to_png(
     fits_path: &str,
@@ -27,6 +25,106 @@ pub fn stretch_to_png(
     )
 }
 
+/// Render a one-shot-color frame in colour, or report that it cannot.
+///
+/// Returns `Ok(false)` when the frame is not a mosaic, leaving the caller to
+/// fall back to the greyscale path — a mono camera has no colour to show, and
+/// refusing outright would make the option useless on a mixed rig.
+///
+/// The transfer is the same midtone stretch the greyscale preview uses, so a
+/// colour and a mono rendition of the same exposure sit at the same
+/// brightness. It is measured once on luminance and applied identically to
+/// red, green, and blue: that keeps the ratios between channels, and with
+/// them the colour. Stretching each channel against its own statistics would
+/// pull all three toward a common median and wash the image out.
+pub fn render_color_preview(
+    fits_path: &str,
+    output: Option<String>,
+    midtone_factor: f64,
+    shadow_clipping: f64,
+    max_dimensions: Option<(u32, u32)>,
+    encoding: PreviewEncoding,
+) -> Result<bool> {
+    use seiza_stretch::{stretch_u16_to_u16, StretchParams};
+
+    let path = Path::new(fits_path);
+    let Some(frame) = ColorFrame::from_file(path)
+        .with_context(|| format!("Failed to load FITS file: {}", path.display()))?
+    else {
+        return Ok(false);
+    };
+
+    // Statistics come from luminance so every channel shares one transfer.
+    let luminance = FitsImage {
+        width: frame.width,
+        height: frame.height,
+        data: frame.luminance(),
+        raw_min: 0.0,
+        raw_scale: 1.0,
+        bzero: 0.0,
+    };
+    let statistics = luminance
+        .calculate_basic_statistics()
+        .to_stretch_statistics();
+    let params = StretchParams {
+        target_median: midtone_factor,
+        shadows_clip: shadow_clipping,
+    };
+
+    // One channel at a time, written straight into the interleaved output.
+    // Holding all three stretched planes at once costs three more copies of a
+    // full frame, which on a 60-megapixel sub is most of the memory budget a
+    // preview worker is allowed.
+    let pixels = frame.width * frame.height;
+    let mut interleaved = vec![0u8; pixels * 3];
+    for channel in 0..3 {
+        let stretched = stretch_u16_to_u16(&frame.channel(channel), &statistics, &params);
+        for (pixel, value) in stretched.iter().enumerate() {
+            interleaved[pixel * 3 + channel] = (value >> 8) as u8;
+        }
+    }
+
+    let buffer = image::RgbImage::from_raw(frame.width as u32, frame.height as u32, interleaved)
+        .context("Failed to create colour image buffer")?;
+    let buffer = match max_dimensions {
+        Some((max_width, max_height)) => resize_to_fit(buffer, max_width, max_height),
+        None => buffer,
+    };
+
+    let output_path = output.map_or_else(
+        // Name the file after what is about to be written to it, not after
+        // the format this function used to be able to produce.
+        || path.with_extension(encoding.extension()),
+        PathBuf::from,
+    );
+    encoding.write(
+        &output_path,
+        buffer.as_raw(),
+        buffer.width(),
+        buffer.height(),
+        ColorType::Rgb8,
+    )?;
+    Ok(true)
+}
+
+/// Scale down to fit a box, keeping the aspect ratio. Never scales up: an
+/// enlarged preview costs bytes and shows nothing extra.
+fn resize_to_fit(buffer: image::RgbImage, max_width: u32, max_height: u32) -> image::RgbImage {
+    let scale =
+        (max_width as f32 / buffer.width() as f32).min(max_height as f32 / buffer.height() as f32);
+    if scale >= 1.0 {
+        return buffer;
+    }
+    let width = ((buffer.width() as f32 * scale) as u32).max(1);
+    let height = ((buffer.height() as f32 * scale) as u32).max(1);
+    image::imageops::resize(
+        &buffer,
+        width,
+        height,
+        image::imageops::FilterType::Lanczos3,
+    )
+}
+
 pub fn stretch_to_png_with_resize(
     fits_path: &str,
     output: Option<String>,
@@ -35,6 +133,31 @@ pub fn stretch_to_png_with_resize(
     logarithmic: bool,
     invert: bool,
     max_dimensions: Option<(u32, u32)>,
+) -> Result<()> {
+    render_preview(
+        fits_path,
+        output,
+        midtone_factor,
+        shadow_clipping,
+        logarithmic,
+        invert,
+        max_dimensions,
+        PreviewEncoding::png(),
+    )
+}
+
+/// As above, in a chosen format. The CLI writes PNG; the server writes
+/// whatever its configuration says.
+#[allow(clippy::too_many_arguments)]
+pub fn render_preview(
+    fits_path: &str,
+    output: Option<String>,
+    midtone_factor: f64,
+    shadow_clipping: f64,
+    logarithmic: bool,
+    invert: bool,
+    max_dimensions: Option<(u32, u32)>,
+    encoding: PreviewEncoding,
 ) -> Result<()> {
     // Load FITS file
     let fits_path = Path::new(fits_path);
@@ -112,23 +235,13 @@ pub fn stretch_to_png_with_resize(
         img_buffer
     };
 
-    // Save PNG with compression
-    let file = File::create(&output_path)
-        .with_context(|| format!("Failed to create output file: {}", output_path.display()))?;
-    let writer = BufWriter::new(file);
-
-    // Create PNG encoder with best compression
-    let encoder = PngEncoder::new_with_quality(writer, CompressionType::Best, FilterType::Adaptive);
-
-    // Write the image data
-    encoder
-        .write_image(
-            &final_buffer,
-            final_buffer.width(),
-            final_buffer.height(),
-            ColorType::L8.into(),
-        )
-        .with_context(|| format!("Failed to write PNG image to {}", output_path.display()))?;
+    encoding.write(
+        &output_path,
+        &final_buffer,
+        final_buffer.width(),
+        final_buffer.height(),
+        ColorType::L8,
+    )?;
 
     println!("Saved stretched image to: {}", output_path.display());
     Ok(())

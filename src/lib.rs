@@ -17,6 +17,7 @@ pub mod image_analysis;
 pub mod models;
 pub mod nina_star_detection;
 pub mod photometry;
+pub mod preview_format;
 pub mod psf_fitting;
 pub mod satellites;
 pub mod sequence_analysis;

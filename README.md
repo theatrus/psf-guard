@@ -900,12 +900,71 @@ curl -X POST \
   "localhost:3000/api/databases/my-db/sync/previews/<preview_id>/apply"
 ```
 
+## One-shot-color frames
+
+A raw OSC file with a recognized `BAYERPAT` header is debayered, and what
+happens next depends on whether you are looking or measuring.
+
+**Looking.** Colour is on by default, in the grid, the overview, and the image
+viewer alike. Press `C` or use the **Color** button for the luminance
+rendition instead; the choice is shared across every view and remembered, so a
+frame does not change appearance on the way into the detail view. Stacks of OSC
+frames are colour throughout: the stacker debayers on ingest and integrates all
+three channels, so the preview and the exported FITS are RGB.
+
+**Measuring.** Grading and quality metrics use luminance, always. Star metrics
+on a bare colour filter array are distorted by the per-channel sampling, and
+N.I.N.A. measures the debayered frame, so this keeps our numbers comparable to
+the ones Target Scheduler recorded. Switching the viewer to colour changes what
+you see and nothing that is scored.
+
+The colour stretch is measured once on luminance and applied identically to
+red, green, and blue. That keeps the ratios between channels, and with them the
+colour balance — stretching each channel against its own statistics would pull
+all three toward a common median and wash the frame out.
+
+A frame with no `BAYERPAT` — a mono camera behind a filter wheel — has no
+colour to recover and renders greyscale either way.
+
+## Preview cache format
+
+Generated previews and annotated images are PNG by default — exact, and the
+same pixels the stretch produced. A server short of disk can trade that for
+size:
+
+```toml
+[server]
+preview_format = "jpeg"      # "png" (default) or "jpeg"
+preview_jpeg_quality = 88    # 50–100, ignored for PNG
+preview_color = true         # colour by default for OSC frames
+```
+
+On a realistic stretched sub, JPEG at the default quality is roughly a third
+the size of PNG. It is lossy in exactly the places this tool asks you to look:
+it smooths the faint, high-frequency detail that noise, hot pixels, and
+marginal stars live in, so a frame can look cleaner in the viewer than it is on
+disk. Grading measurements are taken from the FITS and never from a preview, so
+nothing scored changes — what changes is what your eye is given to check the
+score against.
+
+The two formats use different file extensions, so both can sit in the cache at
+once. Changing the setting leaves existing artifacts alone and regenerates on
+demand; changing it back finds the originals still valid. An artifact is always
+served as whatever it was written as, not as whatever the setting says now.
+Nothing removes the old set — the server reports how much of the cache is in
+the other format at startup, and deleting it is yours to decide.
+
+`preview_color` also decides which rendition background pre-generation warms.
+A viewer that disagrees with it still gets what it asked for, generated on
+demand; on a site whose observers prefer luminance, setting it false keeps the
+warmed cache and the default view pointing at the same artifact.
+
+Star-annotated images follow the same setting. Their markers are line art,
+where JPEG rings hardest, so that is the first place to look if a marker seems
+to have a halo.
+
 ## ⚠️ Known limitations
 
-- **OSC display is luminance-first.** Raw one-shot-color FITS files with a
-  recognized `BAYERPAT` header are debayered, then reduced to luminance for
-  grading and quality measurements. The single-frame grader does not yet
-  provide a full-color rendition of an OSC exposure.
 - **Path assumptions.** Directory layouts matching
   `%DATEMINUS12%/%TARGETNAME%/%DATEMINUS12%/LIGHT/...` (with or without the
   leading date) are detected reliably. Other patterns may need support; open

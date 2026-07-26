@@ -267,6 +267,8 @@ export interface PreviewOptions {
   midtone?: number;
   shadow?: number;
   max_stars?: number;
+  /** Render a one-shot-color mosaic in colour. Mono frames ignore it. */
+  color?: boolean;
 }
 
 // Readiness of an on-demand preview/annotated artifact (the server generates
@@ -288,6 +290,12 @@ export interface PreviewDescriptor {
   midtone?: number;
   shadow?: number;
   maxStars?: number;
+  /**
+   * Must match the flag the `<img>` requested. The server keys colour and
+   * greyscale renditions separately, so polling without it would report on
+   * the wrong artifact.
+   */
+  color?: boolean;
 }
 
 export type StackJobState = 'queued' | 'running' | 'completed' | 'failed';
