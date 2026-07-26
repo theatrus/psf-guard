@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [ main, master ]
 
+# Supersede a PR's earlier run when it is pushed again. Pushes to main keep
+# running to completion — each one is a distinct commit whose result we want,
+# and main's runs are what populate the shared cargo cache.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -54,26 +61,21 @@ jobs:
       with:
         toolchain: ${{ steps.rust-toolchain.outputs.channel }}
         components: rustfmt, clippy
-    - name: Cache cargo registry
-      uses: actions/cache@v6
-      continue-on-error: true
-      with:
-        path: ~/.cargo/registry
-        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
 
-    - name: Cache cargo index
-      uses: actions/cache@v6
-      continue-on-error: true
-      with:
-        path: ~/.cargo/git
-        key: ${{ runner.os }}-cargo-index-${{ hashFiles('Cargo.lock') }}
-
+    # Replaces three hand-rolled actions/cache steps. rust-cache prunes the
+    # workspace's own artifacts, stale objects, and incremental output before
+    # saving, so an entry is a few hundred MB rather than the 1.3-2.5 GB the
+    # raw `target` directory cost. That matters: the repo was sitting at
+    # 10.03 GB against GitHub's 10 GB limit, and macOS entries were evicted so
+    # fast that no macOS job ever started warm.
+    #
+    # Only main writes. PR runs read main's cache but never save, which stops
+    # every branch from keeping its own copy of the same 2 GB.
     - name: Cache cargo build
-      uses: actions/cache@v6
-      continue-on-error: true
+      uses: Swatinem/rust-cache@v2
       with:
-        path: target
-        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('Cargo.lock') }}
+        key: test
+        save-if: ${{ github.ref == 'refs/heads/main' }}
 
     - name: Install npm dependencies and build frontend
       run: |
@@ -90,38 +92,30 @@ jobs:
     - name: Check formatting
       run: cargo fmt -- --check
 
-    - name: Build
-      run: cargo build --verbose
-
+    # No separate `cargo build`. Clippy type-checks every target with every
+    # feature, and `cargo test` builds the binaries anyway — the integration
+    # tests reach for them through CARGO_BIN_EXE_psf-guard. The extra step
+    # cost 485s on Windows and proved nothing the other two miss.
     - name: Run clippy
       run: cargo clippy --all-targets --all-features -- -D warnings
 
     - name: Run tests
       run: cargo test --verbose
 
-    - name: Build release binary
+    # Only Linux needs a release binary, because only the e2e job consumes
+    # one. Release builds its own assets from release.yml, and the Windows and
+    # macOS artifacts this job used to upload were downloaded by nothing. The
+    # release profile still gets exercised on all three platforms by
+    # `cargo tauri build` in test-tauri.
+    - name: Build release binary (Linux, for the e2e job)
+      if: matrix.os == 'ubuntu-22.04'
       run: cargo build --verbose --release
-
 
     - name: Upload artifact (Linux)
       if: matrix.os == 'ubuntu-22.04'
       uses: actions/upload-artifact@v7
       with:
         name: psf-guard-linux-x64
-        path: target/release/psf-guard
-
-    - name: Upload artifact (Windows)
-      if: matrix.os == 'windows-latest'
-      uses: actions/upload-artifact@v7
-      with:
-        name: psf-guard-windows-x64
-        path: target/release/psf-guard.exe
-
-    - name: Upload artifact (macOS)
-      if: matrix.os == 'macos-latest'
-      uses: actions/upload-artifact@v7
-      with:
-        name: psf-guard-macos-arm64
         path: target/release/psf-guard
 
   e2e:
@@ -257,33 +251,11 @@ jobs:
         toolchain: ${{ steps.rust-toolchain.outputs.channel }}
         components: rustfmt, clippy
 
-    - name: Cache cargo registry
-      uses: actions/cache@v6
-      continue-on-error: true
-      with:
-        path: ~/.cargo/registry
-        key: ${{ runner.os }}-cargo-registry-tauri-${{ hashFiles('Cargo.lock') }}
-
-    - name: Cache cargo bin
-      uses: actions/cache@v6
-      continue-on-error: true
-      with:
-        path: ~/.cargo/bin
-        key: ${{ runner.os }}-cargo-bin-tauri-${{ hashFiles('Cargo.lock') }}
-
-    - name: Cache cargo index
-      uses: actions/cache@v6
-      continue-on-error: true
-      with:
-        path: ~/.cargo/git
-        key: ${{ runner.os }}-cargo-index-tauri-${{ hashFiles('Cargo.lock') }}
-
     - name: Cache cargo build
-      uses: actions/cache@v6
-      continue-on-error: true
+      uses: Swatinem/rust-cache@v2
       with:
-        path: target
-        key: ${{ runner.os }}-cargo-build-target-tauri-${{ hashFiles('Cargo.lock', 'tauri.conf.json') }}
+        key: tauri
+        save-if: ${{ github.ref == 'refs/heads/main' }}
 
     - name: Install npm dependencies and build frontend
       run: |
@@ -291,12 +263,23 @@ jobs:
         npm ci
         npm run build
 
+    # Downloads the prebuilt cargo-tauri binary (tauri-cli carries binstall
+    # metadata) rather than compiling the CLI from source, which took 603s on
+    # Windows, 356s on macOS and 331s on Linux — every run. The old
+    # `cargo install` step cached ~/.cargo/bin but not ~/.cargo/.crates.toml,
+    # where cargo records what it has installed, so cargo could never tell the
+    # binary was already there and rebuilt it every time. `continue-on-error`
+    # then hid the whole thing.
     - name: Install Tauri CLI
-      run: cargo install tauri-cli --version "^2.0" --locked
-      continue-on-error: true
+      uses: taiki-e/install-action@v2
+      with:
+        tool: tauri-cli@2
 
-    - name: Test Tauri compilation
-      run: cargo build --features tauri --verbose
+    # `cargo build --features tauri` used to run here first. It compiled the
+    # same crate with the same feature as the `cargo tauri build` below, only
+    # in the debug profile, so it shared no artifacts and proved nothing the
+    # bundle build does not. It cost 823s on Windows, 462s on Linux and 352s
+    # on macOS every run.
 
     - name: Build Tauri desktop app (Linux)
       if: matrix.os == 'ubuntu-22.04'
