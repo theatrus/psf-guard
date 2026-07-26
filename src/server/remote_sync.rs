@@ -825,7 +825,7 @@ fn validate_bundle_within(bundle: &CatalogBundle, max_rows: usize) -> Result<(),
     Ok(())
 }
 
-fn materialize_bundle(
+pub(crate) fn materialize_bundle(
     path: &FsPath,
     template_path: &FsPath,
     bundle: &CatalogBundle,
@@ -960,7 +960,7 @@ fn wire_to_sqlite(value: &WireValue) -> anyhow::Result<Value> {
     })
 }
 
-fn export_bundle(
+pub(crate) fn export_bundle(
     database_path: &FsPath,
     catalog_id: &str,
     operation: SyncOperation,
@@ -1080,7 +1080,7 @@ fn sqlite_to_wire(value: ValueRef<'_>) -> WireValue {
     WireValue { kind, value }
 }
 
-fn scheduler_request(
+pub(crate) fn scheduler_request(
     operation: SyncOperation,
     source_id: String,
     dry_run: bool,
@@ -1101,7 +1101,7 @@ fn scheduler_request(
     }
 }
 
-fn result_summary(result: &SchedulerSyncResponse) -> BTreeMap<String, i64> {
+pub(crate) fn result_summary(result: &SchedulerSyncResponse) -> BTreeMap<String, i64> {
     let mut summary = BTreeMap::from([
         ("total_inserted".into(), result.total_inserted as i64),
         ("total_updated".into(), result.total_updated as i64),
@@ -1143,7 +1143,7 @@ fn add_table_summary(
     summary.insert(format!("{name}_skipped"), counts.skipped as i64);
 }
 
-fn operation_label(operation: SyncOperation) -> &'static str {
+pub(crate) fn operation_label(operation: SyncOperation) -> &'static str {
     match operation {
         SyncOperation::Merge => "merge",
         SyncOperation::PushPlanning => "push_planning",

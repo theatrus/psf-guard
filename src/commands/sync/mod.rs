@@ -6,6 +6,9 @@
 //!   matched by guid with FK remapping, preserving local grading work.
 //! - [`sync_planning`] pushes project, target, template, plan, and rule settings
 //!   back to the telescope without changing capture history or grades.
+//! - [`sync_remote`] runs any of those against a remote PSF Guard over HTTP
+//!   instead of a second local file, so the two catalogs can live on
+//!   different machines.
 //!
 //! All three cores are pure DB logic; CLI glue (argument resolution,
 //! connection opening, reporting) lives in `cli_main.rs`. Shared helpers —
@@ -15,6 +18,7 @@
 mod grades;
 mod planning;
 mod pull;
+mod remote;
 
 pub(crate) use grades::sync_grades_in_transaction;
 pub use grades::{sync_grades, GradeChange, SyncGradesOptions, SyncSummary};
@@ -22,6 +26,10 @@ pub(crate) use planning::sync_planning_in_transaction;
 pub use planning::{sync_planning, PlanningOptions, PlanningSummary};
 pub(crate) use pull::sync_pull_in_transaction;
 pub use pull::{sync_pull, PullOptions, PullSummary, TableCounts};
+pub use remote::{
+    print_summary as print_remote_summary, sync_remote, RemoteDirection, RemoteSyncOptions,
+    RemoteSyncOutcome,
+};
 
 use crate::db_registry::DbRegistry;
 use crate::models::GradingStatus;

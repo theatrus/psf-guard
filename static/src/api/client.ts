@@ -59,6 +59,10 @@ import type {
   CalibrationLibraryDetails,
   CalibrationLibrarySummary,
   CalibrationMutationOutcome,
+  PeerSummary,
+  PeerCheck,
+  RemoteSyncRequest,
+  RemoteSyncResult,
 } from './types';
 
 // Store the initialized API instance and server URL
@@ -244,6 +248,68 @@ export const apiClient = {
       req
     );
     if (!data.data) throw new Error(data.error || 'Failed to sync databases');
+    return data.data;
+  },
+
+  /** Remote PSF Guard peers this instance can sync with. */
+  getPeers: async (): Promise<PeerSummary[]> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<PeerSummary[]>>('/peers');
+    return data.data ?? [];
+  },
+
+  addPeer: async (req: {
+    name: string;
+    base_url: string;
+    token: string;
+    catalog_id?: string | null;
+  }): Promise<PeerSummary> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<PeerSummary>>('/peers', req);
+    if (!data.data) throw new Error(data.error || 'Failed to add peer');
+    return data.data;
+  },
+
+  /** Omit `token` to keep the stored key: the browser never receives it. */
+  updatePeer: async (
+    peerId: string,
+    req: { name: string; base_url: string; token?: string; catalog_id?: string | null }
+  ): Promise<PeerSummary> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<PeerSummary>>(
+      `/peers/${encodeURIComponent(peerId)}`,
+      req
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to update peer');
+    return data.data;
+  },
+
+  removePeer: async (peerId: string): Promise<void> => {
+    const apiInstance = await getApi();
+    await apiInstance.delete(`/peers/${encodeURIComponent(peerId)}`);
+  },
+
+  /** Ask a peer who it is. An unreachable peer is a normal answer. */
+  checkPeer: async (peerId: string): Promise<PeerCheck> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<PeerCheck>>(
+      `/peers/${encodeURIComponent(peerId)}/check`
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to reach peer');
+    return data.data;
+  },
+
+  /** Sync one local catalog with a peer over HTTP. Dry run unless told otherwise. */
+  syncWithPeer: async (
+    dbId: string,
+    req: RemoteSyncRequest
+  ): Promise<RemoteSyncResult> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<RemoteSyncResult>>(
+      `/databases/${encodeURIComponent(dbId)}/sync/remote`,
+      req
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to sync with the peer');
     return data.data;
   },
 

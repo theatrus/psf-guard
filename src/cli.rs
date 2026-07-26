@@ -761,6 +761,63 @@ pub enum SyncKind {
         verbose: bool,
     },
 
+    /// Sync with a remote PSF Guard over HTTP instead of a second local file.
+    ///
+    /// The other catalog lives on another machine, reached by URL and API key,
+    /// which is the arrangement the remote sync protocol was built for. Every
+    /// direction previews first: a push is reviewed by the peer, which writes
+    /// nothing until the preview it issued is applied by name.
+    ///
+    /// The peer must have opened the catalog with a `[[remote_sync]]` block in
+    /// its config, or the Settings panel's "Accept remote scheduler sync".
+    Remote {
+        /// What to do: pull, push-planning, or push-grades. Pull merges the
+        /// peer's structure and captures into the local database, keeping
+        /// grades reviewed here.
+        #[arg(long, value_parser = ["pull", "push-planning", "push-grades"])]
+        direction: String,
+
+        /// Local database: a registry slug or a path to a .sqlite file.
+        #[arg(long)]
+        local: String,
+
+        /// Peer base URL, e.g. https://telescope.example:3000
+        #[arg(long)]
+        peer: String,
+
+        /// Peer API key. Prefer --token-file or PSF_GUARD_SYNC_TOKEN: an
+        /// argument is visible to every process on the machine.
+        #[arg(long)]
+        token: Option<String>,
+
+        /// File holding the peer API key. Whitespace-trimmed.
+        #[arg(long)]
+        token_file: Option<String>,
+
+        /// Which of the peer's catalogs to use. Defaults to the one its key
+        /// opens, which is the only one it accepts anyway.
+        #[arg(long)]
+        peer_catalog: Option<String>,
+
+        /// Print the plan without writing anything on either side.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// For push-grades: send every row, not only reviewed ones. Off by
+        /// default so a Pending row here cannot erase a decision there.
+        #[arg(long)]
+        all_grades: bool,
+
+        /// For pull: skip the (large) imagedata thumbnail BLOBs.
+        #[arg(long)]
+        no_image_data: bool,
+
+        /// Path to the database registry JSON file (only consulted when
+        /// --local is a slug; defaults to the platform config directory).
+        #[arg(long)]
+        registry: Option<String>,
+    },
+
     /// Pull structure + captured images FROM a telescope DB INTO our local DB.
     ///
     /// Mirrors projects, targets (coordinates), exposure templates/plans, rule
