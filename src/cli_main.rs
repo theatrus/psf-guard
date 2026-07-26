@@ -993,7 +993,18 @@ pub fn main() -> Result<()> {
             let server_port = app_config.get_port();
             let worker_policy = app_config.get_worker_policy();
             let site_banner = app_config.get_site_banner()?;
-            let databases = db_registry.databases.clone();
+            // Open the configured databases for remote sync and image upload.
+            // This edits the in-memory list only — the registry on disk keeps
+            // whatever the desktop Settings panel put there.
+            let mut databases = db_registry.databases.clone();
+            let remote_access = crate::config::apply_remote_access(
+                &mut databases,
+                &app_config.remote_sync,
+                &app_config.remote_upload,
+            )?;
+            if !remote_access.is_empty() {
+                eprintln!("Remote access enabled for: {}", remote_access.join(", "));
+            }
             let astrometry_config = db_registry.astrometry.clone();
 
             let runtime = tokio::runtime::Runtime::new()?;

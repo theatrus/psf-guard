@@ -80,6 +80,7 @@ pub struct AuditRecord<'a> {
 
 pub struct RemoteAuditLog {
     path: PathBuf,
+    max_bytes: u64,
     /// Serializes appends so two concurrent applies cannot interleave a line.
     write_lock: Mutex<()>,
 }
@@ -88,7 +89,18 @@ impl RemoteAuditLog {
     pub fn new(cache_root: impl AsRef<Path>) -> Self {
         Self {
             path: cache_root.as_ref().join("remote-sync-audit.jsonl"),
+            max_bytes: MAX_LOG_BYTES,
             write_lock: Mutex::new(()),
+        }
+    }
+
+    /// A smaller roll threshold, so a test can prove rotation without writing
+    /// megabytes of filler.
+    #[cfg(test)]
+    fn with_max_bytes(cache_root: impl AsRef<Path>, max_bytes: u64) -> Self {
+        Self {
+            max_bytes,
+            ..Self::new(cache_root)
         }
     }
 
@@ -158,7 +170,7 @@ impl RemoteAuditLog {
         let Ok(metadata) = fs::metadata(&self.path) else {
             return;
         };
-        if metadata.len() < MAX_LOG_BYTES {
+        if metadata.len() < self.max_bytes {
             return;
         }
         let _ = fs::rename(&self.path, self.path.with_extension("jsonl.1"));
@@ -210,9 +222,10 @@ mod tests {
 
     #[test]
     fn a_full_log_rolls_to_one_previous_generation() {
+        const FULL: u64 = 64;
         let directory = tempdir().unwrap();
-        let log = RemoteAuditLog::new(directory.path());
-        fs::write(log.path(), vec![b'x'; MAX_LOG_BYTES as usize]).unwrap();
+        let log = RemoteAuditLog::with_max_bytes(directory.path(), FULL);
+        fs::write(log.path(), vec![b'x'; FULL as usize]).unwrap();
         log.record(
             "catalog",
             AuditAction::Export,
@@ -221,7 +234,7 @@ mod tests {
         );
 
         let rolled = log.path().with_extension("jsonl.1");
-        assert_eq!(fs::metadata(&rolled).unwrap().len(), MAX_LOG_BYTES);
+        assert_eq!(fs::metadata(&rolled).unwrap().len(), FULL);
         let contents = fs::read_to_string(log.path()).unwrap();
         assert_eq!(contents.lines().count(), 1, "{contents}");
     }

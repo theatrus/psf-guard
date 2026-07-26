@@ -165,6 +165,28 @@ configured database. Every remote action, refusals included, is appended to
 `remote-sync-audit.jsonl` in the cache directory, so you can tell afterwards
 what a key-holder did and when.
 
+A server run from the command line has no Settings panel, so it takes both
+grants from its `--config` file instead:
+
+```toml
+[[remote_sync]]
+database = "telescope"                       # registry slug
+token_file = "/run/secrets/psf-guard-key"    # or token = "..."
+
+[[remote_upload]]
+database = "telescope"
+image_dir = "/data/incoming"
+token_file = "/run/secrets/psf-guard-key"
+```
+
+These apply at startup and are never written back to the registry, so the
+config file stays the whole account of what a deployment allows and rotating a
+key is a restart. A database has one key, whichever grants it holds. Naming a
+database that is not registered stops the server rather than leaving you to
+guess why every request comes back 403. Neither block needs
+`--allow-database-management`: accepting a sync must not require the grant
+that lets a network caller name server filesystem paths.
+
 The Overview's **Plan & coordinates** dialog lets you correct imported names,
 coordinates, limits, and desired counts. See the
 **[import and planning guide](docs/IMPORTING.md)** for database paths, grouping
