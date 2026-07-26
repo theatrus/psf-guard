@@ -9,7 +9,7 @@
     "build:prod": "npm run build && cp -r dist/* ../dist/static/",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:release": "node --test ../scripts/release-feeds.test.mjs",
+    "test:release": "node --test ../scripts/check-release-version.test.mjs ../scripts/release-feeds.test.mjs",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
@@ -29,7 +29,7 @@
     "react-dom": "^19.1.1",
     "react-hotkeys-hook": "^5.1.0",
     "react-intersection-observer": "^9.16.0",
-    "react-router-dom": "^7.12.0",
+    "react-router-dom": "^7.18.1",
     "react-window": "^1.8.10"
   },
   "devDependencies": {

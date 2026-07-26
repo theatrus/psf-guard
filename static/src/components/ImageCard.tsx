@@ -53,7 +53,7 @@ export default function ImageCard({
         { imageId: image.id, kind: 'preview', size: 'large', color }
       );
     }
-  }, [isSelected, image.id, dbId, selectionEffects]);
+  }, [isSelected, image.id, dbId, selectionEffects, color]);
 
   const getStatusClass = () => {
     switch (image.grading_status) {

@@ -348,7 +348,18 @@ export default function ImageDetailView({
       setUseOriginalImage(true);
     }
     // Never switch back from original to large
-  }, [zoom, imageId, showStars, showPsf, image, isOriginalLoaded, dbId, maxStars, mainImageKey]);
+  }, [
+    zoom,
+    imageId,
+    showStars,
+    showPsf,
+    image,
+    isOriginalLoaded,
+    dbId,
+    maxStars,
+    mainImageKey,
+    colorPreview,
+  ]);
   
   // Reset preload state when image changes. Deliberately does NOT touch the
   // zoom state: in 'user' view mode the zoom/pan carries over to the next

@@ -4,6 +4,7 @@ use std::time::Duration;
 
 #[derive(Parser)]
 #[command(name = "psf-guard")]
+#[command(version)]
 #[command(about = "PSF Guard: Astronomical image analysis and quality assessment tool", long_about = None)]
 pub struct Cli {
     #[arg(short, long, default_value = "schedulerdb.sqlite")]
@@ -1053,6 +1054,17 @@ impl PregenerationConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_flag_reports_package_version() {
+        let error = match Cli::try_parse_from(["psf-guard", "--version"]) {
+            Ok(_) => panic!("--version should exit after printing the package version"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
+        assert!(error.to_string().contains(env!("CARGO_PKG_VERSION")));
+    }
 
     #[test]
     fn test_statistical_options_to_grading_config_disabled() {

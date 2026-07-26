@@ -1,6 +1,6 @@
 [package]
 name = "psf-guard"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 # With two bins (psf-guard = GUI/CLI smart binary, psf-guard-cli = console-only
 # CLI), name the default so `cargo run` and tauri-cli pick the app binary, not
@@ -30,7 +30,6 @@ anyhow = "1.0"
 chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
 regex = "1.12"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 semver = "1"
 byteorder = "1.5"
 seiza = "0.12.0"

@@ -114,14 +114,10 @@ jobs:
         cargo tauri signer sign "$probe"
         test -s "$probe.sig"
 
-    - name: Check tag matches app version
+    - name: Check release versions and notes
       shell: bash
       run: |
-        version=$(node -p 'require("./tauri.conf.json").version')
-        if [ "$GITHUB_REF_NAME" != "v$version" ]; then
-          echo "::error::Tag $GITHUB_REF_NAME does not match app version $version."
-          exit 1
-        fi
+        version=$(node scripts/check-release-version.mjs "$GITHUB_REF_NAME")
         echo "APP_VERSION=$version" >> "$GITHUB_ENV"
 
     - name: Write signed updater build config
@@ -240,37 +236,7 @@ jobs:
         prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
         generate_release_notes: true
         name: PSF Guard ${{ github.ref_name }}
-        body: |
-          ## PSF Guard ${{ github.ref_name }}
-
-          ### Desktop Applications 🖥️
-          - **Linux**: `.deb` package and `.AppImage` for easy installation
-          - **Windows**: `.msi` installer and NSIS installer. The NSIS setup also
-            installs a console `psf-guard-cli.exe` next to the app and adds it to
-            your user `PATH`, so you can run `psf-guard-cli` from any terminal.
-          - **macOS**: `.dmg` installer and `.app` bundle (zipped)
-
-          ### Command Line Interface 🖥️
-          - **Linux**: `psf-guard-linux-x64` - standalone CLI binary
-          - **Windows**: `psf-guard-windows-x64.exe` - standalone CLI binary
-          - **macOS**: `psf-guard-macos-x64` - standalone CLI binary
-
-          ### Fedora packages 📦
-          - **Fedora 43 / 44**: `psf-guard-*.fc43.x86_64.rpm` / `*.fc44.x86_64.rpm`
-            install the CLI/server plus a `psf-guard.service` systemd unit
-            (`sudo dnf install ./psf-guard-*.rpm`)
-
-          ### Features
-          - 🖥️ **Smart Binary**: Single binary that automatically switches between GUI and CLI modes
-          - 📊 **N.I.N.A. Integration**: Direct support for N.I.N.A. scheduler databases
-          - 🌟 **Star Detection**: Advanced PSF fitting and analysis
-          - 📁 **File Management**: Comprehensive FITS file organization
-          - 🔄 **Cache System**: Intelligent file caching with real-time progress
-
-          **Desktop GUI**: Run without arguments to launch the desktop interface
-          **CLI Mode**: Run with `--help` or any arguments for command-line interface
-
-          Download the appropriate version for your platform and get started!
+        body_path: docs/releases/${{ github.ref_name }}.md
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -286,8 +252,8 @@ jobs:
       with:
         node-version: '24'
 
-    - name: Test update feed generation
-      run: node --test scripts/release-feeds.test.mjs
+    - name: Test release metadata and feed generation
+      run: node --test scripts/check-release-version.test.mjs scripts/release-feeds.test.mjs
 
     - name: Download signed updater assets
       env:

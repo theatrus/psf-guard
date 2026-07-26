@@ -27,6 +27,7 @@ work. Historical checklists record delivery; they do not track current work.
 
 ## Component-specific guides
 
+- [Release guide](RELEASING.md)
 - [App and server updates](UPDATES.md)
 - [RPM packaging](../packaging/rpm/README.md)
 - [Target Scheduler schema snapshot](../src/ts_schema/README.md)
