@@ -28,7 +28,7 @@ jobs:
             asset_name: psf-guard-windows-x64.exe
           - os: macos-latest
             artifact_name: psf-guard-cli
-            asset_name: psf-guard-macos-x64
+            asset_name: psf-guard-macos-arm64
 
     steps:
     - uses: actions/checkout@v7

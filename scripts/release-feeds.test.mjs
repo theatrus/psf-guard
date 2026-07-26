@@ -11,6 +11,22 @@ import { writeUpdaterConfig } from './write-updater-config.mjs';
 
 const execFileAsync = promisify(execFile);
 
+test('labels macOS artifacts as Apple Silicon', async () => {
+  const releaseWorkflow = await readFile(
+    new URL('../.github/workflows/release.yml', import.meta.url),
+    'utf8',
+  );
+  const ciWorkflow = await readFile(
+    new URL('../.github/workflows/ci.yml', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(releaseWorkflow, /asset_name: psf-guard-macos-arm64/);
+  assert.doesNotMatch(releaseWorkflow, /asset_name: psf-guard-macos-x64/);
+  assert.match(ciWorkflow, /name: psf-guard-macos-arm64/);
+  assert.match(ciWorkflow, /name: psf-guard-tauri-macos-arm64/);
+});
+
 test('normal and signed builds use website-first updater endpoints', async () => {
   const mainConfig = JSON.parse(await readFile(
     new URL('../tauri.conf.json', import.meta.url),
