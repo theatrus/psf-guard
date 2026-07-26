@@ -40,6 +40,7 @@ use crate::server::{
     },
     database_context::DatabaseContext,
     handlers::{execute_scheduler_sync_paths, AppError, SyncGuardMode},
+    remote_audit::{AuditAction, AuditOutcome, AuditRecord},
     state::AppState,
 };
 
@@ -49,6 +50,9 @@ const PROTOCOL_VERSION: u32 = 1;
 /// How long a built export stays fetchable, matching the preview lifetime.
 const EXPORT_LIFETIME_SECS: i64 = 30 * 60;
 const MAX_RETAINED_EXPORTS: usize = 16;
+/// Stands in for the catalog in an audit entry written before the token
+/// identified one — a bad token names no database.
+const UNKNOWN_CATALOG: &str = "-";
 const PLANNING_TABLES: &[&str] = &[
     "exposuretemplate",
     "project",
@@ -65,6 +69,11 @@ const MERGE_TABLES: &[&str] = &[
     "acquiredimage",
     "imagedata",
 ];
+/// A grade push reads its source rows through the scheduler's own
+/// project/target join, so the bundle has to carry those two tables even
+/// though nothing in them is ever written. Without them the materialized
+/// source is not a Target Scheduler database and the read fails outright.
+const GRADE_TABLES: &[&str] = &["project", "target", "acquiredimage"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -260,7 +269,7 @@ pub async fn capabilities(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<ApiResponse<SyncCapabilities>>, AppError> {
-    let catalog = authenticated_catalog(&state, &headers)?;
+    let catalog = authenticated_catalog(&state, &headers, AuditAction::Capabilities)?;
     Ok(Json(ApiResponse::success(SyncCapabilities {
         protocol_version: PROTOCOL_VERSION,
         product: "PSF Guard",
@@ -270,6 +279,7 @@ pub async fn capabilities(
             "push_planning",
             "push_grades",
             "preview_apply",
+            "preview_refresh",
             "exports",
             "image_upload",
         ],
@@ -287,20 +297,49 @@ pub async fn create_preview(
     headers: HeaderMap,
     Json(request): Json<CreatePreviewRequest>,
 ) -> Result<Json<ApiResponse<SyncPreview>>, AppError> {
-    let catalog = authenticated_catalog(&state, &headers)?;
+    let catalog = authenticated_catalog(&state, &headers, AuditAction::Preview)?;
+    let operation = request.operation;
+    // Copy the identifiers the audit log needs before the bundle moves, so
+    // auditing never forces the whole payload to be cloned.
+    let bundle_id = request.bundle.bundle_id.clone();
+    let source_id = request.bundle.source.id.clone();
+    let audit = |outcome,
+                 detail: Option<&str>,
+                 preview_id: Option<&str>,
+                 summary: BTreeMap<String, i64>| {
+        state.remote_audit.record(
+            &catalog.id,
+            AuditAction::Preview,
+            outcome,
+            AuditRecord {
+                operation: Some(operation_label(operation)),
+                source_id: Some(&source_id),
+                bundle_id: Some(&bundle_id),
+                preview_id,
+                detail,
+                summary,
+            },
+        );
+    };
+    let refuse = |message: String| {
+        audit(AuditOutcome::Refused, Some(&message), None, BTreeMap::new());
+        AppError::BadRequest(message)
+    };
     require_protocol(request.protocol_version)?;
     require_catalog(&catalog, &request.catalog_id)?;
-    if request.operation != request.bundle.operation {
-        return Err(AppError::BadRequest(
+    if operation != request.bundle.operation {
+        return Err(refuse(
             "request operation does not match bundle operation".into(),
         ));
     }
-    validate_bundle(&request.bundle)?;
+    if let Err(error) = validate_bundle(&request.bundle) {
+        return Err(match error {
+            AppError::BadRequest(message) => refuse(message),
+            other => other,
+        });
+    }
 
     let destination_path = PathBuf::from(&catalog.database_path);
-    let bundle = request.bundle;
-    let source_id = bundle.source.id.clone();
-    let operation = request.operation;
     let snapshot_file = state
         .sync_previews
         .create_empty_source_snapshot()
@@ -311,6 +350,7 @@ pub async fn create_preview(
         .map_err(internal)?;
     let materialize_path = snapshot_path.clone();
     let template_path = destination_path.clone();
+    let bundle = request.bundle;
     if let Err(error) = tokio::task::spawn_blocking(move || {
         materialize_bundle(&materialize_path, &template_path, &bundle)
     })
@@ -318,9 +358,7 @@ pub async fn create_preview(
     .map_err(|error| AppError::InternalError(format!("bundle task failed: {error}")))?
     {
         state.sync_previews.remove_source_snapshot(&snapshot_file);
-        return Err(AppError::BadRequest(format!(
-            "invalid catalog bundle: {error:#}"
-        )));
+        return Err(refuse(format!("invalid catalog bundle: {error:#}")));
     }
 
     let sync_request = scheduler_request(operation, source_id.clone(), true);
@@ -328,7 +366,7 @@ pub async fn create_preview(
         &state,
         snapshot_path,
         destination_path,
-        source_id,
+        source_id.clone(),
         catalog.id.clone(),
         sync_request.clone(),
         SyncGuardMode::Preview,
@@ -339,6 +377,12 @@ pub async fn create_preview(
         Ok(_) => unreachable!("preview execution returns a fingerprint"),
         Err(error) => {
             state.sync_previews.remove_source_snapshot(&snapshot_file);
+            audit(
+                outcome_of(&error),
+                Some(&detail_of(&error)),
+                None,
+                BTreeMap::new(),
+            );
             return Err(error);
         }
     };
@@ -355,11 +399,13 @@ pub async fn create_preview(
             state.sync_previews.remove_source_snapshot(&snapshot_file);
             internal(error)
         })?;
+    let summary = result_summary(&result);
+    audit(AuditOutcome::Ok, None, Some(&record.id), summary.clone());
     Ok(Json(ApiResponse::success(SyncPreview {
         preview_id: record.id,
         state: "ready",
         expires_at: unix_timestamp(record.expires_at),
-        summary: result_summary(&result),
+        summary,
     })))
 }
 
@@ -368,7 +414,7 @@ pub async fn get_preview(
     headers: HeaderMap,
     Path(preview_id): Path<String>,
 ) -> Result<Json<ApiResponse<SyncPreview>>, AppError> {
-    let catalog = authenticated_catalog(&state, &headers)?;
+    let catalog = authenticated_catalog(&state, &headers, AuditAction::Preview)?;
     let record = state
         .sync_previews
         .get(&preview_id)
@@ -388,18 +434,41 @@ pub async fn apply_preview(
     headers: HeaderMap,
     Path(preview_id): Path<String>,
 ) -> Result<Json<ApiResponse<SyncApplyResult>>, AppError> {
-    let catalog = authenticated_catalog(&state, &headers)?;
+    let catalog = authenticated_catalog(&state, &headers, AuditAction::Apply)?;
+    let audit = |outcome, operation, detail: Option<&str>, summary| {
+        state.remote_audit.record(
+            &catalog.id,
+            AuditAction::Apply,
+            outcome,
+            AuditRecord {
+                operation,
+                preview_id: Some(&preview_id),
+                detail,
+                summary,
+                ..Default::default()
+            },
+        );
+    };
     let _apply_guard = state.sync_apply_lock.lock().await;
-    let record = state
+    let Some(record) = state
         .sync_previews
         .claim(&preview_id, &catalog.id)
         .map_err(internal)?
-        .ok_or(AppError::NotFound)?;
+    else {
+        audit(
+            AuditOutcome::Refused,
+            None,
+            Some("no such preview"),
+            BTreeMap::new(),
+        );
+        return Err(unknown_preview());
+    };
+    let operation = Some(kind_label(record.request.kind));
     let source_path = state
         .sync_previews
         .source_snapshot_path(&record)
         .map_err(internal)?;
-    let mut request = record.request;
+    let mut request = record.request.clone();
     request.dry_run = false;
     let result = execute_scheduler_sync_paths(
         &state,
@@ -409,18 +478,127 @@ pub async fn apply_preview(
         catalog.id.clone(),
         request,
         SyncGuardMode::Apply {
-            destination_fingerprint: record.destination_fingerprint,
+            destination_fingerprint: record.destination_fingerprint.clone(),
         },
     )
     .await
     .map(|(result, _)| result);
+
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            // The apply wrote nothing, so the preview is still good source
+            // data. Keep it: for a remote client, discarding it here means
+            // re-uploading the whole bundle to get back to this point. A stale
+            // destination is fixed by refreshing this same preview.
+            if let Err(restore_error) = state.sync_previews.restore(&record) {
+                tracing::warn!("could not restore sync preview {preview_id}: {restore_error:#}");
+            }
+            audit(
+                outcome_of(&error),
+                operation,
+                Some(&detail_of(&error)),
+                BTreeMap::new(),
+            );
+            return Err(error);
+        }
+    };
     state
         .sync_previews
         .remove_source_snapshot(&record.source_snapshot_file);
-    let result = result?;
+    let summary = result_summary(&result);
+    audit(AuditOutcome::Ok, operation, None, summary.clone());
     Ok(Json(ApiResponse::success(SyncApplyResult {
         state: "applied",
-        summary: result_summary(&result),
+        summary,
+    })))
+}
+
+/// Re-run a kept preview against the destination as it now stands.
+///
+/// The path back from a stale-preview conflict. Apply refuses when the
+/// destination moved under a preview, and the client must review the merge
+/// again — but the source data is already on the server, so make it re-review
+/// that, not re-upload it.
+pub async fn refresh_preview(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(preview_id): Path<String>,
+) -> Result<Json<ApiResponse<SyncPreview>>, AppError> {
+    let catalog = authenticated_catalog(&state, &headers, AuditAction::PreviewRefresh)?;
+    let audit = |outcome, operation, detail: Option<&str>, summary| {
+        state.remote_audit.record(
+            &catalog.id,
+            AuditAction::PreviewRefresh,
+            outcome,
+            AuditRecord {
+                operation,
+                preview_id: Some(&preview_id),
+                detail,
+                summary,
+                ..Default::default()
+            },
+        );
+    };
+    // Refresh rewrites a record an apply may be claiming, so it takes the same
+    // lock, and takes it before reading. Creating a preview needs none of this
+    // — that record is new and nothing else can be holding it.
+    let _apply_guard = state.sync_apply_lock.lock().await;
+    let Some(record) = state
+        .sync_previews
+        .get(&preview_id)
+        .map_err(internal)?
+        .filter(|record| record.local_db_id == catalog.id)
+    else {
+        audit(
+            AuditOutcome::Refused,
+            None,
+            Some("no such preview"),
+            BTreeMap::new(),
+        );
+        return Err(unknown_preview());
+    };
+    let operation = Some(kind_label(record.request.kind));
+    let source_path = state
+        .sync_previews
+        .source_snapshot_path(&record)
+        .map_err(internal)?;
+    let mut request = record.request.clone();
+    request.dry_run = true;
+    let execution = execute_scheduler_sync_paths(
+        &state,
+        source_path,
+        PathBuf::from(&catalog.database_path),
+        request.peer_db_id.clone(),
+        catalog.id.clone(),
+        request,
+        SyncGuardMode::Preview,
+    )
+    .await;
+    let (result, fingerprint) = match execution {
+        Ok((result, Some(fingerprint))) => (result, fingerprint),
+        Ok(_) => unreachable!("preview execution returns a fingerprint"),
+        Err(error) => {
+            audit(
+                outcome_of(&error),
+                operation,
+                Some(&detail_of(&error)),
+                BTreeMap::new(),
+            );
+            return Err(error);
+        }
+    };
+    let refreshed = state
+        .sync_previews
+        .refresh(&record, fingerprint, result.clone())
+        .map_err(internal)?;
+    let summary = result_summary(&result);
+    audit(AuditOutcome::Ok, operation, None, summary.clone());
+    Ok(Json(ApiResponse::success(SyncPreview {
+        preview_id: refreshed.id,
+        state: "ready",
+        expires_at: unix_timestamp(refreshed.expires_at),
+        summary,
     })))
 }
 
@@ -429,19 +607,44 @@ pub async fn create_export(
     headers: HeaderMap,
     Json(request): Json<CreateExportRequest>,
 ) -> Result<Json<ApiResponse<SyncExport>>, AppError> {
-    let catalog = authenticated_catalog(&state, &headers)?;
+    let catalog = authenticated_catalog(&state, &headers, AuditAction::Export)?;
     require_protocol(request.protocol_version)?;
     require_catalog(&catalog, &request.catalog_id)?;
     let database_path = PathBuf::from(&catalog.database_path);
     let catalog_id = catalog.id.clone();
     let operation = request.operation;
     let reviewed_only = request.reviewed_only;
-    let bundle = tokio::task::spawn_blocking(move || {
+    let audit = |outcome, detail: Option<&str>, summary| {
+        state.remote_audit.record(
+            &catalog.id,
+            AuditAction::Export,
+            outcome,
+            AuditRecord {
+                operation: Some(operation_label(operation)),
+                detail,
+                summary,
+                ..Default::default()
+            },
+        );
+    };
+    let bundle = match tokio::task::spawn_blocking(move || {
         export_bundle(&database_path, &catalog_id, operation, reviewed_only)
     })
     .await
     .map_err(|error| AppError::InternalError(format!("export task failed: {error}")))?
-    .map_err(|error| AppError::BadRequest(format!("creating export: {error:#}")))?;
+    {
+        Ok(bundle) => bundle,
+        Err(error) => {
+            let message = format!("creating export: {error:#}");
+            audit(AuditOutcome::Failed, Some(&message), BTreeMap::new());
+            return Err(AppError::BadRequest(message));
+        }
+    };
+    let summary = bundle
+        .tables
+        .iter()
+        .map(|(name, table)| (format!("{name}_rows"), table.rows.len() as i64))
+        .collect();
     let export = SyncExport {
         export_id: Uuid::new_v4().to_string(),
         state: "ready",
@@ -451,6 +654,7 @@ pub async fn create_export(
     state
         .remote_exports
         .insert(catalog.id.clone(), export.clone())?;
+    audit(AuditOutcome::Ok, Some(&export.export_id), summary);
     Ok(Json(ApiResponse::success(export)))
 }
 
@@ -459,7 +663,7 @@ pub async fn get_export(
     headers: HeaderMap,
     Path(export_id): Path<String>,
 ) -> Result<Json<ApiResponse<SyncExport>>, AppError> {
-    let catalog = authenticated_catalog(&state, &headers)?;
+    let catalog = authenticated_catalog(&state, &headers, AuditAction::Export)?;
     let export = state
         .remote_exports
         .get(&export_id, &catalog.id)?
@@ -476,16 +680,30 @@ pub async fn get_export(
 fn authenticated_catalog(
     state: &AppState,
     headers: &HeaderMap,
+    action: AuditAction,
 ) -> Result<Arc<DatabaseContext>, AppError> {
-    let header = headers
+    // A caller who fails here has no catalog to attribute the attempt to, but
+    // the attempt is exactly what an operator wants to see: a run of these is
+    // what a guessed or stolen token looks like from the server side.
+    let refuse = |catalog_id: &str, message: &str| {
+        state.remote_audit.record(
+            catalog_id,
+            action,
+            AuditOutcome::Refused,
+            AuditRecord {
+                detail: Some(message),
+                ..Default::default()
+            },
+        );
+        AppError::Forbidden(message.to_string())
+    };
+    let token = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| AppError::Forbidden("Bearer token required".into()))?;
-    let token = header
-        .strip_prefix("Bearer ")
+        .and_then(|header| header.strip_prefix("Bearer "))
         .map(str::trim)
         .filter(|token| !token.is_empty())
-        .ok_or_else(|| AppError::Forbidden("Bearer token required".into()))?;
+        .ok_or_else(|| refuse(UNKNOWN_CATALOG, "Bearer token required"))?;
     let mut matches = state.all_databases().into_iter().filter(|catalog| {
         catalog
             .remote_image_upload
@@ -494,10 +712,11 @@ fn authenticated_catalog(
     });
     let catalog = matches
         .next()
-        .ok_or_else(|| AppError::Forbidden("Invalid API token".into()))?;
+        .ok_or_else(|| refuse(UNKNOWN_CATALOG, "Invalid API token"))?;
     if matches.next().is_some() {
-        return Err(AppError::Forbidden(
-            "API token is configured for more than one database".into(),
+        return Err(refuse(
+            &catalog.id,
+            "API token is configured for more than one database",
         ));
     }
     // Sync is a separate grant from image upload. A key configured before
@@ -508,8 +727,9 @@ fn authenticated_catalog(
         .as_ref()
         .is_some_and(|config| config.sync_enabled)
     {
-        return Err(AppError::Forbidden(
-            "remote scheduler sync is disabled for this database".into(),
+        return Err(refuse(
+            &catalog.id,
+            "remote scheduler sync is disabled for this database",
         ));
     }
     Ok(catalog)
@@ -536,6 +756,12 @@ fn require_catalog(catalog: &DatabaseContext, requested: &str) -> Result<(), App
 }
 
 fn validate_bundle(bundle: &CatalogBundle) -> Result<(), AppError> {
+    validate_bundle_within(bundle, MAX_BUNDLE_ROWS)
+}
+
+/// The row budget is a parameter so a test can exercise the limit without
+/// building a million rows.
+fn validate_bundle_within(bundle: &CatalogBundle, max_rows: usize) -> Result<(), AppError> {
     require_protocol(bundle.protocol_version)?;
     Uuid::parse_str(&bundle.bundle_id)
         .map_err(|_| AppError::BadRequest("bundle_id must be a UUID".into()))?;
@@ -582,9 +808,9 @@ fn validate_bundle(bundle: &CatalogBundle) -> Result<(), AppError> {
         }
         row_count = row_count.saturating_add(table.rows.len());
     }
-    if row_count > MAX_BUNDLE_ROWS {
+    if row_count > max_rows {
         return Err(AppError::BadRequest(format!(
-            "bundle exceeds the {MAX_BUNDLE_ROWS} row limit"
+            "bundle exceeds the {max_rows} row limit"
         )));
     }
     Ok(())
@@ -740,14 +966,13 @@ fn export_bundle(
     let mut tables = BTreeMap::new();
     let mut row_count = 0usize;
     for name in allowed_tables(operation) {
-        let selected = if operation == SyncOperation::PushGrades {
-            Some(&["guid", "gradingStatus", "rejectreason"][..])
-        } else {
-            None
-        };
-        let where_clause = (operation == SyncOperation::PushGrades && reviewed_only)
-            .then_some("gradingStatus <> 0");
-        let table = read_bundle_table(&connection, name, selected, where_clause)?;
+        // Only acquiredimage narrows: reviewed_only means "the rows I have
+        // actually graded". project and target ride along whole because the
+        // grade read joins against them.
+        let where_clause =
+            (operation == SyncOperation::PushGrades && reviewed_only && *name == "acquiredimage")
+                .then_some("gradingStatus <> 0");
+        let table = read_bundle_table(&connection, name, where_clause)?;
         // Bound the export the same way we bound an import. A merge pulls
         // every acquiredimage row and every imagedata blob, so an unbounded
         // build is how the server runs itself out of memory answering one
@@ -782,12 +1007,11 @@ fn export_bundle(
 fn read_bundle_table(
     connection: &Connection,
     name: &str,
-    selected: Option<&[&str]>,
     where_clause: Option<&str>,
 ) -> anyhow::Result<BundleTable> {
     let mut schema_statement =
         connection.prepare(&format!("PRAGMA table_info({})", quote_identifier(name)))?;
-    let all_columns = schema_statement
+    let columns = schema_statement
         .query_map([], |row| {
             Ok(BundleColumn {
                 name: row.get(1)?,
@@ -797,20 +1021,6 @@ fn read_bundle_table(
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let columns = if let Some(selected) = selected {
-        selected
-            .iter()
-            .map(|wanted| {
-                all_columns
-                    .iter()
-                    .find(|column| column.name.eq_ignore_ascii_case(wanted))
-                    .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("table {name} is missing column {wanted}"))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?
-    } else {
-        all_columns
-    };
     anyhow::ensure!(!columns.is_empty(), "table {name} is missing");
     let select = columns
         .iter()
@@ -924,11 +1134,64 @@ fn add_table_summary(
     summary.insert(format!("{name}_skipped"), counts.skipped as i64);
 }
 
+fn operation_label(operation: SyncOperation) -> &'static str {
+    match operation {
+        SyncOperation::Merge => "merge",
+        SyncOperation::PushPlanning => "push_planning",
+        SyncOperation::PushGrades => "push_grades",
+    }
+}
+
+/// The stored preview keeps the engine's own `SchedulerSyncKind`, so map back
+/// to the protocol name the client used.
+fn kind_label(kind: SchedulerSyncKind) -> &'static str {
+    match kind {
+        SchedulerSyncKind::Pull => "merge",
+        SchedulerSyncKind::PushPlanning => "push_planning",
+        SchedulerSyncKind::PushGrades => "push_grades",
+    }
+}
+
+/// A 404 that says why, since "not found" on a preview usually means it
+/// expired or was already applied — not that the token is wrong.
+fn unknown_preview() -> AppError {
+    AppError::NotFoundMessage(
+        "no such preview. Previews last 30 minutes and each applies once, so \
+         create a new preview."
+            .into(),
+    )
+}
+
+/// Whether the server turned this request away on purpose, or broke.
+fn outcome_of(error: &AppError) -> AuditOutcome {
+    match error {
+        AppError::BadRequest(_)
+        | AppError::Conflict(_)
+        | AppError::Forbidden(_)
+        | AppError::NotFound
+        | AppError::NotFoundMessage(_) => AuditOutcome::Refused,
+        _ => AuditOutcome::Failed,
+    }
+}
+
+fn detail_of(error: &AppError) -> String {
+    match error {
+        AppError::NotFound => "not found".into(),
+        AppError::NotFoundMessage(message)
+        | AppError::DatabaseError(message)
+        | AppError::BadRequest(message)
+        | AppError::Conflict(message)
+        | AppError::Forbidden(message)
+        | AppError::InternalError(message) => message.clone(),
+        AppError::NotImplemented => "not implemented".into(),
+    }
+}
+
 fn allowed_tables(operation: SyncOperation) -> &'static [&'static str] {
     match operation {
         SyncOperation::Merge => MERGE_TABLES,
         SyncOperation::PushPlanning => PLANNING_TABLES,
-        SyncOperation::PushGrades => &["acquiredimage"],
+        SyncOperation::PushGrades => GRADE_TABLES,
     }
 }
 
@@ -939,7 +1202,7 @@ fn required_tables(operation: SyncOperation) -> &'static [&'static str] {
     match operation {
         SyncOperation::Merge => &["project", "target", "acquiredimage"],
         SyncOperation::PushPlanning => &["project", "target", "exposureplan"],
-        SyncOperation::PushGrades => &["acquiredimage"],
+        SyncOperation::PushGrades => GRADE_TABLES,
     }
 }
 
@@ -1022,20 +1285,29 @@ mod tests {
         serde_json::from_str(&json).unwrap()
     }
 
-    const ACQUIRED_IMAGE: &str = r#"{
-        "acquiredimage":{
-            "columns":[{"name":"guid","declared_type":"TEXT","not_null":false,"primary_key":false}],
-            "rows":[{"values":[{"kind":"text","value":"a-guid"}]}]
-        }
-    }"#;
+    const GUID_COLUMN: &str =
+        r#"{"name":"guid","declared_type":"TEXT","not_null":false,"primary_key":false}"#;
+    const GUID_ROW: &str = r#"{"values":[{"kind":"text","value":"a-guid"}]}"#;
+
+    /// Every table a grade push needs: the two it joins against, and the one
+    /// it actually reads.
+    fn grade_tables() -> String {
+        format!(
+            r#"{{
+            "project":{{"columns":[{GUID_COLUMN}],"rows":[{GUID_ROW}]}},
+            "target":{{"columns":[{GUID_COLUMN}],"rows":[{GUID_ROW}]}},
+            "acquiredimage":{{"columns":[{GUID_COLUMN}],"rows":[{GUID_ROW}]}}
+        }}"#
+        )
+    }
 
     #[test]
     fn accepts_a_bundle_whose_digest_is_absent_or_stale() {
         // The digest is advisory. A plugin that omits it, or that computes it
         // over a different JSON encoding than ours, still syncs.
-        validate_bundle(&grades_bundle(ACQUIRED_IMAGE, "")).unwrap();
+        validate_bundle(&grades_bundle(&grade_tables(), "")).unwrap();
         validate_bundle(&grades_bundle(
-            ACQUIRED_IMAGE,
+            &grade_tables(),
             r#","payload_sha256":"0000000000000000000000000000000000000000000000000000000000000000""#,
         ))
         .unwrap();
@@ -1043,7 +1315,15 @@ mod tests {
 
     #[test]
     fn rejects_a_bundle_missing_the_table_its_operation_needs() {
-        let error = validate_bundle(&grades_bundle("{}", "")).unwrap_err();
+        // A grade push without acquiredimage would apply cleanly and change
+        // nothing, which reads to the client as a successful sync.
+        let tables = format!(
+            r#"{{
+            "project":{{"columns":[{GUID_COLUMN}],"rows":[]}},
+            "target":{{"columns":[{GUID_COLUMN}],"rows":[]}}
+        }}"#
+        );
+        let error = validate_bundle(&grades_bundle(&tables, "")).unwrap_err();
         assert!(
             matches!(&error, AppError::BadRequest(message) if message.contains("acquiredimage")),
             "expected a 400 naming the table, got {error:?}"
@@ -1051,17 +1331,62 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_table_outside_the_operation() {
-        let error = validate_bundle(&grades_bundle(
-            r#"{
-                "project":{"columns":[{"name":"guid","declared_type":"TEXT","not_null":false,"primary_key":false}],"rows":[]},
-                "acquiredimage":{"columns":[{"name":"guid","declared_type":"TEXT","not_null":false,"primary_key":false}],"rows":[]}
-            }"#,
-            "",
+    fn counts_rows_across_every_table_against_the_budget() {
+        // Two tables of one row each: within a budget of two, over a budget
+        // of one. The bound has to be the bundle's total, not any one table's.
+        let bundle: CatalogBundle = serde_json::from_str(&format!(
+            r#"{{
+            "protocol_version":1,
+            "bundle_id":"b03b8ab1-ce43-4a87-a4fb-68497394cedb",
+            "created_at_utc":"2026-07-23T12:00:00+00:00",
+            "operation":"push_planning",
+            "source":{{"id":"s","product":"p","product_version":"1","schema_version":23}},
+            "tables":{{
+                "project":{{"columns":[{GUID_COLUMN}],"rows":[{GUID_ROW}]}},
+                "target":{{"columns":[{GUID_COLUMN}],"rows":[{GUID_ROW}]}},
+                "exposureplan":{{"columns":[{GUID_COLUMN}],"rows":[]}}
+            }}
+        }}"#
         ))
-        .unwrap_err();
+        .unwrap();
+
+        validate_bundle_within(&bundle, 2).unwrap();
+        let error = validate_bundle_within(&bundle, 1).unwrap_err();
         assert!(
-            matches!(&error, AppError::BadRequest(message) if message.contains("project")),
+            matches!(&error, AppError::BadRequest(message) if message.contains("row limit")),
+            "expected a 400 about the row limit, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn stored_previews_report_the_operation_the_client_asked_for() {
+        // The audit log names the protocol operation, but a stored preview
+        // only kept the engine's own kind. Round-trip every operation so a
+        // merge is never recorded under the engine's name for it.
+        for operation in [
+            SyncOperation::Merge,
+            SyncOperation::PushPlanning,
+            SyncOperation::PushGrades,
+        ] {
+            let request = scheduler_request(operation, "source".into(), true);
+            assert_eq!(kind_label(request.kind), operation_label(operation));
+        }
+    }
+
+    #[test]
+    fn rejects_a_table_outside_the_operation() {
+        // exposureplan belongs to a planning push, never to a grade push.
+        let tables = format!(
+            r#"{{
+            "exposureplan":{{"columns":[{GUID_COLUMN}],"rows":[]}},
+            "project":{{"columns":[{GUID_COLUMN}],"rows":[]}},
+            "target":{{"columns":[{GUID_COLUMN}],"rows":[]}},
+            "acquiredimage":{{"columns":[{GUID_COLUMN}],"rows":[]}}
+        }}"#
+        );
+        let error = validate_bundle(&grades_bundle(&tables, "")).unwrap_err();
+        assert!(
+            matches!(&error, AppError::BadRequest(message) if message.contains("exposureplan")),
             "expected a 400 naming the table, got {error:?}"
         );
     }

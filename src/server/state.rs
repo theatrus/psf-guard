@@ -73,6 +73,9 @@ pub struct AppState {
     pub sync_apply_lock: tokio::sync::Mutex<()>,
     /// Export bundles built for remote sync clients, capacity- and time-bound.
     pub remote_exports: crate::server::remote_sync::ExportStore,
+    /// Append-only record of remote sync actions, so an operator can tell
+    /// afterwards which token-holder changed the scheduler database and when.
+    pub remote_audit: crate::server::remote_audit::RemoteAuditLog,
     /// Process-global Seiza catalogs and capability diagnostics. Catalogs are
     /// shared across databases and opened lazily on first use.
     pub astrometry: Arc<crate::astrometry::AstrometryContext>,
@@ -378,6 +381,7 @@ impl AppState {
             sync_previews: crate::server::sync_preview::SyncPreviewManager::new(&cache_dir),
             sync_apply_lock: tokio::sync::Mutex::new(()),
             remote_exports: crate::server::remote_sync::ExportStore::new(),
+            remote_audit: crate::server::remote_audit::RemoteAuditLog::new(&cache_dir),
             astrometry: Arc::new(crate::astrometry::AstrometryContext::new(astrometry_config)),
             satellites: Arc::new(satellites),
         })
@@ -499,6 +503,7 @@ impl AppState {
             ),
             sync_apply_lock: tokio::sync::Mutex::new(()),
             remote_exports: crate::server::remote_sync::ExportStore::new(),
+            remote_audit: crate::server::remote_audit::RemoteAuditLog::new("/tmp/psf-guard-test"),
             astrometry: Arc::new(crate::astrometry::AstrometryContext::default()),
             satellites: Arc::new(
                 crate::satellites::SatelliteContext::new(

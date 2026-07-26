@@ -194,6 +194,49 @@ impl SyncPreviewManager {
         Ok(Some(record))
     }
 
+    /// Put a claimed preview back after an apply that changed nothing.
+    ///
+    /// Claiming is deliberately one-shot, but an apply that refuses (the
+    /// destination moved) or breaks (the file was locked) has written nothing,
+    /// so throwing the preview away costs the client its whole source snapshot
+    /// — for a remote client, a re-upload of the entire bundle. Restoring keeps
+    /// it, so the client can retry, or refresh the preview against the
+    /// destination as it now stands.
+    pub fn restore(&self, record: &SyncPreviewRecord) -> Result<()> {
+        if record.expires_at <= unix_seconds() {
+            self.remove_source_snapshot(&record.source_snapshot_file);
+            return Ok(());
+        }
+        write_record(&self.directory, record)?;
+        self.records
+            .lock()
+            .map_err(|error| anyhow::anyhow!("sync preview lock poisoned: {error}"))?
+            .insert(record.id.clone(), record.clone());
+        Ok(())
+    }
+
+    /// Re-run a preview in place: same ID, same source snapshot, new summary
+    /// and destination fingerprint. Lets a client whose preview went stale
+    /// review the merge again without re-sending the source data.
+    pub fn refresh(
+        &self,
+        record: &SyncPreviewRecord,
+        destination_fingerprint: String,
+        result: SchedulerSyncResponse,
+    ) -> Result<SyncPreviewRecord> {
+        let refreshed = SyncPreviewRecord {
+            destination_fingerprint,
+            result,
+            ..record.clone()
+        };
+        write_record(&self.directory, &refreshed)?;
+        self.records
+            .lock()
+            .map_err(|error| anyhow::anyhow!("sync preview lock poisoned: {error}"))?
+            .insert(refreshed.id.clone(), refreshed.clone());
+        Ok(refreshed)
+    }
+
     pub fn discard(&self, id: &str, local_db_id: &str) -> Result<bool> {
         let mut records = self
             .records
@@ -473,6 +516,114 @@ mod tests {
         assert!(manager.claim(&record.id, "source").unwrap().is_some());
         assert!(manager.claim(&record.id, "source").unwrap().is_none());
         assert!(manager.get(&record.id).unwrap().is_none());
+    }
+
+    /// Build a manager holding one preview over a throwaway source database.
+    fn stored_preview(directory: &Path) -> (SyncPreviewManager, SyncPreviewRecord) {
+        let manager = SyncPreviewManager::new(directory.join("cache"));
+        let source_path = directory.join("source.sqlite");
+        let source = Connection::open(&source_path).unwrap();
+        source
+            .execute_batch("CREATE TABLE sample (value TEXT);")
+            .unwrap();
+        drop(source);
+        let snapshot = manager.create_source_snapshot(&source_path).unwrap();
+        let record = manager
+            .store(
+                "catalog".into(),
+                request(),
+                snapshot,
+                "destination-fingerprint".into(),
+                response(),
+            )
+            .unwrap();
+        (manager, record)
+    }
+
+    #[test]
+    fn a_restored_preview_can_be_claimed_again() {
+        // An apply that refuses wrote nothing, so its preview is still valid
+        // source data. Losing it would cost a remote client the whole upload.
+        let directory = tempdir().unwrap();
+        let (manager, record) = stored_preview(directory.path());
+
+        let claimed = manager.claim(&record.id, "catalog").unwrap().unwrap();
+        assert!(manager.get(&record.id).unwrap().is_none());
+        manager.restore(&claimed).unwrap();
+
+        assert!(manager.get(&record.id).unwrap().is_some());
+        // Restoring survives a restart, so the record went back to disk too.
+        let reloaded = SyncPreviewManager::new(directory.path().join("cache"));
+        assert!(reloaded.get(&record.id).unwrap().is_some());
+        assert!(manager.claim(&record.id, "catalog").unwrap().is_some());
+    }
+
+    #[test]
+    fn restoring_an_expired_preview_drops_its_snapshot_instead() {
+        let directory = tempdir().unwrap();
+        let (manager, record) = stored_preview(directory.path());
+        let snapshot = manager.source_snapshot_path(&record).unwrap();
+        let expired = SyncPreviewRecord {
+            expires_at: unix_seconds() - 1,
+            ..manager.claim(&record.id, "catalog").unwrap().unwrap()
+        };
+
+        manager.restore(&expired).unwrap();
+
+        assert!(manager.get(&record.id).unwrap().is_none());
+        assert!(
+            !snapshot.exists(),
+            "an expired preview must not leak a file"
+        );
+    }
+
+    #[test]
+    fn refreshing_keeps_the_id_and_snapshot_but_takes_the_new_fingerprint() {
+        // The way back from a stale preview: re-review the same source data
+        // against the destination as it now stands.
+        let directory = tempdir().unwrap();
+        let (manager, record) = stored_preview(directory.path());
+
+        let refreshed = manager
+            .refresh(&record, "moved-destination".into(), response())
+            .unwrap();
+
+        assert_eq!(refreshed.id, record.id);
+        assert_eq!(refreshed.source_snapshot_file, record.source_snapshot_file);
+        assert_eq!(refreshed.destination_fingerprint, "moved-destination");
+        let reloaded = SyncPreviewManager::new(directory.path().join("cache"));
+        assert_eq!(
+            reloaded
+                .get(&record.id)
+                .unwrap()
+                .unwrap()
+                .destination_fingerprint,
+            "moved-destination"
+        );
+    }
+
+    #[test]
+    fn an_expired_preview_is_dropped_with_its_snapshot_on_load() {
+        let directory = tempdir().unwrap();
+        let (manager, record) = stored_preview(directory.path());
+        let snapshot = manager.source_snapshot_path(&record).unwrap();
+        let expired = SyncPreviewRecord {
+            expires_at: unix_seconds() - 1,
+            ..record.clone()
+        };
+        write_record(
+            &directory.path().join("cache").join("sync-previews"),
+            &expired,
+        )
+        .unwrap();
+
+        let reloaded = SyncPreviewManager::new(directory.path().join("cache"));
+
+        assert!(reloaded.get(&record.id).unwrap().is_none());
+        assert!(
+            !snapshot.exists(),
+            "an expired preview must not leak a file"
+        );
     }
 
     #[test]

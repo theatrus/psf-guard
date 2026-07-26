@@ -897,7 +897,7 @@ pub async fn apply_sync_database_preview_route(
         .source_snapshot_path(&record)
         .map_err(|error| AppError::InternalError(format!("{error:#}")))?;
 
-    let mut request = record.request;
+    let mut request = record.request.clone();
     request.dry_run = false;
     let result = execute_scheduler_sync_guarded(
         &state,
@@ -905,15 +905,26 @@ pub async fn apply_sync_database_preview_route(
         request,
         Some(source_snapshot),
         SyncGuardMode::Apply {
-            destination_fingerprint: record.destination_fingerprint,
+            destination_fingerprint: record.destination_fingerprint.clone(),
         },
     )
     .await
     .map(|(result, _)| result);
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            // Nothing was written, so the snapshot still holds exactly the
+            // source rows the user reviewed. Put the preview back rather than
+            // making them rebuild it to retry.
+            if let Err(restore_error) = state.sync_previews.restore(&record) {
+                tracing::warn!("could not restore sync preview {preview_id}: {restore_error:#}");
+            }
+            return Err(error);
+        }
+    };
     state
         .sync_previews
         .remove_source_snapshot(&record.source_snapshot_file);
-    let result = result?;
     Ok(Json(ApiResponse::success(result)))
 }
 

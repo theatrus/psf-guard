@@ -189,10 +189,11 @@ export default function SchedulerSyncControls({
       queryClient.invalidateQueries({ queryKey: ['databases'] });
       queryClient.invalidateQueries({ queryKey: ['db'] });
     } catch (error) {
+      // A refused apply wrote nothing and the server kept the preview, so
+      // keep it here too: retrying works for a transient failure, and a
+      // stale destination just needs a new preview, which is still offered.
       const detail = error instanceof Error ? error.message : String(error);
       setMessage(`Apply failed: ${detail}`);
-      sessionStorage.removeItem(STORED_PREVIEW_KEY);
-      setPending(null);
     } finally {
       setRunning(false);
     }
