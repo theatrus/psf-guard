@@ -36,6 +36,7 @@ import {
 } from '../utils/projectNavigation';
 import ProjectSchedulerDialog from './ProjectSchedulerDialog';
 import PreviewImage from './PreviewImage';
+import { useColorPreview } from '../hooks/useColorPreview';
 import './Overview.css';
 
 /// Inline edit state for correcting imported groupings.
@@ -48,6 +49,7 @@ function recentImageKey(dbId: string, projectId: number, imageId: number): strin
 }
 
 export default function Overview() {
+  const color = useColorPreview();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [projectSearch, setProjectSearch] = useState('');
@@ -719,11 +721,13 @@ export default function Overview() {
                                   dbId={project.db_id}
                                   src={apiClient.getPreviewUrl(project.db_id, image.id, {
                                     size: 'screen',
+                                    color,
                                   })}
                                   descriptor={{
                                     imageId: image.id,
                                     kind: 'preview',
                                     size: 'screen',
+                                    color,
                                   }}
                                   alt={`${image.target_name}, ${filter}`}
                                   loading="lazy"

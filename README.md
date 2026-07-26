@@ -885,10 +885,12 @@ curl -X POST \
 A raw OSC file with a recognized `BAYERPAT` header is debayered, and what
 happens next depends on whether you are looking or measuring.
 
-**Looking.** The image viewer shows colour by default. Press `C` or use the
-**Color** button for the luminance rendition instead. Stacks of OSC frames are
-colour throughout: the stacker debayers on ingest and integrates all three
-channels, so the preview and the exported FITS are RGB.
+**Looking.** Colour is on by default, in the grid, the overview, and the image
+viewer alike. Press `C` or use the **Color** button for the luminance
+rendition instead; the choice is shared across every view and remembered, so a
+frame does not change appearance on the way into the detail view. Stacks of OSC
+frames are colour throughout: the stacker debayers on ingest and integrates all
+three channels, so the preview and the exported FITS are RGB.
 
 **Measuring.** Grading and quality metrics use luminance, always. Star metrics
 on a bare colour filter array are distorted by the per-channel sampling, and

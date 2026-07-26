@@ -14,6 +14,11 @@ import AstrometryOverlay from './AstrometryOverlay';
 import SatellitePanel from './SatellitePanel';
 import SatelliteTrackOverlay from './SatelliteTrackOverlay';
 import ImageFileLocation from './ImageFileLocation';
+import {
+  colorPreviewEnabled,
+  setColorPreview,
+  useColorPreview,
+} from '../hooks/useColorPreview';
 
 interface ImageDetailViewProps {
   dbId: string;
@@ -49,10 +54,11 @@ export default function ImageDetailView({
 }: ImageDetailViewProps) {
   const queryClient = useQueryClient();
   const [showStars, setShowStars] = useState(false);
-  // On by default: a colour camera's frame should look like what it recorded.
-  // Turning it off gives the luminance rendition the grader measures, and a
-  // mono frame looks the same either way.
-  const [showColor, setShowColor] = useState(true);
+  // Shared with the grid and the overview, so a frame does not change
+  // appearance on the way into the detail view. On by default; off gives the
+  // luminance rendition the grader measures, and a mono frame looks the same
+  // either way.
+  const showColor = useColorPreview();
   const [showPsf, setShowPsf] = useState(false);
   const [psfImageLoading, setPsfImageLoading] = useState(false);
   const [maxStars] = useState(1000);
@@ -247,7 +253,7 @@ export default function ImageDetailView({
   }, [showStars]);
   // Colour is a view of the same exposure, not a different analysis, so it
   // does not turn off the overlays the way stars and PSF turn off each other.
-  useHotkeys('c', () => setShowColor((color) => !color), []);
+  useHotkeys('c', () => setColorPreview(!colorPreviewEnabled()), []);
   useHotkeys('p', () => {
     const newPsfState = !showPsf;
     setShowPsf(newPsfState);
@@ -853,7 +859,7 @@ export default function ImageDetailView({
                 </button>
                 <button
                   className={`zoom-btn-compact${showColor ? ' active' : ''}`}
-                  onClick={() => setShowColor((color) => !color)}
+                  onClick={() => setColorPreview(!showColor)}
                   aria-pressed={showColor}
                   disabled={showStars}
                   title={

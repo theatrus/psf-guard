@@ -783,9 +783,9 @@ export const apiClient = {
     if (options?.stretch !== undefined) params.append('stretch', String(options.stretch));
     if (options?.midtone !== undefined) params.append('midtone', String(options.midtone));
     if (options?.shadow !== undefined) params.append('shadow', String(options.shadow));
-    // Only sent when asked for, so a mono viewer's URLs — and the artifacts
-    // already cached against them — stay exactly as they were.
-    if (options?.color) params.append('color', 'true');
+    // Sent explicitly either way, so the URL states what it wants rather than
+    // depending on the server's default staying put.
+    if (options?.color !== undefined) params.append('color', String(options.color));
 
     const queryString = params.toString();
     const basePath = serverUrl ? `${serverUrl}/api` : '/api';
