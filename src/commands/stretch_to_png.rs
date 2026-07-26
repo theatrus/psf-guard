@@ -89,11 +89,9 @@ pub fn color_to_png_with_resize(
     };
 
     let output_path = output.map_or_else(
-        || {
-            let mut path = path.to_path_buf();
-            path.set_extension("png");
-            path
-        },
+        // Name the file after what is about to be written to it, not after
+        // the format this function used to be able to produce.
+        || path.with_extension(encoding.extension()),
         PathBuf::from,
     );
     encoding.write(

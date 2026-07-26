@@ -132,7 +132,7 @@ export default function ImageComparisonView({
     : apiClient.getPreviewUrl(dbId, leftImageId, { size: leftSize, color });
   const leftDescriptor: PreviewDescriptor = showStars
     ? { imageId: leftImageId, kind: 'annotated', size: leftSize, maxStars }
-    : { imageId: leftImageId, kind: 'preview', size: leftSize };
+    : { imageId: leftImageId, kind: 'preview', size: leftSize, color };
   const asyncLeft = useAsyncImage(dbId, leftSrc, leftDescriptor);
 
   const rightSize: 'large' | 'original' =
@@ -143,7 +143,7 @@ export default function ImageComparisonView({
     : apiClient.getPreviewUrl(dbId, rightIdForUrl, { size: rightSize, color });
   const rightDescriptor: PreviewDescriptor = showStars
     ? { imageId: rightIdForUrl, kind: 'annotated', size: rightSize, maxStars }
-    : { imageId: rightIdForUrl, kind: 'preview', size: rightSize };
+    : { imageId: rightIdForUrl, kind: 'preview', size: rightSize, color };
   const asyncRight = useAsyncImage(dbId, rightSrc, rightDescriptor);
   const hideLeftImage = asyncLeft.state !== 'ready' || loadedLeftSrc !== asyncLeft.src;
   const hideRightImage = asyncRight.state !== 'ready' || loadedRightSrc !== asyncRight.src;
@@ -240,7 +240,7 @@ export default function ImageComparisonView({
         : apiClient.getPreviewUrl(dbId, leftImageId, { size: 'original', color });
       const descriptor: PreviewDescriptor = showStars
         ? { imageId: leftImageId, kind: 'annotated', size: 'original', maxStars }
-        : { imageId: leftImageId, kind: 'preview', size: 'original' };
+        : { imageId: leftImageId, kind: 'preview', size: 'original', color };
 
       // Route through the interactive queue so an uncached 'original' is
       // generated (its 202 is not a failure); only flip once it's ready.
@@ -304,7 +304,7 @@ export default function ImageComparisonView({
         : apiClient.getPreviewUrl(dbId, rightImageId, { size: 'original', color });
       const descriptor: PreviewDescriptor = showStars
         ? { imageId: rightImageId, kind: 'annotated', size: 'original', maxStars }
-        : { imageId: rightImageId, kind: 'preview', size: 'original' };
+        : { imageId: rightImageId, kind: 'preview', size: 'original', color };
 
       void ensurePreviewReady(dbId, originalUrl, descriptor).then((ok) => {
         if (!ok) return;
