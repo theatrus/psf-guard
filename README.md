@@ -304,7 +304,7 @@ These version-independent links point at the latest release:
 | Platform | Download | Notes |
 |----------|----------|-------|
 | Linux x64 | [`psf-guard-linux-x64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-linux-x64) | Self-contained binary |
-| macOS | [`psf-guard-macos-x64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-macos-x64) | Self-contained binary |
+| macOS (Apple Silicon) | [`psf-guard-macos-arm64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-macos-arm64) | Self-contained binary |
 | Windows x64 | [`psf-guard-windows-x64.exe`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-windows-x64.exe) | Static binary, no dependencies |
 
 PSF Guard checks for newer releases without sending catalog or image data. The

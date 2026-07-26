@@ -121,7 +121,7 @@ jobs:
       if: matrix.os == 'macos-latest'
       uses: actions/upload-artifact@v7
       with:
-        name: psf-guard-macos-x64
+        name: psf-guard-macos-arm64
         path: target/release/psf-guard
 
   e2e:
@@ -348,7 +348,7 @@ jobs:
       if: matrix.os == 'macos-latest' && github.event_name != 'pull_request'
       uses: actions/upload-artifact@v7
       with:
-        name: psf-guard-tauri-macos-x64
+        name: psf-guard-tauri-macos-arm64
         path: |
           target/release/bundle/dmg/*.dmg
           target/release/bundle/macos/*.app

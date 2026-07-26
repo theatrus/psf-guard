@@ -93,7 +93,7 @@ All releases now include both CLI binaries and desktop applications:
 ### CLI Binaries
 - `psf-guard-linux-x64` - Standalone Linux binary
 - `psf-guard-windows-x64.exe` - Standalone Windows binary
-- `psf-guard-macos-x64` - Standalone macOS binary
+- `psf-guard-macos-arm64` - Standalone Apple Silicon macOS binary
 
 ### Desktop Applications
 - **Linux**: 
