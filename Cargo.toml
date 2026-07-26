@@ -63,6 +63,8 @@ humantime = "2.3"
 tempfile = "3.27"
 tauri = { version = "2.11.1", features = ["custom-protocol"], optional = true }
 tauri-plugin-dialog = { version = "2.7.1", optional = true }
+tauri-plugin-process = { version = "2.3.1", optional = true }
+tauri-plugin-updater = { version = "2.10.1", optional = true }
 dirs = "6.0"
 dunce = "1"
 async_zip = { version = "0.0.18", features = ["tokio"] }
@@ -79,7 +81,12 @@ http-body-util = "0.1"
 
 [features]
 default = []
-tauri = ["dep:tauri", "dep:tauri-plugin-dialog"]
+tauri = [
+    "dep:tauri",
+    "dep:tauri-plugin-dialog",
+    "dep:tauri-plugin-process",
+    "dep:tauri-plugin-updater",
+]
 
 [profile.release]
 # Enable maximum optimizations for performance

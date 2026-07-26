@@ -101,6 +101,28 @@ jobs:
       run: cargo install tauri-cli --version "^2.0" --locked
       continue-on-error: true
 
+    - name: Check tag matches app version
+      shell: bash
+      run: |
+        version=$(node -p 'require("./tauri.conf.json").version')
+        if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+          echo "::error::Tag $GITHUB_REF_NAME does not match app version $version."
+          exit 1
+        fi
+        echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+
+    - name: Write signed updater build config
+      shell: bash
+      run: |
+        if [ "${{ matrix.os }}" = "windows-latest" ]; then
+          node scripts/write-updater-config.mjs \
+            "${{ runner.temp }}/psf-guard-updater.json" \
+            tauri.bundle-windows.json
+        else
+          node scripts/write-updater-config.mjs \
+            "${{ runner.temp }}/psf-guard-updater.json"
+        fi
+
     - name: Build CLI binary
       # Dedicated console-subsystem CLI (no tauri) — the standalone release
       # asset. The installer's bundled copy comes from Tauri auto-bundling the
@@ -109,14 +131,20 @@ jobs:
 
     - name: Build Tauri desktop app (Linux)
       if: matrix.os == 'ubuntu-22.04'
-      run: cargo tauri build --verbose
+      env:
+        TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      run: cargo tauri build --verbose --config "${{ runner.temp }}/psf-guard-updater.json"
 
     - name: Build Tauri desktop app (Windows, with bundled CLI)
       # externalBin (the CLI sidecar staged above) + the NSIS PATH hook live in
       # tauri.bundle-windows.json, applied only here via --config so other
       # tauri-feature compiles don't require the sidecar.
       if: matrix.os == 'windows-latest'
-      run: cargo tauri build --verbose --config tauri.bundle-windows.json
+      env:
+        TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      run: cargo tauri build --verbose --config "${{ runner.temp }}/psf-guard-updater.json"
 
     - name: Build Tauri desktop app (macOS)
       if: matrix.os == 'macos-latest'
@@ -124,8 +152,10 @@ jobs:
         APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         APPLE_API_KEY_PATH: AuthKey_${{ secrets.APPLE_API_KEY }}.p8
+        TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       run: |
-        bash scripts/package-macos.sh
+        bash scripts/package-macos.sh --config "${{ runner.temp }}/psf-guard-updater.json"
 
     - name: Prepare release assets
       shell: bash
@@ -146,6 +176,10 @@ jobs:
             find target/release/bundle/deb -name "*.deb" -exec cp {} release-assets/ \; 2>/dev/null || echo "No .deb files found"
             # Copy AppImages
             find target/release/bundle/appimage -name "*.AppImage" -exec cp {} release-assets/ \; 2>/dev/null || echo "No .AppImage files found"
+            updater=$(find target/release/bundle/appimage -name "*.AppImage" -print -quit)
+            test -n "$updater" && test -s "$updater.sig"
+            cp "$updater" "release-assets/PSF-Guard-${APP_VERSION}-linux-x86_64.AppImage"
+            cp "$updater.sig" "release-assets/PSF-Guard-${APP_VERSION}-linux-x86_64.AppImage.sig"
             ;;
           windows-latest)
             # Copy .msi installers
@@ -157,6 +191,10 @@ jobs:
             # asset). Keep the original "-setup.exe" name — it's what the docs
             # reference.
             find target/release/bundle/nsis -name "*.exe" -exec cp {} release-assets/ \; 2>/dev/null || echo "No NSIS .exe files found"
+            updater=$(find target/release/bundle/nsis -name "*.exe" -print -quit)
+            test -n "$updater" && test -s "$updater.sig"
+            cp "$updater" "release-assets/PSF-Guard-${APP_VERSION}-windows-x64-setup.exe"
+            cp "$updater.sig" "release-assets/PSF-Guard-${APP_VERSION}-windows-x64-setup.exe.sig"
             ;;
           macos-latest)
             # Copy .dmg installers
@@ -171,6 +209,10 @@ jobs:
               done
               cd ../../../../
             fi
+            updater=$(find target/release/bundle/macos -name "*.app.tar.gz" -print -quit)
+            test -n "$updater" && test -s "$updater.sig"
+            cp "$updater" "release-assets/PSF-Guard-${APP_VERSION}-macos-aarch64.app.tar.gz"
+            cp "$updater.sig" "release-assets/PSF-Guard-${APP_VERSION}-macos-aarch64.app.tar.gz.sig"
             ;;
         esac
 
@@ -218,3 +260,53 @@ jobs:
           Download the appropriate version for your platform and get started!
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-update-feeds:
+    name: Publish updater and server notice feeds
+    runs-on: ubuntu-22.04
+    needs: build
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Install Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: '24'
+
+    - name: Download signed updater assets
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        version=$(node -p 'require("./tauri.conf.json").version')
+        test "$GITHUB_REF_NAME" = "v$version"
+        echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+        mkdir update-feeds
+        gh release download "$GITHUB_REF_NAME" --dir update-feeds \
+          --pattern "PSF-Guard-${version}-windows-x64-setup.exe" \
+          --pattern "PSF-Guard-${version}-windows-x64-setup.exe.sig" \
+          --pattern "PSF-Guard-${version}-linux-x86_64.AppImage" \
+          --pattern "PSF-Guard-${version}-linux-x86_64.AppImage.sig" \
+          --pattern "PSF-Guard-${version}-macos-aarch64.app.tar.gz" \
+          --pattern "PSF-Guard-${version}-macos-aarch64.app.tar.gz.sig"
+
+    - name: Build update feeds
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        published_at=$(gh api \
+          "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" \
+          --jq .published_at)
+        node scripts/release-feeds.mjs \
+          update-feeds \
+          "$APP_VERSION" \
+          "$GITHUB_REF_NAME" \
+          "$published_at"
+
+    - name: Attach update feeds to the release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release upload "$GITHUB_REF_NAME" \
+          update-feeds/updater.json \
+          update-feeds/notice.json \
+          --clobber

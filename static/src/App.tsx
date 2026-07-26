@@ -6,6 +6,7 @@ import ProjectTargetSelector from './components/ProjectTargetSelector';
 import KeyboardShortcutHelp from './components/KeyboardShortcutHelp';
 import ServerInfoPanel from './components/ServerInfoPanel';
 import SiteBanner from './components/SiteBanner';
+import UpdateNotice from './components/UpdateNotice';
 import CacheRefreshStatus from './components/CacheRefreshStatus';
 import AggregatedCacheStatus from './components/AggregatedCacheStatus';
 import TauriSettings from './components/TauriSettings';
@@ -193,6 +194,7 @@ function App() {
       </header>
 
       <SiteBanner banner={serverInfo?.banner} />
+      <UpdateNotice installedVersion={serverInfo?.version} />
 
       <main className="app-main">
         <Outlet />

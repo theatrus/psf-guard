@@ -86,6 +86,10 @@ catalog unless the task grants that access.
 | `packaging/` | RPM and platform packaging |
 | `icons/` | Generated desktop icons; see `icons/README.md` |
 
+The shared UI reads `notice.json` in both server and Tauri modes. Only Tauri
+loads the signed updater plugin. Both feeds try `updates.psf-guard.com` before
+the GitHub release fallback. See [docs/UPDATES.md](docs/UPDATES.md).
+
 ## Core invariants
 
 ### Databases and grading

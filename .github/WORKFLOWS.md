@@ -28,6 +28,10 @@ This repository contains workflows for building both CLI and desktop versions of
      - **Linux**: `.deb` packages, `.AppImage` bundles
      - **Windows**: `.msi` installers, NSIS installers
      - **macOS**: `.dmg` installers, `.app` bundles (zipped)
+     - **Updates**: signed Tauri payloads, `updater.json`, and `notice.json`
+
+The update feeds and signing boundary are documented in
+[`docs/UPDATES.md`](../docs/UPDATES.md).
 
 ## Build Process
 
@@ -46,8 +50,9 @@ The release workflow builds both CLI and Tauri versions:
 3. Install Rust toolchain
 4. Install Tauri CLI: `cargo install tauri-cli --version "^2.0"`
 5. Build CLI binary: `cargo build --release --locked`
-6. Build Tauri app: `cargo tauri build --verbose`
-7. Package and upload both CLI binaries and native bundles
+6. Build and sign Tauri updater payloads
+7. Package and upload CLI binaries, native bundles, and stable updater files
+8. Generate and attach the desktop updater and server notice feeds
 
 ## System Dependencies
 
@@ -110,6 +115,8 @@ All releases now include both CLI binaries and desktop applications:
 - Create and push a version tag: `git tag v1.0.0 && git push origin v1.0.0`
 - A single comprehensive release will be created with both CLI binaries and desktop applications
 - Release notes are generated automatically
+- The workflow attaches update feeds to GitHub. A separate job copies them to
+  `updates.psf-guard.com`.
 
 ## Development Tips
 
@@ -128,14 +135,14 @@ All releases now include both CLI binaries and desktop applications:
    - Ensure frontend builds successfully
    - Verify Tauri CLI is the correct version
 
-   - Verify environment variables (especially on Windows)
+   - Verify the two `TAURI_SIGNING_*` secrets described in `docs/UPDATES.md`
 
-3. **Bundle generation fails**:
+2. **Bundle generation fails**:
    - Ensure all required system dependencies are installed
    - Check Tauri configuration in `tauri.conf.json`
    - Verify app icons exist and are properly configured
 
-4. **Frontend build fails**:
+3. **Frontend build fails**:
    - Check Node.js version (should be 24)
    - Verify `package-lock.json` is committed
    - Ensure all npm dependencies are available
