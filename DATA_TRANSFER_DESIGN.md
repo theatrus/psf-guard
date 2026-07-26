@@ -301,6 +301,24 @@ Each database opts into this protocol on its own. Holding a valid key is not
 enough: the operator ticks **Accept remote scheduler sync** for that database,
 separately from **Accept remote image uploads**.
 
+### Granting access without a Settings panel
+
+The desktop app has Settings; a server run from the command line does not, and
+the route Settings uses is gated behind `--allow-database-management` — far too
+large a grant to demand for this, since it also lets a network caller name
+server filesystem paths. A headless deployment therefore takes both grants from
+`[[remote_sync]]` and `[[remote_upload]]` blocks in its `--config` file, each
+naming a registry slug and a key (inline, or `token_file` for systemd
+credentials and Docker secrets).
+
+They apply to the in-memory database list at startup and are never written back
+to the registry, so the config file stays the whole account of what a
+deployment allows and rotating a key is a restart. A database has one key,
+whichever grants it holds; two blocks naming it with different keys is refused
+rather than letting the later one silently disable the earlier. So is a block
+naming a database that is not registered — the alternative is a server that
+answers every remote request with 403 and cannot say why.
+
 ### Keeping a preview across a refusal
 
 Apply claims a preview once, so no two callers can apply the same one. But an

@@ -21,6 +21,187 @@ pub struct Config {
     pub cache: CacheConfig,
     /// Optional pregeneration configuration
     pub pregeneration: Option<PregenerationConfig>,
+    /// Databases this server accepts remote scheduler sync for, one
+    /// `[[remote_sync]]` block each. See [`RemoteSyncConfig`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remote_sync: Vec<RemoteSyncConfig>,
+    /// Databases this server accepts remote image uploads for, one
+    /// `[[remote_upload]]` block each. See [`RemoteUploadConfig`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remote_upload: Vec<RemoteUploadConfig>,
+}
+
+/// Turn on the remote sync protocol for one already-registered database.
+///
+/// The desktop app configures this in Settings, but a headless
+/// `psf-guard server` has no Settings and should not have to open database
+/// management — a far larger grant, since that route lets a network caller
+/// name server filesystem paths — merely to accept a sync. An operator with
+/// shell access on the box writes this instead.
+///
+/// It is applied to the in-memory database list at startup and never written
+/// back to the registry, so the config file stays the whole truth for a
+/// deployment and rotating a token is a restart.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteSyncConfig {
+    /// Registry slug of the database to open for sync.
+    pub database: String,
+    /// Bearer token, in the clear. Prefer `token_file`: this one is readable
+    /// by anyone who can read the config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    /// File holding the bearer token, for systemd credentials, Docker
+    /// secrets, and the like. Leading and trailing whitespace is trimmed, so
+    /// the usual trailing newline is fine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_file: Option<String>,
+}
+
+/// Accept remote image uploads for one already-registered database.
+///
+/// The image counterpart of [`RemoteSyncConfig`], and separate for the same
+/// reason the registry keeps the two grants apart: a telescope that ships
+/// frames need not also be allowed to merge into the catalog, or the reverse.
+/// A database named by both blocks must use the same key — one key per
+/// database is what the token check assumes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteUploadConfig {
+    /// Registry slug of the database to receive frames for.
+    pub database: String,
+    /// Directory the received frames are written to. Created if absent.
+    pub image_dir: String,
+    /// Bearer token, in the clear. Prefer `token_file`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    /// File holding the bearer token. Whitespace-trimmed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_file: Option<String>,
+}
+
+/// Read a token supplied either inline or by file, naming the database in any
+/// complaint so an operator with several blocks knows which one is wrong.
+fn read_token(
+    database: &str,
+    block: &str,
+    inline: &Option<String>,
+    file: &Option<String>,
+) -> Result<String> {
+    match (inline, file) {
+        (Some(_), Some(_)) => anyhow::bail!(
+            "{block} for database '{database}' sets both token and token_file; use one"
+        ),
+        (Some(token), None) => Ok(token.trim().to_string()),
+        (None, Some(path)) => {
+            let contents = std::fs::read_to_string(path).with_context(|| {
+                format!("reading the {block} token for database '{database}' from {path}")
+            })?;
+            Ok(contents.trim().to_string())
+        }
+        (None, None) => {
+            anyhow::bail!("{block} for database '{database}' needs a token or a token_file")
+        }
+    }
+}
+
+/// Open the configured databases for remote access, in memory only.
+///
+/// Returns a line per database describing what was opened, for the startup
+/// log. An unknown slug is fatal: a typo would otherwise leave the operator
+/// with a server that answers every remote request with 403 and nothing to
+/// say why.
+pub fn apply_remote_access(
+    entries: &mut [crate::db_registry::DbEntry],
+    sync: &[RemoteSyncConfig],
+    upload: &[RemoteUploadConfig],
+) -> Result<Vec<String>> {
+    let mut opened: Vec<(String, Vec<&'static str>)> = Vec::new();
+    // Databases this config run has already keyed. The conflict check is
+    // between blocks the operator wrote together; replacing a key the desktop
+    // Settings panel left in the registry is the config file doing its job.
+    let mut keyed: Vec<(String, String)> = Vec::new();
+    for config in sync {
+        let token = read_token(
+            &config.database,
+            "remote_sync",
+            &config.token,
+            &config.token_file,
+        )?;
+        let access = open(entries, &config.database, &token, &mut keyed)?;
+        access.sync_enabled = true;
+        note(&mut opened, &config.database, "sync");
+    }
+    for config in upload {
+        let token = read_token(
+            &config.database,
+            "remote_upload",
+            &config.token,
+            &config.token_file,
+        )?;
+        std::fs::create_dir_all(&config.image_dir).with_context(|| {
+            format!(
+                "creating the remote upload directory {} for database '{}'",
+                config.image_dir, config.database
+            )
+        })?;
+        let access = open(entries, &config.database, &token, &mut keyed)?;
+        access.enabled = true;
+        access.image_dir = config.image_dir.clone();
+        note(&mut opened, &config.database, "image upload");
+    }
+    Ok(opened
+        .into_iter()
+        .map(|(database, grants)| format!("{database} ({})", grants.join(" + ")))
+        .collect())
+}
+
+/// Find the named database and set its key, leaving every other setting be.
+fn open<'a>(
+    entries: &'a mut [crate::db_registry::DbEntry],
+    database: &str,
+    token: &str,
+    keyed: &mut Vec<(String, String)>,
+) -> Result<&'a mut crate::db_registry::RemoteImageUploadConfig> {
+    // A database has one key. Two blocks naming it with different tokens
+    // would leave whichever ran first silently unusable.
+    if let Some((_, first)) = keyed.iter().find(|(name, _)| name == database)
+        && first != token
+    {
+        anyhow::bail!(
+            "database '{database}' is configured with two different remote keys; \
+             a database has one key, used by whichever grants it holds"
+        );
+    }
+    keyed.push((database.to_string(), token.to_string()));
+    let known = entries
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let entry = entries
+        .iter_mut()
+        .find(|entry| entry.id == database)
+        .with_context(|| {
+            format!(
+                "remote access names database '{database}', which is not registered. \
+                 Configured: {known}"
+            )
+        })?;
+    let access = entry
+        .remote_image_upload
+        .get_or_insert_with(Default::default);
+    access
+        .set_token(token)
+        .with_context(|| format!("remote key for database '{database}'"))?;
+    Ok(access)
+}
+
+fn note(opened: &mut Vec<(String, Vec<&'static str>)>, database: &str, grant: &'static str) {
+    match opened.iter_mut().find(|(name, _)| name == database) {
+        Some((_, grants)) => grants.push(grant),
+        None => opened.push((database.to_string(), vec![grant])),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -678,5 +859,216 @@ directory = "./cache"
             .unwrap_err()
             .to_string()
             .contains("Invalid file_ttl format"));
+    }
+
+    fn entry(id: &str) -> crate::db_registry::DbEntry {
+        crate::db_registry::DbEntry {
+            id: id.into(),
+            name: id.into(),
+            db_path: format!("/tmp/{id}.sqlite"),
+            image_dirs: vec![],
+            reject_archive: None,
+            remote_image_upload: None,
+        }
+    }
+
+    const TOKEN: &str = "a-remote-sync-token-long-enough";
+
+    #[test]
+    fn remote_sync_opens_only_the_named_database_and_only_for_sync() {
+        let config: Config = toml_edit::de::from_str(&format!(
+            r#"
+            [server]
+            [cache]
+            [[remote_sync]]
+            database = "telescope"
+            token = "{TOKEN}"
+            "#
+        ))
+        .unwrap();
+        let mut entries = vec![entry("telescope"), entry("review")];
+
+        let opened =
+            apply_remote_access(&mut entries, &config.remote_sync, &config.remote_upload).unwrap();
+
+        assert_eq!(opened, vec!["telescope (sync)".to_string()]);
+        let upload = entries[0].remote_image_upload.as_ref().unwrap();
+        assert!(upload.sync_enabled);
+        assert!(upload.token_matches(TOKEN));
+        assert!(
+            !upload.enabled,
+            "opening sync must not also accept image uploads"
+        );
+        assert!(
+            entries[1].remote_image_upload.is_none(),
+            "an unnamed database stays closed"
+        );
+    }
+
+    #[test]
+    fn remote_sync_keeps_an_existing_image_upload_grant() {
+        let mut existing = crate::db_registry::RemoteImageUploadConfig {
+            enabled: true,
+            image_dir: "/data/incoming".into(),
+            ..Default::default()
+        };
+        existing
+            .set_token("an-image-upload-token-long-enough")
+            .unwrap();
+        let mut entries = vec![entry("telescope")];
+        entries[0].remote_image_upload = Some(existing);
+
+        apply_remote_access(
+            &mut entries,
+            &[RemoteSyncConfig {
+                database: "telescope".into(),
+                token: Some(TOKEN.into()),
+                token_file: None,
+            }],
+            &[],
+        )
+        .unwrap();
+
+        let upload = entries[0].remote_image_upload.as_ref().unwrap();
+        assert!(upload.enabled, "the upload grant survives");
+        assert_eq!(upload.image_dir, "/data/incoming");
+        assert!(upload.sync_enabled);
+        // One key per database: the configured token replaces the old one.
+        assert!(upload.token_matches(TOKEN));
+    }
+
+    #[test]
+    fn a_token_file_is_read_and_trimmed() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), format!("{TOKEN}\n")).unwrap();
+        let mut entries = vec![entry("telescope")];
+
+        apply_remote_access(
+            &mut entries,
+            &[RemoteSyncConfig {
+                database: "telescope".into(),
+                token: None,
+                token_file: Some(file.path().to_string_lossy().into_owned()),
+            }],
+            &[],
+        )
+        .unwrap();
+
+        // The trailing newline every editor adds must not become part of the
+        // token, or the operator's key silently never matches.
+        assert!(entries[0]
+            .remote_image_upload
+            .as_ref()
+            .unwrap()
+            .token_matches(TOKEN));
+    }
+
+    #[test]
+    fn an_unregistered_database_is_fatal_and_says_what_is_configured() {
+        let mut entries = vec![entry("review")];
+        let error = apply_remote_access(
+            &mut entries,
+            &[RemoteSyncConfig {
+                database: "telescop".into(),
+                token: Some(TOKEN.into()),
+                token_file: None,
+            }],
+            &[],
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("telescop"), "{error}");
+        assert!(error.contains("review"), "{error}");
+    }
+
+    #[test]
+    fn a_remote_sync_block_without_a_token_is_refused() {
+        let error = apply_remote_access(
+            &mut [entry("telescope")],
+            &[RemoteSyncConfig {
+                database: "telescope".into(),
+                token: None,
+                token_file: None,
+            }],
+            &[],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("token"), "{error}");
+    }
+
+    #[test]
+    fn a_short_token_is_refused_before_the_server_starts() {
+        let error = apply_remote_access(
+            &mut [entry("telescope")],
+            &[RemoteSyncConfig {
+                database: "telescope".into(),
+                token: Some("too-short".into()),
+                token_file: None,
+            }],
+            &[],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("telescope"), "{error}");
+    }
+
+    #[test]
+    fn both_grants_can_be_configured_for_one_database() {
+        let directory = tempfile::tempdir().unwrap();
+        let image_dir = directory.path().join("incoming");
+        let mut entries = vec![entry("telescope")];
+
+        let opened = apply_remote_access(
+            &mut entries,
+            &[RemoteSyncConfig {
+                database: "telescope".into(),
+                token: Some(TOKEN.into()),
+                token_file: None,
+            }],
+            &[RemoteUploadConfig {
+                database: "telescope".into(),
+                image_dir: image_dir.to_string_lossy().into_owned(),
+                token: Some(TOKEN.into()),
+                token_file: None,
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(opened, vec!["telescope (sync + image upload)".to_string()]);
+        let access = entries[0].remote_image_upload.as_ref().unwrap();
+        assert!(access.sync_enabled);
+        assert!(access.enabled);
+        assert_eq!(access.image_dir, image_dir.to_string_lossy());
+        assert!(access.token_matches(TOKEN));
+        // The receive directory is made ready at startup, not on the first
+        // upload, so a bad path fails while the operator is still watching.
+        assert!(image_dir.is_dir());
+    }
+
+    #[test]
+    fn two_grants_with_different_keys_are_refused() {
+        // Silently letting the second win would leave the first grant's key
+        // rejected with no hint as to why.
+        let directory = tempfile::tempdir().unwrap();
+        let error = apply_remote_access(
+            &mut [entry("telescope")],
+            &[RemoteSyncConfig {
+                database: "telescope".into(),
+                token: Some(TOKEN.into()),
+                token_file: None,
+            }],
+            &[RemoteUploadConfig {
+                database: "telescope".into(),
+                image_dir: directory.path().to_string_lossy().into_owned(),
+                token: Some("a-different-token-long-enough".into()),
+                token_file: None,
+            }],
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("one key"), "{error}");
     }
 }
