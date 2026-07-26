@@ -175,6 +175,14 @@ export const handlers = [
       status: 'ready',
     })
   ),
+  http.get('/api/update-notice', () =>
+    HttpResponse.json({
+      success: true,
+      data: { checking: false },
+      error: null,
+      status: 'ready',
+    })
+  ),
   http.get('/api/astrometry/capabilities', () =>
     HttpResponse.json({
       success: true,

@@ -9,6 +9,18 @@
     "frontendDist": "./static/dist",
     "features": ["tauri"]
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE3MEMzNkU4RTU2MkQ1QjIKUldTeTFXTGw2RFlNRjJkbENObHkwbEl3OEtOT1p2cXptNHZrcWx1WWYzYUtyRUY1MC9xcXhiNXcK",
+      "endpoints": [
+        "https://updates.psf-guard.com/updater.json",
+        "https://github.com/theatrus/psf-guard/releases/latest/download/updater.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",

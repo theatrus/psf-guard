@@ -46,6 +46,8 @@ pub struct AppState {
     pub allow_database_management: RwLock<bool>,
     /// Optional plain-text notice displayed below the application header.
     pub site_banner: RwLock<Option<crate::config::SiteBannerConfig>>,
+    /// Process-global 24-hour cache for the public release notice feeds.
+    pub update_notices: crate::server::update_notice::UpdateNoticeManager,
     /// Tuning policy for the parallel scans and background pre-generation (see
     /// `concurrency::WorkerPolicy`). Process-global; sourced from the TOML
     /// `[server]` ratios, otherwise the compiled-in defaults.
@@ -380,6 +382,7 @@ impl AppState {
             registry_path: RwLock::new(None),
             allow_database_management: RwLock::new(false),
             site_banner: RwLock::new(None),
+            update_notices: crate::server::update_notice::UpdateNoticeManager::default(),
             worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             preview_encoding: RwLock::new(crate::preview_format::PreviewEncoding::default()),
             preview_color_default: RwLock::new(true),
@@ -523,6 +526,7 @@ impl AppState {
             registry_path: RwLock::new(None),
             allow_database_management: RwLock::new(false),
             site_banner: RwLock::new(None),
+            update_notices: crate::server::update_notice::UpdateNoticeManager::default(),
             worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             preview_encoding: RwLock::new(crate::preview_format::PreviewEncoding::default()),
             preview_color_default: RwLock::new(true),

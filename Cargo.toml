@@ -30,6 +30,8 @@ anyhow = "1.0"
 chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
 regex = "1.12"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+semver = "1"
 byteorder = "1.5"
 seiza = "0.12.0"
 seiza-download = "0.6.0"
@@ -70,6 +72,8 @@ humantime = "2.3"
 tempfile = "3.27"
 tauri = { version = "2.11.1", features = ["custom-protocol"], optional = true }
 tauri-plugin-dialog = { version = "2.7.1", optional = true }
+tauri-plugin-process = { version = "2.3.1", optional = true }
+tauri-plugin-updater = { version = "2.10.1", optional = true }
 dirs = "6.0"
 dunce = "1"
 async_zip = { version = "0.0.18", features = ["tokio"] }
@@ -86,7 +90,12 @@ http-body-util = "0.1"
 
 [features]
 default = []
-tauri = ["dep:tauri", "dep:tauri-plugin-dialog"]
+tauri = [
+    "dep:tauri",
+    "dep:tauri-plugin-dialog",
+    "dep:tauri-plugin-process",
+    "dep:tauri-plugin-updater",
+]
 
 [profile.release]
 # Enable maximum optimizations for performance

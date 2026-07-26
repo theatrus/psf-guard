@@ -732,6 +732,22 @@ export interface ServerInfo {
   banner?: SiteBanner;
 }
 
+export interface ReleaseNotice {
+  schema_version: number;
+  version: string;
+  release_url: string;
+  summary?: string;
+  urgency: 'normal' | 'recommended' | 'required';
+  minimum_supported_version?: string;
+  published_at?: string;
+}
+
+export interface UpdateNoticeStatus {
+  notice?: ReleaseNotice;
+  checking: boolean;
+  checked_at_unix_seconds?: number;
+}
+
 /** One configured database, returned by /api/databases. */
 export interface DatabaseSummary {
   id: string;
