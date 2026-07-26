@@ -7,7 +7,7 @@
 %global debug_package %{nil}
 
 Name:           psf-guard
-Version:        0.6.0
+Version:        0.6.1
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -90,6 +90,9 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Sun Jul 26 2026 Yann Ramin <github@theatr.us> - 0.6.1-1
+- Fix Windows release packaging and publish the 0.6 feature set
+
 * Sun Jul 26 2026 Yann Ramin <github@theatr.us> - 0.6.0-1
 - Add FITS catalog import and export, stack and color previews, calibration
   libraries, satellite trail checks, remote sync, and signed desktop updates

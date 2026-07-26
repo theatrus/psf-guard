@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -29,7 +29,7 @@ export async function writeUpdaterConfig(outputPath, overlayPath) {
   await writeFile(outputPath, `${JSON.stringify(config, null, 2)}\n`);
 }
 
-if (import.meta.url === new URL(process.argv[1], 'file:').href) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [outputPath, overlayPath] = process.argv.slice(2);
   if (!outputPath) {
     throw new Error('Usage: node scripts/write-updater-config.mjs OUTPUT [OVERLAY]');
