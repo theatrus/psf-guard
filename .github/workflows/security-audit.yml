@@ -24,7 +24,7 @@ jobs:
         shell: bash
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@1.97.1
         with:
           toolchain: ${{ steps.rust-toolchain.outputs.channel }}
       
