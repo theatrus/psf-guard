@@ -256,6 +256,7 @@ GET  /api/sync/v1/exports/{export_id}
 POST /api/sync/v1/previews
 GET  /api/sync/v1/previews/{preview_id}
 POST /api/sync/v1/previews/{preview_id}/apply
+POST /api/sync/v1/previews/{preview_id}/refresh
 GET  /api/sync/v1/jobs/{job_id}
 ```
 
@@ -284,16 +285,44 @@ already covers truncation. The receiver therefore accepts a bundle whose
 digest is absent or stale. Enforcing it would pin one canonical JSON encoding,
 and reordering a single field would then reject every plugin already shipped.
 
-A bundle must carry the tables its operation acts on — `acquiredimage` for
-grades, `project`/`target`/`exposureplan` for planning, and both sets for a
-merge. Other tables in the operation's set may be omitted; the receiver
-creates them empty from its own schema, and the merge finds nothing to do.
-The current receiver accepts up to 512 MiB and one million rows per bundle,
-and bounds the exports it builds by the same row limit.
+A bundle must carry the tables its operation acts on — `project`, `target`,
+and `acquiredimage` for grades, `project`/`target`/`exposureplan` for planning,
+and both sets for a merge. Other tables in the operation's set may be omitted;
+the receiver creates them empty from its own schema, and the merge finds
+nothing to do. The current receiver accepts up to 512 MiB and one million rows
+per bundle, and bounds the exports it builds by the same row limit.
+
+A grade push carries `project` and `target` even though it writes neither,
+because the receiver reads its source rows through the scheduler's own
+project/target join. A bundle of bare `acquiredimage` rows is not a Target
+Scheduler database and the read fails outright.
 
 Each database opts into this protocol on its own. Holding a valid key is not
 enough: the operator ticks **Accept remote scheduler sync** for that database,
 separately from **Accept remote image uploads**.
+
+### Keeping a preview across a refusal
+
+Apply claims a preview once, so no two callers can apply the same one. But an
+apply that refuses — the destination moved under the preview — or that breaks
+on a locked file has written nothing, and its uploaded source data is still
+good. The receiver therefore puts the preview back rather than dropping it.
+
+The client's way forward is `POST .../refresh`: it re-runs the same stored
+source against the destination as it now stands, keeps the preview ID, and
+returns a fresh summary to review. Only a successful apply consumes the
+preview. Without this, a stale destination would cost a remote client a
+re-upload of the whole bundle.
+
+### Audit log
+
+Every remote action lands in `remote-sync-audit.jsonl` under the cache root,
+one JSON object per line: when, which catalog, which action, which operation,
+the outcome, and the row counts. Refusals are recorded too, including ones
+that never named a catalog, because a run of rejected applies is what a stolen
+token looks like from the server side. Entries carry no token, no filesystem
+path, and no row contents. The file rolls at 8 MiB, keeping one previous
+generation.
 
 ## N.I.N.A. plugin
 

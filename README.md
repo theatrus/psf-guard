@@ -161,7 +161,9 @@ export, preview, and apply, but only after you tick **Accept remote scheduler
 sync** on that database. The two grants are separate: a key may carry either,
 both, or neither, and a key configured before this protocol existed reaches
 nothing until you opt in. Either way the key is scoped to exactly one
-configured database.
+configured database. Every remote action, refusals included, is appended to
+`remote-sync-audit.jsonl` in the cache directory, so you can tell afterwards
+what a key-holder did and when.
 
 The Overview's **Plan & coordinates** dialog lets you correct imported names,
 coordinates, limits, and desired counts. See the

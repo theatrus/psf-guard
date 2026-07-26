@@ -302,7 +302,7 @@ describe('SchedulerSyncControls', () => {
     });
   });
 
-  it('drops a stale preview and requires a new preview', async () => {
+  it('keeps the preview when apply refuses a changed destination', async () => {
     const result = {
       kind: 'push_planning',
       dry_run: true,
@@ -365,8 +365,10 @@ describe('SchedulerSyncControls', () => {
 
     expect(await screen.findByText(/Apply failed: This preview is stale/))
       .toBeInTheDocument();
+    // The apply wrote nothing, so the reviewed preview survives the refusal
+    // rather than making the user rebuild it to try again.
     expect(
-      screen.queryByRole('button', { name: 'Apply this preview' })
-    ).not.toBeInTheDocument();
+      screen.getByRole('button', { name: 'Apply this preview' })
+    ).toBeInTheDocument();
   });
 });

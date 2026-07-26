@@ -8,6 +8,7 @@ pub mod handlers;
 pub mod import_job;
 pub mod preview_queue;
 pub mod quality_backfill;
+pub mod remote_audit;
 pub mod remote_sync;
 pub mod remote_upload;
 pub mod scheduler;
@@ -443,6 +444,10 @@ async fn run_server_internal(
         .route(
             "/sync/v1/previews/{preview_id}/apply",
             post(remote_sync::apply_preview),
+        )
+        .route(
+            "/sync/v1/previews/{preview_id}/refresh",
+            post(remote_sync::refresh_preview),
         )
         .route("/sync/v1/exports", post(remote_sync::create_export))
         .route("/sync/v1/exports/{export_id}", get(remote_sync::get_export))
