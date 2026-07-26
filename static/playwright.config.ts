@@ -103,20 +103,24 @@ export default defineConfig({
         RUST_LOG: 'info',
       },
     },
-    // The two ends of a sync. Neither takes --allow-database-management: a
-    // server that accepts remote sync must not need the CRUD grant to do it,
-    // and that is part of what these specs check. They are also kept off the
-    // main instance because the CRUD specs reset its database list.
+    // The two ends of a sync, kept off the main instance because the CRUD
+    // specs reset its database list.
+    //
+    // Only the review copy — the machine someone sits at — takes
+    // --allow-database-management, because configuring a peer is registry
+    // work. The telescope has none, which is how the specs show that
+    // *accepting* a sync never needs that grant.
     ...[
-      { port: TELESCOPE_PORT, instance: syncFixture.telescope },
-      { port: REVIEW_PORT, instance: syncFixture.review },
-    ].map(({ port, instance }) => ({
+      { port: TELESCOPE_PORT, instance: syncFixture.telescope, manage: false },
+      { port: REVIEW_PORT, instance: syncFixture.review, manage: true },
+    ].map(({ port, instance, manage }) => ({
       command:
         `${serverCommand} server ` +
         `--port ${port} ` +
         `--registry ${instance.registryPath} ` +
         `--cache-dir ${instance.cacheDir} ` +
-        `--config ${instance.configPath}`,
+        `--config ${instance.configPath}` +
+        (manage ? ' --allow-database-management' : ''),
       url: `http://127.0.0.1:${port}/api/info`,
       timeout: 180_000,
       reuseExistingServer: !process.env.CI,

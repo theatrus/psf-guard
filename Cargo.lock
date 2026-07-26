@@ -3934,6 +3934,7 @@ dependencies = [
  "rand 0.10.2",
  "rayon",
  "regex",
+ "reqwest 0.12.28",
  "rusqlite",
  "seiza",
  "seiza-background",

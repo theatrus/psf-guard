@@ -165,6 +165,26 @@ configured database. Every remote action, refusals included, is appended to
 `remote-sync-audit.jsonl` in the cache directory, so you can tell afterwards
 what a key-holder did and when.
 
+PSF Guard also speaks the other half of that protocol, so one instance can
+sync with another over the network — no shared filesystem, and no copying a
+live SQLite file out from under the process writing it:
+
+```bash
+psf-guard sync remote --direction pull \
+  --local review --peer https://telescope.example:3000 --token-file key.txt
+```
+
+`--direction` takes `pull`, `push-planning`, or `push-grades`. Every direction
+previews first: a push is reviewed by the peer, which writes nothing until the
+preview it issued is applied by name. Add `--dry-run` to stop after the
+preview. The key comes from `--token-file`, `PSF_GUARD_SYNC_TOKEN`, or
+`--token` in that order — an argument is visible to every process on the
+machine, so it is the last resort.
+
+Settings has the same thing under **Remote PSF Guard**: add a peer once with
+its URL and key, test the connection, then preview and apply. The key is
+stored on the server and never sent back to the page.
+
 A server run from the command line has no Settings panel, so it takes both
 grants from its `--config` file instead:
 

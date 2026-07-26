@@ -61,6 +61,30 @@ fn open_sync_pair(from: &str, to: &str, registry: Option<&str>) -> Result<SyncPa
     })
 }
 
+/// Resolve the peer key from a file, an argument, or the environment.
+///
+/// A file first, then the environment, then the argument: `--token` is
+/// visible in `ps` to every user on the machine, so it is the last resort
+/// rather than the obvious one.
+fn read_peer_token(token: Option<&str>, token_file: Option<&str>) -> Result<String> {
+    if let Some(path) = token_file {
+        let contents = std::fs::read_to_string(path)
+            .with_context(|| format!("reading the peer token from {path}"))?;
+        return Ok(contents.trim().to_string());
+    }
+    if let Ok(value) = std::env::var("PSF_GUARD_SYNC_TOKEN")
+        && !value.trim().is_empty()
+    {
+        return Ok(value.trim().to_string());
+    }
+    match token {
+        Some(token) if !token.trim().is_empty() => Ok(token.trim().to_string()),
+        _ => Err(anyhow::anyhow!(
+            "no peer key: pass --token-file, set PSF_GUARD_SYNC_TOKEN, or pass --token"
+        )),
+    }
+}
+
 pub fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -681,6 +705,83 @@ pub fn main() -> Result<()> {
             benchmark_psf(&fits_path, runs, verbose)?;
         }
         Commands::Sync { kind } => match kind {
+            crate::cli::SyncKind::Remote {
+                direction,
+                local,
+                peer,
+                token,
+                token_file,
+                peer_catalog,
+                dry_run,
+                all_grades,
+                no_image_data,
+                registry,
+            } => {
+                use crate::commands::sync::{
+                    print_remote_summary, resolve_db_path, sync_remote, RemoteDirection,
+                    RemoteSyncOptions,
+                };
+                use crate::db_registry::DbRegistry;
+
+                let direction = match direction.as_str() {
+                    "pull" => RemoteDirection::Pull,
+                    "push-planning" => RemoteDirection::PushPlanning,
+                    "push-grades" => RemoteDirection::PushGrades,
+                    other => return Err(anyhow::anyhow!("unknown direction {other}")),
+                };
+                let peer_token = read_peer_token(token.as_deref(), token_file.as_deref())?;
+                let reg = if Path::new(&local).is_file() {
+                    None
+                } else {
+                    let registry_path = match &registry {
+                        Some(path) => PathBuf::from(path),
+                        None => {
+                            DbRegistry::default_path().context("resolving default registry path")?
+                        }
+                    };
+                    Some(DbRegistry::load_or_init(&registry_path).with_context(|| {
+                        format!("loading registry at {}", registry_path.display())
+                    })?)
+                };
+                let local_path = resolve_db_path(reg.as_ref(), &local)?;
+                // How the local catalog names itself in a bundle it sends. The
+                // slug when there is one, so the peer's audit log records
+                // something the operator recognises.
+                let local_id = reg
+                    .as_ref()
+                    .and_then(|registry| registry.find(&local))
+                    .map(|entry| entry.id.clone())
+                    .unwrap_or_else(|| {
+                        local_path
+                            .file_stem()
+                            .map(|stem| stem.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "local".to_string())
+                    });
+
+                let runtime = tokio::runtime::Runtime::new()?;
+                let outcome = runtime.block_on(sync_remote(RemoteSyncOptions {
+                    direction,
+                    local_path,
+                    local_id,
+                    peer_url: peer,
+                    peer_token,
+                    peer_catalog,
+                    reviewed_only: !all_grades,
+                    dry_run,
+                    with_image_data: !no_image_data,
+                }))?;
+                print_remote_summary(&outcome.summary);
+                println!(
+                    "{} with {} ({})",
+                    if outcome.applied {
+                        "Applied"
+                    } else {
+                        "Dry run — nothing written"
+                    },
+                    outcome.peer_catalog,
+                    outcome.peer_product
+                );
+            }
             crate::cli::SyncKind::Grades {
                 from,
                 to,
