@@ -2522,8 +2522,13 @@ fn resolve_image_meta(
 /// Cache key for a stretched preview PNG. Must stay identical between the
 /// preview handler, the status endpoint, and the pre-generation path so all
 /// three address the same file.
+/// Cache key for a preview PNG.
+///
+/// Shared with background pre-generation rather than reimplemented there:
+/// two constructions of one key drift, and when they do the mismatch is
+/// silent — the wrong artifact is served, or a warmed one is never found.
 #[allow(clippy::too_many_arguments)]
-fn preview_cache_key(
+pub(crate) fn preview_cache_key(
     image: &crate::models::AcquiredImage,
     file_only: &str,
     size: &str,
@@ -4520,5 +4525,66 @@ impl IntoResponse for AppError {
             Json(ApiResponse::<()>::error(error_message.to_string())),
         )
             .into_response()
+    }
+}
+
+#[cfg(test)]
+mod preview_cache_key_tests {
+    use super::preview_cache_key;
+    use crate::models::AcquiredImage;
+
+    fn image() -> AcquiredImage {
+        AcquiredImage {
+            id: 42,
+            project_id: 7,
+            target_id: 3,
+            acquired_date: Some(1_750_000_000),
+            filter_name: "OSC".into(),
+            grading_status: 0,
+            metadata: "{}".into(),
+            reject_reason: None,
+            profile_id: None,
+            guid: None,
+        }
+    }
+
+    #[test]
+    fn colour_and_greyscale_are_different_artifacts() {
+        // They are rendered differently, so serving one for the other shows
+        // the wrong pixels rather than a stale copy of the right ones.
+        let mono = preview_cache_key(&image(), "one.fits", "screen", true, 0.2, -2.8, false);
+        let color = preview_cache_key(&image(), "one.fits", "screen", true, 0.2, -2.8, true);
+        assert_ne!(mono, color);
+        assert!(color.ends_with("_color"), "{color}");
+    }
+
+    #[test]
+    fn greyscale_keys_are_unchanged_by_the_colour_option() {
+        // Previews already on disk were written before colour existed. The
+        // marker only appears on the colour variant so those stay valid.
+        assert!(
+            !preview_cache_key(&image(), "one.fits", "screen", true, 0.2, -2.8, false)
+                .contains("color"),
+        );
+    }
+
+    #[test]
+    fn pre_generation_warms_the_key_the_request_path_looks_up() {
+        // Pre-generation used to build this key with its own `format!`, which
+        // drifted the moment colour arrived: it wrote a colour PNG under the
+        // greyscale key, so the viewer never found what had been warmed and
+        // anything asking for greyscale was served colour.
+        let warmed = preview_cache_key(
+            &image(),
+            "one.fits",
+            "screen",
+            true,
+            crate::server::PREGENERATE_MIDTONE,
+            crate::server::PREGENERATE_SHADOW,
+            crate::server::PREGENERATE_COLOR,
+        );
+        // What `get_image_preview` computes for a caller taking every default.
+        let requested = preview_cache_key(&image(), "one.fits", "screen", true, 0.2, -2.8, true);
+        assert_eq!(warmed, requested);
     }
 }

@@ -753,6 +753,17 @@ async fn get_all_images_for_pregeneration(
     Ok(result)
 }
 
+/// Stretch settings background pre-generation warms. They match the request
+/// path's defaults, because an artifact generated with anything else is one
+/// the viewer will never ask for.
+pub(crate) const PREGENERATE_MIDTONE: f64 = 0.2;
+pub(crate) const PREGENERATE_SHADOW: f64 = -2.8;
+/// Warm the colour rendition, which is what the viewer asks for by default.
+/// A mono frame renders the same either way and costs these rigs nothing
+/// beyond the key it is filed under; a viewer that has opted out of colour
+/// finds nothing warmed and generates on demand.
+pub(crate) const PREGENERATE_COLOR: bool = true;
+
 async fn pregenerate_preview(
     state: &Arc<AppState>,
     ctx: &Arc<crate::server::database_context::DatabaseContext>,
@@ -783,18 +794,18 @@ async fn pregenerate_preview(
             .ok_or_else(|| anyhow::anyhow!("Image not found: {}", image_id))?
     };
 
-    // Create cache key matching the on-demand format for consistency
-    let cache_key = format!(
-        "{}_{}_{}_{}_{}_{}_{}_{}_{}",
-        image_id,
-        image_data.project_id,
-        image_data.target_id,
-        image_data.acquired_date.unwrap_or(0),
-        file_only.replace(&['.', ' ', '-'][..], "_"),
+    // The same key the request path builds. This used to be a second
+    // `format!` kept in step by a comment, which is how pre-generation came to
+    // warm a colour PNG under the greyscale key: the viewer never found it,
+    // and anything asking for greyscale was served colour.
+    let cache_key = handlers::preview_cache_key(
+        &image_data,
+        file_only,
         size,
-        "stretch", // Pre-generation always uses stretch mode
-        2000,      // midtone 0.2 * 10000
-        -28000     // shadow -2.8 * 10000
+        true, // pre-generation always stretches
+        PREGENERATE_MIDTONE,
+        PREGENERATE_SHADOW,
+        PREGENERATE_COLOR,
     );
 
     let cache_manager = CacheManager::new(std::path::PathBuf::from(&ctx.cache_dir));
@@ -836,13 +847,10 @@ async fn pregenerate_preview(
         fits_path,
         cache_path,
         kind: crate::server::preview_queue::GenKind::Preview {
-            midtone: 0.2,
-            shadow: -2.8,
+            midtone: PREGENERATE_MIDTONE,
+            shadow: PREGENERATE_SHADOW,
             max_dimensions,
-            // Warm what the viewer will actually ask for. A mono frame
-            // renders the same either way, so this costs those rigs nothing
-            // beyond the cache key.
-            color: true,
+            color: PREGENERATE_COLOR,
         },
     };
     tokio::task::spawn_blocking(move || crate::server::preview_queue::generate(&job)).await??;
