@@ -236,9 +236,23 @@ pub struct ServerConfig {
     /// JPEG quality, 50–100, when `preview_format = "jpeg"`. Ignored for PNG.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview_jpeg_quality: Option<u8>,
+    /// Whether one-shot-color frames are shown in colour unless a viewer says
+    /// otherwise. Default true.
+    ///
+    /// This also decides which rendition background pre-generation warms, so
+    /// on a site whose observers prefer luminance, setting it false keeps the
+    /// warmed cache and the viewer asking for the same thing. Mono rigs are
+    /// unaffected either way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_color: Option<bool>,
 }
 
 impl ServerConfig {
+    /// Whether previews default to colour.
+    pub fn preview_color(&self) -> bool {
+        self.preview_color.unwrap_or(true)
+    }
+
     /// How generated previews are encoded. An unreadable format name is an
     /// error rather than a silent fall back to PNG: an operator who set it
     /// meant something by it.
@@ -381,6 +395,7 @@ impl Default for ServerConfig {
             banner: None,
             preview_format: None,
             preview_jpeg_quality: None,
+            preview_color: None,
         }
     }
 }

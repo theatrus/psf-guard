@@ -93,7 +93,7 @@ fn colour_render_is_actually_coloured() {
     write_fits(&fits, Some("RGGB"));
     let out = dir.path().join("osc.png");
 
-    let rendered = psf_guard::commands::stretch_to_png::color_to_png_with_resize(
+    let rendered = psf_guard::commands::stretch_to_png::render_color_preview(
         &fits.to_string_lossy(),
         Some(out.to_string_lossy().into_owned()),
         0.2,
@@ -126,7 +126,7 @@ fn a_mono_frame_reports_that_it_has_no_colour() {
     let fits = dir.path().join("mono.fits");
     write_fits(&fits, None);
 
-    let rendered = psf_guard::commands::stretch_to_png::color_to_png_with_resize(
+    let rendered = psf_guard::commands::stretch_to_png::render_color_preview(
         &fits.to_string_lossy(),
         Some(dir.path().join("mono.png").to_string_lossy().into_owned()),
         0.2,

@@ -25,9 +25,9 @@ pub fn stretch_to_png(
     )
 }
 
-/// Render a one-shot-color frame in colour, or report that it is not a mosaic.
+/// Render a one-shot-color frame in colour, or report that it cannot.
 ///
-/// Returns `Ok(false)` for a frame with no `BAYERPAT`, leaving the caller to
+/// Returns `Ok(false)` when the frame is not a mosaic, leaving the caller to
 /// fall back to the greyscale path — a mono camera has no colour to show, and
 /// refusing outright would make the option useless on a mixed rig.
 ///
@@ -37,7 +37,7 @@ pub fn stretch_to_png(
 /// red, green, and blue: that keeps the ratios between channels, and with
 /// them the colour. Stretching each channel against its own statistics would
 /// pull all three toward a common median and wash the image out.
-pub fn color_to_png_with_resize(
+pub fn render_color_preview(
     fits_path: &str,
     output: Option<String>,
     midtone_factor: f64,
@@ -71,13 +71,16 @@ pub fn color_to_png_with_resize(
         shadows_clip: shadow_clipping,
     };
 
-    let planes: Vec<Vec<u16>> = (0..3)
-        .map(|channel| stretch_u16_to_u16(&frame.channel(channel), &statistics, &params))
-        .collect();
-    let mut interleaved = Vec::with_capacity(frame.width * frame.height * 3);
-    for pixel in 0..frame.width * frame.height {
-        for plane in &planes {
-            interleaved.push((plane[pixel] >> 8) as u8);
+    // One channel at a time, written straight into the interleaved output.
+    // Holding all three stretched planes at once costs three more copies of a
+    // full frame, which on a 60-megapixel sub is most of the memory budget a
+    // preview worker is allowed.
+    let pixels = frame.width * frame.height;
+    let mut interleaved = vec![0u8; pixels * 3];
+    for channel in 0..3 {
+        let stretched = stretch_u16_to_u16(&frame.channel(channel), &statistics, &params);
+        for (pixel, value) in stretched.iter().enumerate() {
+            interleaved[pixel * 3 + channel] = (value >> 8) as u8;
         }
     }
 
@@ -131,7 +134,7 @@ pub fn stretch_to_png_with_resize(
     invert: bool,
     max_dimensions: Option<(u32, u32)>,
 ) -> Result<()> {
-    stretch_to_png_with_format(
+    render_preview(
         fits_path,
         output,
         midtone_factor,
@@ -146,7 +149,7 @@ pub fn stretch_to_png_with_resize(
 /// As above, in a chosen format. The CLI writes PNG; the server writes
 /// whatever its configuration says.
 #[allow(clippy::too_many_arguments)]
-pub fn stretch_to_png_with_format(
+pub fn render_preview(
     fits_path: &str,
     output: Option<String>,
     midtone_factor: f64,

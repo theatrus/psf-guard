@@ -916,6 +916,7 @@ size:
 [server]
 preview_format = "jpeg"      # "png" (default) or "jpeg"
 preview_jpeg_quality = 88    # 50–100, ignored for PNG
+preview_color = true         # colour by default for OSC frames
 ```
 
 On a realistic stretched sub, JPEG at the default quality is roughly a third
@@ -930,6 +931,13 @@ The two formats use different file extensions, so both can sit in the cache at
 once. Changing the setting leaves existing artifacts alone and regenerates on
 demand; changing it back finds the originals still valid. An artifact is always
 served as whatever it was written as, not as whatever the setting says now.
+Nothing removes the old set — the server reports how much of the cache is in
+the other format at startup, and deleting it is yours to decide.
+
+`preview_color` also decides which rendition background pre-generation warms.
+A viewer that disagrees with it still gets what it asked for, generated on
+demand; on a site whose observers prefer luminance, setting it false keeps the
+warmed cache and the default view pointing at the same artifact.
 
 Star-annotated images follow the same setting. Their markers are line art,
 where JPEG rings hardest, so that is the first place to look if a marker seems

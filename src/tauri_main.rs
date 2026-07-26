@@ -276,6 +276,7 @@ async fn start_server_for_tauri(
         // The desktop app has disk to spare and no operator to ask, so it
         // keeps the exact rendition.
         preview_encoding: crate::preview_format::PreviewEncoding::png(),
+        preview_color_default: true,
         astrometry_config,
     };
 

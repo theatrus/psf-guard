@@ -62,6 +62,8 @@ pub struct ServerConfig {
     /// How generated previews are encoded. PNG unless the TOML `[server]`
     /// section asks for JPEG.
     pub preview_encoding: crate::preview_format::PreviewEncoding,
+    /// Whether previews default to colour.
+    pub preview_color_default: bool,
     /// Process-global Seiza catalog configuration from the shared registry.
     pub astrometry_config: Option<crate::astrometry::AstrometryConfig>,
 }
@@ -79,6 +81,7 @@ pub async fn run_server(
     site_banner: Option<crate::config::SiteBannerConfig>,
     worker_policy: crate::concurrency::WorkerPolicy,
     preview_encoding: crate::preview_format::PreviewEncoding,
+    preview_color_default: bool,
     astrometry_config: Option<crate::astrometry::AstrometryConfig>,
 ) -> anyhow::Result<()> {
     // Initialize tracing with environment-based filtering (for CLI mode)
@@ -106,6 +109,7 @@ pub async fn run_server(
         site_banner,
         worker_policy,
         preview_encoding,
+        preview_color_default,
         astrometry_config,
     };
 
@@ -174,6 +178,7 @@ async fn run_server_internal(
             state.set_site_banner(config.site_banner.clone());
             state.set_worker_policy(config.worker_policy);
             state.set_preview_encoding(config.preview_encoding);
+            state.set_preview_color_default(config.preview_color_default);
             if let Some(banner) = &config.site_banner {
                 tracing::info!("📢 Site banner enabled: {}", banner.title);
             }
@@ -183,6 +188,7 @@ async fn run_server_internal(
                 config.worker_policy.background_ratio,
                 crate::concurrency::logical_cores()
             );
+            report_preview_settings(&state, &config);
             if config.allow_database_management {
                 tracing::warn!(
                     "⚠️ Database management via HTTP is ENABLED. Anyone who can reach \
@@ -759,17 +765,63 @@ async fn get_all_images_for_pregeneration(
     Ok(result)
 }
 
+/// Say what previews will be written as, and how much of the cache is in the
+/// other format.
+///
+/// Changing the format leaves the old artifacts in place on purpose — the two
+/// use different file names, so a change misses and regenerates rather than
+/// serving one as the other, and changing back finds the originals valid. The
+/// cost is that both sets sit on disk until somebody removes one, and an
+/// operator who switched to JPEG for the disk space should be told that the
+/// PNGs are still there rather than discovering it later.
+fn report_preview_settings(state: &AppState, config: &ServerConfig) {
+    let encoding = config.preview_encoding;
+    tracing::info!(
+        "🖼️ Previews: {} ({}), colour {} by default",
+        encoding.extension(),
+        match encoding.format {
+            crate::preview_format::PreviewFormat::Png => "exact".to_string(),
+            crate::preview_format::PreviewFormat::Jpeg =>
+                format!("lossy, quality {}", encoding.jpeg_quality),
+        },
+        if config.preview_color_default {
+            "on"
+        } else {
+            "off"
+        }
+    );
+
+    let stale = state
+        .all_databases()
+        .iter()
+        .map(|ctx| stale_format_bytes(&ctx.cache_dir, encoding.format))
+        .sum::<u64>();
+    if stale > 0 {
+        tracing::warn!(
+            "🖼️ {:.1} MiB of cached previews are in the other format and will \
+             not be served or reused. Remove them if the disk matters.",
+            stale as f64 / (1024.0 * 1024.0)
+        );
+    }
+}
+
+/// Bytes of cached preview artifacts that are *not* in the configured format.
+fn stale_format_bytes(cache_dir: &str, keeping: crate::preview_format::PreviewFormat) -> u64 {
+    ["previews", "annotated"]
+        .iter()
+        .flat_map(|category| std::fs::read_dir(std::path::Path::new(cache_dir).join(category)))
+        .flatten()
+        .flatten()
+        .filter(|entry| crate::preview_format::PreviewFormat::of_path(&entry.path()) != keeping)
+        .filter_map(|entry| entry.metadata().ok().map(|meta| meta.len()))
+        .sum()
+}
+
 /// Stretch settings background pre-generation warms. They match the request
 /// path's defaults, because an artifact generated with anything else is one
 /// the viewer will never ask for.
 pub(crate) const PREGENERATE_MIDTONE: f64 = 0.2;
 pub(crate) const PREGENERATE_SHADOW: f64 = -2.8;
-/// Warm the colour rendition, which is what the viewer asks for by default.
-/// A mono frame renders the same either way and costs these rigs nothing
-/// beyond the key it is filed under; a viewer that has opted out of colour
-/// finds nothing warmed and generates on demand.
-pub(crate) const PREGENERATE_COLOR: bool = true;
-
 async fn pregenerate_preview(
     state: &Arc<AppState>,
     ctx: &Arc<crate::server::database_context::DatabaseContext>,
@@ -811,7 +863,9 @@ async fn pregenerate_preview(
         true, // pre-generation always stretches
         PREGENERATE_MIDTONE,
         PREGENERATE_SHADOW,
-        PREGENERATE_COLOR,
+        // Warm whichever rendition this server serves by default, so the
+        // warmed artifact is the one the viewer will ask for.
+        state.preview_color_default(),
     );
 
     let cache_manager = CacheManager::new(std::path::PathBuf::from(&ctx.cache_dir));
@@ -856,7 +910,7 @@ async fn pregenerate_preview(
             midtone: PREGENERATE_MIDTONE,
             shadow: PREGENERATE_SHADOW,
             max_dimensions,
-            color: PREGENERATE_COLOR,
+            color: state.preview_color_default(),
         },
         encoding: state.preview_encoding(),
     };

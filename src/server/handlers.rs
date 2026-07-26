@@ -2642,7 +2642,9 @@ pub async fn get_image_preview(
     let stretch = options.stretch.unwrap_or(true);
     let midtone = options.midtone.unwrap_or(0.2);
     let shadow = options.shadow.unwrap_or(-2.8);
-    let color = options.color.unwrap_or(true);
+    let color = options
+        .color
+        .unwrap_or_else(|| state.preview_color_default());
 
     let (image, file_only, target_name) = resolve_image_meta(&ctx, image_id)?;
     let cache_key = preview_cache_key(&image, &file_only, size, stretch, midtone, shadow, color);
@@ -3060,9 +3062,10 @@ fn status_for_item(
         state: GenerationState::Error,
         error: Some(msg.to_string()),
     };
-    // One read, used for both the path this polls and the job it may enqueue,
-    // so a setting change mid-request cannot split the two.
+    // One read of each, used for both the path this polls and the job it may
+    // enqueue, so a setting change mid-request cannot split the two.
     let encoding = state.preview_encoding();
+    let color_default = state.preview_color_default();
 
     let Some(image) = images_by_id.get(&item.image_id) else {
         return err("image not found");
@@ -3094,7 +3097,7 @@ fn status_for_item(
             let stretch = item.stretch.unwrap_or(true);
             let midtone = item.midtone.unwrap_or(0.2);
             let shadow = item.shadow.unwrap_or(-2.8);
-            let color = item.color.unwrap_or(true);
+            let color = item.color.unwrap_or(color_default);
             let key = preview_cache_key(image, &file_only, &size, stretch, midtone, shadow, color);
             match artifact_cache_path(ctx, "previews", &key, encoding) {
                 Ok(p) => (
@@ -4590,17 +4593,25 @@ mod preview_cache_key_tests {
         // drifted the moment colour arrived: it wrote a colour PNG under the
         // greyscale key, so the viewer never found what had been warmed and
         // anything asking for greyscale was served colour.
-        let warmed = preview_cache_key(
-            &image(),
-            "one.fits",
-            "screen",
-            true,
-            crate::server::PREGENERATE_MIDTONE,
-            crate::server::PREGENERATE_SHADOW,
-            crate::server::PREGENERATE_COLOR,
-        );
-        // What `get_image_preview` computes for a caller taking every default.
-        let requested = preview_cache_key(&image(), "one.fits", "screen", true, 0.2, -2.8, true);
-        assert_eq!(warmed, requested);
+        //
+        // Both renditions are checked, because the colour default is now a
+        // server setting: whichever one this server serves, that is the one
+        // pre-generation must warm.
+        for color in [true, false] {
+            let warmed = preview_cache_key(
+                &image(),
+                "one.fits",
+                "screen",
+                true,
+                crate::server::PREGENERATE_MIDTONE,
+                crate::server::PREGENERATE_SHADOW,
+                color,
+            );
+            // What `get_image_preview` computes for a caller taking every
+            // default on a server configured that way.
+            let requested =
+                preview_cache_key(&image(), "one.fits", "screen", true, 0.2, -2.8, color);
+            assert_eq!(warmed, requested);
+        }
     }
 }

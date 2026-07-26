@@ -231,6 +231,11 @@ pub fn generate(job: &GenJob) -> anyhow::Result<()> {
             *shadow,
             *max_dimensions,
             *color,
+            // Neither is reachable from the API today. Passed through rather
+            // than hardcoded so that when one is, it arrives at a renderer
+            // that honours it instead of being dropped here.
+            false, // logarithmic
+            false, // invert
             job.encoding,
         ),
         GenKind::Annotated { max_stars, size } => {
@@ -258,12 +263,16 @@ fn generate_preview(
     shadow: f64,
     max_dimensions: Option<(u32, u32)>,
     color: bool,
+    logarithmic: bool,
+    invert: bool,
     encoding: crate::preview_format::PreviewEncoding,
 ) -> anyhow::Result<()> {
     let source = fits_path.to_string_lossy();
     let destination = output.to_string_lossy().into_owned();
     if color
-        && crate::commands::stretch_to_png::color_to_png_with_resize(
+        && !logarithmic
+        && !invert
+        && crate::commands::stretch_to_png::render_color_preview(
             &source,
             Some(destination.clone()),
             midtone,
@@ -274,13 +283,13 @@ fn generate_preview(
     {
         return Ok(());
     }
-    crate::commands::stretch_to_png::stretch_to_png_with_format(
+    crate::commands::stretch_to_png::render_preview(
         &source,
         Some(destination),
         midtone,
         shadow,
-        false, // logarithmic
-        false, // invert
+        logarithmic,
+        invert,
         max_dimensions,
         encoding,
     )
