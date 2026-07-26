@@ -147,6 +147,8 @@ header name grouped them poorly.
 Add both the local and telescope databases in Settings, then use
 **Data Transfer**:
 
+![Data Transfer workspace with named source and destination catalogs](data-transfer.png)
+
 - **Merge catalogs** copies new or changed projects, targets, templates, plans,
   captures, grades, rigs, and raw calibration-frame records from the selected
   source into the destination. Reviewed grades already at the destination win.

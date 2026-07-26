@@ -93,7 +93,7 @@ before a full calibration and processing run.
 
 | Overview Dashboard | Image Grid | Side-by-Side Comparison |
 |:--:|:--:|:--:|
-| ![Overview](docs/overview.png) | ![Flaming Star H-alpha frames in the cleaned image grid](docs/grid-flaming-star-narrowband.png) | ![Compare](docs/compare.jpg) |
+| ![Overview with recent projects and real narrowband frames](docs/overview.png) | ![Flaming Star H-alpha frames in the cleaned image grid](docs/grid-flaming-star-narrowband.png) | ![Compare](docs/compare.jpg) |
 | Project statistics and progress tracking | Grid view with filtering and batch operations | Synchronized zoom and detailed comparison |
 
 The compact grid header keeps project, target, filters, grouping, image size,
@@ -400,7 +400,7 @@ features are ready, keeps download progress across page reloads, and can
 validate every installed file. Catalog packages are additive; **Blind
 solving** is the recommended default.
 
-![Settings showing Seiza catalog readiness, package installation, validation, and database quality actions](docs/settings-catalog-quality.png)
+![Settings showing Seiza catalog readiness, package installation, and validation](docs/settings-seiza-catalogs.png)
 
 For a manual or headless install, get the `seiza` CLI from the
 [Seiza releases](https://github.com/theatrus/seiza/releases) or with
@@ -648,6 +648,8 @@ catalogs. It offers merge, planning, and reviewed-grade actions with a
 server-owned preview before Apply. The preview keeps a frozen source snapshot
 and returns after a page reload. Apply rejects destination changes before it
 writes. Pending grades are excluded from the UI grade push by default.
+
+![Data Transfer workspace with named source and destination catalogs](docs/data-transfer.png)
 
 Native one-off file handles, versioned remote bundles, the remote protocol,
 and the future N.I.N.A. plugin boundary are tracked in
