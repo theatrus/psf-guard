@@ -52,6 +52,13 @@ nalgebra = "0.35"
 axum = { version = "0.8", features = ["multipart", "macros"] }
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
+# Client side of the remote sync protocol (`sync_client.rs`). Features match
+# what seiza-download already pulls in, so this adds no new transitive weight.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "gzip",
+] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.7", features = ["fs", "trace", "cors"] }
 tracing = "0.1"

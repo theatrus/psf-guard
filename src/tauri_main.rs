@@ -527,6 +527,7 @@ mod tests {
             }],
             active_db_id: None,
             astrometry: None,
+            peers: Vec::new(),
         }
     }
 

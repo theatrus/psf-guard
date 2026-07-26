@@ -23,6 +23,7 @@ pub mod sequence_analysis;
 pub mod server;
 pub mod spatial_analysis;
 pub mod star_contours;
+pub mod sync_client;
 pub mod ts_schema;
 pub mod utils;
 
