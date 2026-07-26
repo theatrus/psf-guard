@@ -34,14 +34,14 @@ byteorder = "1.5"
 seiza = "0.12.0"
 seiza-download = "0.6.0"
 seiza-imgproc = { version = "0.3.0", features = ["parallel"] }
-seiza-fits = "=0.2.0"
+seiza-fits = "=0.2.1"
 seiza-satellites = { version = "0.4.2", features = ["serde"] }
 seiza-stacking = "0.1.0"
-seiza-stretch = "0.1.0"
+seiza-stretch = "0.2.0"
 seiza-background = "0.1.0"
 seiza-deconvolution = "0.1.0"
 sha2 = "0.11"
-base64 = "0.22"
+base64 = "0.23"
 rayon = "1"
 bumpalo = { version = "3.20", features = ["collections"] }
 image = "0.25"
