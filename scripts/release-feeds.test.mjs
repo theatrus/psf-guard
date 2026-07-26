@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { buildReleaseFeeds } from './release-feeds.mjs';
 import { writeUpdaterConfig } from './write-updater-config.mjs';
+
+const execFileAsync = promisify(execFile);
 
 test('normal and signed builds use website-first updater endpoints', async () => {
   const mainConfig = JSON.parse(await readFile(
@@ -23,6 +28,18 @@ test('normal and signed builds use website-first updater endpoints', async () =>
   const buildConfig = JSON.parse(await readFile(outputPath, 'utf8'));
   assert.equal(buildConfig.bundle.createUpdaterArtifacts, true);
   assert.deepEqual(buildConfig.plugins.updater, mainConfig.plugins.updater);
+});
+
+test('updater config command writes its output', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'psf-guard-updater-cli-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const outputPath = path.join(directory, 'updater-config.json');
+  const scriptPath = fileURLToPath(new URL('./write-updater-config.mjs', import.meta.url));
+
+  await execFileAsync(process.execPath, [scriptPath, outputPath]);
+
+  const config = JSON.parse(await readFile(outputPath, 'utf8'));
+  assert.equal(config.bundle.createUpdaterArtifacts, true);
 });
 
 test('builds signed updater and server notice feeds', async () => {
