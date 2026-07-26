@@ -19,19 +19,77 @@ test('overview shows the empty-state when no databases are configured', async ({
   await expect(
     page.getByRole('heading', { name: 'No databases configured' })
   ).toBeVisible();
+  // Both starting points are offered here, not just "open an existing
+  // N.I.N.A. database".
+  await expect(
+    page.getByRole('button', { name: /New Database from Images/i })
+  ).toBeVisible();
   // The empty state offers an action that re-opens settings — confirm it
   // actually triggers the modal again.
-  await page.getByRole('button', { name: /Open Settings/i }).click();
+  await page.getByRole('button', { name: /Add Existing Database/i }).click();
   await expect(
     page.getByRole('heading', { name: /Welcome to PSF Guard/i })
+  ).toBeVisible();
+});
+
+test('first run offers importing images as well as opening a N.I.N.A. database', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(
+    page.getByRole('heading', { name: /Welcome to PSF Guard/i })
+  ).toBeVisible();
+
+  // Both choices sit in the welcome banner, above the fold. This is the whole
+  // point: the import path used to live below a catalog-install panel and two
+  // "add a catalog first" dead ends, so a first-time user never saw it.
+  // Scope to the modal: the overview's own empty state sits behind it and
+  // offers the same two choices.
+  const modal = page.locator('.tauri-settings');
+  const create = modal.getByRole('button', { name: /New Database from Images/i });
+  const add = modal.getByRole('button', { name: /Add Existing Database/i });
+  await expect(create).toBeVisible();
+  await expect(add).toBeVisible();
+
+  // Nothing that needs a database to be useful should be in the way.
+  await expect(
+    modal.getByText('Add a catalog before syncing with a remote PSF Guard.')
+  ).toBeHidden();
+  await expect(
+    modal.getByText('Add a second catalog to merge data or send planning and grades.')
+  ).toBeHidden();
+
+  // The import choice opens the create form, which asks for image folders
+  // rather than an existing database file.
+  await create.click();
+  await expect(
+    modal.getByRole('heading', { name: 'New Database from Images' })
+  ).toBeVisible();
+  await expect(modal.getByText('N.I.N.A. Database File:')).toBeHidden();
+  await expect(modal.getByText('Image Directories:')).toBeVisible();
+});
+
+test('the overview import action opens settings on the create form', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page.getByRole('heading', { name: /Welcome to PSF Guard/i }).waitFor();
+  await page.getByRole('button', { name: 'Done' }).click();
+  await page.getByRole('heading', { name: 'No databases configured' }).waitFor();
+
+  // The intent rides along with the open-settings event, so the user lands on
+  // the form they asked for instead of hunting for it again.
+  await page.getByRole('button', { name: /New Database from Images/i }).click();
+  await expect(
+    page.getByRole('heading', { name: 'New Database from Images' })
   ).toBeVisible();
 });
 
 test('header Settings button is present in browser mode', async ({ page }) => {
   await page.goto('/');
   // Wait for the auto-popup to appear, then close it so we can find the
-  // header button beneath. Use `exact: true` because the overview's empty
-  // state also has an "Open Settings" button.
+  // header button beneath. `exact: true` keeps this off any other control
+  // whose name merely contains "Settings".
   await page.getByRole('heading', { name: /Welcome to PSF Guard/i }).waitFor();
   await page.getByRole('button', { name: 'Done' }).click();
   await expect(

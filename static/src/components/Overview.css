@@ -20,6 +20,13 @@
   color: var(--color-text-muted);
 }
 
+.overview-empty-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
 /* Compact catalog summary */
 .overview-summary {
   display: grid;
