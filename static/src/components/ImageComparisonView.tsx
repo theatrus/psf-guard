@@ -265,7 +265,7 @@ export default function ImageComparisonView({
       setUseLeftOriginal(true);
     }
     // Never switch back from original to large
-  }, [leftZoom, leftImageId, showStars, leftImage, leftOriginalLoaded, dbId, maxStars]);
+  }, [leftZoom, leftImageId, showStars, leftImage, leftOriginalLoaded, dbId, maxStars, color]);
   
   // Load original dimensions from metadata if available
   useEffect(() => {
@@ -336,6 +336,7 @@ export default function ImageComparisonView({
     useLeftOriginal,
     dbId,
     maxStars,
+    color,
   ]);
   
   // Effect to make right image follow left image's resolution choice
@@ -354,7 +355,7 @@ export default function ImageComparisonView({
     setLoadedLeftSrc(null);
     leftDimensionsRef.current = { width: 0, height: 0 };
     leftImageStateRef.current = 'large';
-  }, [leftImageId, showStars]);
+  }, [leftImageId, showStars, color]);
   
   useLayoutEffect(() => {
     setRightOriginalLoaded(false);
@@ -363,7 +364,7 @@ export default function ImageComparisonView({
     setLoadedRightSrc(null);
     rightDimensionsRef.current = { width: 0, height: 0 };
     rightImageStateRef.current = 'large';
-  }, [rightImageId, showStars]);
+  }, [rightImageId, showStars, color]);
 
   // Sync zoom states when syncZoom is enabled
   useEffect(() => {

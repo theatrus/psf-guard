@@ -30,6 +30,7 @@ This repository contains workflows for building both CLI and desktop versions of
      - **macOS**: `.dmg` installers, `.app` bundles (zipped)
      - **Updates**: signed Tauri payloads, `updater.json`, and `notice.json`
 
+The operator checklist lives in [`docs/RELEASING.md`](../docs/RELEASING.md).
 The update feeds and signing boundary are documented in
 [`docs/UPDATES.md`](../docs/UPDATES.md).
 
