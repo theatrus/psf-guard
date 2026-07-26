@@ -321,10 +321,10 @@ export default function ImageDetailView({
       originalRequestedRef.current = true;
       const originalUrl = showStars
         ? apiClient.getAnnotatedUrl(dbId, imageId, 'original', maxStars)
-        : apiClient.getPreviewUrl(dbId, imageId, { size: 'original' });
+        : apiClient.getPreviewUrl(dbId, imageId, { size: 'original', color: colorPreview });
       const originalDescriptor: PreviewDescriptor = showStars
         ? { imageId, kind: 'annotated', size: 'original', maxStars }
-        : { imageId, kind: 'preview', size: 'original' };
+        : { imageId, kind: 'preview', size: 'original', color: colorPreview };
 
       const requestedKey = mainImageKey;
       void ensurePreviewReady(dbId, originalUrl, originalDescriptor).then((ok) => {

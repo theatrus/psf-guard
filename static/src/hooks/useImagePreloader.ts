@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { apiClient } from '../api/client';
+import { colorPreviewEnabled } from './useColorPreview';
 import { ensurePreviewReady } from './previewPoll';
 
 /**
@@ -38,8 +39,10 @@ export function useImagePreloader(
     imagesToPreload.forEach((imageId) => {
       void ensurePreviewReady(
         dbId,
-        apiClient.getPreviewUrl(dbId, imageId, { size: imageSize }),
-        { imageId, kind: 'preview', size: imageSize }
+        // Read at call time rather than subscribing: warming is a side
+        // effect, and a preference change simply warms the next batch.
+        apiClient.getPreviewUrl(dbId, imageId, { size: imageSize, color: colorPreviewEnabled() }),
+        { imageId, kind: 'preview', size: imageSize, color: colorPreviewEnabled() }
       );
 
       // Optionally warm the annotated version (getAnnotatedUrl defaults to
