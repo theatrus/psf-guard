@@ -47,9 +47,33 @@ test('header shows the PSF Guard logo', async ({ page }) => {
     .locator('.brand-logo');
   await expect(logo).toBeVisible();
   await expect(logo).toHaveAttribute('src', '/psf-guard.svg');
+
+  // The logo declares its own size, and that size is square.
+  //
+  // Polling for a non-zero width first is not decoration: an <img> reports
+  // zero until it has decoded, so reading straight after the visibility check
+  // races the decode and fails intermittently.
+  //
+  // Squareness rather than a fixed number, because pinning the artwork's
+  // exact intrinsic width is what broke this test when the logo was redrawn.
+  // It still catches the thing that actually goes wrong — an SVG carrying
+  // only a viewBox declares no intrinsic size, and the browser reports either
+  // zero or its own 2:1 default in its place.
   await expect
     .poll(() => logo.evaluate((image: HTMLImageElement) => image.naturalWidth))
-    .toBe(64);
+    .toBeGreaterThan(0);
+  const intrinsic = await logo.evaluate((image: HTMLImageElement) => ({
+    width: image.naturalWidth,
+    height: image.naturalHeight,
+  }));
+  expect(intrinsic.width, 'the logo should declare a square intrinsic size').toBe(
+    intrinsic.height
+  );
+
+  // And it is laid out at the size the header gives it.
+  const box = await logo.boundingBox();
+  expect(box?.width).toBeCloseTo(32, 0);
+  expect(box?.height).toBeCloseTo(32, 0);
 });
 
 test('GET /api/info advertises database management is enabled', async ({
