@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { apiClient } from '../api/client';
 import { isTauriApp } from '../utils/tauri';
 import { checkSignedUpdateVersion, downloadAndInstallSignedUpdate } from '../updates/desktop';
 import {
   type AvailableUpdate,
-  fetchAvailableUpdate,
+  parseReleaseNotice,
   RELEASES_URL,
   selectNewestUpdate,
 } from '../updates/releases';
@@ -22,16 +24,19 @@ interface UpdateNoticeProps {
 
 export default function UpdateNotice({ installedVersion }: UpdateNoticeProps) {
   const [currentVersion, setCurrentVersion] = useState(installedVersion ?? '');
-  const [available, setAvailable] = useState<AvailableUpdate | null>(null);
   const [signedVersion, setSignedVersion] = useState<string | null>(null);
   const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
   const [installState, setInstallState] = useState<UpdateInstallState>({ phase: 'idle' });
   const desktop = isTauriApp();
+  const { data: noticeStatus } = useQuery({
+    queryKey: ['updateNotice'],
+    queryFn: apiClient.getUpdateNotice,
+    staleTime: 30_000,
+    refetchInterval: (query) => query.state.data?.checking ? 1_000 : 24 * 60 * 60 * 1_000,
+  });
 
   useEffect(() => {
     if (!installedVersion) return;
-    const controller = new AbortController();
-
     void (async () => {
       let version = installedVersion;
       if (desktop) {
@@ -42,24 +47,22 @@ export default function UpdateNotice({ installedVersion }: UpdateNoticeProps) {
           // The server version is the safe fallback for the bundled app.
         }
       }
-      if (controller.signal.aborted) return;
       setCurrentVersion(version);
-
-      const [noticeResult, signedResult] = await Promise.allSettled([
-        fetchAvailableUpdate(version, controller.signal),
-        desktop ? checkSignedUpdateVersion() : Promise.resolve(null),
-      ]);
-      if (controller.signal.aborted) return;
-      const notice = noticeResult.status === 'fulfilled' ? noticeResult.value : null;
-      const signed = signedResult.status === 'fulfilled' ? signedResult.value : null;
+      const signed = desktop
+        ? await checkSignedUpdateVersion().catch(() => null)
+        : null;
       setSignedVersion(signed);
-      setAvailable(selectNewestUpdate(notice, signed, version));
     })().catch(() => {
       // Update checks must never block catalog work.
     });
-
-    return () => controller.abort();
   }, [desktop, installedVersion]);
+
+  const available: AvailableUpdate | null = useMemo(() => {
+    const notice = currentVersion && noticeStatus?.notice
+      ? parseReleaseNotice(noticeStatus.notice, currentVersion)
+      : null;
+    return selectNewestUpdate(notice, signedVersion, currentVersion);
+  }, [currentVersion, noticeStatus?.notice, signedVersion]);
 
   if (!available || dismissedVersion === available.version) return null;
 

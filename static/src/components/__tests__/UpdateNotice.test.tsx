@@ -1,12 +1,12 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, expect, it, vi } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { http, HttpResponse } from 'msw';
+import { expect, it } from 'vitest';
 import UpdateNotice from '../UpdateNotice';
-import { GITHUB_NOTICE_URL, WEBSITE_NOTICE_URL } from '../../updates/releases';
+import { server } from '../../test/msw-server';
 
-afterEach(() => vi.unstubAllGlobals());
-
-it('shows and dismisses a server update from the website-first notice flow', async () => {
+it('shows and dismisses a notice returned by the server cache', async () => {
   const response = {
     schema_version: 1,
     version: '0.6.0',
@@ -16,14 +16,22 @@ it('shows and dismisses a server update from the website-first notice flow', asy
     minimum_supported_version: '0.5.0',
     published_at: '2026-07-26T18:00:00Z',
   };
-  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(response), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  }));
-  vi.stubGlobal('fetch', fetchMock);
+  server.use(http.get('/api/update-notice', () => HttpResponse.json({
+    success: true,
+    data: { notice: response, checking: false, checked_at_unix_seconds: 1_774_806_400 },
+    error: null,
+    status: 'ready',
+  })));
 
   const user = userEvent.setup();
-  render(<UpdateNotice installedVersion="0.5.0" />);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <UpdateNotice installedVersion="0.5.0" />
+    </QueryClientProvider>,
+  );
 
   expect(await screen.findByText('v0.6.0 available')).toBeInTheDocument();
   expect(screen.getByText('Improves catalog review.')).toBeInTheDocument();
@@ -31,11 +39,6 @@ it('shows and dismisses a server update from the website-first notice flow', asy
     'href',
     response.release_url,
   );
-  expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-    WEBSITE_NOTICE_URL,
-    GITHUB_NOTICE_URL,
-  ]);
-
   await user.click(screen.getByRole('button', { name: 'Dismiss v0.6.0 update notice' }));
   expect(screen.queryByText('v0.6.0 available')).not.toBeInTheDocument();
 });

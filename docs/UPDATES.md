@@ -8,11 +8,13 @@ PSF Guard publishes two small JSON feeds with different jobs:
 - `updater.json` lets the Tauri desktop app verify, download, and install a
   signed package.
 
-Both checks read `updates.psf-guard.com` first, then the matching file attached
-to the latest GitHub release. The notice check keeps the newer valid version
-and keeps the website copy when both describe the same release. Tauri uses
-GitHub when the website updater feed is unavailable. Browser/server mode never
-downloads or installs an executable.
+The PSF Guard server reads `updates.psf-guard.com` first, then the matching file
+attached to the latest GitHub release. It keeps the newer valid notice and
+keeps the website copy when both describe the same release. The process caches
+that result for 24 hours, refreshes once at startup and once per day, and serves
+the cached result to every browser. Reloading the UI never fetches either public
+feed. Tauri uses GitHub when the website updater feed is unavailable.
+Browser/server mode never downloads or installs an executable.
 
 ## Public files
 
@@ -21,11 +23,9 @@ Publish these files at:
 - `https://updates.psf-guard.com/notice.json`
 - `https://updates.psf-guard.com/updater.json`
 
-The update host must allow cross-origin `GET` requests for `notice.json` so a
-PSF Guard server on another host can read it. Use `Content-Type:
-application/json` and a short cache lifetime. The site publishing job can copy
-the two public files from the GitHub release later; it does not need the signing
-key.
+Use `Content-Type: application/json` and a short cache lifetime. The site
+publishing job can copy the two public files from the GitHub release later; it
+does not need the signing key.
 
 The notice schema is:
 

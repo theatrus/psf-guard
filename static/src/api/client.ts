@@ -12,6 +12,7 @@ import type {
   StarDetectionResponse,
   PreviewOptions,
   ServerInfo,
+  UpdateNoticeStatus,
   SchedulerSyncRequest,
   SchedulerSyncPreviewResponse,
   SchedulerSyncResponse,
@@ -139,6 +140,13 @@ export const apiClient = {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<ServerInfo>>('/info');
     if (!data.data) throw new Error('Failed to get server info');
+    return data.data;
+  },
+
+  getUpdateNotice: async (): Promise<UpdateNoticeStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<UpdateNoticeStatus>>('/update-notice');
+    if (!data.data) throw new Error('Failed to get update notice');
     return data.data;
   },
 

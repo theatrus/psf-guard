@@ -287,10 +287,11 @@ These version-independent links point at the latest release:
 | macOS | [`psf-guard-macos-x64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-macos-x64) | Self-contained binary |
 | Windows x64 | [`psf-guard-windows-x64.exe`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-windows-x64.exe) | Static binary, no dependencies |
 
-PSF Guard checks for newer releases without sending catalog or image data.
-Browser/server mode shows a release notice and link. Desktop builds can also
-verify and install a signed Tauri update. The public feed format and release
-process are documented in [App and server updates](docs/UPDATES.md).
+PSF Guard checks for newer releases without sending catalog or image data. The
+server caches release notices for 24 hours and shares them with every browser.
+Desktop builds can also verify and install a signed Tauri update. The public
+feed format and release process are documented in
+[App and server updates](docs/UPDATES.md).
 
 ```bash
 # Linux / macOS

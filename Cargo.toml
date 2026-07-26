@@ -30,6 +30,8 @@ anyhow = "1.0"
 chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
 regex = "1.12"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+semver = "1"
 byteorder = "1.5"
 seiza = "0.12.0"
 seiza-download = "0.6.0"

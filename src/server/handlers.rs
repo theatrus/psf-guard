@@ -71,6 +71,13 @@ pub async fn get_server_info(
     Ok(Json(ApiResponse::success(info)))
 }
 
+pub async fn get_update_notice(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<crate::server::update_notice::UpdateNoticeStatus>>, AppError> {
+    state.update_notices.refresh_in_background_if_stale();
+    Ok(Json(ApiResponse::success(state.update_notices.snapshot())))
+}
+
 /// Summarize PSF Guard's calibration library in this scheduler database.
 /// Reading an untouched database does not create any sibling tables.
 pub async fn get_calibration_library(

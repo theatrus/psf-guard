@@ -18,6 +18,7 @@ pub mod stack_preview;
 pub mod state;
 pub mod static_file_service;
 pub mod sync_preview;
+pub mod update_notice;
 
 use anyhow::{Context, Result};
 use axum::{
@@ -195,6 +196,10 @@ async fn run_server_internal(
             return Err(e);
         }
     };
+
+    // Release feeds are process-global. Refresh once now and then every 24
+    // hours; browser reloads only read this cache through the API.
+    state.update_notices.start_refresh_loop();
 
     // Kick off a background cache refresh for every configured database.
     for ctx in state.all_databases() {
@@ -388,6 +393,7 @@ async fn run_server_internal(
     // Top-level API: global endpoints + nested per-DB routes.
     let api_routes = Router::new()
         .route("/info", get(handlers::get_server_info))
+        .route("/update-notice", get(handlers::get_update_notice))
         .route(
             "/astrometry/capabilities",
             get(handlers::get_astrometry_capabilities),

@@ -1,8 +1,6 @@
+import type { ReleaseNotice } from '../api/types';
 import { isVersionNewer } from './version';
 
-export const WEBSITE_NOTICE_URL = 'https://updates.psf-guard.com/notice.json';
-export const GITHUB_NOTICE_URL =
-  'https://github.com/theatrus/psf-guard/releases/latest/download/notice.json';
 export const RELEASES_URL = 'https://github.com/theatrus/psf-guard/releases/latest';
 
 export type UpdateUrgency = 'normal' | 'recommended' | 'required';
@@ -13,16 +11,6 @@ export type AvailableUpdate = {
   summary?: string;
   urgency: UpdateUrgency;
   source: 'notice' | 'signed';
-};
-
-type ReleaseNotice = {
-  schema_version?: unknown;
-  version?: unknown;
-  release_url?: unknown;
-  summary?: unknown;
-  urgency?: unknown;
-  minimum_supported_version?: unknown;
-  published_at?: unknown;
 };
 
 function normalizedVersion(version: string): string {
@@ -76,36 +64,6 @@ export function parseReleaseNotice(
     urgency: minimumRequiresUpdate ? 'required' : configuredUrgency,
     source: 'notice',
   };
-}
-
-async function fetchJson(url: string, signal: AbortSignal): Promise<unknown | null> {
-  const response = await fetch(url, {
-    cache: 'no-store',
-    headers: { Accept: 'application/json' },
-    signal,
-  });
-  if (!response.ok) return null;
-  return response.json() as Promise<unknown>;
-}
-
-/** Read the website first, then GitHub. Keep the newer valid notice; the
- * website copy wins when both describe the same version. */
-export async function fetchAvailableUpdate(
-  currentVersion: string,
-  signal: AbortSignal,
-): Promise<AvailableUpdate | null> {
-  let selected: AvailableUpdate | null = null;
-  for (const url of [WEBSITE_NOTICE_URL, GITHUB_NOTICE_URL]) {
-    try {
-      const notice = parseReleaseNotice(await fetchJson(url, signal), currentVersion);
-      if (notice && (!selected || isVersionNewer(notice.version, selected.version))) {
-        selected = notice;
-      }
-    } catch (error) {
-      if (signal.aborted) throw error;
-    }
-  }
-  return selected;
 }
 
 export function signedUpdate(version: string): AvailableUpdate {
