@@ -23,8 +23,13 @@ test('labels macOS artifacts as Apple Silicon', async () => {
 
   assert.match(releaseWorkflow, /asset_name: psf-guard-macos-arm64/);
   assert.doesNotMatch(releaseWorkflow, /asset_name: psf-guard-macos-x64/);
-  assert.match(ciWorkflow, /name: psf-guard-macos-arm64/);
+  // CI publishes one macOS artifact, from the Tauri job. It carries the
+  // bundle and target/release/psf-guard, so dropping the test job's separate
+  // macOS upload cost no binary. What matters here is the label: these
+  // runners are Apple Silicon, and calling the result x64 is the bug this
+  // test exists to catch.
   assert.match(ciWorkflow, /name: psf-guard-tauri-macos-arm64/);
+  assert.doesNotMatch(ciWorkflow, /name: psf-guard-.*macos-x64/);
 });
 
 test('normal and signed builds use website-first updater endpoints', async () => {
