@@ -1,12 +1,10 @@
 use anyhow::{Context, Result};
-use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-use image::{ColorType, ImageEncoder};
+use image::ColorType;
 use image::{ImageBuffer, Luma};
-use std::fs::File;
-use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
 use crate::image_analysis::{ColorFrame, FitsImage};
+use crate::preview_format::PreviewEncoding;
 
 pub fn stretch_to_png(
     fits_path: &str,
@@ -45,6 +43,7 @@ pub fn color_to_png_with_resize(
     midtone_factor: f64,
     shadow_clipping: f64,
     max_dimensions: Option<(u32, u32)>,
+    encoding: PreviewEncoding,
 ) -> Result<bool> {
     use seiza_stretch::{stretch_u16_to_u16, StretchParams};
 
@@ -97,20 +96,13 @@ pub fn color_to_png_with_resize(
         },
         PathBuf::from,
     );
-    let file = File::create(&output_path)
-        .with_context(|| format!("Failed to create output file: {}", output_path.display()))?;
-    PngEncoder::new_with_quality(
-        BufWriter::new(file),
-        CompressionType::Fast,
-        FilterType::NoFilter,
-    )
-    .write_image(
+    encoding.write(
+        &output_path,
         buffer.as_raw(),
         buffer.width(),
         buffer.height(),
-        ColorType::Rgb8.into(),
-    )
-    .context("Failed to encode colour PNG")?;
+        ColorType::Rgb8,
+    )?;
     Ok(true)
 }
 
@@ -140,6 +132,31 @@ pub fn stretch_to_png_with_resize(
     logarithmic: bool,
     invert: bool,
     max_dimensions: Option<(u32, u32)>,
+) -> Result<()> {
+    stretch_to_png_with_format(
+        fits_path,
+        output,
+        midtone_factor,
+        shadow_clipping,
+        logarithmic,
+        invert,
+        max_dimensions,
+        PreviewEncoding::png(),
+    )
+}
+
+/// As above, in a chosen format. The CLI writes PNG; the server writes
+/// whatever its configuration says.
+#[allow(clippy::too_many_arguments)]
+pub fn stretch_to_png_with_format(
+    fits_path: &str,
+    output: Option<String>,
+    midtone_factor: f64,
+    shadow_clipping: f64,
+    logarithmic: bool,
+    invert: bool,
+    max_dimensions: Option<(u32, u32)>,
+    encoding: PreviewEncoding,
 ) -> Result<()> {
     // Load FITS file
     let fits_path = Path::new(fits_path);
@@ -217,23 +234,13 @@ pub fn stretch_to_png_with_resize(
         img_buffer
     };
 
-    // Save PNG with compression
-    let file = File::create(&output_path)
-        .with_context(|| format!("Failed to create output file: {}", output_path.display()))?;
-    let writer = BufWriter::new(file);
-
-    // Create PNG encoder with best compression
-    let encoder = PngEncoder::new_with_quality(writer, CompressionType::Best, FilterType::Adaptive);
-
-    // Write the image data
-    encoder
-        .write_image(
-            &final_buffer,
-            final_buffer.width(),
-            final_buffer.height(),
-            ColorType::L8.into(),
-        )
-        .with_context(|| format!("Failed to write PNG image to {}", output_path.display()))?;
+    encoding.write(
+        &output_path,
+        &final_buffer,
+        final_buffer.width(),
+        final_buffer.height(),
+        ColorType::L8,
+    )?;
 
     println!("Saved stretched image to: {}", output_path.display());
     Ok(())

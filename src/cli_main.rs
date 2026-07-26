@@ -992,6 +992,7 @@ pub fn main() -> Result<()> {
             let server_host = app_config.get_host();
             let server_port = app_config.get_port();
             let worker_policy = app_config.get_worker_policy();
+            let preview_encoding = app_config.server.preview_encoding()?;
             let site_banner = app_config.get_site_banner()?;
             // Open the configured databases for remote sync and image upload.
             // This edits the in-memory list only — the registry on disk keeps
@@ -1020,6 +1021,7 @@ pub fn main() -> Result<()> {
                     allow_database_management,
                     site_banner,
                     worker_policy,
+                    preview_encoding,
                     astrometry_config,
                 )
                 .await

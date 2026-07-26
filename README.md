@@ -906,6 +906,35 @@ all three toward a common median and wash the frame out.
 A frame with no `BAYERPAT` — a mono camera behind a filter wheel — has no
 colour to recover and renders greyscale either way.
 
+## Preview cache format
+
+Generated previews and annotated images are PNG by default — exact, and the
+same pixels the stretch produced. A server short of disk can trade that for
+size:
+
+```toml
+[server]
+preview_format = "jpeg"      # "png" (default) or "jpeg"
+preview_jpeg_quality = 88    # 50–100, ignored for PNG
+```
+
+On a realistic stretched sub, JPEG at the default quality is roughly a third
+the size of PNG. It is lossy in exactly the places this tool asks you to look:
+it smooths the faint, high-frequency detail that noise, hot pixels, and
+marginal stars live in, so a frame can look cleaner in the viewer than it is on
+disk. Grading measurements are taken from the FITS and never from a preview, so
+nothing scored changes — what changes is what your eye is given to check the
+score against.
+
+The two formats use different file extensions, so both can sit in the cache at
+once. Changing the setting leaves existing artifacts alone and regenerates on
+demand; changing it back finds the originals still valid. An artifact is always
+served as whatever it was written as, not as whatever the setting says now.
+
+Star-annotated images follow the same setting. Their markers are line art,
+where JPEG rings hardest, so that is the first place to look if a marker seems
+to have a halo.
+
 ## ⚠️ Known limitations
 
 - **Path assumptions.** Directory layouts matching

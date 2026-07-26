@@ -99,6 +99,7 @@ fn colour_render_is_actually_coloured() {
         0.2,
         -2.8,
         None,
+        psf_guard::preview_format::PreviewEncoding::png(),
     )
     .unwrap();
     assert!(rendered, "a BAYERPAT frame should render in colour");
@@ -131,6 +132,7 @@ fn a_mono_frame_reports_that_it_has_no_colour() {
         0.2,
         -2.8,
         None,
+        psf_guard::preview_format::PreviewEncoding::png(),
     )
     .unwrap();
     assert!(

@@ -52,6 +52,9 @@ pub struct GenJob {
     pub fits_path: PathBuf,
     pub cache_path: PathBuf,
     pub kind: GenKind,
+    /// Carried on the job rather than read from state at write time, so the
+    /// bytes written always match the extension the path was chosen for.
+    pub encoding: crate::preview_format::PreviewEncoding,
 }
 
 /// Readiness of a cache artifact, as reported to the polling frontend.
@@ -228,9 +231,10 @@ pub fn generate(job: &GenJob) -> anyhow::Result<()> {
             *shadow,
             *max_dimensions,
             *color,
+            job.encoding,
         ),
         GenKind::Annotated { max_stars, size } => {
-            generate_annotated(&job.fits_path, &tmp, size, *max_stars)
+            generate_annotated(&job.fits_path, &tmp, size, *max_stars, job.encoding)
         }
     };
 
@@ -246,6 +250,7 @@ pub fn generate(job: &GenJob) -> anyhow::Result<()> {
 }
 
 /// Render one preview, in colour when asked for it and the frame is a mosaic.
+#[allow(clippy::too_many_arguments)]
 fn generate_preview(
     fits_path: &Path,
     output: &Path,
@@ -253,6 +258,7 @@ fn generate_preview(
     shadow: f64,
     max_dimensions: Option<(u32, u32)>,
     color: bool,
+    encoding: crate::preview_format::PreviewEncoding,
 ) -> anyhow::Result<()> {
     let source = fits_path.to_string_lossy();
     let destination = output.to_string_lossy().into_owned();
@@ -263,11 +269,12 @@ fn generate_preview(
             midtone,
             shadow,
             max_dimensions,
+            encoding,
         )?
     {
         return Ok(());
     }
-    crate::commands::stretch_to_png::stretch_to_png_with_resize(
+    crate::commands::stretch_to_png::stretch_to_png_with_format(
         &source,
         Some(destination),
         midtone,
@@ -275,6 +282,7 @@ fn generate_preview(
         false, // logarithmic
         false, // invert
         max_dimensions,
+        encoding,
     )
 }
 
@@ -298,22 +306,22 @@ pub fn generate_annotated(
     out_path: &Path,
     size: &str,
     max_stars: usize,
+    encoding: crate::preview_format::PreviewEncoding,
 ) -> anyhow::Result<()> {
     use crate::commands::annotate_stars_common::create_annotated_image;
     use crate::image_analysis::FitsImage;
-    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-    use image::{ColorType, ImageEncoder, Rgb};
+    use image::{ColorType, Rgb};
 
     let fits = FitsImage::from_file(fits_path)?;
     let rgb = create_annotated_image(&fits, max_stars, 0.2, -2.8, Rgb([255, 255, 0]))?;
     let final_image = resize_rgb_for_size(rgb, fits.width, fits.height, size);
 
-    let file = std::fs::File::create(out_path)?;
-    let writer = std::io::BufWriter::new(file);
-    let encoder = PngEncoder::new_with_quality(writer, CompressionType::Best, FilterType::Adaptive);
     let (w, h) = final_image.dimensions();
-    encoder.write_image(&final_image, w, h, ColorType::Rgb8.into())?;
-    Ok(())
+    // The markers are line art, where JPEG rings hardest. An operator who
+    // chose JPEG for the cache gets it here too rather than a surprising
+    // exception, but that is the place to look first if a marker seems to
+    // have a halo.
+    encoding.write(out_path, &final_image, w, h, ColorType::Rgb8)
 }
 
 /// Resize an RGB image to the requested size bucket (matches the preview

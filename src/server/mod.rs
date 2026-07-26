@@ -59,6 +59,9 @@ pub struct ServerConfig {
     /// Tuning policy for the parallel scans and background pre-generation.
     /// See `concurrency::WorkerPolicy`.
     pub worker_policy: crate::concurrency::WorkerPolicy,
+    /// How generated previews are encoded. PNG unless the TOML `[server]`
+    /// section asks for JPEG.
+    pub preview_encoding: crate::preview_format::PreviewEncoding,
     /// Process-global Seiza catalog configuration from the shared registry.
     pub astrometry_config: Option<crate::astrometry::AstrometryConfig>,
 }
@@ -75,6 +78,7 @@ pub async fn run_server(
     allow_database_management: bool,
     site_banner: Option<crate::config::SiteBannerConfig>,
     worker_policy: crate::concurrency::WorkerPolicy,
+    preview_encoding: crate::preview_format::PreviewEncoding,
     astrometry_config: Option<crate::astrometry::AstrometryConfig>,
 ) -> anyhow::Result<()> {
     // Initialize tracing with environment-based filtering (for CLI mode)
@@ -101,6 +105,7 @@ pub async fn run_server(
         allow_database_management,
         site_banner,
         worker_policy,
+        preview_encoding,
         astrometry_config,
     };
 
@@ -168,6 +173,7 @@ async fn run_server_internal(
             state.set_allow_database_management(config.allow_database_management);
             state.set_site_banner(config.site_banner.clone());
             state.set_worker_policy(config.worker_policy);
+            state.set_preview_encoding(config.preview_encoding);
             if let Some(banner) = &config.site_banner {
                 tracing::info!("📢 Site banner enabled: {}", banner.title);
             }
@@ -852,6 +858,7 @@ async fn pregenerate_preview(
             max_dimensions,
             color: PREGENERATE_COLOR,
         },
+        encoding: state.preview_encoding(),
     };
     tokio::task::spawn_blocking(move || crate::server::preview_queue::generate(&job)).await??;
 
@@ -936,6 +943,7 @@ async fn pregenerate_annotated(
             max_stars: max_stars as usize,
             size: size.to_string(),
         },
+        encoding: state.preview_encoding(),
     };
     tokio::task::spawn_blocking(move || crate::server::preview_queue::generate(&job)).await??;
 

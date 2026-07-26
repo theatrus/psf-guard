@@ -273,6 +273,9 @@ async fn start_server_for_tauri(
         // The desktop app does not read the server TOML.
         site_banner: None,
         worker_policy: config.get_worker_policy(),
+        // The desktop app has disk to spare and no operator to ask, so it
+        // keeps the exact rendition.
+        preview_encoding: crate::preview_format::PreviewEncoding::png(),
         astrometry_config,
     };
 

@@ -50,6 +50,9 @@ pub struct AppState {
     /// `concurrency::WorkerPolicy`). Process-global; sourced from the TOML
     /// `[server]` ratios, otherwise the compiled-in defaults.
     pub worker_policy: RwLock<crate::concurrency::WorkerPolicy>,
+    /// How generated previews are encoded. PNG unless the TOML `[server]`
+    /// section asks for JPEG.
+    pub preview_encoding: RwLock<crate::preview_format::PreviewEncoding>,
     /// Count of interactive (user-triggered) CPU-heavy jobs currently running,
     /// process-wide. Background work reads this to yield: while it is nonzero,
     /// pre-generation pauses so it doesn't compete for cores or memory with a
@@ -374,6 +377,7 @@ impl AppState {
             allow_database_management: RwLock::new(false),
             site_banner: RwLock::new(None),
             worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
+            preview_encoding: RwLock::new(crate::preview_format::PreviewEncoding::default()),
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
@@ -420,6 +424,18 @@ impl AppState {
     /// The worker tuning policy in effect.
     pub fn worker_policy(&self) -> crate::concurrency::WorkerPolicy {
         *self.worker_policy.read().unwrap()
+    }
+
+    /// Set how generated previews are encoded (from the TOML `[server]`
+    /// config).
+    pub fn set_preview_encoding(&self, encoding: crate::preview_format::PreviewEncoding) {
+        *self.preview_encoding.write().unwrap() = encoding;
+    }
+
+    /// How new previews will be encoded. Artifacts already cached keep the
+    /// format they were written in — see `PreviewFormat::of_path`.
+    pub fn preview_encoding(&self) -> crate::preview_format::PreviewEncoding {
+        *self.preview_encoding.read().unwrap()
     }
 
     /// Mark the start of an interactive CPU-heavy job (e.g. an occlusion
@@ -494,6 +510,7 @@ impl AppState {
             allow_database_management: RwLock::new(false),
             site_banner: RwLock::new(None),
             worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
+            preview_encoding: RwLock::new(crate::preview_format::PreviewEncoding::default()),
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),

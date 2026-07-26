@@ -228,6 +228,34 @@ pub struct ServerConfig {
     /// Optional notice shown below the application header on every page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub banner: Option<SiteBannerConfig>,
+    /// File format for generated preview and annotated images: `png`
+    /// (default, exact) or `jpeg` (smaller cache, lossy). See
+    /// [`crate::preview_format`] for what the trade costs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_format: Option<String>,
+    /// JPEG quality, 50–100, when `preview_format = "jpeg"`. Ignored for PNG.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_jpeg_quality: Option<u8>,
+}
+
+impl ServerConfig {
+    /// How generated previews are encoded. An unreadable format name is an
+    /// error rather than a silent fall back to PNG: an operator who set it
+    /// meant something by it.
+    pub fn preview_encoding(&self) -> Result<crate::preview_format::PreviewEncoding> {
+        use crate::preview_format::{PreviewEncoding, PreviewFormat, DEFAULT_JPEG_QUALITY};
+
+        let format = match &self.preview_format {
+            Some(name) => PreviewFormat::parse(name).context("server.preview_format")?,
+            None => return Ok(PreviewEncoding::png()),
+        };
+        Ok(match format {
+            PreviewFormat::Png => PreviewEncoding::png(),
+            PreviewFormat::Jpeg => {
+                PreviewEncoding::jpeg(self.preview_jpeg_quality.unwrap_or(DEFAULT_JPEG_QUALITY))
+            }
+        })
+    }
 }
 
 /// Plain-text site notice configured by the server administrator.
@@ -351,6 +379,8 @@ impl Default for ServerConfig {
             scan_worker_ratio: None,
             background_worker_ratio: None,
             banner: None,
+            preview_format: None,
+            preview_jpeg_quality: None,
         }
     }
 }
@@ -873,6 +903,51 @@ directory = "./cache"
     }
 
     const TOKEN: &str = "a-remote-sync-token-long-enough";
+
+    #[test]
+    fn the_preview_format_is_png_unless_asked_otherwise() {
+        use crate::preview_format::{PreviewFormat, DEFAULT_JPEG_QUALITY};
+
+        let config: Config = toml_edit::de::from_str("[server]\n\n[cache]\n").unwrap();
+        assert_eq!(
+            config.server.preview_encoding().unwrap().format,
+            PreviewFormat::Png
+        );
+
+        let config: Config = toml_edit::de::from_str(
+            "[server]\npreview_format = \"jpeg\"\npreview_jpeg_quality = 70\n\n[cache]\n",
+        )
+        .unwrap();
+        let encoding = config.server.preview_encoding().unwrap();
+        assert_eq!(encoding.format, PreviewFormat::Jpeg);
+        assert_eq!(encoding.jpeg_quality, 70);
+
+        // A quality with no format named is not a request for JPEG.
+        let config: Config =
+            toml_edit::de::from_str("[server]\npreview_jpeg_quality = 70\n\n[cache]\n").unwrap();
+        assert_eq!(
+            config.server.preview_encoding().unwrap().format,
+            PreviewFormat::Png
+        );
+
+        // And JPEG with no quality takes the default rather than zero.
+        let config: Config =
+            toml_edit::de::from_str("[server]\npreview_format = \"jpg\"\n\n[cache]\n").unwrap();
+        assert_eq!(
+            config.server.preview_encoding().unwrap().jpeg_quality,
+            DEFAULT_JPEG_QUALITY
+        );
+    }
+
+    #[test]
+    fn an_unknown_preview_format_stops_the_server() {
+        // Falling back to PNG would leave an operator who asked for a smaller
+        // cache with a full-size one and no indication why.
+        let config: Config =
+            toml_edit::de::from_str("[server]\npreview_format = \"webp\"\n\n[cache]\n").unwrap();
+        let error = config.server.preview_encoding().unwrap_err().to_string();
+        assert!(error.contains("preview_format"), "{error}");
+    }
 
     #[test]
     fn remote_sync_opens_only_the_named_database_and_only_for_sync() {

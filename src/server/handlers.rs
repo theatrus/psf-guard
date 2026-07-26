@@ -2575,18 +2575,25 @@ fn annotated_cache_key(
 
 /// Resolve the on-disk cache path for a preview/annotated artifact, creating
 /// the category dir. `category` is `"previews"` or `"annotated"`.
+/// Where an artifact lives, in the format new ones are written in.
+///
+/// The extension differs per format, so a PNG cache and a JPEG cache coexist:
+/// changing the setting misses and regenerates rather than serving one as the
+/// other, and changing it back finds the originals still valid.
 fn artifact_cache_path(
     ctx: &DatabaseContext,
     category: &str,
     key: &str,
+    encoding: crate::preview_format::PreviewEncoding,
 ) -> Result<PathBuf, AppError> {
     let cm = crate::server::cache::CacheManager::new(PathBuf::from(&ctx.cache_dir));
     cm.ensure_category_dir(category)
         .map_err(|e| AppError::InternalError(format!("Failed to create cache directory: {}", e)))?;
-    Ok(cm.get_cached_path(category, key, "png"))
+    Ok(cm.get_cached_path(category, key, encoding.extension()))
 }
 
-/// Serve a cached PNG from disk.
+/// Serve a cached image, labelled as whatever it was written as rather than as
+/// whatever the setting says now.
 async fn serve_cached_png(cache_path: &std::path::Path) -> Result<Response, AppError> {
     let buffer = tokio::fs::read(cache_path)
         .await
@@ -2594,7 +2601,10 @@ async fn serve_cached_png(cache_path: &std::path::Path) -> Result<Response, AppE
     Ok((
         StatusCode::OK,
         [
-            (CONTENT_TYPE, "image/png"),
+            (
+                CONTENT_TYPE,
+                crate::preview_format::PreviewFormat::of_path(cache_path).content_type(),
+            ),
             (CACHE_CONTROL, "max-age=86400"),
         ],
         buffer,
@@ -2636,7 +2646,7 @@ pub async fn get_image_preview(
 
     let (image, file_only, target_name) = resolve_image_meta(&ctx, image_id)?;
     let cache_key = preview_cache_key(&image, &file_only, size, stretch, midtone, shadow, color);
-    let cache_path = artifact_cache_path(&ctx, "previews", &cache_key)?;
+    let cache_path = artifact_cache_path(&ctx, "previews", &cache_key, state.preview_encoding())?;
 
     if cache_path.exists() {
         return serve_cached_png(&cache_path).await;
@@ -2654,6 +2664,7 @@ pub async fn get_image_preview(
             max_dimensions: crate::server::preview_queue::max_dimensions_for_size(size),
             color,
         },
+        encoding: state.preview_encoding(),
     });
     Ok(generating_response())
 }
@@ -2933,7 +2944,7 @@ pub async fn get_annotated_image(
 
     let (image, file_only, target_name) = resolve_image_meta(&ctx, image_id)?;
     let cache_key = annotated_cache_key(&image, &file_only, size, max_stars);
-    let cache_path = artifact_cache_path(&ctx, "annotated", &cache_key)?;
+    let cache_path = artifact_cache_path(&ctx, "annotated", &cache_key, state.preview_encoding())?;
 
     if cache_path.exists() {
         return serve_cached_png(&cache_path).await;
@@ -2947,6 +2958,7 @@ pub async fn get_annotated_image(
             max_stars,
             size: size.to_string(),
         },
+        encoding: state.preview_encoding(),
     });
     Ok(generating_response())
 }
@@ -3048,6 +3060,9 @@ fn status_for_item(
         state: GenerationState::Error,
         error: Some(msg.to_string()),
     };
+    // One read, used for both the path this polls and the job it may enqueue,
+    // so a setting change mid-request cannot split the two.
+    let encoding = state.preview_encoding();
 
     let Some(image) = images_by_id.get(&item.image_id) else {
         return err("image not found");
@@ -3064,7 +3079,7 @@ fn status_for_item(
         Some("annotated") => {
             let max_stars = item.max_stars.unwrap_or(1000) as usize;
             let key = annotated_cache_key(image, &file_only, &size, max_stars);
-            match artifact_cache_path(ctx, "annotated", &key) {
+            match artifact_cache_path(ctx, "annotated", &key, encoding) {
                 Ok(p) => (
                     p,
                     GenKind::Annotated {
@@ -3081,7 +3096,7 @@ fn status_for_item(
             let shadow = item.shadow.unwrap_or(-2.8);
             let color = item.color.unwrap_or(true);
             let key = preview_cache_key(image, &file_only, &size, stretch, midtone, shadow, color);
-            match artifact_cache_path(ctx, "previews", &key) {
+            match artifact_cache_path(ctx, "previews", &key, encoding) {
                 Ok(p) => (
                     p,
                     GenKind::Preview {
@@ -3109,6 +3124,7 @@ fn status_for_item(
                 fits_path,
                 cache_path,
                 kind,
+                encoding,
             });
             GenerationStatus {
                 state: GenerationState::Generating,
