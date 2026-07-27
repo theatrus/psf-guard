@@ -151,6 +151,14 @@ jobs:
       # Dedicated console-subsystem CLI (no tauri) — the standalone release
       # asset. The installer's bundled copy comes from Tauri auto-bundling the
       # psf-guard-cli bin target, so no sidecar staging is needed here.
+      #
+      # The `-- --bin psf-guard` on every tauri build below exists to protect
+      # this artifact. `cargo tauri build` takes its features from
+      # tauri.conf.json ("features": ["tauri"]) and, left alone, compiles
+      # EVERY bin target with them — psf-guard-cli included. It would land on
+      # top of this one, and "Prepare release assets" would then ship a
+      # tauri-linked binary as the standalone CLI: GUI subsystem behaviour on
+      # Windows, and a link against GTK/WebKit on Linux.
       run: cargo build --release --locked --bin psf-guard-cli
 
     - name: Build Tauri desktop app (Linux)
@@ -158,7 +166,7 @@ jobs:
       env:
         TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      run: cargo tauri build --verbose --config "${{ runner.temp }}/psf-guard-updater.json"
+      run: cargo tauri build --verbose --config "${{ runner.temp }}/psf-guard-updater.json" -- --bin psf-guard
 
     - name: Build Tauri desktop app (Windows, with bundled CLI)
       # externalBin (the CLI sidecar staged above) + the NSIS PATH hook live in
@@ -168,7 +176,7 @@ jobs:
       env:
         TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      run: cargo tauri build --verbose --config "${{ runner.temp }}/psf-guard-updater.json"
+      run: cargo tauri build --verbose --config "${{ runner.temp }}/psf-guard-updater.json" -- --bin psf-guard
 
     - name: Build Tauri desktop app (macOS)
       if: matrix.os == 'macos-latest'
@@ -179,7 +187,7 @@ jobs:
         TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       run: |
-        bash scripts/package-macos.sh --config "${{ runner.temp }}/psf-guard-updater.json"
+        bash scripts/package-macos.sh --config "${{ runner.temp }}/psf-guard-updater.json" -- --bin psf-guard
 
     - name: Prepare release assets
       shell: bash

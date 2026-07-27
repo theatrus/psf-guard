@@ -32,6 +32,43 @@ test('labels macOS artifacts as Apple Silicon', async () => {
   assert.doesNotMatch(ciWorkflow, /name: psf-guard-.*macos-x64/);
 });
 
+test('the shipped CLI is never built with the tauri feature', async () => {
+  const releaseWorkflow = await readFile(
+    new URL('../.github/workflows/release.yml', import.meta.url),
+    'utf8',
+  );
+
+  // psf-guard-cli must stay free of tauri: the feature flips the Windows
+  // binary to the GUI subsystem, where a console process has no stdout to
+  // write to, and drags GTK/WebKit into what is meant to be a plain CLI.
+  //
+  // The trap is that `cargo tauri build` reads its features from
+  // tauri.conf.json and compiles EVERY bin target with them. Without an
+  // explicit `--bin psf-guard` it rebuilds psf-guard-cli on top of the
+  // tauri-free one built earlier in the job, and "Prepare release assets"
+  // ships that. Every tauri build in the release must therefore name the
+  // binary it is allowed to touch.
+  const tauriBuilds = releaseWorkflow
+    .split('\n')
+    .filter((line) => /cargo tauri build|package-macos\.sh/.test(line))
+    .filter((line) => !line.trimStart().startsWith('#'));
+
+  assert.ok(
+    tauriBuilds.length >= 3,
+    `expected a tauri build per platform, found ${tauriBuilds.length}`,
+  );
+  for (const line of tauriBuilds) {
+    assert.match(
+      line,
+      /-- --bin psf-guard$/,
+      `tauri build must not be allowed to rebuild psf-guard-cli: ${line.trim()}`,
+    );
+  }
+
+  // And the tauri-free build it protects has to actually run.
+  assert.match(releaseWorkflow, /cargo build --release --locked --bin psf-guard-cli/);
+});
+
 test('normal and signed builds use website-first updater endpoints', async () => {
   const mainConfig = JSON.parse(await readFile(
     new URL('../tauri.conf.json', import.meta.url),
