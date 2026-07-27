@@ -39,6 +39,12 @@ them.
 The release workflow prepends the matching `docs/releases/vVERSION.md` file to
 GitHub's generated change list. A missing file makes the release job fail.
 
+Open the notes with a plain sentence that says what the release does. That
+first sentence becomes the summary in `notice.json`, which is the single line
+every installed copy sees in its update banner, so write it for someone who
+has not read the rest of the file. Lead with a list or a heading and the
+banner falls back to "A new PSF Guard release is ready."
+
 ## 3. Run local gates
 
 Run the same broad checks used by CI:

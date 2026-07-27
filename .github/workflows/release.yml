@@ -293,6 +293,9 @@ jobs:
         published_at=$(gh api \
           "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" \
           --jq .published_at)
+        # No summary argument: release-feeds.mjs takes the first sentence of
+        # docs/releases/<tag>.md, which the checkout above provides. Passing
+        # one here would override it.
         node scripts/release-feeds.mjs \
           update-feeds \
           "$APP_VERSION" \

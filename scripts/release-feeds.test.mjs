@@ -6,7 +6,12 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { buildReleaseFeeds } from './release-feeds.mjs';
+import {
+  DEFAULT_SUMMARY,
+  buildReleaseFeeds,
+  readReleaseSummary,
+  summaryFromNotes,
+} from './release-feeds.mjs';
 import { writeUpdaterConfig } from './write-updater-config.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -111,4 +116,101 @@ test('rejects a mismatched release tag', async () => {
     tag: 'v1.2.4',
     publishedAt: '2026-07-26T18:00:00Z',
   }), /does not match/);
+});
+
+test('summarises release notes with their first sentence', () => {
+  const summary = summaryFromNotes([
+    '# PSF Guard 0.6.4',
+    '',
+    'This patch release reorganizes Settings. It had grown into one long page',
+    'holding three separate jobs, so reaching any one of them meant scrolling',
+    'past the other two. They are now tabs:',
+    '',
+    '- **Databases** — the catalog list.',
+  ].join('\n'));
+
+  // One line in the banner, so one sentence — not the whole paragraph, and
+  // not the dangling "They are now tabs:" that introduces the list.
+  assert.equal(summary, 'This patch release reorganizes Settings.');
+});
+
+test('strips markup and joins wrapped prose', () => {
+  const summary = summaryFromNotes([
+    '# PSF Guard 1.0.0',
+    '',
+    'Adds **stacking** for [OSC frames](https://example.com/osc) and',
+    '`narrowband` palettes.',
+  ].join('\n'));
+
+  assert.equal(summary, 'Adds stacking for OSC frames and narrowband palettes.');
+});
+
+test('keeps the default when the notes carry no prose', () => {
+  assert.equal(summaryFromNotes('# PSF Guard 1.0.0\n\n- Only a list item.\n'), null);
+  assert.equal(summaryFromNotes(''), null);
+  assert.equal(summaryFromNotes('# Heading only\n'), null);
+});
+
+test('truncates a long opening sentence on a word boundary', () => {
+  const long = `This release ${'improves things '.repeat(30)}everywhere.`;
+  const summary = summaryFromNotes(`# PSF Guard 1.0.0\n\n${long}\n`);
+
+  assert.ok(summary.length <= 201, `summary was ${summary.length} characters`);
+  assert.ok(summary.endsWith('…'));
+  assert.ok(!summary.includes('  '));
+});
+
+test('reads the summary shipped for a real tag', async () => {
+  // Against the checked-in notes, so the extraction cannot drift from what
+  // releases actually publish.
+  assert.equal(
+    await readReleaseSummary('v0.6.4'),
+    'This patch release reorganizes Settings.',
+  );
+  assert.equal(
+    await readReleaseSummary('v0.6.3'),
+    'This patch release fixes the first-run catalog setup.',
+  );
+  assert.equal(
+    await readReleaseSummary('v0.6.2'),
+    'This patch release corrects the name of the stand-alone macOS CLI download.',
+  );
+});
+
+test('falls back for a tag with no notes file', async () => {
+  assert.equal(await readReleaseSummary('v99.99.99'), null);
+  assert.equal(DEFAULT_SUMMARY, 'A new PSF Guard release is ready.');
+});
+
+test('the four-argument workflow invocation publishes a real summary', async (t) => {
+  // This is the shape release.yml uses. It passes no summary, which is how
+  // every notice up to 0.6.4 shipped the generic default line.
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'psf-guard-feeds-cli-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+
+  const version = '0.6.4';
+  for (const fileName of [
+    `PSF-Guard-${version}-windows-x64-setup.exe`,
+    `PSF-Guard-${version}-linux-x86_64.AppImage`,
+    `PSF-Guard-${version}-macos-aarch64.app.tar.gz`,
+  ]) {
+    await writeFile(path.join(directory, fileName), 'payload\n');
+    await writeFile(path.join(directory, `${fileName}.sig`), `sig-${fileName}\n`);
+  }
+
+  const scriptPath = fileURLToPath(new URL('./release-feeds.mjs', import.meta.url));
+  await execFileAsync(process.execPath, [
+    scriptPath,
+    directory,
+    version,
+    `v${version}`,
+    '2026-07-27T06:00:00Z',
+  ]);
+
+  const notice = JSON.parse(await readFile(path.join(directory, 'notice.json'), 'utf8'));
+  assert.equal(notice.summary, 'This patch release reorganizes Settings.');
+  assert.notEqual(notice.summary, DEFAULT_SUMMARY);
+
+  const updater = JSON.parse(await readFile(path.join(directory, 'updater.json'), 'utf8'));
+  assert.equal(updater.notes, notice.summary);
 });

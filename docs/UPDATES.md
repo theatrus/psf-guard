@@ -41,6 +41,10 @@ The notice schema is:
 }
 ```
 
+`summary` is the first sentence of `docs/releases/<tag>.md`, shown on one line
+in the update banner. It falls back to "A new PSF Guard release is ready."
+when those notes open with something other than prose.
+
 `urgency` may be `normal`, `recommended`, or `required`. The UI also treats the
 notice as required when the installed version is older than
 `minimum_supported_version`. This changes the notice style and text; it never
