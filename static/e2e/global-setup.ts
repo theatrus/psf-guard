@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { installAstrometryFixture } from './fixtures/astrometry';
 import { ensureAllFixtures } from './fixtures/loader';
+import { sweepAbandonedRunDirectories } from './tmp-dirs';
 
 const FITS_CARD_BYTES = 80;
 const FITS_BLOCK_BYTES = 2880;
@@ -86,6 +87,18 @@ export default async function globalSetup() {
   const tmpBase =
     process.env.PSF_GUARD_E2E_TMP ??
     path.join(os.tmpdir(), `psf-guard-e2e-${process.pid}`);
+
+  // Reclaim directories left by runs that were interrupted before teardown
+  // could run. Each holds ~1.8 GB of FITS fixtures, and on a tmpfs /tmp a few
+  // of them fill the disk and the next run dies mid-copy on ENOSPC/EDQUOT.
+  const reclaimed = sweepAbandonedRunDirectories(tmpBase);
+  if (reclaimed.length > 0) {
+    console.log(
+      `Removed ${reclaimed.length} abandoned e2e tmp director${
+        reclaimed.length === 1 ? 'y' : 'ies'
+      }`
+    );
+  }
 
   fs.rmSync(tmpBase, { recursive: true, force: true });
   fs.mkdirSync(tmpBase, { recursive: true });
