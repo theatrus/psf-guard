@@ -1,4 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
 import type { DbEntry, DbRegistry } from '../utils/tauri';
@@ -12,6 +17,13 @@ import SchedulerSyncControls from './SchedulerSyncControls';
 import SeizaCatalogControls from './SeizaCatalogControls';
 import CalibrationLibrarySummary from './CalibrationLibrarySummary';
 import './TauriSettings.css';
+
+/**
+ * Settings is three unrelated jobs, not one long page: pointing PSF Guard at
+ * databases, installing Seiza catalogs, and moving data between catalogs.
+ * Tabs name them, so each is findable without scrolling past the other two.
+ */
+type SettingsTab = 'databases' | 'catalogs' | 'sync';
 
 interface TauriSettingsProps {
   isOpen: boolean;
@@ -77,6 +89,7 @@ export default function TauriSettings({
   const [formRemoteUploadTokenCopyState, setFormRemoteUploadTokenCopyState] =
     useState<'idle' | 'copied' | 'failed'>('idle');
   const [showAddForm, setShowAddForm] = useState(false);
+  const [activeTab, setActiveTab] = useState<SettingsTab>('databases');
   // true = "create a brand-new TS database from image folders" flow (no
   // existing .sqlite required; the server bootstraps the full TS schema).
   const [createMode, setCreateMode] = useState(false);
@@ -568,6 +581,34 @@ export default function TauriSettings({
   const databases = registry?.databases ?? [];
   const hasDatabases = databases.length > 0;
 
+  // Catalogs are management-gated, and sync has nothing to talk about until a
+  // catalog exists — the same conditions that used to hide those sections.
+  const visibleTabs: Array<{ id: SettingsTab; label: string }> = [
+    { id: 'databases', label: 'Databases' },
+    ...(managementAllowed
+      ? ([{ id: 'catalogs', label: 'Catalogs' }] as const)
+      : []),
+    ...(managementAllowed && hasDatabases
+      ? ([{ id: 'sync', label: 'Sync' }] as const)
+      : []),
+  ];
+  // Derive rather than store: removing the last database takes the Sync tab
+  // away, and the selection has to fall back in the same render.
+  const currentTab = visibleTabs.some((tab) => tab.id === activeTab)
+    ? activeTab
+    : 'databases';
+
+  const onTabKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step =
+      event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+    if (step === 0) return;
+    event.preventDefault();
+    const index = visibleTabs.findIndex((tab) => tab.id === currentTab);
+    const next = visibleTabs[(index + step + visibleTabs.length) % visibleTabs.length];
+    setActiveTab(next.id);
+    document.getElementById(`settings-tab-${next.id}`)?.focus();
+  };
+
   return (
     <div className="tauri-settings modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -576,7 +617,37 @@ export default function TauriSettings({
           <button className="close-button" onClick={onClose}>×</button>
         </div>
 
-        <div className="modal-body">
+        <div
+          className="settings-tabs"
+          role="tablist"
+          aria-label="Settings sections"
+          onKeyDown={onTabKeyDown}
+        >
+          {visibleTabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              id={`settings-tab-${tab.id}`}
+              aria-selected={tab.id === currentTab}
+              aria-controls={`settings-panel-${tab.id}`}
+              tabIndex={tab.id === currentTab ? 0 : -1}
+              className={`settings-tab${tab.id === currentTab ? ' active' : ''}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        <div
+          className="modal-body"
+          role="tabpanel"
+          id={`settings-panel-${currentTab}`}
+          aria-labelledby={`settings-tab-${currentTab}`}
+        >
+          {currentTab === 'databases' && (
+          <>
           {!hasDatabases && managementAllowed && (
             <div className="welcome-message">
               <h3>🚀 Welcome to PSF Guard!</h3>
@@ -634,11 +705,6 @@ export default function TauriSettings({
             </div>
           )}
 
-          {/* Everything that manages databases comes first — the list, the
-              add/edit form, and the import progress that goes with them. The
-              Seiza catalogs and the sync panels sit below. Putting the catalog
-              installer above meant choosing an action in the welcome banner
-              scrolled the form it opened off the bottom of the modal. */}
           <div className="settings-section">
             <h3>Configured Databases {hasDatabases && <span className="muted">({databases.length})</span>}</h3>
 
@@ -1064,12 +1130,12 @@ export default function TauriSettings({
               </div>
             </div>
           )}
+          </>
+          )}
 
-          {managementAllowed && <SeizaCatalogControls />}
+          {currentTab === 'catalogs' && <SeizaCatalogControls />}
 
-          {/* Both panels can only say "add a catalog first" until one exists.
-              On a first run that is two dead ends below the database section. */}
-          {managementAllowed && hasDatabases && (
+          {currentTab === 'sync' && (
             <>
               <SchedulerSyncControls databases={databases} disabled={isApplying} />
               <RemotePeerSync databases={databases} disabled={isApplying} />

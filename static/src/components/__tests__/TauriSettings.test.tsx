@@ -233,15 +233,6 @@ describe('TauriSettings import state', () => {
     });
 
     expect(await screen.findByText('Remote receive: /images/remote')).toBeInTheDocument();
-
-    // With a database configured the whole database section — list, edit form
-    // and import progress — still sits above the catalog installer.
-    const databases = screen.getByRole('heading', { name: /Configured Databases/ });
-    const seiza = screen.getByRole('heading', { name: 'Seiza Catalogs' });
-    expect(
-      databases.compareDocumentPosition(seiza) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
-
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     expect(
       screen.getByRole('checkbox', { name: 'Accept remote image uploads' })
@@ -315,6 +306,51 @@ describe('TauriSettings first run', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('reveals the Sync tab once a catalog is configured', async () => {
+    server.use(
+      http.get('/api/info', () =>
+        HttpResponse.json({
+          success: true,
+          data: {
+            version: 'test',
+            cache_directory: '/tmp/cache',
+            allow_database_management: true,
+          },
+          error: null,
+          status: 'ready',
+        })
+      ),
+      http.get('/api/databases', () =>
+        HttpResponse.json({
+          success: true,
+          data: [
+            {
+              id: 'archive',
+              name: 'Archive',
+              database_path: '/tmp/archive.sqlite',
+              image_directories: ['/images'],
+            },
+          ],
+          error: null,
+          status: 'ready',
+        })
+      )
+    );
+
+    render(<TauriSettings isOpen onClose={() => undefined} />, {
+      wrapper: createWrapper(),
+    });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Sync' }));
+    expect(
+      await screen.findByRole('heading', { name: 'Remote PSF Guard' })
+    ).toBeInTheDocument();
+    // The database list belongs to its own tab, not this one.
+    expect(
+      screen.queryByRole('heading', { name: /Configured Databases/ })
+    ).not.toBeInTheDocument();
+  });
+
   it('opens straight onto the create form when the caller asks for it', async () => {
     serveEmptyRegistry();
 
@@ -330,7 +366,7 @@ describe('TauriSettings first run', () => {
     expect(screen.queryByText('N.I.N.A. Database File:')).not.toBeInTheDocument();
   });
 
-  it('keeps the import form above the Seiza catalogs', async () => {
+  it('keeps the catalog installer out of the way of the import form', async () => {
     serveEmptyRegistry();
 
     render(
@@ -338,17 +374,36 @@ describe('TauriSettings first run', () => {
       { wrapper: createWrapper() }
     );
 
-    const form = await screen.findByRole('heading', {
-      name: 'New Database from Images',
-    });
-    const seiza = await screen.findByRole('heading', { name: 'Seiza Catalogs' });
-
-    // Choosing an action in the welcome banner opens the form. With the
-    // catalog installer above it, that form landed off the bottom of the
-    // modal and looked like nothing had happened.
+    // The form opens on the Databases tab with nothing above it. The catalog
+    // installer used to render between the welcome banner and this form,
+    // pushing it off the bottom of the modal.
     expect(
-      form.compareDocumentPosition(seiza) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
+      await screen.findByRole('heading', { name: 'New Database from Images' })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: 'Seiza Catalogs' })
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Catalogs' }));
+    expect(
+      await screen.findByRole('heading', { name: 'Seiza Catalogs' })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: 'New Database from Images' })
+    ).not.toBeInTheDocument();
+  });
+
+  it('offers no Sync tab until a catalog exists', async () => {
+    serveEmptyRegistry();
+
+    render(<TauriSettings isOpen onClose={() => undefined} />, {
+      wrapper: createWrapper(),
+    });
+
+    expect(await screen.findByRole('tab', { name: 'Databases' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Catalogs' })).toBeInTheDocument();
+    // Sync has nothing to talk about with no databases configured.
+    expect(screen.queryByRole('tab', { name: 'Sync' })).not.toBeInTheDocument();
   });
 
   it('opens straight onto the add form when the caller asks for it', async () => {
