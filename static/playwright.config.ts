@@ -61,6 +61,9 @@ export default defineConfig({
   reporter: process.env.CI ? [['list'], ['github']] : 'list',
 
   globalSetup: './e2e/global-setup.ts',
+  // Removes this run's tmp directories, ~1.8 GB of copied FITS fixtures.
+  // Set PSF_GUARD_E2E_KEEP_TMP to keep them while debugging a failure.
+  globalTeardown: './e2e/global-teardown.ts',
 
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,
