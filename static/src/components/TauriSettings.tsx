@@ -634,18 +634,11 @@ export default function TauriSettings({
             </div>
           )}
 
-          {managementAllowed && <SeizaCatalogControls />}
-
-          {/* Both panels can only say "add a catalog first" until one exists.
-              On a first run that is two dead ends between the welcome banner
-              and the buttons that actually do something. */}
-          {managementAllowed && hasDatabases && (
-            <>
-              <SchedulerSyncControls databases={databases} disabled={isApplying} />
-              <RemotePeerSync databases={databases} disabled={isApplying} />
-            </>
-          )}
-
+          {/* Everything that manages databases comes first — the list, the
+              add/edit form, and the import progress that goes with them. The
+              Seiza catalogs and the sync panels sit below. Putting the catalog
+              installer above meant choosing an action in the welcome banner
+              scrolled the form it opened off the bottom of the modal. */}
           <div className="settings-section">
             <h3>Configured Databases {hasDatabases && <span className="muted">({databases.length})</span>}</h3>
 
@@ -1070,6 +1063,17 @@ export default function TauriSettings({
                 </button>
               </div>
             </div>
+          )}
+
+          {managementAllowed && <SeizaCatalogControls />}
+
+          {/* Both panels can only say "add a catalog first" until one exists.
+              On a first run that is two dead ends below the database section. */}
+          {managementAllowed && hasDatabases && (
+            <>
+              <SchedulerSyncControls databases={databases} disabled={isApplying} />
+              <RemotePeerSync databases={databases} disabled={isApplying} />
+            </>
           )}
         </div>
 

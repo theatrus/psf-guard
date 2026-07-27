@@ -233,6 +233,15 @@ describe('TauriSettings import state', () => {
     });
 
     expect(await screen.findByText('Remote receive: /images/remote')).toBeInTheDocument();
+
+    // With a database configured the whole database section — list, edit form
+    // and import progress — still sits above the catalog installer.
+    const databases = screen.getByRole('heading', { name: /Configured Databases/ });
+    const seiza = screen.getByRole('heading', { name: 'Seiza Catalogs' });
+    expect(
+      databases.compareDocumentPosition(seiza) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     expect(
       screen.getByRole('checkbox', { name: 'Accept remote image uploads' })
@@ -319,6 +328,27 @@ describe('TauriSettings first run', () => {
     ).toBeInTheDocument();
     // The create flow bootstraps its own database, so it never asks for one.
     expect(screen.queryByText('N.I.N.A. Database File:')).not.toBeInTheDocument();
+  });
+
+  it('keeps the import form above the Seiza catalogs', async () => {
+    serveEmptyRegistry();
+
+    render(
+      <TauriSettings isOpen initialIntent="create" onClose={() => undefined} />,
+      { wrapper: createWrapper() }
+    );
+
+    const form = await screen.findByRole('heading', {
+      name: 'New Database from Images',
+    });
+    const seiza = await screen.findByRole('heading', { name: 'Seiza Catalogs' });
+
+    // Choosing an action in the welcome banner opens the form. With the
+    // catalog installer above it, that form landed off the bottom of the
+    // modal and looked like nothing had happened.
+    expect(
+      form.compareDocumentPosition(seiza) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
   });
 
   it('opens straight onto the add form when the caller asks for it', async () => {
