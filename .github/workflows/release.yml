@@ -84,6 +84,18 @@ jobs:
         toolchain: ${{ steps.rust-toolchain.outputs.channel }}
         components: rustfmt, clippy
 
+    # This workflow had no cargo cache at all, so every release compiled the
+    # whole dependency tree from cold on three platforms. Read main's cache
+    # and never write: a cache saved under a tag ref is scoped to that tag and
+    # could never be read again, so saving here would only consume the repo's
+    # 10 GB budget. Worst case this restores nothing and we are no slower than
+    # before.
+    - name: Cache cargo build
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: tauri
+        save-if: false
+
     - name: Install Node.js
       uses: actions/setup-node@v7
       with:
@@ -97,9 +109,12 @@ jobs:
         npm ci
         npm run build
 
+    # Prebuilt binary rather than a from-source build; this step alone was
+    # 594s of the 36-minute Windows release job.
     - name: Install Tauri CLI
-      run: cargo install tauri-cli --version "^2.0" --locked
-      continue-on-error: true
+      uses: taiki-e/install-action@v2
+      with:
+        tool: tauri-cli@2
 
     - name: Verify updater signing credentials
       shell: bash

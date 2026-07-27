@@ -329,8 +329,10 @@ Then open http://localhost:3000/.
 
 ### Fedora RPM
 
-Releases after v0.3.0 attach prebuilt RPMs for Fedora 43 and 44 to the
-[releases page](https://github.com/theatrus/psf-guard/releases/latest):
+Releases after v0.3.0 attach a prebuilt Fedora 44 RPM to the
+[releases page](https://github.com/theatrus/psf-guard/releases/latest). For
+other Fedora releases, build one with
+[`packaging/rpm/build-in-podman.sh`](packaging/rpm/README.md):
 
 ```bash
 sudo dnf install ./psf-guard-*.fc44.x86_64.rpm
