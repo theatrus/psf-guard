@@ -169,9 +169,11 @@ jobs:
       run: cargo tauri build --verbose --config "${{ runner.temp }}/psf-guard-updater.json" -- --bin psf-guard
 
     - name: Build Tauri desktop app (Windows, with bundled CLI)
-      # externalBin (the CLI sidecar staged above) + the NSIS PATH hook live in
-      # tauri.bundle-windows.json, applied only here via --config so other
-      # tauri-feature compiles don't require the sidecar.
+      # tauri.bundle-windows.json carries the NSIS PATH hook, and nothing else
+      # — there is no externalBin sidecar. `externalBin` is [] in
+      # tauri.conf.json; psf-guard-cli.exe reaches the installer because the
+      # bundler picks up every cargo bin target from target/release, where the
+      # tauri-free build above already put it.
       if: matrix.os == 'windows-latest'
       env:
         TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
