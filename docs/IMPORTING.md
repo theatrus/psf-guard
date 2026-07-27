@@ -15,10 +15,17 @@ a trusted interface and opt in:
 psf-guard server --host 127.0.0.1 --allow-database-management
 ```
 
-Then open **Settings** and choose **New Database from Images**. On a first run
-PSF Guard has no catalogs yet, so it opens Settings for you and the welcome
-banner offers this alongside **Add Existing Database**. The overview's empty
-state offers the same two starting points.
+Settings has three tabs: **Databases** for catalogs and imports, **Catalogs**
+for the Seiza data packages, and **Sync** for moving records between catalogs.
+Sync appears once you have a catalog to move records between.
+
+On a first run PSF Guard has none, so it opens Settings on the Databases tab
+and offers both starting points. The overview's empty state offers the same
+two.
+
+![First run: the Databases tab offering both starting points](settings-tabs.png)
+
+Choose **New Database from Images**.
 
 ![New Database from Images form](import-from-images.png)
 
@@ -130,7 +137,11 @@ reads the server's job state when it opens, so navigation or a page reload does
 not hide a running job. A server restart ends the in-memory job; start it again
 to resume from the persistent cache.
 
-![Settings showing Analyze Missing Quality and Rescan All Quality beside the Seiza catalog controls](settings-catalog-quality.png)
+These controls sit with each database on the **Databases** tab. The screenshot
+below predates the tabs, so it shows them beside the Seiza catalog controls;
+the buttons and their behaviour are unchanged.
+
+![Analyze Missing Quality and Rescan All Quality for a configured database](settings-catalog-quality.png)
 
 The backfill uses the N.I.N.A. Fast detector for star count and HFR, which keeps
 new values comparable with Target Scheduler data. It also stores the full-star
@@ -147,10 +158,10 @@ header name grouped them poorly.
 
 ## Sync with the telescope database
 
-Add both the local and telescope databases in Settings, then use
-**Data Transfer**:
+Add both the local and telescope databases in Settings, then open the **Sync**
+tab and use **Data Transfer**:
 
-![Data Transfer workspace with named source and destination catalogs](data-transfer.png)
+![The Sync tab, with Data Transfer over named source and destination catalogs](data-transfer.png)
 
 - **Merge catalogs** copies new or changed projects, targets, templates, plans,
   captures, grades, rigs, and raw calibration-frame records from the selected

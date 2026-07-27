@@ -306,6 +306,51 @@ describe('TauriSettings first run', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('reveals the Sync tab once a catalog is configured', async () => {
+    server.use(
+      http.get('/api/info', () =>
+        HttpResponse.json({
+          success: true,
+          data: {
+            version: 'test',
+            cache_directory: '/tmp/cache',
+            allow_database_management: true,
+          },
+          error: null,
+          status: 'ready',
+        })
+      ),
+      http.get('/api/databases', () =>
+        HttpResponse.json({
+          success: true,
+          data: [
+            {
+              id: 'archive',
+              name: 'Archive',
+              database_path: '/tmp/archive.sqlite',
+              image_directories: ['/images'],
+            },
+          ],
+          error: null,
+          status: 'ready',
+        })
+      )
+    );
+
+    render(<TauriSettings isOpen onClose={() => undefined} />, {
+      wrapper: createWrapper(),
+    });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Sync' }));
+    expect(
+      await screen.findByRole('heading', { name: 'Remote PSF Guard' })
+    ).toBeInTheDocument();
+    // The database list belongs to its own tab, not this one.
+    expect(
+      screen.queryByRole('heading', { name: /Configured Databases/ })
+    ).not.toBeInTheDocument();
+  });
+
   it('opens straight onto the create form when the caller asks for it', async () => {
     serveEmptyRegistry();
 
@@ -319,6 +364,46 @@ describe('TauriSettings first run', () => {
     ).toBeInTheDocument();
     // The create flow bootstraps its own database, so it never asks for one.
     expect(screen.queryByText('N.I.N.A. Database File:')).not.toBeInTheDocument();
+  });
+
+  it('keeps the catalog installer out of the way of the import form', async () => {
+    serveEmptyRegistry();
+
+    render(
+      <TauriSettings isOpen initialIntent="create" onClose={() => undefined} />,
+      { wrapper: createWrapper() }
+    );
+
+    // The form opens on the Databases tab with nothing above it. The catalog
+    // installer used to render between the welcome banner and this form,
+    // pushing it off the bottom of the modal.
+    expect(
+      await screen.findByRole('heading', { name: 'New Database from Images' })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: 'Seiza Catalogs' })
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Catalogs' }));
+    expect(
+      await screen.findByRole('heading', { name: 'Seiza Catalogs' })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: 'New Database from Images' })
+    ).not.toBeInTheDocument();
+  });
+
+  it('offers no Sync tab until a catalog exists', async () => {
+    serveEmptyRegistry();
+
+    render(<TauriSettings isOpen onClose={() => undefined} />, {
+      wrapper: createWrapper(),
+    });
+
+    expect(await screen.findByRole('tab', { name: 'Databases' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Catalogs' })).toBeInTheDocument();
+    // Sync has nothing to talk about with no databases configured.
+    expect(screen.queryByRole('tab', { name: 'Sync' })).not.toBeInTheDocument();
   });
 
   it('opens straight onto the add form when the caller asks for it', async () => {

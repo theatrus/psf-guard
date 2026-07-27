@@ -69,6 +69,43 @@ test('first run offers importing images as well as opening a N.I.N.A. database',
   await expect(modal.getByText('Image Directories:')).toBeVisible();
 });
 
+test('settings splits its jobs across tabs', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('heading', { name: /Welcome to PSF Guard/i }).waitFor();
+
+  const modal = page.locator('.tauri-settings');
+  await expect(modal.getByRole('tab', { name: 'Databases' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  );
+  // Sync needs a catalog before it has anything to say, so it stays off the
+  // tab strip on a first run.
+  await expect(modal.getByRole('tab', { name: 'Sync' })).toHaveCount(0);
+
+  // The catalog installer is a whole panel of its own, not something to
+  // scroll past on the way to adding a database.
+  await expect(
+    modal.getByRole('heading', { name: 'Seiza Catalogs' })
+  ).toBeHidden();
+  await modal.getByRole('tab', { name: 'Catalogs' }).click();
+  await expect(
+    modal.getByRole('heading', { name: 'Seiza Catalogs' })
+  ).toBeVisible();
+  await expect(
+    modal.getByRole('heading', { name: 'Configured Databases' })
+  ).toBeHidden();
+
+  // Arrow keys move along the tab strip, per the ARIA tabs pattern.
+  await modal.getByRole('tab', { name: 'Catalogs' }).press('ArrowLeft');
+  await expect(modal.getByRole('tab', { name: 'Databases' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  );
+  await expect(
+    modal.getByRole('heading', { name: 'Configured Databases' })
+  ).toBeVisible();
+});
+
 test('the overview import action opens settings on the create form', async ({
   page,
 }) => {

@@ -1,4 +1,4 @@
-import { expect, test, type Route } from '@playwright/test';
+import { expect, test, type Page, type Route } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -7,6 +7,16 @@ import {
   resetDatabases,
   tmpBase,
 } from './helpers';
+
+/**
+ * Settings is tabbed. Data Transfer and Remote PSF Guard live on Sync, which
+ * only appears once a catalog is configured — the tests below all configure
+ * one first.
+ */
+async function openSyncTab(page: Page) {
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('tab', { name: 'Sync' }).click();
+}
 
 test.beforeEach(async ({ request }) => {
   await resetDatabases(request);
@@ -89,7 +99,7 @@ test('grade transfer requires a dry preview before Apply appears', async ({
   });
 
   await page.goto('/');
-  await page.getByRole('button', { name: 'Settings' }).click();
+  await openSyncTab(page);
 
   const workspace = page.locator('.scheduler-sync-workspace');
   await workspace.getByLabel('Transfer source').selectOption({ label: 'Review copy' });
@@ -221,7 +231,7 @@ test('settings shows calibration coverage for each database rig', async ({ page 
 test('data transfer controls fit a compact settings view', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
-  await page.getByRole('button', { name: 'Settings' }).click();
+  await openSyncTab(page);
 
   const workspace = page.locator('.scheduler-sync-workspace');
   await expect(workspace.getByRole('heading', { name: 'Data Transfer' })).toBeVisible();
@@ -281,7 +291,7 @@ test('a pending transfer preview returns after a page reload', async ({ page }) 
   );
 
   await page.goto('/');
-  await page.getByRole('button', { name: 'Settings' }).click();
+  await openSyncTab(page);
 
   let workspace = page.locator('.scheduler-sync-workspace');
   await workspace.getByLabel('Transfer source').selectOption({ label: 'Review copy' });
@@ -295,7 +305,7 @@ test('a pending transfer preview returns after a page reload', async ({ page }) 
   ).toBeVisible();
 
   await page.reload();
-  await page.getByRole('button', { name: 'Settings' }).click();
+  await openSyncTab(page);
   workspace = page.locator('.scheduler-sync-workspace');
   await expect(
     workspace.getByText('Restored the pending transfer preview.')

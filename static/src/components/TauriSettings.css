@@ -74,6 +74,45 @@
   box-sizing: border-box;
 }
 
+.tauri-settings .settings-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--color-border-secondary);
+  flex-wrap: wrap;
+  max-width: 1400px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.tauri-settings .settings-tab {
+  appearance: none;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 10px 14px;
+  margin-bottom: -1px;
+}
+
+.tauri-settings .settings-tab:hover {
+  color: var(--color-text-primary);
+}
+
+.tauri-settings .settings-tab.active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+}
+
+.tauri-settings .settings-tab:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
 .tauri-settings .welcome-message {
   background: linear-gradient(135deg, var(--color-bg-elevated) 0%, var(--color-bg-quaternary) 100%);
   border: 1px solid var(--color-border-secondary);
