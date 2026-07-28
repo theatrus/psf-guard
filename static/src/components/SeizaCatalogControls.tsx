@@ -107,8 +107,8 @@ export default function SeizaCatalogControls() {
         <div>
           <h3 id="seiza-catalog-title">Seiza Catalogs</h3>
           <p>
-            Install the sky data used for object overlays and plate solving. Downloads are
-            verified, cached, and safe to retry.
+            Install the sky data used for object and star labels, overlays, and plate solving.
+            Downloads are verified, cached, and safe to retry.
           </p>
         </div>
         {capabilities.data && (

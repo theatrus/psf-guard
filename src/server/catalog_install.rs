@@ -30,12 +30,14 @@ impl CatalogInstallPreset {
                 Dataset::MinorBodies,
                 Dataset::Transients,
                 Dataset::StarsLiteTycho2,
+                Dataset::StarsLiteTycho2Identifiers,
             ],
             Self::SolverGaia => &[
                 Dataset::Objects,
                 Dataset::MinorBodies,
                 Dataset::Transients,
                 Dataset::StarsGaia,
+                Dataset::StarsLiteTycho2Identifiers,
             ],
             Self::BlindDeep => &[
                 Dataset::Objects,
@@ -43,6 +45,7 @@ impl CatalogInstallPreset {
                 Dataset::Transients,
                 Dataset::StarsDeepGaia17,
                 Dataset::BlindGaia16,
+                Dataset::StarsLiteTycho2Identifiers,
             ],
             Self::BlindDeepGaia20 => &[
                 Dataset::Objects,
@@ -50,6 +53,7 @@ impl CatalogInstallPreset {
                 Dataset::Transients,
                 Dataset::StarsDeepGaia20,
                 Dataset::BlindGaia16,
+                Dataset::StarsLiteTycho2Identifiers,
             ],
         }
     }
@@ -375,11 +379,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn presets_request_the_expected_number_of_files() {
-        assert_eq!(CatalogInstallPreset::SolverLite.file_count(), 4);
-        assert_eq!(CatalogInstallPreset::SolverGaia.file_count(), 4);
-        assert_eq!(CatalogInstallPreset::BlindDeep.file_count(), 5);
-        assert_eq!(CatalogInstallPreset::BlindDeepGaia20.file_count(), 5);
+    fn presets_request_the_expected_files() {
+        let presets = [
+            (CatalogInstallPreset::SolverLite, 5),
+            (CatalogInstallPreset::SolverGaia, 5),
+            (CatalogInstallPreset::BlindDeep, 6),
+            (CatalogInstallPreset::BlindDeepGaia20, 6),
+        ];
+
+        for (preset, file_count) in presets {
+            assert_eq!(preset.file_count(), file_count);
+            assert!(
+                preset
+                    .datasets()
+                    .contains(&Dataset::StarsLiteTycho2Identifiers),
+                "{preset:?} must install the star identifier catalog"
+            );
+        }
     }
 
     #[test]
