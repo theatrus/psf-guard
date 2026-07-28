@@ -9,8 +9,8 @@ test('partial data directory reports usable and missing Seiza resources', async 
   const body = await response.json();
   expect(body.success).toBe(true);
   expect(body.data).toMatchObject({
-    seiza_version: '0.12.0',
-    seiza_fits_version: '0.2.0',
+    seiza_version: '0.12.2',
+    seiza_fits_version: '0.2.1',
     features: {
       object_association: true,
       object_name_search: false,

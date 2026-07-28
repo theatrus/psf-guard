@@ -588,7 +588,21 @@ fn camera_geometry_scale(
 ) -> Option<Provenanced<f64>> {
     let focal_length_mm = focal_length_mm?;
     let pixel_size_um = pixel_size_um?;
-    let binning = binning_x.map_or(1.0, |value| value.value);
+    // XPIXSZ is the image pixel width after binning. N.I.N.A. can therefore
+    // write both XPIXSZ=4.63 and XBINNING=2 for the native 4144x2822 mode of
+    // an ASI294MM. Multiplying the two again doubles the scale hint. Preserve
+    // the old binning behavior for the non-standard PIXSIZE aliases, whose
+    // writers may still report the physical sensor pixel width.
+    let pixel_size_is_effective = pixel_size_um
+        .sources
+        .first()
+        .is_some_and(|source| source.eq_ignore_ascii_case("XPIXSZ"));
+    let applied_binning = if pixel_size_is_effective {
+        None
+    } else {
+        binning_x
+    };
+    let binning = applied_binning.map_or(1.0, |value| value.value);
     let scale = 206.265 * pixel_size_um.value * binning / focal_length_mm.value;
     if !scale.is_finite() || scale <= 0.0 {
         return None;
@@ -596,13 +610,17 @@ fn camera_geometry_scale(
     let mut sources = Vec::new();
     sources.extend(focal_length_mm.sources.iter().cloned());
     sources.extend(pixel_size_um.sources.iter().cloned());
-    if let Some(binning_x) = binning_x {
+    if let Some(binning_x) = applied_binning {
         sources.extend(binning_x.sources.iter().cloned());
     }
     Some(Provenanced::derived(
         scale,
         sources,
-        "206.265 * pixel_size_um * binning_x / focal_length_mm",
+        if pixel_size_is_effective {
+            "206.265 * effective_pixel_size_um / focal_length_mm"
+        } else {
+            "206.265 * pixel_size_um * binning_x / focal_length_mm"
+        },
     ))
 }
 
@@ -721,7 +739,7 @@ mod tests {
     }
 
     #[test]
-    fn derives_camera_geometry_scale_with_binning() {
+    fn treats_xpixsz_as_the_effective_binned_pixel_size() {
         let parsed = FitsAstrometryHeaders::from_headers(&headers(&[
             ("XPIXSZ", HeaderValue::Float(3.76)),
             ("XBINNING", HeaderValue::Integer(2)),
@@ -729,9 +747,47 @@ mod tests {
         ]));
 
         let scale = parsed.pixel_scale_arcsec_per_pixel.unwrap();
+        let expected = 206.265 * 3.76 / 550.0;
+        assert!((scale.value - expected).abs() < 1e-10);
+        assert_eq!(scale.sources, ["FOCALLEN", "XPIXSZ"]);
+    }
+
+    #[test]
+    fn derives_nina_asi294_scale_without_double_counting_binning() {
+        let parsed = FitsAstrometryHeaders::from_headers(&headers(&[
+            ("NAXIS1", HeaderValue::Integer(4144)),
+            ("NAXIS2", HeaderValue::Integer(2822)),
+            ("RA", HeaderValue::Float(315.147297524169)),
+            ("DEC", HeaderValue::Float(45.1289918743763)),
+            ("XPIXSZ", HeaderValue::Float(4.63)),
+            ("YPIXSZ", HeaderValue::Float(4.63)),
+            ("XBINNING", HeaderValue::Integer(2)),
+            ("YBINNING", HeaderValue::Integer(2)),
+            ("FOCALLEN", HeaderValue::Float(1000.0)),
+            ("INSTRUME", HeaderValue::String("ZWO ASI294MM Pro".into())),
+            (
+                "SWCREATE",
+                HeaderValue::String("N.I.N.A. 3.2.0.9001 (x64)".into()),
+            ),
+        ]));
+
+        let scale = parsed.pixel_scale_arcsec_per_pixel.unwrap();
+        assert!((scale.value - 0.955_006_95).abs() < 1e-10);
+        assert_eq!(scale.sources, ["FOCALLEN", "XPIXSZ"]);
+    }
+
+    #[test]
+    fn preserves_binning_for_non_standard_physical_pixel_size_aliases() {
+        let parsed = FitsAstrometryHeaders::from_headers(&headers(&[
+            ("PIXSIZE", HeaderValue::Float(3.76)),
+            ("XBINNING", HeaderValue::Integer(2)),
+            ("FOCALLEN", HeaderValue::Float(550.0)),
+        ]));
+
+        let scale = parsed.pixel_scale_arcsec_per_pixel.unwrap();
         let expected = 206.265 * 3.76 * 2.0 / 550.0;
         assert!((scale.value - expected).abs() < 1e-10);
-        assert_eq!(scale.sources, ["FOCALLEN", "XPIXSZ", "XBINNING"]);
+        assert_eq!(scale.sources, ["FOCALLEN", "PIXSIZE", "XBINNING"]);
     }
 
     #[test]
