@@ -72,7 +72,7 @@ describe('SeizaCatalogControls', () => {
               output_dir: '/catalogs',
               file_name: 'stars-deep-gaia17.bin',
               files_completed: 2,
-              files_total: 5,
+              files_total: 6,
               bytes_completed: 50,
               bytes_total: 100,
             },
@@ -94,7 +94,7 @@ describe('SeizaCatalogControls', () => {
     expect(
       await screen.findByText('Downloading stars-deep-gaia17.bin…')
     ).toBeInTheDocument();
-    expect(screen.getByText('2/5 files')).toBeInTheDocument();
+    expect(screen.getByText('2/6 files')).toBeInTheDocument();
     expect(screen.getByRole('progressbar')).toHaveAttribute('value', '50');
   });
 });
