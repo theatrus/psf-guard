@@ -28,6 +28,19 @@ test('labels macOS artifacts as Apple Silicon', async () => {
 
   assert.match(releaseWorkflow, /asset_name: psf-guard-macos-arm64/);
   assert.doesNotMatch(releaseWorkflow, /asset_name: psf-guard-macos-x64/);
+  assert.match(
+    releaseWorkflow,
+    /release-assets\/PSF\.Guard_\$\{APP_VERSION\}_aarch64\.dmg/,
+  );
+  assert.doesNotMatch(
+    releaseWorkflow,
+    /release-assets\/PSF\.Guard_\$\{APP_VERSION\}_x64\.dmg/,
+  );
+  assert.match(releaseWorkflow, /xcrun stapler validate "\$app"/);
+  assert.match(releaseWorkflow, /xcrun notarytool submit "\$dmg"/);
+  assert.match(releaseWorkflow, /xcrun stapler staple "\$dmg"/);
+  assert.match(releaseWorkflow, /xcrun stapler validate "\$dmg"/);
+  assert.match(releaseWorkflow, /spctl --assess .* "\$dmg"/);
   // CI publishes one macOS artifact, from the Tauri job. It carries the
   // bundle and target/release/psf-guard, so dropping the test job's separate
   // macOS upload cost no binary. What matters here is the label: these
@@ -163,6 +176,10 @@ test('truncates a long opening sentence on a word boundary', () => {
 test('reads the summary shipped for a real tag', async () => {
   // Against the checked-in notes, so the extraction cannot drift from what
   // releases actually publish.
+  assert.equal(
+    await readReleaseSummary('v0.6.6'),
+    'This patch release fixes the macOS installer so Gatekeeper can verify it.',
+  );
   assert.equal(
     await readReleaseSummary('v0.6.5'),
     'This patch release fixes plate solving for binned NINA FITS files, adds star names to Seiza catalog packages, and shows full release summaries in update notices.',
