@@ -164,6 +164,10 @@ test('reads the summary shipped for a real tag', async () => {
   // Against the checked-in notes, so the extraction cannot drift from what
   // releases actually publish.
   assert.equal(
+    await readReleaseSummary('v0.6.5'),
+    'This patch release fixes plate solving for binned NINA FITS files, adds star names to Seiza catalog packages, and shows full release summaries in update notices.',
+  );
+  assert.equal(
     await readReleaseSummary('v0.6.4'),
     'This patch release reorganizes Settings.',
   );

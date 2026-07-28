@@ -7,7 +7,7 @@
 %global debug_package %{nil}
 
 Name:           psf-guard
-Version:        0.6.4
+Version:        0.6.5
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -90,6 +90,10 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Tue Jul 28 2026 Yann Ramin <github@theatr.us> - 0.6.5-1
+- Fix N.I.N.A. pixel-scale hints and install star identifier catalogs
+- Show the release summary in update notices
+
 * Sun Jul 26 2026 Yann Ramin <github@theatr.us> - 0.6.4-1
 - Split Settings into Databases, Catalogs, and Sync tabs
 
