@@ -7,7 +7,7 @@
 %global debug_package %{nil}
 
 Name:           psf-guard
-Version:        0.6.5
+Version:        0.6.6
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -90,6 +90,9 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Tue Jul 28 2026 Yann Ramin <github@theatr.us> - 0.6.6-1
+- Notarize and staple the macOS disk image for Gatekeeper
+
 * Tue Jul 28 2026 Yann Ramin <github@theatr.us> - 0.6.5-1
 - Fix N.I.N.A. pixel-scale hints and install star identifier catalogs
 - Show the release summary in update notices

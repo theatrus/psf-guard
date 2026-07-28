@@ -181,6 +181,34 @@ jobs:
       run: |
         bash scripts/package-macos.sh --config "${{ runner.temp }}/psf-guard-updater.json"
 
+    # Tauri notarizes and staples the app before it creates the DMG. The disk
+    # image is signed afterward, so submit and staple that final artifact too.
+    # These checks keep an unnotarized installer out of the public release.
+    - name: Notarize and verify macOS disk image
+      if: matrix.os == 'macos-latest'
+      env:
+        APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        APPLE_API_KEY_PATH: AuthKey_${{ secrets.APPLE_API_KEY }}.p8
+      shell: bash
+      run: |
+        app=$(find target/release/bundle/macos -maxdepth 1 -name "*.app" -print -quit)
+        dmg=$(find target/release/bundle/dmg -maxdepth 1 -name "*.dmg" -print -quit)
+        test -n "$app" && test -d "$app"
+        test -n "$dmg" && test -s "$dmg"
+
+        codesign --verify --deep --strict --verbose=2 "$app"
+        xcrun stapler validate "$app"
+        xcrun notarytool submit "$dmg" \
+          --key "$APPLE_API_KEY_PATH" \
+          --key-id "$APPLE_API_KEY" \
+          --issuer "$APPLE_API_ISSUER" \
+          --wait
+        xcrun stapler staple "$dmg"
+        hdiutil verify "$dmg"
+        xcrun stapler validate "$dmg"
+        spctl --assess --type open --context context:primary-signature -v "$dmg"
+
     - name: Prepare release assets
       shell: bash
       run: |
@@ -221,8 +249,11 @@ jobs:
             cp "$updater.sig" "release-assets/PSF-Guard-${APP_VERSION}-windows-x64-setup.exe.sig"
             ;;
           macos-latest)
-            # Copy .dmg installers
-            find target/release/bundle/dmg -name "*.dmg" -exec cp {} release-assets/ \; 2>/dev/null || echo "No .dmg files found"
+            # Tauri's generated name has varied between x64 and aarch64 on
+            # Apple's arm64 runners. Publish one stable, accurate name.
+            dmg=$(find target/release/bundle/dmg -name "*.dmg" -print -quit)
+            test -n "$dmg" && test -s "$dmg"
+            cp "$dmg" "release-assets/PSF.Guard_${APP_VERSION}_aarch64.dmg"
             # Create zip of .app bundles
             if [ -d "target/release/bundle/macos" ]; then
               cd target/release/bundle/macos
