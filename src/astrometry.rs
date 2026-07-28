@@ -432,6 +432,8 @@ pub struct AstrometrySolutionResponse {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AstrometrySolverProvenance {
     pub seiza_version: String,
+    #[serde(default)]
+    pub seiza_fits_version: String,
     pub detection_backend: String,
     pub star_catalog: AstrometryCatalogFileSignature,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -963,7 +965,7 @@ impl AstrometryContext {
             && cached.image_id == fresh.image_id
             && cached.source_fingerprint == fresh.source_fingerprint
             && cached.catalog_signature == fresh.catalog_signature
-            && provenance.seiza_version == SEIZA_VERSION
+            && solver_versions_match(provenance)
             && provenance.star_catalog == current_stars
             && blind_matches;
         if !valid {
@@ -1012,7 +1014,7 @@ impl AstrometryContext {
         let cached =
             self.persisted_pixel_analysis_for_source(cache_dir, image_id, expected_target)?;
         let provenance = cached.solver_provenance.as_ref()?;
-        if provenance.seiza_version != SEIZA_VERSION {
+        if !solver_versions_match(provenance) {
             return None;
         }
         let current_stars = self.load_star_catalog().ok()?;
@@ -1202,6 +1204,7 @@ impl AstrometryContext {
                             .flatten();
                         let provenance = deterministic.then(|| AstrometrySolverProvenance {
                             seiza_version: SEIZA_VERSION.to_string(),
+                            seiza_fits_version: SEIZA_FITS_VERSION.to_string(),
                             detection_backend: "mtf_u8+linear_f32".to_string(),
                             star_catalog: catalog_file_signature(
                                 "stars",
@@ -1227,6 +1230,7 @@ impl AstrometryContext {
 
         let provenance = AstrometrySolverProvenance {
             seiza_version: SEIZA_VERSION.to_string(),
+            seiza_fits_version: SEIZA_FITS_VERSION.to_string(),
             detection_backend,
             star_catalog: catalog_file_signature("stars", &stars_catalog.fingerprint),
             blind_index: blind_index
@@ -1322,9 +1326,12 @@ impl AstrometryContext {
             max_pattern_deg: blind_index.value.max_pattern_deg(),
             ..Default::default()
         };
-        if let Some(scale) = scale {
-            params.min_scale_arcsec_px = (scale * 0.5).max(0.01);
-            params.max_scale_arcsec_px = scale * 1.5;
+        // Once a complete hint has failed, it is no longer safe to narrow the
+        // blind search around the same scale. FITS focal lengths and mount
+        // coordinates can be stale even when the image pixels are sound.
+        if let Some((minimum, maximum)) = blind_scale_constraint(scale, hinted_error.is_some()) {
+            params.min_scale_arcsec_px = minimum;
+            params.max_scale_arcsec_px = maximum;
         }
         seiza::blind::solve_blind(stars, catalog, &blind_index.value, &params, dimensions)
             .map(|solution| (AstrometrySolveMode::Blind, solution, Some(blind_index)))
@@ -1551,6 +1558,17 @@ impl AstrometryContext {
 enum DetectionPass {
     MtfU8,
     LinearF32,
+}
+
+fn blind_scale_constraint(scale: Option<f64>, hinted_solve_failed: bool) -> Option<(f64, f64)> {
+    if hinted_solve_failed {
+        return None;
+    }
+    scale.map(|scale| ((scale * 0.5).max(0.01), scale * 1.5))
+}
+
+fn solver_versions_match(provenance: &AstrometrySolverProvenance) -> bool {
+    provenance.seiza_version == SEIZA_VERSION && provenance.seiza_fits_version == SEIZA_FITS_VERSION
 }
 
 struct PixelSolutionMetadata {
@@ -2783,6 +2801,36 @@ mod tests {
     }
 
     #[test]
+    fn failed_hint_removes_the_scale_constraint_from_blind_fallback() {
+        assert_eq!(blind_scale_constraint(Some(2.0), false), Some((1.0, 3.0)));
+        assert_eq!(blind_scale_constraint(Some(2.0), true), None);
+        assert_eq!(blind_scale_constraint(None, false), None);
+    }
+
+    #[test]
+    fn fits_decoder_version_participates_in_cache_validation() {
+        let mut provenance = AstrometrySolverProvenance {
+            seiza_version: SEIZA_VERSION.to_string(),
+            seiza_fits_version: SEIZA_FITS_VERSION.to_string(),
+            detection_backend: "mtf_u8".to_string(),
+            star_catalog: AstrometryCatalogFileSignature {
+                name: "stars".to_string(),
+                path: "/data/stars.bin".to_string(),
+                format: "test".to_string(),
+                size_bytes: 1,
+                modified_unix_seconds: 1,
+                modified_subsec_nanos: 0,
+                sha256: None,
+            },
+            blind_index: None,
+        };
+        assert!(solver_versions_match(&provenance));
+
+        provenance.seiza_fits_version.clear();
+        assert!(!solver_versions_match(&provenance));
+    }
+
+    #[test]
     fn malformed_object_catalog_is_reported_as_invalid() {
         let directory = tempfile::tempdir().unwrap();
         let objects_path = directory.path().join("objects.bin");
@@ -2867,6 +2915,7 @@ mod tests {
             catalog_signature: None,
             solver_provenance: Some(AstrometrySolverProvenance {
                 seiza_version: SEIZA_VERSION.to_string(),
+                seiza_fits_version: SEIZA_FITS_VERSION.to_string(),
                 detection_backend: "mtf_u8+linear_f32".to_string(),
                 star_catalog: AstrometryCatalogFileSignature {
                     name: "stars".to_string(),
