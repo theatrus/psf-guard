@@ -545,7 +545,7 @@ describe('SequenceView: interactions', () => {
 });
 
 describe('SequenceView: multi-session', () => {
-  it('renders sequence tabs for multiple sessions', async () => {
+  function setupMultiSessionHandlers() {
     server.use(
       http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json(multiSessionFixture);
@@ -567,6 +567,10 @@ describe('SequenceView: multi-session', () => {
         });
       }),
     );
+  }
+
+  it('renders sequence tabs for multiple sessions', async () => {
+    setupMultiSessionHandlers();
 
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=2') });
 
@@ -578,27 +582,7 @@ describe('SequenceView: multi-session', () => {
   });
 
   it('switches between sequences when tabs are clicked', async () => {
-    server.use(
-      http.get('/api/db/:dbId/analysis/sequence', () => {
-        return HttpResponse.json(multiSessionFixture);
-      }),
-      http.get('/api/db/:dbId/projects/:projectId/targets', () => {
-        return HttpResponse.json({
-          success: true,
-          data: mockTargets,
-          error: null,
-          status: 'ready',
-        });
-      }),
-      http.get('/api/db/:dbId/images', () => {
-        return HttpResponse.json({
-          success: true,
-          data: [],
-          error: null,
-          status: 'ready',
-        });
-      }),
-    );
+    setupMultiSessionHandlers();
 
     const user = userEvent.setup();
 
@@ -620,6 +604,62 @@ describe('SequenceView: multi-session', () => {
     // Second tab should now be active
     expect(tabs[1].classList.contains('active')).toBe(true);
     expect(tabs[0].classList.contains('active')).toBe(false);
+  });
+
+  it('stores the active image and return view when opening Detail', async () => {
+    setupMultiSessionHandlers();
+    const user = userEvent.setup();
+    let pathname = '';
+    let search = '';
+    function LocationProbe() {
+      const location = useLocation();
+      pathname = location.pathname;
+      search = location.search;
+      return null;
+    }
+
+    const Wrapper = createWrapper('/sequence?db=test&project=1&target=2');
+    render(
+      <Wrapper>
+        <SequenceView />
+        <LocationProbe />
+      </Wrapper>
+    );
+
+    const tabs = await screen.findAllByText(/L · .* \(5\)/);
+    await user.click(tabs[1]);
+
+    await waitFor(() => {
+      const params = new URLSearchParams(search);
+      expect(params.get('current')).toBe('211');
+    });
+
+    const cards = document.querySelectorAll('.sequence-image-card');
+    expect(cards).toHaveLength(5);
+    await user.dblClick(cards[1]);
+
+    await waitFor(() => {
+      const params = new URLSearchParams(search);
+      expect(pathname).toBe('/detail/212');
+      expect(params.get('returnTo')).toBe('sequence');
+      expect(params.get('current')).toBe('212');
+    });
+  });
+
+  it('restores a session from URL state', async () => {
+    setupMultiSessionHandlers();
+
+    render(<SequenceView />, {
+      wrapper: createWrapper(
+        '/sequence?db=test&project=1&target=2&current=212'
+      ),
+    });
+
+    const tabs = await screen.findAllByText(/L · .* \(5\)/);
+    expect(tabs[1]).toHaveClass('active');
+    expect(document.querySelectorAll('.sequence-image-card')[1]).toHaveClass(
+      'current-selection'
+    );
   });
 });
 

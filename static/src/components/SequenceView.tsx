@@ -19,6 +19,7 @@ import UndoRedoToolbar from './UndoRedoToolbar';
 import ImageCard from './ImageCard';
 import Dialog from './Dialog';
 import type { Image, ScoredSequence, ImageQualityResult } from '../api/types';
+import { imageDetailPath } from '../utils/imageDetailRoutes';
 
 function formatCategory(category: string): string {
   return category
@@ -57,7 +58,6 @@ export default function SequenceView() {
   const [threshold, setThreshold] = useState(0.5);
   const [selectedImages, setSelectedImages] = useState<Set<number>>(new Set());
   const [showRejectReview, setShowRejectReview] = useState(false);
-  const [activeSequenceIndex, setActiveSequenceIndex] = useState(0);
   const spatialScan = useSpatialScan(dbId, targetId ?? undefined, filterName);
 
   // Fetch targets for the project to allow selection
@@ -93,7 +93,17 @@ export default function SequenceView() {
     }
   }, [targetId, filterName, analyze]);
 
-  const sequences = analysisData?.sequences || [];
+  const sequences = useMemo(() => analysisData?.sequences ?? [], [analysisData?.sequences]);
+  const activeSequenceIndex = useMemo(() => {
+    if (urlCurrentImageId !== null) {
+      const currentIndex = sequences.findIndex(sequence =>
+        sequence.images.some(image => image.image_id === urlCurrentImageId)
+      );
+      if (currentIndex >= 0) return currentIndex;
+    }
+
+    return 0;
+  }, [sequences, urlCurrentImageId]);
   const activeSequence: ScoredSequence | undefined = sequences[activeSequenceIndex];
   const activeImageId = useMemo(() => {
     if (!activeSequence || activeSequence.images.length === 0) return null;
@@ -288,8 +298,17 @@ export default function SequenceView() {
 
   const routeQuery = searchParams.toString();
   const openImage = useCallback((imageId: number) => {
-    navigate(`/detail/${imageId}${routeQuery ? `?${routeQuery}` : ''}`);
+    const params = new URLSearchParams(routeQuery);
+    params.set('current', String(imageId));
+    navigate(imageDetailPath(imageId, params, 'sequence'));
   }, [navigate, routeQuery]);
+
+  const selectSequence = useCallback((sequence: ScoredSequence) => {
+    const firstImageId = sequence.images[0]?.image_id;
+    if (firstImageId !== undefined) {
+      setCurrentImageId(firstImageId);
+    }
+  }, [setCurrentImageId]);
 
   if (!projectId) {
     return (
@@ -499,7 +518,7 @@ export default function SequenceView() {
                 <button
                   key={i}
                   className={`sequence-tab ${i === activeSequenceIndex ? 'active' : ''}`}
-                  onClick={() => setActiveSequenceIndex(i)}
+                  onClick={() => selectSequence(seq)}
                 >
                   {formatSequenceLabel(seq)}
                 </button>

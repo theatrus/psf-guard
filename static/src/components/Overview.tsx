@@ -27,6 +27,7 @@ import {
   saveProjectSeenState,
 } from '../utils/projectRecency';
 import { formatRelativeTime } from '../utils/relativeTime';
+import { imageDetailPath } from '../utils/imageDetailRoutes';
 import {
   groupProjectsByActivity,
   isArchivedProject,
@@ -337,7 +338,7 @@ export default function Overview() {
       project: String(project.id),
       target: String(image.target_id),
     });
-    navigate(`/detail/${image.id}?${params}`);
+    navigate(imageDetailPath(image.id, params, 'grid'));
   };
 
   const handleSelectTarget = (target: WithDb<TargetOverview>) => {

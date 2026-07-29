@@ -30,6 +30,7 @@ import {
   NO_EXPANDED_GROUPS,
   resolveExpandedGroups,
 } from '../utils/imageGrouping';
+import { imageDetailPath } from '../utils/imageDetailRoutes';
 
 interface GroupedImageGridProps {
   useLazyImages?: boolean;
@@ -78,8 +79,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const [searchParams] = useSearchParams();
   
   const navigateToDetail = useCallback((imageId: number) => {
-    const params = searchParams.toString();
-    navigate(`/detail/${imageId}?${params}`);
+    navigate(imageDetailPath(imageId, searchParams, 'grid'));
   }, [navigate, searchParams]);
   
   const navigateToComparison = useCallback((leftId: number, rightId: number) => {

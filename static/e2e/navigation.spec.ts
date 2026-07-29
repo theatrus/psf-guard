@@ -369,6 +369,81 @@ test('sequence mode uses arrows and Space for the same keyboard selection flow',
   await expect(cards.nth(0)).toHaveClass(/current-selection/);
 });
 
+test('detail closes back to the Sequence session that opened it', async ({ page }) => {
+  const secondSessionStart = Math.floor(Date.UTC(2026, 3, 17, 0, 25, 0) / 1000);
+  await page.route(`**/api/db/${dbId}/analysis/sequence*`, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json() as {
+      data: {
+        sequences: Array<{
+          session_start?: number;
+          session_end?: number;
+          image_count: number;
+          images: Array<{ image_id: number }>;
+        }>;
+      };
+    };
+    const original = body.data.sequences[0];
+    const [firstImage, ...laterImages] = original.images;
+    body.data.sequences = [
+      {
+        ...original,
+        image_count: 1,
+        images: [firstImage],
+      },
+      {
+        ...original,
+        session_start: secondSessionStart,
+        session_end: secondSessionStart + 132,
+        image_count: laterImages.length,
+        images: laterImages,
+      },
+    ];
+    await route.fulfill({ response, json: body });
+  });
+
+  await page.goto(
+    `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`
+  );
+
+  const tabs = page.locator('.sequence-tab');
+  await expect(tabs).toHaveCount(2, { timeout: 15_000 });
+  await tabs.nth(1).click();
+  await expect(tabs.nth(1)).toHaveClass(/active/);
+  await expect(page).toHaveURL(/current=2/);
+
+  const cards = page.locator('.sequence-image-card');
+  await expect(cards).toHaveCount(2);
+  await cards.nth(0).dblclick();
+  await expect(page).toHaveURL(/#\/detail\/2/);
+  await expect(page).toHaveURL(/returnTo=sequence/);
+  await expect(page.locator('.image-card-wrapper')).toHaveCount(0);
+  await page.reload();
+
+  await page.locator('.image-detail-overlay .close-button').click();
+
+  await expect(page).toHaveURL(/#\/sequence\?/);
+  await expect(page).not.toHaveURL(/returnTo=/);
+  await expect(page).toHaveURL(/current=2/);
+  await expect(tabs.nth(1)).toHaveClass(/active/);
+  await expect(cards.nth(0)).toHaveClass(/current-selection/);
+});
+
+test('detail opened from Images still closes back to Images', async ({ page }) => {
+  await page.goto(
+    `/#/grid?db=${encodeURIComponent(dbId)}&project=1&returnTo=sequence`
+  );
+  const cards = page.locator('.image-card');
+  await expect(cards).toHaveCount(3, { timeout: 15_000 });
+  await cards.nth(0).dblclick();
+  await expect(page).toHaveURL(/#\/detail\/1/);
+  await expect(page).not.toHaveURL(/returnTo=/);
+
+  await page.locator('.image-detail-overlay .close-button').click();
+
+  await expect(page).toHaveURL(/#\/grid\?/);
+});
+
 test('sequence keyboard shortcuts pause while the rejection dialog is open', async ({ page }) => {
   await page.goto(
     `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`
