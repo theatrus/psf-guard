@@ -19,6 +19,7 @@ import UndoRedoToolbar from './UndoRedoToolbar';
 import ImageCard from './ImageCard';
 import Dialog from './Dialog';
 import type { Image, ScoredSequence, ImageQualityResult } from '../api/types';
+import { imageDetailPath } from '../utils/imageDetailRoutes';
 
 function formatCategory(category: string): string {
   return category
@@ -299,8 +300,7 @@ export default function SequenceView() {
   const openImage = useCallback((imageId: number) => {
     const params = new URLSearchParams(routeQuery);
     params.set('current', String(imageId));
-    params.set('returnTo', 'sequence');
-    navigate(`/detail/${imageId}?${params.toString()}`);
+    navigate(imageDetailPath(imageId, params, 'sequence'));
   }, [navigate, routeQuery]);
 
   const selectSequence = useCallback((sequence: ScoredSequence) => {

@@ -417,6 +417,7 @@ test('detail closes back to the Sequence session that opened it', async ({ page 
   await cards.nth(0).dblclick();
   await expect(page).toHaveURL(/#\/detail\/2/);
   await expect(page).toHaveURL(/returnTo=sequence/);
+  await expect(page.locator('.image-card-wrapper')).toHaveCount(0);
   await page.reload();
 
   await page.locator('.image-detail-overlay .close-button').click();
@@ -429,11 +430,14 @@ test('detail closes back to the Sequence session that opened it', async ({ page 
 });
 
 test('detail opened from Images still closes back to Images', async ({ page }) => {
-  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+  await page.goto(
+    `/#/grid?db=${encodeURIComponent(dbId)}&project=1&returnTo=sequence`
+  );
   const cards = page.locator('.image-card');
   await expect(cards).toHaveCount(3, { timeout: 15_000 });
   await cards.nth(0).dblclick();
   await expect(page).toHaveURL(/#\/detail\/1/);
+  await expect(page).not.toHaveURL(/returnTo=/);
 
   await page.locator('.image-detail-overlay .close-button').click();
 

@@ -5,6 +5,7 @@ import ImageDetailView from './ImageDetailView';
 import ImageComparisonView from './ImageComparisonView';
 import { useImageNavigation } from '../hooks/useImageNavigation';
 import { useGrading } from '../hooks/useGrading';
+import { imageDetailReturnView } from '../utils/imageDetailRoutes';
 
 export default function MainView() {
   const location = useLocation();
@@ -16,6 +17,7 @@ export default function MainView() {
   // Determine current view mode from URL
   const isDetailView = location.pathname.startsWith('/detail/');
   const isComparisonView = location.pathname.startsWith('/compare/');
+  const detailReturnView = imageDetailReturnView(searchParams);
 
   const imageId = params.imageId ? parseInt(params.imageId, 10) : undefined;
   const leftImageId = params.leftImageId ? parseInt(params.leftImageId, 10) : undefined;
@@ -147,8 +149,10 @@ export default function MainView() {
 
   return (
     <div className="main-view">
-      {/* Always show the grid as the base layer */}
-      <GroupedImageGrid useLazyImages={true} />
+      {/* Keep the grid mounted for its own overlays so closing preserves it. */}
+      {(!isDetailView || detailReturnView === 'grid') && (
+        <GroupedImageGrid useLazyImages={true} />
+      )}
 
       {/* Show detail view overlay when in detail mode */}
       {isDetailView && imageId && dbId && (

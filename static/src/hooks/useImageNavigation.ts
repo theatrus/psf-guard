@@ -9,6 +9,11 @@ import {
   imageGroupKey,
   resolveExpandedGroups,
 } from '../utils/imageGrouping';
+import {
+  imageDetailClosePath,
+  imageDetailPath,
+  imageDetailReturnView,
+} from '../utils/imageDetailRoutes';
 
 /**
  * Hook for navigating between images in the current context
@@ -163,7 +168,10 @@ export function useImageNavigation(currentImageId?: number) {
     const params = searchParams.toString();
     
     if (view === 'detail') {
-      navigate(`/detail/${imageId}?${params}`, { replace: true });
+      navigate(
+        imageDetailPath(imageId, searchParams, imageDetailReturnView(searchParams)),
+        { replace: true },
+      );
     } else {
       // For comparison, we need both left and right image IDs
       const rightImageId = currentImageId === imageId ? 
@@ -192,11 +200,7 @@ export function useImageNavigation(currentImageId?: number) {
   }, [navigate, searchParams]);
 
   const closeDetail = useCallback(() => {
-    const params = new URLSearchParams(searchParams);
-    const returnPath = params.get('returnTo') === 'sequence' ? '/sequence' : '/grid';
-    params.delete('returnTo');
-    const query = params.toString();
-    navigate(`${returnPath}${query ? `?${query}` : ''}`, { replace: true });
+    navigate(imageDetailClosePath(searchParams), { replace: true });
   }, [navigate, searchParams]);
 
   return {
