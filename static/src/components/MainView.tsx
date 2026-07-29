@@ -156,7 +156,7 @@ export default function MainView() {
           <ImageDetailView
             dbId={dbId}
             imageId={imageId}
-            onClose={navigation.goToGrid}
+            onClose={navigation.closeDetail}
             onNext={navigation.goToNext}
             onPrevious={navigation.goToPrevious}
             onGrade={handleGrade}

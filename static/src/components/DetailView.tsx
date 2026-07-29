@@ -52,7 +52,7 @@ export default function DetailView() {
     <ImageDetailView
       dbId={dbId}
       imageId={imageIdNum!}
-      onClose={navigation.goToGrid}
+      onClose={navigation.closeDetail}
       onNext={navigation.goToNext}
       onPrevious={navigation.goToPrevious}
       onGrade={handleGrade}

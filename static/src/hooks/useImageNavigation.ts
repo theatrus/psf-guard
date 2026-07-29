@@ -191,6 +191,14 @@ export function useImageNavigation(currentImageId?: number) {
     navigate(`/grid?${params}`, { replace: true });
   }, [navigate, searchParams]);
 
+  const closeDetail = useCallback(() => {
+    const params = new URLSearchParams(searchParams);
+    const returnPath = params.get('returnTo') === 'sequence' ? '/sequence' : '/grid';
+    params.delete('returnTo');
+    const query = params.toString();
+    navigate(`${returnPath}${query ? `?${query}` : ''}`, { replace: true });
+  }, [navigate, searchParams]);
+
   return {
     canGoPrevious,
     canGoNext,
@@ -199,6 +207,7 @@ export function useImageNavigation(currentImageId?: number) {
     goToNext,
     goToPrevious,
     goToGrid,
+    closeDetail,
     navigateToImageWithContext,
     allImages: flatImages, // Return the grouped/filtered list for compatibility
   };
