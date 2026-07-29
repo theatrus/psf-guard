@@ -18,6 +18,7 @@ import { useDbProjectTarget, useGridState } from '../hooks/useUrlState';
 import UndoRedoToolbar from './UndoRedoToolbar';
 import ImageCard from './ImageCard';
 import Dialog from './Dialog';
+import ThumbnailSizeControl from './ThumbnailSizeControl';
 import type { Image, ScoredSequence, ImageQualityResult } from '../api/types';
 import { imageDetailPath } from '../utils/imageDetailRoutes';
 
@@ -48,7 +49,12 @@ function qualityColor(score: number): string {
 
 export default function SequenceView() {
   const { dbId, projectId, targetId } = useDbProjectTarget();
-  const { currentImageId: urlCurrentImageId, setCurrentImageId } = useGridState();
+  const {
+    imageSize,
+    currentImageId: urlCurrentImageId,
+    setImageSize,
+    setCurrentImageId,
+  } = useGridState(150);
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const grading = useGrading(dbId!);
@@ -444,6 +450,11 @@ export default function SequenceView() {
         </div>
 
         <div className="sequence-review-row">
+          <ThumbnailSizeControl
+            id="sequence-thumbnail-size"
+            value={imageSize}
+            onChange={setImageSize}
+          />
           <div className="threshold-control">
             <label htmlFor="sequence-threshold">Threshold:</label>
             <input
@@ -472,8 +483,8 @@ export default function SequenceView() {
               <option value="recommended">Recommended</option>
             </select>
           </div>
-          <div className="sequence-selection-slot">
-            {selectedImages.size > 0 && (
+          {selectedImages.size > 0 && (
+            <div className="sequence-selection-slot">
               <div className="selection-action-bar sequence-selection-bar" aria-label="Selected image actions">
                 <span className="selection-count">{selectedImages.size} selected</span>
                 <button
@@ -491,8 +502,8 @@ export default function SequenceView() {
                   Clear
                 </button>
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -581,6 +592,7 @@ export default function SequenceView() {
                 currentImageId={activeImageId}
                 selectedImages={selectedImages}
                 threshold={threshold}
+                imageSize={imageSize}
                 onToggle={toggleImage}
                 onOpen={openImage}
               />
@@ -800,6 +812,7 @@ const SequenceStrip = memo(function SequenceStrip({
   currentImageId,
   selectedImages,
   threshold,
+  imageSize,
   onToggle,
   onOpen,
 }: {
@@ -813,6 +826,7 @@ const SequenceStrip = memo(function SequenceStrip({
   currentImageId: number | null;
   selectedImages: Set<number>;
   threshold: number;
+  imageSize: number;
   onToggle: (id: number) => void;
   onOpen: (id: number) => void;
 }) {
@@ -829,7 +843,13 @@ const SequenceStrip = memo(function SequenceStrip({
   }, [currentImageId]);
 
   return (
-    <div ref={stripRef} className="filter-images sequence-strip">
+    <div
+      ref={stripRef}
+      className="filter-images sequence-strip"
+      style={{
+        gridTemplateColumns: `repeat(auto-fill, minmax(${imageSize}px, 1fr))`,
+      }}
+    >
       {images.map(quality => {
         const image = imageMap.get(quality.image_id) ?? {
           id: quality.image_id,

@@ -9,6 +9,17 @@ function Router({ children }: PropsWithChildren) {
 }
 
 describe('useGridState', () => {
+  it('supports a view-specific default thumbnail size', async () => {
+    const { result } = renderHook(() => useGridState(150), { wrapper: Router });
+    expect(result.current.imageSize).toBe(150);
+
+    act(() => result.current.setImageSize(500));
+    await waitFor(() => expect(result.current.imageSize).toBe(500));
+
+    act(() => result.current.setImageSize(150));
+    await waitFor(() => expect(result.current.imageSize).toBe(150));
+  });
+
   it('keeps rapid functional multi-selection updates and a stable setter', async () => {
     const { result } = renderHook(() => useGridState(), { wrapper: Router });
     const initialSetter = result.current.setSelectedImages;

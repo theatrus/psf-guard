@@ -181,11 +181,14 @@ export function useFilters() {
 /**
  * Hook for managing grid state in URL
  */
-export function useGridState() {
+export function useGridState(defaultImageSize = 300) {
   const { getParam, getNumberParam, getBooleanParam, getArrayParam, getNumberArrayParam, updateParams } = useUrlParams();
   
   const groupingMode = useMemo(() => (getParam('grouping') as GroupingMode) || DEFAULT_SINGLE_PROJECT_MODE, [getParam]);
-  const imageSize = useMemo(() => getNumberParam('size') || 300, [getNumberParam]);
+  const imageSize = useMemo(
+    () => getNumberParam('size') || defaultImageSize,
+    [defaultImageSize, getNumberParam],
+  );
   const showStats = useMemo(() => getBooleanParam('stats'), [getBooleanParam]);
   const expandedGroups = useMemo(() => new Set(getArrayParam('expanded')), [getArrayParam]);
   const currentImageId = useMemo(() => getNumberParam('current'), [getNumberParam]);
@@ -198,8 +201,8 @@ export function useGridState() {
   }, [updateParams]);
   
   const setImageSize = useCallback((size: number) => {
-    updateParams({ size: size === 300 ? null : size });
-  }, [updateParams]);
+    updateParams({ size: size === defaultImageSize ? null : size });
+  }, [defaultImageSize, updateParams]);
   
   const setShowStats = useCallback((show: boolean) => {
     updateParams({ stats: show ? true : null });

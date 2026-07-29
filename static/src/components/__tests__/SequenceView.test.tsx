@@ -401,6 +401,37 @@ describe('SequenceView: interactions', () => {
     expect(cards[0].classList.contains('selected')).toBe(false);
   });
 
+  it('changes thumbnail size and keeps it in the URL', async () => {
+    setupDefaultHandlers();
+    let search = '';
+    function LocationProbe() {
+      search = useLocation().search;
+      return null;
+    }
+
+    const Wrapper = createWrapper('/sequence?db=test&project=1&target=1');
+    render(
+      <Wrapper>
+        <SequenceView />
+        <LocationProbe />
+      </Wrapper>
+    );
+
+    await screen.findByText('82');
+    const size = screen.getByLabelText('Size:');
+    expect(size).toHaveValue('150');
+
+    fireEvent.change(size, { target: { value: '500' } });
+
+    await waitFor(() => {
+      expect(new URLSearchParams(search).get('size')).toBe('500');
+    });
+    expect(document.querySelector('.sequence-strip')).toHaveStyle({
+      gridTemplateColumns: 'repeat(auto-fill, minmax(500px, 1fr))',
+    });
+    expect(screen.getByText('500px')).toBeInTheDocument();
+  });
+
   it('moves the cursor with arrows and toggles selection with Space', async () => {
     setupDefaultHandlers();
 
@@ -440,7 +471,7 @@ describe('SequenceView: interactions', () => {
     // Instead, test with the default threshold -- just click the button and verify behavior.
     // The default threshold of 0.50 won't select any normal fixture images (all are >= 0.70),
     // so let's use fireEvent to set the threshold to 0.80.
-    const slider = screen.getByRole('slider');
+    const slider = screen.getByLabelText('Threshold:');
     // fireEvent is more reliable for range inputs than userEvent
     const { fireEvent } = await import('@testing-library/react');
     fireEvent.change(slider, { target: { value: '0.80' } });

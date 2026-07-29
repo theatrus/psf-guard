@@ -369,6 +369,41 @@ test('sequence mode uses arrows and Space for the same keyboard selection flow',
   await expect(cards.nth(0)).toHaveClass(/current-selection/);
 });
 
+test('sequence thumbnail size can be changed and survives reload', async ({ page }) => {
+  await page.goto(
+    `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`
+  );
+
+  const cards = page.locator('.sequence-image-card');
+  await expect(cards).toHaveCount(3, { timeout: 15_000 });
+  const size = page.getByLabel('Size:');
+  await expect(size).toHaveValue('150');
+
+  await size.fill('500');
+
+  await expect(page).toHaveURL(/size=500/);
+  const strip = page.locator('.sequence-strip');
+  await expect(strip).toHaveAttribute(
+    'style',
+    /grid-template-columns: repeat\(auto-fill, minmax\(500px, 1fr\)\)/
+  );
+  await expect(page.getByText('500px')).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByLabel('Size:')).toHaveValue('500');
+  await expect(page.locator('.sequence-strip')).toHaveAttribute(
+    'style',
+    /grid-template-columns: repeat\(auto-fill, minmax\(500px, 1fr\)\)/
+  );
+
+  await page.setViewportSize({ width: 760, height: 720 });
+  const controlsWidth = await page.locator('.sequence-controls').evaluate((element) => ({
+    client: element.clientWidth,
+    scroll: element.scrollWidth,
+  }));
+  expect(controlsWidth.scroll).toBeLessThanOrEqual(controlsWidth.client);
+});
+
 test('detail closes back to the Sequence session that opened it', async ({ page }) => {
   const secondSessionStart = Math.floor(Date.UTC(2026, 3, 17, 0, 25, 0) / 1000);
   await page.route(`**/api/db/${dbId}/analysis/sequence*`, async (route) => {
