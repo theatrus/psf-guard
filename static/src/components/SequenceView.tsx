@@ -706,21 +706,13 @@ export default function SequenceView() {
             <button
               type="button"
               className="header-button"
-              onClick={() => analyze({ target_id: targetId, filter_name: filterName })}
-              disabled={isAnalyzing}
-            >
-              {isAnalyzing ? 'Analyzing...' : 'Re-analyze'}
-            </button>
-            <button
-              type="button"
-              className="header-button"
               onClick={(event) => spatialScan.start(event.shiftKey || undefined)}
               disabled={spatialScan.isStarting || spatialScan.isRunning}
-              title="Analyze FITS pixels for occlusion, photometry, plate solutions, target offset, tracking loss, and satellite trails. Shift-click to recompute all cached evidence from the current catalogs."
+              title="Analyze FITS pixels, then refresh sequence scores. Shift-click to recompute all cached evidence from the current catalogs."
             >
               {spatialScan.isRunning
                 ? `${spatialScan.status?.progress.stage === 'astrometry' ? 'Solving' : 'Scanning'} ${spatialScan.status?.progress.processed ?? 0}/${spatialScan.status?.progress.total ?? 0}...`
-                : 'Scan Quality'}
+                : 'Analyze Quality'}
             </button>
           </div>
           <div className="sequence-job-status" aria-live="polite">

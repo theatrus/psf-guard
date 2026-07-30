@@ -14,7 +14,7 @@ jumps, tracking drift, and deterministic solve failures. See
 failure semantics, score caps, and the guarded regrade workflow.
 
 All pixel detections are classical statistics — no machine learning or
-training data. An explicit server **Scan Quality** may download and retain
+training data. An explicit server **Analyze Quality** run may download and retain
 orbital elements needed for satellite checks. Merely opening Sequence Analysis
 and CLI regrading remain cache-only. Thresholds were calibrated against real
 sessions (measured clean-frame envelopes across multiple nights and filters),
@@ -100,9 +100,10 @@ psf-guard screen-fits "/path/to/LIGHT" --regrade-db my-db-slug
 psf-guard move-rejects --db my-db-slug
 ```
 
-From the **web UI**: open a target's Sequence view and press **Scan Quality**.
+From the **web UI**: open a target's Sequence view and press **Analyze Quality**.
 The scan runs spatial/photometric screening and fresh plate solves in the
-background (progress shown live), and results persist across restarts. The
+background (progress shown live), then refreshes the sequence scores. Results
+persist across restarts. The
 sequence analysis shows coverage badges, classifications, solved-center
 scatter, a session view, and an all-session stack comparison for each filter.
 The stack comparison scores only capture profiles with at least three matching

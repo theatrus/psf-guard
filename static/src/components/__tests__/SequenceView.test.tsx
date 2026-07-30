@@ -1080,13 +1080,43 @@ describe('SequenceView: batch operations', () => {
     });
   });
 
-  it('shows Re-analyze button', async () => {
+  it('offers one action that scans pixels and refreshes sequence scores', async () => {
     setupDefaultHandlers();
+    let scanRequests = 0;
+    server.use(
+      http.post('/api/db/:dbId/analysis/quality-scan', () => {
+        scanRequests += 1;
+        return HttpResponse.json({
+          success: true,
+          data: {
+            started: false,
+            progress: {
+              running: false,
+              target_id: null,
+              filter_name: null,
+              total: 0,
+              processed: 0,
+              skipped_cached: 0,
+              errors: 0,
+              current_file: null,
+              last_error: null,
+              stage: 'idle',
+            },
+            cached_count: 0,
+          },
+          error: null,
+          status: 'ready',
+        });
+      }),
+    );
+    const user = userEvent.setup();
 
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
-    await waitFor(() => {
-      expect(screen.getByText('Re-analyze')).toBeInTheDocument();
-    });
+    const analyzeQuality = await screen.findByRole('button', { name: 'Analyze Quality' });
+    expect(screen.queryByRole('button', { name: 'Re-analyze' })).not.toBeInTheDocument();
+
+    await user.click(analyzeQuality);
+    await waitFor(() => expect(scanRequests).toBe(1));
   });
 });
