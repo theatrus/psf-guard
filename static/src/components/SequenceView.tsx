@@ -201,20 +201,7 @@ export default function SequenceView() {
   const activeImageIdRef = useRef(activeImageId);
   activeImageIdRef.current = activeImageId;
   const sequenceStripRef = useRef<HTMLDivElement>(null);
-  const sequenceTabsRef = useRef<HTMLDivElement>(null);
   const restoredScrollRef = useRef(false);
-
-  useEffect(() => {
-    const tabs = sequenceTabsRef.current;
-    const activeTab = tabs?.querySelector<HTMLElement>('.sequence-tab.active');
-    if (!tabs || !activeTab) return;
-    const left = activeTab.offsetLeft;
-    const right = left + activeTab.offsetWidth;
-    if (left < tabs.scrollLeft) tabs.scrollLeft = left;
-    else if (right > tabs.scrollLeft + tabs.clientWidth) {
-      tabs.scrollLeft = right - tabs.clientWidth;
-    }
-  }, [activeSequenceIndex, selectedImages, sequences]);
 
   useLayoutEffect(() => {
     const position = sequenceReturnPositionFromState(location.state);
@@ -694,7 +681,7 @@ export default function SequenceView() {
         <>
           {/* Sequence tabs (if multiple) */}
           {sequences.length > 1 && (
-            <div className="sequence-tabs" ref={sequenceTabsRef}>
+            <div className="sequence-tabs">
               {sequences.map((seq, i) => {
                 const selectedCount = seq.images.filter(image =>
                   selectedImages.has(image.image_id)

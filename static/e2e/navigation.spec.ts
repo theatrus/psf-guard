@@ -472,7 +472,7 @@ test('Sequence Shift-click selects a visible range', async ({ page }) => {
   await expect(page.locator('.sequence-selection-bar')).toContainText('3 selected');
 });
 
-test('many Sequence tabs stay on one stable scrolling row', async ({ page }) => {
+test('many Sequence tabs wrap into a stable grid without horizontal scrolling', async ({ page }) => {
   await page.route(`**/api/db/${dbId}/analysis/sequence*`, async (route) => {
     const response = await route.fetch();
     const body = await response.json() as {
@@ -506,7 +506,7 @@ test('many Sequence tabs stay on one stable scrolling row', async ({ page }) => 
     top: element.getBoundingClientRect().top,
     width: element.getBoundingClientRect().width,
   })));
-  expect(new Set(before.map(tab => Math.round(tab.top))).size).toBe(1);
+  expect(new Set(before.map(tab => Math.round(tab.top))).size).toBeGreaterThan(1);
 
   await tabs.last().click();
   await expect(tabs.last()).toHaveClass(/active/);
@@ -514,13 +514,17 @@ test('many Sequence tabs stay on one stable scrolling row', async ({ page }) => 
     top: element.getBoundingClientRect().top,
     width: element.getBoundingClientRect().width,
   })));
-  expect(new Set(after.map(tab => Math.round(tab.top))).size).toBe(1);
+  expect(after.map(tab => Math.round(tab.top))).toEqual(
+    before.map(tab => Math.round(tab.top))
+  );
   expect(after.map(tab => Math.round(tab.width))).toEqual(
     before.map(tab => Math.round(tab.width))
   );
-  await expect.poll(
-    () => page.locator('.sequence-tabs').evaluate(element => element.scrollLeft)
-  ).toBeGreaterThan(0);
+  const overflow = await page.locator('.sequence-tabs').evaluate(element => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(overflow.scrollWidth).toBe(overflow.clientWidth);
 });
 
 test('sequence arrows reveal a normal card that is only partly visible', async ({ page }) => {
