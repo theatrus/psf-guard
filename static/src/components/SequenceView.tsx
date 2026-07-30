@@ -63,8 +63,10 @@ export default function SequenceView() {
   const {
     imageSize,
     currentImageId: urlCurrentImageId,
+    selectedImages,
     setImageSize,
     setCurrentImageId,
+    setSelectedImages,
   } = useGridState(150);
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -74,7 +76,6 @@ export default function SequenceView() {
 
   const filterName = searchParams.get('filterName') || undefined;
   const [threshold, setThreshold] = useState(0.5);
-  const [selectedImages, setSelectedImages] = useState<Set<number>>(new Set());
   const [showRejectReview, setShowRejectReview] = useState(false);
   const spatialScan = useSpatialScan(dbId, targetId ?? undefined, filterName);
 
@@ -106,14 +107,36 @@ export default function SequenceView() {
 
   // Preserve the Grid cursor when it identifies a target. With no cursor,
   // skip the target picker when the project has only one choice.
+  const entrySelectionRef = useRef<Set<number> | null>(new Set(selectedImages));
+  const inferredSelectionRef = useRef<Set<number> | null>(null);
   useEffect(() => {
     if (!projectId || targetId) return;
     const currentTargetId = urlCurrentImageId === null
       ? null
       : imageMap.get(urlCurrentImageId)?.target_id ?? null;
-    const inferredTargetId = currentTargetId ?? (targets.length === 1 ? targets[0].id : null);
-    if (inferredTargetId !== null) setTargetId(inferredTargetId);
-  }, [imageMap, projectId, setTargetId, targetId, targets, urlCurrentImageId]);
+    const onlyTargetId = targets.length === 1 ? targets[0].id : null;
+    const inferredTargetId = currentTargetId ?? onlyTargetId;
+    if (inferredTargetId !== null) {
+      const inferredSelection = new Set(
+        Array.from(entrySelectionRef.current ?? []).filter(imageId => {
+          const image = imageMap.get(imageId);
+          return image?.target_id === inferredTargetId || (
+            image === undefined && onlyTargetId === inferredTargetId
+          );
+        }),
+      );
+      entrySelectionRef.current = inferredSelection;
+      inferredSelectionRef.current = inferredSelection;
+      setTargetId(inferredTargetId);
+    }
+  }, [
+    imageMap,
+    projectId,
+    setTargetId,
+    targetId,
+    targets,
+    urlCurrentImageId,
+  ]);
 
   // A selection may span sessions for one target, but never survives a scope
   // change where its quality evidence is no longer loaded.
@@ -122,9 +145,12 @@ export default function SequenceView() {
   useEffect(() => {
     if (selectionScopeRef.current !== selectionScope) {
       selectionScopeRef.current = selectionScope;
-      setSelectedImages(new Set());
+      const inferredSelection = inferredSelectionRef.current;
+      inferredSelectionRef.current = null;
+      if (inferredSelection === null) entrySelectionRef.current = null;
+      setSelectedImages(inferredSelection ?? new Set());
     }
-  }, [selectionScope]);
+  }, [selectionScope, setSelectedImages]);
 
   // Auto-analyze when target is selected
   useEffect(() => {
@@ -134,6 +160,25 @@ export default function SequenceView() {
   }, [targetId, filterName, analyze]);
 
   const sequences = useMemo(() => analysisData?.sequences ?? [], [analysisData?.sequences]);
+
+  // Grid selection shares URL state with Sequence. Normalize that initial
+  // selection once the active target's analysis has loaded. Later Sequence
+  // selections must remain untouched.
+  useEffect(() => {
+    const entrySelection = entrySelectionRef.current;
+    if (!targetId || !analysisData || isAnalyzing || entrySelection === null) return;
+
+    entrySelectionRef.current = null;
+    const sequenceImageIds = new Set(
+      sequences.flatMap(sequence => sequence.images.map(image => image.image_id)),
+    );
+    const normalizedSelection = new Set(
+      Array.from(entrySelection).filter(imageId => sequenceImageIds.has(imageId)),
+    );
+    const unchanged = normalizedSelection.size === selectedImages.size
+      && Array.from(normalizedSelection).every(imageId => selectedImages.has(imageId));
+    if (!unchanged) setSelectedImages(normalizedSelection);
+  }, [analysisData, isAnalyzing, selectedImages, sequences, setSelectedImages, targetId]);
   const activeSequenceIndex = useMemo(() => {
     if (urlCurrentImageId !== null) {
       const currentIndex = sequences.findIndex(sequence =>
@@ -231,7 +276,7 @@ export default function SequenceView() {
       }
     });
     setSelectedImages(ids);
-  }, [activeSequence, threshold]);
+  }, [activeSequence, setSelectedImages, threshold]);
 
   // Select contiguous runs of clouded/occluded/bad images
   const selectCloudedSequence = useCallback(() => {
@@ -261,7 +306,7 @@ export default function SequenceView() {
       runBuffer.forEach(id => ids.add(id));
     }
     setSelectedImages(ids);
-  }, [activeSequence]);
+  }, [activeSequence, setSelectedImages]);
 
   const selectAstrometryIssues = useCallback(() => {
     if (!activeSequence) return;
@@ -271,7 +316,7 @@ export default function SequenceView() {
           flag === 'off_target' || flag === 'pointing_jump' || flag === 'pointing_drift'))
         .map(img => img.image_id)
     ));
-  }, [activeSequence]);
+  }, [activeSequence, setSelectedImages]);
 
   const selectUnsolved = useCallback(() => {
     if (!activeSequence) return;
@@ -280,7 +325,7 @@ export default function SequenceView() {
         .filter(img => img.pointing?.solve_failed && img.pointing.image_quality_evidence)
         .map(img => img.image_id)
     ));
-  }, [activeSequence]);
+  }, [activeSequence, setSelectedImages]);
 
   const selectRecommended = useCallback(() => {
     if (!activeSequence) return;
@@ -289,7 +334,7 @@ export default function SequenceView() {
         .filter(img => !!img.regrade_reason)
         .map(img => img.image_id)
     ));
-  }, [activeSequence]);
+  }, [activeSequence, setSelectedImages]);
 
   const applySelectionPreset = useCallback((preset: string) => {
     switch (preset) {
@@ -345,7 +390,7 @@ export default function SequenceView() {
     }
     setSelectedImages(new Set());
     setShowRejectReview(false);
-  }, [grading, selectedForReview]);
+  }, [grading, selectedForReview, setSelectedImages]);
 
   // Toggle individual image selection
   const toggleImage = useCallback((imageId: number) => {
@@ -360,7 +405,7 @@ export default function SequenceView() {
       }
       return next;
     });
-  }, [setCurrentImageId]);
+  }, [setCurrentImageId, setSelectedImages]);
 
   const selectImage = useCallback((imageId: number, event: React.MouseEvent) => {
     const anchorId = activeImageIdRef.current;
@@ -383,7 +428,7 @@ export default function SequenceView() {
       }
     }
     toggleImage(imageId);
-  }, [activeSequence, setCurrentImageId, toggleImage]);
+  }, [activeSequence, setCurrentImageId, setSelectedImages, toggleImage]);
 
   const moveImageCursor = useCallback((direction: GridNavigationDirection) => {
     const currentImageId = activeImageIdRef.current;

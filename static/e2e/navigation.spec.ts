@@ -393,6 +393,56 @@ test('Sequence keeps the current Grid image and opens its session', async ({ pag
   ).toHaveClass(/current-selection/);
 });
 
+test('Sequence keeps a Grid selection that spans session tabs', async ({ page }) => {
+  const secondSessionStart = Math.floor(Date.UTC(2026, 3, 17, 0, 25, 0) / 1000);
+  await page.route(`**/api/db/${dbId}/analysis/sequence*`, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json() as {
+      data: {
+        sequences: Array<{
+          session_start?: number;
+          session_end?: number;
+          image_count: number;
+          images: Array<{ image_id: number }>;
+        }>;
+      };
+    };
+    const original = body.data.sequences[0];
+    const [firstImage, ...laterImages] = original.images;
+    body.data.sequences = [
+      {
+        ...original,
+        image_count: 1,
+        images: [firstImage],
+      },
+      {
+        ...original,
+        session_start: secondSessionStart,
+        session_end: secondSessionStart + 132,
+        image_count: laterImages.length,
+        images: laterImages,
+      },
+    ];
+    await route.fulfill({ response, json: body });
+  });
+
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+  const gridCards = page.locator('.image-card-wrapper');
+  await expect(gridCards).toHaveCount(3, { timeout: 15_000 });
+  await gridCards.nth(0).click();
+  const additiveModifier: 'Meta' | 'Control' = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await gridCards.nth(2).click({ modifiers: [additiveModifier] });
+  await expect(page.locator('.image-card-wrapper.multi-selected')).toHaveCount(2);
+
+  await page.getByRole('button', { name: 'Sequence', exact: true }).click();
+
+  await expect(page.locator('.sequence-tab')).toHaveCount(2, { timeout: 15_000 });
+  await expect(page.locator('.sequence-tab-selection-count')).toHaveCount(2);
+  await expect(page.locator('.sequence-selection-bar')).toContainText('2 selected');
+  await expect(page.locator('.sequence-image-card.selected')).toHaveCount(1);
+  await expect(page.locator('.sequence-tab').nth(1)).toHaveClass(/active/);
+});
+
 test('Sequence vertical arrows follow the rendered thumbnail grid', async ({ page }) => {
   await page.setViewportSize({ width: 760, height: 720 });
   await page.goto(

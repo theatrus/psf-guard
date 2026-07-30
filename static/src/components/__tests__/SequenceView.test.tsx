@@ -794,6 +794,27 @@ describe('SequenceView: multi-session', () => {
     ]));
   });
 
+  it('restores a URL selection across session tabs', async () => {
+    setupMultiSessionHandlers();
+    const firstImageId = multiSessionFixture.data.sequences[0].images[0].image_id;
+    const secondImageId = multiSessionFixture.data.sequences[1].images[0].image_id;
+
+    render(<SequenceView />, {
+      wrapper: createWrapper(
+        `/sequence?db=test&project=1&target=2&current=${secondImageId}`
+        + `&selected=${firstImageId},${secondImageId}`
+      ),
+    });
+
+    await screen.findAllByRole('button', { name: /L · .* \(5\)/ });
+    expect(document.querySelectorAll('.sequence-tab-selection-count')).toHaveLength(2);
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+    expect(document.querySelector('.sequence-image-card.selected')).toHaveAttribute(
+      'data-card-image-id',
+      String(secondImageId),
+    );
+  });
+
   it('stores the active image and return view when opening Detail', async () => {
     setupMultiSessionHandlers();
     const user = userEvent.setup();
