@@ -510,15 +510,47 @@ test('detail closes back to the Sequence session that opened it', async ({ page 
   await expect(page).toHaveURL(/#\/detail\/2/);
   await expect(page).toHaveURL(/returnTo=sequence/);
   await expect(page.locator('.image-card-wrapper')).toHaveCount(0);
+  await page.keyboard.press('ArrowRight');
+  await expect(page).toHaveURL(/#\/detail\/3/);
+  await expect(page).toHaveURL(/current=3/);
   await page.reload();
 
   await page.locator('.image-detail-overlay .close-button').click();
 
   await expect(page).toHaveURL(/#\/sequence\?/);
   await expect(page).not.toHaveURL(/returnTo=/);
-  await expect(page).toHaveURL(/current=2/);
+  await expect(page).toHaveURL(/current=3/);
   await expect(tabs.nth(1)).toHaveClass(/active/);
-  await expect(cards.nth(0)).toHaveClass(/current-selection/);
+  await expect(cards.nth(1)).toHaveClass(/current-selection/);
+});
+
+test('detail restores the exact Sequence scroll position', async ({ page }) => {
+  await page.goto(
+    `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1&current=2&size=1200`
+  );
+
+  const cards = page.locator('.sequence-image-card');
+  await expect(cards).toHaveCount(3, { timeout: 15_000 });
+  const current = cards.nth(1);
+  await expect(current).toHaveClass(/current-selection/);
+  await current.evaluate((element) => element.scrollIntoView({ block: 'center' }));
+  await expect(current).toBeInViewport();
+  const scroller = page.locator('.app-main');
+  const before = await scroller.evaluate((element) => element.scrollTop);
+  expect(before).toBeGreaterThan(0);
+
+  // Dispatch directly so Playwright does not reposition this oversized card
+  // while making it actionable; a real user can double-click its visible area.
+  await current.dispatchEvent('dblclick');
+  await expect(page).toHaveURL(/#\/detail\/2/);
+  expect(await page.evaluate(() => window.history.state.usr?.sequenceReturn.scrollTop)).toBe(before);
+  await page.locator('.image-detail-overlay .close-button').click();
+
+  await expect(page).toHaveURL(/#\/sequence\?/);
+  await expect(cards.nth(1)).toHaveClass(/current-selection/);
+  await expect.poll(
+    () => scroller.evaluate((element) => element.scrollTop)
+  ).toBeCloseTo(before, 0);
 });
 
 test('detail opened from Images still closes back to Images', async ({ page }) => {

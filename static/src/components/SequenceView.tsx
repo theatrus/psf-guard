@@ -7,7 +7,7 @@ import {
   useLayoutEffect,
   useRef,
 } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useLocation, useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../api/client';
@@ -20,7 +20,11 @@ import ImageCard from './ImageCard';
 import Dialog from './Dialog';
 import ThumbnailSizeControl from './ThumbnailSizeControl';
 import type { Image, ScoredSequence, ImageQualityResult } from '../api/types';
-import { imageDetailPath } from '../utils/imageDetailRoutes';
+import {
+  imageDetailNavigationState,
+  imageDetailPath,
+  sequenceReturnPositionFromState,
+} from '../utils/imageDetailRoutes';
 import { thumbnailGridColumns } from '../utils/thumbnailSizing';
 
 function formatCategory(category: string): string {
@@ -34,6 +38,7 @@ function formatSequenceLabel(sequence: ScoredSequence): string {
   if (!sequence.session_start) return `${sequence.filter_name} (${sequence.image_count})`;
   const start = new Date(sequence.session_start * 1000);
   const when = start.toLocaleString([], {
+    year: 'numeric',
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
@@ -56,6 +61,7 @@ export default function SequenceView() {
     setImageSize,
     setCurrentImageId,
   } = useGridState(150);
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const grading = useGrading(dbId!);
@@ -122,6 +128,42 @@ export default function SequenceView() {
   }, [activeSequence, urlCurrentImageId]);
   const activeImageIdRef = useRef(activeImageId);
   activeImageIdRef.current = activeImageId;
+  const restoredScrollRef = useRef(false);
+
+  useLayoutEffect(() => {
+    const position = sequenceReturnPositionFromState(location.state);
+    if (restoredScrollRef.current || !position || isAnalyzing || !activeSequence) {
+      return;
+    }
+
+    const scroller = document.querySelector<HTMLElement>('.app-main');
+    if (!scroller) return;
+    restoredScrollRef.current = true;
+
+    const restorePosition = () => {
+      const anchor = document.querySelector<HTMLElement>(
+        `.sequence-image-card[data-card-image-id="${position.imageId}"]`,
+      );
+      if (!anchor) {
+        scroller.scrollTop = position.scrollTop;
+        return;
+      }
+      const currentOffset =
+        anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      scroller.scrollTop += currentOffset - position.offsetTop;
+    };
+
+    restorePosition();
+    let secondFrame = 0;
+    const firstFrame = requestAnimationFrame(() => {
+      restorePosition();
+      secondFrame = requestAnimationFrame(restorePosition);
+    });
+    return () => {
+      cancelAnimationFrame(firstFrame);
+      if (secondFrame) cancelAnimationFrame(secondFrame);
+    };
+  }, [activeSequence, isAnalyzing, location.state]);
 
   useEffect(() => {
     if (activeImageId !== null && activeImageId !== urlCurrentImageId) {
@@ -303,12 +345,19 @@ export default function SequenceView() {
     if (currentImageId !== null) toggleImage(currentImageId);
   }, sequenceHotkeyOptions, [toggleImage]);
 
-  const routeQuery = searchParams.toString();
   const openImage = useCallback((imageId: number) => {
-    const params = new URLSearchParams(routeQuery);
-    params.set('current', String(imageId));
-    navigate(imageDetailPath(imageId, params, 'sequence'));
-  }, [navigate, routeQuery]);
+    const scroller = document.querySelector<HTMLElement>('.app-main');
+    const anchor = document.querySelector<HTMLElement>(
+      `.sequence-image-card[data-card-image-id="${imageId}"]`,
+    );
+    const scrollTop = scroller?.scrollTop ?? 0;
+    const offsetTop = scroller && anchor
+      ? anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+      : 0;
+    navigate(imageDetailPath(imageId, searchParams, 'sequence'), {
+      state: imageDetailNavigationState({ scrollTop, imageId, offsetTop }),
+    });
+  }, [navigate, searchParams]);
 
   const selectSequence = useCallback((sequence: ScoredSequence) => {
     const firstImageId = sequence.images[0]?.image_id;
@@ -839,7 +888,15 @@ const SequenceStrip = memo(function SequenceStrip({
       const currentCard = stripRef.current?.querySelector<HTMLElement>(
         '.sequence-image-card.current-selection',
       );
-      currentCard?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+      const scroller = stripRef.current?.closest<HTMLElement>('.app-main');
+      if (!currentCard || !scroller) return;
+      const cardRect = currentCard.getBoundingClientRect();
+      const scrollerRect = scroller.getBoundingClientRect();
+      const isOutsideViewport =
+        cardRect.bottom <= scrollerRect.top || cardRect.top >= scrollerRect.bottom;
+      if (isOutsideViewport) {
+        currentCard.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
     });
   }, [currentImageId, imageSize]);
 
