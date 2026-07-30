@@ -32,13 +32,15 @@ import {
   resolveExpandedGroups,
 } from '../utils/imageGrouping';
 import { imageDetailPath } from '../utils/imageDetailRoutes';
+import {
+  findGridNavigationIndex,
+  type GridNavigationDirection,
+} from '../utils/gridNavigation';
 import { thumbnailGridColumns } from '../utils/thumbnailSizing';
 
 interface GroupedImageGridProps {
   useLazyImages?: boolean;
 }
-
-type GridNavigationDirection = 'next' | 'prev' | 'up' | 'down';
 
 export default function GroupedImageGrid({ useLazyImages = false }: GroupedImageGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -302,46 +304,14 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
 
     if (currentIndex === -1) return;
 
-    let newIndex = currentIndex;
-    if (direction === 'next') {
-      newIndex = Math.min(currentIndex + 1, flatImages.length - 1);
-    } else if (direction === 'prev') {
-      newIndex = Math.max(currentIndex - 1, 0);
-    } else {
-      const currentId = flatImages[currentIndex].id;
-      const currentNode = containerRef.current?.querySelector<HTMLElement>(
-        `[data-image-id="${currentId}"]`,
-      );
-      if (!currentNode) return;
-
-      const currentRect = currentNode.getBoundingClientRect();
-      const currentCenter = currentRect.left + currentRect.width / 2;
-      const sign = direction === 'down' ? 1 : -1;
-      let bestVerticalDistance = Number.POSITIVE_INFINITY;
-      let bestHorizontalDistance = Number.POSITIVE_INFINITY;
-
-      flatImages.forEach((image, index) => {
-        if (index === currentIndex) return;
-        const node = containerRef.current?.querySelector<HTMLElement>(
-          `[data-image-id="${image.id}"]`,
-        );
-        if (!node) return;
-
-        const rect = node.getBoundingClientRect();
-        const verticalDistance = (rect.top - currentRect.top) * sign;
-        if (verticalDistance <= 4) return;
-        const horizontalDistance = Math.abs((rect.left + rect.width / 2) - currentCenter);
-
-        const isCloserRow = verticalDistance < bestVerticalDistance - 4;
-        const isCloserColumn = Math.abs(verticalDistance - bestVerticalDistance) <= 4
-          && horizontalDistance < bestHorizontalDistance;
-        if (isCloserRow || isCloserColumn) {
-          newIndex = index;
-          bestVerticalDistance = verticalDistance;
-          bestHorizontalDistance = horizontalDistance;
-        }
-      });
-    }
+    const newIndex = findGridNavigationIndex(
+      flatImages,
+      currentIndex,
+      direction,
+      image => containerRef.current
+        ?.querySelector<HTMLElement>(`[data-image-id="${image.id}"]`)
+        ?.getBoundingClientRect() ?? null,
+    );
 
     if (newIndex === currentIndex) return;
 

@@ -365,8 +365,112 @@ test('sequence mode uses arrows and Space for the same keyboard selection flow',
   await page.keyboard.press('Space');
   await expect(page.locator('.sequence-image-card.selected')).toHaveCount(2);
 
+  await page.keyboard.press('ArrowLeft');
+  await expect(cards.nth(0)).toHaveClass(/current-selection/);
+});
+
+test('Sequence opens the only target in a project', async ({ page }) => {
+  await page.goto(`/#/sequence?db=${encodeURIComponent(dbId)}&project=1`);
+
+  await expect(page).toHaveURL(/target=1/);
+  await expect(page.locator('.sequence-image-card')).toHaveCount(3, { timeout: 15_000 });
+});
+
+test('Sequence keeps the current Grid image and opens its session', async ({ page }) => {
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1&size=300`);
+  const gridCards = page.locator('.image-card-wrapper');
+  await expect(gridCards).toHaveCount(3, { timeout: 15_000 });
+  const chosenId = await gridCards.nth(1).getAttribute('data-image-id');
+  expect(chosenId).not.toBeNull();
+  await gridCards.nth(1).click();
+
+  await page.getByRole('button', { name: 'Sequence', exact: true }).click();
+
+  await expect(page).toHaveURL(/target=1/);
+  await expect(page).toHaveURL(new RegExp(`current=${chosenId}`));
+  await expect(
+    page.locator(`.sequence-image-card[data-card-image-id="${chosenId}"]`)
+  ).toHaveClass(/current-selection/);
+});
+
+test('Sequence vertical arrows follow the rendered thumbnail grid', async ({ page }) => {
+  await page.setViewportSize({ width: 760, height: 720 });
+  await page.goto(
+    `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1&size=300`
+  );
+
+  const cards = page.locator('.sequence-image-card');
+  await expect(cards).toHaveCount(3, { timeout: 15_000 });
+  await expect(cards.nth(0)).toHaveClass(/current-selection/);
+
+  await page.keyboard.press('ArrowDown');
+  await expect(cards.nth(2)).toHaveClass(/current-selection/);
   await page.keyboard.press('ArrowUp');
   await expect(cards.nth(0)).toHaveClass(/current-selection/);
+});
+
+test('Sequence Shift-click selects a visible range', async ({ page }) => {
+  await page.goto(
+    `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`
+  );
+
+  const cards = page.locator('.sequence-image-card');
+  await expect(cards).toHaveCount(3, { timeout: 15_000 });
+  await cards.nth(2).click({ modifiers: ['Shift'] });
+
+  await expect(page.locator('.sequence-image-card.selected')).toHaveCount(3);
+  await expect(page.locator('.sequence-selection-bar')).toContainText('3 selected');
+});
+
+test('many Sequence tabs stay on one stable scrolling row', async ({ page }) => {
+  await page.route(`**/api/db/${dbId}/analysis/sequence*`, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json() as {
+      data: {
+        sequences: Array<{
+          session_start: number;
+          session_end: number;
+          image_count: number;
+          images: Array<Record<string, unknown> & { image_id: number }>;
+        }>;
+      };
+    };
+    const template = body.data.sequences[0];
+    body.data.sequences = Array.from({ length: 12 }, (_, sequenceIndex) => ({
+      ...template,
+      session_start: template.session_start - sequenceIndex * 86_400,
+      session_end: template.session_end - sequenceIndex * 86_400,
+      images: template.images.map((image, imageIndex) => ({
+        ...image,
+        image_id: 1_000 + sequenceIndex * 10 + imageIndex,
+      })),
+    }));
+    await route.fulfill({ response, json: body });
+  });
+  await page.setViewportSize({ width: 760, height: 720 });
+  await page.goto(`/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`);
+
+  const tabs = page.locator('.sequence-tab');
+  await expect(tabs).toHaveCount(12, { timeout: 15_000 });
+  const before = await tabs.evaluateAll(elements => elements.map(element => ({
+    top: element.getBoundingClientRect().top,
+    width: element.getBoundingClientRect().width,
+  })));
+  expect(new Set(before.map(tab => Math.round(tab.top))).size).toBe(1);
+
+  await tabs.last().click();
+  await expect(tabs.last()).toHaveClass(/active/);
+  const after = await tabs.evaluateAll(elements => elements.map(element => ({
+    top: element.getBoundingClientRect().top,
+    width: element.getBoundingClientRect().width,
+  })));
+  expect(new Set(after.map(tab => Math.round(tab.top))).size).toBe(1);
+  expect(after.map(tab => Math.round(tab.width))).toEqual(
+    before.map(tab => Math.round(tab.width))
+  );
+  await expect.poll(
+    () => page.locator('.sequence-tabs').evaluate(element => element.scrollLeft)
+  ).toBeGreaterThan(0);
 });
 
 test('sequence arrows reveal a normal card that is only partly visible', async ({ page }) => {

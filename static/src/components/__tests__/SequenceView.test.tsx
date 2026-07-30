@@ -152,6 +152,102 @@ describe('SequenceView: rendering states', () => {
     expect(screen.getByText('NGC7000')).toBeInTheDocument();
   });
 
+  it('opens the only target in a project', async () => {
+    server.use(
+      http.get('/api/db/:dbId/projects/:projectId/targets', () => {
+        return HttpResponse.json({
+          success: true,
+          data: [mockTargets[0]],
+          error: null,
+          status: 'ready',
+        });
+      }),
+      http.get('/api/db/:dbId/images', () => {
+        return HttpResponse.json({
+          success: true,
+          data: mockImages,
+          error: null,
+          status: 'ready',
+        });
+      }),
+      http.get('/api/db/:dbId/analysis/sequence', () => {
+        return HttpResponse.json(normalFixture);
+      }),
+    );
+    let search = '';
+    function LocationProbe() {
+      search = useLocation().search;
+      return null;
+    }
+
+    const Wrapper = createWrapper('/sequence?db=test&project=1');
+    render(
+      <Wrapper>
+        <SequenceView />
+        <LocationProbe />
+      </Wrapper>
+    );
+
+    await waitFor(() => {
+      expect(new URLSearchParams(search).get('target')).toBe('1');
+    });
+    expect(await screen.findByText('82')).toBeInTheDocument();
+  });
+
+  it('uses the current Grid image to choose a target', async () => {
+    const selectedImageId = multiSessionFixture.data.sequences[1].images[1].image_id;
+    const selectedImage = {
+      ...mockImages[0],
+      id: selectedImageId,
+      target_id: 2,
+      target_name: 'NGC7000',
+    };
+    server.use(
+      http.get('/api/db/:dbId/projects/:projectId/targets', () => {
+        return HttpResponse.json({
+          success: true,
+          data: mockTargets,
+          error: null,
+          status: 'ready',
+        });
+      }),
+      http.get('/api/db/:dbId/images', () => {
+        return HttpResponse.json({
+          success: true,
+          data: [...mockImages, selectedImage],
+          error: null,
+          status: 'ready',
+        });
+      }),
+      http.get('/api/db/:dbId/analysis/sequence', () => {
+        return HttpResponse.json(multiSessionFixture);
+      }),
+    );
+    let search = '';
+    function LocationProbe() {
+      search = useLocation().search;
+      return null;
+    }
+
+    const Wrapper = createWrapper(`/sequence?db=test&project=1&current=${selectedImageId}`);
+    render(
+      <Wrapper>
+        <SequenceView />
+        <LocationProbe />
+      </Wrapper>
+    );
+
+    await waitFor(() => {
+      expect(new URLSearchParams(search).get('target')).toBe('2');
+    });
+    expect(new URLSearchParams(search).get('current')).toBe(String(selectedImageId));
+    const tabs = await screen.findAllByRole('button', { name: /L · .* \(5\)/ });
+    expect(tabs[1]).toHaveClass('active');
+    expect(document.querySelector(`[data-card-image-id="${selectedImageId}"]`)).toHaveClass(
+      'current-selection'
+    );
+  });
+
   it('clicking a target card keeps the db/project context (no blank analysis)', async () => {
     setupDefaultHandlers();
 
@@ -453,8 +549,27 @@ describe('SequenceView: interactions', () => {
     fireEvent.keyDown(document, { key: ' ', code: 'Space' });
     expect(cards[1]).toHaveClass('selected');
 
-    fireEvent.keyDown(document, { key: 'ArrowUp', code: 'ArrowUp' });
+    fireEvent.keyDown(document, { key: 'ArrowLeft', code: 'ArrowLeft' });
     await waitFor(() => expect(cards[0]).toHaveClass('current-selection'));
+  });
+
+  it('selects a range with Shift-click', async () => {
+    setupDefaultHandlers();
+
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
+
+    await waitFor(() => {
+      expect(document.querySelectorAll('.sequence-image-card')).toHaveLength(10);
+    });
+    const cards = document.querySelectorAll('.sequence-image-card');
+    fireEvent.click(cards[2], { shiftKey: true });
+
+    await waitFor(() => {
+      expect(document.querySelectorAll('.sequence-image-card.selected')).toHaveLength(3);
+    });
+    expect(cards[0]).toHaveClass('selected');
+    expect(cards[1]).toHaveClass('selected');
+    expect(cards[2]).toHaveClass('selected');
   });
 
   it('selects images below threshold', async () => {
@@ -607,7 +722,7 @@ describe('SequenceView: multi-session', () => {
 
     await waitFor(() => {
       // Each tab shows the filter, session time, and image count.
-      const tabs = screen.getAllByText(/L · .* \(5\)/);
+      const tabs = screen.getAllByRole('button', { name: /L · .* \(5\)/ });
       expect(tabs).toHaveLength(2);
       const year = new Date(
         multiSessionFixture.data.sequences[0].session_start * 1000,
@@ -624,11 +739,11 @@ describe('SequenceView: multi-session', () => {
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=2') });
 
     await waitFor(() => {
-      const tabs = screen.getAllByText(/L · .* \(5\)/);
+      const tabs = screen.getAllByRole('button', { name: /L · .* \(5\)/ });
       expect(tabs).toHaveLength(2);
     });
 
-    const tabs = screen.getAllByText(/L · .* \(5\)/);
+    const tabs = screen.getAllByRole('button', { name: /L · .* \(5\)/ });
 
     // First tab should be active by default
     expect(tabs[0].classList.contains('active')).toBe(true);
@@ -639,6 +754,44 @@ describe('SequenceView: multi-session', () => {
     // Second tab should now be active
     expect(tabs[1].classList.contains('active')).toBe(true);
     expect(tabs[0].classList.contains('active')).toBe(false);
+  });
+
+  it('keeps cross-session selections visible and reviews all of them', async () => {
+    setupMultiSessionHandlers();
+    const gradedImageIds: string[] = [];
+    server.use(
+      http.put('/api/db/:dbId/images/:imageId/grade', ({ params }) => {
+        gradedImageIds.push(params.imageId as string);
+        return HttpResponse.json({
+          success: true,
+          data: null,
+          error: null,
+          status: 'ready',
+        });
+      }),
+    );
+    const user = userEvent.setup();
+
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=2') });
+
+    const tabs = await screen.findAllByRole('button', { name: /L · .* \(5\)/ });
+    let cards = document.querySelectorAll('.sequence-image-card');
+    await user.click(cards[0]);
+    expect(tabs[0].querySelector('.sequence-tab-selection-count')).toHaveTextContent('1');
+
+    await user.click(tabs[1]);
+    cards = document.querySelectorAll('.sequence-image-card');
+    await user.click(cards[0]);
+
+    expect(document.querySelectorAll('.sequence-tab-selection-count')).toHaveLength(2);
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Review rejection' }));
+    await user.click(screen.getByRole('button', { name: 'Confirm rejection (2)' }));
+    await waitFor(() => expect(gradedImageIds).toHaveLength(2));
+    expect(gradedImageIds).toEqual(expect.arrayContaining([
+      String(multiSessionFixture.data.sequences[0].images[0].image_id),
+      String(multiSessionFixture.data.sequences[1].images[0].image_id),
+    ]));
   });
 
   it('stores the active image and return view when opening Detail', async () => {
@@ -661,7 +814,7 @@ describe('SequenceView: multi-session', () => {
       </Wrapper>
     );
 
-    const tabs = await screen.findAllByText(/L · .* \(5\)/);
+    const tabs = await screen.findAllByRole('button', { name: /L · .* \(5\)/ });
     await user.click(tabs[1]);
 
     await waitFor(() => {
@@ -690,7 +843,7 @@ describe('SequenceView: multi-session', () => {
       ),
     });
 
-    const tabs = await screen.findAllByText(/L · .* \(5\)/);
+    const tabs = await screen.findAllByRole('button', { name: /L · .* \(5\)/ });
     expect(tabs[1]).toHaveClass('active');
     expect(document.querySelectorAll('.sequence-image-card')[1]).toHaveClass(
       'current-selection'

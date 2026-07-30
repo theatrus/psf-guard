@@ -5356,21 +5356,27 @@
 /* Sequence tabs */
 .sequence-tabs {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.25rem;
   padding: 0.75rem 1rem 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
 }
 
 .sequence-tab {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.4rem;
   background: var(--color-bg-tertiary);
   border: 1px solid var(--color-bg-quaternary);
-  border-bottom: none;
-  border-radius: 6px 6px 0 0;
+  border-radius: 6px;
   padding: 0.5rem 1rem;
   cursor: pointer;
   color: var(--color-text-secondary);
   font-size: 0.9rem;
-  transition: all 0.2s;
+  white-space: nowrap;
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s;
 }
 
 .sequence-tab.active {
@@ -5381,6 +5387,19 @@
 
 .sequence-tab:hover:not(.active) {
   background: var(--color-bg-quaternary);
+}
+
+.sequence-tab-selection-count {
+  display: inline-grid;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 0.3rem;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--color-bg-primary);
+  background: var(--color-warning);
+  font-size: 0.72rem;
+  font-weight: 700;
 }
 
 /* Summary bar */

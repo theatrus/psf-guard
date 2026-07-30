@@ -7,6 +7,7 @@ import {
   useLayoutEffect,
   useRef,
 } from 'react';
+import type { RefObject } from 'react';
 import { useLocation, useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
@@ -25,6 +26,10 @@ import {
   imageDetailPath,
   sequenceReturnPositionFromState,
 } from '../utils/imageDetailRoutes';
+import {
+  findGridNavigationIndex,
+  type GridNavigationDirection,
+} from '../utils/gridNavigation';
 import { thumbnailGridColumns } from '../utils/thumbnailSizing';
 
 function formatCategory(category: string): string {
@@ -54,7 +59,7 @@ function qualityColor(score: number): string {
 }
 
 export default function SequenceView() {
-  const { dbId, projectId, targetId } = useDbProjectTarget();
+  const { dbId, projectId, targetId, setTargetId } = useDbProjectTarget();
   const {
     imageSize,
     currentImageId: urlCurrentImageId,
@@ -99,6 +104,28 @@ export default function SequenceView() {
     return map;
   }, [images]);
 
+  // Preserve the Grid cursor when it identifies a target. With no cursor,
+  // skip the target picker when the project has only one choice.
+  useEffect(() => {
+    if (!projectId || targetId) return;
+    const currentTargetId = urlCurrentImageId === null
+      ? null
+      : imageMap.get(urlCurrentImageId)?.target_id ?? null;
+    const inferredTargetId = currentTargetId ?? (targets.length === 1 ? targets[0].id : null);
+    if (inferredTargetId !== null) setTargetId(inferredTargetId);
+  }, [imageMap, projectId, setTargetId, targetId, targets, urlCurrentImageId]);
+
+  // A selection may span sessions for one target, but never survives a scope
+  // change where its quality evidence is no longer loaded.
+  const selectionScope = `${dbId ?? ''}:${projectId ?? ''}:${targetId ?? ''}:${filterName ?? ''}`;
+  const selectionScopeRef = useRef(selectionScope);
+  useEffect(() => {
+    if (selectionScopeRef.current !== selectionScope) {
+      selectionScopeRef.current = selectionScope;
+      setSelectedImages(new Set());
+    }
+  }, [selectionScope]);
+
   // Auto-analyze when target is selected
   useEffect(() => {
     if (targetId) {
@@ -128,7 +155,21 @@ export default function SequenceView() {
   }, [activeSequence, urlCurrentImageId]);
   const activeImageIdRef = useRef(activeImageId);
   activeImageIdRef.current = activeImageId;
+  const sequenceStripRef = useRef<HTMLDivElement>(null);
+  const sequenceTabsRef = useRef<HTMLDivElement>(null);
   const restoredScrollRef = useRef(false);
+
+  useEffect(() => {
+    const tabs = sequenceTabsRef.current;
+    const activeTab = tabs?.querySelector<HTMLElement>('.sequence-tab.active');
+    if (!tabs || !activeTab) return;
+    const left = activeTab.offsetLeft;
+    const right = left + activeTab.offsetWidth;
+    if (left < tabs.scrollLeft) tabs.scrollLeft = left;
+    else if (right > tabs.scrollLeft + tabs.clientWidth) {
+      tabs.scrollLeft = right - tabs.clientWidth;
+    }
+  }, [activeSequenceIndex, selectedImages, sequences]);
 
   useLayoutEffect(() => {
     const position = sequenceReturnPositionFromState(location.state);
@@ -276,19 +317,24 @@ export default function SequenceView() {
     selectUnsolved,
   ]);
 
-  const selectedForReview = useMemo(() =>
-    activeSequence?.images.filter(img => selectedImages.has(img.image_id)) ?? [],
-  [activeSequence, selectedImages]);
+  const selectedForReview = useMemo(() => {
+    const selected = new Map<number, ImageQualityResult>();
+    sequences.forEach(sequence => {
+      sequence.images.forEach(image => {
+        if (selectedImages.has(image.image_id)) selected.set(image.image_id, image);
+      });
+    });
+    return Array.from(selected.values());
+  }, [selectedImages, sequences]);
 
   // Batch rejection is deliberately two-step: show the exact per-image
   // evidence/reason before changing scheduler grades. Each image's own reason
   // is written — the scheduler keeps rejectreason per image, so a mixed batch
   // must not collapse to one shared string.
   const confirmRejectSelected = useCallback(async () => {
-    if (selectedImages.size === 0) return;
-    const selected = activeSequence?.images.filter(img => selectedImages.has(img.image_id)) ?? [];
+    if (selectedForReview.length === 0) return;
     const byReason = new Map<string, number[]>();
-    for (const img of selected) {
+    for (const img of selectedForReview) {
       const reason = img.regrade_reason ?? 'Quality analysis';
       const ids = byReason.get(reason);
       if (ids) ids.push(img.image_id);
@@ -299,7 +345,7 @@ export default function SequenceView() {
     }
     setSelectedImages(new Set());
     setShowRejectReview(false);
-  }, [selectedImages, activeSequence, grading]);
+  }, [grading, selectedForReview]);
 
   // Toggle individual image selection
   const toggleImage = useCallback((imageId: number) => {
@@ -316,16 +362,43 @@ export default function SequenceView() {
     });
   }, [setCurrentImageId]);
 
-  const moveImageCursor = useCallback((offset: -1 | 1) => {
+  const selectImage = useCallback((imageId: number, event: React.MouseEvent) => {
+    const anchorId = activeImageIdRef.current;
+    if (event.shiftKey && activeSequence && anchorId !== null) {
+      const anchorIndex = activeSequence.images.findIndex(image => image.image_id === anchorId);
+      const imageIndex = activeSequence.images.findIndex(image => image.image_id === imageId);
+      if (anchorIndex >= 0 && imageIndex >= 0) {
+        const start = Math.min(anchorIndex, imageIndex);
+        const end = Math.max(anchorIndex, imageIndex);
+        setSelectedImages(previous => {
+          const next = new Set(previous);
+          activeSequence.images.slice(start, end + 1).forEach(image => {
+            next.add(image.image_id);
+          });
+          return next;
+        });
+        activeImageIdRef.current = imageId;
+        setCurrentImageId(imageId);
+        return;
+      }
+    }
+    toggleImage(imageId);
+  }, [activeSequence, setCurrentImageId, toggleImage]);
+
+  const moveImageCursor = useCallback((direction: GridNavigationDirection) => {
     const currentImageId = activeImageIdRef.current;
     if (!activeSequence || currentImageId === null) return;
     const currentIndex = activeSequence.images.findIndex(
       image => image.image_id === currentImageId,
     );
     if (currentIndex < 0) return;
-    const nextIndex = Math.max(
-      0,
-      Math.min(activeSequence.images.length - 1, currentIndex + offset),
+    const nextIndex = findGridNavigationIndex(
+      activeSequence.images,
+      currentIndex,
+      direction,
+      image => sequenceStripRef.current
+        ?.querySelector<HTMLElement>(`[data-card-image-id="${image.image_id}"]`)
+        ?.getBoundingClientRect() ?? null,
     );
     if (nextIndex === currentIndex) return;
     const nextImageId = activeSequence.images[nextIndex].image_id;
@@ -338,8 +411,10 @@ export default function SequenceView() {
     preventDefault: true,
   }), [activeSequence, isAnalyzing, showRejectReview]);
 
-  useHotkeys('left,up', () => moveImageCursor(-1), sequenceHotkeyOptions, [moveImageCursor]);
-  useHotkeys('right,down', () => moveImageCursor(1), sequenceHotkeyOptions, [moveImageCursor]);
+  useHotkeys('left', () => moveImageCursor('prev'), sequenceHotkeyOptions, [moveImageCursor]);
+  useHotkeys('right', () => moveImageCursor('next'), sequenceHotkeyOptions, [moveImageCursor]);
+  useHotkeys('up', () => moveImageCursor('up'), sequenceHotkeyOptions, [moveImageCursor]);
+  useHotkeys('down', () => moveImageCursor('down'), sequenceHotkeyOptions, [moveImageCursor]);
   useHotkeys('space', () => {
     const currentImageId = activeImageIdRef.current;
     if (currentImageId !== null) toggleImage(currentImageId);
@@ -533,10 +608,10 @@ export default function SequenceView() {
               <option value="recommended">Recommended</option>
             </select>
           </div>
-          {selectedImages.size > 0 && (
+          {selectedForReview.length > 0 && (
             <div className="sequence-selection-slot">
               <div className="selection-action-bar sequence-selection-bar" aria-label="Selected image actions">
-                <span className="selection-count">{selectedImages.size} selected</span>
+                <span className="selection-count">{selectedForReview.length} selected</span>
                 <button
                   type="button"
                   className="action-button reject"
@@ -574,16 +649,30 @@ export default function SequenceView() {
         <>
           {/* Sequence tabs (if multiple) */}
           {sequences.length > 1 && (
-            <div className="sequence-tabs">
-              {sequences.map((seq, i) => (
-                <button
-                  key={i}
-                  className={`sequence-tab ${i === activeSequenceIndex ? 'active' : ''}`}
-                  onClick={() => selectSequence(seq)}
-                >
-                  {formatSequenceLabel(seq)}
-                </button>
-              ))}
+            <div className="sequence-tabs" ref={sequenceTabsRef}>
+              {sequences.map((seq, i) => {
+                const selectedCount = seq.images.filter(image =>
+                  selectedImages.has(image.image_id)
+                ).length;
+                const sequenceKey = [
+                  seq.target_id,
+                  seq.filter_name,
+                  seq.session_start ?? 'unknown',
+                  seq.images[0]?.image_id ?? 'empty',
+                ].join('-');
+                return (
+                  <button
+                    key={sequenceKey}
+                    className={`sequence-tab ${i === activeSequenceIndex ? 'active' : ''}`}
+                    onClick={() => selectSequence(seq)}
+                  >
+                    <span>{formatSequenceLabel(seq)}</span>
+                    {selectedCount > 0 && (
+                      <span className="sequence-tab-selection-count">{selectedCount}</span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           )}
 
@@ -643,7 +732,8 @@ export default function SequenceView() {
                 selectedImages={selectedImages}
                 threshold={threshold}
                 imageSize={imageSize}
-                onToggle={toggleImage}
+                stripRef={sequenceStripRef}
+                onSelect={selectImage}
                 onOpen={openImage}
               />
             </>
@@ -863,7 +953,8 @@ const SequenceStrip = memo(function SequenceStrip({
   selectedImages,
   threshold,
   imageSize,
-  onToggle,
+  stripRef,
+  onSelect,
   onOpen,
 }: {
   dbId: string;
@@ -877,11 +968,10 @@ const SequenceStrip = memo(function SequenceStrip({
   selectedImages: Set<number>;
   threshold: number;
   imageSize: number;
-  onToggle: (id: number) => void;
+  stripRef: RefObject<HTMLDivElement | null>;
+  onSelect: (id: number, event: React.MouseEvent) => void;
   onOpen: (id: number) => void;
 }) {
-  const stripRef = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
     if (currentImageId === null) return;
     requestAnimationFrame(() => {
@@ -901,7 +991,7 @@ const SequenceStrip = memo(function SequenceStrip({
         currentCard.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       }
     });
-  }, [currentImageId, imageSize]);
+  }, [currentImageId, imageSize, stripRef]);
 
   return (
     <div
@@ -934,7 +1024,7 @@ const SequenceStrip = memo(function SequenceStrip({
             image={image}
             quality={quality}
             isSelected={selectedImages.has(quality.image_id)}
-            onClick={() => onToggle(quality.image_id)}
+            onClick={(event) => onSelect(quality.image_id, event)}
             onDoubleClick={() => onOpen(quality.image_id)}
             lazyPreview
             selectionEffects={false}
