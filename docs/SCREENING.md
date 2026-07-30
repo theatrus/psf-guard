@@ -109,6 +109,11 @@ Use the **Select** menu for score threshold, cloud, target, solve, or rejection
 recommendation presets. Rejecting a recommendation always opens a per-image
 review before anything is written.
 
+| All matching sessions | One capture session |
+|:--:|:--:|
+| ![B-filter stack comparison across two sessions](sequence-score-stack.jpg) | ![B-filter comparison within one capture session](sequence-score-session.jpg) |
+| Finds weak frames that could enter the same stack, while keeping capture settings matched | Shows changes within one capture run without comparing separate nights |
+
 The user-triggered scan resolves and durably caches suitable orbital elements
 for each exposure, then caches exposure-specific crossings. Potentially bright
 predictions warn; only a high-risk prediction with a matching pixel trail
