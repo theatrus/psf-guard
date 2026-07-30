@@ -5515,10 +5515,6 @@
   outline-offset: 2px;
 }
 
-.sequence-image-card.below-threshold {
-  opacity: 0.7;
-}
-
 .sequence-image-card.below-threshold:not(.selected) {
   border-color: var(--color-error);
 }
