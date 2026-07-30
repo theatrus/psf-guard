@@ -5425,8 +5425,14 @@
 
 .summary-stats {
   display: flex;
+  flex-wrap: wrap;
   gap: 1rem;
   font-size: 0.85rem;
+}
+
+.sequence-score-context {
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
 }
 
 .summary-item {
@@ -5564,9 +5570,14 @@
 
 .analysis-signal,
 .sequence-image-coverage,
+.sequence-score-basis,
 .sequence-image-details {
   font-size: 0.7rem;
   color: var(--color-text-hint);
+}
+
+.sequence-score-basis {
+  display: block;
 }
 
 .analysis-signal.warning,

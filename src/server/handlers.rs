@@ -3661,7 +3661,10 @@ pub async fn analyze_sequence(
 
     if images_data.is_empty() {
         return Ok(Json(ApiResponse::success(
-            crate::server::api::SequenceAnalysisResponse { sequences: vec![] },
+            crate::server::api::SequenceAnalysisResponse {
+                sequences: vec![],
+                target_filter_rollups: vec![],
+            },
         )));
     }
 
@@ -3728,41 +3731,44 @@ pub async fn analyze_sequence(
         }
 
         let mut all_sequences = Vec::new();
+        let mut target_filter_rollups = Vec::new();
         for (filter, mut metrics) in by_filter {
             if let Some(entries) = entries_by_filter.get(&filter) {
                 merge_photometric_signals(&mut metrics, entries, session_gap_minutes);
             }
-            let scored = analyzer.analyze(&metrics, target_id, &target_name_clone, &filter);
+            let (scored, rollup) = analyzer.analyze_with_target_filter_rollup(
+                &metrics,
+                target_id,
+                &target_name_clone,
+                &filter,
+            );
             all_sequences.extend(scored);
+            if let Some(rollup) = rollup {
+                target_filter_rollups.push(rollup);
+            }
         }
 
-        all_sequences
+        (all_sequences, target_filter_rollups)
     })
     .await
     .map_err(|e| AppError::InternalError(format!("Analysis task failed: {}", e)))?;
 
-    let mut sequences: Vec<_> = result
-        .into_iter()
-        .map(|seq| crate::server::api::ScoredSequenceResponse {
-            target_id: seq.target_id,
-            target_name: seq.target_name,
-            filter_name: seq.filter_name,
-            session_start: seq.session_start,
-            session_end: seq.session_end,
-            image_count: seq.image_count,
-            reference_values: seq.reference_values,
-            images: seq.images,
-            summary: seq.summary,
-        })
-        .collect();
+    let mut sequences: Vec<crate::server::api::ScoredSequenceResponse> =
+        result.0.into_iter().map(Into::into).collect();
+    let mut target_filter_rollups: Vec<crate::server::api::TargetFilterRollupResponse> =
+        result.1.into_iter().map(Into::into).collect();
     sequences.sort_by(|a, b| {
         b.session_start
             .cmp(&a.session_start)
             .then_with(|| a.filter_name.cmp(&b.filter_name))
     });
+    target_filter_rollups.sort_by(|a, b| a.filter_name.cmp(&b.filter_name));
 
     Ok(Json(ApiResponse::success(
-        crate::server::api::SequenceAnalysisResponse { sequences },
+        crate::server::api::SequenceAnalysisResponse {
+            sequences,
+            target_filter_rollups,
+        },
     )))
 }
 

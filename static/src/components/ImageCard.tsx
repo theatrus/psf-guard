@@ -6,6 +6,11 @@ import { apiClient } from '../api/client';
 import PreviewImage from './PreviewImage';
 import { useColorPreview } from '../hooks/useColorPreview';
 import { ensurePreviewReady } from '../hooks/previewPoll';
+import {
+  qualityScoreBasis,
+  qualityScoreDescription,
+  type QualityScoreScope,
+} from '../utils/qualityScore';
 
 export interface ImageCardProps {
   dbId: string;
@@ -14,6 +19,7 @@ export interface ImageCardProps {
   onClick: (event: React.MouseEvent) => void;
   onDoubleClick: () => void;
   quality?: ImageQualityResult;
+  qualityScoreScope?: QualityScoreScope;
   lazyPreview?: boolean;
   selectionEffects?: boolean;
   className?: string;
@@ -26,6 +32,7 @@ export default function ImageCard({
   onClick,
   onDoubleClick,
   quality,
+  qualityScoreScope = 'capture_sequence',
   lazyPreview = false,
   selectionEffects = true,
   className = '',
@@ -121,7 +128,7 @@ export default function ImageCard({
             style={{
               backgroundColor: qualityColor(quality.quality_score),
             }}
-            title={`Quality: ${(quality.quality_score * 100).toFixed(0)}%`}
+            title={qualityScoreDescription(quality, qualityScoreScope)}
           >
             {(quality.quality_score * 100).toFixed(0)}
           </div>
@@ -141,6 +148,14 @@ export default function ImageCard({
             {stats.hfr && <span className="stat-hfr">HFR: {stats.hfr}</span>}
             {stats.starCount && <span className="stat-stars">★ {stats.starCount}</span>}
           </div>
+        )}
+        {quality && (
+          <span
+            className="sequence-score-basis"
+            title={qualityScoreDescription(quality, qualityScoreScope)}
+          >
+            {qualityScoreBasis(quality)}
+          </span>
         )}
         <div className={`image-status ${getStatusClass()}`}>
           {getStatusText()}

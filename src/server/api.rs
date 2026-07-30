@@ -1,4 +1,7 @@
-use crate::sequence_analysis::{ImageQualityResult, ReferenceValues, SequenceSummary};
+use crate::sequence_analysis::{
+    ImageQualityResult, NormalizedMetrics, ReferenceValues, ScoredSequence, SequenceSummary,
+    TargetFilterRollup,
+};
 use crate::server::state::RefreshStatus;
 use serde::{Deserialize, Serialize};
 
@@ -716,6 +719,7 @@ pub struct SequenceAnalysisQuery {
 #[derive(Debug, Serialize)]
 pub struct SequenceAnalysisResponse {
     pub sequences: Vec<ScoredSequenceResponse>,
+    pub target_filter_rollups: Vec<TargetFilterRollupResponse>,
 }
 
 /// Request body for starting a spatial (occlusion) metrics scan.
@@ -769,6 +773,69 @@ pub struct ScoredSequenceResponse {
     pub reference_values: ReferenceValues,
     pub images: Vec<ImageQualityResult>,
     pub summary: SequenceSummary,
+}
+
+impl From<ScoredSequence> for ScoredSequenceResponse {
+    fn from(sequence: ScoredSequence) -> Self {
+        Self {
+            target_id: sequence.target_id,
+            target_name: sequence.target_name,
+            filter_name: sequence.filter_name,
+            session_start: sequence.session_start,
+            session_end: sequence.session_end,
+            image_count: sequence.image_count,
+            reference_values: sequence.reference_values,
+            images: sequence.images,
+            summary: sequence.summary,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct TargetFilterScoreResponse {
+    pub image_id: i32,
+    pub quality_score: f64,
+    pub normalized_metrics: NormalizedMetrics,
+    pub details: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TargetFilterRollupResponse {
+    pub target_id: i32,
+    pub target_name: String,
+    pub filter_name: String,
+    pub session_start: Option<i64>,
+    pub session_end: Option<i64>,
+    pub image_count: usize,
+    pub unavailable_image_count: usize,
+    pub images: Vec<TargetFilterScoreResponse>,
+    pub summary: SequenceSummary,
+}
+
+impl From<TargetFilterRollup> for TargetFilterRollupResponse {
+    fn from(rollup: TargetFilterRollup) -> Self {
+        let sequence = rollup.sequence;
+        Self {
+            target_id: sequence.target_id,
+            target_name: sequence.target_name,
+            filter_name: sequence.filter_name,
+            session_start: sequence.session_start,
+            session_end: sequence.session_end,
+            image_count: sequence.image_count,
+            unavailable_image_count: rollup.unavailable_image_count,
+            images: sequence
+                .images
+                .into_iter()
+                .map(|image| TargetFilterScoreResponse {
+                    image_id: image.image_id,
+                    quality_score: image.quality_score,
+                    normalized_metrics: image.normalized_metrics,
+                    details: image.details,
+                })
+                .collect(),
+            summary: sequence.summary,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]

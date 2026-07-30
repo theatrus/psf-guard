@@ -570,10 +570,14 @@ the selectors to focus Clouded, Off Target, Unsolved, or all Recommended
 frames.
 
 The scan runs spatial, photometric, and astrometric analysis on the server. It
-shows solved-center scatter, field-relative offsets, quality scores, and Off
-Target, Pointing Jump, Pointing Drift, or Unsolved evidence. **Select
-Recommended** opens a per-image review before any rejection is written. Stable
-multi-frame framing offsets stay advisory.
+shows solved-center scatter, field-relative offsets, and named issue evidence.
+Session scores find changes within a capture run; the target/filter stack view
+also finds weak frames across nights while keeping capture settings comparable.
+A stack comparison needs at least three matching frames across two sessions;
+the UI reports frames that lack enough matches instead of scoring them as 1.0.
+A low relative score alone does not diagnose damage or recommend rejection.
+**Select Recommended** opens a per-image review before any rejection is
+written. Stable multi-frame framing offsets stay advisory.
 
 | Occlusion arriving | Thin cloud veil (same field, clean vs veiled) |
 |:--:|:--:|

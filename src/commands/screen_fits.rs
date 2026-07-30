@@ -921,6 +921,7 @@ fn score_records(
                     image_id: idx as i32,
                     timestamp: r.timestamp,
                     session_id: None,
+                    capture_profile: r.exposure_s.map(|e| format!("exposure={e:.3}")),
                     star_count: Some(r.star_count as f64),
                     hfr: (r.avg_hfr > 0.0).then_some(r.avg_hfr),
                     eccentricity: None,

@@ -12,6 +12,40 @@ import cloudsFixture from '../../__fixtures__/sequence-analysis-clouds.json';
 import multiSessionFixture from '../../__fixtures__/sequence-analysis-multi-session.json';
 import emptyFixture from '../../__fixtures__/sequence-analysis-empty.json';
 
+const multiSessionRollup = {
+  target_id: multiSessionFixture.data.sequences[0].target_id,
+  target_name: multiSessionFixture.data.sequences[0].target_name,
+  filter_name: multiSessionFixture.data.sequences[0].filter_name,
+  session_start: multiSessionFixture.data.sequences[0].session_start,
+  session_end: multiSessionFixture.data.sequences[1].session_end,
+  image_count: 10,
+  unavailable_image_count: 0,
+  images: [
+    ...multiSessionFixture.data.sequences[0].images.map(image => (
+      image.image_id === 201 ? { ...image, quality_score: 0.42 } : image
+    )),
+    ...multiSessionFixture.data.sequences[1].images,
+  ].map(image => ({
+    image_id: image.image_id,
+    quality_score: image.quality_score,
+    normalized_metrics: image.normalized_metrics,
+    details: image.details,
+  })),
+  summary: {
+    excellent_count: 4,
+    good_count: 5,
+    fair_count: 0,
+    poor_count: 1,
+    bad_count: 0,
+    cloud_events_detected: 0,
+    focus_drift_detected: false,
+    tracking_issues_detected: false,
+    out_of_target_count: 0,
+    plate_solve_failed_count: 0,
+    satellite_risk_count: 0,
+  },
+};
+
 // Mock images data that aligns with the normal fixture's image IDs
 const mockImages = normalFixture.data.sequences[0].images.map((img, i) => ({
   id: img.image_id,
@@ -381,10 +415,10 @@ describe('SequenceView: quality display', () => {
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
-      expect(screen.getByText(/3 excellent/)).toBeInTheDocument();
+      expect(screen.getByText('3 at 90–100')).toBeInTheDocument();
     }, { timeout: 3000 });
-    expect(screen.getByText(/4 good/)).toBeInTheDocument();
-    expect(screen.getByText(/3 fair/)).toBeInTheDocument();
+    expect(screen.getByText('4 at 70–89')).toBeInTheDocument();
+    expect(screen.getByText('3 at 50–69')).toBeInTheDocument();
   }, 10000);
 
   it('renders image cards with quality badges', async () => {
@@ -403,7 +437,7 @@ describe('SequenceView: quality display', () => {
 
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
-    const timeline = await screen.findByRole('img', { name: 'Sequence quality scores' });
+    const timeline = await screen.findByRole('img', { name: 'Capture sequence comparison scores' });
     expect(timeline).not.toHaveAttribute('preserveAspectRatio', 'none');
     expect(timeline).toHaveAttribute('width', '400');
     expect(timeline).toHaveAttribute('height', '120');
@@ -609,7 +643,7 @@ describe('SequenceView: interactions', () => {
     // Instead, test with the default threshold -- just click the button and verify behavior.
     // The default threshold of 0.50 won't select any normal fixture images (all are >= 0.70),
     // so let's use fireEvent to set the threshold to 0.80.
-    const slider = screen.getByLabelText('Threshold:');
+    const slider = screen.getByLabelText('Score threshold:');
     // fireEvent is more reliable for range inputs than userEvent
     const { fireEvent } = await import('@testing-library/react');
     fireEvent.change(slider, { target: { value: '0.80' } });
@@ -637,7 +671,7 @@ describe('SequenceView: interactions', () => {
     fireEvent.click(cards[0]);
     fireEvent.click(cards[8]);
 
-    fireEvent.change(screen.getByLabelText('Threshold:'), { target: { value: '0.80' } });
+    fireEvent.change(screen.getByLabelText('Score threshold:'), { target: { value: '0.80' } });
     await user.selectOptions(screen.getByLabelText('Select:'), 'threshold');
     await waitFor(() => expect(screen.getByText('4 selected')).toBeInTheDocument());
 
@@ -742,10 +776,16 @@ describe('SequenceView: interactions', () => {
 });
 
 describe('SequenceView: multi-session', () => {
-  function setupMultiSessionHandlers() {
+  function setupMultiSessionHandlers(rollup = multiSessionRollup) {
     server.use(
       http.get('/api/db/:dbId/analysis/sequence', () => {
-        return HttpResponse.json(multiSessionFixture);
+        return HttpResponse.json({
+          ...multiSessionFixture,
+          data: {
+            ...multiSessionFixture.data,
+            target_filter_rollups: [rollup],
+          },
+        });
       }),
       http.get('/api/db/:dbId/projects/:projectId/targets', () => {
         return HttpResponse.json({
@@ -766,6 +806,19 @@ describe('SequenceView: multi-session', () => {
     );
   }
 
+  it('reports frames without enough matching capture settings', async () => {
+    setupMultiSessionHandlers({
+      ...multiSessionRollup,
+      unavailable_image_count: 2,
+    });
+
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=2') });
+
+    expect(await screen.findByText(
+      /2 not comparable across sessions/,
+    )).toBeInTheDocument();
+  });
+
   it('renders sequence tabs for multiple sessions', async () => {
     setupMultiSessionHandlers();
 
@@ -780,6 +833,31 @@ describe('SequenceView: multi-session', () => {
       ).getFullYear();
       expect(tabs[0]).toHaveTextContent(String(year));
     });
+    expect(screen.getByRole('button', { name: 'L · All sessions (10)' })).toHaveClass('active');
+  });
+
+  it('compares all stack candidates without replacing session scores', async () => {
+    setupMultiSessionHandlers();
+    const user = userEvent.setup();
+
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=2') });
+
+    const rollupTab = await screen.findByRole('button', { name: 'L · All sessions (10)' });
+    expect(rollupTab).toHaveClass('active');
+    expect(document.querySelectorAll('.sequence-image-card')).toHaveLength(10);
+    expect(screen.getByText('Stack comparison · matching capture settings across all sessions')).toBeInTheDocument();
+    expect(document.querySelector('[data-card-image-id="201"] .quality-badge')).toHaveTextContent('42');
+
+    await user.selectOptions(screen.getByLabelText('Select:'), 'threshold');
+    await user.click(screen.getByRole('button', { name: 'Review rejection' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('Image 201 · score 0.42');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    const sessionTabs = screen.getAllByRole('button', { name: /L · .* \(5\)/ });
+    await user.click(sessionTabs[0]);
+    expect(document.querySelectorAll('.sequence-image-card')).toHaveLength(5);
+    expect(document.querySelector('[data-card-image-id="201"] .quality-badge')).toHaveTextContent('78');
+    expect(screen.getByText('Session comparison · one capture run')).toBeInTheDocument();
   });
 
   it('switches between sequences when tabs are clicked', async () => {
@@ -796,8 +874,9 @@ describe('SequenceView: multi-session', () => {
 
     const tabs = screen.getAllByRole('button', { name: /L · .* \(5\)/ });
 
-    // First tab should be active by default
-    expect(tabs[0].classList.contains('active')).toBe(true);
+    // The all-session stack comparison is active by default.
+    expect(screen.getByRole('button', { name: 'L · All sessions (10)' })).toHaveClass('active');
+    expect(tabs[0].classList.contains('active')).toBe(false);
 
     // Click second tab
     await user.click(tabs[1]);
@@ -834,10 +913,10 @@ describe('SequenceView: multi-session', () => {
     cards = document.querySelectorAll('.sequence-image-card');
     await user.click(cards[0]);
 
-    expect(document.querySelectorAll('.sequence-tab-selection-count')).toHaveLength(2);
+    expect(document.querySelectorAll('.sequence-tab-selection-count')).toHaveLength(3);
     expect(screen.getByText('2 selected')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Review rejection' }));
-    await user.click(screen.getByRole('button', { name: 'Confirm rejection (2)' }));
+    await user.click(screen.getByRole('button', { name: 'Reject selected (2)' }));
     await waitFor(() => expect(gradedImageIds).toHaveLength(2));
     expect(gradedImageIds).toEqual(expect.arrayContaining([
       String(multiSessionFixture.data.sequences[0].images[0].image_id),
@@ -858,7 +937,7 @@ describe('SequenceView: multi-session', () => {
     });
 
     await screen.findAllByRole('button', { name: /L · .* \(5\)/ });
-    expect(document.querySelectorAll('.sequence-tab-selection-count')).toHaveLength(2);
+    expect(document.querySelectorAll('.sequence-tab-selection-count')).toHaveLength(3);
     expect(screen.getByText('2 selected')).toBeInTheDocument();
     expect(document.querySelector('.sequence-image-card.selected')).toHaveAttribute(
       'data-card-image-id',
@@ -986,9 +1065,9 @@ describe('SequenceView: batch operations', () => {
 
     // Open review, verify that no grade has been written yet, then confirm.
     await user.click(screen.getByText('Review rejection'));
-    expect(screen.getByRole('dialog', { name: /Review 2 recommended rejections/ })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: /Review 2 selected frames/ })).toBeInTheDocument();
     expect(gradeRequests).toHaveLength(0);
-    await user.click(screen.getByText(/Confirm rejection \(2\)/));
+    await user.click(screen.getByText(/Reject selected \(2\)/));
 
     // Wait for the grade API calls to be made
     await waitFor(() => {

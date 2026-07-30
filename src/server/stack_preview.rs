@@ -824,11 +824,37 @@ fn quality_results(
             metrics.push(value);
         }
         super::handlers::merge_photometric_signals(&mut metrics, &entries, session_gap);
-        for sequence in analyzer.analyze(&metrics, target_id, &target_name, &filter_name) {
-            output.extend(sequence.images);
-        }
+        let (sequences, rollup) = analyzer.analyze_with_target_filter_rollup(
+            &metrics,
+            target_id,
+            &target_name,
+            &filter_name,
+        );
+        let session_results = sequences
+            .into_iter()
+            .flat_map(|sequence| sequence.images)
+            .collect();
+        output.extend(prefer_target_filter_scores(
+            session_results,
+            rollup.map(|rollup| rollup.sequence.images),
+        ));
     }
     output
+}
+
+fn prefer_target_filter_scores(
+    session_results: Vec<ImageQualityResult>,
+    rollup_results: Option<Vec<ImageQualityResult>>,
+) -> Vec<ImageQualityResult> {
+    let mut rollup_by_id = rollup_results
+        .into_iter()
+        .flatten()
+        .map(|image| (image.image_id, image))
+        .collect::<HashMap<_, _>>();
+    session_results
+        .into_iter()
+        .map(|session| rollup_by_id.remove(&session.image_id).unwrap_or(session))
+        .collect()
 }
 
 fn fallback_quality(image_id: i32) -> ImageQualityResult {
@@ -1314,6 +1340,27 @@ mod tests {
             groups,
             error: None,
         }
+    }
+
+    #[test]
+    fn stack_quality_prefers_comparable_target_filter_scores() {
+        let mut session_one = fallback_quality(1);
+        session_one.quality_score = 1.0;
+        let mut session_two = fallback_quality(2);
+        session_two.quality_score = 1.0;
+        let mut rollup_two = session_two.clone();
+        rollup_two.quality_score = 0.2;
+
+        let merged =
+            prefer_target_filter_scores(vec![session_one, session_two], Some(vec![rollup_two]));
+        let by_id = merged
+            .iter()
+            .map(|image| (image.image_id, image.quality_score))
+            .collect::<HashMap<_, _>>();
+        assert_eq!(by_id.get(&1), Some(&1.0));
+        assert_eq!(by_id.get(&2), Some(&0.2));
+        assert_eq!(merged[0].image_id, 1);
+        assert_eq!(merged[1].image_id, 2);
     }
 
     #[test]

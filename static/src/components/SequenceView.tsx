@@ -31,6 +31,18 @@ import {
   type GridNavigationDirection,
 } from '../utils/gridNavigation';
 import { thumbnailGridColumns } from '../utils/thumbnailSizing';
+import {
+  qualityScoreDescription,
+  type QualityScoreScope,
+} from '../utils/qualityScore';
+
+interface SequenceChoice {
+  key: string;
+  label: string;
+  sequence: ScoredSequence;
+  scoreScope: QualityScoreScope;
+  unavailableImageCount: number;
+}
 
 function formatCategory(category: string): string {
   return category
@@ -50,6 +62,15 @@ function formatSequenceLabel(sequence: ScoredSequence): string {
     minute: '2-digit',
   });
   return `${sequence.filter_name} · ${when} (${sequence.image_count})`;
+}
+
+function sequenceKey(sequence: ScoredSequence): string {
+  return [
+    sequence.target_id,
+    sequence.filter_name,
+    sequence.session_start ?? 'unknown',
+    sequence.images[0]?.image_id ?? 'empty',
+  ].join('-');
 }
 
 function qualityColor(score: number): string {
@@ -75,6 +96,7 @@ export default function SequenceView() {
   const { analyze, data: analysisData, isLoading: isAnalyzing, error: analysisError } = useSequenceAnalysis(dbId);
 
   const filterName = searchParams.get('filterName') || undefined;
+  const requestedScoreScope = searchParams.get('scoreScope');
   const [threshold, setThreshold] = useState(0.5);
   const [showRejectReview, setShowRejectReview] = useState(false);
   const selectionAnchorIdRef = useRef<number | null>(null);
@@ -164,6 +186,68 @@ export default function SequenceView() {
   }, [targetId, filterName, analyze]);
 
   const sequences = useMemo(() => analysisData?.sequences ?? [], [analysisData?.sequences]);
+  const rollups = useMemo(
+    () => analysisData?.target_filter_rollups ?? [],
+    [analysisData?.target_filter_rollups],
+  );
+  const sequenceChoices = useMemo(() => {
+    const choices: SequenceChoice[] = [];
+    const sessionsByFilter = new Map<string, ScoredSequence[]>();
+    const rollupsByFilter = new Map(
+      rollups.map(rollup => [rollup.filter_name, rollup]),
+    );
+    sequences.forEach(sequence => {
+      const sessions = sessionsByFilter.get(sequence.filter_name);
+      if (sessions) sessions.push(sequence);
+      else sessionsByFilter.set(sequence.filter_name, [sequence]);
+    });
+    const sessionEvidence = new Map(
+      sequences.flatMap(sequence => sequence.images).map(image => [image.image_id, image]),
+    );
+
+    // Keep the server's newest-session-first filter order. This preserves the
+    // prior default when the target has more than one filter.
+    sessionsByFilter.forEach((sessions, filter) => {
+      const rollup = rollupsByFilter.get(filter);
+      if (rollup && sessions.length > 1) {
+        const images = rollup.images.flatMap(score => {
+          const session = sessionEvidence.get(score.image_id);
+          return session ? [{
+            ...session,
+            quality_score: score.quality_score,
+            normalized_metrics: score.normalized_metrics,
+            details: score.details,
+          }] : [];
+        });
+        const sequence: ScoredSequence = {
+          target_id: rollup.target_id,
+          target_name: rollup.target_name,
+          filter_name: rollup.filter_name,
+          session_start: rollup.session_start,
+          session_end: rollup.session_end,
+          image_count: images.length,
+          reference_values: {},
+          images,
+          summary: rollup.summary,
+        };
+        choices.push({
+          key: `target-filter:${filter}`,
+          label: `${filter} · All sessions (${rollup.image_count})`,
+          sequence,
+          scoreScope: 'target_filter',
+          unavailableImageCount: rollup.unavailable_image_count,
+        });
+      }
+      sessions.forEach(sequence => choices.push({
+        key: `session:${sequenceKey(sequence)}`,
+        label: formatSequenceLabel(sequence),
+        sequence,
+        scoreScope: 'capture_sequence',
+        unavailableImageCount: 0,
+      }));
+    });
+    return choices;
+  }, [rollups, sequences]);
 
   // Grid selection shares URL state with Sequence. Normalize that initial
   // selection once the active target's analysis has loaded. Later Sequence
@@ -183,17 +267,29 @@ export default function SequenceView() {
       && Array.from(normalizedSelection).every(imageId => selectedImages.has(imageId));
     if (!unchanged) setSelectedImages(normalizedSelection);
   }, [analysisData, isAnalyzing, selectedImages, sequences, setSelectedImages, targetId]);
-  const activeSequenceIndex = useMemo(() => {
-    if (urlCurrentImageId !== null) {
-      const currentIndex = sequences.findIndex(sequence =>
-        sequence.images.some(image => image.image_id === urlCurrentImageId)
+  const activeChoice = useMemo(() => {
+    if (requestedScoreScope?.startsWith('target-filter:')) {
+      const requestedFilter = requestedScoreScope.slice('target-filter:'.length);
+      const rollup = sequenceChoices.find(choice =>
+        choice.scoreScope === 'target_filter'
+        && choice.sequence.filter_name === requestedFilter
       );
-      if (currentIndex >= 0) return currentIndex;
+      if (rollup) return rollup;
+    }
+    if (urlCurrentImageId !== null) {
+      const currentSession = sequenceChoices.find(choice =>
+        choice.scoreScope === 'capture_sequence'
+        && choice.sequence.images.some(image => image.image_id === urlCurrentImageId)
+      );
+      if (currentSession) return currentSession;
     }
 
-    return 0;
-  }, [sequences, urlCurrentImageId]);
-  const activeSequence: ScoredSequence | undefined = sequences[activeSequenceIndex];
+    return sequenceChoices.find(choice => choice.scoreScope === 'target_filter')
+      ?? sequenceChoices[0];
+  }, [requestedScoreScope, sequenceChoices, urlCurrentImageId]);
+  const activeSequence = activeChoice?.sequence;
+  const activeScoreScope: QualityScoreScope = activeChoice?.scoreScope ?? 'capture_sequence';
+  const unavailableImageCount = activeChoice?.unavailableImageCount ?? 0;
   const activeImageId = useMemo(() => {
     if (!activeSequence || activeSequence.images.length === 0) return null;
     if (urlCurrentImageId
@@ -256,9 +352,27 @@ export default function SequenceView() {
 
   useEffect(() => {
     if (activeImageId !== null && activeImageId !== urlCurrentImageId) {
-      setCurrentImageId(activeImageId);
+      if (activeScoreScope === 'target_filter' && !requestedScoreScope) {
+        const params = new URLSearchParams(searchParams);
+        params.set('current', String(activeImageId));
+        params.set('scoreScope', `target-filter:${activeSequence?.filter_name ?? ''}`);
+        params.delete('groupIndex');
+        params.delete('imageIndex');
+        navigate(`/sequence?${params.toString()}`, { replace: true });
+      } else {
+        setCurrentImageId(activeImageId);
+      }
     }
-  }, [activeImageId, setCurrentImageId, urlCurrentImageId]);
+  }, [
+    activeImageId,
+    activeScoreScope,
+    activeSequence?.filter_name,
+    navigate,
+    requestedScoreScope,
+    searchParams,
+    setCurrentImageId,
+    urlCurrentImageId,
+  ]);
 
   const replaceSelectedImages = useCallback((ids: Set<number>) => {
     const anchorId = activeImageIdRef.current;
@@ -290,34 +404,16 @@ export default function SequenceView() {
     replaceSelectedImages(ids);
   }, [activeSequence, replaceSelectedImages, threshold]);
 
-  // Select contiguous runs of clouded/occluded/bad images
+  // Select frames for which a detector named cloud or obstruction evidence.
+  // A low relative score alone must not masquerade as a diagnosis.
   const selectCloudedSequence = useCallback(() => {
     if (!activeSequence) return;
-    const ids = new Set<number>();
-    let inRun = false;
-    const runBuffer: number[] = [];
-
-    for (const img of activeSequence.images) {
-      const isBad =
-        img.category === 'likely_clouds' ||
-        img.category === 'possible_obstruction' ||
-        img.quality_score < 0.3;
-      if (isBad) {
-        inRun = true;
-        runBuffer.push(img.image_id);
-      } else {
-        if (inRun && runBuffer.length >= 2) {
-          runBuffer.forEach(id => ids.add(id));
-        }
-        inRun = false;
-        runBuffer.length = 0;
-      }
-    }
-    // Flush trailing run
-    if (inRun && runBuffer.length >= 2) {
-      runBuffer.forEach(id => ids.add(id));
-    }
-    replaceSelectedImages(ids);
+    replaceSelectedImages(new Set(
+      activeSequence.images
+        .filter(image => image.category === 'likely_clouds'
+          || image.category === 'possible_obstruction')
+        .map(image => image.image_id),
+    ));
   }, [activeSequence, replaceSelectedImages]);
 
   const selectAstrometryIssues = useCallback(() => {
@@ -376,13 +472,20 @@ export default function SequenceView() {
 
   const selectedForReview = useMemo(() => {
     const selected = new Map<number, ImageQualityResult>();
+    // Put the active view first so the dialog follows its order and score
+    // scope. Other session selections follow without overwriting it.
+    activeSequence?.images.forEach(image => {
+      if (selectedImages.has(image.image_id)) selected.set(image.image_id, image);
+    });
     sequences.forEach(sequence => {
       sequence.images.forEach(image => {
-        if (selectedImages.has(image.image_id)) selected.set(image.image_id, image);
+        if (selectedImages.has(image.image_id) && !selected.has(image.image_id)) {
+          selected.set(image.image_id, image);
+        }
       });
     });
     return Array.from(selected.values());
-  }, [selectedImages, sequences]);
+  }, [activeSequence, selectedImages, sequences]);
 
   // Batch rejection is deliberately two-step: show the exact per-image
   // evidence/reason before changing scheduler grades. Each image's own reason
@@ -500,7 +603,8 @@ export default function SequenceView() {
     });
   }, [navigate, searchParams]);
 
-  const selectSequence = useCallback((sequence: ScoredSequence) => {
+  const selectSequence = useCallback((choice: SequenceChoice) => {
+    const sequence = choice.sequence;
     const firstImageId = sequence.images[0]?.image_id;
     if (firstImageId !== undefined) {
       selectionAnchorIdRef.current = firstImageId;
@@ -508,9 +612,18 @@ export default function SequenceView() {
       selectionBaseIdsRef.current = new Set(
         Array.from(selectedImages).filter(imageId => !sequenceImageIds.has(imageId)),
       );
-      setCurrentImageId(firstImageId);
+      const params = new URLSearchParams(searchParams);
+      params.set('current', String(firstImageId));
+      params.delete('groupIndex');
+      params.delete('imageIndex');
+      if (choice.scoreScope === 'target_filter') {
+        params.set('scoreScope', `target-filter:${sequence.filter_name}`);
+      } else {
+        params.delete('scoreScope');
+      }
+      navigate(`/sequence?${params.toString()}`, { replace: true });
     }
-  }, [selectedImages, setCurrentImageId]);
+  }, [navigate, searchParams, selectedImages]);
 
   if (!projectId) {
     return (
@@ -579,6 +692,7 @@ export default function SequenceView() {
                     } else {
                       params.delete('filterName');
                     }
+                    params.delete('scoreScope');
                     navigate(`/sequence?${params.toString()}`);
                   }}
                 >
@@ -652,7 +766,7 @@ export default function SequenceView() {
             onChange={setImageSize}
           />
           <div className="threshold-control">
-            <label htmlFor="sequence-threshold">Threshold:</label>
+            <label htmlFor="sequence-threshold">Score threshold:</label>
             <input
               id="sequence-threshold"
               type="range"
@@ -672,7 +786,7 @@ export default function SequenceView() {
               onChange={(event) => applySelectionPreset(event.target.value)}
             >
               <option value="" disabled>Choose images…</option>
-              <option value="threshold">Below threshold</option>
+              <option value="threshold">Below score threshold</option>
               <option value="clouded">Clouded</option>
               <option value="off-target">Off target</option>
               <option value="unsolved">Unsolved</option>
@@ -723,25 +837,20 @@ export default function SequenceView() {
       {!isAnalyzing && sequences.length > 0 && (
         <>
           {/* Sequence tabs (if multiple) */}
-          {sequences.length > 1 && (
+          {sequenceChoices.length > 1 && (
             <div className="sequence-tabs">
-              {sequences.map((seq, i) => {
+              {sequenceChoices.map(choice => {
+                const seq = choice.sequence;
                 const selectedCount = seq.images.filter(image =>
                   selectedImages.has(image.image_id)
                 ).length;
-                const sequenceKey = [
-                  seq.target_id,
-                  seq.filter_name,
-                  seq.session_start ?? 'unknown',
-                  seq.images[0]?.image_id ?? 'empty',
-                ].join('-');
                 return (
                   <button
-                    key={sequenceKey}
-                    className={`sequence-tab ${i === activeSequenceIndex ? 'active' : ''}`}
-                    onClick={() => selectSequence(seq)}
+                    key={choice.key}
+                    className={`sequence-tab ${choice.key === activeChoice?.key ? 'active' : ''}`}
+                    onClick={() => selectSequence(choice)}
                   >
-                    <span>{formatSequenceLabel(seq)}</span>
+                    <span>{choice.label}</span>
                     {selectedCount > 0 && (
                       <span className="sequence-tab-selection-count">{selectedCount}</span>
                     )}
@@ -756,11 +865,20 @@ export default function SequenceView() {
               {/* Summary bar */}
               <div className="sequence-summary-bar">
                 <div className="summary-stats">
-                  <span className="summary-item excellent">{activeSequence.summary.excellent_count} excellent</span>
-                  <span className="summary-item good">{activeSequence.summary.good_count} good</span>
-                  <span className="summary-item fair">{activeSequence.summary.fair_count} fair</span>
-                  <span className="summary-item poor">{activeSequence.summary.poor_count} poor</span>
-                  <span className="summary-item bad">{activeSequence.summary.bad_count} bad</span>
+                  <span className="summary-item excellent">{activeSequence.summary.excellent_count} at 90–100</span>
+                  <span className="summary-item good">{activeSequence.summary.good_count} at 70–89</span>
+                  <span className="summary-item fair">{activeSequence.summary.fair_count} at 50–69</span>
+                  <span className="summary-item poor">{activeSequence.summary.poor_count} at 30–49</span>
+                  <span className="summary-item bad">{activeSequence.summary.bad_count} below 30</span>
+                </div>
+                <div className="sequence-score-context">
+                  {activeScoreScope === 'target_filter'
+                    ? `Stack comparison · matching capture settings across all sessions${
+                      unavailableImageCount > 0
+                        ? ` · ${unavailableImageCount} not comparable across sessions`
+                        : ''
+                    }`
+                    : 'Session comparison · one capture run'}
                 </div>
                 <div className="summary-issues">
                   {activeSequence.summary.cloud_events_detected > 0 && (
@@ -783,8 +901,9 @@ export default function SequenceView() {
 
               {/* Timeline chart */}
               <SequenceTimeline
-                key={`${activeSequence.filter_name}-${activeSequence.session_start}-timeline`}
+                key={`${activeChoice?.key}-timeline`}
                 images={activeSequence.images}
+                scoreScope={activeScoreScope}
                 threshold={threshold}
                 currentImageId={activeImageId}
                 selectedImages={selectedImages}
@@ -795,9 +914,10 @@ export default function SequenceView() {
 
               {/* Image strip */}
               <SequenceStrip
-                key={`${activeSequence.filter_name}-${activeSequence.session_start}-strip`}
+                key={`${activeChoice?.key}-strip`}
                 dbId={dbId!}
                 images={activeSequence.images}
+                scoreScope={activeScoreScope}
                 imageMap={imageMap}
                 projectId={projectId!}
                 targetId={activeSequence.target_id}
@@ -825,7 +945,7 @@ export default function SequenceView() {
 
       <Dialog
         open={showRejectReview}
-        title={`Review ${selectedForReview.length} recommended rejection${selectedForReview.length === 1 ? '' : 's'}`}
+        title={`Review ${selectedForReview.length} selected frame${selectedForReview.length === 1 ? '' : 's'}`}
         onClose={() => setShowRejectReview(false)}
         className="reject-review-dialog"
         footer={(
@@ -839,7 +959,7 @@ export default function SequenceView() {
               onClick={confirmRejectSelected}
               disabled={grading.isLoading}
             >
-              Confirm rejection ({selectedForReview.length})
+              Reject selected ({selectedForReview.length})
             </button>
           </>
         )}
@@ -914,12 +1034,14 @@ const PointingScatter = memo(function PointingScatter({ images }: { images: Imag
 // Timeline visualization component
 const SequenceTimeline = memo(function SequenceTimeline({
   images,
+  scoreScope,
   threshold,
   currentImageId,
   selectedImages,
   onSelect,
 }: {
   images: ImageQualityResult[];
+  scoreScope: QualityScoreScope;
   threshold: number;
   currentImageId: number | null;
   selectedImages: Set<number>;
@@ -963,7 +1085,9 @@ const SequenceTimeline = memo(function SequenceTimeline({
           height={chartHeight}
           viewBox={`0 0 ${chartWidth} ${chartHeight}`}
           role="img"
-          aria-label="Sequence quality scores"
+          aria-label={scoreScope === 'target_filter'
+            ? 'Target and filter stack comparison scores'
+            : 'Capture sequence comparison scores'}
         >
         {/* Threshold line */}
         <line
@@ -1007,7 +1131,7 @@ const SequenceTimeline = memo(function SequenceTimeline({
               style={{ cursor: 'pointer' }}
               onClick={(event) => onSelect(img.image_id, event)}
             >
-              <title>Score: {img.quality_score.toFixed(2)}{img.category ? ` (${formatCategory(img.category)})` : ''}</title>
+              <title>{qualityScoreDescription(img, scoreScope)}{img.category ? ` ${formatCategory(img.category)}.` : ''}</title>
             </rect>
           );
         })}
@@ -1020,6 +1144,7 @@ const SequenceTimeline = memo(function SequenceTimeline({
 const SequenceStrip = memo(function SequenceStrip({
   dbId,
   images,
+  scoreScope,
   imageMap,
   projectId,
   targetId,
@@ -1035,6 +1160,7 @@ const SequenceStrip = memo(function SequenceStrip({
 }: {
   dbId: string;
   images: ImageQualityResult[];
+  scoreScope: QualityScoreScope;
   imageMap: ReadonlyMap<number, Image>;
   projectId: number;
   targetId: number;
@@ -1099,6 +1225,7 @@ const SequenceStrip = memo(function SequenceStrip({
             dbId={dbId}
             image={image}
             quality={quality}
+            qualityScoreScope={scoreScope}
             isSelected={selectedImages.has(quality.image_id)}
             onClick={(event) => onSelect(quality.image_id, event)}
             onDoubleClick={() => onOpen(quality.image_id)}

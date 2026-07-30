@@ -310,6 +310,8 @@ async fn test_analyze_sequence_normal() {
         1,
         "Should have exactly 1 sequence (single session)"
     );
+    let rollups = json["data"]["target_filter_rollups"].as_array().unwrap();
+    assert!(rollups.is_empty(), "one session does not need a rollup");
 
     let seq = &sequences[0];
     assert_eq!(seq["target_id"], 1);
@@ -716,6 +718,14 @@ async fn test_analyze_sequence_custom_session_gap() {
     let (_, json_default) = get_json(app1, "/api/db/test/analysis/sequence?target_id=2").await;
     let default_count = json_default["data"]["sequences"].as_array().unwrap().len();
     assert_eq!(default_count, 2, "Default should produce 2 sequences");
+    let rollups = json_default["data"]["target_filter_rollups"]
+        .as_array()
+        .unwrap();
+    assert_eq!(rollups.len(), 1);
+    assert_eq!(rollups[0]["image_count"], 10);
+    assert_eq!(rollups[0]["unavailable_image_count"], 0);
+    assert_eq!(rollups[0]["images"].as_array().unwrap().len(), 10);
+    assert!(rollups[0]["images"][0].get("pointing").is_none());
 
     // Now test with a very small gap (5 minutes)
     let conn2 = Connection::open_in_memory().unwrap();
@@ -761,6 +771,10 @@ async fn test_json_contract_structure() {
     assert!(json.get("data").is_some(), "Missing 'data' field");
     assert!(json.get("error").is_some(), "Missing 'error' field");
     assert!(json.get("status").is_some(), "Missing 'status' field");
+    assert!(
+        json["data"].get("target_filter_rollups").is_some(),
+        "Missing 'target_filter_rollups' field"
+    );
 
     let seq = &json["data"]["sequences"][0];
 
