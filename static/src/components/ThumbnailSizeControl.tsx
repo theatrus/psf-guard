@@ -1,3 +1,9 @@
+import {
+  THUMBNAIL_SIZE_MAX,
+  THUMBNAIL_SIZE_MIN,
+  THUMBNAIL_SIZE_STEP,
+} from '../utils/thumbnailSizing';
+
 interface ThumbnailSizeControlProps {
   id: string;
   value: number;
@@ -15,9 +21,9 @@ export default function ThumbnailSizeControl({
       <input
         id={id}
         type="range"
-        min="150"
-        max="1200"
-        step="50"
+        min={THUMBNAIL_SIZE_MIN}
+        max={THUMBNAIL_SIZE_MAX}
+        step={THUMBNAIL_SIZE_STEP}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
       />

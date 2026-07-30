@@ -385,7 +385,7 @@ test('sequence thumbnail size can be changed and survives reload', async ({ page
   const strip = page.locator('.sequence-strip');
   await expect(strip).toHaveAttribute(
     'style',
-    /grid-template-columns: repeat\(auto-fill, minmax\(500px, 1fr\)\)/
+    /grid-template-columns: repeat\(auto-fill, minmax\(min\(500px, 100%\), 1fr\)\)/
   );
   await expect(page.getByText('500px')).toBeVisible();
 
@@ -393,15 +393,72 @@ test('sequence thumbnail size can be changed and survives reload', async ({ page
   await expect(page.getByLabel('Size:')).toHaveValue('500');
   await expect(page.locator('.sequence-strip')).toHaveAttribute(
     'style',
-    /grid-template-columns: repeat\(auto-fill, minmax\(500px, 1fr\)\)/
+    /grid-template-columns: repeat\(auto-fill, minmax\(min\(500px, 100%\), 1fr\)\)/
   );
 
+  await page.getByRole('button', { name: 'Images', exact: true }).click();
+  await expect(page.locator('.image-card')).toHaveCount(3);
+  const gridSize = page.getByLabel('Size:');
+  await expect(gridSize).toHaveValue('500');
+  await gridSize.fill('300');
+  await expect(page).toHaveURL(/size=300/);
+
+  await page.getByRole('button', { name: 'Sequence', exact: true }).click();
+  await expect(page.getByLabel('Size:')).toHaveValue('300');
+
   await page.setViewportSize({ width: 760, height: 720 });
-  const controlsWidth = await page.locator('.sequence-controls').evaluate((element) => ({
-    client: element.clientWidth,
-    scroll: element.scrollWidth,
-  }));
-  expect(controlsWidth.scroll).toBeLessThanOrEqual(controlsWidth.client);
+  await page.getByLabel('Size:').fill('1200');
+  await expect(page).toHaveURL(/size=1200/);
+  await expect(page.locator('.sequence-strip')).toHaveAttribute(
+    'style',
+    /grid-template-columns: repeat\(auto-fill, minmax\(min\(1200px, 100%\), 1fr\)\)/
+  );
+  const widths = await page.evaluate(() => {
+    const controls = document.querySelector<HTMLElement>('.sequence-controls')!;
+    const strip = document.querySelector<HTMLElement>('.sequence-strip')!;
+    return {
+      controls: { client: controls.clientWidth, scroll: controls.scrollWidth },
+      strip: { client: strip.clientWidth, scroll: strip.scrollWidth },
+    };
+  });
+  expect(widths.controls.scroll).toBeLessThanOrEqual(widths.controls.client);
+  expect(widths.strip.scroll).toBeLessThanOrEqual(widths.strip.client);
+});
+
+test('sequence thumbnail resizing keeps the active image visible', async ({ page }) => {
+  await page.route(`**/api/db/${dbId}/analysis/sequence*`, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json() as {
+      data: {
+        sequences: Array<{
+          image_count: number;
+          images: Array<Record<string, unknown> & { image_id: number }>;
+        }>;
+      };
+    };
+    const sequence = body.data.sequences[0];
+    const template = sequence.images[0];
+    sequence.images = Array.from({ length: 30 }, (_, index) => ({
+      ...template,
+      image_id: 101 + index,
+    }));
+    sequence.image_count = sequence.images.length;
+    await route.fulfill({ response, json: body });
+  });
+
+  await page.goto(
+    `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1&current=125`
+  );
+
+  const cards = page.locator('.sequence-image-card');
+  await expect(cards).toHaveCount(30, { timeout: 15_000 });
+  const current = page.locator('.sequence-image-card.current-selection');
+  await expect(current).toBeInViewport();
+
+  await page.getByLabel('Size:').fill('500');
+
+  await expect(page).toHaveURL(/size=500/);
+  await expect(current).toBeInViewport();
 });
 
 test('detail closes back to the Sequence session that opened it', async ({ page }) => {

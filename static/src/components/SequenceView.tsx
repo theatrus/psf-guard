@@ -21,6 +21,7 @@ import Dialog from './Dialog';
 import ThumbnailSizeControl from './ThumbnailSizeControl';
 import type { Image, ScoredSequence, ImageQualityResult } from '../api/types';
 import { imageDetailPath } from '../utils/imageDetailRoutes';
+import { thumbnailGridColumns } from '../utils/thumbnailSizing';
 
 function formatCategory(category: string): string {
   return category
@@ -840,14 +841,14 @@ const SequenceStrip = memo(function SequenceStrip({
       );
       currentCard?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
     });
-  }, [currentImageId]);
+  }, [currentImageId, imageSize]);
 
   return (
     <div
       ref={stripRef}
       className="filter-images sequence-strip"
       style={{
-        gridTemplateColumns: `repeat(auto-fill, minmax(${imageSize}px, 1fr))`,
+        gridTemplateColumns: thumbnailGridColumns(imageSize),
       }}
     >
       {images.map(quality => {

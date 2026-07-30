@@ -201,8 +201,8 @@ export function useGridState(defaultImageSize = 300) {
   }, [updateParams]);
   
   const setImageSize = useCallback((size: number) => {
-    updateParams({ size: size === defaultImageSize ? null : size });
-  }, [defaultImageSize, updateParams]);
+    updateParams({ size });
+  }, [updateParams]);
   
   const setShowStats = useCallback((show: boolean) => {
     updateParams({ stats: show ? true : null });

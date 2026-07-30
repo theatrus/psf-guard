@@ -427,7 +427,7 @@ describe('SequenceView: interactions', () => {
       expect(new URLSearchParams(search).get('size')).toBe('500');
     });
     expect(document.querySelector('.sequence-strip')).toHaveStyle({
-      gridTemplateColumns: 'repeat(auto-fill, minmax(500px, 1fr))',
+      gridTemplateColumns: 'repeat(auto-fill, minmax(min(500px, 100%), 1fr))',
     });
     expect(screen.getByText('500px')).toBeInTheDocument();
   });

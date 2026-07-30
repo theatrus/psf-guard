@@ -32,6 +32,7 @@ import {
   resolveExpandedGroups,
 } from '../utils/imageGrouping';
 import { imageDetailPath } from '../utils/imageDetailRoutes';
+import { thumbnailGridColumns } from '../utils/thumbnailSizing';
 
 interface GroupedImageGridProps {
   useLazyImages?: boolean;
@@ -861,7 +862,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                   <div 
                     className="filter-images"
                     style={{
-                      gridTemplateColumns: `repeat(auto-fill, minmax(${imageSize}px, 1fr))`,
+                      gridTemplateColumns: thumbnailGridColumns(imageSize),
                     }}
                   >
                     {group.images.map((image) => {
