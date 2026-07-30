@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Issue categories for quality problems detected in image sequences.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -23,7 +24,8 @@ pub enum IssueCategory {
     UnknownDegradation,
 }
 
-/// Per-image normalized metric values (0.0 = worst in sequence, 1.0 = best).
+/// Per-image metric scores. One means the value is within the comparison's
+/// normal band; zero means it reached that metric's severe-deviation bound.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalizedMetrics {
     pub star_count: Option<f64>,
@@ -231,7 +233,7 @@ pub struct SequenceSummary {
     pub satellite_risk_count: usize,
 }
 
-/// A scored sequence of images sharing the same target, filter, and session.
+/// A scored capture sequence or target/filter stack-candidate rollup.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScoredSequence {
     pub target_id: i32,
@@ -252,6 +254,10 @@ pub struct ImageMetrics {
     pub timestamp: Option<i64>,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// Stable capture settings that must remain comparable within one scored
+    /// sequence. Missing profiles do not force a split for older catalogs.
+    #[serde(default)]
+    pub capture_profile: Option<String>,
     pub star_count: Option<f64>,
     pub hfr: Option<f64>,
     pub eccentricity: Option<f64>,
@@ -302,6 +308,12 @@ pub struct ImageMetrics {
     /// Cached orbital prediction for this exact source file and WCS.
     #[serde(default)]
     pub satellite: Option<SatelliteFrameMetrics>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScoreScope {
+    CaptureSequence,
+    TargetFilter,
 }
 
 /// Configurable weights for composite quality scoring.
@@ -574,6 +586,105 @@ impl SequenceAnalyzer {
             .collect()
     }
 
+    /// Score each capture session and the full target/filter stack candidate
+    /// set. The rollup compares only matching capture profiles, then restores
+    /// the issue evidence found in the time-local session analysis.
+    pub fn analyze_with_target_filter_rollup(
+        &self,
+        images: &[ImageMetrics],
+        target_id: i32,
+        target_name: &str,
+        filter_name: &str,
+    ) -> (Vec<ScoredSequence>, ScoredSequence) {
+        let sequences = self.analyze(images, target_id, target_name, filter_name);
+        let session_evidence: HashMap<i32, ImageQualityResult> = sequences
+            .iter()
+            .flat_map(|sequence| sequence.images.iter().cloned())
+            .map(|result| (result.image_id, result))
+            .collect();
+
+        let mut by_profile: HashMap<Option<String>, Vec<ImageMetrics>> = HashMap::new();
+        for image in images {
+            by_profile
+                .entry(image.capture_profile.clone())
+                .or_default()
+                .push(image.clone());
+        }
+
+        let timestamps: HashMap<i32, i64> = images
+            .iter()
+            .filter_map(|image| image.timestamp.map(|timestamp| (image.image_id, timestamp)))
+            .collect();
+        let mut rollup_images = by_profile
+            .into_values()
+            .flat_map(|mut profile_images| {
+                profile_images.sort_by_key(|image| image.timestamp.unwrap_or(0));
+                self.score_group(
+                    profile_images,
+                    target_id,
+                    target_name,
+                    filter_name,
+                    ScoreScope::TargetFilter,
+                )
+                .images
+            })
+            .collect::<Vec<_>>();
+
+        for result in &mut rollup_images {
+            let Some(session) = session_evidence.get(&result.image_id) else {
+                continue;
+            };
+            // Keep pointing in its time-local session context. Without an
+            // intended target, comparing solved centers across nights would
+            // turn deliberate framing changes into a stack-quality penalty.
+            result.normalized_metrics.pointing = session.normalized_metrics.pointing;
+            result.pointing = session.pointing.clone();
+            result.quality_score = apply_pointing_score(
+                self.composite_score(&result.normalized_metrics),
+                result.pointing.as_ref(),
+            );
+            result.category = session.category.clone();
+            result.flags = session.flags.clone();
+            result.satellite = session.satellite.clone();
+            result.regrade_reason = session.regrade_reason.clone();
+            if session.category.is_some()
+                || !session.flags.is_empty()
+                || session.regrade_reason.is_some()
+            {
+                result.details = session.details.clone().or_else(|| result.details.clone());
+            } else {
+                result.details = (result.quality_score < 0.5)
+                    .then(|| relative_score_explanation(result, ScoreScope::TargetFilter));
+            }
+        }
+        rollup_images.sort_by_key(|result| timestamps.get(&result.image_id).copied().unwrap_or(0));
+
+        let session_start = images.iter().filter_map(|image| image.timestamp).min();
+        let session_end = images.iter().filter_map(|image| image.timestamp).max();
+        let summary = self.build_summary(&rollup_images);
+        let rollup = ScoredSequence {
+            target_id,
+            target_name: target_name.to_string(),
+            filter_name: filter_name.to_string(),
+            session_start,
+            session_end,
+            image_count: rollup_images.len(),
+            // A target/filter rollup can contain more than one capture
+            // profile, so one set of raw reference values would mislead.
+            reference_values: ReferenceValues {
+                best_star_count: None,
+                best_hfr: None,
+                best_eccentricity: None,
+                best_snr: None,
+                best_background: None,
+            },
+            images: rollup_images,
+            summary,
+        };
+
+        (sequences, rollup)
+    }
+
     /// Split a time-ordered list of images into contiguous sessions.
     fn split_into_sequences(&self, images: &[ImageMetrics]) -> Vec<Vec<ImageMetrics>> {
         if images.is_empty() {
@@ -601,7 +712,17 @@ impl SequenceAnalyzer {
                     .zip(img.session_id.as_ref())
                     .is_some_and(|(left, right)| left != right)
             });
-            if explicit_session_changed || curr_ts - prev_ts > gap_seconds {
+            let capture_profile_changed = current_seq.last().is_some_and(|previous| {
+                previous
+                    .capture_profile
+                    .as_ref()
+                    .zip(img.capture_profile.as_ref())
+                    .is_some_and(|(left, right)| left != right)
+            });
+            if explicit_session_changed
+                || capture_profile_changed
+                || curr_ts - prev_ts > gap_seconds
+            {
                 sequences.push(std::mem::take(&mut current_seq));
             }
             current_seq.push(img.clone());
@@ -621,11 +742,35 @@ impl SequenceAnalyzer {
         target_name: &str,
         filter_name: &str,
     ) -> ScoredSequence {
+        self.score_group(
+            images,
+            target_id,
+            target_name,
+            filter_name,
+            ScoreScope::CaptureSequence,
+        )
+    }
+
+    fn score_group(
+        &self,
+        images: Vec<ImageMetrics>,
+        target_id: i32,
+        target_name: &str,
+        filter_name: &str,
+        scope: ScoreScope,
+    ) -> ScoredSequence {
         let image_count = images.len();
 
         let session_start = images.first().and_then(|i| i.timestamp);
         let session_end = images.last().and_then(|i| i.timestamp);
-        let pointing_quality = self.analyze_pointing(&images);
+        let pointing_quality = if scope == ScoreScope::CaptureSequence {
+            self.analyze_pointing(&images)
+        } else {
+            // The rollup reuses each session's pointing result below. Besides
+            // preserving framing context, this avoids a second cross-night
+            // solved-center clustering pass.
+            vec![None; image_count]
+        };
 
         // If sequence is too short, return with score 1.0 for all images
         if image_count < self.config.min_sequence_length {
@@ -639,13 +784,17 @@ impl SequenceAnalyzer {
                     category: None,
                     flags: Vec::new(),
                     normalized_metrics: NormalizedMetrics {
-                        star_count: Some(1.0),
-                        hfr: Some(1.0),
-                        eccentricity: Some(1.0),
-                        snr: Some(1.0),
-                        background: Some(1.0),
-                        spatial_coverage: Some(1.0),
-                        transparency: Some(1.0),
+                        star_count: img.star_count.map(|_| 1.0),
+                        hfr: img.hfr.map(|_| 1.0),
+                        eccentricity: img.eccentricity.map(|_| 1.0),
+                        snr: img.snr.map(|_| 1.0),
+                        background: img.background.map(|_| 1.0),
+                        spatial_coverage: img.dead_cell_fraction.map(|dead| {
+                            1.0 - (dead / self.config.dead_cell_abs_threshold).clamp(0.0, 1.0)
+                        }),
+                        transparency: img
+                            .transparency
+                            .map(|value| ((value - 0.6) / 0.4).clamp(0.0, 1.0)),
                         pointing: pointing_quality[idx].as_ref().and_then(pointing_normalized),
                     },
                     pointing: pointing_quality[idx].clone(),
@@ -678,18 +827,29 @@ impl SequenceAnalyzer {
         }
 
         // Normalize each metric
-        let norm_stars = self.normalize_metric_higher_better(
+        // Catalog metrics are relative to a robust good reference, but normal
+        // session jitter receives no penalty. The former percentile stretch
+        // always forced the weakest frame toward zero even when every frame
+        // was sound.
+        let norm_stars = score_relative_higher_better(
             &images.iter().map(|i| i.star_count).collect::<Vec<_>>(),
+            STAR_COUNT_TOLERANCE,
         );
-        let norm_hfr =
-            self.normalize_metric_lower_better(&images.iter().map(|i| i.hfr).collect::<Vec<_>>());
-        let norm_ecc = self.normalize_metric_lower_better(
+        let norm_hfr = score_relative_lower_better(
+            &images.iter().map(|i| i.hfr).collect::<Vec<_>>(),
+            HFR_TOLERANCE,
+        );
+        let norm_ecc = score_relative_lower_better(
             &images.iter().map(|i| i.eccentricity).collect::<Vec<_>>(),
+            ECCENTRICITY_TOLERANCE,
         );
-        let norm_snr =
-            self.normalize_metric_higher_better(&images.iter().map(|i| i.snr).collect::<Vec<_>>());
-        let norm_bg = self.normalize_metric_lower_better(
+        let norm_snr = score_relative_higher_better(
+            &images.iter().map(|i| i.snr).collect::<Vec<_>>(),
+            SNR_TOLERANCE,
+        );
+        let norm_bg = score_relative_lower_better(
             &images.iter().map(|i| i.background).collect::<Vec<_>>(),
+            BACKGROUND_TOLERANCE,
         );
         // Spatial coverage uses an absolute mapping instead of the
         // sequence-relative percentile normalization: dead_cell_fraction is
@@ -716,10 +876,13 @@ impl SequenceAnalyzer {
             .collect();
 
         // Compute EWMA temporal deviation scores
-        let temporal_scores = self.compute_temporal_scores(&images);
+        let temporal_scores = if scope == ScoreScope::CaptureSequence {
+            self.compute_temporal_scores(&images)
+        } else {
+            vec![0.0; image_count]
+        };
 
         // Compute composite quality scores
-        let w = &self.config.quality_weights;
         let mut results: Vec<ImageQualityResult> = Vec::with_capacity(image_count);
 
         for i in 0..image_count {
@@ -732,23 +895,17 @@ impl SequenceAnalyzer {
             let ntr = norm_transparency[i];
             let npt = norm_pointing[i];
 
-            // Weighted sum using available metrics
-            let (score, total_weight) = weighted_sum_available(&[
-                (ns, w.star_count),
-                (nh, w.hfr),
-                (ne, w.eccentricity),
-                (nsn, w.snr),
-                (nb, w.background),
-                (nsp, w.spatial),
-                (ntr, w.transparency),
-                (npt, w.pointing),
-            ]);
-
-            let quality_score = if total_weight > 0.0 {
-                score / total_weight
-            } else {
-                1.0
+            let normalized_metrics = NormalizedMetrics {
+                star_count: ns,
+                hfr: nh,
+                eccentricity: ne,
+                snr: nsn,
+                background: nb,
+                spatial_coverage: nsp,
+                transparency: ntr,
+                pointing: npt,
             };
+            let quality_score = self.composite_score(&normalized_metrics);
 
             // Apply temporal penalty
             let temporal = temporal_scores[i];
@@ -764,16 +921,7 @@ impl SequenceAnalyzer {
                 temporal_anomaly_score: temporal,
                 category: None, // Classified below
                 flags: Vec::new(),
-                normalized_metrics: NormalizedMetrics {
-                    star_count: ns,
-                    hfr: nh,
-                    eccentricity: ne,
-                    snr: nsn,
-                    background: nb,
-                    spatial_coverage: nsp,
-                    transparency: ntr,
-                    pointing: npt,
-                },
+                normalized_metrics,
                 pointing: pointing_quality[i].clone(),
                 satellite: images[i].satellite.clone(),
                 regrade_reason: None,
@@ -781,10 +929,17 @@ impl SequenceAnalyzer {
             });
         }
 
-        // Classify issues
-        self.classify_issues(&mut results, &images);
-        self.merge_pointing_issues(&mut results);
-        self.merge_satellite_issues(&mut results, &images);
+        if scope == ScoreScope::CaptureSequence {
+            self.classify_issues(&mut results, &images);
+            self.merge_pointing_issues(&mut results);
+            self.merge_satellite_issues(&mut results, &images);
+        } else {
+            for result in &mut results {
+                if result.quality_score < 0.5 {
+                    result.details = Some(relative_score_explanation(result, scope));
+                }
+            }
+        }
 
         // Build reference values
         let reference_values = ReferenceValues {
@@ -808,6 +963,25 @@ impl SequenceAnalyzer {
             reference_values,
             images: results,
             summary,
+        }
+    }
+
+    fn composite_score(&self, metrics: &NormalizedMetrics) -> f64 {
+        let weights = &self.config.quality_weights;
+        let (score, total_weight) = weighted_sum_available(&[
+            (metrics.star_count, weights.star_count),
+            (metrics.hfr, weights.hfr),
+            (metrics.eccentricity, weights.eccentricity),
+            (metrics.snr, weights.snr),
+            (metrics.background, weights.background),
+            (metrics.spatial_coverage, weights.spatial),
+            (metrics.transparency, weights.transparency),
+            (metrics.pointing, weights.pointing),
+        ]);
+        if total_weight > 0.0 {
+            score / total_weight
+        } else {
+            1.0
         }
     }
 
@@ -864,44 +1038,6 @@ impl SequenceAnalyzer {
                 result.quality_score = result.quality_score.min(0.75);
             }
         }
-    }
-
-    /// Normalize values where higher is better (e.g. star count, SNR).
-    /// Uses 5th/95th percentile bounds for robustness.
-    fn normalize_metric_higher_better(&self, values: &[Option<f64>]) -> Vec<Option<f64>> {
-        let valid: Vec<f64> = values.iter().filter_map(|v| *v).collect();
-        if valid.is_empty() {
-            return values.iter().map(|_| None).collect();
-        }
-
-        let (p5, p95) = percentile_bounds(&valid);
-        if (p95 - p5).abs() < f64::EPSILON {
-            return values.iter().map(|v| v.map(|_| 1.0)).collect();
-        }
-
-        values
-            .iter()
-            .map(|v| v.map(|val| ((val - p5) / (p95 - p5)).clamp(0.0, 1.0)))
-            .collect()
-    }
-
-    /// Normalize values where lower is better (e.g. HFR, background).
-    /// Uses 5th/95th percentile bounds for robustness.
-    fn normalize_metric_lower_better(&self, values: &[Option<f64>]) -> Vec<Option<f64>> {
-        let valid: Vec<f64> = values.iter().filter_map(|v| *v).collect();
-        if valid.is_empty() {
-            return values.iter().map(|_| None).collect();
-        }
-
-        let (p5, p95) = percentile_bounds(&valid);
-        if (p95 - p5).abs() < f64::EPSILON {
-            return values.iter().map(|v| v.map(|_| 1.0)).collect();
-        }
-
-        values
-            .iter()
-            .map(|v| v.map(|val| ((p95 - val) / (p95 - p5)).clamp(0.0, 1.0)))
-            .collect()
     }
 
     /// Compute EWMA-based temporal deviation scores for the sequence.
@@ -1679,11 +1815,11 @@ impl SequenceAnalyzer {
                 )
             } else if results[i].quality_score < 0.5 {
                 (
-                    Some(IssueCategory::UnknownDegradation),
-                    Some(
-                        "Quality degraded but no clear pattern matches known issue types."
-                            .to_string(),
-                    ),
+                    None,
+                    Some(relative_score_explanation(
+                        &results[i],
+                        ScoreScope::CaptureSequence,
+                    )),
                 )
             } else {
                 (None, None)
@@ -2011,17 +2147,143 @@ fn theil_sen_slope(times: &[f64], values: &[f64]) -> f64 {
     median(&slopes)
 }
 
-/// Compute the 5th and 95th percentile values from a slice.
-fn percentile_bounds(values: &[f64]) -> (f64, f64) {
+#[derive(Clone, Copy)]
+struct RelativeMetricTolerance {
+    no_penalty_fraction: f64,
+    zero_score_fraction: f64,
+}
+
+impl RelativeMetricTolerance {
+    const fn new(no_penalty_fraction: f64, zero_score_fraction: f64) -> Self {
+        Self {
+            no_penalty_fraction,
+            zero_score_fraction,
+        }
+    }
+}
+
+const STAR_COUNT_TOLERANCE: RelativeMetricTolerance = RelativeMetricTolerance::new(0.10, 0.40);
+const HFR_TOLERANCE: RelativeMetricTolerance = RelativeMetricTolerance::new(0.05, 0.30);
+const ECCENTRICITY_TOLERANCE: RelativeMetricTolerance = RelativeMetricTolerance::new(0.10, 0.50);
+const SNR_TOLERANCE: RelativeMetricTolerance = RelativeMetricTolerance::new(0.10, 0.40);
+const BACKGROUND_TOLERANCE: RelativeMetricTolerance = RelativeMetricTolerance::new(0.10, 0.40);
+
+fn percentile(values: &[f64], quantile: f64) -> Option<f64> {
     if values.is_empty() {
-        return (0.0, 0.0);
+        return None;
     }
     let mut sorted = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let n = sorted.len();
-    let p5_idx = ((n as f64 * 0.05).floor() as usize).min(n - 1);
-    let p95_idx = ((n as f64 * 0.95).ceil() as usize).min(n - 1);
-    (sorted[p5_idx], sorted[p95_idx])
+    let position = quantile.clamp(0.0, 1.0) * (sorted.len() - 1) as f64;
+    let lower = position.floor() as usize;
+    let upper = position.ceil() as usize;
+    let fraction = position - lower as f64;
+    Some(sorted[lower] * (1.0 - fraction) + sorted[upper] * fraction)
+}
+
+fn relative_metric_score(degradation: f64, tolerance: RelativeMetricTolerance) -> f64 {
+    if degradation <= tolerance.no_penalty_fraction {
+        return 1.0;
+    }
+    let span = tolerance.zero_score_fraction - tolerance.no_penalty_fraction;
+    if span <= f64::EPSILON {
+        return 0.0;
+    }
+    (1.0 - (degradation - tolerance.no_penalty_fraction) / span).clamp(0.0, 1.0)
+}
+
+fn score_relative_higher_better(
+    values: &[Option<f64>],
+    tolerance: RelativeMetricTolerance,
+) -> Vec<Option<f64>> {
+    let valid: Vec<f64> = values.iter().filter_map(|value| *value).collect();
+    let Some(reference) = percentile(&valid, 0.90) else {
+        return values.iter().map(|_| None).collect();
+    };
+    if reference.abs() < f64::EPSILON {
+        return values.iter().map(|value| value.map(|_| 1.0)).collect();
+    }
+    values
+        .iter()
+        .map(|value| {
+            value.map(|value| {
+                let degradation = ((reference - value) / reference).max(0.0);
+                relative_metric_score(degradation, tolerance)
+            })
+        })
+        .collect()
+}
+
+fn score_relative_lower_better(
+    values: &[Option<f64>],
+    tolerance: RelativeMetricTolerance,
+) -> Vec<Option<f64>> {
+    let valid: Vec<f64> = values.iter().filter_map(|value| *value).collect();
+    let Some(reference) = percentile(&valid, 0.10) else {
+        return values.iter().map(|_| None).collect();
+    };
+    if reference.abs() < f64::EPSILON {
+        return values.iter().map(|value| value.map(|_| 1.0)).collect();
+    }
+    values
+        .iter()
+        .map(|value| {
+            value.map(|value| {
+                let degradation = ((value - reference) / reference).max(0.0);
+                relative_metric_score(degradation, tolerance)
+            })
+        })
+        .collect()
+}
+
+fn relative_score_explanation(result: &ImageQualityResult, scope: ScoreScope) -> String {
+    let metrics = &result.normalized_metrics;
+    let mut components = [
+        ("star count", metrics.star_count),
+        ("HFR", metrics.hfr),
+        ("eccentricity", metrics.eccentricity),
+        ("SNR", metrics.snr),
+        ("background", metrics.background),
+        ("spatial coverage", metrics.spatial_coverage),
+        ("transparency", metrics.transparency),
+        ("pointing", metrics.pointing),
+    ]
+    .into_iter()
+    .filter_map(|(name, score)| score.map(|score| (name, score)))
+    .collect::<Vec<_>>();
+    components.sort_by(|left, right| {
+        left.1
+            .partial_cmp(&right.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let weakest = components
+        .iter()
+        .take(3)
+        .map(|(name, score)| format!("{name} {:.0}%", score * 100.0))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let has_pixel_evidence = metrics.spatial_coverage.is_some()
+        || metrics.transparency.is_some()
+        || metrics.pointing.is_some();
+    let basis = if has_pixel_evidence {
+        "Pixel-assisted relative score."
+    } else {
+        "Catalog-relative score only; no fresh pixel-quality evidence."
+    };
+    let temporal = result.temporal_anomaly_score.min(0.5) * 100.0;
+    let comparison = if scope == ScoreScope::CaptureSequence {
+        "its capture sequence"
+    } else {
+        "all target/filter stack candidates with matching capture settings"
+    };
+    let temporal_note = if scope == ScoreScope::CaptureSequence {
+        format!(" Temporal change reduced the metric score by {temporal:.0}%.")
+    } else {
+        String::new()
+    };
+    format!(
+        "{basis} Lowest components: {weakest}.{temporal_note} This ranks the frame against {comparison}; it does not prove image damage."
+    )
 }
 
 /// Weighted sum of available (non-None) metric values.
@@ -2057,6 +2319,48 @@ fn best_value(
 }
 
 /// Parse image metrics from an AcquiredImage's metadata JSON.
+fn metadata_value_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(value) if !value.is_empty() => Some(value.clone()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        serde_json::Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn capture_profile_from_metadata(metadata: &serde_json::Value) -> Option<String> {
+    let exposure = metadata_value_text(&metadata["ExposureDuration"])
+        .or_else(|| metadata_value_text(&metadata["ExposureTime"]))
+        .or_else(|| metadata_value_text(&metadata["EXPTIME"]));
+    let gain = metadata_value_text(&metadata["Gain"]);
+    let offset = metadata_value_text(&metadata["Offset"]);
+    let binning = metadata_value_text(&metadata["Binning"]).or_else(|| {
+        let x = metadata_value_text(&metadata["XBINNING"])?;
+        let y = metadata_value_text(&metadata["YBINNING"])?;
+        Some(format!("{x}x{y}"))
+    });
+    let readout = metadata_value_text(&metadata["ReadoutMode"]);
+    let roi = metadata_value_text(&metadata["ROI"]);
+    if exposure.is_none()
+        && gain.is_none()
+        && offset.is_none()
+        && binning.is_none()
+        && readout.is_none()
+        && roi.is_none()
+    {
+        return None;
+    }
+    Some(format!(
+        "exposure={}|gain={}|offset={}|binning={}|readout={}|roi={}",
+        exposure.as_deref().unwrap_or("?"),
+        gain.as_deref().unwrap_or("?"),
+        offset.as_deref().unwrap_or("?"),
+        binning.as_deref().unwrap_or("?"),
+        readout.as_deref().unwrap_or("?"),
+        roi.as_deref().unwrap_or("?"),
+    ))
+}
+
 pub fn extract_metrics_from_metadata(
     image_id: i32,
     metadata_json: &str,
@@ -2096,10 +2400,9 @@ pub fn extract_metrics_from_metadata(
     ImageMetrics {
         image_id,
         timestamp,
-        session_id: metadata["SessionId"]
-            .as_str()
-            .or_else(|| metadata["SessionID"].as_str())
-            .map(str::to_string),
+        session_id: metadata_value_text(&metadata["SessionId"])
+            .or_else(|| metadata_value_text(&metadata["SessionID"])),
+        capture_profile: capture_profile_from_metadata(&metadata),
         star_count,
         hfr,
         eccentricity,
@@ -2127,6 +2430,7 @@ mod tests {
             image_id: id,
             timestamp: Some(ts),
             session_id: None,
+            capture_profile: None,
             star_count: Some(stars),
             hfr: Some(hfr),
             eccentricity: None,
@@ -2158,6 +2462,7 @@ mod tests {
             image_id: id,
             timestamp: Some(ts),
             session_id: None,
+            capture_profile: None,
             star_count: Some(stars),
             hfr: Some(hfr),
             eccentricity: Some(ecc),
@@ -2188,6 +2493,7 @@ mod tests {
             image_id: id,
             timestamp: Some(ts),
             session_id: None,
+            capture_profile: None,
             star_count: Some(stars),
             hfr: Some(hfr),
             eccentricity: None,
@@ -2666,32 +2972,28 @@ mod tests {
     }
 
     #[test]
-    fn test_percentile_bounds_basic() {
+    fn test_percentile_interpolates() {
         let values: Vec<f64> = (1..=100).map(|x| x as f64).collect();
-        let (p5, p95) = percentile_bounds(&values);
-        assert!(p5 <= 6.0, "p5 should be around 5: got {}", p5);
-        assert!(p95 >= 95.0, "p95 should be around 95: got {}", p95);
+        assert_eq!(percentile(&values, 0.0), Some(1.0));
+        assert_eq!(percentile(&values, 1.0), Some(100.0));
+        assert_eq!(percentile(&values, 0.5), Some(50.5));
     }
 
     #[test]
-    fn test_percentile_bounds_identical() {
+    fn test_percentile_identical() {
         let values = vec![5.0, 5.0, 5.0, 5.0];
-        let (p5, p95) = percentile_bounds(&values);
-        assert_eq!(p5, 5.0);
-        assert_eq!(p95, 5.0);
+        assert_eq!(percentile(&values, 0.1), Some(5.0));
+        assert_eq!(percentile(&values, 0.9), Some(5.0));
     }
 
     #[test]
-    fn test_percentile_bounds_empty() {
+    fn test_percentile_empty() {
         let values: Vec<f64> = vec![];
-        let (p5, p95) = percentile_bounds(&values);
-        assert_eq!(p5, 0.0);
-        assert_eq!(p95, 0.0);
+        assert_eq!(percentile(&values, 0.5), None);
     }
 
     #[test]
     fn test_normalize_higher_better() {
-        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
         let values = vec![
             Some(100.0),
             Some(200.0),
@@ -2699,7 +3001,8 @@ mod tests {
             Some(400.0),
             Some(500.0),
         ];
-        let normalized = analyzer.normalize_metric_higher_better(&values);
+        let normalized =
+            score_relative_higher_better(&values, RelativeMetricTolerance::new(0.10, 0.40));
 
         // 500 should be the best (1.0), 100 the worst (0.0)
         assert!(normalized[4].unwrap() > normalized[0].unwrap());
@@ -2709,9 +3012,9 @@ mod tests {
 
     #[test]
     fn test_normalize_lower_better() {
-        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
         let values = vec![Some(1.0), Some(2.0), Some(3.0), Some(4.0), Some(5.0)];
-        let normalized = analyzer.normalize_metric_lower_better(&values);
+        let normalized =
+            score_relative_lower_better(&values, RelativeMetricTolerance::new(0.05, 0.30));
 
         // 1.0 should be the best (close to 1.0), 5.0 the worst (close to 0.0)
         assert!(normalized[0].unwrap() > normalized[4].unwrap());
@@ -2720,9 +3023,9 @@ mod tests {
 
     #[test]
     fn test_normalize_all_identical() {
-        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
         let values = vec![Some(3.0), Some(3.0), Some(3.0)];
-        let normalized = analyzer.normalize_metric_higher_better(&values);
+        let normalized =
+            score_relative_higher_better(&values, RelativeMetricTolerance::new(0.10, 0.40));
         for v in &normalized {
             assert_eq!(v.unwrap(), 1.0);
         }
@@ -2730,9 +3033,9 @@ mod tests {
 
     #[test]
     fn test_normalize_with_nones() {
-        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
         let values = vec![Some(100.0), None, Some(300.0), None, Some(500.0)];
-        let normalized = analyzer.normalize_metric_higher_better(&values);
+        let normalized =
+            score_relative_higher_better(&values, RelativeMetricTolerance::new(0.10, 0.40));
 
         assert!(normalized[0].is_some());
         assert!(normalized[1].is_none());
@@ -2798,6 +3101,25 @@ mod tests {
     }
 
     #[test]
+    fn test_sequence_splitting_capture_profile_change() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<ImageMetrics> = (0..6)
+            .map(|i| make_image(i, 1000 + i as i64 * 60, 300.0, 2.5))
+            .collect();
+        for image in &mut images[..3] {
+            image.capture_profile = Some("exposure=60|gain=100|binning=1x1|readout=0".into());
+        }
+        for image in &mut images[3..] {
+            image.capture_profile = Some("exposure=120|gain=100|binning=1x1|readout=0".into());
+        }
+
+        let sequences = analyzer.split_into_sequences(&images);
+        assert_eq!(sequences.len(), 2);
+        assert_eq!(sequences[0].len(), 3);
+        assert_eq!(sequences[1].len(), 3);
+    }
+
+    #[test]
     fn test_sequence_splitting_two_sessions() {
         let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
         let mut images: Vec<ImageMetrics> = (0..5)
@@ -2858,6 +3180,82 @@ mod tests {
             "Most frames in a tight sequence should score above fair: {} out of 10",
             above_fair
         );
+    }
+
+    #[test]
+    fn realistic_catalog_variation_does_not_claim_degradation() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let images: Vec<ImageMetrics> = (0..30)
+            .map(|i| {
+                let progress = i as f64 / 29.0;
+                make_full_image(
+                    i,
+                    i as i64 * 68,
+                    6852.0 - progress * 1325.0,
+                    1.739 + progress * 0.128,
+                    1590.0,
+                    45.0,
+                    0.313 + progress * 0.119,
+                )
+            })
+            .collect();
+
+        let sequence = &analyzer.analyze(&images, 1, "Sh2 230", "B")[0];
+        let last = sequence.images.last().unwrap();
+        assert!(
+            last.quality_score >= 0.5,
+            "normal catalog variation scored too low: {:.2}",
+            last.quality_score,
+        );
+        assert_eq!(last.category, None);
+        assert!(last.details.is_none());
+    }
+
+    #[test]
+    fn target_filter_rollup_finds_a_weak_session_for_stack_review() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<ImageMetrics> = (0..5)
+            .map(|i| make_image(i, 1000 + i as i64 * 60, 1000.0, 2.5))
+            .collect();
+        images.extend((5..10).map(|i| make_image(i, 10_000 + (i as i64 - 5) * 60, 600.0, 2.5)));
+        for image in &mut images {
+            image.capture_profile = Some("exposure=300|gain=100|binning=1x1|readout=0".into());
+        }
+
+        let (sessions, rollup) =
+            analyzer.analyze_with_target_filter_rollup(&images, 1, "M42", "Ha");
+        assert_eq!(sessions.len(), 2);
+        assert!(sessions
+            .iter()
+            .all(|session| session.images.iter().all(|image| image.quality_score > 0.9)));
+        assert!(rollup.images[..5]
+            .iter()
+            .all(|image| image.quality_score > 0.9));
+        assert!(rollup.images[5..]
+            .iter()
+            .all(|image| image.quality_score < 0.5));
+        assert!(rollup.images[5].details.as_deref().is_some_and(|details| {
+            details.contains("all target/filter stack candidates with matching capture settings")
+        }));
+        assert_eq!(rollup.images[5].category, None);
+    }
+
+    #[test]
+    fn target_filter_rollup_does_not_compare_different_capture_profiles() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<ImageMetrics> = (0..5)
+            .map(|i| make_image(i, 1000 + i as i64 * 60, 1000.0, 2.5))
+            .collect();
+        images.extend((5..10).map(|i| make_image(i, 10_000 + (i as i64 - 5) * 60, 600.0, 2.5)));
+        for image in &mut images[..5] {
+            image.capture_profile = Some("exposure=300|gain=100|binning=1x1|readout=0".into());
+        }
+        for image in &mut images[5..] {
+            image.capture_profile = Some("exposure=60|gain=100|binning=1x1|readout=0".into());
+        }
+
+        let (_, rollup) = analyzer.analyze_with_target_filter_rollup(&images, 1, "M42", "Ha");
+        assert!(rollup.images.iter().all(|image| image.quality_score > 0.9));
     }
 
     #[test]
@@ -3002,6 +3400,13 @@ mod tests {
             "FilterName": "Ha",
             "HFR": 2.5,
             "DetectedStars": 342,
+            "ExposureDuration": 60.0,
+            "Gain": 100,
+            "Offset": 10,
+            "Binning": "1x1",
+            "ReadoutMode": 0,
+            "ROI": 100,
+            "SessionId": 5,
             "ExposureStartTime": "2024-01-15T22:00:00Z"
         }"#;
 
@@ -3009,6 +3414,11 @@ mod tests {
         assert_eq!(metrics.image_id, 1);
         assert_eq!(metrics.star_count, Some(342.0));
         assert_eq!(metrics.hfr, Some(2.5));
+        assert_eq!(metrics.session_id.as_deref(), Some("5"));
+        assert_eq!(
+            metrics.capture_profile.as_deref(),
+            Some("exposure=60.0|gain=100|offset=10|binning=1x1|readout=0|roi=100")
+        );
         assert!(metrics.timestamp.is_some());
         assert!(metrics.eccentricity.is_none());
         assert!(metrics.snr.is_none());

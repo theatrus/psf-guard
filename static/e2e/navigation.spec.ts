@@ -474,11 +474,18 @@ test('Sequence keeps a Grid selection that spans session tabs', async ({ page })
 
   await page.getByRole('button', { name: 'Sequence', exact: true }).click();
 
-  await expect(page.locator('.sequence-tab')).toHaveCount(2, { timeout: 15_000 });
-  await expect(page.locator('.sequence-tab-selection-count')).toHaveCount(2);
+  await expect(page.locator('.sequence-tab')).toHaveCount(3, { timeout: 15_000 });
+  await expect(page.locator('.sequence-tab-selection-count')).toHaveCount(3);
   await expect(page.locator('.sequence-selection-bar')).toContainText('2 selected');
   await expect(page.locator('.sequence-image-card.selected')).toHaveCount(1);
-  await expect(page.locator('.sequence-tab').nth(1)).toHaveClass(/active/);
+  await expect(page.locator('.sequence-tab').nth(2)).toHaveClass(/active/);
+
+  await page.getByRole('button', { name: /All sessions/ }).click();
+  await expect(page.locator('.sequence-image-card')).toHaveCount(3);
+  await expect(page.locator('.sequence-score-context')).toContainText(
+    'matching capture settings across all sessions'
+  );
+  await expect(page).toHaveURL(/scoreScope=target-filter%3A/);
 });
 
 test('Sequence vertical arrows follow the rendered thumbnail grid', async ({ page }) => {
@@ -574,7 +581,7 @@ test('many Sequence tabs wrap into a stable grid without horizontal scrolling', 
   await page.goto(`/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`);
 
   const tabs = page.locator('.sequence-tab');
-  await expect(tabs).toHaveCount(12, { timeout: 15_000 });
+  await expect(tabs).toHaveCount(13, { timeout: 15_000 });
   const before = await tabs.evaluateAll(elements => elements.map(element => ({
     top: element.getBoundingClientRect().top,
     width: element.getBoundingClientRect().width,

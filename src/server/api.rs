@@ -1,4 +1,6 @@
-use crate::sequence_analysis::{ImageQualityResult, ReferenceValues, SequenceSummary};
+use crate::sequence_analysis::{
+    ImageQualityResult, ReferenceValues, ScoredSequence, SequenceSummary,
+};
 use crate::server::state::RefreshStatus;
 use serde::{Deserialize, Serialize};
 
@@ -716,6 +718,7 @@ pub struct SequenceAnalysisQuery {
 #[derive(Debug, Serialize)]
 pub struct SequenceAnalysisResponse {
     pub sequences: Vec<ScoredSequenceResponse>,
+    pub target_filter_rollups: Vec<ScoredSequenceResponse>,
 }
 
 /// Request body for starting a spatial (occlusion) metrics scan.
@@ -769,6 +772,22 @@ pub struct ScoredSequenceResponse {
     pub reference_values: ReferenceValues,
     pub images: Vec<ImageQualityResult>,
     pub summary: SequenceSummary,
+}
+
+impl From<ScoredSequence> for ScoredSequenceResponse {
+    fn from(sequence: ScoredSequence) -> Self {
+        Self {
+            target_id: sequence.target_id,
+            target_name: sequence.target_name,
+            filter_name: sequence.filter_name,
+            session_start: sequence.session_start,
+            session_end: sequence.session_end,
+            image_count: sequence.image_count,
+            reference_values: sequence.reference_values,
+            images: sequence.images,
+            summary: sequence.summary,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]

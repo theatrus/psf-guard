@@ -1233,6 +1233,9 @@ export interface SequenceAnalysisRequest {
 
 export interface SequenceAnalysisResponse {
   sequences: ScoredSequence[];
+  /** Scores across all stack candidates for each target/filter. Each score is
+   * compared only with frames that have matching capture settings. */
+  target_filter_rollups?: ScoredSequence[];
 }
 
 export interface ScoredSequence {

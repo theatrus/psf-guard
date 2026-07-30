@@ -56,11 +56,31 @@ problems away.
 | **Fresh plate solution** | Off-target frames, pointing jumps/drift, deterministic no-solves | Seiza solves the current pixels; solved centers are compared to the authoritative target, stable framing clusters, and within-segment drift |
 | **Satellite prediction + pixel alignment** | Potentially bright satellite trails | A solved WCS plus FITS exposure/site metadata projects cached orbital elements through the shutter-open interval, then a bounded matched-filter search tests the nearby pixels; prediction and aligned-path evidence remain separate |
 
-The signals feed a sequence analyzer that scores every frame 0–1 relative to
-its session (same target, filter, and exposure; sessions split on 60-minute
-gaps) and classifies the likely cause. Verdicts: **OK**, **WARN**
-(recoverable or review-worthy — e.g. gradients that flat-ish processing can
-remove, glow that stacks into artifacts), **REJECT** (clouds and occlusion).
+The signals feed two comparisons:
+
+- **Session comparison** ranks frames from one capture run. It catches a
+  cloud, focus change, or tracking loss within a night.
+- **Target/filter stack comparison** ranks all frames that could enter one
+  stack across capture runs. It can expose a whole weak night that looked
+  stable by itself. It compares only frames with matching exposure, gain,
+  offset, binning, readout, and sensor-region metadata.
+
+Both scores run from 0 to 1. They are relative ranks, not verdicts. Catalog
+star count, HFR, eccentricity, SNR, and background use a robust good reference
+with a no-penalty band for normal variation. Missing signals receive no weight.
+Fresh spatial, photometric, and plate-solve results add pixel evidence when a
+quality scan has run.
+
+A low relative score alone does not name a fault or recommend rejection. The
+UI labels catalog-only results as **Catalog-relative score** and says which
+comparison produced them. A frame gets a cause such as clouds, obstruction,
+focus drift, tracking error, or off-target only when that detector has enough
+evidence. Reviewed rejection recommendations use those causes, not the score
+alone.
+
+Capture sessions split at a Target Scheduler session change, a capture-profile
+change, or a 60-minute gap. CLI screening still reports **OK**, **WARN**, and
+**REJECT** verdicts for its file-screening workflow.
 
 ## Quick start
 
@@ -83,9 +103,10 @@ psf-guard move-rejects --db my-db-slug
 From the **web UI**: open a target's Sequence view and press **Scan Quality**.
 The scan runs spatial/photometric screening and fresh plate solves in the
 background (progress shown live), and results persist across restarts. The
-sequence analysis shows coverage badges, classifications, and solved-center
-scatter. Use **Select Clouded**, **Select Off Target**, **Select Unsolved**, or
-**Select Recommended**; rejecting a recommendation always opens a per-image
+sequence analysis shows coverage badges, classifications, solved-center
+scatter, a session view, and an all-session stack comparison for each filter.
+Use the **Select** menu for score threshold, cloud, target, solve, or rejection
+recommendation presets. Rejecting a recommendation always opens a per-image
 review before anything is written.
 
 The user-triggered scan resolves and durably caches suitable orbital elements

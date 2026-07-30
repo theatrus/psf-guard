@@ -310,6 +310,10 @@ async fn test_analyze_sequence_normal() {
         1,
         "Should have exactly 1 sequence (single session)"
     );
+    let rollups = json["data"]["target_filter_rollups"].as_array().unwrap();
+    assert_eq!(rollups.len(), 1);
+    assert_eq!(rollups[0]["filter_name"], "L");
+    assert_eq!(rollups[0]["image_count"], 10);
 
     let seq = &sequences[0];
     assert_eq!(seq["target_id"], 1);
@@ -761,6 +765,10 @@ async fn test_json_contract_structure() {
     assert!(json.get("data").is_some(), "Missing 'data' field");
     assert!(json.get("error").is_some(), "Missing 'error' field");
     assert!(json.get("status").is_some(), "Missing 'status' field");
+    assert!(
+        json["data"].get("target_filter_rollups").is_some(),
+        "Missing 'target_filter_rollups' field"
+    );
 
     let seq = &json["data"]["sequences"][0];
 
