@@ -1,4 +1,5 @@
 import { expect, test, type Route } from '@playwright/test';
+import type { ScoredSequence, TargetFilterRollup } from '../src/api/types';
 import {
   registerFixtureDb,
   resetDatabases,
@@ -6,6 +7,25 @@ import {
 } from './helpers';
 
 let dbId: string;
+
+function compactTargetFilterRollup(sequence: ScoredSequence): TargetFilterRollup {
+  return {
+    target_id: sequence.target_id,
+    target_name: sequence.target_name,
+    filter_name: sequence.filter_name,
+    session_start: sequence.session_start,
+    session_end: sequence.session_end,
+    image_count: sequence.image_count,
+    unavailable_image_count: 0,
+    images: sequence.images.map(image => ({
+      image_id: image.image_id,
+      quality_score: image.quality_score,
+      normalized_metrics: image.normalized_metrics,
+      details: image.details,
+    })),
+    summary: sequence.summary,
+  };
+}
 
 test.beforeEach(async ({ request }) => {
   await resetDatabases(request);
@@ -437,16 +457,13 @@ test('Sequence keeps a Grid selection that spans session tabs', async ({ page })
     const response = await route.fetch();
     const body = await response.json() as {
       data: {
-        sequences: Array<{
-          session_start?: number;
-          session_end?: number;
-          image_count: number;
-          images: Array<{ image_id: number }>;
-        }>;
+        sequences: ScoredSequence[];
+        target_filter_rollups?: TargetFilterRollup[];
       };
     };
     const original = body.data.sequences[0];
     const [firstImage, ...laterImages] = original.images;
+    body.data.target_filter_rollups = [compactTargetFilterRollup(original)];
     body.data.sequences = [
       {
         ...original,
@@ -557,12 +574,8 @@ test('many Sequence tabs wrap into a stable grid without horizontal scrolling', 
     const response = await route.fetch();
     const body = await response.json() as {
       data: {
-        sequences: Array<{
-          session_start: number;
-          session_end: number;
-          image_count: number;
-          images: Array<Record<string, unknown> & { image_id: number }>;
-        }>;
+        sequences: ScoredSequence[];
+        target_filter_rollups?: TargetFilterRollup[];
       };
     };
     const template = body.data.sequences[0];
@@ -575,6 +588,13 @@ test('many Sequence tabs wrap into a stable grid without horizontal scrolling', 
         image_id: 1_000 + sequenceIndex * 10 + imageIndex,
       })),
     }));
+    const rollupImages = body.data.sequences.flatMap(sequence => sequence.images);
+    body.data.target_filter_rollups = [compactTargetFilterRollup({
+      ...template,
+      session_start: body.data.sequences.at(-1)?.session_start,
+      image_count: rollupImages.length,
+      images: rollupImages,
+    })];
     await route.fulfill({ response, json: body });
   });
   await page.setViewportSize({ width: 760, height: 720 });

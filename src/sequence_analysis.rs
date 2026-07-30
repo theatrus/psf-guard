@@ -247,6 +247,14 @@ pub struct ScoredSequence {
     pub summary: SequenceSummary,
 }
 
+/// A target/filter comparison containing only capture-profile groups with
+/// enough frames to support a relative score.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TargetFilterRollup {
+    pub sequence: ScoredSequence,
+    pub unavailable_image_count: usize,
+}
+
 /// Raw metric values extracted from an image's metadata for analysis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageMetrics {
@@ -595,12 +603,25 @@ impl SequenceAnalyzer {
         target_id: i32,
         target_name: &str,
         filter_name: &str,
-    ) -> (Vec<ScoredSequence>, ScoredSequence) {
+    ) -> (Vec<ScoredSequence>, Option<TargetFilterRollup>) {
         let sequences = self.analyze(images, target_id, target_name, filter_name);
+        if sequences.len() < 2 {
+            return (sequences, None);
+        }
         let session_evidence: HashMap<i32, ImageQualityResult> = sequences
             .iter()
             .flat_map(|sequence| sequence.images.iter().cloned())
             .map(|result| (result.image_id, result))
+            .collect();
+        let session_by_image: HashMap<i32, usize> = sequences
+            .iter()
+            .enumerate()
+            .flat_map(|(session_index, sequence)| {
+                sequence
+                    .images
+                    .iter()
+                    .map(move |image| (image.image_id, session_index))
+            })
             .collect();
 
         let mut by_profile: HashMap<Option<String>, Vec<ImageMetrics>> = HashMap::new();
@@ -615,10 +636,20 @@ impl SequenceAnalyzer {
             .iter()
             .filter_map(|image| image.timestamp.map(|timestamp| (image.image_id, timestamp)))
             .collect();
-        let mut rollup_images = by_profile
-            .into_values()
-            .flat_map(|mut profile_images| {
-                profile_images.sort_by_key(|image| image.timestamp.unwrap_or(0));
+        let mut unavailable_image_count = 0;
+        let mut rollup_images = Vec::new();
+        for mut profile_images in by_profile.into_values() {
+            let session_count = profile_images
+                .iter()
+                .filter_map(|image| session_by_image.get(&image.image_id))
+                .collect::<std::collections::HashSet<_>>()
+                .len();
+            if profile_images.len() < self.config.min_sequence_length || session_count < 2 {
+                unavailable_image_count += profile_images.len();
+                continue;
+            }
+            profile_images.sort_by_key(|image| image.timestamp.unwrap_or(0));
+            rollup_images.extend(
                 self.score_group(
                     profile_images,
                     target_id,
@@ -626,9 +657,12 @@ impl SequenceAnalyzer {
                     filter_name,
                     ScoreScope::TargetFilter,
                 )
-                .images
-            })
-            .collect::<Vec<_>>();
+                .images,
+            );
+        }
+        if rollup_images.is_empty() {
+            return (sequences, None);
+        }
 
         for result in &mut rollup_images {
             let Some(session) = session_evidence.get(&result.image_id) else {
@@ -647,6 +681,8 @@ impl SequenceAnalyzer {
             result.flags = session.flags.clone();
             result.satellite = session.satellite.clone();
             result.regrade_reason = session.regrade_reason.clone();
+            result.quality_score =
+                apply_satellite_score(result.quality_score, result.satellite.as_ref());
             if session.category.is_some()
                 || !session.flags.is_empty()
                 || session.regrade_reason.is_some()
@@ -682,7 +718,13 @@ impl SequenceAnalyzer {
             summary,
         };
 
-        (sequences, rollup)
+        (
+            sequences,
+            Some(TargetFilterRollup {
+                sequence: rollup,
+                unavailable_image_count,
+            }),
+        )
     }
 
     /// Split a time-ordered list of images into contiguous sessions.
@@ -697,6 +739,8 @@ impl SequenceAnalyzer {
         let gap_seconds = (self.config.session_gap_minutes * 60) as i64;
         let mut sequences: Vec<Vec<ImageMetrics>> = Vec::new();
         let mut current_seq: Vec<ImageMetrics> = vec![sorted[0].clone()];
+        let mut current_session_id = sorted[0].session_id.clone();
+        let mut current_capture_profile = sorted[0].capture_profile.clone();
 
         for img in sorted.iter().skip(1) {
             let prev_ts = current_seq
@@ -705,25 +749,28 @@ impl SequenceAnalyzer {
                 .unwrap_or(0);
             let curr_ts = img.timestamp.unwrap_or(0);
 
-            let explicit_session_changed = current_seq.last().is_some_and(|previous| {
-                previous
-                    .session_id
-                    .as_ref()
-                    .zip(img.session_id.as_ref())
-                    .is_some_and(|(left, right)| left != right)
-            });
-            let capture_profile_changed = current_seq.last().is_some_and(|previous| {
-                previous
-                    .capture_profile
-                    .as_ref()
-                    .zip(img.capture_profile.as_ref())
-                    .is_some_and(|(left, right)| left != right)
-            });
+            let explicit_session_changed = current_session_id
+                .as_ref()
+                .zip(img.session_id.as_ref())
+                .is_some_and(|(left, right)| left != right);
+            let capture_profile_changed = current_capture_profile
+                .as_ref()
+                .zip(img.capture_profile.as_ref())
+                .is_some_and(|(left, right)| left != right);
             if explicit_session_changed
                 || capture_profile_changed
                 || curr_ts - prev_ts > gap_seconds
             {
                 sequences.push(std::mem::take(&mut current_seq));
+                current_session_id = img.session_id.clone();
+                current_capture_profile = img.capture_profile.clone();
+            } else {
+                if img.session_id.is_some() {
+                    current_session_id = img.session_id.clone();
+                }
+                if img.capture_profile.is_some() {
+                    current_capture_profile = img.capture_profile.clone();
+                }
             }
             current_seq.push(img.clone());
         }
@@ -1023,8 +1070,8 @@ impl SequenceAnalyzer {
                 None => detail,
             });
 
+            result.quality_score = apply_satellite_score(result.quality_score, Some(satellite));
             if satellite.reject_recommended && satellite.pixel_aligned_high_risk_count > 0 {
-                result.quality_score = result.quality_score.min(0.35);
                 let reason = format!(
                     "[Auto] Pixel-aligned bright satellite trail - {} high-risk candidate(s), risk {:.2}; verify overlay",
                     satellite.pixel_aligned_high_risk_count,
@@ -1034,8 +1081,6 @@ impl SequenceAnalyzer {
                     Some(existing) => format!("{existing}; {reason}"),
                     None => reason,
                 });
-            } else {
-                result.quality_score = result.quality_score.min(0.75);
             }
         }
     }
@@ -2065,6 +2110,20 @@ fn apply_pointing_score(score: f64, pointing: Option<&PointingQuality>) -> f64 {
     }
 }
 
+fn apply_satellite_score(score: f64, satellite: Option<&SatelliteFrameMetrics>) -> f64 {
+    let Some(satellite) = satellite else {
+        return score;
+    };
+    if satellite.potentially_bright_count == 0 && satellite.pixel_aligned_count == 0 {
+        return score;
+    }
+    if satellite.reject_recommended && satellite.pixel_aligned_high_risk_count > 0 {
+        score.min(0.35)
+    } else {
+        score.min(0.75)
+    }
+}
+
 /// Group solved centers by spatial connectivity. Single-link clustering is
 /// intentional: a gradual tracking drift remains one cluster through its
 /// short consecutive steps, while a discrete framing change forms another.
@@ -2328,19 +2387,66 @@ fn metadata_value_text(value: &serde_json::Value) -> Option<String> {
     }
 }
 
+fn canonical_number_text(value: f64) -> Option<String> {
+    if !value.is_finite() {
+        return None;
+    }
+    let mut text = format!("{value:.6}");
+    while text.contains('.') && text.ends_with('0') {
+        text.pop();
+    }
+    if text.ends_with('.') {
+        text.pop();
+    }
+    if text == "-0" {
+        text = "0".to_string();
+    }
+    Some(text)
+}
+
+fn capture_value_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Number(value) => value.as_f64().and_then(canonical_number_text),
+        serde_json::Value::String(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else if let Ok(number) = trimmed.parse::<f64>() {
+                canonical_number_text(number)
+            } else {
+                Some(trimmed.to_ascii_lowercase())
+            }
+        }
+        _ => None,
+    }
+}
+
+fn capture_binning_text(value: &serde_json::Value) -> Option<String> {
+    let raw = capture_value_text(value)?;
+    if let Ok(number) = raw.parse::<f64>() {
+        let side = canonical_number_text(number)?;
+        return Some(format!("{side}x{side}"));
+    }
+    let compact = raw.replace(char::is_whitespace, "");
+    let (left, right) = compact.split_once('x')?;
+    let left = canonical_number_text(left.parse().ok()?)?;
+    let right = canonical_number_text(right.parse().ok()?)?;
+    Some(format!("{left}x{right}"))
+}
+
 fn capture_profile_from_metadata(metadata: &serde_json::Value) -> Option<String> {
-    let exposure = metadata_value_text(&metadata["ExposureDuration"])
-        .or_else(|| metadata_value_text(&metadata["ExposureTime"]))
-        .or_else(|| metadata_value_text(&metadata["EXPTIME"]));
-    let gain = metadata_value_text(&metadata["Gain"]);
-    let offset = metadata_value_text(&metadata["Offset"]);
-    let binning = metadata_value_text(&metadata["Binning"]).or_else(|| {
-        let x = metadata_value_text(&metadata["XBINNING"])?;
-        let y = metadata_value_text(&metadata["YBINNING"])?;
+    let exposure = capture_value_text(&metadata["ExposureDuration"])
+        .or_else(|| capture_value_text(&metadata["ExposureTime"]))
+        .or_else(|| capture_value_text(&metadata["EXPTIME"]));
+    let gain = capture_value_text(&metadata["Gain"]);
+    let offset = capture_value_text(&metadata["Offset"]);
+    let binning = capture_binning_text(&metadata["Binning"]).or_else(|| {
+        let x = capture_value_text(&metadata["XBINNING"])?;
+        let y = capture_value_text(&metadata["YBINNING"])?;
         Some(format!("{x}x{y}"))
     });
-    let readout = metadata_value_text(&metadata["ReadoutMode"]);
-    let roi = metadata_value_text(&metadata["ROI"]);
+    let readout = capture_value_text(&metadata["ReadoutMode"]);
+    let roi = capture_value_text(&metadata["ROI"]);
     if exposure.is_none()
         && gain.is_none()
         && offset.is_none()
@@ -3120,6 +3226,24 @@ mod tests {
     }
 
     #[test]
+    fn missing_profile_does_not_bridge_different_capture_settings() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<ImageMetrics> = (0..5)
+            .map(|i| make_image(i, 1000 + i as i64 * 60, 300.0, 2.5))
+            .collect();
+        images[0].capture_profile = Some("exposure=60".into());
+        images[1].capture_profile = None;
+        images[2].capture_profile = Some("exposure=120".into());
+        images[3].capture_profile = Some("exposure=120".into());
+        images[4].capture_profile = Some("exposure=120".into());
+
+        let sequences = analyzer.split_into_sequences(&images);
+        assert_eq!(sequences.len(), 2);
+        assert_eq!(sequences[0].len(), 2);
+        assert_eq!(sequences[1].len(), 3);
+    }
+
+    #[test]
     fn test_sequence_splitting_two_sessions() {
         let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
         let mut images: Vec<ImageMetrics> = (0..5)
@@ -3224,6 +3348,8 @@ mod tests {
 
         let (sessions, rollup) =
             analyzer.analyze_with_target_filter_rollup(&images, 1, "M42", "Ha");
+        let rollup = rollup.expect("two comparable sessions should produce a rollup");
+        let rollup = rollup.sequence;
         assert_eq!(sessions.len(), 2);
         assert!(sessions
             .iter()
@@ -3255,7 +3381,53 @@ mod tests {
         }
 
         let (_, rollup) = analyzer.analyze_with_target_filter_rollup(&images, 1, "M42", "Ha");
-        assert!(rollup.images.iter().all(|image| image.quality_score > 0.9));
+        assert!(
+            rollup.is_none(),
+            "different capture profiles must not produce a cross-session score"
+        );
+    }
+
+    #[test]
+    fn target_filter_rollup_omits_profiles_without_enough_frames() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images = vec![
+            make_image(1, 1_000, 1000.0, 2.5),
+            make_image(2, 10_000, 600.0, 2.5),
+        ];
+        for image in &mut images {
+            image.capture_profile = Some("exposure=300|gain=100".into());
+        }
+
+        let (sessions, rollup) =
+            analyzer.analyze_with_target_filter_rollup(&images, 1, "M42", "Ha");
+        assert_eq!(sessions.len(), 2);
+        assert!(rollup.is_none(), "two frames cannot support a rollup score");
+    }
+
+    #[test]
+    fn target_filter_rollup_requires_a_profile_to_span_sessions() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<ImageMetrics> = (0..6)
+            .map(|i| make_image(i, 1_000 + i as i64 * 60, 300.0, 2.5))
+            .collect();
+        for image in &mut images[..3] {
+            image.capture_profile = Some("exposure=60|gain=100".into());
+        }
+        for image in &mut images[3..] {
+            image.capture_profile = Some("exposure=120|gain=100".into());
+        }
+
+        let (sessions, rollup) =
+            analyzer.analyze_with_target_filter_rollup(&images, 1, "M42", "Ha");
+        assert_eq!(
+            sessions.len(),
+            2,
+            "the capture profile change splits the session"
+        );
+        assert!(
+            rollup.is_none(),
+            "neither capture profile has frames in more than one session"
+        );
     }
 
     #[test]
@@ -3417,12 +3589,27 @@ mod tests {
         assert_eq!(metrics.session_id.as_deref(), Some("5"));
         assert_eq!(
             metrics.capture_profile.as_deref(),
-            Some("exposure=60.0|gain=100|offset=10|binning=1x1|readout=0|roi=100")
+            Some("exposure=60|gain=100|offset=10|binning=1x1|readout=0|roi=100")
         );
         assert!(metrics.timestamp.is_some());
         assert!(metrics.eccentricity.is_none());
         assert!(metrics.snr.is_none());
         assert!(metrics.background.is_none());
+    }
+
+    #[test]
+    fn capture_profile_normalizes_equivalent_json_values() {
+        let integer = extract_metrics_from_metadata(
+            1,
+            r#"{"ExposureDuration":60,"Gain":"100.0","Binning":1,"ROI":100}"#,
+            None,
+        );
+        let decimal = extract_metrics_from_metadata(
+            2,
+            r#"{"ExposureTime":60.0,"Gain":100,"Binning":"1 x 1","ROI":100.0}"#,
+            None,
+        );
+        assert_eq!(integer.capture_profile, decimal.capture_profile);
     }
 
     #[test]
@@ -3578,6 +3765,44 @@ mod tests {
             .as_deref()
             .is_some_and(|details| details.contains("Pixel corridor alignment found 1")));
         assert_eq!(result[0].summary.satellite_risk_count, 1);
+    }
+
+    #[test]
+    fn target_filter_rollup_preserves_satellite_score_cap() {
+        let mut images = vec![
+            make_image(1, 1000, 100.0, 2.0),
+            make_image(2, 1060, 100.0, 2.0),
+            make_image(3, 1120, 100.0, 2.0),
+            make_image(4, 10_000, 100.0, 2.0),
+            make_image(5, 10_060, 100.0, 2.0),
+            make_image(6, 10_120, 100.0, 2.0),
+        ];
+        for image in &mut images {
+            image.capture_profile = Some("exposure=60|gain=100".into());
+        }
+        images[4].satellite = Some(SatelliteFrameMetrics {
+            predicted_tracks: 2,
+            potentially_bright_count: 1,
+            high_risk_count: 1,
+            maximum_bright_trail_risk: 0.82,
+            pixel_alignment_attempted: true,
+            pixel_aligned_count: 1,
+            pixel_aligned_high_risk_count: 1,
+            reject_recommended: true,
+            association: "predicted_with_pixel_alignment".into(),
+        });
+
+        let (_, rollup) = SequenceAnalyzer::new(SequenceAnalyzerConfig::default())
+            .analyze_with_target_filter_rollup(&images, 1, "target", "L");
+        let affected = rollup
+            .expect("two sessions should produce a rollup")
+            .sequence
+            .images
+            .into_iter()
+            .find(|image| image.image_id == 5)
+            .unwrap();
+        assert!(affected.quality_score <= 0.35);
+        assert!(affected.regrade_reason.is_some());
     }
 
     #[test]

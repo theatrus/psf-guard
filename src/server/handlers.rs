@@ -3743,7 +3743,9 @@ pub async fn analyze_sequence(
                 &filter,
             );
             all_sequences.extend(scored);
-            target_filter_rollups.push(rollup);
+            if let Some(rollup) = rollup {
+                target_filter_rollups.push(rollup);
+            }
         }
 
         (all_sequences, target_filter_rollups)
@@ -3753,7 +3755,7 @@ pub async fn analyze_sequence(
 
     let mut sequences: Vec<crate::server::api::ScoredSequenceResponse> =
         result.0.into_iter().map(Into::into).collect();
-    let mut target_filter_rollups: Vec<crate::server::api::ScoredSequenceResponse> =
+    let mut target_filter_rollups: Vec<crate::server::api::TargetFilterRollupResponse> =
         result.1.into_iter().map(Into::into).collect();
     sequences.sort_by(|a, b| {
         b.session_start

@@ -13,22 +13,24 @@ import multiSessionFixture from '../../__fixtures__/sequence-analysis-multi-sess
 import emptyFixture from '../../__fixtures__/sequence-analysis-empty.json';
 
 const multiSessionRollup = {
-  ...multiSessionFixture.data.sequences[0],
+  target_id: multiSessionFixture.data.sequences[0].target_id,
+  target_name: multiSessionFixture.data.sequences[0].target_name,
+  filter_name: multiSessionFixture.data.sequences[0].filter_name,
+  session_start: multiSessionFixture.data.sequences[0].session_start,
   session_end: multiSessionFixture.data.sequences[1].session_end,
   image_count: 10,
-  reference_values: {
-    best_star_count: null,
-    best_hfr: null,
-    best_eccentricity: null,
-    best_snr: null,
-    best_background: null,
-  },
+  unavailable_image_count: 0,
   images: [
     ...multiSessionFixture.data.sequences[0].images.map(image => (
       image.image_id === 201 ? { ...image, quality_score: 0.42 } : image
     )),
     ...multiSessionFixture.data.sequences[1].images,
-  ],
+  ].map(image => ({
+    image_id: image.image_id,
+    quality_score: image.quality_score,
+    normalized_metrics: image.normalized_metrics,
+    details: image.details,
+  })),
   summary: {
     excellent_count: 4,
     good_count: 5,
@@ -774,14 +776,14 @@ describe('SequenceView: interactions', () => {
 });
 
 describe('SequenceView: multi-session', () => {
-  function setupMultiSessionHandlers() {
+  function setupMultiSessionHandlers(rollup = multiSessionRollup) {
     server.use(
       http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json({
           ...multiSessionFixture,
           data: {
             ...multiSessionFixture.data,
-            target_filter_rollups: [multiSessionRollup],
+            target_filter_rollups: [rollup],
           },
         });
       }),
@@ -803,6 +805,19 @@ describe('SequenceView: multi-session', () => {
       }),
     );
   }
+
+  it('reports frames without enough matching capture settings', async () => {
+    setupMultiSessionHandlers({
+      ...multiSessionRollup,
+      unavailable_image_count: 2,
+    });
+
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=2') });
+
+    expect(await screen.findByText(
+      /2 not comparable across sessions/,
+    )).toBeInTheDocument();
+  });
 
   it('renders sequence tabs for multiple sessions', async () => {
     setupMultiSessionHandlers();

@@ -105,14 +105,14 @@ The scan runs spatial/photometric screening and fresh plate solves in the
 background (progress shown live), and results persist across restarts. The
 sequence analysis shows coverage badges, classifications, solved-center
 scatter, a session view, and an all-session stack comparison for each filter.
+The stack comparison scores only capture profiles with at least three matching
+frames across two sessions. It reports profiles without enough matches instead
+of assigning them a perfect score. Stack previews use the same cross-session
+score when choosing a reference frame; profiles without enough matches keep
+their session score.
 Use the **Select** menu for score threshold, cloud, target, solve, or rejection
 recommendation presets. Rejecting a recommendation always opens a per-image
 review before anything is written.
-
-| All matching sessions | One capture session |
-|:--:|:--:|
-| ![B-filter stack comparison across two sessions](sequence-score-stack.jpg) | ![B-filter comparison within one capture session](sequence-score-session.jpg) |
-| Finds weak frames that could enter the same stack, while keeping capture settings matched | Shows changes within one capture run without comparing separate nights |
 
 The user-triggered scan resolves and durably caches suitable orbital elements
 for each exposure, then caches exposure-specific crossings. Potentially bright

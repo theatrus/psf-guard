@@ -1235,7 +1235,26 @@ export interface SequenceAnalysisResponse {
   sequences: ScoredSequence[];
   /** Scores across all stack candidates for each target/filter. Each score is
    * compared only with frames that have matching capture settings. */
-  target_filter_rollups?: ScoredSequence[];
+  target_filter_rollups?: TargetFilterRollup[];
+}
+
+export interface TargetFilterScore {
+  image_id: number;
+  quality_score: number;
+  normalized_metrics: ImageQualityResult['normalized_metrics'];
+  details: string | null;
+}
+
+export interface TargetFilterRollup {
+  target_id: number;
+  target_name: string;
+  filter_name: string;
+  session_start?: number;
+  session_end?: number;
+  image_count: number;
+  unavailable_image_count: number;
+  images: TargetFilterScore[];
+  summary: SequenceSummary;
 }
 
 export interface ScoredSequence {

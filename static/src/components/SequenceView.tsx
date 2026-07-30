@@ -41,6 +41,7 @@ interface SequenceChoice {
   label: string;
   sequence: ScoredSequence;
   scoreScope: QualityScoreScope;
+  unavailableImageCount: number;
 }
 
 function formatCategory(category: string): string {
@@ -200,17 +201,41 @@ export default function SequenceView() {
       if (sessions) sessions.push(sequence);
       else sessionsByFilter.set(sequence.filter_name, [sequence]);
     });
+    const sessionEvidence = new Map(
+      sequences.flatMap(sequence => sequence.images).map(image => [image.image_id, image]),
+    );
 
     // Keep the server's newest-session-first filter order. This preserves the
     // prior default when the target has more than one filter.
     sessionsByFilter.forEach((sessions, filter) => {
       const rollup = rollupsByFilter.get(filter);
       if (rollup && sessions.length > 1) {
+        const images = rollup.images.flatMap(score => {
+          const session = sessionEvidence.get(score.image_id);
+          return session ? [{
+            ...session,
+            quality_score: score.quality_score,
+            normalized_metrics: score.normalized_metrics,
+            details: score.details,
+          }] : [];
+        });
+        const sequence: ScoredSequence = {
+          target_id: rollup.target_id,
+          target_name: rollup.target_name,
+          filter_name: rollup.filter_name,
+          session_start: rollup.session_start,
+          session_end: rollup.session_end,
+          image_count: images.length,
+          reference_values: {},
+          images,
+          summary: rollup.summary,
+        };
         choices.push({
           key: `target-filter:${filter}`,
           label: `${filter} · All sessions (${rollup.image_count})`,
-          sequence: rollup,
+          sequence,
           scoreScope: 'target_filter',
+          unavailableImageCount: rollup.unavailable_image_count,
         });
       }
       sessions.forEach(sequence => choices.push({
@@ -218,6 +243,7 @@ export default function SequenceView() {
         label: formatSequenceLabel(sequence),
         sequence,
         scoreScope: 'capture_sequence',
+        unavailableImageCount: 0,
       }));
     });
     return choices;
@@ -263,6 +289,7 @@ export default function SequenceView() {
   }, [requestedScoreScope, sequenceChoices, urlCurrentImageId]);
   const activeSequence = activeChoice?.sequence;
   const activeScoreScope: QualityScoreScope = activeChoice?.scoreScope ?? 'capture_sequence';
+  const unavailableImageCount = activeChoice?.unavailableImageCount ?? 0;
   const activeImageId = useMemo(() => {
     if (!activeSequence || activeSequence.images.length === 0) return null;
     if (urlCurrentImageId
@@ -846,7 +873,11 @@ export default function SequenceView() {
                 </div>
                 <div className="sequence-score-context">
                   {activeScoreScope === 'target_filter'
-                    ? 'Stack comparison · matching capture settings across all sessions'
+                    ? `Stack comparison · matching capture settings across all sessions${
+                      unavailableImageCount > 0
+                        ? ` · ${unavailableImageCount} not comparable across sessions`
+                        : ''
+                    }`
                     : 'Session comparison · one capture run'}
                 </div>
                 <div className="summary-issues">
