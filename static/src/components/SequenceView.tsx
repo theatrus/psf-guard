@@ -260,6 +260,15 @@ export default function SequenceView() {
     }
   }, [activeImageId, setCurrentImageId, urlCurrentImageId]);
 
+  const replaceSelectedImages = useCallback((ids: Set<number>) => {
+    const anchorId = activeImageIdRef.current;
+    const base = new Set(ids);
+    if (anchorId !== null) base.delete(anchorId);
+    selectionAnchorIdRef.current = anchorId;
+    selectionBaseIdsRef.current = base;
+    setSelectedImages(ids);
+  }, [setSelectedImages]);
+
   // Get unique filter names from available targets
   const availableFilters = useMemo(() => {
     const filters = new Set<string>();
@@ -278,8 +287,8 @@ export default function SequenceView() {
         ids.add(img.image_id);
       }
     });
-    setSelectedImages(ids);
-  }, [activeSequence, setSelectedImages, threshold]);
+    replaceSelectedImages(ids);
+  }, [activeSequence, replaceSelectedImages, threshold]);
 
   // Select contiguous runs of clouded/occluded/bad images
   const selectCloudedSequence = useCallback(() => {
@@ -308,36 +317,36 @@ export default function SequenceView() {
     if (inRun && runBuffer.length >= 2) {
       runBuffer.forEach(id => ids.add(id));
     }
-    setSelectedImages(ids);
-  }, [activeSequence, setSelectedImages]);
+    replaceSelectedImages(ids);
+  }, [activeSequence, replaceSelectedImages]);
 
   const selectAstrometryIssues = useCallback(() => {
     if (!activeSequence) return;
-    setSelectedImages(new Set(
+    replaceSelectedImages(new Set(
       activeSequence.images
         .filter(img => (img.flags ?? []).some(flag =>
           flag === 'off_target' || flag === 'pointing_jump' || flag === 'pointing_drift'))
         .map(img => img.image_id)
     ));
-  }, [activeSequence, setSelectedImages]);
+  }, [activeSequence, replaceSelectedImages]);
 
   const selectUnsolved = useCallback(() => {
     if (!activeSequence) return;
-    setSelectedImages(new Set(
+    replaceSelectedImages(new Set(
       activeSequence.images
         .filter(img => img.pointing?.solve_failed && img.pointing.image_quality_evidence)
         .map(img => img.image_id)
     ));
-  }, [activeSequence, setSelectedImages]);
+  }, [activeSequence, replaceSelectedImages]);
 
   const selectRecommended = useCallback(() => {
     if (!activeSequence) return;
-    setSelectedImages(new Set(
+    replaceSelectedImages(new Set(
       activeSequence.images
         .filter(img => !!img.regrade_reason)
         .map(img => img.image_id)
     ));
-  }, [activeSequence, setSelectedImages]);
+  }, [activeSequence, replaceSelectedImages]);
 
   const applySelectionPreset = useCallback((preset: string) => {
     switch (preset) {

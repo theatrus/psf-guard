@@ -386,7 +386,10 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
 
   // Handle image selection with shift+click support
   const handleImageSelection = useCallback((imageId: number, event: React.MouseEvent) => {
-    const selectionAnchorId = selectionAnchorIdRef.current ?? activeImageIdRef.current;
+    const storedAnchorId = selectionAnchorIdRef.current;
+    const selectionAnchorId = storedAnchorId !== null && flatImages.some(
+      image => image.id === storedAnchorId,
+    ) ? storedAnchorId : activeImageIdRef.current;
     if (event.shiftKey && selectionAnchorId !== null) {
       // Shift+click: select range
       const startIndex = flatImages.findIndex(image => image.id === selectionAnchorId);

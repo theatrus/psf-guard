@@ -624,6 +624,34 @@ describe('SequenceView: interactions', () => {
     });
   });
 
+  it('uses a selection preset as the base for the next Shift-click range', async () => {
+    setupDefaultHandlers();
+    const user = userEvent.setup();
+
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
+
+    await waitFor(() => {
+      expect(document.querySelectorAll('.sequence-image-card')).toHaveLength(10);
+    });
+    const cards = document.querySelectorAll('.sequence-image-card');
+    fireEvent.click(cards[0]);
+    fireEvent.click(cards[8]);
+
+    fireEvent.change(screen.getByLabelText('Threshold:'), { target: { value: '0.80' } });
+    await user.selectOptions(screen.getByLabelText('Select:'), 'threshold');
+    await waitFor(() => expect(screen.getByText('4 selected')).toBeInTheDocument());
+
+    fireEvent.click(cards[9], { shiftKey: true });
+
+    await waitFor(() => expect(screen.getByText('5 selected')).toBeInTheDocument());
+    expect(cards[0]).not.toHaveClass('selected');
+    expect(cards[2]).toHaveClass('selected');
+    expect(cards[4]).toHaveClass('selected');
+    expect(cards[6]).toHaveClass('selected');
+    expect(cards[8]).toHaveClass('selected');
+    expect(cards[9]).toHaveClass('selected');
+  });
+
   it('shows "Select Clouded" button and selects cloud runs', async () => {
     server.use(
       http.get('/api/db/:dbId/analysis/sequence', () => {

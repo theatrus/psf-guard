@@ -244,6 +244,27 @@ test('Grid Shift-click selects a range from a plain-click anchor', async ({ page
   await expect(wrappers.nth(2)).not.toHaveClass(/multi-selected/);
 });
 
+test('Grid Shift-click resets an anchor from another project', async ({ page }) => {
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+
+  const cards = page.locator('.image-card');
+  await expect(cards).toHaveCount(3, { timeout: 15_000 });
+  await cards.first().click();
+
+  await page.locator('#scope-select').click();
+  const picker = page.getByRole('dialog', { name: 'Choose a project or target' });
+  const betaProject = picker.locator('.selector-project-tree').filter({ hasText: 'Project Beta' });
+  const betaToggle = betaProject.getByRole('button', { name: /^Project Beta/ });
+  if (await betaToggle.getAttribute('aria-expanded') === 'false') await betaToggle.click();
+  await betaProject.getByRole('button', { name: /^All images/ }).click();
+
+  await expect(page).toHaveURL(new RegExp(`db=${dbId}.*project=2`));
+  await expect(cards).toHaveCount(1);
+  await cards.first().click({ modifiers: ['Shift'] });
+  await expect(page.locator('.image-card-wrapper.multi-selected')).toHaveCount(1);
+  await expect(page.locator('.selection-action-bar')).toContainText('1 selected');
+});
+
 test('arrow keys move through the image grid', async ({ page }) => {
   await page.setViewportSize({ width: 760, height: 720 });
   await page.goto(
