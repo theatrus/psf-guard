@@ -205,8 +205,8 @@ export default function SequenceView() {
       sequences.flatMap(sequence => sequence.images).map(image => [image.image_id, image]),
     );
 
-    // Keep the server's newest-session-first filter order. This preserves the
-    // prior default when the target has more than one filter.
+    // Keep the server's chronological session order so the tabs read left to
+    // right in capture order. Each filter's all-session view stays first.
     sessionsByFilter.forEach((sessions, filter) => {
       const rollup = rollupsByFilter.get(filter);
       if (rollup && sessions.length > 1) {

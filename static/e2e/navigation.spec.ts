@@ -555,6 +555,32 @@ test('Sequence keeps flagged image thumbnails at full opacity', async ({ page })
   await expect(flaggedCard).toHaveCSS('opacity', '1');
 });
 
+test('Sequence shows long score reasons in a popover without resizing the card', async ({ page }) => {
+  const reason = 'Star count and background are outside the normal range for matching capture settings across all available sessions.';
+  await page.route(`**/api/db/${dbId}/analysis/sequence*`, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.data.sequences[0].images[0].details = reason;
+    await route.fulfill({ response, json: body });
+  });
+  await page.goto(
+    `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`
+  );
+
+  const card = page.locator('.sequence-image-card').first();
+  await expect(card).toBeVisible({ timeout: 15_000 });
+  const before = await card.boundingBox();
+  await card.getByRole('button', { name: 'Show quality reason' }).click();
+
+  const popover = page.getByRole('dialog', { name: 'Quality reason' });
+  await expect(popover).toContainText(reason);
+  const after = await card.boundingBox();
+  expect(after?.height).toBeCloseTo(before?.height ?? 0, 2);
+
+  await popover.getByRole('button', { name: 'Close quality reason' }).click();
+  await expect(popover).not.toBeVisible();
+});
+
 test('Sequence chart Shift-click selects a visible range', async ({ page }) => {
   await page.goto(
     `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`

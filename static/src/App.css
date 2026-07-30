@@ -5570,8 +5570,7 @@
 
 .analysis-signal,
 .sequence-image-coverage,
-.sequence-score-basis,
-.sequence-image-details {
+.sequence-score-basis {
   font-size: 0.7rem;
   color: var(--color-text-hint);
 }
@@ -5589,10 +5588,86 @@
   color: var(--color-error);
 }
 
-.sequence-image-details {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.sequence-reason-trigger {
+  display: block;
+  width: fit-content;
+  margin-top: 0.25rem;
+  padding: 0.12rem 0.45rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 999px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.sequence-reason-trigger:hover,
+.sequence-reason-trigger[aria-expanded='true'] {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.sequence-reason-trigger:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.sequence-reason-popover {
+  position: fixed;
+  z-index: 1200;
+  box-sizing: border-box;
+  max-height: min(18rem, calc(100vh - 24px));
+  overflow: auto;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 45%);
+  font-size: 0.82rem;
+}
+
+.sequence-reason-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--color-primary);
+}
+
+.sequence-reason-popover-header button {
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 1.2rem;
+  cursor: pointer;
+}
+
+.sequence-reason-popover-header button:hover {
+  background: var(--color-bg-quaternary);
+  color: var(--color-text-primary);
+}
+
+.sequence-reason-popover p {
+  margin: 0.55rem 0 0;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+.sequence-reason-evidence-label {
+  display: block;
+  margin-top: 0.7rem;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 /* Async preview-generation placeholder (PreviewImage / poll-on-error). Fills a
