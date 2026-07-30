@@ -401,6 +401,37 @@ describe('SequenceView: interactions', () => {
     expect(cards[0].classList.contains('selected')).toBe(false);
   });
 
+  it('changes thumbnail size and keeps it in the URL', async () => {
+    setupDefaultHandlers();
+    let search = '';
+    function LocationProbe() {
+      search = useLocation().search;
+      return null;
+    }
+
+    const Wrapper = createWrapper('/sequence?db=test&project=1&target=1');
+    render(
+      <Wrapper>
+        <SequenceView />
+        <LocationProbe />
+      </Wrapper>
+    );
+
+    await screen.findByText('82');
+    const size = screen.getByLabelText('Size:');
+    expect(size).toHaveValue('150');
+
+    fireEvent.change(size, { target: { value: '500' } });
+
+    await waitFor(() => {
+      expect(new URLSearchParams(search).get('size')).toBe('500');
+    });
+    expect(document.querySelector('.sequence-strip')).toHaveStyle({
+      gridTemplateColumns: 'repeat(auto-fill, minmax(min(500px, 100%), 1fr))',
+    });
+    expect(screen.getByText('500px')).toBeInTheDocument();
+  });
+
   it('moves the cursor with arrows and toggles selection with Space', async () => {
     setupDefaultHandlers();
 
@@ -440,7 +471,7 @@ describe('SequenceView: interactions', () => {
     // Instead, test with the default threshold -- just click the button and verify behavior.
     // The default threshold of 0.50 won't select any normal fixture images (all are >= 0.70),
     // so let's use fireEvent to set the threshold to 0.80.
-    const slider = screen.getByRole('slider');
+    const slider = screen.getByLabelText('Threshold:');
     // fireEvent is more reliable for range inputs than userEvent
     const { fireEvent } = await import('@testing-library/react');
     fireEvent.change(slider, { target: { value: '0.80' } });
@@ -545,7 +576,7 @@ describe('SequenceView: interactions', () => {
 });
 
 describe('SequenceView: multi-session', () => {
-  it('renders sequence tabs for multiple sessions', async () => {
+  function setupMultiSessionHandlers() {
     server.use(
       http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json(multiSessionFixture);
@@ -567,6 +598,10 @@ describe('SequenceView: multi-session', () => {
         });
       }),
     );
+  }
+
+  it('renders sequence tabs for multiple sessions', async () => {
+    setupMultiSessionHandlers();
 
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=2') });
 
@@ -574,31 +609,15 @@ describe('SequenceView: multi-session', () => {
       // Each tab shows the filter, session time, and image count.
       const tabs = screen.getAllByText(/L · .* \(5\)/);
       expect(tabs).toHaveLength(2);
+      const year = new Date(
+        multiSessionFixture.data.sequences[0].session_start * 1000,
+      ).getFullYear();
+      expect(tabs[0]).toHaveTextContent(String(year));
     });
   });
 
   it('switches between sequences when tabs are clicked', async () => {
-    server.use(
-      http.get('/api/db/:dbId/analysis/sequence', () => {
-        return HttpResponse.json(multiSessionFixture);
-      }),
-      http.get('/api/db/:dbId/projects/:projectId/targets', () => {
-        return HttpResponse.json({
-          success: true,
-          data: mockTargets,
-          error: null,
-          status: 'ready',
-        });
-      }),
-      http.get('/api/db/:dbId/images', () => {
-        return HttpResponse.json({
-          success: true,
-          data: [],
-          error: null,
-          status: 'ready',
-        });
-      }),
-    );
+    setupMultiSessionHandlers();
 
     const user = userEvent.setup();
 
@@ -620,6 +639,62 @@ describe('SequenceView: multi-session', () => {
     // Second tab should now be active
     expect(tabs[1].classList.contains('active')).toBe(true);
     expect(tabs[0].classList.contains('active')).toBe(false);
+  });
+
+  it('stores the active image and return view when opening Detail', async () => {
+    setupMultiSessionHandlers();
+    const user = userEvent.setup();
+    let pathname = '';
+    let search = '';
+    function LocationProbe() {
+      const location = useLocation();
+      pathname = location.pathname;
+      search = location.search;
+      return null;
+    }
+
+    const Wrapper = createWrapper('/sequence?db=test&project=1&target=2');
+    render(
+      <Wrapper>
+        <SequenceView />
+        <LocationProbe />
+      </Wrapper>
+    );
+
+    const tabs = await screen.findAllByText(/L · .* \(5\)/);
+    await user.click(tabs[1]);
+
+    await waitFor(() => {
+      const params = new URLSearchParams(search);
+      expect(params.get('current')).toBe('211');
+    });
+
+    const cards = document.querySelectorAll('.sequence-image-card');
+    expect(cards).toHaveLength(5);
+    await user.dblClick(cards[1]);
+
+    await waitFor(() => {
+      const params = new URLSearchParams(search);
+      expect(pathname).toBe('/detail/212');
+      expect(params.get('returnTo')).toBe('sequence');
+      expect(params.get('current')).toBe('212');
+    });
+  });
+
+  it('restores a session from URL state', async () => {
+    setupMultiSessionHandlers();
+
+    render(<SequenceView />, {
+      wrapper: createWrapper(
+        '/sequence?db=test&project=1&target=2&current=212'
+      ),
+    });
+
+    const tabs = await screen.findAllByText(/L · .* \(5\)/);
+    expect(tabs[1]).toHaveClass('active');
+    expect(document.querySelectorAll('.sequence-image-card')[1]).toHaveClass(
+      'current-selection'
+    );
   });
 });
 

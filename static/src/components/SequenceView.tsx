@@ -7,7 +7,7 @@ import {
   useLayoutEffect,
   useRef,
 } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useLocation, useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../api/client';
@@ -18,7 +18,14 @@ import { useDbProjectTarget, useGridState } from '../hooks/useUrlState';
 import UndoRedoToolbar from './UndoRedoToolbar';
 import ImageCard from './ImageCard';
 import Dialog from './Dialog';
+import ThumbnailSizeControl from './ThumbnailSizeControl';
 import type { Image, ScoredSequence, ImageQualityResult } from '../api/types';
+import {
+  imageDetailNavigationState,
+  imageDetailPath,
+  sequenceReturnPositionFromState,
+} from '../utils/imageDetailRoutes';
+import { thumbnailGridColumns } from '../utils/thumbnailSizing';
 
 function formatCategory(category: string): string {
   return category
@@ -31,6 +38,7 @@ function formatSequenceLabel(sequence: ScoredSequence): string {
   if (!sequence.session_start) return `${sequence.filter_name} (${sequence.image_count})`;
   const start = new Date(sequence.session_start * 1000);
   const when = start.toLocaleString([], {
+    year: 'numeric',
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
@@ -47,7 +55,13 @@ function qualityColor(score: number): string {
 
 export default function SequenceView() {
   const { dbId, projectId, targetId } = useDbProjectTarget();
-  const { currentImageId: urlCurrentImageId, setCurrentImageId } = useGridState();
+  const {
+    imageSize,
+    currentImageId: urlCurrentImageId,
+    setImageSize,
+    setCurrentImageId,
+  } = useGridState(150);
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const grading = useGrading(dbId!);
@@ -57,7 +71,6 @@ export default function SequenceView() {
   const [threshold, setThreshold] = useState(0.5);
   const [selectedImages, setSelectedImages] = useState<Set<number>>(new Set());
   const [showRejectReview, setShowRejectReview] = useState(false);
-  const [activeSequenceIndex, setActiveSequenceIndex] = useState(0);
   const spatialScan = useSpatialScan(dbId, targetId ?? undefined, filterName);
 
   // Fetch targets for the project to allow selection
@@ -93,7 +106,17 @@ export default function SequenceView() {
     }
   }, [targetId, filterName, analyze]);
 
-  const sequences = analysisData?.sequences || [];
+  const sequences = useMemo(() => analysisData?.sequences ?? [], [analysisData?.sequences]);
+  const activeSequenceIndex = useMemo(() => {
+    if (urlCurrentImageId !== null) {
+      const currentIndex = sequences.findIndex(sequence =>
+        sequence.images.some(image => image.image_id === urlCurrentImageId)
+      );
+      if (currentIndex >= 0) return currentIndex;
+    }
+
+    return 0;
+  }, [sequences, urlCurrentImageId]);
   const activeSequence: ScoredSequence | undefined = sequences[activeSequenceIndex];
   const activeImageId = useMemo(() => {
     if (!activeSequence || activeSequence.images.length === 0) return null;
@@ -105,6 +128,42 @@ export default function SequenceView() {
   }, [activeSequence, urlCurrentImageId]);
   const activeImageIdRef = useRef(activeImageId);
   activeImageIdRef.current = activeImageId;
+  const restoredScrollRef = useRef(false);
+
+  useLayoutEffect(() => {
+    const position = sequenceReturnPositionFromState(location.state);
+    if (restoredScrollRef.current || !position || isAnalyzing || !activeSequence) {
+      return;
+    }
+
+    const scroller = document.querySelector<HTMLElement>('.app-main');
+    if (!scroller) return;
+    restoredScrollRef.current = true;
+
+    const restorePosition = () => {
+      const anchor = document.querySelector<HTMLElement>(
+        `.sequence-image-card[data-card-image-id="${position.imageId}"]`,
+      );
+      if (!anchor) {
+        scroller.scrollTop = position.scrollTop;
+        return;
+      }
+      const currentOffset =
+        anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      scroller.scrollTop += currentOffset - position.offsetTop;
+    };
+
+    restorePosition();
+    let secondFrame = 0;
+    const firstFrame = requestAnimationFrame(() => {
+      restorePosition();
+      secondFrame = requestAnimationFrame(restorePosition);
+    });
+    return () => {
+      cancelAnimationFrame(firstFrame);
+      if (secondFrame) cancelAnimationFrame(secondFrame);
+    };
+  }, [activeSequence, isAnalyzing, location.state]);
 
   useEffect(() => {
     if (activeImageId !== null && activeImageId !== urlCurrentImageId) {
@@ -286,10 +345,26 @@ export default function SequenceView() {
     if (currentImageId !== null) toggleImage(currentImageId);
   }, sequenceHotkeyOptions, [toggleImage]);
 
-  const routeQuery = searchParams.toString();
   const openImage = useCallback((imageId: number) => {
-    navigate(`/detail/${imageId}${routeQuery ? `?${routeQuery}` : ''}`);
-  }, [navigate, routeQuery]);
+    const scroller = document.querySelector<HTMLElement>('.app-main');
+    const anchor = document.querySelector<HTMLElement>(
+      `.sequence-image-card[data-card-image-id="${imageId}"]`,
+    );
+    const scrollTop = scroller?.scrollTop ?? 0;
+    const offsetTop = scroller && anchor
+      ? anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+      : 0;
+    navigate(imageDetailPath(imageId, searchParams, 'sequence'), {
+      state: imageDetailNavigationState({ scrollTop, imageId, offsetTop }),
+    });
+  }, [navigate, searchParams]);
+
+  const selectSequence = useCallback((sequence: ScoredSequence) => {
+    const firstImageId = sequence.images[0]?.image_id;
+    if (firstImageId !== undefined) {
+      setCurrentImageId(firstImageId);
+    }
+  }, [setCurrentImageId]);
 
   if (!projectId) {
     return (
@@ -425,6 +500,11 @@ export default function SequenceView() {
         </div>
 
         <div className="sequence-review-row">
+          <ThumbnailSizeControl
+            id="sequence-thumbnail-size"
+            value={imageSize}
+            onChange={setImageSize}
+          />
           <div className="threshold-control">
             <label htmlFor="sequence-threshold">Threshold:</label>
             <input
@@ -453,8 +533,8 @@ export default function SequenceView() {
               <option value="recommended">Recommended</option>
             </select>
           </div>
-          <div className="sequence-selection-slot">
-            {selectedImages.size > 0 && (
+          {selectedImages.size > 0 && (
+            <div className="sequence-selection-slot">
               <div className="selection-action-bar sequence-selection-bar" aria-label="Selected image actions">
                 <span className="selection-count">{selectedImages.size} selected</span>
                 <button
@@ -472,8 +552,8 @@ export default function SequenceView() {
                   Clear
                 </button>
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -499,7 +579,7 @@ export default function SequenceView() {
                 <button
                   key={i}
                   className={`sequence-tab ${i === activeSequenceIndex ? 'active' : ''}`}
-                  onClick={() => setActiveSequenceIndex(i)}
+                  onClick={() => selectSequence(seq)}
                 >
                   {formatSequenceLabel(seq)}
                 </button>
@@ -562,6 +642,7 @@ export default function SequenceView() {
                 currentImageId={activeImageId}
                 selectedImages={selectedImages}
                 threshold={threshold}
+                imageSize={imageSize}
                 onToggle={toggleImage}
                 onOpen={openImage}
               />
@@ -781,6 +862,7 @@ const SequenceStrip = memo(function SequenceStrip({
   currentImageId,
   selectedImages,
   threshold,
+  imageSize,
   onToggle,
   onOpen,
 }: {
@@ -794,6 +876,7 @@ const SequenceStrip = memo(function SequenceStrip({
   currentImageId: number | null;
   selectedImages: Set<number>;
   threshold: number;
+  imageSize: number;
   onToggle: (id: number) => void;
   onOpen: (id: number) => void;
 }) {
@@ -805,12 +888,29 @@ const SequenceStrip = memo(function SequenceStrip({
       const currentCard = stripRef.current?.querySelector<HTMLElement>(
         '.sequence-image-card.current-selection',
       );
-      currentCard?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+      const scroller = stripRef.current?.closest<HTMLElement>('.app-main');
+      if (!currentCard || !scroller) return;
+      const cardRect = currentCard.getBoundingClientRect();
+      const scrollerRect = scroller.getBoundingClientRect();
+      const isClipped =
+        cardRect.top < scrollerRect.top || cardRect.bottom > scrollerRect.bottom;
+      const isOutsideViewport =
+        cardRect.bottom <= scrollerRect.top || cardRect.top >= scrollerRect.bottom;
+      const fitsViewport = cardRect.height <= scrollerRect.height;
+      if (isOutsideViewport || (fitsViewport && isClipped)) {
+        currentCard.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
     });
-  }, [currentImageId]);
+  }, [currentImageId, imageSize]);
 
   return (
-    <div ref={stripRef} className="filter-images sequence-strip">
+    <div
+      ref={stripRef}
+      className="filter-images sequence-strip"
+      style={{
+        gridTemplateColumns: thumbnailGridColumns(imageSize),
+      }}
+    >
       {images.map(quality => {
         const image = imageMap.get(quality.image_id) ?? {
           id: quality.image_id,

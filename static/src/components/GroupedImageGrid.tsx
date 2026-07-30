@@ -14,6 +14,7 @@ import FilterControls, { type FilterOptions } from './FilterControls';
 import StatsDashboard from './StatsDashboard';
 import UndoRedoToolbar from './UndoRedoToolbar';
 import StackPreviewPanel from './StackPreviewPanel';
+import ThumbnailSizeControl from './ThumbnailSizeControl';
 import { 
   type GroupingMode, 
   SINGLE_PROJECT_MODES,
@@ -30,6 +31,8 @@ import {
   NO_EXPANDED_GROUPS,
   resolveExpandedGroups,
 } from '../utils/imageGrouping';
+import { imageDetailPath } from '../utils/imageDetailRoutes';
+import { thumbnailGridColumns } from '../utils/thumbnailSizing';
 
 interface GroupedImageGridProps {
   useLazyImages?: boolean;
@@ -78,8 +81,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const [searchParams] = useSearchParams();
   
   const navigateToDetail = useCallback((imageId: number) => {
-    const params = searchParams.toString();
-    navigate(`/detail/${imageId}?${params}`);
+    navigate(imageDetailPath(imageId, searchParams, 'grid'));
   }, [navigate, searchParams]);
   
   const navigateToComparison = useCallback((leftId: number, rightId: number) => {
@@ -672,18 +674,11 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
             />
             
             <div className="controls-section">
-              <div className="size-control compact">
-                <label>Size:</label>
-                <input
-                  type="range"
-                  min="150"
-                  max="1200"
-                  step="50"
-                  value={imageSize}
-                  onChange={(e) => setImageSize(Number(e.target.value))}
-                />
-                <span className="size-value">{imageSize}px</span>
-              </div>
+              <ThumbnailSizeControl
+                id="grid-thumbnail-size"
+                value={imageSize}
+                onChange={setImageSize}
+              />
               
               <div className="grouping-control compact">
                 <label>Group:</label>
@@ -867,7 +862,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                   <div 
                     className="filter-images"
                     style={{
-                      gridTemplateColumns: `repeat(auto-fill, minmax(${imageSize}px, 1fr))`,
+                      gridTemplateColumns: thumbnailGridColumns(imageSize),
                     }}
                   >
                     {group.images.map((image) => {

@@ -98,6 +98,7 @@ export default function ImageCard({
   return (
     <div
       ref={setCardRef}
+      data-card-image-id={image.id}
       className={`image-card ${getStatusClass()} ${isSelected ? 'selected' : ''} ${className}`.trim()}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
