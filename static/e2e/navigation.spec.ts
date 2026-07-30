@@ -581,6 +581,40 @@ test('Sequence shows long score reasons in a popover without resizing the card',
   await expect(popover).not.toBeVisible();
 });
 
+test('quality reasons remain available in Grid and image details', async ({ page }) => {
+  const reviewReason = 'Tracking error: elongated stars';
+  const evidence = 'HFR and eccentricity are poor compared with this capture sequence.';
+  await page.route(`**/api/db/${dbId}/analysis/sequence*`, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.data.sequences[0].images[0].regrade_reason = reviewReason;
+    body.data.sequences[0].images[0].details = evidence;
+    await route.fulfill({ response, json: body });
+  });
+  await page.route(`**/api/db/${dbId}/analysis/image/1`, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.data.quality.regrade_reason = reviewReason;
+    body.data.quality.details = evidence;
+    await route.fulfill({ response, json: body });
+  });
+
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+  const card = page.locator('[data-card-image-id="1"]');
+  await expect(card).toBeVisible({ timeout: 15_000 });
+  await card.getByRole('button', { name: 'Show quality reason' }).click();
+  const popover = page.getByRole('dialog', { name: 'Quality reason' });
+  await expect(popover).toContainText(reviewReason);
+  await expect(popover).toContainText(evidence);
+  await popover.getByRole('button', { name: 'Close quality reason' }).click();
+
+  await card.dblclick();
+  const detail = page.locator('.detail-quality-analysis');
+  await expect(detail.getByRole('heading', { name: 'Quality analysis' })).toBeVisible();
+  await expect(detail).toContainText(reviewReason);
+  await expect(detail).toContainText(evidence);
+});
+
 test('Sequence chart Shift-click selects a visible range', async ({ page }) => {
   await page.goto(
     `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`

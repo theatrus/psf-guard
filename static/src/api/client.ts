@@ -33,6 +33,7 @@ import type {
   OverallStats,
   CacheRefreshProgress,
   SequenceAnalysisRequest,
+  ProjectSequenceAnalysisRequest,
   SequenceAnalysisResponse,
   ImageQualityResponse,
   SpatialScanRequest,
@@ -985,7 +986,7 @@ export const apiClient = {
 
   analyzeSequence: async (
     dbId: string,
-    request: SequenceAnalysisRequest
+    request: SequenceAnalysisRequest | ProjectSequenceAnalysisRequest
   ): Promise<SequenceAnalysisResponse> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<SequenceAnalysisResponse>>(

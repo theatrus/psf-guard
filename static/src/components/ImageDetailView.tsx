@@ -14,6 +14,8 @@ import AstrometryOverlay from './AstrometryOverlay';
 import SatellitePanel from './SatellitePanel';
 import SatelliteTrackOverlay from './SatelliteTrackOverlay';
 import ImageFileLocation from './ImageFileLocation';
+import { useImageQuality } from '../hooks/useSequenceAnalysis';
+import QualityAnalysisSummary from './QualityAnalysisSummary';
 import {
   colorPreviewEnabled,
   setColorPreview,
@@ -166,6 +168,9 @@ export default function ImageDetailView({
     queryFn: () => apiClient.getImage(dbId, imageId),
     placeholderData: (previousData) => previousData, // Keep showing previous image while loading new one
   });
+
+  const { data: qualityContext } = useImageQuality(dbId, imageId);
+  const quality = qualityContext?.quality;
 
   const {
     data: astrometry,
@@ -746,6 +751,8 @@ export default function ImageDetailView({
                 </div>
               )}
             </div>
+
+            <QualityAnalysisSummary quality={quality} />
 
             <AstrometryPanel
               analysis={astrometry}

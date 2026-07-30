@@ -354,6 +354,70 @@ async fn test_analyze_sequence_normal() {
     );
 }
 
+#[tokio::test]
+async fn test_analyze_project_returns_each_targets_sequences() {
+    let conn = Connection::open_in_memory().unwrap();
+    create_test_schema(&conn);
+    load_normal_sequence(&conn);
+    insert_target(&conn, 2, 1, "M43");
+    for i in 0i32..3 {
+        insert_image(
+            &conn,
+            1000 + i,
+            1,
+            2,
+            1705352400 + i as i64 * 300,
+            "R",
+            &build_metadata(200.0 + i as f64 * 5.0, 2.8, None, None, None),
+        );
+    }
+    let app = create_test_app(conn);
+
+    let (status, json) = get_json(app, "/api/db/test/analysis/sequence?project_id=1").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let sequences = json["data"]["sequences"].as_array().unwrap();
+    let target_ids = sequences
+        .iter()
+        .map(|sequence| sequence["target_id"].as_i64().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(target_ids, std::collections::BTreeSet::from([1, 2]));
+    assert_eq!(
+        sequences
+            .iter()
+            .map(|sequence| sequence["image_count"].as_u64().unwrap())
+            .sum::<u64>(),
+        13
+    );
+}
+
+#[tokio::test]
+async fn test_analyze_sequence_requires_one_scope() {
+    let conn = Connection::open_in_memory().unwrap();
+    create_test_schema(&conn);
+    load_normal_sequence(&conn);
+    let app = create_test_app(conn);
+
+    let (status, json) = get_json(
+        app.clone(),
+        "/api/db/test/analysis/sequence?target_id=1&project_id=1",
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json["error"],
+        "Specify exactly one of target_id or project_id"
+    );
+
+    let (status, json) = get_json(app, "/api/db/test/analysis/sequence").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json["error"],
+        "Specify exactly one of target_id or project_id"
+    );
+}
+
 /// Test 2: Cloud detection through the full API path
 #[tokio::test]
 async fn test_analyze_sequence_cloud_detection() {

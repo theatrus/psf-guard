@@ -3607,7 +3607,6 @@ pub async fn analyze_sequence(
         extract_metrics_from_metadata, QualityWeights, SequenceAnalyzer, SequenceAnalyzerConfig,
     };
 
-    let target_id = params.target_id;
     let filter_name = params.filter_name.clone();
     let session_gap = params.session_gap_minutes;
     let weight_star_count = params.weight_star_count;
@@ -3618,45 +3617,64 @@ pub async fn analyze_sequence(
     let weight_spatial = params.weight_spatial;
     let weight_pointing = params.weight_pointing;
 
-    // Fetch images from database
-    let (images_data, target_name, expected_by_image) = {
+    // Fetch images from the requested target or project. Project scope keeps
+    // Grid at one analysis request regardless of its thumbnail count.
+    let (images_data, expected_by_image) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
 
-        // Get target name
-        let targets = db.get_targets_by_ids(&[target_id]).map_err(AppError::db)?;
-        let target = targets
-            .into_iter()
-            .next()
-            .ok_or_else(|| AppError::BadRequest(format!("Target {} not found", target_id)))?;
-        let target_name = target.name.clone();
+        let targets = match (params.target_id, params.project_id) {
+            (Some(target_id), None) => {
+                let targets = db.get_targets_by_ids(&[target_id]).map_err(AppError::db)?;
+                if targets.is_empty() {
+                    return Err(AppError::BadRequest(format!(
+                        "Target {} not found",
+                        target_id
+                    )));
+                }
+                targets
+            }
+            (None, Some(project_id)) => db
+                .get_targets_with_images(project_id)
+                .map_err(AppError::db)?
+                .into_iter()
+                .map(|(target, _, _, _)| target)
+                .collect(),
+            _ => {
+                return Err(AppError::BadRequest(
+                    "Specify exactly one of target_id or project_id".to_string(),
+                ));
+            }
+        };
 
-        // Query images for this target
-        let all_images = db
-            .query_images_scoped(None, None, Some(target_id), None, 0)
-            .map_err(AppError::db)?;
-
-        let filtered: Vec<_> = all_images
-            .into_iter()
-            .filter(|(img, _, _)| {
-                img.target_id == target_id
-                    && filter_name.as_ref().is_none_or(|f| img.filter_name == *f)
-            })
-            .collect();
         let mut resolver =
             crate::acquisition_context::FramingResolver::new(&conn).map_err(AppError::db)?;
-        let expected_by_image = filtered
+        let mut images_data = Vec::new();
+        let target_ids = targets
             .iter()
-            .map(|(image, _, _)| {
-                resolver
-                    .expected_for_grading(&conn, image)
-                    .map(|expected| (image.id, expected))
-            })
-            .collect::<Result<std::collections::HashMap<_, _>, _>>()
+            .map(|target| target.id)
+            .collect::<std::collections::HashSet<_>>();
+        let mut expected_by_image = std::collections::HashMap::new();
+        let all_images = db
+            .query_images_scoped(None, params.project_id, params.target_id, None, 0)
             .map_err(AppError::db)?;
+        for image in all_images.into_iter().filter(|(image, _, _)| {
+            target_ids.contains(&image.target_id)
+                && filter_name
+                    .as_ref()
+                    .is_none_or(|filter| image.filter_name == *filter)
+        }) {
+            expected_by_image.insert(
+                image.0.id,
+                resolver
+                    .expected_for_grading(&conn, &image.0)
+                    .map_err(AppError::db)?,
+            );
+            images_data.push(image);
+        }
 
-        (filtered, target_name, expected_by_image)
+        (images_data, expected_by_image)
     };
 
     if images_data.is_empty() {
@@ -3674,7 +3692,6 @@ pub async fn analyze_sequence(
     let spatial_store = ctx.spatial_metrics.clone();
     let astrometry_cache_dir = ctx.cache_dir_path.clone();
     let astrometry_evidence = ctx.astrometry_evidence.clone();
-    let target_name_clone = target_name.clone();
     let result = tokio::task::spawn_blocking(move || {
         let mut config = SequenceAnalyzerConfig::default();
         if let Some(gap) = session_gap {
@@ -3704,12 +3721,13 @@ pub async fn analyze_sequence(
         let session_gap_minutes = config.session_gap_minutes;
         let analyzer = SequenceAnalyzer::new(config);
 
-        // Group by filter_name and analyze each group
-        let mut by_filter: std::collections::HashMap<String, Vec<_>> =
+        // Group by target and filter so project analysis preserves the same
+        // comparison boundaries as one-target Sequence analysis.
+        let mut by_group: std::collections::HashMap<(i32, String, String), Vec<_>> =
             std::collections::HashMap::new();
-        let mut entries_by_filter: std::collections::HashMap<String, Vec<_>> =
+        let mut entries_by_group: std::collections::HashMap<(i32, String, String), Vec<_>> =
             std::collections::HashMap::new();
-        for (img, _proj, _target) in &images_data {
+        for (img, _project_name, target_name) in &images_data {
             let mut metrics =
                 extract_metrics_from_metadata(img.id, &img.metadata, img.acquired_date);
             merge_spatial_metrics(&mut metrics, &spatial_store, &img.metadata);
@@ -3720,26 +3738,26 @@ pub async fn analyze_sequence(
                 &astrometry_evidence,
                 expected_by_image.get(&img.id).copied().flatten(),
             );
-            entries_by_filter
-                .entry(img.filter_name.clone())
+            let group = (img.target_id, target_name.clone(), img.filter_name.clone());
+            entries_by_group
+                .entry(group.clone())
                 .or_default()
                 .push(stored_entry_for(&spatial_store, img.id, &img.metadata));
-            by_filter
-                .entry(img.filter_name.clone())
-                .or_default()
-                .push(metrics);
+            by_group.entry(group).or_default().push(metrics);
         }
 
         let mut all_sequences = Vec::new();
         let mut target_filter_rollups = Vec::new();
-        for (filter, mut metrics) in by_filter {
-            if let Some(entries) = entries_by_filter.get(&filter) {
+        for ((target_id, target_name, filter), mut metrics) in by_group {
+            if let Some(entries) =
+                entries_by_group.get(&(target_id, target_name.clone(), filter.clone()))
+            {
                 merge_photometric_signals(&mut metrics, entries, session_gap_minutes);
             }
             let (scored, rollup) = analyzer.analyze_with_target_filter_rollup(
                 &metrics,
                 target_id,
-                &target_name_clone,
+                &target_name,
                 &filter,
             );
             all_sequences.extend(scored);
@@ -3760,12 +3778,20 @@ pub async fn analyze_sequence(
     sequences.sort_by(|a, b| match (a.session_start, b.session_start) {
         (Some(left), Some(right)) => left
             .cmp(&right)
+            .then_with(|| a.target_id.cmp(&b.target_id))
             .then_with(|| a.filter_name.cmp(&b.filter_name)),
         (Some(_), None) => std::cmp::Ordering::Less,
         (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => a.filter_name.cmp(&b.filter_name),
+        (None, None) => a
+            .target_id
+            .cmp(&b.target_id)
+            .then_with(|| a.filter_name.cmp(&b.filter_name)),
     });
-    target_filter_rollups.sort_by(|a, b| a.filter_name.cmp(&b.filter_name));
+    target_filter_rollups.sort_by(|a, b| {
+        a.target_id
+            .cmp(&b.target_id)
+            .then_with(|| a.filter_name.cmp(&b.filter_name))
+    });
 
     Ok(Json(ApiResponse::success(
         crate::server::api::SequenceAnalysisResponse {

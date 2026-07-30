@@ -106,6 +106,8 @@ background (progress shown live), then refreshes the sequence scores. Results
 persist across restarts. The
 sequence analysis shows coverage badges, classifications, solved-center
 scatter, a session view, and an all-session stack comparison for each filter.
+When analysis names a cause, the same reason and supporting evidence appear on
+the Sequence card, the matching Grid card, and the image detail panel.
 The stack comparison scores only capture profiles with at least three matching
 frames across two sessions. It reports profiles without enough matches instead
 of assigning them a perfect score. Stack previews use the same cross-session

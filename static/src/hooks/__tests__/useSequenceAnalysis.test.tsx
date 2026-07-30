@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
-import { useSequenceAnalysis, useImageQuality } from '../useSequenceAnalysis';
+import { useGridQuality, useSequenceAnalysis, useImageQuality } from '../useSequenceAnalysis';
 import normalFixture from '../../__fixtures__/sequence-analysis-normal.json';
 import imageQualityFixture from '../../__fixtures__/image-quality-context.json';
 
@@ -145,5 +145,33 @@ describe('useImageQuality', () => {
     expect(result.current.data!.quality).toBeDefined();
     expect(result.current.data!.quality!.quality_score).toBe(0.70);
     expect(result.current.data!.sequence_filter_name).toBe('L');
+  });
+});
+
+describe('useGridQuality', () => {
+  it('loads one project analysis and indexes results by image', async () => {
+    let requests = 0;
+    let projectId: string | null = null;
+    server.use(
+      http.get('/api/db/:dbId/analysis/sequence', ({ request }) => {
+        requests += 1;
+        projectId = new URL(request.url).searchParams.get('project_id');
+        return HttpResponse.json(normalFixture);
+      }),
+    );
+
+    const { result } = renderHook(() => useGridQuality('test', 7, undefined), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.qualityByImage.size).toBe(10);
+    });
+
+    expect(requests).toBe(1);
+    expect(projectId).toBe('7');
+    expect(result.current.qualityByImage.get(1)?.details).toBe(
+      normalFixture.data.sequences[0].images[0].details,
+    );
   });
 });

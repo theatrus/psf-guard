@@ -7,6 +7,20 @@ interface QualityReasonPopoverProps {
   details?: string | null;
 }
 
+export function QualityReasonText({ reason, details }: QualityReasonPopoverProps) {
+  return (
+    <div className="quality-reason-text">
+      {reason && <p>{reason}</p>}
+      {details && details !== reason && (
+        <>
+          {reason && <span className="quality-reason-evidence-label">Evidence</span>}
+          <p>{details}</p>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function QualityReasonPopover({ reason, details }: QualityReasonPopoverProps) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<CSSProperties>({});
@@ -99,13 +113,7 @@ export default function QualityReasonPopover({ reason, details }: QualityReasonP
               ×
             </button>
           </div>
-          {reason && <p>{reason}</p>}
-          {details && details !== reason && (
-            <>
-              {reason && <span className="sequence-reason-evidence-label">Evidence</span>}
-              <p>{details}</p>
-            </>
-          )}
+          <QualityReasonText reason={reason} details={details} />
         </div>,
         document.body,
       )}

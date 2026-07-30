@@ -37,6 +37,7 @@ import {
   type GridNavigationDirection,
 } from '../utils/gridNavigation';
 import { thumbnailGridColumns } from '../utils/thumbnailSizing';
+import { useGridQuality } from '../hooks/useSequenceAnalysis';
 
 interface GroupedImageGridProps {
   useLazyImages?: boolean;
@@ -156,6 +157,13 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     });
     return Array.from(filterSet).sort();
   }, [allImages]);
+
+  const { qualityByImage } = useGridQuality(
+    dbId,
+    projectId,
+    targetId,
+    filters.filterName === 'all' ? undefined : filters.filterName,
+  );
 
   // Determine if we're in multi-project mode
   const isMultiProjectMode = projectId === null;
@@ -884,6 +892,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                           <CardComponent
                             dbId={dbId!}
                             image={image}
+                            quality={qualityByImage.get(image.id)}
                             isSelected={
                               selectedImages.has(image.id) ||
                               image.id === activeImageId

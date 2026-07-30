@@ -1231,6 +1231,11 @@ export interface SequenceAnalysisRequest {
   weight_pointing?: number;
 }
 
+export interface ProjectSequenceAnalysisRequest {
+  project_id: number;
+  filter_name?: string;
+}
+
 export interface SequenceAnalysisResponse {
   sequences: ScoredSequence[];
   /** Scores across all stack candidates for each target/filter. Each score is
