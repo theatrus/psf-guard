@@ -514,6 +514,23 @@ test('Sequence Shift-click selects a visible range', async ({ page }) => {
   await expect(cards.nth(2)).not.toHaveClass(/selected/);
 });
 
+test('Sequence keeps flagged image thumbnails at full opacity', async ({ page }) => {
+  await page.route(`**/api/db/${dbId}/analysis/sequence*`, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.data.sequences[0].images[0].quality_score = 0.2;
+    body.data.sequences[0].images[0].category = 'likely_clouds';
+    await route.fulfill({ response, json: body });
+  });
+  await page.goto(
+    `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`
+  );
+
+  const flaggedCard = page.locator('.sequence-image-card.below-threshold').first();
+  await expect(flaggedCard).toBeVisible({ timeout: 15_000 });
+  await expect(flaggedCard).toHaveCSS('opacity', '1');
+});
+
 test('Sequence chart Shift-click selects a visible range', async ({ page }) => {
   await page.goto(
     `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`
