@@ -369,6 +369,47 @@ test('sequence mode uses arrows and Space for the same keyboard selection flow',
   await expect(cards.nth(0)).toHaveClass(/current-selection/);
 });
 
+test('sequence arrows reveal a normal card that is only partly visible', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.goto(
+    `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1&size=300`
+  );
+
+  const cards = page.locator('.sequence-image-card');
+  await expect(cards).toHaveCount(3, { timeout: 15_000 });
+  await expect(cards.nth(0)).toHaveClass(/current-selection/);
+  const nextCard = cards.nth(1);
+
+  await nextCard.evaluate((card) => {
+    const container = document.querySelector<HTMLElement>('.app-main')!;
+    const cardRect = card.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    container.scrollTop += cardRect.top - containerRect.bottom + 20;
+  });
+  const visibleBefore = await nextCard.evaluate((card) => {
+    const container = document.querySelector<HTMLElement>('.app-main')!;
+    const cardRect = card.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    return {
+      partlyVisible: cardRect.top < containerRect.bottom && cardRect.bottom > containerRect.bottom,
+      fitsViewport: cardRect.height <= containerRect.height,
+    };
+  });
+  expect(visibleBefore).toEqual({ partlyVisible: true, fitsViewport: true });
+
+  await page.keyboard.press('ArrowRight');
+  await expect(nextCard).toHaveClass(/current-selection/);
+  await expect.poll(async () => {
+    return nextCard.evaluate((card) => {
+      const container = document.querySelector<HTMLElement>('.app-main')!;
+      const cardRect = card.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      return cardRect.top >= containerRect.top - 1
+        && cardRect.bottom <= containerRect.bottom + 1;
+    });
+  }).toBe(true);
+});
+
 test('sequence thumbnail size can be changed and survives reload', async ({ page }) => {
   await page.goto(
     `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`

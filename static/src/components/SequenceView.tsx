@@ -892,9 +892,12 @@ const SequenceStrip = memo(function SequenceStrip({
       if (!currentCard || !scroller) return;
       const cardRect = currentCard.getBoundingClientRect();
       const scrollerRect = scroller.getBoundingClientRect();
+      const isClipped =
+        cardRect.top < scrollerRect.top || cardRect.bottom > scrollerRect.bottom;
       const isOutsideViewport =
         cardRect.bottom <= scrollerRect.top || cardRect.top >= scrollerRect.bottom;
-      if (isOutsideViewport) {
+      const fitsViewport = cardRect.height <= scrollerRect.height;
+      if (isOutsideViewport || (fitsViewport && isClipped)) {
         currentCard.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       }
     });
