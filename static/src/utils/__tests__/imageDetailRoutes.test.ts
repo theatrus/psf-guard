@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  imageDetailNavigationState,
   imageDetailClosePath,
   imageDetailPath,
   imageDetailReturnView,
+  sequenceReturnPositionFromState,
 } from '../imageDetailRoutes';
 
 describe('image detail routes', () => {
@@ -11,6 +13,16 @@ describe('image detail routes', () => {
 
     expect(imageDetailPath(12, params, 'sequence')).toBe(
       '/detail/12?db=test&project=1&target=2&current=12&returnTo=sequence'
+    );
+  });
+
+  it('updates the Sequence cursor while navigating between Detail images', () => {
+    const params = new URLSearchParams(
+      'db=test&project=1&target=2&current=12&returnTo=sequence'
+    );
+
+    expect(imageDetailPath(13, params, 'sequence')).toBe(
+      '/detail/13?db=test&project=1&target=2&current=13&returnTo=sequence'
     );
   });
 
@@ -38,5 +50,18 @@ describe('image detail routes', () => {
 
     expect(imageDetailReturnView(params)).toBe('grid');
     expect(imageDetailClosePath(params)).toBe('/grid?db=test&project=1');
+  });
+
+  it('validates Sequence scroll state', () => {
+    const position = { scrollTop: 432, imageId: 12, offsetTop: 180 };
+    expect(imageDetailNavigationState(position)).toEqual({ sequenceReturn: position });
+    expect(imageDetailNavigationState({ ...position, scrollTop: -10 })).toEqual({
+      sequenceReturn: { ...position, scrollTop: 0 },
+    });
+    expect(sequenceReturnPositionFromState({ sequenceReturn: position })).toEqual(position);
+    expect(sequenceReturnPositionFromState({
+      sequenceReturn: { ...position, offsetTop: Number.NaN },
+    })).toBeNull();
+    expect(sequenceReturnPositionFromState(null)).toBeNull();
   });
 });

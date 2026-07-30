@@ -609,6 +609,10 @@ describe('SequenceView: multi-session', () => {
       // Each tab shows the filter, session time, and image count.
       const tabs = screen.getAllByText(/L · .* \(5\)/);
       expect(tabs).toHaveLength(2);
+      const year = new Date(
+        multiSessionFixture.data.sequences[0].session_start * 1000,
+      ).getFullYear();
+      expect(tabs[0]).toHaveTextContent(String(year));
     });
   });
 

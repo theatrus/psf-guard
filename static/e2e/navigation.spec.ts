@@ -369,6 +369,47 @@ test('sequence mode uses arrows and Space for the same keyboard selection flow',
   await expect(cards.nth(0)).toHaveClass(/current-selection/);
 });
 
+test('sequence arrows reveal a normal card that is only partly visible', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.goto(
+    `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1&size=300`
+  );
+
+  const cards = page.locator('.sequence-image-card');
+  await expect(cards).toHaveCount(3, { timeout: 15_000 });
+  await expect(cards.nth(0)).toHaveClass(/current-selection/);
+  const nextCard = cards.nth(1);
+
+  await nextCard.evaluate((card) => {
+    const container = document.querySelector<HTMLElement>('.app-main')!;
+    const cardRect = card.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    container.scrollTop += cardRect.top - containerRect.bottom + 20;
+  });
+  const visibleBefore = await nextCard.evaluate((card) => {
+    const container = document.querySelector<HTMLElement>('.app-main')!;
+    const cardRect = card.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    return {
+      partlyVisible: cardRect.top < containerRect.bottom && cardRect.bottom > containerRect.bottom,
+      fitsViewport: cardRect.height <= containerRect.height,
+    };
+  });
+  expect(visibleBefore).toEqual({ partlyVisible: true, fitsViewport: true });
+
+  await page.keyboard.press('ArrowRight');
+  await expect(nextCard).toHaveClass(/current-selection/);
+  await expect.poll(async () => {
+    return nextCard.evaluate((card) => {
+      const container = document.querySelector<HTMLElement>('.app-main')!;
+      const cardRect = card.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      return cardRect.top >= containerRect.top - 1
+        && cardRect.bottom <= containerRect.bottom + 1;
+    });
+  }).toBe(true);
+});
+
 test('sequence thumbnail size can be changed and survives reload', async ({ page }) => {
   await page.goto(
     `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`
@@ -510,15 +551,47 @@ test('detail closes back to the Sequence session that opened it', async ({ page 
   await expect(page).toHaveURL(/#\/detail\/2/);
   await expect(page).toHaveURL(/returnTo=sequence/);
   await expect(page.locator('.image-card-wrapper')).toHaveCount(0);
+  await page.keyboard.press('ArrowRight');
+  await expect(page).toHaveURL(/#\/detail\/3/);
+  await expect(page).toHaveURL(/current=3/);
   await page.reload();
 
   await page.locator('.image-detail-overlay .close-button').click();
 
   await expect(page).toHaveURL(/#\/sequence\?/);
   await expect(page).not.toHaveURL(/returnTo=/);
-  await expect(page).toHaveURL(/current=2/);
+  await expect(page).toHaveURL(/current=3/);
   await expect(tabs.nth(1)).toHaveClass(/active/);
-  await expect(cards.nth(0)).toHaveClass(/current-selection/);
+  await expect(cards.nth(1)).toHaveClass(/current-selection/);
+});
+
+test('detail restores the exact Sequence scroll position', async ({ page }) => {
+  await page.goto(
+    `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1&current=2&size=1200`
+  );
+
+  const cards = page.locator('.sequence-image-card');
+  await expect(cards).toHaveCount(3, { timeout: 15_000 });
+  const current = cards.nth(1);
+  await expect(current).toHaveClass(/current-selection/);
+  await current.evaluate((element) => element.scrollIntoView({ block: 'center' }));
+  await expect(current).toBeInViewport();
+  const scroller = page.locator('.app-main');
+  const before = await scroller.evaluate((element) => element.scrollTop);
+  expect(before).toBeGreaterThan(0);
+
+  // Dispatch directly so Playwright does not reposition this oversized card
+  // while making it actionable; a real user can double-click its visible area.
+  await current.dispatchEvent('dblclick');
+  await expect(page).toHaveURL(/#\/detail\/2/);
+  expect(await page.evaluate(() => window.history.state.usr?.sequenceReturn.scrollTop)).toBe(before);
+  await page.locator('.image-detail-overlay .close-button').click();
+
+  await expect(page).toHaveURL(/#\/sequence\?/);
+  await expect(cards.nth(1)).toHaveClass(/current-selection/);
+  await expect.poll(
+    () => scroller.evaluate((element) => element.scrollTop)
+  ).toBeCloseTo(before, 0);
 });
 
 test('detail opened from Images still closes back to Images', async ({ page }) => {

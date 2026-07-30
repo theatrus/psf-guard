@@ -1,6 +1,6 @@
 import { useMemo, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiClient } from '../api/client';
 import { useDbProjectTarget, useFilters, useGridState } from './useUrlState';
 import type { Image } from '../api/types';
@@ -19,6 +19,7 @@ import {
  * Hook for navigating between images in the current context
  */
 export function useImageNavigation(currentImageId?: number) {
+  const location = useLocation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { dbId, projectId, targetId } = useDbProjectTarget();
@@ -170,7 +171,7 @@ export function useImageNavigation(currentImageId?: number) {
     if (view === 'detail') {
       navigate(
         imageDetailPath(imageId, searchParams, imageDetailReturnView(searchParams)),
-        { replace: true },
+        { replace: true, state: location.state },
       );
     } else {
       // For comparison, we need both left and right image IDs
@@ -178,7 +179,7 @@ export function useImageNavigation(currentImageId?: number) {
         (canGoNext ? flatImages[currentIndex + 1]?.id : imageId) : imageId;
       navigate(`/compare/${imageId}/${rightImageId}?${params}`, { replace: true });
     }
-  }, [navigate, searchParams, currentImageId, canGoNext, flatImages, currentIndex]);
+  }, [navigate, searchParams, currentImageId, canGoNext, flatImages, currentIndex, location.state]);
 
   const goToNext = useCallback(() => {
     if (canGoNext && currentIndex >= 0) {
@@ -200,8 +201,11 @@ export function useImageNavigation(currentImageId?: number) {
   }, [navigate, searchParams]);
 
   const closeDetail = useCallback(() => {
-    navigate(imageDetailClosePath(searchParams), { replace: true });
-  }, [navigate, searchParams]);
+    navigate(imageDetailClosePath(searchParams), {
+      replace: true,
+      state: location.state,
+    });
+  }, [location.state, navigate, searchParams]);
 
   return {
     canGoPrevious,
