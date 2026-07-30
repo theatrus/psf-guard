@@ -77,6 +77,8 @@ export default function SequenceView() {
   const filterName = searchParams.get('filterName') || undefined;
   const [threshold, setThreshold] = useState(0.5);
   const [showRejectReview, setShowRejectReview] = useState(false);
+  const selectionAnchorIdRef = useRef<number | null>(null);
+  const selectionBaseIdsRef = useRef<Set<number>>(new Set());
   const spatialScan = useSpatialScan(dbId, targetId ?? undefined, filterName);
 
   // Fetch targets for the project to allow selection
@@ -148,6 +150,8 @@ export default function SequenceView() {
       const inferredSelection = inferredSelectionRef.current;
       inferredSelectionRef.current = null;
       if (inferredSelection === null) entrySelectionRef.current = null;
+      selectionAnchorIdRef.current = null;
+      selectionBaseIdsRef.current = new Set();
       setSelectedImages(inferredSelection ?? new Set());
     }
   }, [selectionScope, setSelectedImages]);
@@ -201,20 +205,19 @@ export default function SequenceView() {
   const activeImageIdRef = useRef(activeImageId);
   activeImageIdRef.current = activeImageId;
   const sequenceStripRef = useRef<HTMLDivElement>(null);
-  const sequenceTabsRef = useRef<HTMLDivElement>(null);
   const restoredScrollRef = useRef(false);
 
   useEffect(() => {
-    const tabs = sequenceTabsRef.current;
-    const activeTab = tabs?.querySelector<HTMLElement>('.sequence-tab.active');
-    if (!tabs || !activeTab) return;
-    const left = activeTab.offsetLeft;
-    const right = left + activeTab.offsetWidth;
-    if (left < tabs.scrollLeft) tabs.scrollLeft = left;
-    else if (right > tabs.scrollLeft + tabs.clientWidth) {
-      tabs.scrollLeft = right - tabs.clientWidth;
+    if (selectionAnchorIdRef.current === null && activeImageId !== null) {
+      selectionAnchorIdRef.current = activeImageId;
+      const activeImageIds = new Set(
+        activeSequence?.images.map(image => image.image_id) ?? [],
+      );
+      selectionBaseIdsRef.current = new Set(
+        Array.from(selectedImages).filter(imageId => !activeImageIds.has(imageId)),
+      );
     }
-  }, [activeSequenceIndex, selectedImages, sequences]);
+  }, [activeImageId, activeSequence, selectedImages]);
 
   useLayoutEffect(() => {
     const position = sequenceReturnPositionFromState(location.state);
@@ -257,6 +260,15 @@ export default function SequenceView() {
     }
   }, [activeImageId, setCurrentImageId, urlCurrentImageId]);
 
+  const replaceSelectedImages = useCallback((ids: Set<number>) => {
+    const anchorId = activeImageIdRef.current;
+    const base = new Set(ids);
+    if (anchorId !== null) base.delete(anchorId);
+    selectionAnchorIdRef.current = anchorId;
+    selectionBaseIdsRef.current = base;
+    setSelectedImages(ids);
+  }, [setSelectedImages]);
+
   // Get unique filter names from available targets
   const availableFilters = useMemo(() => {
     const filters = new Set<string>();
@@ -275,8 +287,8 @@ export default function SequenceView() {
         ids.add(img.image_id);
       }
     });
-    setSelectedImages(ids);
-  }, [activeSequence, setSelectedImages, threshold]);
+    replaceSelectedImages(ids);
+  }, [activeSequence, replaceSelectedImages, threshold]);
 
   // Select contiguous runs of clouded/occluded/bad images
   const selectCloudedSequence = useCallback(() => {
@@ -305,36 +317,36 @@ export default function SequenceView() {
     if (inRun && runBuffer.length >= 2) {
       runBuffer.forEach(id => ids.add(id));
     }
-    setSelectedImages(ids);
-  }, [activeSequence, setSelectedImages]);
+    replaceSelectedImages(ids);
+  }, [activeSequence, replaceSelectedImages]);
 
   const selectAstrometryIssues = useCallback(() => {
     if (!activeSequence) return;
-    setSelectedImages(new Set(
+    replaceSelectedImages(new Set(
       activeSequence.images
         .filter(img => (img.flags ?? []).some(flag =>
           flag === 'off_target' || flag === 'pointing_jump' || flag === 'pointing_drift'))
         .map(img => img.image_id)
     ));
-  }, [activeSequence, setSelectedImages]);
+  }, [activeSequence, replaceSelectedImages]);
 
   const selectUnsolved = useCallback(() => {
     if (!activeSequence) return;
-    setSelectedImages(new Set(
+    replaceSelectedImages(new Set(
       activeSequence.images
         .filter(img => img.pointing?.solve_failed && img.pointing.image_quality_evidence)
         .map(img => img.image_id)
     ));
-  }, [activeSequence, setSelectedImages]);
+  }, [activeSequence, replaceSelectedImages]);
 
   const selectRecommended = useCallback(() => {
     if (!activeSequence) return;
-    setSelectedImages(new Set(
+    replaceSelectedImages(new Set(
       activeSequence.images
         .filter(img => !!img.regrade_reason)
         .map(img => img.image_id)
     ));
-  }, [activeSequence, setSelectedImages]);
+  }, [activeSequence, replaceSelectedImages]);
 
   const applySelectionPreset = useCallback((preset: string) => {
     switch (preset) {
@@ -389,12 +401,15 @@ export default function SequenceView() {
       await grading.gradeBatch(ids, 'rejected', reason);
     }
     setSelectedImages(new Set());
+    selectionAnchorIdRef.current = null;
+    selectionBaseIdsRef.current = new Set();
     setShowRejectReview(false);
   }, [grading, selectedForReview, setSelectedImages]);
 
   // Toggle individual image selection
   const toggleImage = useCallback((imageId: number) => {
     activeImageIdRef.current = imageId;
+    selectionAnchorIdRef.current = imageId;
     setCurrentImageId(imageId);
     setSelectedImages(prev => {
       const next = new Set(prev);
@@ -403,20 +418,26 @@ export default function SequenceView() {
       } else {
         next.add(imageId);
       }
+      const base = new Set(next);
+      base.delete(imageId);
+      selectionBaseIdsRef.current = base;
       return next;
     });
   }, [setCurrentImageId, setSelectedImages]);
 
   const selectImage = useCallback((imageId: number, event: React.MouseEvent) => {
-    const anchorId = activeImageIdRef.current;
+    const storedAnchorId = selectionAnchorIdRef.current;
+    const anchorId = storedAnchorId !== null && activeSequence?.images.some(
+      image => image.image_id === storedAnchorId,
+    ) ? storedAnchorId : activeImageIdRef.current;
     if (event.shiftKey && activeSequence && anchorId !== null) {
       const anchorIndex = activeSequence.images.findIndex(image => image.image_id === anchorId);
       const imageIndex = activeSequence.images.findIndex(image => image.image_id === imageId);
       if (anchorIndex >= 0 && imageIndex >= 0) {
         const start = Math.min(anchorIndex, imageIndex);
         const end = Math.max(anchorIndex, imageIndex);
-        setSelectedImages(previous => {
-          const next = new Set(previous);
+        setSelectedImages(() => {
+          const next = new Set(selectionBaseIdsRef.current);
           activeSequence.images.slice(start, end + 1).forEach(image => {
             next.add(image.image_id);
           });
@@ -482,9 +503,14 @@ export default function SequenceView() {
   const selectSequence = useCallback((sequence: ScoredSequence) => {
     const firstImageId = sequence.images[0]?.image_id;
     if (firstImageId !== undefined) {
+      selectionAnchorIdRef.current = firstImageId;
+      const sequenceImageIds = new Set(sequence.images.map(image => image.image_id));
+      selectionBaseIdsRef.current = new Set(
+        Array.from(selectedImages).filter(imageId => !sequenceImageIds.has(imageId)),
+      );
       setCurrentImageId(firstImageId);
     }
-  }, [setCurrentImageId]);
+  }, [selectedImages, setCurrentImageId]);
 
   if (!projectId) {
     return (
@@ -667,7 +693,11 @@ export default function SequenceView() {
                 <button
                   type="button"
                   className="header-button"
-                  onClick={() => setSelectedImages(new Set())}
+                  onClick={() => {
+                    setSelectedImages(new Set());
+                    selectionAnchorIdRef.current = null;
+                    selectionBaseIdsRef.current = new Set();
+                  }}
                 >
                   Clear
                 </button>
@@ -694,7 +724,7 @@ export default function SequenceView() {
         <>
           {/* Sequence tabs (if multiple) */}
           {sequences.length > 1 && (
-            <div className="sequence-tabs" ref={sequenceTabsRef}>
+            <div className="sequence-tabs">
               {sequences.map((seq, i) => {
                 const selectedCount = seq.images.filter(image =>
                   selectedImages.has(image.image_id)
@@ -758,7 +788,7 @@ export default function SequenceView() {
                 threshold={threshold}
                 currentImageId={activeImageId}
                 selectedImages={selectedImages}
-                onToggle={toggleImage}
+                onSelect={selectImage}
               />
 
               <PointingScatter images={activeSequence.images} />
@@ -887,13 +917,13 @@ const SequenceTimeline = memo(function SequenceTimeline({
   threshold,
   currentImageId,
   selectedImages,
-  onToggle,
+  onSelect,
 }: {
   images: ImageQualityResult[];
   threshold: number;
   currentImageId: number | null;
   selectedImages: Set<number>;
-  onToggle: (id: number) => void;
+  onSelect: (id: number, event: React.MouseEvent) => void;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [viewportWidth, setViewportWidth] = useState(0);
@@ -963,6 +993,7 @@ const SequenceTimeline = memo(function SequenceTimeline({
           return (
             <rect
               key={img.image_id}
+              data-image-id={img.image_id}
               x={x}
               y={y}
               width={barWidth}
@@ -974,7 +1005,7 @@ const SequenceTimeline = memo(function SequenceTimeline({
                 : isSelected ? 'var(--color-warning)' : 'none'}
               strokeWidth={isCurrent ? 2 : isSelected ? 1 : 0}
               style={{ cursor: 'pointer' }}
-              onClick={() => onToggle(img.image_id)}
+              onClick={(event) => onSelect(img.image_id, event)}
             >
               <title>Score: {img.quality_score.toFixed(2)}{img.category ? ` (${formatCategory(img.category)})` : ''}</title>
             </rect>

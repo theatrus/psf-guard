@@ -78,6 +78,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   // Initialize grading system with undo/redo
   const grading = useGrading(dbId!);
   const [lastSelectedImageId, setLastSelectedImageId] = useState<number | null>(null);
+  const selectionAnchorIdRef = useRef<number | null>(null);
+  const selectionBaseIdsRef = useRef<Set<number>>(new Set());
 
   // Navigation helpers
   const [searchParams] = useSearchParams();
@@ -286,13 +288,25 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   // Keep the cursor on an image ID. Group positions can move when new images
   // arrive or the grouping mode changes.
   useEffect(() => {
+    if (selectionAnchorIdRef.current === null && activeImageId !== null) {
+      selectionAnchorIdRef.current = activeImageId;
+      const base = new Set(selectedImages);
+      base.delete(activeImageId);
+      selectionBaseIdsRef.current = base;
+    }
     if (activeImageId !== lastSelectedImageId) {
       setLastSelectedImageId(activeImageId);
     }
     if (activeImageId !== null && activeImageId !== urlCurrentImageId) {
       setCurrentImageId(activeImageId);
     }
-  }, [activeImageId, lastSelectedImageId, setCurrentImageId, urlCurrentImageId]);
+  }, [
+    activeImageId,
+    lastSelectedImageId,
+    selectedImages,
+    setCurrentImageId,
+    urlCurrentImageId,
+  ]);
 
   // Grading is now handled by the useGrading hook
 
@@ -330,6 +344,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const toggleCurrentImageSelection = useCallback(() => {
     const currentImageId = activeImageIdRef.current;
     if (currentImageId === null) return;
+    selectionAnchorIdRef.current = currentImageId;
     setSelectedImages((selected) => {
       const next = new Set(selected);
       if (next.has(currentImageId)) {
@@ -337,6 +352,9 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
       } else {
         next.add(currentImageId);
       }
+      const base = new Set(next);
+      base.delete(currentImageId);
+      selectionBaseIdsRef.current = base;
       return next;
     });
   }, [setSelectedImages]);
@@ -368,9 +386,13 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
 
   // Handle image selection with shift+click support
   const handleImageSelection = useCallback((imageId: number, event: React.MouseEvent) => {
-    if (event.shiftKey && lastSelectedImageId) {
+    const storedAnchorId = selectionAnchorIdRef.current;
+    const selectionAnchorId = storedAnchorId !== null && flatImages.some(
+      image => image.id === storedAnchorId,
+    ) ? storedAnchorId : activeImageIdRef.current;
+    if (event.shiftKey && selectionAnchorId !== null) {
       // Shift+click: select range
-      const startIndex = flatImages.findIndex(image => image.id === lastSelectedImageId);
+      const startIndex = flatImages.findIndex(image => image.id === selectionAnchorId);
       const endIndex = flatImages.findIndex(image => image.id === imageId);
       
       if (startIndex !== -1 && endIndex !== -1) {
@@ -381,11 +403,9 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
           newSelections.add(flatImages[i].id);
         }
         
-        setSelectedImages((prev: Set<number>) => {
-          const next = new Set(prev);
-          newSelections.forEach(id => next.add(id));
-          return next;
-        });
+        const next = new Set(selectionBaseIdsRef.current);
+        newSelections.forEach(id => next.add(id));
+        setSelectedImages(next);
       }
       activeImageIdRef.current = imageId;
       setCurrentImageId(imageId);
@@ -398,20 +418,25 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
         } else {
           next.add(imageId);
         }
+        const base = new Set(next);
+        base.delete(imageId);
+        selectionBaseIdsRef.current = base;
         return next;
       });
       activeImageIdRef.current = imageId;
       setCurrentImageId(imageId);
       setLastSelectedImageId(imageId);
+      selectionAnchorIdRef.current = imageId;
     } else {
       // Regular click: single selection for navigation
       activeImageIdRef.current = imageId;
       setCurrentImageSelection(imageId);
       setLastSelectedImageId(imageId);
+      selectionAnchorIdRef.current = imageId;
+      selectionBaseIdsRef.current = new Set();
     }
   }, [
     flatImages,
-    lastSelectedImageId,
     setCurrentImageId,
     setCurrentImageSelection,
     setSelectedImages,
@@ -427,6 +452,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
       // Clear selection after batch operation
       setSelectedImages(new Set());
       setLastSelectedImageId(null);
+      selectionAnchorIdRef.current = null;
+      selectionBaseIdsRef.current = new Set();
     } catch (error) {
       console.error('Batch grading failed:', error);
     }
@@ -490,6 +517,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     previousSelectionFilterKey.current = selectionFilterKey;
     setSelectedImages(new Set());
     setLastSelectedImageId(null);
+    selectionAnchorIdRef.current = null;
+    selectionBaseIdsRef.current = new Set();
   }, [selectionFilterKey, setSelectedImages]);
 
   // Keyboard shortcuts
@@ -587,6 +616,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     // Just clear selection on escape (we're already in grid view)
     setSelectedImages(new Set());
     setLastSelectedImageId(null);
+    selectionAnchorIdRef.current = null;
+    selectionBaseIdsRef.current = new Set();
   }, gridHotkeyOptions, [setSelectedImages, isLiveGridRoute]);
   
   // Add comparison keyboard shortcut
@@ -777,6 +808,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                     onClick={() => {
                       setSelectedImages(new Set());
                       setLastSelectedImageId(null);
+                      selectionAnchorIdRef.current = null;
+                      selectionBaseIdsRef.current = new Set();
                     }}
                   >
                     Clear
