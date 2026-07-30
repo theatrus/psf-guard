@@ -3757,10 +3757,13 @@ pub async fn analyze_sequence(
         result.0.into_iter().map(Into::into).collect();
     let mut target_filter_rollups: Vec<crate::server::api::TargetFilterRollupResponse> =
         result.1.into_iter().map(Into::into).collect();
-    sequences.sort_by(|a, b| {
-        b.session_start
-            .cmp(&a.session_start)
-            .then_with(|| a.filter_name.cmp(&b.filter_name))
+    sequences.sort_by(|a, b| match (a.session_start, b.session_start) {
+        (Some(left), Some(right)) => left
+            .cmp(&right)
+            .then_with(|| a.filter_name.cmp(&b.filter_name)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.filter_name.cmp(&b.filter_name),
     });
     target_filter_rollups.sort_by(|a, b| a.filter_name.cmp(&b.filter_name));
 

@@ -441,9 +441,9 @@ async fn test_analyze_sequence_session_split() {
     assert_eq!(sequences[0]["image_count"], 5);
     assert_eq!(sequences[1]["image_count"], 5);
 
-    // The API presents newest sessions first for navigation. Sort the bounds
-    // chronologically here because this test checks splitting, not UI order.
-    let mut bounds = sequences
+    // The API presents sessions in capture order so the tab row reads from
+    // the start of the project to its latest session.
+    let bounds = sequences
         .iter()
         .map(|sequence| {
             (
@@ -452,7 +452,6 @@ async fn test_analyze_sequence_session_split() {
             )
         })
         .collect::<Vec<_>>();
-    bounds.sort_by_key(|(start, _)| *start);
     let (_, seq0_end) = bounds[0];
     let (seq1_start, _) = bounds[1];
 

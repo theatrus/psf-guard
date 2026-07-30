@@ -11,6 +11,7 @@ import {
   qualityScoreDescription,
   type QualityScoreScope,
 } from '../utils/qualityScore';
+import QualityReasonPopover from './QualityReasonPopover';
 
 export interface ImageCardProps {
   dbId: string;
@@ -206,10 +207,11 @@ export default function ImageCard({
                   : 'possible'}
           </span>
         )}
-        {quality?.details && (
-          <span className="sequence-image-details" title={quality.details}>
-            {quality.details}
-          </span>
+        {(quality?.regrade_reason || quality?.details) && (
+          <QualityReasonPopover
+            reason={quality.regrade_reason}
+            details={quality.details}
+          />
         )}
       </div>
     </div>
