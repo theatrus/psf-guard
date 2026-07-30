@@ -881,7 +881,7 @@ test('sequence keyboard shortcuts pause while the rejection dialog is open', asy
   await expect(cards.nth(1)).toHaveClass(/current-selection/);
 
   await page.getByRole('button', { name: 'Review rejection' }).click();
-  const dialog = page.getByRole('dialog', { name: /Review 2 recommended rejections/ });
+  const dialog = page.getByRole('dialog', { name: /Review 2 selected frames/ });
   await expect(dialog).toBeVisible();
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
