@@ -227,6 +227,23 @@ test('multi-select stays active without changing the toolbar height', async ({ p
   await expect(page.locator('.image-card-wrapper.multi-selected')).toHaveCount(3);
 });
 
+test('Grid Shift-click selects a range from a plain-click anchor', async ({ page }) => {
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+
+  const cards = page.locator('.image-card');
+  const wrappers = page.locator('.image-card-wrapper');
+  await expect(cards).toHaveCount(3, { timeout: 15_000 });
+  await cards.nth(0).click();
+  await cards.nth(2).click({ modifiers: ['Shift'] });
+
+  await expect(page.locator('.image-card-wrapper.multi-selected')).toHaveCount(3);
+  await expect(page.locator('.selection-action-bar')).toContainText('3 selected');
+
+  await cards.nth(1).click({ modifiers: ['Shift'] });
+  await expect(page.locator('.image-card-wrapper.multi-selected')).toHaveCount(2);
+  await expect(wrappers.nth(2)).not.toHaveClass(/multi-selected/);
+});
+
 test('arrow keys move through the image grid', async ({ page }) => {
   await page.setViewportSize({ width: 760, height: 720 });
   await page.goto(
@@ -470,6 +487,24 @@ test('Sequence Shift-click selects a visible range', async ({ page }) => {
 
   await expect(page.locator('.sequence-image-card.selected')).toHaveCount(3);
   await expect(page.locator('.sequence-selection-bar')).toContainText('3 selected');
+
+  await cards.nth(1).click({ modifiers: ['Shift'] });
+  await expect(page.locator('.sequence-image-card.selected')).toHaveCount(2);
+  await expect(cards.nth(2)).not.toHaveClass(/selected/);
+});
+
+test('Sequence chart Shift-click selects a visible range', async ({ page }) => {
+  await page.goto(
+    `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`
+  );
+
+  const bars = page.locator('.sequence-timeline rect[data-image-id]');
+  await expect(bars).toHaveCount(3, { timeout: 15_000 });
+  await bars.nth(0).click();
+  await bars.nth(2).click({ modifiers: ['Shift'] });
+
+  await expect(page.locator('.sequence-image-card.selected')).toHaveCount(3);
+  await expect(page.locator('.sequence-selection-bar')).toContainText('3 selected');
 });
 
 test('many Sequence tabs wrap into a stable grid without horizontal scrolling', async ({ page }) => {
@@ -514,8 +549,8 @@ test('many Sequence tabs wrap into a stable grid without horizontal scrolling', 
     top: element.getBoundingClientRect().top,
     width: element.getBoundingClientRect().width,
   })));
-  expect(after.map(tab => Math.round(tab.top))).toEqual(
-    before.map(tab => Math.round(tab.top))
+  expect(after.map(tab => Math.round(tab.top - after[0].top))).toEqual(
+    before.map(tab => Math.round(tab.top - before[0].top))
   );
   expect(after.map(tab => Math.round(tab.width))).toEqual(
     before.map(tab => Math.round(tab.width))

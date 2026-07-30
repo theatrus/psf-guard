@@ -570,6 +570,29 @@ describe('SequenceView: interactions', () => {
     expect(cards[0]).toHaveClass('selected');
     expect(cards[1]).toHaveClass('selected');
     expect(cards[2]).toHaveClass('selected');
+
+    fireEvent.click(cards[1], { shiftKey: true });
+    await waitFor(() => {
+      expect(document.querySelectorAll('.sequence-image-card.selected')).toHaveLength(2);
+    });
+    expect(cards[2]).not.toHaveClass('selected');
+  });
+
+  it('selects a range with Shift-click in the quality chart', async () => {
+    setupDefaultHandlers();
+
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
+
+    await waitFor(() => {
+      expect(document.querySelectorAll('.sequence-timeline rect[data-image-id]')).toHaveLength(10);
+    });
+    const bars = document.querySelectorAll('.sequence-timeline rect[data-image-id]');
+    fireEvent.click(bars[0]);
+    fireEvent.click(bars[2], { shiftKey: true });
+
+    await waitFor(() => {
+      expect(document.querySelectorAll('.sequence-image-card.selected')).toHaveLength(3);
+    });
   });
 
   it('selects images below threshold', async () => {
