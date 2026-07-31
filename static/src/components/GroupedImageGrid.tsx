@@ -404,7 +404,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
 
   const gradeImage = useCallback(async (status: 'accepted' | 'rejected' | 'pending') => {
     const currentImageId = activeImageIdRef.current;
-    if (!currentImageId) return;
+    if (!currentImageId || !grading.canWrite) return;
 
     try {
       await grading.gradeImage(currentImageId, status);
@@ -487,7 +487,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
 
   // Batch grading functions
   const gradeBatch = useCallback(async (status: 'accepted' | 'rejected' | 'pending') => {
-    if (selectedImages.size === 0) return;
+    if (selectedImages.size === 0 || !grading.canWrite) return;
 
     try {
       await grading.gradeBatch(Array.from(selectedImages), status);
@@ -830,21 +830,21 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                 <div className="batch-buttons">
                   <button
                     className="action-button accept"
-                    disabled={selectedImages.size <= 1}
+                    disabled={selectedImages.size <= 1 || !grading.canWrite}
                     onClick={() => gradeBatch('accepted')}
                   >
                     Accept
                   </button>
                   <button
                     className="action-button reject"
-                    disabled={selectedImages.size <= 1}
+                    disabled={selectedImages.size <= 1 || !grading.canWrite}
                     onClick={() => gradeBatch('rejected')}
                   >
                     Reject
                   </button>
                   <button
                     className="action-button pending"
-                    disabled={selectedImages.size <= 1}
+                    disabled={selectedImages.size <= 1 || !grading.canWrite}
                     onClick={() => gradeBatch('pending')}
                   >
                     Pending

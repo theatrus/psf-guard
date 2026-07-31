@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type { AxiosInstance } from 'axios';
+import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
 import type {
   ApiResponse,
@@ -12,6 +13,7 @@ import type {
   StarDetectionResponse,
   PreviewOptions,
   ServerInfo,
+  AuthStatus,
   UpdateNoticeStatus,
   SchedulerSyncRequest,
   SchedulerSyncPreviewResponse,
@@ -92,6 +94,12 @@ const initializeApi = async () => {
       (error) => {
         console.error('API Error:', error);
         if (axios.isAxiosError<ApiResponse<unknown>>(error)) {
+          if (
+            error.response?.status === 401
+            && !error.config?.url?.startsWith('/auth/')
+          ) {
+            window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT));
+          }
           const message = error.response?.data?.error;
           if (message) return Promise.reject(new Error(message, { cause: error }));
         }
@@ -140,6 +148,28 @@ const stackStretchError = (cause: unknown, fallback: string): Error => {
 };
 
 export const apiClient = {
+  getAuthStatus: async (): Promise<AuthStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<AuthStatus>>('/auth/status');
+    if (!data.data) throw new Error(data.error || 'Failed to check sign-in status');
+    return data.data;
+  },
+
+  login: async (username: string, password: string): Promise<AuthStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<AuthStatus>>('/auth/login', {
+      username,
+      password,
+    });
+    if (!data.data) throw new Error(data.error || 'Sign in failed');
+    return data.data;
+  },
+
+  logout: async (): Promise<void> => {
+    const apiInstance = await getApi();
+    await apiInstance.post('/auth/logout');
+  },
+
   // ── Global ────────────────────────────────────────────────────────────────
 
   getServerInfo: async (): Promise<ServerInfo> => {

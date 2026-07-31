@@ -212,6 +212,10 @@ pub struct ServerConfig {
     pub host: Option<String>,
     /// Enable CORS (default: true)
     pub cors: Option<bool>,
+    /// Optional browser login for server mode. Tauri does not load this config
+    /// and keeps its localhost server unauthenticated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<ServerAuthConfig>,
     /// Fraction of logical CPU cores interactive, user-triggered work (the
     /// occlusion / spatial scan) may use (0.0–1.0, default 0.5). It runs on
     /// the blocking pool while the server keeps serving the UI, so this leaves
@@ -245,6 +249,52 @@ pub struct ServerConfig {
     /// unaffected either way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview_color: Option<bool>,
+}
+
+/// Two simple browser roles. This is deliberately not an ACL system: one
+/// optional viewer credential and one optional editor credential cover the
+/// small-server deployment case.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerAuthConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only: Option<ServerAuthCredentialConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_write: Option<ServerAuthCredentialConfig>,
+    /// Browser session lifetime. Defaults to seven days.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_hours: Option<u64>,
+    /// Mark the session cookie Secure. Defaults to true; leave it false only
+    /// for direct HTTP development servers.
+    #[serde(default = "default_secure_cookie")]
+    pub secure_cookie: bool,
+}
+
+fn default_secure_cookie() -> bool {
+    true
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerAuthCredentialConfig {
+    pub username: String,
+    /// Inline password. Prefer `password_file` for deployed servers.
+    #[serde(default, skip_serializing)]
+    pub password: Option<String>,
+    /// File holding the password. Leading and trailing whitespace is trimmed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_file: Option<String>,
+}
+
+impl std::fmt::Debug for ServerAuthCredentialConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ServerAuthCredentialConfig")
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("password_file", &self.password_file)
+            .finish()
+    }
 }
 
 impl ServerConfig {
@@ -390,6 +440,7 @@ impl Default for ServerConfig {
             port: Some(3000),
             host: Some("0.0.0.0".to_string()),
             cors: Some(true),
+            auth: None,
             scan_worker_ratio: None,
             background_worker_ratio: None,
             banner: None,
@@ -484,6 +535,14 @@ impl Config {
 
     pub fn get_cors_enabled(&self) -> bool {
         self.server.cors.unwrap_or(true)
+    }
+
+    pub fn get_server_auth(&self) -> Result<Option<crate::server::auth::ServerAuth>> {
+        self.server
+            .auth
+            .as_ref()
+            .map(crate::server::auth::ServerAuth::from_config)
+            .transpose()
     }
 
     /// Validated, whitespace-normalized site banner for the server API.
@@ -597,6 +656,7 @@ impl Config {
         }
 
         self.get_site_banner()?;
+        self.get_server_auth()?;
 
         Ok(())
     }
@@ -613,6 +673,7 @@ mod tests {
         assert_eq!(config.get_port(), 3000);
         assert_eq!(config.get_host(), "0.0.0.0");
         assert!(config.get_cors_enabled());
+        assert!(config.get_server_auth().unwrap().is_none());
         // Database/images are obsolete and default to absent.
         assert!(config.database.is_none());
         assert!(config.images.is_none());
@@ -656,6 +717,61 @@ directory = "./cache"
         assert_eq!(config.get_port(), 3002);
         assert!(config.database.is_none());
         assert!(config.images.is_none());
+    }
+
+    #[test]
+    fn server_auth_parses_role_credentials_and_secret_files() {
+        let secret = NamedTempFile::new().unwrap();
+        std::fs::write(secret.path(), "editor-secret\n").unwrap();
+        let toml = format!(
+            r#"
+[server]
+port = 3000
+
+[server.auth]
+session_hours = 24
+secure_cookie = true
+
+[server.auth.read_only]
+username = "viewer"
+password = "viewer-secret"
+
+[server.auth.read_write]
+username = "editor"
+password_file = "{}"
+
+[cache]
+directory = "./cache"
+"#,
+            secret.path().display()
+        );
+        let config: Config = toml_edit::de::from_str(&toml).unwrap();
+        let config_debug = format!("{config:?}");
+        assert!(!config_debug.contains("viewer-secret"));
+        assert!(!config_debug.contains("editor-secret"));
+        let auth = config.get_server_auth().unwrap().unwrap();
+        let debug = format!("{auth:?}");
+        assert!(debug.contains("viewer"));
+        assert!(debug.contains("editor"));
+        assert!(!debug.contains("viewer-secret"));
+        assert!(!debug.contains("editor-secret"));
+    }
+
+    #[test]
+    fn server_auth_defaults_to_secure_cookies() {
+        let config: Config = toml_edit::de::from_str(
+            r#"
+[server.auth.read_write]
+username = "editor"
+password = "development-only"
+
+[cache]
+directory = "./cache"
+"#,
+        )
+        .unwrap();
+
+        assert!(config.server.auth.unwrap().secure_cookie);
     }
 
     #[test]

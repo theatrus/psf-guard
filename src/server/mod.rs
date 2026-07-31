@@ -1,4 +1,5 @@
 pub mod api;
+pub mod auth;
 pub mod cache;
 pub mod catalog_install;
 pub mod database_context;
@@ -58,6 +59,8 @@ pub struct ServerConfig {
     pub allow_database_management: bool,
     /// Optional notice shown below the application header.
     pub site_banner: Option<crate::config::SiteBannerConfig>,
+    /// Optional browser/server authentication. Tauri always leaves this off.
+    pub auth: Option<auth::ServerAuth>,
     /// Tuning policy for the parallel scans and background pre-generation.
     /// See `concurrency::WorkerPolicy`.
     pub worker_policy: crate::concurrency::WorkerPolicy,
@@ -81,6 +84,7 @@ pub async fn run_server(
     registry_path: Option<PathBuf>,
     allow_database_management: bool,
     site_banner: Option<crate::config::SiteBannerConfig>,
+    auth: Option<auth::ServerAuth>,
     worker_policy: crate::concurrency::WorkerPolicy,
     preview_encoding: crate::preview_format::PreviewEncoding,
     preview_color_default: bool,
@@ -109,6 +113,7 @@ pub async fn run_server(
         registry_path,
         allow_database_management,
         site_banner,
+        auth,
         worker_policy,
         preview_encoding,
         preview_color_default,
@@ -178,11 +183,15 @@ async fn run_server_internal(
             state.set_registry_path(config.registry_path.clone());
             state.set_allow_database_management(config.allow_database_management);
             state.set_site_banner(config.site_banner.clone());
+            state.set_server_auth(config.auth.clone());
             state.set_worker_policy(config.worker_policy);
             state.set_preview_encoding(config.preview_encoding);
             state.set_preview_color_default(config.preview_color_default);
             if let Some(banner) = &config.site_banner {
                 tracing::info!("📢 Site banner enabled: {}", banner.title);
+            }
+            if config.auth.is_some() {
+                tracing::info!("🔐 Browser authentication enabled");
             }
             tracing::info!(
                 "📐 Worker ratios — interactive {:.2}, background {:.2} (of {} logical cores)",
@@ -192,10 +201,16 @@ async fn run_server_internal(
             );
             report_preview_settings(&state, &config);
             if config.allow_database_management {
-                tracing::warn!(
-                    "⚠️ Database management via HTTP is ENABLED. Anyone who can reach \
-                     this server can add/edit/remove configured databases."
-                );
+                if config.auth.is_some() {
+                    tracing::warn!(
+                        "⚠️ Database management via HTTP is enabled for authenticated editors."
+                    );
+                } else {
+                    tracing::warn!(
+                        "⚠️ Database management via HTTP is ENABLED. Anyone who can reach \
+                         this server can add/edit/remove configured databases."
+                    );
+                }
             } else {
                 tracing::info!(
                     "🔒 Database management via HTTP is disabled. Pass \
@@ -405,6 +420,9 @@ async fn run_server_internal(
 
     // Top-level API: global endpoints + nested per-DB routes.
     let api_routes = Router::new()
+        .route("/auth/status", get(auth::status))
+        .route("/auth/login", post(auth::login))
+        .route("/auth/logout", post(auth::logout))
         .route("/info", get(handlers::get_server_info))
         .route("/update-notice", get(handlers::get_update_notice))
         .route(
@@ -481,6 +499,10 @@ async fn run_server_internal(
         .route("/sync/v1/exports", post(remote_sync::create_export))
         .route("/sync/v1/exports/{export_id}", get(remote_sync::get_export))
         .nest("/db/{db_id}", db_routes)
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state),
+            auth::authorize_api,
+        ))
         .with_state(state);
 
     // Create main app with either embedded or filesystem static serving

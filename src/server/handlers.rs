@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::{
         header::{CACHE_CONTROL, CONTENT_TYPE},
         StatusCode,
@@ -60,11 +60,19 @@ mod coordinate_format_tests {
 
 pub async fn get_server_info(
     State(state): State<Arc<AppState>>,
+    access: Option<Extension<crate::server::auth::RequestAccess>>,
 ) -> Result<Json<ApiResponse<ServerInfo>>, AppError> {
+    let access =
+        access
+            .map(|Extension(access)| access)
+            .unwrap_or(crate::server::auth::RequestAccess {
+                role: crate::server::auth::AccessRole::ReadWrite,
+            });
     let info = ServerInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         cache_directory: state.cache_dir_root.clone(),
-        allow_database_management: state.database_management_allowed(),
+        allow_database_management: state.database_management_allowed()
+            && access.role == crate::server::auth::AccessRole::ReadWrite,
         banner: state.site_banner(),
     };
 

@@ -274,6 +274,8 @@ async fn start_server_for_tauri(
         allow_database_management: true,
         // The desktop app does not read the server TOML.
         site_banner: None,
+        // Tauri binds localhost and does not use browser authentication.
+        auth: None,
         worker_policy: config.get_worker_policy(),
         // The desktop app has disk to spare and no operator to ask, so it
         // keeps the exact rendition.

@@ -25,6 +25,22 @@ host = "0.0.0.0"
 # Enable CORS (default: true)
 cors = true
 
+# Optional browser login. Omit this whole block to keep the server open.
+# Use password files for deployed systems. Secure cookies are the default;
+# set secure_cookie = false only for a direct HTTP development server.
+#
+# [server.auth]
+# session_hours = 168
+# secure_cookie = true
+#
+# [server.auth.read_only]
+# username = "viewer"
+# password_file = "/run/secrets/psf-guard-viewer"
+#
+# [server.auth.read_write]
+# username = "editor"
+# password_file = "/run/secrets/psf-guard-editor"
+
 # Optional notice shown below the application header on every page.
 # Values are plain text. Set both link fields or omit both.
 #

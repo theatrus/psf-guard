@@ -1096,6 +1096,7 @@ pub fn main() -> Result<()> {
             let preview_encoding = app_config.server.preview_encoding()?;
             let preview_color_default = app_config.server.preview_color();
             let site_banner = app_config.get_site_banner()?;
+            let server_auth = app_config.get_server_auth()?;
             // Open the configured databases for remote sync and image upload.
             // This edits the in-memory list only — the registry on disk keeps
             // whatever the desktop Settings panel put there.
@@ -1122,6 +1123,7 @@ pub fn main() -> Result<()> {
                     Some(registry_path),
                     allow_database_management,
                     site_banner,
+                    server_auth,
                     worker_policy,
                     preview_encoding,
                     preview_color_default,

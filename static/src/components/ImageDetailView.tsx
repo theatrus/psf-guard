@@ -35,6 +35,7 @@ interface ImageDetailViewProps {
   adjacentImageIds?: { next: number[]; previous: number[] };
   // Optional grading system for undo/redo (passed from parent)
   grading?: {
+    canWrite: boolean;
     canUndo: boolean;
     canRedo: boolean;
     isLoading: boolean;
@@ -805,18 +806,21 @@ export default function ImageDetailView({
               <button 
                 className="action-button accept" 
                 onClick={() => onGrade('accepted')}
+                disabled={grading ? !grading.canWrite : false}
               >
                 Accept (A)
               </button>
               <button 
                 className="action-button reject" 
                 onClick={() => onGrade('rejected')}
+                disabled={grading ? !grading.canWrite : false}
               >
                 Reject (X)
               </button>
               <button 
                 className="action-button pending" 
                 onClick={() => onGrade('pending')}
+                disabled={grading ? !grading.canWrite : false}
               >
                 Unmark (U)
               </button>

@@ -492,7 +492,7 @@ export default function SequenceView() {
   // is written — the scheduler keeps rejectreason per image, so a mixed batch
   // must not collapse to one shared string.
   const confirmRejectSelected = useCallback(async () => {
-    if (selectedForReview.length === 0) return;
+    if (!grading.canWrite || selectedForReview.length === 0) return;
     const byReason = new Map<string, number[]>();
     for (const img of selectedForReview) {
       const reason = img.regrade_reason ?? 'Quality analysis';
@@ -707,8 +707,10 @@ export default function SequenceView() {
               type="button"
               className="header-button"
               onClick={(event) => spatialScan.start(event.shiftKey || undefined)}
-              disabled={spatialScan.isStarting || spatialScan.isRunning}
-              title="Analyze FITS pixels, then refresh sequence scores. Shift-click to recompute all cached evidence from the current catalogs."
+              disabled={!grading.canWrite || spatialScan.isStarting || spatialScan.isRunning}
+              title={grading.canWrite
+                ? 'Analyze FITS pixels, then refresh sequence scores. Shift-click to recompute all cached evidence from the current catalogs.'
+                : 'A read-only account cannot start quality analysis.'}
             >
               {spatialScan.isRunning
                 ? `${spatialScan.status?.progress.stage === 'astrometry' ? 'Solving' : 'Scanning'} ${spatialScan.status?.progress.processed ?? 0}/${spatialScan.status?.progress.total ?? 0}...`
@@ -792,6 +794,7 @@ export default function SequenceView() {
                 <button
                   type="button"
                   className="action-button reject"
+                  disabled={!grading.canWrite}
                   onClick={() => setShowRejectReview(true)}
                 >
                   Review rejection
@@ -949,7 +952,7 @@ export default function SequenceView() {
               type="button"
               className="action-button reject"
               onClick={confirmRejectSelected}
-              disabled={grading.isLoading}
+              disabled={grading.isLoading || !grading.canWrite}
             >
               Reject selected ({selectedForReview.length})
             </button>

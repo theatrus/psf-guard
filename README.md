@@ -840,6 +840,19 @@ host = "0.0.0.0"
 #scan_worker_ratio = 0.5
 #background_worker_ratio = 0.25
 
+# Optional browser login. See docs/AUTHENTICATION.md.
+[server.auth]
+session_hours = 168
+secure_cookie = true
+
+[server.auth.read_only]
+username = "viewer"
+password_file = "/run/secrets/psf-guard-viewer"
+
+[server.auth.read_write]
+username = "editor"
+password_file = "/run/secrets/psf-guard-editor"
+
 # Optional plain-text notice shown below the application header.
 [server.banner]
 title = "Demo site"
@@ -861,6 +874,13 @@ large = false          # 2000px previews
 Omit `[server.banner]` to hide the notice. The title and message are plain
 text. Set both link fields or omit both; links must use `http://` or
 `https://`.
+
+Omit `[server.auth]` to keep the server open as before. When enabled, PSF Guard
+shows its own login page and uses an HttpOnly session cookie. Viewer accounts
+can browse images and build derived views, but cannot change grades, plans,
+files, or server settings. Editor accounts keep normal write access. Tauri
+always stays unauthenticated on its localhost-only server. See
+[Server authentication](docs/AUTHENTICATION.md).
 
 Command-line arguments override the config file. (A legacy
 `[database]`/`[images]` section is still parsed but ignored in server mode —

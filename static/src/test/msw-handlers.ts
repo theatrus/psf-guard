@@ -162,6 +162,18 @@ export const handlers = [
   }),
 
   // Cross-DB endpoints
+  http.get('/api/auth/status', () =>
+    HttpResponse.json({
+      success: true,
+      data: {
+        authentication_required: false,
+        authenticated: true,
+        role: 'read_write',
+      },
+      error: null,
+      status: 'ready',
+    })
+  ),
   http.get('/api/databases', () => HttpResponse.json(emptyList)),
   http.get('/api/info', () =>
     HttpResponse.json({
