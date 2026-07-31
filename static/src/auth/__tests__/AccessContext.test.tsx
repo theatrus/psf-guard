@@ -23,7 +23,8 @@ function ProtectedContent() {
   const access = useAccess();
   return (
     <div>
-      Catalog ready · {access.canWrite ? 'editor' : 'viewer'} · {access.status.username}
+      Catalog ready · {access.canWrite ? 'editor' : 'viewer'} ·
+      {access.canCompute ? ' compute' : ' cached only'} · {access.status.username}
       <button type="button" onClick={() => void access.logout()}>Sign out</button>
     </div>
   );
@@ -44,7 +45,11 @@ describe('AuthGate', () => {
       http.get('/api/auth/status', () =>
         HttpResponse.json({
           success: true,
-          data: { authentication_required: true, authenticated: false },
+          data: {
+            authentication_required: true,
+            authenticated: false,
+            can_compute: false,
+          },
           error: null,
           status: 'ready',
         })
@@ -69,6 +74,7 @@ describe('AuthGate', () => {
             authenticated: true,
             role: 'read_only',
             username: 'viewer',
+            can_compute: false,
           },
           error: null,
           status: 'ready',
@@ -91,7 +97,7 @@ describe('AuthGate', () => {
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret' } });
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     await waitFor(() => {
-      expect(screen.getByText('Catalog ready · viewer · viewer')).toBeInTheDocument();
+      expect(screen.getByText('Catalog ready · viewer · cached only · viewer')).toBeInTheDocument();
     });
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
     expect(await screen.findByRole('heading', { name: 'Sign in to PSF Guard' }))

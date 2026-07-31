@@ -6,6 +6,7 @@ interface AstrometryPanelProps {
   error?: string;
   solveError?: string;
   isSolving: boolean;
+  canSolve: boolean;
   overlayVisible: boolean;
   onToggleOverlay: () => void;
   onSolve: () => void;
@@ -49,6 +50,7 @@ export default function AstrometryPanel({
   error,
   solveError,
   isSolving,
+  canSolve,
   overlayVisible,
   onToggleOverlay,
   onSolve,
@@ -118,7 +120,8 @@ export default function AstrometryPanel({
         <button
           type="button"
           className="astrometry-solve"
-          disabled={isSolving}
+          disabled={!canSolve || isSolving}
+          title={canSolve ? undefined : 'This account can view cached solutions but cannot start a plate solve.'}
           onClick={onSolve}
         >
           <span className="astrometry-toggle-icon" aria-hidden="true">◎</span>

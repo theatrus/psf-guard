@@ -21,6 +21,7 @@ interface StackColorPreviewPanelProps {
   sourceRevision: string;
   channelBuildRunning: boolean;
   outdatedTargetIds: ReadonlySet<number>;
+  canCompute: boolean;
 }
 
 interface ColorOperation {
@@ -113,6 +114,7 @@ function ColorCard({
   operationPending,
   unavailable,
   sourceStacksOutdated,
+  canCompute,
   onPaletteChange,
   onBuild,
   onInspect,
@@ -129,6 +131,7 @@ function ColorCard({
   operationPending: boolean;
   unavailable: boolean;
   sourceStacksOutdated: boolean;
+  canCompute: boolean;
   onPaletteChange?: (palette: StackNarrowbandPalette) => void;
   onBuild: () => void;
   onInspect: (job: StackColorJob) => void;
@@ -208,7 +211,10 @@ function ColorCard({
           <button
             className="stack-preview-card-action"
             type="button"
-            disabled={busy || unavailable}
+            disabled={!canCompute || busy || unavailable}
+            title={canCompute
+              ? undefined
+              : 'This account can view cached color previews but cannot build them.'}
             aria-label={artifact ? `Rebuild ${label} color preview` : `Build ${label} color preview`}
             onClick={onBuild}
           >
@@ -294,7 +300,7 @@ function ColorCard({
         applied={artifact?.processing ?? null}
         backgrounds={artifact?.resolved_backgrounds ?? {}}
         deconvolutions={artifact?.resolved_input_deconvolutions ?? {}}
-        disabled={busy || unavailable}
+        disabled={!canCompute || busy || unavailable}
         onApply={onProcessingApply}
       />
 
@@ -320,6 +326,7 @@ export default function StackColorPreviewPanel({
   sourceRevision,
   channelBuildRunning,
   outdatedTargetIds,
+  canCompute,
 }: StackColorPreviewPanelProps) {
   const queryClient = useQueryClient();
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -453,6 +460,7 @@ export default function StackColorPreviewPanel({
                   operationPending={startPending && startVariables?.operationKey === key}
                   unavailable={!available}
                   sourceStacksOutdated={outdatedTargetIds.has(target.target_id)}
+                  canCompute={canCompute}
                   onBuild={() => startColor({
                     targetId: target.target_id,
                     kind,
@@ -501,6 +509,7 @@ export default function StackColorPreviewPanel({
                 operationPending={startPending && startVariables?.operationKey === key}
                 unavailable={!target.narrowband_palettes.includes(palette)}
                 sourceStacksOutdated={outdatedTargetIds.has(target.target_id)}
+                canCompute={canCompute}
                 onPaletteChange={(next) => setPaletteByTarget((current) => ({
                   ...current, [target.target_id]: next,
                 }))}

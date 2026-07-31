@@ -21,6 +21,7 @@ import {
   setColorPreview,
   useColorPreview,
 } from '../hooks/useColorPreview';
+import { useAccess } from '../auth/access';
 
 interface ImageDetailViewProps {
   dbId: string;
@@ -62,6 +63,7 @@ export default function ImageDetailView({
   grading,
 }: ImageDetailViewProps) {
   const queryClient = useQueryClient();
+  const { canCompute } = useAccess();
   const [showStars, setShowStars] = useState(false);
   // Shared with the grid and the overview, so a frame does not change
   // appearance on the way into the detail view. On by default; off gives the
@@ -288,19 +290,24 @@ export default function ImageDetailView({
       setShowAstrometry((visible) => !visible);
       setShowStars(false);
       setShowPsf(false);
-    } else if (!(solveMatchesCurrent && solveAstrometry.isPending)) {
+    } else if (canCompute && !(solveMatchesCurrent && solveAstrometry.isPending)) {
       solveAstrometry.mutate({ dbId, imageId });
     }
-  }, [astrometry?.solution, solveAstrometry.isPending, solveMatchesCurrent]);
+  }, [astrometry?.solution, canCompute, solveAstrometry.isPending, solveMatchesCurrent]);
   useHotkeys('t', () => {
     if (satelliteStatus?.analysis) {
       setShowSatellites((visible) => !visible);
       setShowStars(false);
       setShowPsf(false);
-    } else if (!(satellitePredictionMatchesCurrent && predictSatellites.isPending)) {
+    } else if (canCompute && !(satellitePredictionMatchesCurrent && predictSatellites.isPending)) {
       predictSatellites.mutate({ dbId, imageId });
     }
-  }, [satelliteStatus?.analysis, satellitePredictionMatchesCurrent, predictSatellites.isPending]);
+  }, [
+    canCompute,
+    satelliteStatus?.analysis,
+    satellitePredictionMatchesCurrent,
+    predictSatellites.isPending,
+  ]);
   useHotkeys('z', () => setImageSize(s => s === 'screen' ? 'large' : 'screen'), []);
   useHotkeys('plus,equal', () => zoom.zoomIn(), [zoom.zoomIn]);
   useHotkeys('minus', () => zoom.zoomOut(), [zoom.zoomOut]);
@@ -776,6 +783,7 @@ export default function ImageDetailView({
                 ? solveAstrometry.error.message
                 : undefined}
               isSolving={solveMatchesCurrent && solveAstrometry.isPending}
+              canSolve={canCompute}
               overlayVisible={showAstrometry && !!astrometry?.solution}
               onToggleOverlay={() => {
                 setShowAstrometry((visible) => !visible);
@@ -793,6 +801,7 @@ export default function ImageDetailView({
                 ? predictSatellites.error.message
                 : undefined}
               isPredicting={satellitePredictionMatchesCurrent && predictSatellites.isPending}
+              canPredict={canCompute}
               overlayVisible={showSatellites && !!satelliteStatus?.analysis}
               onToggleOverlay={() => {
                 setShowSatellites((visible) => !visible);

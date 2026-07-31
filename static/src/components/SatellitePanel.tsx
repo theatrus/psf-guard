@@ -6,6 +6,7 @@ interface SatellitePanelProps {
   error?: string;
   predictError?: string;
   isPredicting: boolean;
+  canPredict: boolean;
   overlayVisible: boolean;
   onToggleOverlay: () => void;
   onPredict: () => void;
@@ -17,6 +18,7 @@ export default function SatellitePanel({
   error,
   predictError,
   isPredicting,
+  canPredict,
   overlayVisible,
   onToggleOverlay,
   onPredict,
@@ -61,7 +63,10 @@ export default function SatellitePanel({
         <button
           type="button"
           className="astrometry-solve"
-          disabled={isLoading || isPredicting}
+          disabled={!canPredict || isLoading || isPredicting}
+          title={canPredict
+            ? undefined
+            : 'This account can view cached tracks but cannot start a prediction.'}
           onClick={onPredict}
         >
           <span className="astrometry-toggle-icon" aria-hidden="true">↗</span>

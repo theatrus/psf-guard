@@ -32,6 +32,7 @@ cors = true
 # [server.auth]
 # session_hours = 168
 # secure_cookie = true
+# allow_read_only_compute = false
 #
 # [server.auth.read_only]
 # username = "viewer"

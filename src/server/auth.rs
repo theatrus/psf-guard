@@ -23,7 +23,9 @@ use crate::{
 
 const SESSION_COOKIE: &str = "psf_guard_session";
 const DEFAULT_SESSION_HOURS: u64 = 24 * 7;
-const MAX_SESSIONS: usize = 256;
+const MAX_SESSIONS_PER_USER: usize = 128;
+const LOGIN_ATTEMPTS_PER_SECOND: f64 = 4.0;
+const LOGIN_ATTEMPT_BURST: f64 = 4.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -41,9 +43,10 @@ pub struct RequestAccess {
 pub struct ServerAuth {
     users: Vec<AuthUser>,
     sessions: Arc<Mutex<HashMap<String, Session>>>,
-    next_login_attempt: Arc<tokio::sync::Mutex<Instant>>,
+    login_rate_limit: Arc<Mutex<LoginRateLimit>>,
     session_ttl: Duration,
     secure_cookie: bool,
+    allow_read_only_compute: bool,
 }
 
 #[derive(Clone)]
@@ -58,6 +61,11 @@ struct Session {
     username: String,
     role: AccessRole,
     expires_at: Instant,
+}
+
+struct LoginRateLimit {
+    available: f64,
+    last_refill: Instant,
 }
 
 impl std::fmt::Debug for ServerAuth {
@@ -100,9 +108,13 @@ impl ServerAuth {
         Ok(Self {
             users,
             sessions: Arc::new(Mutex::new(HashMap::new())),
-            next_login_attempt: Arc::new(tokio::sync::Mutex::new(Instant::now())),
+            login_rate_limit: Arc::new(Mutex::new(LoginRateLimit {
+                available: LOGIN_ATTEMPT_BURST,
+                last_refill: Instant::now(),
+            })),
             session_ttl: Duration::from_secs(session_hours * 60 * 60),
             secure_cookie: config.secure_cookie,
+            allow_read_only_compute: config.allow_read_only_compute,
         })
     }
 
@@ -115,13 +127,18 @@ impl ServerAuth {
         })
     }
 
-    async fn wait_for_login_slot(&self) {
-        let mut next_attempt = self.next_login_attempt.lock().await;
+    fn claim_login_slot(&self) -> bool {
+        let mut limit = self.login_rate_limit.lock().unwrap();
         let now = Instant::now();
-        if *next_attempt > now {
-            tokio::time::sleep(*next_attempt - now).await;
+        let replenished = limit.available
+            + now.duration_since(limit.last_refill).as_secs_f64() * LOGIN_ATTEMPTS_PER_SECOND;
+        limit.available = replenished.min(LOGIN_ATTEMPT_BURST);
+        limit.last_refill = now;
+        if limit.available < 1.0 {
+            return false;
         }
-        *next_attempt = Instant::now() + Duration::from_millis(250);
+        limit.available -= 1.0;
+        true
     }
 
     fn create_session(&self, user: &AuthUser) -> String {
@@ -137,9 +154,14 @@ impl ServerAuth {
         };
         let mut sessions = self.sessions.lock().unwrap();
         sessions.retain(|_, session| session.expires_at > Instant::now());
-        if sessions.len() >= MAX_SESSIONS
+        if sessions
+            .values()
+            .filter(|session| session.username == user.username)
+            .count()
+            >= MAX_SESSIONS_PER_USER
             && let Some(oldest) = sessions
                 .iter()
+                .filter(|(_, session)| session.username == user.username)
                 .min_by_key(|(_, session)| session.expires_at)
                 .map(|(token, _)| token.clone())
         {
@@ -176,6 +198,10 @@ impl ServerAuth {
             value.push_str("; Secure");
         }
         HeaderValue::from_str(&value).expect("clear cookie contains safe characters")
+    }
+
+    fn can_compute(&self, role: AccessRole) -> bool {
+        role == AccessRole::ReadWrite || self.allow_read_only_compute
     }
 }
 
@@ -256,6 +282,7 @@ pub struct AuthStatus {
     pub role: Option<AccessRole>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
+    pub can_compute: bool,
 }
 
 pub async fn status(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
@@ -265,6 +292,9 @@ pub async fn status(State(state): State<Arc<AppState>>, headers: HeaderMap) -> R
             authentication_required: true,
             authenticated: session.is_some(),
             role: session.as_ref().map(|session| session.role),
+            can_compute: session
+                .as_ref()
+                .is_some_and(|session| auth.can_compute(session.role)),
             username: session.map(|session| session.username),
         }
     } else {
@@ -273,6 +303,7 @@ pub async fn status(State(state): State<Arc<AppState>>, headers: HeaderMap) -> R
             authenticated: true,
             role: Some(AccessRole::ReadWrite),
             username: None,
+            can_compute: true,
         }
     };
     (
@@ -292,10 +323,26 @@ pub async fn login(
             authenticated: true,
             role: Some(AccessRole::ReadWrite),
             username: None,
+            can_compute: true,
         }))
         .into_response();
     };
-    auth.wait_for_login_slot().await;
+    if !auth.claim_login_slot() {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [
+                (CACHE_CONTROL, HeaderValue::from_static("no-store")),
+                (
+                    axum::http::header::RETRY_AFTER,
+                    HeaderValue::from_static("1"),
+                ),
+            ],
+            Json(ApiResponse::<AuthStatus>::error(
+                "Too many sign-in attempts; wait a moment and try again".to_string(),
+            )),
+        )
+            .into_response();
+    }
     let Some(user) = auth.authenticate_password(request.username.trim(), &request.password) else {
         return (
             StatusCode::UNAUTHORIZED,
@@ -318,6 +365,7 @@ pub async fn login(
             authenticated: true,
             role: Some(user.role),
             username: Some(user.username.clone()),
+            can_compute: auth.can_compute(user.role),
         })),
     )
         .into_response()
@@ -354,7 +402,7 @@ pub async fn authorize_api(
 
     let path = api_path(request.uri().path());
     if request.method() == Method::OPTIONS
-        || path.starts_with("/auth/")
+        || is_public_auth_path(path)
         || uses_remote_bearer_token(path)
     {
         return next.run(request).await;
@@ -368,7 +416,8 @@ pub async fn authorize_api(
         )
             .into_response();
     };
-    if session.role == AccessRole::ReadOnly && requires_write(request.method(), path) {
+    let can_compute = auth.can_compute(session.role);
+    if session.role == AccessRole::ReadOnly && requires_write(request.method(), path, can_compute) {
         return (
             StatusCode::FORBIDDEN,
             [(CACHE_CONTROL, "no-store")],
@@ -405,7 +454,11 @@ fn uses_remote_bearer_token(path: &str) -> bool {
     path.starts_with("/sync/v1/") || (path.starts_with("/db/") && path.ends_with("/images/upload"))
 }
 
-fn requires_write(method: &Method, path: &str) -> bool {
+fn is_public_auth_path(path: &str) -> bool {
+    matches!(path, "/auth/status" | "/auth/login" | "/auth/logout")
+}
+
+fn requires_write(method: &Method, path: &str, can_compute: bool) -> bool {
     if matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
         return false;
     }
@@ -413,11 +466,16 @@ fn requires_write(method: &Method, path: &str) -> bool {
         return true;
     }
 
-    // These POSTs calculate or read derived display data. They may populate
-    // caches, but they do not change catalog grades, plans, files, or server
-    // configuration.
-    !(path.ends_with("/images/generation-status")
-        || path.ends_with("/astrometry")
+    if path.ends_with("/images/generation-status") {
+        return false;
+    }
+    if !can_compute {
+        return true;
+    }
+
+    // These POSTs calculate derived display data. They may populate caches,
+    // but they do not change catalog grades, plans, files, or server config.
+    !(path.ends_with("/astrometry")
         || path.ends_with("/satellites")
         || path.contains("/stack-previews")
         || path == "/astrometry/catalogs/validate")
@@ -482,6 +540,7 @@ mod tests {
             }),
             session_hours: Some(12),
             secure_cookie: true,
+            allow_read_only_compute: false,
         }
     }
 
@@ -502,38 +561,70 @@ mod tests {
     }
 
     #[test]
-    fn session_store_evicts_the_oldest_session_at_its_limit() {
+    fn session_store_evicts_only_within_the_same_user() {
         let auth = ServerAuth::from_config(&test_config()).unwrap();
         let viewer = auth.authenticate_password("viewer", "view-secret").unwrap();
-        let oldest = auth.create_session(viewer);
-        for _ in 0..MAX_SESSIONS {
+        let editor = auth.authenticate_password("editor", "edit-secret").unwrap();
+        let editor_session = auth.create_session(editor);
+        let oldest_viewer = auth.create_session(viewer);
+        for _ in 1..MAX_SESSIONS_PER_USER {
             auth.create_session(viewer);
         }
+        auth.create_session(viewer);
 
-        assert!(auth.session(&oldest).is_none());
-        assert_eq!(auth.sessions.lock().unwrap().len(), MAX_SESSIONS);
+        assert!(auth.session(&oldest_viewer).is_none());
+        assert!(auth.session(&editor_session).is_some());
+        assert_eq!(
+            auth.sessions.lock().unwrap().len(),
+            MAX_SESSIONS_PER_USER + 1
+        );
     }
 
     #[test]
     fn read_only_rules_allow_derived_views_but_block_catalog_changes() {
         assert!(!requires_write(
             &Method::POST,
-            "/db/test/images/generation-status"
+            "/db/test/images/generation-status",
+            false,
         ));
-        assert!(!requires_write(
-            &Method::POST,
-            "/db/test/images/12/astrometry"
-        ));
-        assert!(!requires_write(
-            &Method::POST,
-            "/astrometry/catalogs/validate"
-        ));
-        assert!(requires_write(&Method::PUT, "/db/test/images/12/grade"));
         assert!(requires_write(
             &Method::POST,
-            "/db/test/analysis/quality-scan"
+            "/db/test/images/12/astrometry",
+            false,
         ));
-        assert!(requires_write(&Method::POST, "/databases/create"));
+        assert!(!requires_write(
+            &Method::POST,
+            "/db/test/images/12/astrometry",
+            true,
+        ));
+        assert!(requires_write(
+            &Method::PUT,
+            "/db/test/images/12/grade",
+            true,
+        ));
+        assert!(requires_write(
+            &Method::POST,
+            "/db/test/analysis/quality-scan",
+            true,
+        ));
+        assert!(requires_write(&Method::POST, "/databases/create", true,));
+    }
+
+    #[test]
+    fn login_rate_limit_rejects_instead_of_queueing() {
+        let auth = ServerAuth::from_config(&test_config()).unwrap();
+        for _ in 0..LOGIN_ATTEMPT_BURST as usize {
+            assert!(auth.claim_login_slot());
+        }
+        assert!(!auth.claim_login_slot());
+    }
+
+    #[test]
+    fn only_current_session_endpoints_are_public() {
+        assert!(is_public_auth_path("/auth/status"));
+        assert!(is_public_auth_path("/auth/login"));
+        assert!(is_public_auth_path("/auth/logout"));
+        assert!(!is_public_auth_path("/auth/passkeys/enroll"));
     }
 
     #[test]
@@ -571,6 +662,7 @@ mod tests {
             read_write: None,
             session_hours: None,
             secure_cookie: false,
+            allow_read_only_compute: false,
         };
         assert!(ServerAuth::from_config(&empty).is_err());
     }

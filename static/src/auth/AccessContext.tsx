@@ -37,6 +37,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       queryClient.setQueryData<AuthStatus>(['authStatus'], {
         authentication_required: true,
         authenticated: false,
+        can_compute: false,
       });
     };
     window.addEventListener(AUTH_REQUIRED_EVENT, requireLogin);
@@ -79,12 +80,14 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     authenticated: true,
     role: status.role ?? 'read_write',
     username: status.username,
+    can_compute: status.can_compute,
   };
   return (
     <AccessContext.Provider
       value={{
         status: effectiveStatus,
         canWrite: effectiveStatus.role === 'read_write',
+        canCompute: effectiveStatus.can_compute,
         logout: async () => {
           await apiClient.logout();
           queryClient.removeQueries({
@@ -93,6 +96,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
           queryClient.setQueryData<AuthStatus>(['authStatus'], {
             authentication_required: true,
             authenticated: false,
+            can_compute: false,
           });
         },
       }}

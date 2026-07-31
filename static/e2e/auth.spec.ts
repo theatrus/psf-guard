@@ -16,6 +16,7 @@ test('viewer signs in through the app and gets a read-only session', async ({ pa
       body: JSON.stringify(apiResponse({
         authentication_required: true,
         authenticated,
+        can_compute: false,
         ...(authenticated ? { role: 'read_only', username: 'viewer' } : {}),
       })),
     })
@@ -31,6 +32,7 @@ test('viewer signs in through the app and gets a read-only session', async ({ pa
         authenticated: true,
         role: 'read_only',
         username: 'viewer',
+        can_compute: false,
       })),
     });
   });

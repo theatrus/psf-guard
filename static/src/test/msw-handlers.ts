@@ -169,6 +169,7 @@ export const handlers = [
         authentication_required: false,
         authenticated: true,
         role: 'read_write',
+        can_compute: true,
       },
       error: null,
       status: 'ready',

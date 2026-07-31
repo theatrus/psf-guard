@@ -36,14 +36,19 @@ fn auth_config() -> ServerAuthConfig {
         }),
         session_hours: Some(1),
         secure_cookie: false,
+        allow_read_only_compute: false,
     }
 }
 
 fn app() -> Router {
+    app_with_auth(auth_config())
+}
+
+fn app_with_auth(config: ServerAuthConfig) -> Router {
     let state = Arc::new(AppState::new_for_test(
         Connection::open_in_memory().unwrap(),
     ));
-    state.set_server_auth(Some(ServerAuth::from_config(&auth_config()).unwrap()));
+    state.set_server_auth(Some(ServerAuth::from_config(&config).unwrap()));
     state.set_allow_database_management(true);
 
     let api = Router::new()
@@ -59,6 +64,10 @@ fn app() -> Router {
             "/sync/v1/capabilities",
             post(|| async { "remote bearer route" }),
         )
+        .route(
+            "/images/{image_id}/astrometry",
+            post(|| async { "derived result" }),
+        )
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::authorize_api,
@@ -66,6 +75,37 @@ fn app() -> Router {
         .with_state(state);
 
     Router::new().nest("/api", api)
+}
+
+#[tokio::test]
+async fn viewer_compute_is_separate_from_read_access() {
+    let app = app();
+    let (_, viewer_cookie, _) = login(&app, "viewer", "view-secret").await;
+    let compute = Request::builder()
+        .method(Method::POST)
+        .uri("/api/images/12/astrometry")
+        .header(COOKIE, &viewer_cookie)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        app.clone().oneshot(compute).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let mut config = auth_config();
+    config.allow_read_only_compute = true;
+    let trusted_app = app_with_auth(config);
+    let (_, trusted_viewer_cookie, _) = login(&trusted_app, "viewer", "view-secret").await;
+    let compute = Request::builder()
+        .method(Method::POST)
+        .uri("/api/images/12/astrometry")
+        .header(COOKIE, trusted_viewer_cookie)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        trusted_app.oneshot(compute).await.unwrap().status(),
+        StatusCode::OK
+    );
 }
 
 async fn json(app: &Router, request: Request<Body>) -> (StatusCode, axum::http::HeaderMap, Value) {
@@ -116,6 +156,7 @@ async fn login_status_and_logout_use_an_http_only_session_cookie() {
     let (status, cookie, login) = login(&app, "viewer", "view-secret").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(login["data"]["role"], "read_only");
+    assert_eq!(login["data"]["can_compute"], false);
     assert!(cookie.starts_with("psf_guard_session="));
 
     let authenticated = Request::builder()

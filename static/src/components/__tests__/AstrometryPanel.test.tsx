@@ -71,6 +71,7 @@ describe('AstrometryPanel', () => {
         analysis={solved}
         isLoading={false}
         isSolving={false}
+        canSolve={true}
         overlayVisible={true}
         onToggleOverlay={onToggle}
         onSolve={vi.fn()}
@@ -105,6 +106,7 @@ describe('AstrometryPanel', () => {
         }}
         isLoading={false}
         isSolving={false}
+        canSolve={true}
         overlayVisible={false}
         onToggleOverlay={vi.fn()}
         onSolve={onSolve}
@@ -116,5 +118,25 @@ describe('AstrometryPanel', () => {
     expect(screen.getByText('Within 1.0° · field size unknown')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Solve field' }));
     expect(onSolve).toHaveBeenCalledOnce();
+  });
+
+  it('keeps cached sky context visible when solving is not allowed', () => {
+    const onSolve = vi.fn();
+    render(
+      <AstrometryPanel
+        analysis={{ ...solved, status: 'catalog_only', solution: undefined }}
+        isLoading={false}
+        isSolving={false}
+        canSolve={false}
+        overlayVisible={false}
+        onToggleOverlay={vi.fn()}
+        onSolve={onSolve}
+      />
+    );
+
+    const solve = screen.getByRole('button', { name: 'Solve field' });
+    expect(solve).toBeDisabled();
+    fireEvent.click(solve);
+    expect(onSolve).not.toHaveBeenCalled();
   });
 });

@@ -14,6 +14,7 @@ Add one or both roles to the server TOML:
 [server.auth]
 session_hours = 168
 secure_cookie = true
+allow_read_only_compute = false
 
 [server.auth.read_only]
 username = "viewer"
@@ -47,9 +48,13 @@ plain HTTP URL.
 ## Roles
 
 The viewer can read catalogs, images, quality results, exports, and cached
-analysis. Viewer requests may build derived display artifacts such as image
-previews, stacks, plate solutions, and satellite overlays. These operations
-write only derived caches.
+analysis. By default, the viewer cannot start costly stack builds, plate
+solves, satellite predictions, or view-processing jobs. Cached results remain
+available.
+
+Set `allow_read_only_compute = true` to let the viewer start those derived-data
+jobs. This can suit a trusted private server. Leave it off for a public demo,
+where repeated jobs could consume CPU, network data, and cache space.
 
 The editor can also:
 
@@ -86,6 +91,8 @@ continue to work when browser authentication is enabled.
 - Put the public server behind HTTPS. Login passwords otherwise cross the
   network in clear text.
 - Restrict password-file permissions to the PSF Guard service account.
+- On Windows, use a TOML literal string for paths with backslashes, such as
+  `password_file = 'C:\ProgramData\PSF Guard\editor-password'`.
 - Keep `--allow-database-management` off unless browser-side database
   management is needed. An editor login does not override that gate.
 - Signing out revokes the current in-memory session. Restarting the server

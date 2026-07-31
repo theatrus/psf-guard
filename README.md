@@ -844,6 +844,7 @@ host = "0.0.0.0"
 [server.auth]
 session_hours = 168
 secure_cookie = true
+allow_read_only_compute = false
 
 [server.auth.read_only]
 username = "viewer"
@@ -877,9 +878,11 @@ text. Set both link fields or omit both; links must use `http://` or
 
 Omit `[server.auth]` to keep the server open as before. When enabled, PSF Guard
 shows its own login page and uses an HttpOnly session cookie. Viewer accounts
-can browse images and build derived views, but cannot change grades, plans,
-files, or server settings. Editor accounts keep normal write access. Tauri
-always stays unauthenticated on its localhost-only server. See
+can browse images and cached results, but cannot change grades, plans, files,
+or server settings. Set `allow_read_only_compute = true` only when viewers
+should also start stacks, plate solves, and satellite predictions. Editor
+accounts keep normal write and compute access. Tauri always stays
+unauthenticated on its localhost-only server. See
 [Server authentication](docs/AUTHENTICATION.md).
 
 Command-line arguments override the config file. (A legacy

@@ -268,6 +268,10 @@ pub struct ServerAuthConfig {
     /// for direct HTTP development servers.
     #[serde(default = "default_secure_cookie")]
     pub secure_cookie: bool,
+    /// Allow read-only accounts to start costly derived-data jobs such as
+    /// stacks, plate solves, and satellite predictions. Defaults to false.
+    #[serde(default)]
+    pub allow_read_only_compute: bool,
 }
 
 fn default_secure_cookie() -> bool {
@@ -723,6 +727,8 @@ directory = "./cache"
     fn server_auth_parses_role_credentials_and_secret_files() {
         let secret = NamedTempFile::new().unwrap();
         std::fs::write(secret.path(), "editor-secret\n").unwrap();
+        let secret_path =
+            toml_edit::Value::from(secret.path().to_string_lossy().as_ref()).to_string();
         let toml = format!(
             r#"
 [server]
@@ -738,12 +744,11 @@ password = "viewer-secret"
 
 [server.auth.read_write]
 username = "editor"
-password_file = "{}"
+password_file = {secret_path}
 
 [cache]
 directory = "./cache"
-"#,
-            secret.path().display()
+"#
         );
         let config: Config = toml_edit::de::from_str(&toml).unwrap();
         let config_debug = format!("{config:?}");
@@ -771,7 +776,9 @@ directory = "./cache"
         )
         .unwrap();
 
-        assert!(config.server.auth.unwrap().secure_cookie);
+        let auth = config.server.auth.unwrap();
+        assert!(auth.secure_cookie);
+        assert!(!auth.allow_read_only_compute);
     }
 
     #[test]

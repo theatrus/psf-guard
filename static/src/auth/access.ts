@@ -4,6 +4,7 @@ import type { AuthStatus } from '../api/types';
 export interface AccessContextValue {
   status: AuthStatus;
   canWrite: boolean;
+  canCompute: boolean;
   logout: () => Promise<void>;
 }
 
@@ -12,8 +13,10 @@ const DEFAULT_ACCESS: AccessContextValue = {
     authentication_required: false,
     authenticated: true,
     role: 'read_write',
+    can_compute: true,
   },
   canWrite: true,
+  canCompute: true,
   logout: async () => undefined,
 };
 

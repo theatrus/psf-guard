@@ -739,6 +739,7 @@ export interface AuthStatus {
   authenticated: boolean;
   role?: AccessRole;
   username?: string;
+  can_compute: boolean;
 }
 
 export interface ReleaseNotice {
