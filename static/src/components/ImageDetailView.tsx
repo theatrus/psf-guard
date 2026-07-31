@@ -14,6 +14,8 @@ import AstrometryOverlay from './AstrometryOverlay';
 import SatellitePanel from './SatellitePanel';
 import SatelliteTrackOverlay from './SatelliteTrackOverlay';
 import ImageFileLocation from './ImageFileLocation';
+import { useScopedQuality } from '../hooks/useSequenceAnalysis';
+import QualityAnalysisSummary from './QualityAnalysisSummary';
 import {
   colorPreviewEnabled,
   setColorPreview,
@@ -23,6 +25,9 @@ import {
 interface ImageDetailViewProps {
   dbId: string;
   imageId: number;
+  projectId?: number | null;
+  targetId?: number | null;
+  qualityFilterName?: string;
   onClose: () => void;
   onNext: () => void;
   onPrevious: () => void;
@@ -45,6 +50,9 @@ interface ImageDetailViewProps {
 export default function ImageDetailView({
   dbId,
   imageId,
+  projectId,
+  targetId,
+  qualityFilterName,
   onClose,
   onNext,
   onPrevious,
@@ -166,6 +174,16 @@ export default function ImageDetailView({
     queryFn: () => apiClient.getImage(dbId, imageId),
     placeholderData: (previousData) => previousData, // Keep showing previous image while loading new one
   });
+
+  const qualityScope = useScopedQuality(dbId, projectId, targetId, qualityFilterName);
+  const quality = qualityScope.qualityByImage.get(imageId);
+  const qualityStatus = qualityScope.isLoading
+      ? 'Loading the sequence quality score and reason…'
+      : qualityScope.error
+        ? 'Sequence quality is unavailable for this scope.'
+        : quality
+          ? undefined
+          : 'No sequence score is available for this image.';
 
   const {
     data: astrometry,
@@ -746,6 +764,8 @@ export default function ImageDetailView({
                 </div>
               )}
             </div>
+
+            <QualityAnalysisSummary quality={quality} statusMessage={qualityStatus} />
 
             <AstrometryPanel
               analysis={astrometry}

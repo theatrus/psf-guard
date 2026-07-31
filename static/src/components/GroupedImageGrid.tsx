@@ -37,6 +37,7 @@ import {
   type GridNavigationDirection,
 } from '../utils/gridNavigation';
 import { thumbnailGridColumns } from '../utils/thumbnailSizing';
+import { useScopedQuality } from '../hooks/useSequenceAnalysis';
 
 interface GroupedImageGridProps {
   useLazyImages?: boolean;
@@ -156,6 +157,48 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     });
     return Array.from(filterSet).sort();
   }, [allImages]);
+
+  const quality = useScopedQuality(
+    dbId,
+    projectId,
+    targetId,
+    filters.filterName === 'all' ? undefined : filters.filterName,
+  );
+  let qualityStatus = {
+    label: 'Quality: unscored',
+    title: 'No sequence score is available for these images. Open a target Sequence view to inspect the evidence or run Analyze Quality.',
+  };
+  const scoredImageCount = filteredImages.reduce(
+    (count, image) => count + Number(quality.qualityByImage.has(image.id)),
+    0,
+  );
+  const unscoredImageCount = filteredImages.length - scoredImageCount;
+  if (quality.isLoading) {
+    qualityStatus = {
+      label: 'Quality: loading',
+      title: 'Loading sequence scores and reasons from stored metadata and cached evidence.',
+    };
+  } else if (quality.error) {
+    qualityStatus = {
+      label: 'Quality: unavailable',
+      title: 'Sequence quality could not be loaded for this scope.',
+    };
+  } else if (scoredImageCount > 0 && unscoredImageCount > 0) {
+    qualityStatus = {
+      label: `Quality: ${scoredImageCount} scored · ${unscoredImageCount} unscored`,
+      title: 'Unscored images lack a comparable sequence or enough evidence. Open their target Sequence view to inspect them or run Analyze Quality.',
+    };
+  } else if (scoredImageCount > 0) {
+    qualityStatus = {
+      label: `Quality: ${scoredImageCount} scored`,
+      title: 'Sequence scores and reasons are available for all visible images.',
+    };
+  } else if (unscoredImageCount > 0) {
+    qualityStatus = {
+      label: `Quality: ${unscoredImageCount} unscored`,
+      title: 'These images lack a comparable sequence or enough evidence. Open a target Sequence view to inspect them or run Analyze Quality.',
+    };
+  }
 
   // Determine if we're in multi-project mode
   const isMultiProjectMode = projectId === null;
@@ -771,6 +814,10 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                 {filters.status !== 'all' && ` • ${filters.status}`}
                 {filters.filterName !== 'all' && ` • ${filters.filterName}`}
                 {filters.searchTerm && ` • "${filters.searchTerm}"`}
+                {' • '}
+                <span className="grid-quality-state" title={qualityStatus.title}>
+                  {qualityStatus.label}
+                </span>
               </div>
               <div
                 className={`selection-action-bar ${selectedImages.size > 1 ? 'active' : ''}`}
@@ -884,6 +931,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                           <CardComponent
                             dbId={dbId!}
                             image={image}
+                            quality={quality.qualityByImage.get(image.id)}
+                            qualityPresentation="compact"
                             isSelected={
                               selectedImages.has(image.id) ||
                               image.id === activeImageId

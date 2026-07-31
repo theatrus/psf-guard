@@ -1,6 +1,6 @@
 # Astrometry quality grading
 
-PSF Guard's **Scan Quality** workflow combines fresh Seiza plate solutions
+PSF Guard's **Analyze Quality** workflow combines fresh Seiza plate solutions
 with the existing sequence, occlusion, photometry, guiding, and grading
 signals. It identifies images that were captured away from the intended
 catalog target, sequences that lost tracking, and frames whose pixels could not
@@ -10,8 +10,9 @@ be matched to the sky.
 
 ## Run a quality scan
 
-Open a catalog target in the **Sequence Analysis** view and press **Scan
-Quality**. The background job runs two stages:
+Open a catalog target in the **Sequence Analysis** view and press **Analyze
+Quality**. The background job runs two stages, then refreshes the sequence
+scores:
 
 1. spatial and photometric screening for clouds, occlusion, transparency, and
    errant light; and

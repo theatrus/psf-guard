@@ -555,6 +555,88 @@ test('Sequence keeps flagged image thumbnails at full opacity', async ({ page })
   await expect(flaggedCard).toHaveCSS('opacity', '1');
 });
 
+test('Sequence shows long score reasons in a popover without resizing the card', async ({ page }) => {
+  const reason = 'Star count and background are outside the normal range for matching capture settings across all available sessions.';
+  await page.route(`**/api/db/${dbId}/analysis/sequence*`, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.data.sequences[0].images[0].details = reason;
+    await route.fulfill({ response, json: body });
+  });
+  await page.goto(
+    `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`
+  );
+
+  const card = page.locator('.sequence-image-card').first();
+  await expect(card).toBeVisible({ timeout: 15_000 });
+  const before = await card.boundingBox();
+  await card.getByRole('button', { name: 'Show quality reason' }).click();
+
+  const popover = page.getByRole('dialog', { name: 'Quality reason' });
+  await expect(popover).toContainText(reason);
+  const after = await card.boundingBox();
+  expect(after?.height).toBeCloseTo(before?.height ?? 0, 2);
+
+  await popover.getByRole('button', { name: 'Close quality reason' }).click();
+  await expect(popover).not.toBeVisible();
+});
+
+test('quality reasons remain available in Grid and image details', async ({ page }) => {
+  const reviewReason = 'Tracking error: elongated stars';
+  const evidence = 'HFR and eccentricity are poor compared with this capture sequence.';
+  let perImageQualityRequests = 0;
+  page.on('request', (request) => {
+    if (request.url().includes('/analysis/image/')) perImageQualityRequests += 1;
+  });
+  await page.route(`**/api/db/${dbId}/analysis/sequence*`, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.data.sequences[0].images[0].regrade_reason = reviewReason;
+    body.data.sequences[0].images[0].details = evidence;
+    await route.fulfill({ response, json: body });
+  });
+
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+  const card = page.locator('[data-card-image-id="1"]');
+  await expect(card).toBeVisible({ timeout: 15_000 });
+  await card.getByRole('button', { name: 'Show quality reason' }).click();
+  const popover = page.getByRole('dialog', { name: 'Quality reason' });
+  await expect(popover).toContainText(reviewReason);
+  await expect(popover).toContainText(evidence);
+  await popover.getByRole('button', { name: 'Close quality reason' }).click();
+
+  await card.dblclick();
+  const detail = page.locator('.detail-quality-analysis');
+  await expect(detail.getByRole('heading', { name: 'Quality analysis' })).toBeVisible();
+  await expect(detail).toContainText(reviewReason);
+  await expect(detail).toContainText(evidence);
+  expect(perImageQualityRequests).toBe(0);
+});
+
+test('All Projects loads scores without starting a quality scan', async ({
+  page,
+}) => {
+  let sequenceRequests = 0;
+  let qualityScanRequests = 0;
+  let databaseScope = false;
+  page.on('request', (request) => {
+    if (request.url().includes('/analysis/sequence')) {
+      sequenceRequests += 1;
+      databaseScope = new URL(request.url()).searchParams.get('all_projects') === 'true';
+    }
+    if (request.url().includes('/analysis/quality-scan')) qualityScanRequests += 1;
+  });
+
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}`);
+  await expect(page.locator('.image-card')).toHaveCount(4, { timeout: 15_000 });
+  const state = page.locator('.grid-quality-state');
+  await expect(state).toHaveText('Quality: 4 scored');
+  await expect(page.locator('.image-card .quality-badge')).toHaveCount(4);
+  expect(sequenceRequests).toBe(1);
+  expect(databaseScope).toBe(true);
+  expect(qualityScanRequests).toBe(0);
+});
+
 test('Sequence chart Shift-click selects a visible range', async ({ page }) => {
   await page.goto(
     `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`

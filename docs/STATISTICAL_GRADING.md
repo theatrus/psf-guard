@@ -24,7 +24,7 @@ images.
   median absolute deviation (MAD).
 
 These checks use catalog measurements. They do not replace a fresh
-**Scan Quality** run.
+**Analyze Quality** run.
 
 ### Sequence cloud check
 

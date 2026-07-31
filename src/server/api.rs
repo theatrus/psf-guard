@@ -704,7 +704,16 @@ pub struct FileStatusResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct SequenceAnalysisQuery {
-    pub target_id: i32,
+    /// Analyze one target. Exactly one scope must be supplied.
+    pub target_id: Option<i32>,
+    /// Analyze every target with images in one project. This lets grid views
+    /// load quality results in one request instead of one request per card.
+    pub project_id: Option<i32>,
+    /// Analyze every target/filter group in this database. Scores remain
+    /// relative to their own target/filter sequence; this does not start a
+    /// FITS quality scan.
+    #[serde(default)]
+    pub all_projects: bool,
     pub filter_name: Option<String>,
     pub session_gap_minutes: Option<u64>,
     pub weight_star_count: Option<f64>,

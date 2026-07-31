@@ -565,7 +565,7 @@ bright trail, not catalog presence alone.
 PSF Guard screens for occlusion, clouds, veils, stray light, off-target
 pointing, and tracking loss. These faults can pass star-count and HFR grading.
 
-**In the app:** open a target's Sequence view and choose **Scan Quality**. Use
+**In the app:** open a target's Sequence view and choose **Analyze Quality**. Use
 the selectors to focus Clouded, Off Target, Unsolved, or all Recommended
 frames.
 
