@@ -11,6 +11,7 @@ const apiResponse = (data: unknown) => ({
 
 test('viewer signs in through the app and gets a read-only session', async ({ page }) => {
   let authenticated = false;
+  await page.setViewportSize({ width: 320, height: 700 });
 
   await page.route('**/api/auth/status', (route) =>
     route.fulfill({
@@ -45,6 +46,16 @@ test('viewer signs in through the app and gets a read-only session', async ({ pa
 
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Sign in to PSF Guard' })).toBeVisible();
+
+  const cardBox = await page.locator('.auth-card').boundingBox();
+  const usernameBox = await page.getByLabel('Username').boundingBox();
+  const passwordBox = await page.getByLabel('Password').boundingBox();
+  expect(cardBox).not.toBeNull();
+  for (const field of [usernameBox, passwordBox]) {
+    expect(field).not.toBeNull();
+    expect(field!.x).toBeGreaterThanOrEqual(cardBox!.x);
+    expect(field!.x + field!.width).toBeLessThanOrEqual(cardBox!.x + cardBox!.width);
+  }
 
   await page.getByLabel('Username').fill('viewer');
   await page.getByLabel('Password').fill('secret');
