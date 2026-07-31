@@ -1006,6 +1006,9 @@ pub fn main() -> Result<()> {
                 println!("     telescope capture counts, images, and grades were left unchanged");
             }
         },
+        Commands::Users { action } => {
+            crate::commands::users::manage_users(action)?;
+        }
         Commands::Server {
             config,
             registry,
@@ -1096,7 +1099,19 @@ pub fn main() -> Result<()> {
             let preview_encoding = app_config.server.preview_encoding()?;
             let preview_color_default = app_config.server.preview_color();
             let site_banner = app_config.get_site_banner()?;
-            let server_auth = app_config.get_server_auth()?;
+            let auth_registry_path =
+                crate::auth_registry::AuthRegistry::path_for_database_registry(&registry_path);
+            let auth_registry = crate::auth_registry::AuthRegistry::load(&auth_registry_path)
+                .with_context(|| {
+                    format!(
+                        "loading browser users from {}",
+                        auth_registry_path.display()
+                    )
+                })?;
+            let server_auth = crate::server::auth::ServerAuth::from_sources(
+                app_config.server.auth.as_ref(),
+                &auth_registry,
+            )?;
             // Open the configured databases for remote sync and image upload.
             // This edits the in-memory list only — the registry on disk keeps
             // whatever the desktop Settings panel put there.

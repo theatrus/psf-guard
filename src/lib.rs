@@ -2,6 +2,7 @@ pub mod accord_imaging;
 pub mod acquisition_context;
 pub mod astrometry;
 pub mod astrometry_headers;
+pub mod auth_registry;
 pub mod calibration;
 pub mod cli;
 pub mod commands;

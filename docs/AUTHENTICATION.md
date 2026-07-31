@@ -6,7 +6,48 @@ localhost and remains trusted by the desktop UI.
 
 ![PSF Guard server login](server-login.png)
 
-## Configure viewer and editor accounts
+## Manage users from the CLI
+
+Add a viewer or editor. If `--password-file` is absent, the CLI prompts twice
+without showing the password:
+
+```bash
+psf-guard users add viewer --role read-only
+psf-guard users add editor --role read-write --password-file /run/secrets/editor
+psf-guard users list
+```
+
+The CLI stores salted Argon2 password hashes in `auth.json`, beside the
+database registry. It never stores the password. With a custom database
+registry, pass the same path to both commands:
+
+```bash
+psf-guard users add editor --role read-write \
+  --registry /srv/psf-guard/catalogs.json
+psf-guard server --registry /srv/psf-guard/catalogs.json
+```
+
+This example writes the users to `/srv/psf-guard/catalogs.auth.json`. The
+standard `config.json` registry uses `auth.json`. On Unix, PSF Guard writes the
+auth registry with mode `0600`.
+
+Use `--replace` with `users add` to change a user's password or role. Remove a
+user with:
+
+```bash
+psf-guard users remove viewer
+```
+
+The CLI refuses to remove the final managed user unless you pass
+`--allow-empty`. Without a TOML bootstrap account, removing that user turns
+browser authentication off after restart. Restart the server after any user
+change; active sessions stay valid until then.
+
+## Server settings and bootstrap accounts
+
+The CLI registry is the normal way to manage users. The optional TOML block
+sets session policy and can also hold one bootstrap or recovery account per
+role:
 
 Add one or both roles to the server TOML:
 
@@ -25,7 +66,7 @@ username = "editor"
 password_file = "/run/secrets/psf-guard-editor"
 ```
 
-Restart `psf-guard server --config psf-guard.toml`. The browser will show a
+Run `psf-guard server --config psf-guard.toml`. The browser will show a
 PSF Guard login page. A successful login creates an HttpOnly, SameSite=Strict
 session cookie. Sessions live in server memory, expire after `session_hours`,
 and end when the server restarts.
@@ -40,10 +81,10 @@ username = "editor"
 password = "development-only-password"
 ```
 
-Do not set both password fields for one role. Viewer and editor usernames must
-differ. Secure cookies are the default. Set `secure_cookie = false` only for a
-direct HTTP development server; a browser will not send a Secure cookie to a
-plain HTTP URL.
+Do not set both password fields for one role. Every username across TOML and
+`auth.json` must differ. Secure cookies are the default. Set
+`secure_cookie = false` only for a direct HTTP development server; a browser
+will not send a Secure cookie to a plain HTTP URL.
 
 ## Roles
 

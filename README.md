@@ -840,7 +840,8 @@ host = "0.0.0.0"
 #scan_worker_ratio = 0.5
 #background_worker_ratio = 0.25
 
-# Optional browser login. See docs/AUTHENTICATION.md.
+# Optional browser session policy and bootstrap accounts.
+# Managed users live in auth.json; see docs/AUTHENTICATION.md.
 [server.auth]
 session_hours = 168
 secure_cookie = true
@@ -876,13 +877,21 @@ Omit `[server.banner]` to hide the notice. The title and message are plain
 text. Set both link fields or omit both; links must use `http://` or
 `https://`.
 
-Omit `[server.auth]` to keep the server open as before. When enabled, PSF Guard
-shows its own login page and uses an HttpOnly session cookie. Viewer accounts
-can browse images and cached results, but cannot change grades, plans, files,
-or server settings. Set `allow_read_only_compute = true` only when viewers
-should also start stacks, plate solves, and satellite predictions. Editor
-accounts keep normal write and compute access. Tauri always stays
-unauthenticated on its localhost-only server. See
+Add managed users without putting passwords in the TOML:
+
+```bash
+psf-guard users add viewer --role read-only
+psf-guard users add editor --role read-write
+psf-guard users list
+```
+
+An `auth.json` user or a TOML bootstrap account turns on the login page and
+HttpOnly session cookies. Viewer accounts can browse images and cached
+results, but cannot change grades, plans, files, or server settings. Set
+`allow_read_only_compute = true` only when viewers should also start stacks,
+plate solves, and satellite predictions. Editor accounts keep normal write
+and compute access. With no users in either source, the server stays open as
+before. Tauri always stays unauthenticated on its localhost-only server. See
 [Server authentication](docs/AUTHENTICATION.md).
 
 Command-line arguments override the config file. (A legacy

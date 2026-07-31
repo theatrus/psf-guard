@@ -9,7 +9,6 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -17,22 +16,18 @@ use std::{
 };
 
 use crate::{
+    auth_registry::{validate_username, AuthRegistry},
     config::{ServerAuthConfig, ServerAuthCredentialConfig},
     server::{api::ApiResponse, state::AppState},
 };
+
+pub use crate::auth_registry::AccessRole;
 
 const SESSION_COOKIE: &str = "psf_guard_session";
 const DEFAULT_SESSION_HOURS: u64 = 24 * 7;
 const MAX_SESSIONS_PER_USER: usize = 128;
 const LOGIN_ATTEMPTS_PER_SECOND: f64 = 4.0;
 const LOGIN_ATTEMPT_BURST: f64 = 4.0;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AccessRole {
-    ReadOnly,
-    ReadWrite,
-}
 
 #[derive(Debug, Clone)]
 pub struct RequestAccess {
@@ -52,7 +47,7 @@ pub struct ServerAuth {
 #[derive(Clone)]
 struct AuthUser {
     username: String,
-    password_digest: [u8; 32],
+    password_hash: String,
     role: AccessRole,
 }
 
@@ -88,24 +83,50 @@ impl std::fmt::Debug for ServerAuth {
 
 impl ServerAuth {
     pub fn from_config(config: &ServerAuthConfig) -> anyhow::Result<Self> {
-        let mut users = Vec::new();
-        if let Some(credentials) = &config.read_only {
-            users.push(AuthUser::from_config(credentials, AccessRole::ReadOnly)?);
-        }
-        if let Some(credentials) = &config.read_write {
-            users.push(AuthUser::from_config(credentials, AccessRole::ReadWrite)?);
+        Self::from_sources(Some(config), &AuthRegistry::default())?
+            .ok_or_else(|| anyhow::anyhow!("server.auth needs at least one user"))
+    }
+
+    pub fn from_sources(
+        config: Option<&ServerAuthConfig>,
+        registry: &AuthRegistry,
+    ) -> anyhow::Result<Option<Self>> {
+        let mut users = registry
+            .users
+            .iter()
+            .map(|user| AuthUser {
+                username: user.username.clone(),
+                password_hash: user.password_hash().to_string(),
+                role: user.role,
+            })
+            .collect::<Vec<_>>();
+        if let Some(config) = config {
+            if let Some(credentials) = &config.read_only {
+                users.push(AuthUser::from_config(credentials, AccessRole::ReadOnly)?);
+            }
+            if let Some(credentials) = &config.read_write {
+                users.push(AuthUser::from_config(credentials, AccessRole::ReadWrite)?);
+            }
         }
         if users.is_empty() {
-            anyhow::bail!("server.auth needs at least one of read_only or read_write");
+            return Ok(None);
         }
-        if users.len() == 2 && users[0].username == users[1].username {
-            anyhow::bail!("server.auth read_only and read_write usernames must differ");
+        let mut usernames = std::collections::HashSet::new();
+        for user in &users {
+            if !usernames.insert(user.username.as_str()) {
+                anyhow::bail!(
+                    "browser user '{}' is defined more than once in auth.json or server.auth",
+                    user.username
+                );
+            }
         }
-        let session_hours = config.session_hours.unwrap_or(DEFAULT_SESSION_HOURS);
+        let session_hours = config
+            .and_then(|config| config.session_hours)
+            .unwrap_or(DEFAULT_SESSION_HOURS);
         if !(1..=24 * 90).contains(&session_hours) {
             anyhow::bail!("server.auth.session_hours must be between 1 and 2160");
         }
-        Ok(Self {
+        Ok(Some(Self {
             users,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             login_rate_limit: Arc::new(Mutex::new(LoginRateLimit {
@@ -113,18 +134,35 @@ impl ServerAuth {
                 last_refill: Instant::now(),
             })),
             session_ttl: Duration::from_secs(session_hours * 60 * 60),
-            secure_cookie: config.secure_cookie,
-            allow_read_only_compute: config.allow_read_only_compute,
-        })
+            secure_cookie: config.is_none_or(|config| config.secure_cookie),
+            allow_read_only_compute: config.is_some_and(|config| config.allow_read_only_compute),
+        }))
     }
 
-    fn authenticate_password(&self, username: &str, password: &str) -> Option<&AuthUser> {
-        let candidate = Sha256::digest(password.as_bytes());
-        self.users.iter().find(|user| {
-            let password_matches =
-                constant_time_eq(user.password_digest.as_slice(), candidate.as_slice());
-            user.username == username && password_matches
+    async fn authenticate_password(&self, username: &str, password: &str) -> Option<AuthUser> {
+        let user = self
+            .users
+            .iter()
+            .find(|user| user.username == username)
+            .cloned();
+        // Check a real hash even for an unknown name. This keeps a caller from
+        // learning valid usernames from the large Argon2 timing difference.
+        let password_hash = user
+            .as_ref()
+            .unwrap_or_else(|| &self.users[0])
+            .password_hash
+            .clone();
+        let password = password.to_string();
+        let matches = tokio::task::spawn_blocking(move || {
+            crate::auth_registry::verify_password_hash(&password_hash, &password)
         })
+        .await
+        .unwrap_or(false);
+        if matches {
+            user
+        } else {
+            None
+        }
     }
 
     fn claim_login_slot(&self) -> bool {
@@ -211,12 +249,8 @@ impl AuthUser {
         role: AccessRole,
     ) -> anyhow::Result<Self> {
         let username = credentials.username.trim();
-        if username.is_empty() || username.contains(':') {
-            anyhow::bail!(
-                "server.auth {} username must be non-empty and cannot contain ':'",
-                role.config_name()
-            );
-        }
+        validate_username(username)
+            .map_err(|error| anyhow::anyhow!("server.auth {} {error}", role.config_name()))?;
         let password = read_password(credentials, role)?;
         if password.is_empty() {
             anyhow::bail!(
@@ -226,7 +260,7 @@ impl AuthUser {
         }
         Ok(Self {
             username: username.to_string(),
-            password_digest: Sha256::digest(password.as_bytes()).into(),
+            password_hash: crate::auth_registry::hash_password_without_policy(&password)?,
             role,
         })
     }
@@ -343,7 +377,10 @@ pub async fn login(
         )
             .into_response();
     }
-    let Some(user) = auth.authenticate_password(request.username.trim(), &request.password) else {
+    let Some(user) = auth
+        .authenticate_password(request.username.trim(), &request.password)
+        .await
+    else {
         return (
             StatusCode::UNAUTHORIZED,
             [(CACHE_CONTROL, "no-store")],
@@ -353,7 +390,7 @@ pub async fn login(
         )
             .into_response();
     };
-    let token = auth.create_session(user);
+    let token = auth.create_session(&user);
     (
         StatusCode::OK,
         [
@@ -512,16 +549,6 @@ fn mark_response_private(response: &mut Response) {
     );
 }
 
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    left.iter()
-        .zip(right)
-        .fold(0u8, |difference, (left, right)| difference | (left ^ right))
-        == 0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,14 +571,20 @@ mod tests {
         }
     }
 
-    #[test]
-    fn accepts_both_roles_and_creates_expiring_secure_cookies() {
+    #[tokio::test]
+    async fn accepts_both_roles_and_creates_expiring_secure_cookies() {
         let auth = ServerAuth::from_config(&test_config()).unwrap();
-        let viewer = auth.authenticate_password("viewer", "view-secret").unwrap();
+        let viewer = auth
+            .authenticate_password("viewer", "view-secret")
+            .await
+            .unwrap();
         assert_eq!(viewer.role, AccessRole::ReadOnly);
-        assert!(auth.authenticate_password("viewer", "wrong").is_none());
+        assert!(auth
+            .authenticate_password("viewer", "wrong")
+            .await
+            .is_none());
 
-        let token = auth.create_session(viewer);
+        let token = auth.create_session(&viewer);
         let cookie = auth.cookie(&token).to_str().unwrap().to_string();
         assert!(cookie.contains("HttpOnly"));
         assert!(cookie.contains("SameSite=Strict"));
@@ -560,17 +593,23 @@ mod tests {
         assert_eq!(auth.session(&token).unwrap().username, "viewer");
     }
 
-    #[test]
-    fn session_store_evicts_only_within_the_same_user() {
+    #[tokio::test]
+    async fn session_store_evicts_only_within_the_same_user() {
         let auth = ServerAuth::from_config(&test_config()).unwrap();
-        let viewer = auth.authenticate_password("viewer", "view-secret").unwrap();
-        let editor = auth.authenticate_password("editor", "edit-secret").unwrap();
-        let editor_session = auth.create_session(editor);
-        let oldest_viewer = auth.create_session(viewer);
+        let viewer = auth
+            .authenticate_password("viewer", "view-secret")
+            .await
+            .unwrap();
+        let editor = auth
+            .authenticate_password("editor", "edit-secret")
+            .await
+            .unwrap();
+        let editor_session = auth.create_session(&editor);
+        let oldest_viewer = auth.create_session(&viewer);
         for _ in 1..MAX_SESSIONS_PER_USER {
-            auth.create_session(viewer);
+            auth.create_session(&viewer);
         }
-        auth.create_session(viewer);
+        auth.create_session(&viewer);
 
         assert!(auth.session(&oldest_viewer).is_none());
         assert!(auth.session(&editor_session).is_some());
@@ -665,5 +704,29 @@ mod tests {
             allow_read_only_compute: false,
         };
         assert!(ServerAuth::from_config(&empty).is_err());
+    }
+
+    #[tokio::test]
+    async fn registry_users_enable_secure_auth_without_toml_credentials() {
+        let mut registry = AuthRegistry::default();
+        registry
+            .add(
+                crate::auth_registry::AuthUserRecord::new(
+                    "managed-viewer",
+                    AccessRole::ReadOnly,
+                    "managed-view-secret",
+                )
+                .unwrap(),
+                false,
+            )
+            .unwrap();
+
+        let auth = ServerAuth::from_sources(None, &registry).unwrap().unwrap();
+        assert!(auth.secure_cookie);
+        let user = auth
+            .authenticate_password("managed-viewer", "managed-view-secret")
+            .await
+            .unwrap();
+        assert_eq!(user.role, AccessRole::ReadOnly);
     }
 }

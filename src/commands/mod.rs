@@ -17,6 +17,7 @@ pub mod show_images;
 pub mod stretch_to_png;
 pub mod sync;
 pub mod update_grade;
+pub mod users;
 pub mod visualize_psf;
 pub mod visualize_psf_multi_common;
 

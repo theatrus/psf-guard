@@ -212,7 +212,8 @@ pub struct ServerConfig {
     pub host: Option<String>,
     /// Enable CORS (default: true)
     pub cors: Option<bool>,
-    /// Optional browser login for server mode. Tauri does not load this config
+    /// Optional browser session policy and bootstrap accounts for server
+    /// mode. Managed accounts live in auth.json. Tauri loads neither source
     /// and keeps its localhost server unauthenticated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<ServerAuthConfig>,
