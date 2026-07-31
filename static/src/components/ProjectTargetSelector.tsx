@@ -9,6 +9,7 @@ import {
   type NavigationProject,
   type NavigationTarget,
 } from '../utils/projectTargetNavigation';
+import { useAccess } from '../auth/access';
 import ProjectTreeOption from './projectSelector/ProjectTreeOption';
 
 export default function ProjectTargetSelector() {
@@ -18,6 +19,7 @@ export default function ProjectTargetSelector() {
     targetId: selectedTargetId,
     setDbProjectTarget,
   } = useDbProjectTarget();
+  const access = useAccess();
   const queryClient = useQueryClient();
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -300,9 +302,11 @@ export default function ProjectTargetSelector() {
           if (event.shiftKey) refreshBothCachesMutation.mutate();
           else refreshCacheMutation.mutate();
         }}
-        disabled={!dbId || refreshPending}
+        disabled={!access.canWrite || !dbId || refreshPending}
         title={
-          refreshBothCachesMutation.isPending
+          !access.canWrite
+            ? 'A read-only account cannot refresh file caches.'
+            : refreshBothCachesMutation.isPending
             ? 'Refreshing directory and file caches...'
             : refreshCacheMutation.isPending
               ? 'Refreshing file cache...'

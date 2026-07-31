@@ -46,6 +46,8 @@ pub struct AppState {
     pub allow_database_management: RwLock<bool>,
     /// Optional plain-text notice displayed below the application header.
     pub site_banner: RwLock<Option<crate::config::SiteBannerConfig>>,
+    /// Optional browser/server authentication. Tauri leaves this unset.
+    pub server_auth: RwLock<Option<crate::server::auth::ServerAuth>>,
     /// Process-global 24-hour cache for the public release notice feeds.
     pub update_notices: crate::server::update_notice::UpdateNoticeManager,
     /// Tuning policy for the parallel scans and background pre-generation (see
@@ -382,6 +384,7 @@ impl AppState {
             registry_path: RwLock::new(None),
             allow_database_management: RwLock::new(false),
             site_banner: RwLock::new(None),
+            server_auth: RwLock::new(None),
             update_notices: crate::server::update_notice::UpdateNoticeManager::default(),
             worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             preview_encoding: RwLock::new(crate::preview_format::PreviewEncoding::default()),
@@ -404,6 +407,14 @@ impl AppState {
     /// also `set_allow_database_management`.
     pub fn set_registry_path(&self, path: Option<PathBuf>) {
         *self.registry_path.write().unwrap() = path;
+    }
+
+    pub fn set_server_auth(&self, auth: Option<crate::server::auth::ServerAuth>) {
+        *self.server_auth.write().unwrap() = auth;
+    }
+
+    pub fn server_auth(&self) -> Option<crate::server::auth::ServerAuth> {
+        self.server_auth.read().unwrap().clone()
     }
 
     /// Toggle the database CRUD endpoints. When false, mutating routes on
@@ -526,6 +537,7 @@ impl AppState {
             registry_path: RwLock::new(None),
             allow_database_management: RwLock::new(false),
             site_banner: RwLock::new(None),
+            server_auth: RwLock::new(None),
             update_notices: crate::server::update_notice::UpdateNoticeManager::default(),
             worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             preview_encoding: RwLock::new(crate::preview_format::PreviewEncoding::default()),

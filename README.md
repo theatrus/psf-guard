@@ -840,6 +840,13 @@ host = "0.0.0.0"
 #scan_worker_ratio = 0.5
 #background_worker_ratio = 0.25
 
+# Optional browser session policy. Users live in auth.json; see
+# docs/AUTHENTICATION.md.
+[server.auth]
+session_hours = 168
+secure_cookie = true
+allow_read_only_compute = false
+
 # Optional plain-text notice shown below the application header.
 [server.banner]
 title = "Demo site"
@@ -861,6 +868,27 @@ large = false          # 2000px previews
 Omit `[server.banner]` to hide the notice. The title and message are plain
 text. Set both link fields or omit both; links must use `http://` or
 `https://`.
+
+Add users without putting passwords in the TOML:
+
+```bash
+psf-guard users add viewer --role read-only --email viewer@example.com
+psf-guard users add editor --role read-write --email editor@example.com
+psf-guard users list
+```
+
+Any user in `auth.json` turns on the login page and HttpOnly session cookies.
+Viewer accounts can browse images and cached results, but cannot change
+grades, plans, files, or server settings. Set
+`allow_read_only_compute = true` only when viewers should also start stacks,
+plate solves, and satellite predictions. Editor accounts keep normal write
+and compute access. With no users, the server stays open as before. Tauri
+always stays unauthenticated on its localhost-only server. See
+[Server authentication](docs/AUTHENTICATION.md).
+
+Signed-in editors can manage every account from the separate **Users** tab in
+Settings. Each account can include an optional email address. Changes made
+there take effect at once.
 
 Command-line arguments override the config file. (A legacy
 `[database]`/`[images]` section is still parsed but ignored in server mode —

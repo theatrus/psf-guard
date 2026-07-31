@@ -27,6 +27,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml_edit = { version = "0.25", features = ["serde"] }
 anyhow = "1.0"
+argon2 = "0.5.3"
 chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
 regex = "1.12"
@@ -75,6 +76,7 @@ tauri-plugin-process = { version = "2.3.1", optional = true }
 tauri-plugin-updater = { version = "2.10.1", optional = true }
 dirs = "6.0"
 dunce = "1"
+rpassword = "7.5.4"
 async_zip = { version = "0.0.18", features = ["tokio"] }
 # Platform memory probes for the occlusion-scan worker budget in
 # `concurrency` (both already in the tree transitively). Linux uses

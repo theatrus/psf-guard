@@ -13,6 +13,7 @@ import type {
 import StackPreviewInspector from './StackPreviewInspector';
 import StackColorPreviewPanel from './StackColorPreviewPanel';
 import StackStretchControls from './StackStretchControls';
+import { useAccess } from '../auth/access';
 
 type StackCandidateImage = Pick<
   Image,
@@ -116,6 +117,7 @@ export default function StackPreviewPanel({
   selectionSource,
 }: StackPreviewPanelProps) {
   const queryClient = useQueryClient();
+  const { canCompute } = useAccess();
   const [acceptedOnly, setAcceptedOnly] = useState(false);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [inspector, setInspector] = useState<StackArtifact | null>(null);
@@ -323,7 +325,8 @@ export default function StackPreviewPanel({
             <button
               className="stack-preview-build"
               type="button"
-              disabled={running || stableImageIds.length < 2}
+              disabled={!canCompute || running || stableImageIds.length < 2}
+              title={canCompute ? undefined : 'This account can view cached stacks but cannot build them.'}
               onClick={() => beginAll(false)}
             >
               {running && startVariables?.operationKey === 'all'
@@ -336,7 +339,8 @@ export default function StackPreviewPanel({
               <button
                 className="stack-preview-rebuild"
                 type="button"
-                disabled={running || stableImageIds.length < 2}
+                disabled={!canCompute || running || stableImageIds.length < 2}
+                title={canCompute ? undefined : 'This account can view cached stacks but cannot rebuild them.'}
                 onClick={() => beginAll(true)}
               >
                 Rebuild current set
@@ -361,6 +365,7 @@ export default function StackPreviewPanel({
           sourceRevision={colorSourceRevision}
           channelBuildRunning={running}
           outdatedTargetIds={outdatedTargetIds}
+          canCompute={canCompute}
         />
 
         {displayKeys.length > 0 && (
@@ -493,9 +498,11 @@ export default function StackPreviewPanel({
                           <button
                             className="stack-preview-card-action"
                             type="button"
-                            disabled={running || !canBuildChannel}
+                            disabled={!canCompute || running || !canBuildChannel}
                             aria-label={artifact ? 'Rebuild channel' : 'Build channel'}
-                            title={artifact ? 'Rebuild channel' : 'Build channel'}
+                            title={!canCompute
+                              ? 'This account can view cached stacks but cannot build them.'
+                              : artifact ? 'Rebuild channel' : 'Build channel'}
                             onClick={() => beginChannel(current, Boolean(artifact))}
                           >
                             {groupBusy || (startPending && startVariables?.operationKey === key)
@@ -525,7 +532,7 @@ export default function StackPreviewPanel({
                         key={stretchKey}
                         label={`${targetName} ${filterName || 'no filter'}`}
                         channels={artifact.group.output_channels === 3 ? 3 : 1}
-                        disabled={running}
+                        disabled={!canCompute || running}
                         applied={appliedStretch}
                         apply={(request) => apiClient.applyStackStretch(
                           dbId, artifact.jobId, artifact.group.index, request

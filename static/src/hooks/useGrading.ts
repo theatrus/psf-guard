@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { UpdateGradeRequest } from '../api/types';
 import { useUndoRedo } from './useUndoRedo';
+import { useAccess } from '../auth/access';
 
 interface UseGradingOptions {
   onSuccess?: (imageIds: number[], status: string) => void;
@@ -13,6 +14,7 @@ export function useGrading(dbId: string, options: UseGradingOptions = {}) {
   const { onSuccess, onError } = options;
   const queryClient = useQueryClient();
   const undoRedo = useUndoRedo(dbId);
+  const { canWrite } = useAccess();
 
   // Single image grading mutation
   const singleGradeMutation = useMutation({
@@ -21,6 +23,7 @@ export function useGrading(dbId: string, options: UseGradingOptions = {}) {
       request: UpdateGradeRequest;
       recordHistory?: boolean;
     }) => {
+      if (!canWrite) throw new Error('This account has read-only access');
       // Record action before applying if history tracking is enabled
       let actionId: string | null = null;
       if (recordHistory) {
@@ -61,6 +64,7 @@ export function useGrading(dbId: string, options: UseGradingOptions = {}) {
       request: UpdateGradeRequest;
       recordHistory?: boolean;
     }) => {
+      if (!canWrite) throw new Error('This account has read-only access');
       // Record action before applying if history tracking is enabled
       let actionId: string | null = null;
       if (recordHistory) {
@@ -142,6 +146,14 @@ export function useGrading(dbId: string, options: UseGradingOptions = {}) {
   }, [gradeImage, gradeBatch]);
 
   const isLoading = singleGradeMutation.isPending || batchGradeMutation.isPending || undoRedo.isProcessing;
+  const undo = useCallback(
+    () => canWrite ? undoRedo.undo() : Promise.resolve(false),
+    [canWrite, undoRedo],
+  );
+  const redo = useCallback(
+    () => canWrite ? undoRedo.redo() : Promise.resolve(false),
+    [canWrite, undoRedo],
+  );
 
   return {
     // Grading functions
@@ -150,14 +162,15 @@ export function useGrading(dbId: string, options: UseGradingOptions = {}) {
     gradeImages,
     
     // Undo/redo functions
-    undo: undoRedo.undo,
-    redo: undoRedo.redo,
+    undo,
+    redo,
     clearHistory: undoRedo.clearHistory,
     
     // State
     isLoading,
-    canUndo: undoRedo.canUndo,
-    canRedo: undoRedo.canRedo,
+    canUndo: canWrite && undoRedo.canUndo,
+    canRedo: canWrite && undoRedo.canRedo,
+    canWrite,
     undoStackSize: undoRedo.undoStackSize,
     redoStackSize: undoRedo.redoStackSize,
     

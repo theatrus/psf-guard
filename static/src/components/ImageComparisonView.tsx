@@ -19,6 +19,7 @@ interface ImageComparisonViewProps {
   onNavigateRightNext: () => void;
   onNavigateRightPrev: () => void;
   onSwapImages: () => void;
+  canGrade?: boolean;
 }
 
 export default function ImageComparisonView({
@@ -32,6 +33,7 @@ export default function ImageComparisonView({
   onNavigateRightNext,
   onNavigateRightPrev,
   onSwapImages,
+  canGrade = true,
 }: ImageComparisonViewProps) {
   const [showStars, setShowStars] = useState(false);
   // Same shared preference as the grid and the detail view: comparing two
@@ -660,13 +662,13 @@ export default function ImageComparisonView({
             </div>
 
             <div className="panel-actions">
-              <button onClick={() => onGradeLeft('accepted')} className="action-button accept">
+              <button onClick={() => onGradeLeft('accepted')} className="action-button accept" disabled={!canGrade}>
                 Accept (1)
               </button>
-              <button onClick={() => onGradeLeft('rejected')} className="action-button reject">
+              <button onClick={() => onGradeLeft('rejected')} className="action-button reject" disabled={!canGrade}>
                 Reject (2)
               </button>
-              <button onClick={() => onGradeLeft('pending')} className="action-button pending">
+              <button onClick={() => onGradeLeft('pending')} className="action-button pending" disabled={!canGrade}>
                 Unmark (3)
               </button>
             </div>
@@ -837,13 +839,13 @@ export default function ImageComparisonView({
                 </div>
 
                 <div className="panel-actions">
-                  <button onClick={() => onGradeRight('accepted')} className="action-button accept">
+                  <button onClick={() => onGradeRight('accepted')} className="action-button accept" disabled={!canGrade}>
                     Accept (7)
                   </button>
-                  <button onClick={() => onGradeRight('rejected')} className="action-button reject">
+                  <button onClick={() => onGradeRight('rejected')} className="action-button reject" disabled={!canGrade}>
                     Reject (8)
                   </button>
-                  <button onClick={() => onGradeRight('pending')} className="action-button pending">
+                  <button onClick={() => onGradeRight('pending')} className="action-button pending" disabled={!canGrade}>
                     Unmark (9)
                   </button>
                 </div>

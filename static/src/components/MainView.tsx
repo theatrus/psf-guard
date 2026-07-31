@@ -34,7 +34,7 @@ export default function MainView() {
   const grading = useGrading(dbId!);
 
   const handleGrade = async (status: 'accepted' | 'rejected' | 'pending') => {
-    if (!imageId) return;
+    if (!imageId || !grading.canWrite) return;
     
     try {
       await grading.gradeImage(imageId, status);
@@ -49,7 +49,7 @@ export default function MainView() {
 
   // Comparison view handlers
   const handleGradeLeft = async (status: 'accepted' | 'rejected' | 'pending') => {
-    if (!leftImageId) return;
+    if (!leftImageId || !grading.canWrite) return;
     
     try {
       await grading.gradeImage(leftImageId, status);
@@ -59,7 +59,7 @@ export default function MainView() {
   };
 
   const handleGradeRight = async (status: 'accepted' | 'rejected' | 'pending') => {
-    if (!rightImageId) return;
+    if (!rightImageId || !grading.canWrite) return;
     
     try {
       await grading.gradeImage(rightImageId, status);
@@ -193,6 +193,7 @@ export default function MainView() {
             onNavigateRightNext={handleNavigateRightNext}
             onNavigateRightPrev={handleNavigateRightPrev}
             onSwapImages={handleSwapImages}
+            canGrade={grading.canWrite}
           />
         </div>
       )}

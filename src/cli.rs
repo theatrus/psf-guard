@@ -1,5 +1,5 @@
 use anyhow::Context;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::time::Duration;
 
 #[derive(Parser)]
@@ -655,6 +655,12 @@ pub enum Commands {
         kind: SyncKind,
     },
 
+    /// Manage browser users for server mode.
+    Users {
+        #[command(subcommand)]
+        action: UserCommand,
+    },
+
     /// Start the web server for API access and static file serving
     Server {
         /// Path to TOML configuration file
@@ -722,6 +728,75 @@ pub enum Commands {
         #[arg(long)]
         allow_database_management: bool,
     },
+}
+
+#[derive(Subcommand)]
+pub enum UserCommand {
+    /// List configured browser users.
+    List {
+        /// Path to the database registry JSON file. The auth registry sits
+        /// beside it. Defaults to the platform config directory.
+        #[arg(long)]
+        registry: Option<String>,
+    },
+
+    /// Add a browser user.
+    Add {
+        /// Login name.
+        username: String,
+
+        /// Access granted to the user.
+        #[arg(long, value_enum)]
+        role: UserRoleArg,
+
+        /// Optional contact email.
+        #[arg(long)]
+        email: Option<String>,
+
+        /// Read the password from this file. If omitted, prompt twice.
+        #[arg(long)]
+        password_file: Option<String>,
+
+        /// Replace an existing user with the same name.
+        #[arg(long)]
+        replace: bool,
+
+        /// Path to the database registry JSON file. The auth registry sits
+        /// beside it. Defaults to the platform config directory.
+        #[arg(long)]
+        registry: Option<String>,
+    },
+
+    /// Remove a browser user.
+    Remove {
+        /// Login name.
+        username: String,
+
+        /// Permit removal of the last user. This disables browser
+        /// authentication after restart.
+        #[arg(long)]
+        allow_empty: bool,
+
+        /// Path to the database registry JSON file. The auth registry sits
+        /// beside it. Defaults to the platform config directory.
+        #[arg(long)]
+        registry: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum UserRoleArg {
+    ReadOnly,
+    ReadWrite,
+}
+
+impl From<UserRoleArg> for crate::auth_registry::AccessRole {
+    fn from(value: UserRoleArg) -> Self {
+        match value {
+            UserRoleArg::ReadOnly => Self::ReadOnly,
+            UserRoleArg::ReadWrite => Self::ReadWrite,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -1064,6 +1139,44 @@ mod tests {
 
         assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
         assert!(error.to_string().contains(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn parses_user_commands() {
+        let cli = Cli::try_parse_from([
+            "psf-guard",
+            "users",
+            "add",
+            "viewer",
+            "--role",
+            "read-only",
+            "--email",
+            "viewer@example.com",
+            "--password-file",
+            "viewer.secret",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Users {
+                action:
+                    UserCommand::Add {
+                        username,
+                        role,
+                        email,
+                        password_file,
+                        replace,
+                        registry,
+                    },
+            } => {
+                assert_eq!(username, "viewer");
+                assert_eq!(role, UserRoleArg::ReadOnly);
+                assert_eq!(email.as_deref(), Some("viewer@example.com"));
+                assert_eq!(password_file.as_deref(), Some("viewer.secret"));
+                assert!(!replace);
+                assert!(registry.is_none());
+            }
+            _ => panic!("parsed the wrong command"),
+        }
     }
 
     #[test]

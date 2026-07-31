@@ -43,6 +43,7 @@ describe('SatellitePanel', () => {
         status={status}
         isLoading={false}
         isPredicting={false}
+        canPredict={true}
         overlayVisible={true}
         onToggleOverlay={onToggleOverlay}
         onPredict={vi.fn()}
@@ -68,6 +69,7 @@ describe('SatellitePanel', () => {
         status={{ orbital_elements_cached: false }}
         isLoading={false}
         isPredicting={false}
+        canPredict={true}
         overlayVisible={false}
         onToggleOverlay={vi.fn()}
         onPredict={onPredict}
@@ -75,6 +77,26 @@ describe('SatellitePanel', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: /Identify satellite tracks/ }));
     expect(onPredict).toHaveBeenCalledOnce();
+  });
+
+  it('does not let a cached-only viewer start a prediction', () => {
+    const onPredict = vi.fn();
+    render(
+      <SatellitePanel
+        status={{ orbital_elements_cached: false }}
+        isLoading={false}
+        isPredicting={false}
+        canPredict={false}
+        overlayVisible={false}
+        onToggleOverlay={vi.fn()}
+        onPredict={onPredict}
+      />
+    );
+
+    const predict = screen.getByRole('button', { name: /Identify satellite tracks/ });
+    expect(predict).toBeDisabled();
+    fireEvent.click(predict);
+    expect(onPredict).not.toHaveBeenCalled();
   });
 
   it('shows the requested epoch for a historical catalog response', () => {
@@ -108,6 +130,7 @@ describe('SatellitePanel', () => {
         status={status}
         isLoading={false}
         isPredicting={false}
+        canPredict={true}
         overlayVisible={false}
         onToggleOverlay={vi.fn()}
         onPredict={vi.fn()}

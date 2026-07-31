@@ -212,6 +212,10 @@ pub struct ServerConfig {
     pub host: Option<String>,
     /// Enable CORS (default: true)
     pub cors: Option<bool>,
+    /// Optional browser session policy for server mode. Browser users live in
+    /// auth.json. Tauri keeps its localhost server unauthenticated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<ServerAuthConfig>,
     /// Fraction of logical CPU cores interactive, user-triggered work (the
     /// occlusion / spatial scan) may use (0.0–1.0, default 0.5). It runs on
     /// the blocking pool while the server keeps serving the UI, so this leaves
@@ -245,6 +249,27 @@ pub struct ServerConfig {
     /// unaffected either way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview_color: Option<bool>,
+}
+
+/// Browser session policy. Users and password hashes live in auth.json.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerAuthConfig {
+    /// Browser session lifetime. Defaults to seven days.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_hours: Option<u64>,
+    /// Mark the session cookie Secure. Defaults to true; leave it false only
+    /// for direct HTTP development servers.
+    #[serde(default = "default_secure_cookie")]
+    pub secure_cookie: bool,
+    /// Allow read-only accounts to start costly derived-data jobs such as
+    /// stacks, plate solves, and satellite predictions. Defaults to false.
+    #[serde(default)]
+    pub allow_read_only_compute: bool,
+}
+
+fn default_secure_cookie() -> bool {
+    true
 }
 
 impl ServerConfig {
@@ -390,6 +415,7 @@ impl Default for ServerConfig {
             port: Some(3000),
             host: Some("0.0.0.0".to_string()),
             cors: Some(true),
+            auth: None,
             scan_worker_ratio: None,
             background_worker_ratio: None,
             banner: None,
@@ -484,6 +510,19 @@ impl Config {
 
     pub fn get_cors_enabled(&self) -> bool {
         self.server.cors.unwrap_or(true)
+    }
+
+    pub fn get_server_auth_config(&self) -> Result<Option<&ServerAuthConfig>> {
+        if let Some(hours) = self
+            .server
+            .auth
+            .as_ref()
+            .and_then(|auth| auth.session_hours)
+            && !(1..=24 * 90).contains(&hours)
+        {
+            anyhow::bail!("server.auth.session_hours must be between 1 and 2160");
+        }
+        Ok(self.server.auth.as_ref())
     }
 
     /// Validated, whitespace-normalized site banner for the server API.
@@ -597,6 +636,7 @@ impl Config {
         }
 
         self.get_site_banner()?;
+        self.get_server_auth_config()?;
 
         Ok(())
     }
@@ -613,6 +653,7 @@ mod tests {
         assert_eq!(config.get_port(), 3000);
         assert_eq!(config.get_host(), "0.0.0.0");
         assert!(config.get_cors_enabled());
+        assert!(config.get_server_auth_config().unwrap().is_none());
         // Database/images are obsolete and default to absent.
         assert!(config.database.is_none());
         assert!(config.images.is_none());
@@ -656,6 +697,56 @@ directory = "./cache"
         assert_eq!(config.get_port(), 3002);
         assert!(config.database.is_none());
         assert!(config.images.is_none());
+    }
+
+    #[test]
+    fn server_auth_parses_session_policy() {
+        let toml = r#"
+[server]
+port = 3000
+
+[server.auth]
+session_hours = 24
+secure_cookie = true
+allow_read_only_compute = true
+
+[cache]
+directory = "./cache"
+"#;
+        let config: Config = toml_edit::de::from_str(toml).unwrap();
+        let auth = config.get_server_auth_config().unwrap().unwrap();
+        assert_eq!(auth.session_hours, Some(24));
+        assert!(auth.secure_cookie);
+        assert!(auth.allow_read_only_compute);
+    }
+
+    #[test]
+    fn server_auth_defaults_to_secure_cookies() {
+        let config: Config = toml_edit::de::from_str(
+            r#"
+[server.auth]
+
+[cache]
+directory = "./cache"
+"#,
+        )
+        .unwrap();
+
+        let auth = config.server.auth.unwrap();
+        assert!(auth.secure_cookie);
+        assert!(!auth.allow_read_only_compute);
+    }
+
+    #[test]
+    fn server_auth_rejects_a_second_toml_user_list() {
+        let config = toml_edit::de::from_str::<Config>(
+            r#"
+[server.auth.read_write]
+username = "editor"
+password = "development-only"
+"#,
+        );
+        assert!(config.is_err());
     }
 
     #[test]

@@ -18,9 +18,11 @@ import {
   type SettingsIntent,
 } from './utils/settingsIntent';
 import { apiClient } from './api/client';
+import AuthGate from './auth/AccessContext';
+import { useAccess } from './auth/access';
 import './App.css';
 
-function App() {
+function AppContent() {
   const navigate = useNavigate();
   const location = useLocation();
   const { showStats, setShowStats } = useGridState();
@@ -45,6 +47,7 @@ function App() {
   // We track this only to short-circuit checks against Tauri-only commands;
   // the modal itself is shown regardless of mode.
   const [, setIsTauri] = useState(false);
+  const access = useAccess();
 
   // Check configuration on mount. In both Tauri and browser/CLI-server mode,
   // we pop the settings modal automatically when no databases are configured.
@@ -75,13 +78,13 @@ function App() {
         // If management is disabled and there are no DBs, leave the user on
         // the overview's empty state where they can read the explanation
         // without a modal blocking them.
-        if (!cancelled && !hasValid && managementAllowed) {
+        if (!cancelled && access.canWrite && !hasValid && managementAllowed) {
           console.log('No databases configured — opening settings modal');
           setShowSettings(true);
         }
       } catch (error) {
         console.error('Failed to check configuration:', error);
-        if (!cancelled) setShowSettings(true);
+        if (!cancelled && access.canWrite) setShowSettings(true);
       }
     };
 
@@ -92,6 +95,7 @@ function App() {
     // Let any component request opening settings via a window event (e.g.
     // the Overview empty-state button).
     const openHandler = (event: Event) => {
+      if (!access.canWrite) return;
       setSettingsIntent(settingsIntentOf(event));
       setShowSettings(true);
     };
@@ -102,7 +106,7 @@ function App() {
       clearTimeout(handle);
       window.removeEventListener(OPEN_SETTINGS_EVENT, openHandler);
     };
-  }, []);
+  }, [access.canWrite]);
 
   // Keyboard shortcut for help
   useHotkeys('?', () => setShowHelp(true), []);
@@ -184,15 +188,35 @@ function App() {
               </span>
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => setShowSettings(true)}
-            className="header-button utility-button"
-            title="Settings"
-          >
-            <span className="utility-icon" aria-hidden="true">⚙</span>
-            <span className="utility-label">Settings</span>
-          </button>
+          {access.canWrite && (
+            <button
+              type="button"
+              onClick={() => setShowSettings(true)}
+              className="header-button utility-button"
+              title="Settings"
+            >
+              <span className="utility-icon" aria-hidden="true">⚙</span>
+              <span className="utility-label">Settings</span>
+            </button>
+          )}
+          {access.status.authentication_required && (
+            <>
+              <span
+                className={`access-badge ${access.canWrite ? 'read-write' : 'read-only'}`}
+                title={`Signed in as ${access.status.username ?? 'user'}`}
+              >
+                {access.canWrite ? 'Editor' : 'Read only'}
+              </span>
+              <button
+                type="button"
+                onClick={() => void access.logout()}
+                className="header-button utility-button"
+                title="Sign out"
+              >
+                <span className="utility-label">Sign out</span>
+              </button>
+            </>
+          )}
           <button
             type="button"
             onClick={() => setShowHelp(true)}
@@ -217,7 +241,7 @@ function App() {
         <KeyboardShortcutHelp onClose={() => setShowHelp(false)} />
       )}
       
-      {showSettings && (
+      {showSettings && access.canWrite && (
         <TauriSettings
           isOpen={showSettings}
           initialIntent={settingsIntent}
@@ -231,4 +255,10 @@ function App() {
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <AuthGate>
+      <AppContent />
+    </AuthGate>
+  );
+}

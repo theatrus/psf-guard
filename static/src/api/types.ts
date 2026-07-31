@@ -732,6 +732,35 @@ export interface ServerInfo {
   banner?: SiteBanner;
 }
 
+export type AccessRole = 'read_only' | 'read_write';
+
+export interface AuthStatus {
+  authentication_required: boolean;
+  authenticated: boolean;
+  role?: AccessRole;
+  username?: string;
+  can_compute: boolean;
+}
+
+export interface AuthUserSummary {
+  username: string;
+  role: AccessRole;
+  email?: string;
+}
+
+export interface CreateAuthUserRequest {
+  username: string;
+  role: AccessRole;
+  email?: string;
+  password: string;
+}
+
+export interface UpdateAuthUserRequest {
+  role: AccessRole;
+  email?: string;
+  password?: string;
+}
+
 export interface ReleaseNotice {
   schema_version: number;
   version: string;

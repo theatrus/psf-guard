@@ -4,6 +4,8 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { HttpResponse, http } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
+import { AccessContext } from '../../auth/access';
+import type { AuthUserSummary } from '../../api/types';
 import TauriSettings from '../TauriSettings';
 
 function createWrapper() {
@@ -19,6 +21,89 @@ function createWrapper() {
 }
 
 describe('TauriSettings import state', () => {
+  it('shows user management as its own tab when server login is enabled', async () => {
+    let users: AuthUserSummary[] = [
+      { username: 'editor', role: 'read_write' },
+      { username: 'reviewer', role: 'read_only', email: 'reviewer@example.com' },
+    ];
+    server.use(
+      http.get('/api/auth/users', () =>
+        HttpResponse.json({
+          success: true,
+          data: users,
+          error: null,
+          status: 'ready',
+        })
+      ),
+      http.post('/api/auth/users', async ({ request }) => {
+        const body = await request.json() as {
+          username: string;
+          role: 'read_only' | 'read_write';
+          email?: string;
+          password: string;
+        };
+        users = [...users, {
+          username: body.username,
+          role: body.role,
+          email: body.email,
+        }];
+        return HttpResponse.json({
+          success: true,
+          data: users,
+          error: null,
+          status: 'ready',
+        });
+      })
+    );
+
+    const Wrapper = createWrapper();
+    render(
+      <AccessContext.Provider
+        value={{
+          status: {
+            authentication_required: true,
+            authenticated: true,
+            role: 'read_write',
+            username: 'editor',
+            can_compute: true,
+          },
+          canWrite: true,
+          canCompute: true,
+          logout: async () => undefined,
+        }}
+      >
+        <TauriSettings isOpen onClose={() => undefined} />
+      </AccessContext.Provider>,
+      { wrapper: Wrapper }
+    );
+
+    const usersTab = await screen.findByRole('tab', { name: 'Users' });
+    fireEvent.click(usersTab);
+    expect(
+      await screen.findByRole('heading', { name: 'Browser users' })
+    ).toBeInTheDocument();
+    expect(await screen.findByText('reviewer')).toBeInTheDocument();
+    expect(await screen.findByText('reviewer@example.com')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '+ Add user' }));
+    fireEvent.change(screen.getByLabelText('Username'), {
+      target: { value: 'viewer' },
+    });
+    fireEvent.change(screen.getByLabelText('Email (optional)'), {
+      target: { value: 'viewer@example.com' },
+    });
+    fireEvent.change(screen.getByLabelText('Password'), {
+      target: { value: 'long-viewer-password' },
+    });
+    fireEvent.change(screen.getByLabelText('Confirm password'), {
+      target: { value: 'long-viewer-password' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save user' }));
+
+    expect(await screen.findByText('viewer')).toBeInTheDocument();
+    expect(await screen.findByText('viewer@example.com')).toBeInTheDocument();
+  });
+
   it('hides catalog management on a read-only server', async () => {
     render(<TauriSettings isOpen onClose={() => undefined} />, {
       wrapper: createWrapper(),
