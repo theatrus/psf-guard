@@ -108,8 +108,12 @@ sequence analysis shows coverage badges, classifications, solved-center
 scatter, a session view, and an all-session stack comparison for each filter.
 When analysis names a cause, the same reason and supporting evidence appear on
 the Sequence card, the matching Grid card, and the image detail panel.
-Grid reuses one project or target analysis; **All Projects** stays unscored and
-says so instead of starting a database-wide analysis.
+Grid reuses one target, project, or database-wide scoring request. **All
+Projects** scores each target/filter group on its own; it never compares frames
+from unrelated targets. This request reads stored metadata and cached evidence
+but does not start the full FITS quality scan. Grid states how many visible
+images remain unscored because they lack a comparable sequence or enough
+evidence.
 The stack comparison scores only capture profiles with at least three matching
 frames across two sessions. It reports profiles without enough matches instead
 of assigning them a perfect score. Stack previews use the same cross-session

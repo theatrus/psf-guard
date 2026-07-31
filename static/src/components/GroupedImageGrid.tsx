@@ -166,27 +166,37 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   );
   let qualityStatus = {
     label: 'Quality: unscored',
-    title: 'No sequence score is available for this scope. Analyze Quality from a target Sequence view to add pixel evidence.',
+    title: 'No sequence score is available for these images. Open a target Sequence view to inspect the evidence or run Analyze Quality.',
   };
-  if (!quality.isScoped) {
-    qualityStatus = {
-      label: 'Quality: unscored — choose a project',
-      title: 'All Projects does not run a database-wide sequence analysis. Choose a project or target to load quality scores and reasons.',
-    };
-  } else if (quality.isLoading) {
+  const scoredImageCount = filteredImages.reduce(
+    (count, image) => count + Number(quality.qualityByImage.has(image.id)),
+    0,
+  );
+  const unscoredImageCount = filteredImages.length - scoredImageCount;
+  if (quality.isLoading) {
     qualityStatus = {
       label: 'Quality: loading',
-      title: 'Loading cached sequence scores and reasons for this scope.',
+      title: 'Loading sequence scores and reasons from stored metadata and cached evidence.',
     };
   } else if (quality.error) {
     qualityStatus = {
       label: 'Quality: unavailable',
       title: 'Sequence quality could not be loaded for this scope.',
     };
-  } else if (quality.qualityByImage.size > 0) {
+  } else if (scoredImageCount > 0 && unscoredImageCount > 0) {
     qualityStatus = {
-      label: `Quality: ${quality.qualityByImage.size} scored`,
-      title: 'Sequence scores and reasons are available for these images.',
+      label: `Quality: ${scoredImageCount} scored · ${unscoredImageCount} unscored`,
+      title: 'Unscored images lack a comparable sequence or enough evidence. Open their target Sequence view to inspect them or run Analyze Quality.',
+    };
+  } else if (scoredImageCount > 0) {
+    qualityStatus = {
+      label: `Quality: ${scoredImageCount} scored`,
+      title: 'Sequence scores and reasons are available for all visible images.',
+    };
+  } else if (unscoredImageCount > 0) {
+    qualityStatus = {
+      label: `Quality: ${unscoredImageCount} unscored`,
+      title: 'These images lack a comparable sequence or enough evidence. Open a target Sequence view to inspect them or run Analyze Quality.',
     };
   }
 

@@ -177,9 +177,7 @@ export default function ImageDetailView({
 
   const qualityScope = useScopedQuality(dbId, projectId, targetId, qualityFilterName);
   const quality = qualityScope.qualityByImage.get(imageId);
-  const qualityStatus = !qualityScope.isScoped
-    ? 'Quality scores and reasons are not calculated in All Projects. Choose a project or target to load them.'
-    : qualityScope.isLoading
+  const qualityStatus = qualityScope.isLoading
       ? 'Loading the sequence quality score and reason…'
       : qualityScope.error
         ? 'Sequence quality is unavailable for this scope.'

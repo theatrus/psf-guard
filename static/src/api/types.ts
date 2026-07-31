@@ -1236,6 +1236,11 @@ export interface ProjectSequenceAnalysisRequest {
   filter_name?: string;
 }
 
+export interface DatabaseSequenceAnalysisRequest {
+  all_projects: true;
+  filter_name?: string;
+}
+
 export interface SequenceAnalysisResponse {
   sequences: ScoredSequence[];
   /** Scores across all stack candidates for each target/filter. Each score is

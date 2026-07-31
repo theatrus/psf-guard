@@ -613,20 +613,28 @@ test('quality reasons remain available in Grid and image details', async ({ page
   expect(perImageQualityRequests).toBe(0);
 });
 
-test('All Projects explains that quality remains unscored without a project scope', async ({
+test('All Projects loads scores without starting a quality scan', async ({
   page,
 }) => {
   let sequenceRequests = 0;
+  let qualityScanRequests = 0;
+  let databaseScope = false;
   page.on('request', (request) => {
-    if (request.url().includes('/analysis/sequence')) sequenceRequests += 1;
+    if (request.url().includes('/analysis/sequence')) {
+      sequenceRequests += 1;
+      databaseScope = new URL(request.url()).searchParams.get('all_projects') === 'true';
+    }
+    if (request.url().includes('/analysis/quality-scan')) qualityScanRequests += 1;
   });
 
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}`);
   await expect(page.locator('.image-card')).toHaveCount(4, { timeout: 15_000 });
   const state = page.locator('.grid-quality-state');
-  await expect(state).toHaveText('Quality: unscored — choose a project');
-  await expect(state).toHaveAttribute('title', /does not run a database-wide sequence analysis/);
-  expect(sequenceRequests).toBe(0);
+  await expect(state).toHaveText('Quality: 4 scored');
+  await expect(page.locator('.image-card .quality-badge')).toHaveCount(4);
+  expect(sequenceRequests).toBe(1);
+  expect(databaseScope).toBe(true);
+  expect(qualityScanRequests).toBe(0);
 });
 
 test('Sequence chart Shift-click selects a visible range', async ({ page }) => {

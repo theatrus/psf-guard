@@ -3617,15 +3617,16 @@ pub async fn analyze_sequence(
     let weight_spatial = params.weight_spatial;
     let weight_pointing = params.weight_pointing;
 
-    // Fetch images from the requested target or project. Project scope keeps
-    // Grid at one analysis request regardless of its thumbnail count.
+    // Fetch images from the requested target, project, or database. Wider
+    // scopes still score each target/filter group independently and only read
+    // evidence already stored in metadata or caches.
     let (images_data, expected_by_image) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
 
-        let targets = match (params.target_id, params.project_id) {
-            (Some(target_id), None) => {
+        let target_ids = match (params.target_id, params.project_id, params.all_projects) {
+            (Some(target_id), None, false) => {
                 let targets = db.get_targets_by_ids(&[target_id]).map_err(AppError::db)?;
                 if targets.is_empty() {
                     return Err(AppError::BadRequest(format!(
@@ -3633,17 +3634,20 @@ pub async fn analyze_sequence(
                         target_id
                     )));
                 }
-                targets
+                Some(std::collections::HashSet::from([target_id]))
             }
-            (None, Some(project_id)) => db
-                .get_targets_with_images(project_id)
-                .map_err(AppError::db)?
-                .into_iter()
-                .map(|(target, _, _, _)| target)
-                .collect(),
+            (None, Some(project_id), false) => Some(
+                db.get_targets_with_images(project_id)
+                    .map_err(AppError::db)?
+                    .into_iter()
+                    .map(|(target, _, _, _)| target.id)
+                    .collect(),
+            ),
+            (None, None, true) => None,
             _ => {
                 return Err(AppError::BadRequest(
-                    "Specify exactly one of target_id or project_id".to_string(),
+                    "Specify exactly one of target_id, project_id, or all_projects=true"
+                        .to_string(),
                 ));
             }
         };
@@ -3651,16 +3655,14 @@ pub async fn analyze_sequence(
         let mut resolver =
             crate::acquisition_context::FramingResolver::new(&conn).map_err(AppError::db)?;
         let mut images_data = Vec::new();
-        let target_ids = targets
-            .iter()
-            .map(|target| target.id)
-            .collect::<std::collections::HashSet<_>>();
         let mut expected_by_image = std::collections::HashMap::new();
         let all_images = db
             .query_images_scoped(None, params.project_id, params.target_id, None, 0)
             .map_err(AppError::db)?;
         for image in all_images.into_iter().filter(|(image, _, _)| {
-            target_ids.contains(&image.target_id)
+            target_ids
+                .as_ref()
+                .is_none_or(|target_ids| target_ids.contains(&image.target_id))
                 && filter_name
                     .as_ref()
                     .is_none_or(|filter| image.filter_name == *filter)

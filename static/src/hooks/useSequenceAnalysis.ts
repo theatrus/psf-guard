@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type {
   ImageQualityResult,
+  DatabaseSequenceAnalysisRequest,
   ProjectSequenceAnalysisRequest,
   SequenceAnalysisRequest,
 } from '../api/types';
@@ -40,8 +41,9 @@ export function useImageQuality(dbId: string | null | undefined, imageId: number
 }
 
 /**
- * Load Sequence quality for a Grid scope in one request. Project scope is
- * handled on the server so a page never issues one analysis request per card.
+ * Load Sequence quality for a Grid scope in one request. The server keeps
+ * target/filter comparison groups separate even for project and database
+ * scopes, so the page never issues one analysis request per card.
  */
 export function useScopedQuality(
   dbId: string | null | undefined,
@@ -49,18 +51,23 @@ export function useScopedQuality(
   targetId: number | null | undefined,
   filterName?: string,
 ) {
-  const request: SequenceAnalysisRequest | ProjectSequenceAnalysisRequest | null = targetId != null
-    ? { target_id: targetId, filter_name: filterName }
-    : projectId != null
-      ? { project_id: projectId, filter_name: filterName }
-      : null;
+  const request:
+    | SequenceAnalysisRequest
+    | ProjectSequenceAnalysisRequest
+    | DatabaseSequenceAnalysisRequest = targetId != null
+      ? { target_id: targetId, filter_name: filterName }
+      : projectId != null
+        ? { project_id: projectId, filter_name: filterName }
+        : { all_projects: true, filter_name: filterName };
   const queryKey = targetId != null
     ? ['db', dbId, 'sequence-analysis', targetId, filterName]
-    : ['db', dbId, 'sequence-analysis', 'project', projectId, filterName];
+    : projectId != null
+      ? ['db', dbId, 'sequence-analysis', 'project', projectId, filterName]
+      : ['db', dbId, 'sequence-analysis', 'all-projects', filterName];
   const query = useQuery({
     queryKey,
-    queryFn: () => apiClient.analyzeSequence(dbId!, request!),
-    enabled: !!dbId && request !== null,
+    queryFn: () => apiClient.analyzeSequence(dbId!, request),
+    enabled: !!dbId,
     staleTime: 60000,
   });
 
@@ -75,6 +82,5 @@ export function useScopedQuality(
     qualityByImage,
     isLoading: query.isLoading,
     error: query.error,
-    isScoped: request !== null,
   };
 }

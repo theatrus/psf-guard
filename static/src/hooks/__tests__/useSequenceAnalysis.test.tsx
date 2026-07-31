@@ -175,11 +175,13 @@ describe('useScopedQuality', () => {
     );
   });
 
-  it('keeps All Projects unscored without starting a database-wide analysis', () => {
+  it('loads All Projects scores in one database-wide request', async () => {
     let requests = 0;
+    let allProjects: string | null = null;
     server.use(
-      http.get('/api/db/:dbId/analysis/sequence', () => {
+      http.get('/api/db/:dbId/analysis/sequence', ({ request }) => {
         requests += 1;
+        allProjects = new URL(request.url).searchParams.get('all_projects');
         return HttpResponse.json(normalFixture);
       }),
     );
@@ -188,8 +190,8 @@ describe('useScopedQuality', () => {
       wrapper: createWrapper(),
     });
 
-    expect(result.current.isScoped).toBe(false);
-    expect(result.current.qualityByImage.size).toBe(0);
-    expect(requests).toBe(0);
+    await waitFor(() => expect(result.current.qualityByImage.size).toBeGreaterThan(0));
+    expect(allProjects).toBe('true');
+    expect(requests).toBe(1);
   });
 });
