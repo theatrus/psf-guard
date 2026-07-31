@@ -12,12 +12,18 @@ export default function MainView() {
   const params = useParams();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { dbId } = useDbProjectTarget();
+  const { dbId, projectId, targetId } = useDbProjectTarget();
 
   // Determine current view mode from URL
   const isDetailView = location.pathname.startsWith('/detail/');
   const isComparisonView = location.pathname.startsWith('/compare/');
   const detailReturnView = imageDetailReturnView(searchParams);
+  const requestedQualityFilter = searchParams.get(
+    detailReturnView === 'sequence' ? 'filterName' : 'filter',
+  );
+  const qualityFilterName = requestedQualityFilter && requestedQualityFilter !== 'all'
+    ? requestedQualityFilter
+    : undefined;
 
   const imageId = params.imageId ? parseInt(params.imageId, 10) : undefined;
   const leftImageId = params.leftImageId ? parseInt(params.leftImageId, 10) : undefined;
@@ -160,6 +166,9 @@ export default function MainView() {
           <ImageDetailView
             dbId={dbId}
             imageId={imageId}
+            projectId={projectId}
+            targetId={targetId}
+            qualityFilterName={qualityFilterName}
             onClose={navigation.closeDetail}
             onNext={navigation.goToNext}
             onPrevious={navigation.goToPrevious}

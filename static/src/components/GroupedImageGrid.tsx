@@ -37,7 +37,7 @@ import {
   type GridNavigationDirection,
 } from '../utils/gridNavigation';
 import { thumbnailGridColumns } from '../utils/thumbnailSizing';
-import { useGridQuality } from '../hooks/useSequenceAnalysis';
+import { useScopedQuality } from '../hooks/useSequenceAnalysis';
 
 interface GroupedImageGridProps {
   useLazyImages?: boolean;
@@ -158,12 +158,37 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     return Array.from(filterSet).sort();
   }, [allImages]);
 
-  const { qualityByImage } = useGridQuality(
+  const quality = useScopedQuality(
     dbId,
     projectId,
     targetId,
     filters.filterName === 'all' ? undefined : filters.filterName,
   );
+  let qualityStatus = {
+    label: 'Quality: unscored',
+    title: 'No sequence score is available for this scope. Analyze Quality from a target Sequence view to add pixel evidence.',
+  };
+  if (!quality.isScoped) {
+    qualityStatus = {
+      label: 'Quality: unscored — choose a project',
+      title: 'All Projects does not run a database-wide sequence analysis. Choose a project or target to load quality scores and reasons.',
+    };
+  } else if (quality.isLoading) {
+    qualityStatus = {
+      label: 'Quality: loading',
+      title: 'Loading cached sequence scores and reasons for this scope.',
+    };
+  } else if (quality.error) {
+    qualityStatus = {
+      label: 'Quality: unavailable',
+      title: 'Sequence quality could not be loaded for this scope.',
+    };
+  } else if (quality.qualityByImage.size > 0) {
+    qualityStatus = {
+      label: `Quality: ${quality.qualityByImage.size} scored`,
+      title: 'Sequence scores and reasons are available for these images.',
+    };
+  }
 
   // Determine if we're in multi-project mode
   const isMultiProjectMode = projectId === null;
@@ -779,6 +804,10 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                 {filters.status !== 'all' && ` • ${filters.status}`}
                 {filters.filterName !== 'all' && ` • ${filters.filterName}`}
                 {filters.searchTerm && ` • "${filters.searchTerm}"`}
+                {' • '}
+                <span className="grid-quality-state" title={qualityStatus.title}>
+                  {qualityStatus.label}
+                </span>
               </div>
               <div
                 className={`selection-action-bar ${selectedImages.size > 1 ? 'active' : ''}`}
@@ -892,7 +921,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                           <CardComponent
                             dbId={dbId!}
                             image={image}
-                            quality={qualityByImage.get(image.id)}
+                            quality={quality.qualityByImage.get(image.id)}
+                            qualityPresentation="compact"
                             isSelected={
                               selectedImages.has(image.id) ||
                               image.id === activeImageId

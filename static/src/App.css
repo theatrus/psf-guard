@@ -1314,6 +1314,12 @@
   color: var(--color-text-lighter);
 }
 
+.grid-quality-state {
+  display: inline-block;
+  min-width: 10rem;
+  color: var(--color-text-muted);
+}
+
 .reject-reason-inline {
   font-size: 0.85rem;
   color: var(--color-error-light);
@@ -1888,6 +1894,13 @@
 
 .detail-quality-reason .quality-reason-text {
   font-size: 0.82rem;
+}
+
+.detail-quality-status {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
 }
 
 .info-section dl {
@@ -5644,6 +5657,18 @@
 .sequence-reason-trigger:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
+}
+
+.card-quality-reason-overlay {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 6;
+}
+
+.card-quality-reason-overlay .sequence-reason-trigger {
+  margin-top: 0;
+  background: color-mix(in srgb, var(--color-bg-elevated) 88%, transparent);
 }
 
 .sequence-reason-popover {

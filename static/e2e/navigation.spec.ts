@@ -584,18 +584,15 @@ test('Sequence shows long score reasons in a popover without resizing the card',
 test('quality reasons remain available in Grid and image details', async ({ page }) => {
   const reviewReason = 'Tracking error: elongated stars';
   const evidence = 'HFR and eccentricity are poor compared with this capture sequence.';
+  let perImageQualityRequests = 0;
+  page.on('request', (request) => {
+    if (request.url().includes('/analysis/image/')) perImageQualityRequests += 1;
+  });
   await page.route(`**/api/db/${dbId}/analysis/sequence*`, async (route) => {
     const response = await route.fetch();
     const body = await response.json();
     body.data.sequences[0].images[0].regrade_reason = reviewReason;
     body.data.sequences[0].images[0].details = evidence;
-    await route.fulfill({ response, json: body });
-  });
-  await page.route(`**/api/db/${dbId}/analysis/image/1`, async (route) => {
-    const response = await route.fetch();
-    const body = await response.json();
-    body.data.quality.regrade_reason = reviewReason;
-    body.data.quality.details = evidence;
     await route.fulfill({ response, json: body });
   });
 
@@ -613,6 +610,23 @@ test('quality reasons remain available in Grid and image details', async ({ page
   await expect(detail.getByRole('heading', { name: 'Quality analysis' })).toBeVisible();
   await expect(detail).toContainText(reviewReason);
   await expect(detail).toContainText(evidence);
+  expect(perImageQualityRequests).toBe(0);
+});
+
+test('All Projects explains that quality remains unscored without a project scope', async ({
+  page,
+}) => {
+  let sequenceRequests = 0;
+  page.on('request', (request) => {
+    if (request.url().includes('/analysis/sequence')) sequenceRequests += 1;
+  });
+
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}`);
+  await expect(page.locator('.image-card')).toHaveCount(4, { timeout: 15_000 });
+  const state = page.locator('.grid-quality-state');
+  await expect(state).toHaveText('Quality: unscored — choose a project');
+  await expect(state).toHaveAttribute('title', /does not run a database-wide sequence analysis/);
+  expect(sequenceRequests).toBe(0);
 });
 
 test('Sequence chart Shift-click selects a visible range', async ({ page }) => {

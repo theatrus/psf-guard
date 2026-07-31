@@ -21,6 +21,7 @@ export interface ImageCardProps {
   onDoubleClick: () => void;
   quality?: ImageQualityResult;
   qualityScoreScope?: QualityScoreScope;
+  qualityPresentation?: 'full' | 'compact';
   lazyPreview?: boolean;
   selectionEffects?: boolean;
   className?: string;
@@ -34,6 +35,7 @@ export default function ImageCard({
   onDoubleClick,
   quality,
   qualityScoreScope = 'capture_sequence',
+  qualityPresentation = 'full',
   lazyPreview = false,
   selectionEffects = true,
   className = '',
@@ -139,6 +141,15 @@ export default function ImageCard({
             {formatCategory(quality.category)}
           </div>
         )}
+        {qualityPresentation === 'compact'
+          && (quality?.regrade_reason || quality?.details) && (
+          <div className="card-quality-reason-overlay">
+            <QualityReasonPopover
+              reason={quality.regrade_reason}
+              details={quality.details}
+            />
+          </div>
+        )}
       </div>
       <div className="image-info">
         <h3>{image.target_name}</h3>
@@ -150,7 +161,7 @@ export default function ImageCard({
             {stats.starCount && <span className="stat-stars">★ {stats.starCount}</span>}
           </div>
         )}
-        {quality && (
+        {qualityPresentation === 'full' && quality && (
           <span
             className="sequence-score-basis"
             title={qualityScoreDescription(quality, qualityScoreScope)}
@@ -164,13 +175,15 @@ export default function ImageCard({
             <span className="reject-reason-inline"> - {image.reject_reason}</span>
           )}
         </div>
-        {quality?.normalized_metrics.spatial_coverage != null
+        {qualityPresentation === 'full'
+          && quality?.normalized_metrics.spatial_coverage != null
           && quality.normalized_metrics.spatial_coverage < 0.9 && (
           <span className="sequence-image-coverage" title="Spatial star coverage (1.0 = stars across the whole frame)">
             coverage {quality.normalized_metrics.spatial_coverage.toFixed(2)}
           </span>
         )}
-        {quality?.pointing?.field_fraction_offset != null && (
+        {qualityPresentation === 'full'
+          && quality?.pointing?.field_fraction_offset != null && (
           <span
             className={quality.regrade_reason ? 'analysis-signal danger' : 'analysis-signal'}
             title={`Solved target offset: ${quality.pointing.separation_arcsec?.toFixed(0) ?? '?'} arcsec`}
@@ -178,7 +191,7 @@ export default function ImageCard({
             offset {(quality.pointing.field_fraction_offset * 100).toFixed(0)}% field
           </span>
         )}
-        {quality?.pointing?.solve_failed && (
+        {qualityPresentation === 'full' && quality?.pointing?.solve_failed && (
           <span
             className="analysis-signal warning"
             title={quality.pointing.error || (quality.pointing.image_quality_evidence
@@ -188,7 +201,8 @@ export default function ImageCard({
             {quality.pointing.image_quality_evidence ? 'unsolved' : 'solve unavailable'}
           </span>
         )}
-        {quality?.satellite && (quality.satellite.potentially_bright_count > 0
+        {qualityPresentation === 'full' && quality?.satellite
+          && (quality.satellite.potentially_bright_count > 0
           || quality.satellite.pixel_aligned_count > 0) && (
           <span
             className={quality.satellite.pixel_aligned_high_risk_count > 0
@@ -207,7 +221,8 @@ export default function ImageCard({
                   : 'possible'}
           </span>
         )}
-        {(quality?.regrade_reason || quality?.details) && (
+        {qualityPresentation === 'full'
+          && (quality?.regrade_reason || quality?.details) && (
           <QualityReasonPopover
             reason={quality.regrade_reason}
             details={quality.details}

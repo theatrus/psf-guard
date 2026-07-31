@@ -14,7 +14,7 @@ import AstrometryOverlay from './AstrometryOverlay';
 import SatellitePanel from './SatellitePanel';
 import SatelliteTrackOverlay from './SatelliteTrackOverlay';
 import ImageFileLocation from './ImageFileLocation';
-import { useImageQuality } from '../hooks/useSequenceAnalysis';
+import { useScopedQuality } from '../hooks/useSequenceAnalysis';
 import QualityAnalysisSummary from './QualityAnalysisSummary';
 import {
   colorPreviewEnabled,
@@ -25,6 +25,9 @@ import {
 interface ImageDetailViewProps {
   dbId: string;
   imageId: number;
+  projectId?: number | null;
+  targetId?: number | null;
+  qualityFilterName?: string;
   onClose: () => void;
   onNext: () => void;
   onPrevious: () => void;
@@ -47,6 +50,9 @@ interface ImageDetailViewProps {
 export default function ImageDetailView({
   dbId,
   imageId,
+  projectId,
+  targetId,
+  qualityFilterName,
   onClose,
   onNext,
   onPrevious,
@@ -169,8 +175,17 @@ export default function ImageDetailView({
     placeholderData: (previousData) => previousData, // Keep showing previous image while loading new one
   });
 
-  const { data: qualityContext } = useImageQuality(dbId, imageId);
-  const quality = qualityContext?.quality;
+  const qualityScope = useScopedQuality(dbId, projectId, targetId, qualityFilterName);
+  const quality = qualityScope.qualityByImage.get(imageId);
+  const qualityStatus = !qualityScope.isScoped
+    ? 'Quality scores and reasons are not calculated in All Projects. Choose a project or target to load them.'
+    : qualityScope.isLoading
+      ? 'Loading the sequence quality score and reason…'
+      : qualityScope.error
+        ? 'Sequence quality is unavailable for this scope.'
+        : quality
+          ? undefined
+          : 'No sequence score is available for this image.';
 
   const {
     data: astrometry,
@@ -752,7 +767,7 @@ export default function ImageDetailView({
               )}
             </div>
 
-            <QualityAnalysisSummary quality={quality} />
+            <QualityAnalysisSummary quality={quality} statusMessage={qualityStatus} />
 
             <AstrometryPanel
               analysis={astrometry}

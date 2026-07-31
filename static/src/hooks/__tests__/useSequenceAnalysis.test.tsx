@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
-import { useGridQuality, useSequenceAnalysis, useImageQuality } from '../useSequenceAnalysis';
+import { useScopedQuality, useSequenceAnalysis, useImageQuality } from '../useSequenceAnalysis';
 import normalFixture from '../../__fixtures__/sequence-analysis-normal.json';
 import imageQualityFixture from '../../__fixtures__/image-quality-context.json';
 
@@ -148,7 +148,7 @@ describe('useImageQuality', () => {
   });
 });
 
-describe('useGridQuality', () => {
+describe('useScopedQuality', () => {
   it('loads one project analysis and indexes results by image', async () => {
     let requests = 0;
     let projectId: string | null = null;
@@ -160,7 +160,7 @@ describe('useGridQuality', () => {
       }),
     );
 
-    const { result } = renderHook(() => useGridQuality('test', 7, undefined), {
+    const { result } = renderHook(() => useScopedQuality('test', 7, undefined), {
       wrapper: createWrapper(),
     });
 
@@ -173,5 +173,23 @@ describe('useGridQuality', () => {
     expect(result.current.qualityByImage.get(1)?.details).toBe(
       normalFixture.data.sequences[0].images[0].details,
     );
+  });
+
+  it('keeps All Projects unscored without starting a database-wide analysis', () => {
+    let requests = 0;
+    server.use(
+      http.get('/api/db/:dbId/analysis/sequence', () => {
+        requests += 1;
+        return HttpResponse.json(normalFixture);
+      }),
+    );
+
+    const { result } = renderHook(() => useScopedQuality('test', null, null), {
+      wrapper: createWrapper(),
+    });
+
+    expect(result.current.isScoped).toBe(false);
+    expect(result.current.qualityByImage.size).toBe(0);
+    expect(requests).toBe(0);
   });
 });

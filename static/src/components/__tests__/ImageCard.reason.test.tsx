@@ -83,4 +83,24 @@ describe('ImageCard quality reason', () => {
     expect(screen.queryByRole('dialog', { name: 'Quality reason' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Show quality reason' })).toHaveFocus();
   });
+
+  it('keeps compact Grid quality controls out of the card body', () => {
+    const { container } = render(
+      <ImageCard
+        dbId="db"
+        image={image}
+        isSelected={false}
+        onClick={() => {}}
+        onDoubleClick={() => {}}
+        quality={quality}
+        qualityPresentation="compact"
+        selectionEffects={false}
+      />
+    );
+
+    expect(container.querySelector('.quality-badge')).toHaveTextContent('42');
+    expect(container.querySelector('.sequence-score-basis')).not.toBeInTheDocument();
+    expect(container.querySelector('.image-info .sequence-reason-trigger')).not.toBeInTheDocument();
+    expect(container.querySelector('.image-preview .sequence-reason-trigger')).toBeInTheDocument();
+  });
 });

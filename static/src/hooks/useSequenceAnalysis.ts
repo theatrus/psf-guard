@@ -43,7 +43,7 @@ export function useImageQuality(dbId: string | null | undefined, imageId: number
  * Load Sequence quality for a Grid scope in one request. Project scope is
  * handled on the server so a page never issues one analysis request per card.
  */
-export function useGridQuality(
+export function useScopedQuality(
   dbId: string | null | undefined,
   projectId: number | null | undefined,
   targetId: number | null | undefined,
@@ -71,5 +71,10 @@ export function useGridQuality(
     }
   }
 
-  return { qualityByImage, isLoading: query.isLoading, error: query.error };
+  return {
+    qualityByImage,
+    isLoading: query.isLoading,
+    error: query.error,
+    isScoped: request !== null,
+  };
 }

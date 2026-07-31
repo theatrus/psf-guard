@@ -31,11 +31,17 @@ describe('QualityAnalysisSummary', () => {
     expect(screen.getByText(quality.details!)).toBeInTheDocument();
   });
 
-  it('renders nothing when analysis has no reason', () => {
-    const { container } = render(
+  it('says when a scored image has no specific issue', () => {
+    render(
       <QualityAnalysisSummary quality={{ ...quality, regrade_reason: undefined, details: null }} />,
     );
 
-    expect(container).toBeEmptyDOMElement();
+    expect(screen.getByText('No specific quality issue was identified.')).toBeInTheDocument();
+  });
+
+  it('explains why an image has no score', () => {
+    render(<QualityAnalysisSummary statusMessage="Choose a project to load quality." />);
+
+    expect(screen.getByText('Choose a project to load quality.')).toBeInTheDocument();
   });
 });
