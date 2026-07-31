@@ -21,6 +21,7 @@ pub mod state;
 pub mod static_file_service;
 pub mod sync_preview;
 pub mod update_notice;
+pub mod user_admin;
 
 use anyhow::{Context, Result};
 use axum::{
@@ -423,6 +424,14 @@ async fn run_server_internal(
         .route("/auth/status", get(auth::status))
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
+        .route(
+            "/auth/users",
+            get(user_admin::list_users).post(user_admin::create_user),
+        )
+        .route(
+            "/auth/users/{username}",
+            put(user_admin::update_user).delete(user_admin::remove_user),
+        )
         .route("/info", get(handlers::get_server_info))
         .route("/update-notice", get(handlers::get_update_notice))
         .route(

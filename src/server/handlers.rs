@@ -67,6 +67,7 @@ pub async fn get_server_info(
             .map(|Extension(access)| access)
             .unwrap_or(crate::server::auth::RequestAccess {
                 role: crate::server::auth::AccessRole::ReadWrite,
+                username: None,
             });
     let info = ServerInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),

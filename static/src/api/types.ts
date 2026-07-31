@@ -742,6 +742,23 @@ export interface AuthStatus {
   can_compute: boolean;
 }
 
+export interface AuthUserSummary {
+  username: string;
+  role: AccessRole;
+  managed: boolean;
+}
+
+export interface CreateAuthUserRequest {
+  username: string;
+  role: AccessRole;
+  password: string;
+}
+
+export interface UpdateAuthUserRequest {
+  role: AccessRole;
+  password?: string;
+}
+
 export interface ReleaseNotice {
   schema_version: number;
   version: string;

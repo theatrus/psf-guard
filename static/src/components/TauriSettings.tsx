@@ -8,6 +8,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
 import type { DbEntry, DbRegistry } from '../utils/tauri';
 import { apiClient } from '../api/client';
+import { useAccess } from '../auth/access';
 import type { SettingsIntent } from '../utils/settingsIntent';
 import type { DatabaseSummary } from '../api/types';
 import { describeImportProgress, useImportJob } from '../hooks/useImportJob';
@@ -16,14 +17,13 @@ import RemotePeerSync from './RemotePeerSync';
 import SchedulerSyncControls from './SchedulerSyncControls';
 import SeizaCatalogControls from './SeizaCatalogControls';
 import CalibrationLibrarySummary from './CalibrationLibrarySummary';
+import UserManagement from './UserManagement';
 import './TauriSettings.css';
 
 /**
- * Settings is three unrelated jobs, not one long page: pointing PSF Guard at
- * databases, installing Seiza catalogs, and moving data between catalogs.
- * Tabs name them, so each is findable without scrolling past the other two.
+ * Settings groups unrelated jobs into named tabs so each stays easy to find.
  */
-type SettingsTab = 'databases' | 'catalogs' | 'sync';
+type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'users';
 
 interface TauriSettingsProps {
   isOpen: boolean;
@@ -57,6 +57,7 @@ export default function TauriSettings({
   initialIntent = null,
 }: TauriSettingsProps) {
   const isTauri = isTauriApp();
+  const access = useAccess();
   const queryClient = useQueryClient();
   const { data: serverInfo } = useQuery({
     queryKey: ['serverInfo'],
@@ -590,6 +591,9 @@ export default function TauriSettings({
       : []),
     ...(managementAllowed && hasDatabases
       ? ([{ id: 'sync', label: 'Sync' }] as const)
+      : []),
+    ...(!isTauri && access.status.authentication_required
+      ? ([{ id: 'users', label: 'Users' }] as const)
       : []),
   ];
   // Derive rather than store: removing the last database takes the Sync tab
@@ -1140,6 +1144,10 @@ export default function TauriSettings({
               <SchedulerSyncControls databases={databases} disabled={isApplying} />
               <RemotePeerSync databases={databases} disabled={isApplying} />
             </>
+          )}
+
+          {currentTab === 'users' && (
+            <UserManagement currentUsername={access.status.username} />
           )}
         </div>
 

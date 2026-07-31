@@ -72,6 +72,12 @@ impl AuthUserRecord {
         &self.password_hash
     }
 
+    pub fn set_password(&mut self, password: &str) -> Result<()> {
+        validate_password(password)?;
+        self.password_hash = hash_password_without_policy(password)?;
+        Ok(())
+    }
+
     #[cfg(test)]
     fn verify_password(&self, password: &str) -> bool {
         verify_password_hash(&self.password_hash, password)
@@ -207,6 +213,10 @@ impl AuthRegistry {
         Ok(())
     }
 
+    pub fn find_mut(&mut self, username: &str) -> Option<&mut AuthUserRecord> {
+        self.users.iter_mut().find(|user| user.username == username)
+    }
+
     fn validate(&self) -> Result<()> {
         if self.schema_version != CURRENT_SCHEMA_VERSION {
             anyhow::bail!(
@@ -233,16 +243,20 @@ pub fn validate_username(username: &str) -> Result<()> {
     if username.len() > 128 {
         anyhow::bail!("username cannot exceed 128 bytes");
     }
-    if username.contains(':') || username.chars().any(char::is_control) {
-        anyhow::bail!("username cannot contain ':' or control characters");
+    if username
+        .chars()
+        .any(|character| matches!(character, ':' | '/' | '\\') || character.is_control())
+    {
+        anyhow::bail!("username cannot contain ':', '/', '\\', or control characters");
     }
     Ok(())
 }
 
 pub fn validate_password(password: &str) -> Result<()> {
-    if !(MIN_PASSWORD_LENGTH..=MAX_PASSWORD_LENGTH).contains(&password.len()) {
+    if password.chars().count() < MIN_PASSWORD_LENGTH || password.len() > MAX_PASSWORD_LENGTH {
         anyhow::bail!(
-            "password must be between {MIN_PASSWORD_LENGTH} and {MAX_PASSWORD_LENGTH} bytes"
+            "password must be at least {MIN_PASSWORD_LENGTH} characters and no more than \
+             {MAX_PASSWORD_LENGTH} bytes"
         );
     }
     if password.chars().any(char::is_control) {

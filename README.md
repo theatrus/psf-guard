@@ -894,6 +894,10 @@ and compute access. With no users in either source, the server stays open as
 before. Tauri always stays unauthenticated on its localhost-only server. See
 [Server authentication](docs/AUTHENTICATION.md).
 
+Signed-in editors can also manage these accounts from the separate **Users**
+tab in Settings. Changes made there take effect at once; TOML bootstrap
+accounts appear for reference but stay file-managed.
+
 Command-line arguments override the config file. (A legacy
 `[database]`/`[images]` section is still parsed but ignored in server mode —
 databases come from the registry.)

@@ -43,6 +43,21 @@ The CLI refuses to remove the final managed user unless you pass
 browser authentication off after restart. Restart the server after any user
 change; active sessions stay valid until then.
 
+## Manage users in Settings
+
+An editor signed in to a web server gets a separate **Users** tab in Settings.
+It can add users, change roles or passwords, and remove managed users. Changes
+take effect at once. Changing or removing an account signs out its existing
+sessions.
+
+![PSF Guard user management](server-users.png)
+
+The tab shows TOML bootstrap accounts so an editor can see every account with
+access, but it does not edit them. Change those accounts in the server TOML.
+The UI refuses to remove the account used by the current session or leave the
+server without an editor. Tauri does not show the tab because its localhost
+server does not use browser authentication.
+
 ## Server settings and bootstrap accounts
 
 The CLI registry is the normal way to manage users. The optional TOML block

@@ -14,6 +14,9 @@ import type {
   PreviewOptions,
   ServerInfo,
   AuthStatus,
+  AuthUserSummary,
+  CreateAuthUserRequest,
+  UpdateAuthUserRequest,
   UpdateNoticeStatus,
   SchedulerSyncRequest,
   SchedulerSyncPreviewResponse,
@@ -168,6 +171,45 @@ export const apiClient = {
   logout: async (): Promise<void> => {
     const apiInstance = await getApi();
     await apiInstance.post('/auth/logout');
+  },
+
+  getAuthUsers: async (): Promise<AuthUserSummary[]> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<AuthUserSummary[]>>('/auth/users');
+    if (!data.data) throw new Error(data.error || 'Failed to load users');
+    return data.data;
+  },
+
+  createAuthUser: async (request: CreateAuthUserRequest): Promise<AuthUserSummary[]> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<AuthUserSummary[]>>(
+      '/auth/users',
+      request
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to add user');
+    return data.data;
+  },
+
+  updateAuthUser: async (
+    username: string,
+    request: UpdateAuthUserRequest
+  ): Promise<AuthUserSummary[]> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<AuthUserSummary[]>>(
+      '/auth/users/' + encodeURIComponent(username),
+      request
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to update user');
+    return data.data;
+  },
+
+  removeAuthUser: async (username: string): Promise<AuthUserSummary[]> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.delete<ApiResponse<AuthUserSummary[]>>(
+      '/auth/users/' + encodeURIComponent(username)
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to remove user');
+    return data.data;
   },
 
   // ── Global ────────────────────────────────────────────────────────────────

@@ -10,13 +10,14 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
+    collections::{HashMap, HashSet},
+    path::Path as FilePath,
+    sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
 
 use crate::{
-    auth_registry::{validate_username, AuthRegistry},
+    auth_registry::{validate_username, AuthRegistry, AuthUserRecord},
     config::{ServerAuthConfig, ServerAuthCredentialConfig},
     server::{api::ApiResponse, state::AppState},
 };
@@ -32,13 +33,15 @@ const LOGIN_ATTEMPT_BURST: f64 = 4.0;
 #[derive(Debug, Clone)]
 pub struct RequestAccess {
     pub role: AccessRole,
+    pub username: Option<String>,
 }
 
 #[derive(Clone)]
 pub struct ServerAuth {
-    users: Vec<AuthUser>,
+    users: Arc<RwLock<Vec<AuthUser>>>,
     sessions: Arc<Mutex<HashMap<String, Session>>>,
     login_rate_limit: Arc<Mutex<LoginRateLimit>>,
+    user_management_lock: Arc<Mutex<()>>,
     session_ttl: Duration,
     secure_cookie: bool,
     allow_read_only_compute: bool,
@@ -49,6 +52,14 @@ struct AuthUser {
     username: String,
     password_hash: String,
     role: AccessRole,
+    managed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AuthUserSummary {
+    pub username: String,
+    pub role: AccessRole,
+    pub managed: bool,
 }
 
 #[derive(Clone)]
@@ -71,8 +82,10 @@ impl std::fmt::Debug for ServerAuth {
                 "users",
                 &self
                     .users
+                    .read()
+                    .unwrap()
                     .iter()
-                    .map(|user| (&user.username, user.role))
+                    .map(|user| (&user.username, user.role, user.managed))
                     .collect::<Vec<_>>(),
             )
             .field("session_ttl", &self.session_ttl)
@@ -98,6 +111,7 @@ impl ServerAuth {
                 username: user.username.clone(),
                 password_hash: user.password_hash().to_string(),
                 role: user.role,
+                managed: true,
             })
             .collect::<Vec<_>>();
         if let Some(config) = config {
@@ -127,12 +141,13 @@ impl ServerAuth {
             anyhow::bail!("server.auth.session_hours must be between 1 and 2160");
         }
         Ok(Some(Self {
-            users,
+            users: Arc::new(RwLock::new(users)),
             sessions: Arc::new(Mutex::new(HashMap::new())),
             login_rate_limit: Arc::new(Mutex::new(LoginRateLimit {
                 available: LOGIN_ATTEMPT_BURST,
                 last_refill: Instant::now(),
             })),
+            user_management_lock: Arc::new(Mutex::new(())),
             session_ttl: Duration::from_secs(session_hours * 60 * 60),
             secure_cookie: config.is_none_or(|config| config.secure_cookie),
             allow_read_only_compute: config.is_some_and(|config| config.allow_read_only_compute),
@@ -140,18 +155,18 @@ impl ServerAuth {
     }
 
     async fn authenticate_password(&self, username: &str, password: &str) -> Option<AuthUser> {
-        let user = self
-            .users
-            .iter()
-            .find(|user| user.username == username)
-            .cloned();
-        // Check a real hash even for an unknown name. This keeps a caller from
-        // learning valid usernames from the large Argon2 timing difference.
-        let password_hash = user
-            .as_ref()
-            .unwrap_or_else(|| &self.users[0])
-            .password_hash
-            .clone();
+        let (user, password_hash) = {
+            let users = self.users.read().unwrap();
+            let user = users.iter().find(|user| user.username == username).cloned();
+            // Check a real hash even for an unknown name. This keeps a caller
+            // from learning valid usernames from the Argon2 timing difference.
+            let password_hash = user
+                .as_ref()
+                .unwrap_or_else(|| &users[0])
+                .password_hash
+                .clone();
+            (user, password_hash)
+        };
         let password = password.to_string();
         let matches = tokio::task::spawn_blocking(move || {
             crate::auth_registry::verify_password_hash(&password_hash, &password)
@@ -179,7 +194,15 @@ impl ServerAuth {
         true
     }
 
-    fn create_session(&self, user: &AuthUser) -> String {
+    fn create_session(&self, user: &AuthUser) -> Option<String> {
+        let users = self.users.read().unwrap();
+        if !users.iter().any(|current| {
+            current.username == user.username
+                && current.password_hash == user.password_hash
+                && current.role == user.role
+        }) {
+            return None;
+        }
         let token = format!(
             "{}{}",
             uuid::Uuid::new_v4().simple(),
@@ -206,7 +229,7 @@ impl ServerAuth {
             sessions.remove(&oldest);
         }
         sessions.insert(token.clone(), session);
-        token
+        Some(token)
     }
 
     fn session(&self, token: &str) -> Option<Session> {
@@ -241,6 +264,125 @@ impl ServerAuth {
     fn can_compute(&self, role: AccessRole) -> bool {
         role == AccessRole::ReadWrite || self.allow_read_only_compute
     }
+
+    pub(crate) fn user_summaries(&self) -> Vec<AuthUserSummary> {
+        let mut users = self
+            .users
+            .read()
+            .unwrap()
+            .iter()
+            .map(|user| AuthUserSummary {
+                username: user.username.clone(),
+                role: user.role,
+                managed: user.managed,
+            })
+            .collect::<Vec<_>>();
+        users.sort_by(|left, right| left.username.cmp(&right.username));
+        users
+    }
+
+    fn update_managed_users<T>(
+        &self,
+        registry_path: &FilePath,
+        update: impl FnOnce(&mut AuthRegistry) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        let _guard = self.user_management_lock.lock().unwrap();
+        let mut registry = AuthRegistry::load(registry_path)?;
+        let result = update(&mut registry)?;
+        let mut users = self.users.write().unwrap();
+        let old_users = users.clone();
+        let mut next_users = old_users
+            .iter()
+            .filter(|user| !user.managed)
+            .cloned()
+            .collect::<Vec<_>>();
+        next_users.extend(registry.users.iter().map(|user| AuthUser {
+            username: user.username.clone(),
+            password_hash: user.password_hash().to_string(),
+            role: user.role,
+            managed: true,
+        }));
+        if next_users.is_empty() {
+            anyhow::bail!("cannot remove the final browser user while the server is running");
+        }
+        if !next_users
+            .iter()
+            .any(|user| user.role == AccessRole::ReadWrite)
+        {
+            anyhow::bail!("user management must keep at least one editor account");
+        }
+        let mut usernames = HashSet::new();
+        for user in &next_users {
+            if !usernames.insert(user.username.as_str()) {
+                anyhow::bail!(
+                    "browser user '{}' is also defined by a TOML bootstrap account",
+                    user.username
+                );
+            }
+        }
+
+        registry.save(registry_path)?;
+
+        let changed = old_users
+            .iter()
+            .filter(|old| old.managed)
+            .filter(|old| {
+                next_users
+                    .iter()
+                    .find(|next| next.username == old.username)
+                    .is_none_or(|next| {
+                        next.role != old.role || next.password_hash != old.password_hash
+                    })
+            })
+            .map(|user| user.username.as_str())
+            .collect::<HashSet<_>>();
+        if !changed.is_empty() {
+            self.sessions
+                .lock()
+                .unwrap()
+                .retain(|_, session| !changed.contains(session.username.as_str()));
+        }
+        *users = next_users;
+        Ok(result)
+    }
+
+    pub(crate) fn add_managed_user(
+        &self,
+        registry_path: &FilePath,
+        username: &str,
+        role: AccessRole,
+        password: &str,
+    ) -> anyhow::Result<()> {
+        let user = AuthUserRecord::new(username, role, password)?;
+        self.update_managed_users(registry_path, |registry| registry.add(user, false))
+    }
+
+    pub(crate) fn update_managed_user(
+        &self,
+        registry_path: &FilePath,
+        username: &str,
+        role: AccessRole,
+        password: Option<&str>,
+    ) -> anyhow::Result<()> {
+        self.update_managed_users(registry_path, |registry| {
+            let user = registry
+                .find_mut(username)
+                .ok_or_else(|| anyhow::anyhow!("managed user '{username}' does not exist"))?;
+            user.role = role;
+            if let Some(password) = password {
+                user.set_password(password)?;
+            }
+            Ok(())
+        })
+    }
+
+    pub(crate) fn remove_managed_user(
+        &self,
+        registry_path: &FilePath,
+        username: &str,
+    ) -> anyhow::Result<()> {
+        self.update_managed_users(registry_path, |registry| registry.remove(username))
+    }
 }
 
 impl AuthUser {
@@ -262,6 +404,7 @@ impl AuthUser {
             username: username.to_string(),
             password_hash: crate::auth_registry::hash_password_without_policy(&password)?,
             role,
+            managed: false,
         })
     }
 }
@@ -390,7 +533,16 @@ pub async fn login(
         )
             .into_response();
     };
-    let token = auth.create_session(&user);
+    let Some(token) = auth.create_session(&user) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(CACHE_CONTROL, "no-store")],
+            Json(ApiResponse::<AuthStatus>::error(
+                "The account changed during sign-in; try again".to_string(),
+            )),
+        )
+            .into_response();
+    };
     (
         StatusCode::OK,
         [
@@ -433,6 +585,7 @@ pub async fn authorize_api(
     let Some(auth) = state.server_auth() else {
         request.extensions_mut().insert(RequestAccess {
             role: AccessRole::ReadWrite,
+            username: None,
         });
         return next.run(request).await;
     };
@@ -465,9 +618,10 @@ pub async fn authorize_api(
             .into_response();
     }
 
-    request
-        .extensions_mut()
-        .insert(RequestAccess { role: session.role });
+    request.extensions_mut().insert(RequestAccess {
+        role: session.role,
+        username: Some(session.username),
+    });
     let mut response = next.run(request).await;
     mark_response_private(&mut response);
     response
@@ -584,7 +738,7 @@ mod tests {
             .await
             .is_none());
 
-        let token = auth.create_session(&viewer);
+        let token = auth.create_session(&viewer).unwrap();
         let cookie = auth.cookie(&token).to_str().unwrap().to_string();
         assert!(cookie.contains("HttpOnly"));
         assert!(cookie.contains("SameSite=Strict"));
@@ -604,12 +758,12 @@ mod tests {
             .authenticate_password("editor", "edit-secret")
             .await
             .unwrap();
-        let editor_session = auth.create_session(&editor);
-        let oldest_viewer = auth.create_session(&viewer);
+        let editor_session = auth.create_session(&editor).unwrap();
+        let oldest_viewer = auth.create_session(&viewer).unwrap();
         for _ in 1..MAX_SESSIONS_PER_USER {
-            auth.create_session(&viewer);
+            let _ = auth.create_session(&viewer);
         }
-        auth.create_session(&viewer);
+        let _ = auth.create_session(&viewer);
 
         assert!(auth.session(&oldest_viewer).is_none());
         assert!(auth.session(&editor_session).is_some());
@@ -728,5 +882,47 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(user.role, AccessRole::ReadOnly);
+    }
+
+    #[tokio::test]
+    async fn live_management_revokes_stale_sign_ins_and_keeps_an_editor() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("auth.json");
+        let mut registry = AuthRegistry::default();
+        registry
+            .add(
+                AuthUserRecord::new(
+                    "only-editor",
+                    AccessRole::ReadWrite,
+                    "managed-editor-password",
+                )
+                .unwrap(),
+                false,
+            )
+            .unwrap();
+        registry.save(&path).unwrap();
+        let auth = ServerAuth::from_sources(None, &registry).unwrap().unwrap();
+        let stale_user = auth
+            .authenticate_password("only-editor", "managed-editor-password")
+            .await
+            .unwrap();
+
+        auth.update_managed_user(
+            &path,
+            "only-editor",
+            AccessRole::ReadWrite,
+            Some("replacement-editor-password"),
+        )
+        .unwrap();
+        assert!(auth.create_session(&stale_user).is_none());
+
+        assert!(auth
+            .update_managed_user(&path, "only-editor", AccessRole::ReadOnly, None,)
+            .is_err());
+        assert!(auth.remove_managed_user(&path, "only-editor").is_err());
+        assert_eq!(
+            AuthRegistry::load(&path).unwrap().users[0].role,
+            AccessRole::ReadWrite
+        );
     }
 }

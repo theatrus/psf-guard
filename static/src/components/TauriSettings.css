@@ -327,9 +327,14 @@
   flex-shrink: 0;
 }
 
-.tauri-settings .remove-button:hover {
+.tauri-settings .remove-button:hover:not(:disabled) {
   background-color: var(--color-error);
   color: var(--color-text-primary);
+}
+
+.tauri-settings .remove-button:disabled {
+  color: var(--color-text-disabled);
+  cursor: not-allowed;
 }
 
 .tauri-settings .no-directories {
@@ -1360,4 +1365,83 @@
 .remote-peer-check,
 .remote-peer-message {
   margin: 0.5rem 0 0;
+}
+
+.tauri-settings .user-management {
+  max-width: 860px;
+}
+
+.tauri-settings .user-management-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  margin-bottom: 16px;
+}
+
+.tauri-settings .user-management-heading h3,
+.tauri-settings .user-management-heading p {
+  margin-bottom: 6px;
+}
+
+.tauri-settings .user-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--color-border-secondary);
+}
+
+.tauri-settings .user-row-main {
+  min-width: 0;
+}
+
+.tauri-settings .user-row-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.tauri-settings .user-source-badge {
+  padding: 2px 7px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 999px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.tauri-settings .user-form {
+  margin-top: 20px;
+  padding: 18px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  background: var(--color-bg-elevated);
+}
+
+.tauri-settings .user-management .status-message {
+  margin-top: 16px;
+  padding: 10px 12px;
+  border-radius: 4px;
+  background: var(--color-primary-alpha-10);
+  color: var(--color-text-primary);
+}
+
+.tauri-settings .user-management .status-message.error {
+  border: 1px solid var(--color-danger, #c44);
+}
+
+.tauri-settings .user-management-note {
+  margin-top: 20px;
+}
+
+@media (max-width: 640px) {
+  .tauri-settings .user-management-heading,
+  .tauri-settings .user-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }

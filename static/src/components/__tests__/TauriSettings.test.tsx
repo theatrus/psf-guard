@@ -4,6 +4,8 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { HttpResponse, http } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
+import { AccessContext } from '../../auth/access';
+import type { AuthUserSummary } from '../../api/types';
 import TauriSettings from '../TauriSettings';
 
 function createWrapper() {
@@ -19,6 +21,78 @@ function createWrapper() {
 }
 
 describe('TauriSettings import state', () => {
+  it('shows user management as its own tab when server login is enabled', async () => {
+    let users: AuthUserSummary[] = [
+      { username: 'editor', role: 'read_write', managed: true },
+      { username: 'recovery', role: 'read_write', managed: false },
+    ];
+    server.use(
+      http.get('/api/auth/users', () =>
+        HttpResponse.json({
+          success: true,
+          data: users,
+          error: null,
+          status: 'ready',
+        })
+      ),
+      http.post('/api/auth/users', async ({ request }) => {
+        const body = await request.json() as {
+          username: string;
+          role: 'read_only' | 'read_write';
+        };
+        users = [...users, { ...body, managed: true }];
+        return HttpResponse.json({
+          success: true,
+          data: users,
+          error: null,
+          status: 'ready',
+        });
+      })
+    );
+
+    const Wrapper = createWrapper();
+    render(
+      <AccessContext.Provider
+        value={{
+          status: {
+            authentication_required: true,
+            authenticated: true,
+            role: 'read_write',
+            username: 'editor',
+            can_compute: true,
+          },
+          canWrite: true,
+          canCompute: true,
+          logout: async () => undefined,
+        }}
+      >
+        <TauriSettings isOpen onClose={() => undefined} />
+      </AccessContext.Provider>,
+      { wrapper: Wrapper }
+    );
+
+    const usersTab = await screen.findByRole('tab', { name: 'Users' });
+    fireEvent.click(usersTab);
+    expect(
+      await screen.findByRole('heading', { name: 'Browser users' })
+    ).toBeInTheDocument();
+    expect(await screen.findByText('TOML bootstrap')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '+ Add user' }));
+    fireEvent.change(screen.getByLabelText('Username'), {
+      target: { value: 'viewer' },
+    });
+    fireEvent.change(screen.getByLabelText('Password'), {
+      target: { value: 'long-viewer-password' },
+    });
+    fireEvent.change(screen.getByLabelText('Confirm password'), {
+      target: { value: 'long-viewer-password' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save user' }));
+
+    expect(await screen.findByText('viewer')).toBeInTheDocument();
+  });
+
   it('hides catalog management on a read-only server', async () => {
     render(<TauriSettings isOpen onClose={() => undefined} />, {
       wrapper: createWrapper(),

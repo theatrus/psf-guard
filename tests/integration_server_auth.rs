@@ -10,11 +10,13 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use psf_guard::{
+    auth_registry::{AccessRole, AuthRegistry, AuthUserRecord},
     config::{ServerAuthConfig, ServerAuthCredentialConfig},
     server::{
         auth::{self, ServerAuth},
         handlers,
         state::AppState,
+        user_admin,
     },
 };
 use rusqlite::Connection;
@@ -74,6 +76,57 @@ fn app_with_auth(config: ServerAuthConfig) -> Router {
         ))
         .with_state(state);
 
+    Router::new().nest("/api", api)
+}
+
+fn managed_users_app(directory: &tempfile::TempDir) -> Router {
+    let database_registry_path = directory.path().join("config.json");
+    let auth_registry_path = AuthRegistry::path_for_database_registry(&database_registry_path);
+    let mut registry = AuthRegistry::default();
+    registry
+        .add(
+            AuthUserRecord::new("viewer", AccessRole::ReadOnly, "managed-viewer-password").unwrap(),
+            false,
+        )
+        .unwrap();
+    registry.save(&auth_registry_path).unwrap();
+    let config = ServerAuthConfig {
+        read_only: None,
+        read_write: Some(ServerAuthCredentialConfig {
+            username: "editor".into(),
+            password: Some("edit-secret".into()),
+            password_file: None,
+        }),
+        session_hours: Some(1),
+        secure_cookie: false,
+        allow_read_only_compute: false,
+    };
+    let auth = ServerAuth::from_sources(Some(&config), &registry)
+        .unwrap()
+        .unwrap();
+    let state = Arc::new(AppState::new_for_test(
+        Connection::open_in_memory().unwrap(),
+    ));
+    state.set_server_auth(Some(auth));
+    state.set_registry_path(Some(database_registry_path));
+
+    let api = Router::new()
+        .route("/auth/status", get(auth::status))
+        .route("/auth/login", post(auth::login))
+        .route("/auth/logout", post(auth::logout))
+        .route(
+            "/auth/users",
+            get(user_admin::list_users).post(user_admin::create_user),
+        )
+        .route(
+            "/auth/users/{username}",
+            axum::routing::put(user_admin::update_user).delete(user_admin::remove_user),
+        )
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            auth::authorize_api,
+        ))
+        .with_state(state);
     Router::new().nest("/api", api)
 }
 
@@ -257,4 +310,106 @@ async fn protected_api_challenges_but_remote_bearer_routes_stay_separate() {
         .body(Body::empty())
         .unwrap();
     assert_eq!(app.oneshot(remote).await.unwrap().status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn editor_manages_hashed_users_live_while_bootstrap_accounts_stay_read_only() {
+    let directory = tempfile::tempdir().unwrap();
+    let app = managed_users_app(&directory);
+    let (_, viewer_cookie, _) = login(&app, "viewer", "managed-viewer-password").await;
+    let viewer_list = Request::builder()
+        .uri("/api/auth/users")
+        .header(COOKIE, viewer_cookie)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        app.clone().oneshot(viewer_list).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let (_, editor_cookie, _) = login(&app, "editor", "edit-secret").await;
+    let list = Request::builder()
+        .uri("/api/auth/users")
+        .header(COOKIE, &editor_cookie)
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, list) = json(&app, list).await;
+    assert_eq!(list["data"][0]["username"], "editor");
+    assert_eq!(list["data"][0]["managed"], false);
+    assert_eq!(list["data"][1]["username"], "viewer");
+    assert_eq!(list["data"][1]["managed"], true);
+
+    let create = Request::builder()
+        .method(Method::POST)
+        .uri("/api/auth/users")
+        .header(COOKIE, &editor_cookie)
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "username": "guest",
+                "role": "read_only",
+                "password": "managed-guest-password"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    assert_eq!(json(&app, create).await.0, StatusCode::OK);
+    let (_, guest_cookie, _) = login(&app, "guest", "managed-guest-password").await;
+    assert!(!guest_cookie.is_empty());
+
+    let update = Request::builder()
+        .method(Method::PUT)
+        .uri("/api/auth/users/guest")
+        .header(COOKIE, &editor_cookie)
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "role": "read_write",
+                "password": "new-managed-guest-password"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    assert_eq!(json(&app, update).await.0, StatusCode::OK);
+    let old_session = Request::builder()
+        .uri("/api/auth/status")
+        .header(COOKIE, guest_cookie)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        json(&app, old_session).await.2["data"]["authenticated"],
+        false
+    );
+    assert_eq!(
+        login(&app, "guest", "managed-guest-password").await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        login(&app, "guest", "new-managed-guest-password").await.0,
+        StatusCode::OK
+    );
+
+    let remove = Request::builder()
+        .method(Method::DELETE)
+        .uri("/api/auth/users/guest")
+        .header(COOKIE, &editor_cookie)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(json(&app, remove).await.0, StatusCode::OK);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        login(&app, "guest", "new-managed-guest-password").await.0,
+        StatusCode::UNAUTHORIZED
+    );
+
+    let remove_self = Request::builder()
+        .method(Method::DELETE)
+        .uri("/api/auth/users/editor")
+        .header(COOKIE, editor_cookie)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = json(&app, remove_self).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["error"].as_str().unwrap().contains("this session"));
 }
