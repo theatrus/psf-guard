@@ -159,39 +159,34 @@ export default function UserManagement({
               <div className="user-row-title">
                 <strong>{user.username}</strong>
                 {isCurrent && <span className="user-source-badge">Current</span>}
-                {!user.managed && (
-                  <span className="user-source-badge">TOML bootstrap</span>
-                )}
               </div>
               <span className="muted">
                 {user.role === 'read_write' ? 'Editor' : 'Read only'}
               </span>
             </div>
-            {user.managed && (
-              <div className="db-row-actions">
-                <button
-                  type="button"
-                  className="browse-button"
-                  onClick={() => startEdit(user)}
-                  disabled={saving}
-                >
-                  Edit
-                </button>
-                <button
-                  type="button"
-                  className="remove-button"
-                  onClick={() => void remove(user)}
-                  disabled={saving || isCurrent}
-                  title={
-                    isCurrent
-                      ? 'You cannot remove the account used by this session'
-                      : 'Remove user'
-                  }
-                >
-                  Remove
-                </button>
-              </div>
-            )}
+            <div className="db-row-actions">
+              <button
+                type="button"
+                className="browse-button"
+                onClick={() => startEdit(user)}
+                disabled={saving}
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                className="remove-button"
+                onClick={() => void remove(user)}
+                disabled={saving || isCurrent}
+                title={
+                  isCurrent
+                    ? 'You cannot remove the account used by this session'
+                    : 'Remove user'
+                }
+              >
+                Remove
+              </button>
+            </div>
           </div>
         );
       })}
@@ -277,8 +272,7 @@ export default function UserManagement({
       {status && <div className="status-message">{status}</div>}
 
       <p className="muted user-management-note">
-        TOML bootstrap accounts appear here but must be changed in the server
-        config. User changes take effect at once.
+        User changes take effect at once.
       </p>
     </div>
   );

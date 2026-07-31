@@ -38,66 +38,41 @@ user with:
 psf-guard users remove viewer
 ```
 
-The CLI refuses to remove the final managed user unless you pass
-`--allow-empty`. Without a TOML bootstrap account, removing that user turns
-browser authentication off after restart. Restart the server after any user
-change; active sessions stay valid until then.
+The CLI refuses to remove the final user unless you pass `--allow-empty`.
+Removing that user turns browser authentication off after restart. Restart the
+server after any CLI user change; active sessions stay valid until then.
 
 ## Manage users in Settings
 
 An editor signed in to a web server gets a separate **Users** tab in Settings.
-It can add users, change roles or passwords, and remove managed users. Changes
+Editors can add users, change roles or passwords, and remove users. Changes
 take effect at once. Changing or removing an account signs out its existing
 sessions.
 
 ![PSF Guard user management](server-users.png)
 
-The tab shows TOML bootstrap accounts so an editor can see every account with
-access, but it does not edit them. Change those accounts in the server TOML.
 The UI refuses to remove the account used by the current session or leave the
 server without an editor. Tauri does not show the tab because its localhost
 server does not use browser authentication.
 
-## Server settings and bootstrap accounts
+## Server settings
 
-The CLI registry is the normal way to manage users. The optional TOML block
-sets session policy and can also hold one bootstrap or recovery account per
-role:
-
-Add one or both roles to the server TOML:
+The optional TOML block sets session policy. It does not define a second user
+list:
 
 ```toml
 [server.auth]
 session_hours = 168
 secure_cookie = true
 allow_read_only_compute = false
-
-[server.auth.read_only]
-username = "viewer"
-password_file = "/run/secrets/psf-guard-viewer"
-
-[server.auth.read_write]
-username = "editor"
-password_file = "/run/secrets/psf-guard-editor"
 ```
 
-Run `psf-guard server --config psf-guard.toml`. The browser will show a
-PSF Guard login page. A successful login creates an HttpOnly, SameSite=Strict
-session cookie. Sessions live in server memory, expire after `session_hours`,
-and end when the server restarts.
+Run `psf-guard server --config psf-guard.toml`. If `auth.json` contains users,
+the browser will show a PSF Guard login page. A successful login creates an
+HttpOnly, SameSite=Strict session cookie. Sessions live in server memory,
+expire after `session_hours`, and end when the server restarts.
 
-Use `password_file` for deployed servers. The process trims leading and
-trailing whitespace, so a final newline is safe. An inline `password` also
-works for development:
-
-```toml
-[server.auth.read_write]
-username = "editor"
-password = "development-only-password"
-```
-
-Do not set both password fields for one role. Every username across TOML and
-`auth.json` must differ. Secure cookies are the default. Set
+Secure cookies are the default. Set
 `secure_cookie = false` only for a direct HTTP development server; a browser
 will not send a Secure cookie to a plain HTTP URL.
 
@@ -146,9 +121,11 @@ continue to work when browser authentication is enabled.
 
 - Put the public server behind HTTPS. Login passwords otherwise cross the
   network in clear text.
-- Restrict password-file permissions to the PSF Guard service account.
-- On Windows, use a TOML literal string for paths with backslashes, such as
-  `password_file = 'C:\ProgramData\PSF Guard\editor-password'`.
+- Restrict `auth.json` permissions to the PSF Guard service account. PSF Guard
+  sets mode `0600` on Unix.
+- A deployment can seed a user from an existing secret with
+  `psf-guard users add editor --role read-write --password-file PATH`. PSF Guard
+  stores only the resulting hash in `auth.json`.
 - Keep `--allow-database-management` off unless browser-side database
   management is needed. An editor login does not override that gate.
 - Signing out revokes the current in-memory session. Restarting the server

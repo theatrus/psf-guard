@@ -1,4 +1,4 @@
-//! End-to-end coverage for managed server users.
+//! End-to-end coverage for server users.
 
 use std::{
     fs,
@@ -18,11 +18,11 @@ fn path_arg(path: &Path) -> String {
 }
 
 #[test]
-fn add_list_replace_and_remove_managed_users() {
+fn add_list_replace_and_remove_users() {
     let directory = tempfile::tempdir().unwrap();
     let database_registry = directory.path().join("test-config.json");
     let password_file = directory.path().join("password");
-    fs::write(&password_file, "long-managed-password\n").unwrap();
+    fs::write(&password_file, "long-user-password\n").unwrap();
     let registry_arg = path_arg(&database_registry);
     let password_arg = path_arg(&password_file);
 
@@ -47,7 +47,7 @@ fn add_list_replace_and_remove_managed_users() {
     let contents = fs::read_to_string(&auth_path).unwrap();
     assert!(contents.contains("\"username\": \"viewer\""));
     assert!(contents.contains("\"role\": \"read_only\""));
-    assert!(!contents.contains("long-managed-password"));
+    assert!(!contents.contains("long-user-password"));
     assert!(contents.contains("$argon2"));
     #[cfg(unix)]
     {

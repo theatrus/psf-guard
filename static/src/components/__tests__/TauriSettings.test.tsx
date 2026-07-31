@@ -23,8 +23,8 @@ function createWrapper() {
 describe('TauriSettings import state', () => {
   it('shows user management as its own tab when server login is enabled', async () => {
     let users: AuthUserSummary[] = [
-      { username: 'editor', role: 'read_write', managed: true },
-      { username: 'recovery', role: 'read_write', managed: false },
+      { username: 'editor', role: 'read_write' },
+      { username: 'reviewer', role: 'read_only' },
     ];
     server.use(
       http.get('/api/auth/users', () =>
@@ -40,7 +40,7 @@ describe('TauriSettings import state', () => {
           username: string;
           role: 'read_only' | 'read_write';
         };
-        users = [...users, { ...body, managed: true }];
+        users = [...users, body];
         return HttpResponse.json({
           success: true,
           data: users,
@@ -76,7 +76,7 @@ describe('TauriSettings import state', () => {
     expect(
       await screen.findByRole('heading', { name: 'Browser users' })
     ).toBeInTheDocument();
-    expect(await screen.findByText('TOML bootstrap')).toBeInTheDocument();
+    expect(await screen.findByText('reviewer')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '+ Add user' }));
     fireEvent.change(screen.getByLabelText('Username'), {

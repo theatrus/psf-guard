@@ -67,7 +67,7 @@ pub async fn create_user(
     let (auth, registry_path, _) = require_user_admin(&state, access)?;
     let worker = auth.clone();
     tokio::task::spawn_blocking(move || {
-        worker.add_managed_user(
+        worker.add_user(
             &registry_path,
             &request.username,
             request.role,
@@ -88,11 +88,11 @@ pub async fn update_user(
 ) -> Result<Json<ApiResponse<Vec<AuthUserSummary>>>, AppError> {
     let (auth, registry_path, _) = require_user_admin(&state, access)?;
     let worker = auth.clone();
-    let managed_username = username.clone();
+    let stored_username = username.clone();
     tokio::task::spawn_blocking(move || {
-        worker.update_managed_user(
+        worker.update_user(
             &registry_path,
-            &managed_username,
+            &stored_username,
             request.role,
             request.password.as_deref(),
         )
@@ -115,12 +115,10 @@ pub async fn remove_user(
         ));
     }
     let worker = auth.clone();
-    let managed_username = username.clone();
-    tokio::task::spawn_blocking(move || {
-        worker.remove_managed_user(&registry_path, &managed_username)
-    })
-    .await
-    .map_err(|error| AppError::InternalError(format!("User update task failed: {error}")))?
-    .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    let stored_username = username.clone();
+    tokio::task::spawn_blocking(move || worker.remove_user(&registry_path, &stored_username))
+        .await
+        .map_err(|error| AppError::InternalError(format!("User update task failed: {error}")))?
+        .map_err(|error| AppError::BadRequest(error.to_string()))?;
     Ok(Json(ApiResponse::success(auth.user_summaries())))
 }

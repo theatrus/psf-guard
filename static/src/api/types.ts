@@ -745,7 +745,6 @@ export interface AuthStatus {
 export interface AuthUserSummary {
   username: string;
   role: AccessRole;
-  managed: boolean;
 }
 
 export interface CreateAuthUserRequest {

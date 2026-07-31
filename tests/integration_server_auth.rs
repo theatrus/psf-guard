@@ -11,7 +11,7 @@ use axum::{
 use http_body_util::BodyExt;
 use psf_guard::{
     auth_registry::{AccessRole, AuthRegistry, AuthUserRecord},
-    config::{ServerAuthConfig, ServerAuthCredentialConfig},
+    config::ServerAuthConfig,
     server::{
         auth::{self, ServerAuth},
         handlers,
@@ -26,20 +26,27 @@ use tower::ServiceExt;
 
 fn auth_config() -> ServerAuthConfig {
     ServerAuthConfig {
-        read_only: Some(ServerAuthCredentialConfig {
-            username: "viewer".into(),
-            password: Some("view-secret".into()),
-            password_file: None,
-        }),
-        read_write: Some(ServerAuthCredentialConfig {
-            username: "editor".into(),
-            password: Some("edit-secret".into()),
-            password_file: None,
-        }),
         session_hours: Some(1),
         secure_cookie: false,
         allow_read_only_compute: false,
     }
+}
+
+fn auth_registry() -> AuthRegistry {
+    let mut registry = AuthRegistry::default();
+    registry
+        .add(
+            AuthUserRecord::new("viewer", AccessRole::ReadOnly, "viewer-secret").unwrap(),
+            false,
+        )
+        .unwrap();
+    registry
+        .add(
+            AuthUserRecord::new("editor", AccessRole::ReadWrite, "editor-secret").unwrap(),
+            false,
+        )
+        .unwrap();
+    registry
 }
 
 fn app() -> Router {
@@ -50,7 +57,11 @@ fn app_with_auth(config: ServerAuthConfig) -> Router {
     let state = Arc::new(AppState::new_for_test(
         Connection::open_in_memory().unwrap(),
     ));
-    state.set_server_auth(Some(ServerAuth::from_config(&config).unwrap()));
+    state.set_server_auth(Some(
+        ServerAuth::from_sources(Some(&config), &auth_registry())
+            .unwrap()
+            .unwrap(),
+    ));
     state.set_allow_database_management(true);
 
     let api = Router::new()
@@ -79,24 +90,12 @@ fn app_with_auth(config: ServerAuthConfig) -> Router {
     Router::new().nest("/api", api)
 }
 
-fn managed_users_app(directory: &tempfile::TempDir) -> Router {
+fn user_management_app(directory: &tempfile::TempDir) -> Router {
     let database_registry_path = directory.path().join("config.json");
     let auth_registry_path = AuthRegistry::path_for_database_registry(&database_registry_path);
-    let mut registry = AuthRegistry::default();
-    registry
-        .add(
-            AuthUserRecord::new("viewer", AccessRole::ReadOnly, "managed-viewer-password").unwrap(),
-            false,
-        )
-        .unwrap();
+    let registry = auth_registry();
     registry.save(&auth_registry_path).unwrap();
     let config = ServerAuthConfig {
-        read_only: None,
-        read_write: Some(ServerAuthCredentialConfig {
-            username: "editor".into(),
-            password: Some("edit-secret".into()),
-            password_file: None,
-        }),
         session_hours: Some(1),
         secure_cookie: false,
         allow_read_only_compute: false,
@@ -133,7 +132,7 @@ fn managed_users_app(directory: &tempfile::TempDir) -> Router {
 #[tokio::test]
 async fn viewer_compute_is_separate_from_read_access() {
     let app = app();
-    let (_, viewer_cookie, _) = login(&app, "viewer", "view-secret").await;
+    let (_, viewer_cookie, _) = login(&app, "viewer", "viewer-secret").await;
     let compute = Request::builder()
         .method(Method::POST)
         .uri("/api/images/12/astrometry")
@@ -148,7 +147,7 @@ async fn viewer_compute_is_separate_from_read_access() {
     let mut config = auth_config();
     config.allow_read_only_compute = true;
     let trusted_app = app_with_auth(config);
-    let (_, trusted_viewer_cookie, _) = login(&trusted_app, "viewer", "view-secret").await;
+    let (_, trusted_viewer_cookie, _) = login(&trusted_app, "viewer", "viewer-secret").await;
     let compute = Request::builder()
         .method(Method::POST)
         .uri("/api/images/12/astrometry")
@@ -206,7 +205,7 @@ async fn login_status_and_logout_use_an_http_only_session_cookie() {
     assert_eq!(headers[CACHE_CONTROL], "no-store");
     assert_eq!(status["data"]["authenticated"], false);
 
-    let (status, cookie, login) = login(&app, "viewer", "view-secret").await;
+    let (status, cookie, login) = login(&app, "viewer", "viewer-secret").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(login["data"]["role"], "read_only");
     assert_eq!(login["data"]["can_compute"], false);
@@ -240,7 +239,7 @@ async fn login_status_and_logout_use_an_http_only_session_cookie() {
 #[tokio::test]
 async fn viewer_reads_but_editor_writes() {
     let app = app();
-    let (_, viewer_cookie, _) = login(&app, "viewer", "view-secret").await;
+    let (_, viewer_cookie, _) = login(&app, "viewer", "viewer-secret").await;
     let read = Request::builder()
         .uri("/api/catalog")
         .header(COOKIE, &viewer_cookie)
@@ -270,7 +269,7 @@ async fn viewer_reads_but_editor_writes() {
         StatusCode::FORBIDDEN
     );
 
-    let (_, editor_cookie, _) = login(&app, "editor", "edit-secret").await;
+    let (_, editor_cookie, _) = login(&app, "editor", "editor-secret").await;
     let editor_info = Request::builder()
         .uri("/api/info")
         .header(COOKIE, &editor_cookie)
@@ -313,10 +312,10 @@ async fn protected_api_challenges_but_remote_bearer_routes_stay_separate() {
 }
 
 #[tokio::test]
-async fn editor_manages_hashed_users_live_while_bootstrap_accounts_stay_read_only() {
+async fn editor_manages_all_hashed_users_live() {
     let directory = tempfile::tempdir().unwrap();
-    let app = managed_users_app(&directory);
-    let (_, viewer_cookie, _) = login(&app, "viewer", "managed-viewer-password").await;
+    let app = user_management_app(&directory);
+    let (_, viewer_cookie, _) = login(&app, "viewer", "viewer-secret").await;
     let viewer_list = Request::builder()
         .uri("/api/auth/users")
         .header(COOKIE, viewer_cookie)
@@ -327,7 +326,7 @@ async fn editor_manages_hashed_users_live_while_bootstrap_accounts_stay_read_onl
         StatusCode::FORBIDDEN
     );
 
-    let (_, editor_cookie, _) = login(&app, "editor", "edit-secret").await;
+    let (_, editor_cookie, _) = login(&app, "editor", "editor-secret").await;
     let list = Request::builder()
         .uri("/api/auth/users")
         .header(COOKIE, &editor_cookie)
@@ -335,9 +334,7 @@ async fn editor_manages_hashed_users_live_while_bootstrap_accounts_stay_read_onl
         .unwrap();
     let (_, _, list) = json(&app, list).await;
     assert_eq!(list["data"][0]["username"], "editor");
-    assert_eq!(list["data"][0]["managed"], false);
     assert_eq!(list["data"][1]["username"], "viewer");
-    assert_eq!(list["data"][1]["managed"], true);
 
     let create = Request::builder()
         .method(Method::POST)
@@ -348,13 +345,13 @@ async fn editor_manages_hashed_users_live_while_bootstrap_accounts_stay_read_onl
             serde_json::json!({
                 "username": "guest",
                 "role": "read_only",
-                "password": "managed-guest-password"
+                "password": "guest-password"
             })
             .to_string(),
         ))
         .unwrap();
     assert_eq!(json(&app, create).await.0, StatusCode::OK);
-    let (_, guest_cookie, _) = login(&app, "guest", "managed-guest-password").await;
+    let (_, guest_cookie, _) = login(&app, "guest", "guest-password").await;
     assert!(!guest_cookie.is_empty());
 
     let update = Request::builder()
@@ -365,7 +362,7 @@ async fn editor_manages_hashed_users_live_while_bootstrap_accounts_stay_read_onl
         .body(Body::from(
             serde_json::json!({
                 "role": "read_write",
-                "password": "new-managed-guest-password"
+                "password": "new-guest-password"
             })
             .to_string(),
         ))
@@ -381,12 +378,12 @@ async fn editor_manages_hashed_users_live_while_bootstrap_accounts_stay_read_onl
         false
     );
     assert_eq!(
-        login(&app, "guest", "managed-guest-password").await.0,
+        login(&app, "guest", "guest-password").await.0,
         StatusCode::UNAUTHORIZED
     );
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert_eq!(
-        login(&app, "guest", "new-managed-guest-password").await.0,
+        login(&app, "guest", "new-guest-password").await.0,
         StatusCode::OK
     );
 
@@ -399,7 +396,7 @@ async fn editor_manages_hashed_users_live_while_bootstrap_accounts_stay_read_onl
     assert_eq!(json(&app, remove).await.0, StatusCode::OK);
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert_eq!(
-        login(&app, "guest", "new-managed-guest-password").await.0,
+        login(&app, "guest", "new-guest-password").await.0,
         StatusCode::UNAUTHORIZED
     );
 

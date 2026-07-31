@@ -59,8 +59,8 @@ test('viewer signs in through the app and gets a read-only session', async ({ pa
 
 test('editor manages browser users from a separate Settings tab', async ({ page }) => {
   let users = [
-    { username: 'editor', role: 'read_write', managed: true },
-    { username: 'recovery', role: 'read_write', managed: false },
+    { username: 'editor', role: 'read_write' },
+    { username: 'reviewer', role: 'read_only' },
   ];
   await page.route('**/api/auth/status', (route) =>
     route.fulfill({
@@ -80,7 +80,6 @@ test('editor manages browser users from a separate Settings tab', async ({ page 
       users = [...users, {
         username: request.username,
         role: request.role,
-        managed: true,
       }];
     }
     await route.fulfill({
@@ -94,7 +93,7 @@ test('editor manages browser users from a separate Settings tab', async ({ page 
   await usersTab.click();
 
   await expect(page.getByRole('heading', { name: 'Browser users' })).toBeVisible();
-  await expect(page.getByText('TOML bootstrap', { exact: true })).toBeVisible();
+  await expect(page.getByText('reviewer', { exact: true })).toBeVisible();
   await expect(
     page.getByRole('button', { name: 'Remove' }).first()
   ).toBeDisabled();

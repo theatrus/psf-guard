@@ -23,7 +23,7 @@ pub fn manage_users(action: UserCommand) -> Result<()> {
     match action {
         UserCommand::List { .. } => {
             if registry.users.is_empty() {
-                println!("No managed browser users in {}", auth_path.display());
+                println!("No browser users in {}", auth_path.display());
             } else {
                 println!("{:<32} ROLE", "USERNAME");
                 for user in &registry.users {
@@ -57,9 +57,7 @@ pub fn manage_users(action: UserCommand) -> Result<()> {
             ..
         } => {
             if registry.users.len() == 1 && registry.users[0].username == username && !allow_empty {
-                anyhow::bail!(
-                    "'{username}' is the last managed user; pass --allow-empty to remove it"
-                );
+                anyhow::bail!("'{username}' is the last user; pass --allow-empty to remove it");
             }
             registry.remove(&username)?;
             registry.save(&auth_path)?;

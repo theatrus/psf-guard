@@ -212,9 +212,8 @@ pub struct ServerConfig {
     pub host: Option<String>,
     /// Enable CORS (default: true)
     pub cors: Option<bool>,
-    /// Optional browser session policy and bootstrap accounts for server
-    /// mode. Managed accounts live in auth.json. Tauri loads neither source
-    /// and keeps its localhost server unauthenticated.
+    /// Optional browser session policy for server mode. Browser users live in
+    /// auth.json. Tauri keeps its localhost server unauthenticated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<ServerAuthConfig>,
     /// Fraction of logical CPU cores interactive, user-triggered work (the
@@ -252,16 +251,10 @@ pub struct ServerConfig {
     pub preview_color: Option<bool>,
 }
 
-/// Two simple browser roles. This is deliberately not an ACL system: one
-/// optional viewer credential and one optional editor credential cover the
-/// small-server deployment case.
+/// Browser session policy. Users and password hashes live in auth.json.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerAuthConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub read_only: Option<ServerAuthCredentialConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub read_write: Option<ServerAuthCredentialConfig>,
     /// Browser session lifetime. Defaults to seven days.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_hours: Option<u64>,
@@ -277,29 +270,6 @@ pub struct ServerAuthConfig {
 
 fn default_secure_cookie() -> bool {
     true
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ServerAuthCredentialConfig {
-    pub username: String,
-    /// Inline password. Prefer `password_file` for deployed servers.
-    #[serde(default, skip_serializing)]
-    pub password: Option<String>,
-    /// File holding the password. Leading and trailing whitespace is trimmed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub password_file: Option<String>,
-}
-
-impl std::fmt::Debug for ServerAuthCredentialConfig {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("ServerAuthCredentialConfig")
-            .field("username", &self.username)
-            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
-            .field("password_file", &self.password_file)
-            .finish()
-    }
 }
 
 impl ServerConfig {
@@ -542,12 +512,17 @@ impl Config {
         self.server.cors.unwrap_or(true)
     }
 
-    pub fn get_server_auth(&self) -> Result<Option<crate::server::auth::ServerAuth>> {
-        self.server
+    pub fn get_server_auth_config(&self) -> Result<Option<&ServerAuthConfig>> {
+        if let Some(hours) = self
+            .server
             .auth
             .as_ref()
-            .map(crate::server::auth::ServerAuth::from_config)
-            .transpose()
+            .and_then(|auth| auth.session_hours)
+            && !(1..=24 * 90).contains(&hours)
+        {
+            anyhow::bail!("server.auth.session_hours must be between 1 and 2160");
+        }
+        Ok(self.server.auth.as_ref())
     }
 
     /// Validated, whitespace-normalized site banner for the server API.
@@ -661,7 +636,7 @@ impl Config {
         }
 
         self.get_site_banner()?;
-        self.get_server_auth()?;
+        self.get_server_auth_config()?;
 
         Ok(())
     }
@@ -678,7 +653,7 @@ mod tests {
         assert_eq!(config.get_port(), 3000);
         assert_eq!(config.get_host(), "0.0.0.0");
         assert!(config.get_cors_enabled());
-        assert!(config.get_server_auth().unwrap().is_none());
+        assert!(config.get_server_auth_config().unwrap().is_none());
         // Database/images are obsolete and default to absent.
         assert!(config.database.is_none());
         assert!(config.images.is_none());
@@ -725,51 +700,31 @@ directory = "./cache"
     }
 
     #[test]
-    fn server_auth_parses_role_credentials_and_secret_files() {
-        let secret = NamedTempFile::new().unwrap();
-        std::fs::write(secret.path(), "editor-secret\n").unwrap();
-        let secret_path =
-            toml_edit::Value::from(secret.path().to_string_lossy().as_ref()).to_string();
-        let toml = format!(
-            r#"
+    fn server_auth_parses_session_policy() {
+        let toml = r#"
 [server]
 port = 3000
 
 [server.auth]
 session_hours = 24
 secure_cookie = true
-
-[server.auth.read_only]
-username = "viewer"
-password = "viewer-secret"
-
-[server.auth.read_write]
-username = "editor"
-password_file = {secret_path}
+allow_read_only_compute = true
 
 [cache]
 directory = "./cache"
-"#
-        );
-        let config: Config = toml_edit::de::from_str(&toml).unwrap();
-        let config_debug = format!("{config:?}");
-        assert!(!config_debug.contains("viewer-secret"));
-        assert!(!config_debug.contains("editor-secret"));
-        let auth = config.get_server_auth().unwrap().unwrap();
-        let debug = format!("{auth:?}");
-        assert!(debug.contains("viewer"));
-        assert!(debug.contains("editor"));
-        assert!(!debug.contains("viewer-secret"));
-        assert!(!debug.contains("editor-secret"));
+"#;
+        let config: Config = toml_edit::de::from_str(toml).unwrap();
+        let auth = config.get_server_auth_config().unwrap().unwrap();
+        assert_eq!(auth.session_hours, Some(24));
+        assert!(auth.secure_cookie);
+        assert!(auth.allow_read_only_compute);
     }
 
     #[test]
     fn server_auth_defaults_to_secure_cookies() {
         let config: Config = toml_edit::de::from_str(
             r#"
-[server.auth.read_write]
-username = "editor"
-password = "development-only"
+[server.auth]
 
 [cache]
 directory = "./cache"
@@ -780,6 +735,18 @@ directory = "./cache"
         let auth = config.server.auth.unwrap();
         assert!(auth.secure_cookie);
         assert!(!auth.allow_read_only_compute);
+    }
+
+    #[test]
+    fn server_auth_rejects_a_second_toml_user_list() {
+        let config = toml_edit::de::from_str::<Config>(
+            r#"
+[server.auth.read_write]
+username = "editor"
+password = "development-only"
+"#,
+        );
+        assert!(config.is_err());
     }
 
     #[test]

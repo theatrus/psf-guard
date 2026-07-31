@@ -768,8 +768,8 @@ pub enum UserCommand {
         /// Login name.
         username: String,
 
-        /// Permit removal of the last managed user. Without a TOML bootstrap
-        /// account, this disables browser authentication after restart.
+        /// Permit removal of the last user. This disables browser
+        /// authentication after restart.
         #[arg(long)]
         allow_empty: bool,
 
@@ -1138,7 +1138,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_managed_user_commands() {
+    fn parses_user_commands() {
         let cli = Cli::try_parse_from([
             "psf-guard",
             "users",

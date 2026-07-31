@@ -840,20 +840,12 @@ host = "0.0.0.0"
 #scan_worker_ratio = 0.5
 #background_worker_ratio = 0.25
 
-# Optional browser session policy and bootstrap accounts.
-# Managed users live in auth.json; see docs/AUTHENTICATION.md.
+# Optional browser session policy. Users live in auth.json; see
+# docs/AUTHENTICATION.md.
 [server.auth]
 session_hours = 168
 secure_cookie = true
 allow_read_only_compute = false
-
-[server.auth.read_only]
-username = "viewer"
-password_file = "/run/secrets/psf-guard-viewer"
-
-[server.auth.read_write]
-username = "editor"
-password_file = "/run/secrets/psf-guard-editor"
 
 # Optional plain-text notice shown below the application header.
 [server.banner]
@@ -877,7 +869,7 @@ Omit `[server.banner]` to hide the notice. The title and message are plain
 text. Set both link fields or omit both; links must use `http://` or
 `https://`.
 
-Add managed users without putting passwords in the TOML:
+Add users without putting passwords in the TOML:
 
 ```bash
 psf-guard users add viewer --role read-only
@@ -885,18 +877,17 @@ psf-guard users add editor --role read-write
 psf-guard users list
 ```
 
-An `auth.json` user or a TOML bootstrap account turns on the login page and
-HttpOnly session cookies. Viewer accounts can browse images and cached
-results, but cannot change grades, plans, files, or server settings. Set
+Any user in `auth.json` turns on the login page and HttpOnly session cookies.
+Viewer accounts can browse images and cached results, but cannot change
+grades, plans, files, or server settings. Set
 `allow_read_only_compute = true` only when viewers should also start stacks,
 plate solves, and satellite predictions. Editor accounts keep normal write
-and compute access. With no users in either source, the server stays open as
-before. Tauri always stays unauthenticated on its localhost-only server. See
+and compute access. With no users, the server stays open as before. Tauri
+always stays unauthenticated on its localhost-only server. See
 [Server authentication](docs/AUTHENTICATION.md).
 
-Signed-in editors can also manage these accounts from the separate **Users**
-tab in Settings. Changes made there take effect at once; TOML bootstrap
-accounts appear for reference but stay file-managed.
+Signed-in editors can manage every account from the separate **Users** tab in
+Settings. Changes made there take effect at once.
 
 Command-line arguments override the config file. (A legacy
 `[database]`/`[images]` section is still parsed but ignored in server mode —
