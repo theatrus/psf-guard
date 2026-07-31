@@ -872,8 +872,8 @@ text. Set both link fields or omit both; links must use `http://` or
 Add users without putting passwords in the TOML:
 
 ```bash
-psf-guard users add viewer --role read-only
-psf-guard users add editor --role read-write
+psf-guard users add viewer --role read-only --email viewer@example.com
+psf-guard users add editor --role read-write --email editor@example.com
 psf-guard users list
 ```
 
@@ -887,7 +887,8 @@ always stays unauthenticated on its localhost-only server. See
 [Server authentication](docs/AUTHENTICATION.md).
 
 Signed-in editors can manage every account from the separate **Users** tab in
-Settings. Changes made there take effect at once.
+Settings. Each account can include an optional email address. Changes made
+there take effect at once.
 
 Command-line arguments override the config file. (A legacy
 `[database]`/`[images]` section is still parsed but ignored in server mode —

@@ -749,6 +749,10 @@ pub enum UserCommand {
         #[arg(long, value_enum)]
         role: UserRoleArg,
 
+        /// Optional contact email.
+        #[arg(long)]
+        email: Option<String>,
+
         /// Read the password from this file. If omitted, prompt twice.
         #[arg(long)]
         password_file: Option<String>,
@@ -1146,6 +1150,8 @@ mod tests {
             "viewer",
             "--role",
             "read-only",
+            "--email",
+            "viewer@example.com",
             "--password-file",
             "viewer.secret",
         ])
@@ -1156,6 +1162,7 @@ mod tests {
                     UserCommand::Add {
                         username,
                         role,
+                        email,
                         password_file,
                         replace,
                         registry,
@@ -1163,6 +1170,7 @@ mod tests {
             } => {
                 assert_eq!(username, "viewer");
                 assert_eq!(role, UserRoleArg::ReadOnly);
+                assert_eq!(email.as_deref(), Some("viewer@example.com"));
                 assert_eq!(password_file.as_deref(), Some("viewer.secret"));
                 assert!(!replace);
                 assert!(registry.is_none());

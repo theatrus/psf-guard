@@ -71,7 +71,7 @@ test('viewer signs in through the app and gets a read-only session', async ({ pa
 test('editor manages browser users from a separate Settings tab', async ({ page }) => {
   let users = [
     { username: 'editor', role: 'read_write' },
-    { username: 'reviewer', role: 'read_only' },
+    { username: 'reviewer', role: 'read_only', email: 'reviewer@example.com' },
   ];
   await page.route('**/api/auth/status', (route) =>
     route.fulfill({
@@ -91,6 +91,7 @@ test('editor manages browser users from a separate Settings tab', async ({ page 
       users = [...users, {
         username: request.username,
         role: request.role,
+        email: request.email,
       }];
     }
     await route.fulfill({
@@ -105,6 +106,7 @@ test('editor manages browser users from a separate Settings tab', async ({ page 
 
   await expect(page.getByRole('heading', { name: 'Browser users' })).toBeVisible();
   await expect(page.getByText('reviewer', { exact: true })).toBeVisible();
+  await expect(page.getByText('reviewer@example.com', { exact: true })).toBeVisible();
   await expect(
     page.getByRole('button', { name: 'Remove' }).first()
   ).toBeDisabled();
@@ -116,11 +118,18 @@ test('editor manages browser users from a separate Settings tab', async ({ page 
     });
   }
 
+  const reviewerRow = page.locator('.user-row').filter({ hasText: 'reviewer' });
+  await reviewerRow.getByRole('button', { name: 'Edit' }).click();
+  await expect(page.getByLabel('Email (optional)')).toHaveValue('reviewer@example.com');
+  await page.getByRole('button', { name: 'Cancel' }).click();
+
   await page.getByRole('button', { name: '+ Add user' }).click();
   await page.getByLabel('Username').fill('viewer');
+  await page.getByLabel('Email (optional)').fill('viewer@example.com');
   await page.getByLabel('Password', { exact: true }).fill('long-viewer-password');
   await page.getByLabel('Confirm password').fill('long-viewer-password');
   await page.getByRole('button', { name: 'Save user' }).click();
 
   await expect(page.getByText('viewer', { exact: true })).toBeVisible();
+  await expect(page.getByText('viewer@example.com', { exact: true })).toBeVisible();
 });

@@ -25,9 +25,14 @@ pub fn manage_users(action: UserCommand) -> Result<()> {
             if registry.users.is_empty() {
                 println!("No browser users in {}", auth_path.display());
             } else {
-                println!("{:<32} ROLE", "USERNAME");
+                println!("{:<32} {:<12} EMAIL", "USERNAME", "ROLE");
                 for user in &registry.users {
-                    println!("{:<32} {}", user.username, user.role);
+                    println!(
+                        "{:<32} {:<12} {}",
+                        user.username,
+                        user.role,
+                        user.email.as_deref().unwrap_or("")
+                    );
                 }
                 println!("\nAuth registry: {}", auth_path.display());
             }
@@ -35,12 +40,27 @@ pub fn manage_users(action: UserCommand) -> Result<()> {
         UserCommand::Add {
             username,
             role,
+            email,
             password_file,
             replace,
             ..
         } => {
             let password = read_new_password(password_file.as_deref())?;
-            let user = AuthUserRecord::new(&username, role.into(), &password)?;
+            let previous_email = if replace && email.is_none() {
+                registry
+                    .users
+                    .iter()
+                    .find(|user| user.username == username)
+                    .and_then(|user| user.email.clone())
+            } else {
+                None
+            };
+            let user = AuthUserRecord::new_with_email(
+                &username,
+                role.into(),
+                email.as_deref().or(previous_email.as_deref()),
+                &password,
+            )?;
             registry.add(user, replace)?;
             registry.save(&auth_path)?;
             println!(

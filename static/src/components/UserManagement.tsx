@@ -34,6 +34,7 @@ export default function UserManagement({
   });
   const [form, setForm] = useState<UserForm>(null);
   const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [role, setRole] = useState<AccessRole>('read_only');
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
@@ -43,6 +44,7 @@ export default function UserManagement({
   const resetForm = () => {
     setForm(null);
     setUsername('');
+    setEmail('');
     setRole('read_only');
     setPassword('');
     setConfirmation('');
@@ -57,6 +59,7 @@ export default function UserManagement({
   const startEdit = (user: AuthUserSummary) => {
     setForm({ kind: 'edit', user });
     setUsername(user.username);
+    setEmail(user.email ?? '');
     setRole(user.role);
     setPassword('');
     setConfirmation('');
@@ -82,12 +85,18 @@ export default function UserManagement({
     try {
       if (form?.kind === 'add') {
         publishUsers(
-          await apiClient.createAuthUser({ username: username.trim(), role, password })
+          await apiClient.createAuthUser({
+            username: username.trim(),
+            role,
+            ...(email.trim() ? { email: email.trim() } : {}),
+            password,
+          })
         );
         setStatus('User added.');
       } else if (form?.kind === 'edit') {
         const request = {
           role,
+          email: email.trim(),
           ...(password ? { password } : {}),
         };
         publishUsers(await apiClient.updateAuthUser(form.user.username, request));
@@ -96,7 +105,7 @@ export default function UserManagement({
           window.location.reload();
           return;
         }
-        setStatus('User updated. Their existing sessions were signed out.');
+        setStatus('User updated. Password or access changes sign out existing sessions.');
       }
       resetForm();
     } catch (error) {
@@ -160,9 +169,12 @@ export default function UserManagement({
                 <strong>{user.username}</strong>
                 {isCurrent && <span className="user-source-badge">Current</span>}
               </div>
-              <span className="muted">
-                {user.role === 'read_write' ? 'Editor' : 'Read only'}
-              </span>
+              <div className="user-row-details">
+                <span className="muted">
+                  {user.role === 'read_write' ? 'Editor' : 'Read only'}
+                </span>
+                {user.email && <span className="muted">{user.email}</span>}
+              </div>
             </div>
             <div className="db-row-actions">
               <button
@@ -204,6 +216,19 @@ export default function UserManagement({
               disabled={form.kind === 'edit' || saving}
               autoComplete="username"
               required
+            />
+          </div>
+          <div className="database-config">
+            <label htmlFor="auth-email">Email (optional)</label>
+            <input
+              id="auth-email"
+              className="file-path-input"
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              autoComplete="email"
+              maxLength={254}
+              disabled={saving}
             />
           </div>
           <div className="database-config">

@@ -12,14 +12,15 @@ Add a viewer or editor. If `--password-file` is absent, the CLI prompts twice
 without showing the password:
 
 ```bash
-psf-guard users add viewer --role read-only
-psf-guard users add editor --role read-write --password-file /run/secrets/editor
+psf-guard users add viewer --role read-only --email viewer@example.com
+psf-guard users add editor --role read-write --email editor@example.com \
+  --password-file /run/secrets/editor
 psf-guard users list
 ```
 
 The CLI stores salted Argon2 password hashes in `auth.json`, beside the
-database registry. It never stores the password. With a custom database
-registry, pass the same path to both commands:
+database registry. It never stores the password. Email is optional account
+metadata. With a custom database registry, pass the same path to both commands:
 
 ```bash
 psf-guard users add editor --role read-write \
@@ -45,9 +46,10 @@ server after any CLI user change; active sessions stay valid until then.
 ## Manage users in Settings
 
 An editor signed in to a web server gets a separate **Users** tab in Settings.
-Editors can add users, change roles or passwords, and remove users. Changes
-take effect at once. Changing or removing an account signs out its existing
-sessions.
+Editors can add users, record an optional email, change roles or passwords,
+and remove users. Changes take effect at once. Changing access or a password,
+or removing an account, signs out its existing sessions. Changing only an
+email does not.
 
 ![PSF Guard user management](server-users.png)
 

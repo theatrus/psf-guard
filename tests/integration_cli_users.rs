@@ -32,6 +32,8 @@ fn add_list_replace_and_remove_users() {
         "viewer",
         "--role",
         "read-only",
+        "--email",
+        "viewer@example.com",
         "--password-file",
         &password_arg,
         "--registry",
@@ -47,6 +49,7 @@ fn add_list_replace_and_remove_users() {
     let contents = fs::read_to_string(&auth_path).unwrap();
     assert!(contents.contains("\"username\": \"viewer\""));
     assert!(contents.contains("\"role\": \"read_only\""));
+    assert!(contents.contains("\"email\": \"viewer@example.com\""));
     assert!(!contents.contains("long-user-password"));
     assert!(contents.contains("$argon2"));
     #[cfg(unix)]
@@ -63,6 +66,7 @@ fn add_list_replace_and_remove_users() {
     assert!(listed.status.success(), "{stdout}");
     assert!(stdout.contains("viewer"));
     assert!(stdout.contains("read-only"));
+    assert!(stdout.contains("viewer@example.com"));
 
     let duplicate = run(&[
         "users",
@@ -99,6 +103,9 @@ fn add_list_replace_and_remove_users() {
         "{}",
         String::from_utf8_lossy(&replaced.stderr)
     );
+    assert!(fs::read_to_string(&auth_path)
+        .unwrap()
+        .contains("\"email\": \"viewer@example.com\""));
 
     let guarded_remove = run(&["users", "remove", "viewer", "--registry", &registry_arg]);
     assert!(!guarded_remove.status.success());

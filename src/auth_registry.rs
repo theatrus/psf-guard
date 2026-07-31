@@ -20,6 +20,7 @@ use std::{
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 pub const MIN_PASSWORD_LENGTH: usize = 12;
 pub const MAX_PASSWORD_LENGTH: usize = 1024;
+pub const MAX_EMAIL_LENGTH: usize = 254;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,6 +43,8 @@ impl fmt::Display for AccessRole {
 pub struct AuthUserRecord {
     pub username: String,
     pub role: AccessRole,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
     password_hash: String,
 }
 
@@ -51,6 +54,7 @@ impl fmt::Debug for AuthUserRecord {
             .debug_struct("AuthUserRecord")
             .field("username", &self.username)
             .field("role", &self.role)
+            .field("email", &self.email)
             .field("password_hash", &"[redacted]")
             .finish()
     }
@@ -58,12 +62,22 @@ impl fmt::Debug for AuthUserRecord {
 
 impl AuthUserRecord {
     pub fn new(username: &str, role: AccessRole, password: &str) -> Result<Self> {
+        Self::new_with_email(username, role, None, password)
+    }
+
+    pub fn new_with_email(
+        username: &str,
+        role: AccessRole,
+        email: Option<&str>,
+        password: &str,
+    ) -> Result<Self> {
         validate_username(username)?;
         validate_password(password)?;
         let password_hash = hash_password_without_policy(password)?;
         Ok(Self {
             username: username.to_string(),
             role,
+            email: normalize_email(email)?,
             password_hash,
         })
     }
@@ -78,6 +92,11 @@ impl AuthUserRecord {
         Ok(())
     }
 
+    pub fn set_email(&mut self, email: Option<&str>) -> Result<()> {
+        self.email = normalize_email(email)?;
+        Ok(())
+    }
+
     #[cfg(test)]
     fn verify_password(&self, password: &str) -> bool {
         verify_password_hash(&self.password_hash, password)
@@ -85,6 +104,7 @@ impl AuthUserRecord {
 
     fn validate(&self) -> Result<()> {
         validate_username(&self.username)?;
+        normalize_email(self.email.as_deref())?;
         let hash = PasswordHash::new(&self.password_hash).map_err(|error| {
             anyhow::anyhow!("invalid password hash for '{}': {error}", self.username)
         })?;
@@ -265,6 +285,25 @@ pub fn validate_password(password: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn normalize_email(email: Option<&str>) -> Result<Option<String>> {
+    let Some(email) = email.map(str::trim).filter(|email| !email.is_empty()) else {
+        return Ok(None);
+    };
+    if email.len() > MAX_EMAIL_LENGTH {
+        anyhow::bail!("email cannot exceed {MAX_EMAIL_LENGTH} bytes");
+    }
+    if email.chars().any(char::is_whitespace) || email.chars().any(char::is_control) {
+        anyhow::bail!("email cannot contain whitespace or control characters");
+    }
+    let Some((local, domain)) = email.split_once('@') else {
+        anyhow::bail!("email must contain one '@'");
+    };
+    if local.is_empty() || domain.is_empty() || domain.contains('@') {
+        anyhow::bail!("email must contain one '@' with text on both sides");
+    }
+    Ok(Some(email.to_string()))
+}
+
 #[cfg(unix)]
 fn set_private_permissions(file: &std::fs::File, path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -283,12 +322,28 @@ mod tests {
 
     #[test]
     fn hashes_round_trip_without_exposing_passwords() {
-        let user = AuthUserRecord::new("viewer", AccessRole::ReadOnly, "long-view-secret").unwrap();
+        let user = AuthUserRecord::new_with_email(
+            "viewer",
+            AccessRole::ReadOnly,
+            Some(" viewer@example.com "),
+            "long-view-secret",
+        )
+        .unwrap();
         assert!(user.verify_password("long-view-secret"));
         assert!(!user.verify_password("wrong-secret-value"));
+        assert_eq!(user.email.as_deref(), Some("viewer@example.com"));
         let json = serde_json::to_string(&user).unwrap();
         assert!(!json.contains("long-view-secret"));
         assert!(!format!("{user:?}").contains(user.password_hash()));
+    }
+
+    #[test]
+    fn email_is_optional_and_rejects_malformed_values() {
+        assert_eq!(normalize_email(None).unwrap(), None);
+        assert_eq!(normalize_email(Some("  ")).unwrap(), None);
+        assert!(normalize_email(Some("missing-at.example.com")).is_err());
+        assert!(normalize_email(Some("two@@example.com")).is_err());
+        assert!(normalize_email(Some("space @example.com")).is_err());
     }
 
     #[test]

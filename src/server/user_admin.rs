@@ -24,12 +24,16 @@ use crate::{
 pub struct CreateUserRequest {
     username: String,
     role: AccessRole,
+    #[serde(default)]
+    email: Option<String>,
     password: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateUserRequest {
     role: AccessRole,
+    #[serde(default)]
+    email: Option<String>,
     #[serde(default)]
     password: Option<String>,
 }
@@ -71,6 +75,7 @@ pub async fn create_user(
             &registry_path,
             &request.username,
             request.role,
+            request.email.as_deref(),
             &request.password,
         )
     })
@@ -94,6 +99,7 @@ pub async fn update_user(
             &registry_path,
             &stored_username,
             request.role,
+            request.email.as_deref(),
             request.password.as_deref(),
         )
     })

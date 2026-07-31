@@ -52,12 +52,15 @@ struct AuthUser {
     username: String,
     password_hash: String,
     role: AccessRole,
+    email: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthUserSummary {
     pub username: String,
     pub role: AccessRole,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
 }
 
 #[derive(Clone)]
@@ -83,7 +86,7 @@ impl std::fmt::Debug for ServerAuth {
                     .read()
                     .unwrap()
                     .iter()
-                    .map(|user| (&user.username, user.role))
+                    .map(|user| (&user.username, user.role, &user.email))
                     .collect::<Vec<_>>(),
             )
             .field("session_ttl", &self.session_ttl)
@@ -104,6 +107,7 @@ impl ServerAuth {
                 username: user.username.clone(),
                 password_hash: user.password_hash().to_string(),
                 role: user.role,
+                email: user.email.clone(),
             })
             .collect::<Vec<_>>();
         if users.is_empty() {
@@ -249,6 +253,7 @@ impl ServerAuth {
             .map(|user| AuthUserSummary {
                 username: user.username.clone(),
                 role: user.role,
+                email: user.email.clone(),
             })
             .collect::<Vec<_>>();
         users.sort_by(|left, right| left.username.cmp(&right.username));
@@ -272,6 +277,7 @@ impl ServerAuth {
                 username: user.username.clone(),
                 password_hash: user.password_hash().to_string(),
                 role: user.role,
+                email: user.email.clone(),
             })
             .collect::<Vec<_>>();
         if next_users.is_empty() {
@@ -312,9 +318,10 @@ impl ServerAuth {
         registry_path: &FilePath,
         username: &str,
         role: AccessRole,
+        email: Option<&str>,
         password: &str,
     ) -> anyhow::Result<()> {
-        let user = AuthUserRecord::new(username, role, password)?;
+        let user = AuthUserRecord::new_with_email(username, role, email, password)?;
         self.update_users(registry_path, |registry| registry.add(user, false))
     }
 
@@ -323,6 +330,7 @@ impl ServerAuth {
         registry_path: &FilePath,
         username: &str,
         role: AccessRole,
+        email: Option<&str>,
         password: Option<&str>,
     ) -> anyhow::Result<()> {
         self.update_users(registry_path, |registry| {
@@ -330,6 +338,9 @@ impl ServerAuth {
                 .find_mut(username)
                 .ok_or_else(|| anyhow::anyhow!("user '{username}' does not exist"))?;
             user.role = role;
+            if let Some(email) = email {
+                user.set_email(Some(email))?;
+            }
             if let Some(password) = password {
                 user.set_password(password)?;
             }
@@ -806,13 +817,14 @@ mod tests {
             &path,
             "only-editor",
             AccessRole::ReadWrite,
+            None,
             Some("replacement-editor-password"),
         )
         .unwrap();
         assert!(auth.create_session(&stale_user).is_none());
 
         assert!(auth
-            .update_user(&path, "only-editor", AccessRole::ReadOnly, None,)
+            .update_user(&path, "only-editor", AccessRole::ReadOnly, None, None)
             .is_err());
         assert!(auth.remove_user(&path, "only-editor").is_err());
         assert_eq!(

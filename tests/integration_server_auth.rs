@@ -345,14 +345,43 @@ async fn editor_manages_all_hashed_users_live() {
             serde_json::json!({
                 "username": "guest",
                 "role": "read_only",
+                "email": "guest@example.com",
                 "password": "guest-password"
             })
             .to_string(),
         ))
         .unwrap();
-    assert_eq!(json(&app, create).await.0, StatusCode::OK);
+    let (status, _, created) = json(&app, create).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(created["data"][1]["email"], "guest@example.com");
     let (_, guest_cookie, _) = login(&app, "guest", "guest-password").await;
     assert!(!guest_cookie.is_empty());
+
+    let update_email = Request::builder()
+        .method(Method::PUT)
+        .uri("/api/auth/users/guest")
+        .header(COOKIE, &editor_cookie)
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "role": "read_only",
+                "email": "updated-guest@example.com"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let (status, _, updated) = json(&app, update_email).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["data"][1]["email"], "updated-guest@example.com");
+    let existing_session = Request::builder()
+        .uri("/api/auth/status")
+        .header(COOKIE, &guest_cookie)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        json(&app, existing_session).await.2["data"]["authenticated"],
+        true
+    );
 
     let update = Request::builder()
         .method(Method::PUT)
@@ -367,7 +396,9 @@ async fn editor_manages_all_hashed_users_live() {
             .to_string(),
         ))
         .unwrap();
-    assert_eq!(json(&app, update).await.0, StatusCode::OK);
+    let (status, _, updated) = json(&app, update).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["data"][1]["email"], "updated-guest@example.com");
     let old_session = Request::builder()
         .uri("/api/auth/status")
         .header(COOKIE, guest_cookie)

@@ -745,16 +745,19 @@ export interface AuthStatus {
 export interface AuthUserSummary {
   username: string;
   role: AccessRole;
+  email?: string;
 }
 
 export interface CreateAuthUserRequest {
   username: string;
   role: AccessRole;
+  email?: string;
   password: string;
 }
 
 export interface UpdateAuthUserRequest {
   role: AccessRole;
+  email?: string;
   password?: string;
 }
 
