@@ -1025,6 +1025,7 @@ pub fn main() -> Result<()> {
             pregenerate_all,
             cache_expiry,
             allow_database_management,
+            allow_anonymous_access,
         } => {
             use crate::config::Config;
             use crate::db_registry::DbRegistry;
@@ -1137,6 +1138,7 @@ pub fn main() -> Result<()> {
                     pregeneration_config,
                     Some(registry_path),
                     allow_database_management,
+                    allow_anonymous_access,
                     site_banner,
                     server_auth,
                     worker_policy,

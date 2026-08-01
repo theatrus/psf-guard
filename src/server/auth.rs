@@ -386,13 +386,24 @@ pub async fn status(State(state): State<Arc<AppState>>, headers: HeaderMap) -> R
                 .is_some_and(|session| auth.can_compute(session.role)),
             username: session.map(|session| session.username),
         }
-    } else {
+    } else if state.anonymous_access_trusted() {
         AuthStatus {
             authentication_required: false,
             authenticated: true,
             role: Some(AccessRole::ReadWrite),
             username: None,
             can_compute: true,
+        }
+    } else {
+        // A routable bind with no accounts. Report the truth: a login is
+        // required and this caller does not have one. The browser shows the
+        // sign-in page and the operator sees the startup warning.
+        AuthStatus {
+            authentication_required: true,
+            authenticated: false,
+            role: None,
+            username: None,
+            can_compute: false,
         }
     };
     (
@@ -407,6 +418,9 @@ pub async fn login(
     Json(request): Json<LoginRequest>,
 ) -> Response {
     let Some(auth) = state.server_auth() else {
+        if !state.anonymous_access_trusted() {
+            return no_accounts_response();
+        }
         return Json(ApiResponse::success(AuthStatus {
             authentication_required: false,
             authenticated: true,
@@ -494,14 +508,6 @@ pub async fn authorize_api(
     mut request: Request,
     next: Next,
 ) -> Response {
-    let Some(auth) = state.server_auth() else {
-        request.extensions_mut().insert(RequestAccess {
-            role: AccessRole::ReadWrite,
-            username: None,
-        });
-        return next.run(request).await;
-    };
-
     let path = api_path(request.uri().path());
     if request.method() == Method::OPTIONS
         || is_public_auth_path(path)
@@ -509,6 +515,21 @@ pub async fn authorize_api(
     {
         return next.run(request).await;
     }
+
+    let Some(auth) = state.server_auth() else {
+        // No user accounts. A loopback server — the desktop app, or a
+        // developer's own machine — keeps full access. A routable bind does
+        // not: the port is open to the network, so it answers 401 until an
+        // operator adds a user.
+        if !state.anonymous_access_trusted() {
+            return no_accounts_response();
+        }
+        request.extensions_mut().insert(RequestAccess {
+            role: AccessRole::ReadWrite,
+            username: None,
+        });
+        return next.run(request).await;
+    };
 
     let Some(session) = session_from_headers(&auth, request.headers()) else {
         return (
@@ -537,6 +558,37 @@ pub async fn authorize_api(
     let mut response = next.run(request).await;
     mark_response_private(&mut response);
     response
+}
+
+/// Answer for a network caller on a server that has no user accounts. The
+/// wording names the fix because only an operator can apply it.
+pub(crate) const NO_ACCOUNTS_MESSAGE: &str =
+    "This server has no user accounts. Add one with `psf-guard users add <name> \
+     --role read-write`, then restart the server.";
+
+fn no_accounts_response() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        [(CACHE_CONTROL, "no-store")],
+        Json(ApiResponse::<()>::error(NO_ACCOUNTS_MESSAGE.to_string())),
+    )
+        .into_response()
+}
+
+/// Whether a bind host keeps the server on the machine that runs it.
+/// `0.0.0.0` and `::` are not loopback: they accept traffic from the network.
+/// An unresolvable name counts as routable, which is the safe answer.
+pub(crate) fn host_is_loopback(host: &str) -> bool {
+    let host = host.trim();
+    let host = host
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(host);
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    host.parse::<std::net::IpAddr>()
+        .is_ok_and(|address| address.is_loopback())
 }
 
 fn session_from_headers(auth: &ServerAuth, headers: &HeaderMap) -> Option<Session> {
@@ -731,6 +783,24 @@ mod tests {
             assert!(auth.claim_login_slot());
         }
         assert!(!auth.claim_login_slot());
+    }
+
+    #[test]
+    fn only_a_bind_that_stays_on_this_machine_counts_as_loopback() {
+        assert!(host_is_loopback("127.0.0.1"));
+        assert!(host_is_loopback("127.5.5.5"));
+        assert!(host_is_loopback("localhost"));
+        assert!(host_is_loopback("LocalHost"));
+        assert!(host_is_loopback("::1"));
+        assert!(host_is_loopback("[::1]"));
+        assert!(host_is_loopback(" 127.0.0.1 "));
+
+        assert!(!host_is_loopback("0.0.0.0"));
+        assert!(!host_is_loopback("::"));
+        assert!(!host_is_loopback("192.168.1.10"));
+        assert!(!host_is_loopback("guard.example"));
+        assert!(!host_is_loopback("localhost.example.com"));
+        assert!(!host_is_loopback(""));
     }
 
     #[test]

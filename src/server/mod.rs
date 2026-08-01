@@ -58,6 +58,10 @@ pub struct ServerConfig {
     /// Allow HTTP clients to mutate the configured database list. Off by
     /// default for CLI servers; Tauri always enables it.
     pub allow_database_management: bool,
+    /// Trust every session-less caller even on a routable bind address, so a
+    /// server with no user accounts stays open the way a localhost server is.
+    /// Off by default. Loopback binds are trusted without it.
+    pub allow_anonymous_access: bool,
     /// Optional notice shown below the application header.
     pub site_banner: Option<crate::config::SiteBannerConfig>,
     /// Optional browser/server authentication. Tauri always leaves this off.
@@ -84,6 +88,7 @@ pub async fn run_server(
     pregeneration_config: PregenerationConfig,
     registry_path: Option<PathBuf>,
     allow_database_management: bool,
+    allow_anonymous_access: bool,
     site_banner: Option<crate::config::SiteBannerConfig>,
     auth: Option<auth::ServerAuth>,
     worker_policy: crate::concurrency::WorkerPolicy,
@@ -113,6 +118,7 @@ pub async fn run_server(
         pregeneration_config,
         registry_path,
         allow_database_management,
+        allow_anonymous_access,
         site_banner,
         auth,
         worker_policy,
@@ -141,10 +147,46 @@ pub async fn run_server_with_config(config: ServerConfig) -> anyhow::Result<()> 
     run_server_internal(config, None).await
 }
 
+/// Whether a caller with no session is trusted while the server has no user
+/// accounts. Reaching a loopback server already means reaching the machine,
+/// so it stays open. Any other address needs the operator to say so.
+fn anonymous_access_is_trusted(host: &str, allow_anonymous_access: bool) -> bool {
+    auth::host_is_loopback(host) || allow_anonymous_access
+}
+
+/// Refuse a network server that would hand out database management with no
+/// login. Loopback servers — the desktop app, and local development — keep
+/// working, as does a server whose operator asked for anonymous access.
+fn check_management_needs_a_login(
+    host: &str,
+    allow_database_management: bool,
+    anonymous_access_trusted: bool,
+    has_users: bool,
+) -> anyhow::Result<()> {
+    if allow_database_management && !has_users && !anonymous_access_trusted {
+        anyhow::bail!(
+            "Database management on {host} needs a login. Add an editor with \
+             `psf-guard users add <name> --role read-write` (pass the same \
+             --registry you give the server), or bind the server to 127.0.0.1. \
+             --allow-anonymous-access serves it to everyone instead."
+        );
+    }
+    Ok(())
+}
+
 async fn run_server_internal(
     config: ServerConfig,
     shutdown_rx: Option<oneshot::Receiver<()>>,
 ) -> anyhow::Result<()> {
+    let anonymous_access_trusted =
+        anonymous_access_is_trusted(&config.host, config.allow_anonymous_access);
+    check_management_needs_a_login(
+        &config.host,
+        config.allow_database_management,
+        anonymous_access_trusted,
+        config.auth.is_some(),
+    )?;
+
     tracing::info!("🚀 Starting PSF Guard server");
     tracing::info!(
         "📊 Databases ({}):{}",
@@ -185,6 +227,7 @@ async fn run_server_internal(
             state.set_allow_database_management(config.allow_database_management);
             state.set_site_banner(config.site_banner.clone());
             state.set_server_auth(config.auth.clone());
+            state.set_anonymous_access_trusted(anonymous_access_trusted);
             state.set_worker_policy(config.worker_policy);
             state.set_preview_encoding(config.preview_encoding);
             state.set_preview_color_default(config.preview_color_default);
@@ -193,6 +236,26 @@ async fn run_server_internal(
             }
             if config.auth.is_some() {
                 tracing::info!("🔐 Browser authentication enabled");
+            } else if !anonymous_access_trusted {
+                tracing::warn!(
+                    "🔐 No user accounts, so {} answers 401 to every API request. Add one \
+                     with `psf-guard users add <name> --role read-write` and restart, or \
+                     bind the server to 127.0.0.1 to keep it on this machine. Remote sync \
+                     and image upload keys keep working either way.",
+                    config.host
+                );
+            } else if config.allow_anonymous_access && !auth::host_is_loopback(&config.host) {
+                tracing::warn!(
+                    "⚠️ --allow-anonymous-access is ON with no user accounts. Everyone who \
+                     can reach {} gets full editor access to every catalog. Add users and \
+                     drop the flag as soon as you can.",
+                    config.host
+                );
+            } else {
+                tracing::info!(
+                    "🔓 No user accounts; {} is a loopback server and stays open to this machine",
+                    config.host
+                );
             }
             tracing::info!(
                 "📐 Worker ratios — interactive {:.2}, background {:.2} (of {} logical cores)",
@@ -208,8 +271,9 @@ async fn run_server_internal(
                     );
                 } else {
                     tracing::warn!(
-                        "⚠️ Database management via HTTP is ENABLED. Anyone who can reach \
-                         this server can add/edit/remove configured databases."
+                        "⚠️ Database management via HTTP is ENABLED with no login. Anyone \
+                         who can reach {} can add/edit/remove configured databases.",
+                        config.host
                     );
                 }
             } else {
@@ -1051,4 +1115,39 @@ async fn pregenerate_annotated(
 
     tracing::trace!("✅ Generated annotated image for image {}", image_id);
     Ok(true) // Successfully generated
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::{anonymous_access_is_trusted, check_management_needs_a_login};
+
+    /// The startup pair, as `run_server_internal` computes it: work out who a
+    /// session-less caller is, then decide whether the server may start.
+    fn start(host: &str, manage: bool, anonymous: bool, has_users: bool) -> anyhow::Result<bool> {
+        let trusted = anonymous_access_is_trusted(host, anonymous);
+        check_management_needs_a_login(host, manage, trusted, has_users)?;
+        Ok(trusted)
+    }
+
+    #[test]
+    fn a_network_server_cannot_offer_database_management_without_a_login() {
+        let refusal = start("0.0.0.0", true, false, false).unwrap_err();
+        assert!(refusal.to_string().contains("psf-guard users add"));
+
+        // A login exists, so the editor gate applies as usual.
+        assert!(start("0.0.0.0", true, false, true).is_ok());
+        // No management asked for, so nothing to hand out.
+        assert!(start("0.0.0.0", false, false, false).is_ok());
+    }
+
+    #[test]
+    fn only_loopback_or_the_explicit_flag_trusts_a_caller_with_no_account() {
+        // The desktop app and local development.
+        assert!(start("127.0.0.1", true, false, false).unwrap());
+        assert!(start("localhost", true, false, false).unwrap());
+        // A network server stays closed until an operator says otherwise.
+        assert!(!start("0.0.0.0", false, false, false).unwrap());
+        // The operator said otherwise, so management may start too.
+        assert!(start("0.0.0.0", true, true, false).unwrap());
+    }
 }

@@ -15,6 +15,11 @@ a trusted interface and opt in:
 psf-guard server --host 127.0.0.1 --allow-database-management
 ```
 
+On any other bind address the server refuses to start until a user account
+exists, because database management names paths the server then reads and
+writes. Only an editor can use those routes. `--allow-anonymous-access` opens
+them to everyone instead. See [server authentication](AUTHENTICATION.md).
+
 Settings has three tabs: **Databases** for catalogs and imports, **Catalogs**
 for the Seiza data packages, and **Sync** for moving records between catalogs.
 Sync appears once you have a catalog to move records between.
