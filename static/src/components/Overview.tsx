@@ -811,10 +811,10 @@ export default function Overview() {
                     </div>
                   </div>
                   
-                  {/* Desired Progress Bar */}
+                  {/* Desired progress bar */}
                   {project.total_desired > 0 && (
                     <div className="project-desired-progress">
-                      <div className="progress-label">Desired Progress:</div>
+                      <div className="progress-label">Desired progress</div>
                       <div className="desired-progress-bar">
                         <div
                           className="desired-progress-fill"
@@ -824,13 +824,13 @@ export default function Overview() {
                     </div>
                   )}
                   
-                  {/* Grading Progress Bar */}
+                  {/* Grading status bar */}
                   <figure className="project-grading-progress">
-                    <figcaption className="progress-label">Grading progress</figcaption>
+                    <figcaption className="progress-label">Grading status</figcaption>
                     <div
                       className="project-mini-progress"
                       role="img"
-                      aria-label={`Grading progress: ${project.accepted_images} accepted, ${project.rejected_images} rejected, ${project.pending_images} pending`}
+                      aria-label={`Grading status: ${project.accepted_images} accepted, ${project.rejected_images} rejected, ${project.pending_images} pending`}
                     >
                       <div
                         className="mini-progress-accepted"

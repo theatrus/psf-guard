@@ -60,16 +60,16 @@ test('overview puts projects ahead of a compact catalog summary', async ({
   ).toBeVisible();
   await expect(alphaCard.getByText('1 / 4 desired')).toBeVisible();
   const desiredProgress = alphaCard.locator('.project-desired-progress');
-  const desiredLabel = desiredProgress.getByText('Desired Progress:', {
+  const desiredLabel = desiredProgress.getByText('Desired progress', {
     exact: true,
   });
   const desiredBar = desiredProgress.locator('.desired-progress-bar');
-  const gradingProgress = alphaCard.locator('.project-grading-progress');
-  const gradingLabel = gradingProgress.getByText('Grading progress', {
+  const gradingStatus = alphaCard.locator('.project-grading-progress');
+  const gradingLabel = gradingStatus.getByText('Grading status', {
     exact: true,
   });
-  const gradingBar = gradingProgress.getByRole('img', {
-    name: /Grading progress: \d+ accepted, \d+ rejected, \d+ pending/,
+  const gradingBar = gradingStatus.getByRole('img', {
+    name: /Grading status: \d+ accepted, \d+ rejected, \d+ pending/,
   });
   await expect(desiredLabel).toBeVisible();
   await expect(desiredBar).toBeVisible();

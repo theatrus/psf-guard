@@ -962,7 +962,7 @@
   font-weight: 500;
 }
 
-/* Desired Progress Bar */
+/* Desired progress bar */
 .project-desired-progress {
   margin-bottom: 8px;
 }
@@ -989,7 +989,7 @@
   border-radius: 3px;
 }
 
-/* Mini Progress Bars */
+/* Grading status bar */
 .project-grading-progress {
   margin: 4px 0 10px;
 }
