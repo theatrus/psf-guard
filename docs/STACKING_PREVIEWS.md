@@ -117,6 +117,9 @@ dark crops within each filter. Each result shows its crop, capture time,
 deviation strength, changed-pixel fraction, and a link to the full source
 image. Color-preview searches also apply the retained channel-to-color
 registration, so the selected area maps through both registration steps.
+Every integrated frame contributes to the comparison. For a large stack, the
+result panel keeps the 50 strongest crops per filter instead of creating and
+loading an unbounded list of preview images.
 
 The search is evidence for review, not a grade. **Strong**, **possible**, and
 **low** describe how far one crop differs from the other crops in that small
@@ -131,7 +134,7 @@ This real three-frame M44 check finds no source that clearly separates from
 its peers. PSF Guard keeps the ranked crops visible and labels each result
 **low** instead of inventing a culprit.
 
-Stacks made before this feature lack the retained transforms and source
+Stacks made before this feature lack the retained frame mappings and source
 fingerprints. Rebuild the mono stacks and color preview once before searching
 them. PSF Guard also asks for a rebuild if a source file, calibration choice,
 channel stack, or color registration changed after the displayed preview was
