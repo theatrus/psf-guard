@@ -891,6 +891,7 @@ fn fallback_quality(image_id: i32) -> ImageQualityResult {
             pointing: None,
         },
         regrade_reason: None,
+        spatial_overlay: None,
         pointing: None,
         satellite: None,
         details: None,

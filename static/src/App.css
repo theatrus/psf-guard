@@ -1616,6 +1616,123 @@
   overflow: hidden;
 }
 
+.detail-quality-region-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 4;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.quality-region-cell {
+  stroke-width: 0.045;
+  vector-effect: non-scaling-stroke;
+}
+
+.quality-region-low-stars {
+  fill: rgba(235, 60, 60, 0.34);
+  stroke: rgb(255, 105, 105);
+}
+
+.quality-region-extinction {
+  fill: rgba(245, 160, 40, 0.34);
+  stroke: rgb(255, 190, 85);
+}
+
+.quality-region-star-loss {
+  fill: rgba(225, 80, 225, 0.32);
+  stroke: rgb(245, 125, 245);
+}
+
+.quality-region-glow {
+  fill: rgba(70, 210, 210, 0.3);
+  stroke: rgb(105, 235, 235);
+}
+
+.quality-region-border {
+  fill: none;
+  stroke-width: 0.08;
+  vector-effect: non-scaling-stroke;
+}
+
+.quality-region-background-rise {
+  stroke: rgb(250, 235, 70);
+}
+
+.quality-region-background-fall {
+  stroke: rgb(90, 160, 255);
+  stroke-dasharray: 0.18 0.1;
+}
+
+.quality-region-controls {
+  margin-top: 0.75rem;
+}
+
+.quality-region-toggle {
+  margin-bottom: 0.55rem;
+}
+
+.quality-region-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  color: var(--color-text-muted);
+  font-size: 0.74rem;
+}
+
+.quality-region-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+}
+
+.quality-region-swatch {
+  display: inline-block;
+  width: 0.72rem;
+  height: 0.72rem;
+  border: 2px solid currentColor;
+  border-radius: 2px;
+}
+
+.quality-region-swatch.quality-region-low-stars {
+  color: rgb(255, 105, 105);
+  background: rgba(235, 60, 60, 0.34);
+}
+
+.quality-region-swatch.quality-region-extinction {
+  color: rgb(255, 190, 85);
+  background: rgba(245, 160, 40, 0.34);
+}
+
+.quality-region-swatch.quality-region-star-loss {
+  color: rgb(245, 125, 245);
+  background: rgba(225, 80, 225, 0.32);
+}
+
+.quality-region-swatch.quality-region-background-rise {
+  color: rgb(250, 235, 70);
+  background: transparent;
+}
+
+.quality-region-swatch.quality-region-background-fall {
+  color: rgb(90, 160, 255);
+  background: transparent;
+  border-style: dashed;
+}
+
+.quality-region-swatch.quality-region-glow {
+  color: rgb(105, 235, 235);
+  background: rgba(70, 210, 210, 0.3);
+}
+
+.quality-region-note {
+  margin: 0.45rem 0 0;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
 .satellite-badge-high {
   border-color: var(--color-error-light);
   color: var(--color-error-light);

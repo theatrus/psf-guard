@@ -1364,6 +1364,19 @@ export interface ScoredSequence {
   summary: SequenceSummary;
 }
 
+export interface QualityRegionOverlay {
+  grid_cols: number;
+  grid_rows: number;
+  image_width: number;
+  image_height: number;
+  low_star_cells: boolean[];
+  extinction_cells: boolean[];
+  star_loss_cells: boolean[];
+  background_rise_cells: boolean[];
+  background_fall_cells: boolean[];
+  glow_cells: boolean[];
+}
+
 export interface ImageQualityResult {
   image_id: number;
   quality_score: number;
@@ -1417,6 +1430,9 @@ export interface ImageQualityResult {
     association: 'predicted_not_pixel_detected' | 'predicted_pixel_checked' | 'predicted_with_pixel_alignment';
   };
   regrade_reason?: string;
+  /** Measured grid cells that support a localized quality finding. Global
+   * findings do not offer an overlay. */
+  spatial_overlay?: QualityRegionOverlay;
   details: string | null;
 }
 

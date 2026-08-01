@@ -203,7 +203,44 @@ pub struct ImageQualityResult {
     pub satellite: Option<SatelliteFrameMetrics>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regrade_reason: Option<String>,
+    /// Measured image regions that support a localized quality finding. The
+    /// UI may draw these cells over the image; global findings leave it empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial_overlay: Option<QualityRegionOverlay>,
     pub details: Option<String>,
+}
+
+/// Per-cell evidence that can be drawn over an image. Every mask is
+/// row-major and has `grid_cols * grid_rows` entries.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct QualityRegionOverlay {
+    pub grid_cols: usize,
+    pub grid_rows: usize,
+    pub image_width: usize,
+    pub image_height: usize,
+    pub low_star_cells: Vec<bool>,
+    pub extinction_cells: Vec<bool>,
+    pub star_loss_cells: Vec<bool>,
+    pub background_rise_cells: Vec<bool>,
+    pub background_fall_cells: Vec<bool>,
+    pub glow_cells: Vec<bool>,
+}
+
+/// Raw localized evidence retained while the sequence classifier runs. This
+/// stays out of the API until the classifier confirms that it supports the
+/// reported issue.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct QualityRegionEvidence {
+    pub grid_cols: usize,
+    pub grid_rows: usize,
+    pub image_width: usize,
+    pub image_height: usize,
+    pub low_star_cells: Vec<bool>,
+    pub extinction_cells: Vec<bool>,
+    pub star_loss_cells: Vec<bool>,
+    pub background_rise_cells: Vec<bool>,
+    pub background_fall_cells: Vec<bool>,
+    pub glow_cells: Vec<bool>,
 }
 
 /// Reference values representing the best metrics observed in a sequence.
@@ -322,6 +359,84 @@ pub struct ImageMetrics {
     /// Cached orbital prediction for this exact source file and WCS.
     #[serde(default)]
     pub satellite: Option<SatelliteFrameMetrics>,
+    /// Per-cell scan evidence used to build an optional UI overlay after the
+    /// classifier has chosen a localized issue.
+    #[serde(skip)]
+    pub(crate) spatial_evidence: Option<QualityRegionEvidence>,
+}
+
+#[derive(Clone, Copy)]
+enum QualityOverlayKind {
+    Obstruction,
+    LocalExtinction,
+    BackgroundRise,
+    StaticGlow,
+}
+
+fn quality_region_overlay(
+    evidence: Option<&QualityRegionEvidence>,
+    kind: QualityOverlayKind,
+) -> Option<QualityRegionOverlay> {
+    let evidence = evidence?;
+    let cells = evidence.grid_cols.checked_mul(evidence.grid_rows)?;
+    if cells == 0 || evidence.image_width == 0 || evidence.image_height == 0 {
+        return None;
+    }
+
+    let keep = |values: &[bool], enabled: bool| {
+        if enabled && values.len() == cells {
+            values.to_vec()
+        } else {
+            vec![false; cells]
+        }
+    };
+    let low_star_cells = keep(
+        &evidence.low_star_cells,
+        matches!(kind, QualityOverlayKind::Obstruction),
+    );
+    let extinction_cells = keep(
+        &evidence.extinction_cells,
+        matches!(kind, QualityOverlayKind::LocalExtinction),
+    );
+    let star_loss_cells = keep(
+        &evidence.star_loss_cells,
+        matches!(kind, QualityOverlayKind::LocalExtinction),
+    );
+    let background_rise_cells = keep(
+        &evidence.background_rise_cells,
+        matches!(kind, QualityOverlayKind::BackgroundRise),
+    );
+    let background_fall_cells = keep(
+        &evidence.background_fall_cells,
+        matches!(kind, QualityOverlayKind::LocalExtinction),
+    );
+    let glow_cells = keep(
+        &evidence.glow_cells,
+        matches!(kind, QualityOverlayKind::StaticGlow),
+    );
+
+    let any_flagged = [
+        &low_star_cells,
+        &extinction_cells,
+        &star_loss_cells,
+        &background_rise_cells,
+        &background_fall_cells,
+        &glow_cells,
+    ]
+    .into_iter()
+    .any(|mask| mask.iter().any(|&flagged| flagged));
+    any_flagged.then_some(QualityRegionOverlay {
+        grid_cols: evidence.grid_cols,
+        grid_rows: evidence.grid_rows,
+        image_width: evidence.image_width,
+        image_height: evidence.image_height,
+        low_star_cells,
+        extinction_cells,
+        star_loss_cells,
+        background_rise_cells,
+        background_fall_cells,
+        glow_cells,
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -853,6 +968,7 @@ impl SequenceAnalyzer {
                     pointing: pointing_quality[idx].clone(),
                     satellite: img.satellite.clone(),
                     regrade_reason: None,
+                    spatial_overlay: None,
                     details: None,
                 })
                 .collect();
@@ -978,6 +1094,7 @@ impl SequenceAnalyzer {
                 pointing: pointing_quality[i].clone(),
                 satellite: images[i].satellite.clone(),
                 regrade_reason: None,
+                spatial_overlay: None,
                 details: None,
             });
         }
@@ -1753,6 +1870,33 @@ impl SequenceAnalyzer {
             let bg_stable = bg_rise < self.config.bg_rise_threshold;
             let ecc_stable = ecc_rise < 0.15;
 
+            // Only localized classifier paths expose a region overlay. A
+            // whole-frame transparency loss or a global star-count drop has
+            // no defensible location to draw.
+            let spatial_overlay = if occluded {
+                quality_region_overlay(
+                    images[i].spatial_evidence.as_ref(),
+                    QualityOverlayKind::Obstruction,
+                )
+            } else if small_cloud {
+                quality_region_overlay(
+                    images[i].spatial_evidence.as_ref(),
+                    QualityOverlayKind::LocalExtinction,
+                )
+            } else if !veiled && errant_light && star_stable {
+                quality_region_overlay(
+                    images[i].spatial_evidence.as_ref(),
+                    QualityOverlayKind::BackgroundRise,
+                )
+            } else if !veiled && !errant_light && static_glow && star_stable {
+                quality_region_overlay(
+                    images[i].spatial_evidence.as_ref(),
+                    QualityOverlayKind::StaticGlow,
+                )
+            } else {
+                None
+            };
+
             // Classification rules. A localized dead region is checked first:
             // it is the most specific signature (clouds veil the frame
             // uniformly, occluders kill a contiguous part of it).
@@ -1877,6 +2021,7 @@ impl SequenceAnalyzer {
             };
 
             results[i].category = category;
+            results[i].spatial_overlay = spatial_overlay;
             results[i].details = details;
         }
     }
@@ -2530,6 +2675,7 @@ pub fn extract_metrics_from_metadata(
         bg_glow_max: None,
         astrometry: None,
         satellite: None,
+        spatial_evidence: None,
     }
 }
 
@@ -2558,6 +2704,7 @@ mod tests {
             bg_glow_max: None,
             astrometry: None,
             satellite: None,
+            spatial_evidence: None,
         }
     }
 
@@ -2590,6 +2737,7 @@ mod tests {
             bg_glow_max: None,
             astrometry: None,
             satellite: None,
+            spatial_evidence: None,
         }
     }
 
@@ -2621,6 +2769,7 @@ mod tests {
             bg_glow_max: None,
             astrometry: None,
             satellite: None,
+            spatial_evidence: None,
         }
     }
 
@@ -2934,6 +3083,15 @@ mod tests {
             .map(|i| make_photometric_image(i, i as i64 * 300, 1.0, 0.0, 0.0, 0.0))
             .collect();
         images[5] = make_photometric_image(5, 5 * 300, 0.96, 0.10, 0.04, 0.0);
+        images[5].spatial_evidence = Some(QualityRegionEvidence {
+            grid_cols: 2,
+            grid_rows: 2,
+            image_width: 2000,
+            image_height: 1500,
+            extinction_cells: vec![true, false, false, false],
+            star_loss_cells: vec![false, true, false, false],
+            ..Default::default()
+        });
 
         let results = analyzer.analyze(&images, 1, "test", "R");
         let seq = &results[0];
@@ -2943,6 +3101,12 @@ mod tests {
             "localized extinction should classify as small cloud: {:?}",
             seq.images[5].details
         );
+        let overlay = seq.images[5]
+            .spatial_overlay
+            .as_ref()
+            .expect("localized cloud should retain its measured cells");
+        assert_eq!(overlay.extinction_cells, vec![true, false, false, false]);
+        assert_eq!(overlay.star_loss_cells, vec![false, true, false, false]);
         assert_eq!(seq.images[4].category, None);
     }
 
@@ -2991,6 +3155,14 @@ mod tests {
             .map(|i| make_photometric_image(i, i as i64 * 300, 1.0, 0.0, 0.0, 0.0))
             .collect();
         images[6] = make_photometric_image(6, 6 * 300, 0.70, 0.0, 0.0, 0.0);
+        images[6].spatial_evidence = Some(QualityRegionEvidence {
+            grid_cols: 2,
+            grid_rows: 2,
+            image_width: 2000,
+            image_height: 1500,
+            extinction_cells: vec![true, false, false, false],
+            ..Default::default()
+        });
 
         let results = analyzer.analyze(&images, 1, "test", "R");
         let seq = &results[0];
@@ -3002,6 +3174,10 @@ mod tests {
         );
         // The veiled frame must also score worse than its clean neighbors.
         assert!(seq.images[6].quality_score < seq.images[3].quality_score);
+        assert!(
+            seq.images[6].spatial_overlay.is_none(),
+            "a whole-frame veil must not claim a local boundary"
+        );
     }
 
     #[test]
@@ -3014,6 +3190,14 @@ mod tests {
             .map(|i| make_photometric_image(i, i as i64 * 300, 1.0, 0.0, 0.0, 0.0))
             .collect();
         images[4] = make_photometric_image(4, 4 * 300, 1.0, 0.0, 0.0, 0.10);
+        images[4].spatial_evidence = Some(QualityRegionEvidence {
+            grid_cols: 2,
+            grid_rows: 2,
+            image_width: 2000,
+            image_height: 1500,
+            background_rise_cells: vec![false, false, true, false],
+            ..Default::default()
+        });
 
         let results = analyzer.analyze(&images, 1, "test", "R");
         let seq = &results[0];
@@ -3022,6 +3206,14 @@ mod tests {
             Some(IssueCategory::SkyBrightening),
             "transient localized bg rise should classify as errant light: {:?}",
             seq.images[4].details
+        );
+        assert_eq!(
+            seq.images[4]
+                .spatial_overlay
+                .as_ref()
+                .expect("errant light should retain its measured cells")
+                .background_rise_cells,
+            vec![false, false, true, false]
         );
     }
 
@@ -3037,6 +3229,14 @@ mod tests {
             .map(|i| {
                 let mut m = make_photometric_image(i, i as i64 * 300, 1.0, 0.0, 0.0, 0.0);
                 m.bg_glow_max = Some(0.045); // static, every frame
+                m.spatial_evidence = Some(QualityRegionEvidence {
+                    grid_cols: 2,
+                    grid_rows: 2,
+                    image_width: 2000,
+                    image_height: 1500,
+                    glow_cells: vec![false, false, false, true],
+                    ..Default::default()
+                });
                 m
             })
             .collect();
@@ -3048,6 +3248,13 @@ mod tests {
                 Some(IssueCategory::SkyBrightening),
                 "static glow should classify every affected frame: {:?}",
                 r.details
+            );
+            assert_eq!(
+                r.spatial_overlay
+                    .as_ref()
+                    .expect("static glow should retain its measured cells")
+                    .glow_cells,
+                vec![false, false, false, true]
             );
         }
     }
@@ -3679,6 +3886,7 @@ mod tests {
                 pointing: None,
                 satellite: None,
                 regrade_reason: None,
+                spatial_overlay: None,
                 details: None,
             },
             ImageQualityResult {
@@ -3700,6 +3908,7 @@ mod tests {
                 pointing: None,
                 satellite: None,
                 regrade_reason: None,
+                spatial_overlay: None,
                 details: None,
             },
             ImageQualityResult {
@@ -3721,6 +3930,7 @@ mod tests {
                 pointing: None,
                 satellite: None,
                 regrade_reason: None,
+                spatial_overlay: None,
                 details: Some("Cloud".to_string()),
             },
         ];
@@ -4076,6 +4286,14 @@ mod tests {
         // Frame 6-7: corner occluded; star count barely moves.
         images[6] = make_spatial_image(6, 6 * 300, 4650.0, 2.60, 0.17, 0.10);
         images[7] = make_spatial_image(7, 7 * 300, 4600.0, 2.58, 0.21, 0.12);
+        images[6].spatial_evidence = Some(QualityRegionEvidence {
+            grid_cols: 2,
+            grid_rows: 2,
+            image_width: 2000,
+            image_height: 1500,
+            low_star_cells: vec![true, false, false, false],
+            ..Default::default()
+        });
 
         let results = analyzer.analyze(&images, 1, "NGC 6820", "R");
         let seq = &results[0];
@@ -4091,6 +4309,15 @@ mod tests {
             seq.images[7].category,
             Some(IssueCategory::PossibleObstruction)
         );
+        assert_eq!(
+            seq.images[6]
+                .spatial_overlay
+                .as_ref()
+                .expect("localized obstruction should retain its measured cells")
+                .low_star_cells,
+            vec![true, false, false, false]
+        );
+        assert!(seq.images[7].spatial_overlay.is_none());
         // Clean frames stay unclassified.
         assert_eq!(seq.images[3].category, None);
         // Occluded frames must score below clean frames.

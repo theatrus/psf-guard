@@ -4048,6 +4048,54 @@ pub(crate) fn merge_photometric_signals(
                 m.star_cell_drop_fraction = sig.star_cell_drop_fraction;
                 m.bg_cell_rise_fraction = sig.bg_cell_rise_fraction;
                 m.bg_cell_fall_fraction = sig.bg_cell_fall_fraction;
+                if let Some(entry) = entries[i].as_ref() {
+                    let cells = entry.grid_cols.saturating_mul(entry.grid_rows);
+                    if cells > 0 && entry.width > 0 && entry.height > 0 {
+                        let checked_mask = |mask: Vec<bool>| {
+                            if mask.len() == cells {
+                                mask
+                            } else {
+                                vec![false; cells]
+                            }
+                        };
+                        let low_star_cells = if entry.star_dead_cells.len() == cells {
+                            entry.star_dead_cells.clone()
+                        } else if entry.star_cell_counts.len() == cells {
+                            crate::spatial_analysis::star_dead_cell_flags(
+                                &entry.star_cell_counts,
+                                crate::spatial_analysis::SpatialAnalysisConfig::default()
+                                    .dead_cell_ratio,
+                            )
+                        } else {
+                            vec![false; cells]
+                        };
+                        let extinction_cells = if sig.cell_relative_ratios.len() == cells {
+                            sig.cell_relative_ratios
+                                .iter()
+                                .map(|ratio| {
+                                    ratio.is_some_and(|value| {
+                                        value < phot_config.local_extinction_ratio
+                                    })
+                                })
+                                .collect()
+                        } else {
+                            vec![false; cells]
+                        };
+                        m.spatial_evidence =
+                            Some(crate::sequence_analysis::QualityRegionEvidence {
+                                grid_cols: entry.grid_cols,
+                                grid_rows: entry.grid_rows,
+                                image_width: entry.width,
+                                image_height: entry.height,
+                                low_star_cells,
+                                extinction_cells,
+                                star_loss_cells: checked_mask(sig.star_drop_cells),
+                                background_rise_cells: checked_mask(sig.bg_rise_cells),
+                                background_fall_cells: checked_mask(sig.bg_fall_cells),
+                                glow_cells: checked_mask(entry.bg_glow_cells.clone()),
+                            });
+                    }
+                }
             }
         }
     }

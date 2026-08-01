@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import type { ImageQualityResult } from '../../api/types';
 import QualityAnalysisSummary from '../QualityAnalysisSummary';
 
@@ -43,5 +43,36 @@ describe('QualityAnalysisSummary', () => {
     render(<QualityAnalysisSummary statusMessage="Choose a project to load quality." />);
 
     expect(screen.getByText('Choose a project to load quality.')).toBeInTheDocument();
+  });
+
+  it('offers a measured region overlay only when one is available', () => {
+    const onToggleOverlay = vi.fn();
+    render(
+      <QualityAnalysisSummary
+        quality={{
+          ...quality,
+          spatial_overlay: {
+            grid_cols: 2,
+            grid_rows: 2,
+            image_width: 2000,
+            image_height: 1500,
+            low_star_cells: [true, false, false, false],
+            extinction_cells: [false, false, false, false],
+            star_loss_cells: [false, false, false, false],
+            background_rise_cells: [false, false, false, false],
+            background_fall_cells: [false, false, false, false],
+            glow_cells: [false, false, false, false],
+          },
+        }}
+        overlayVisible={false}
+        onToggleOverlay={onToggleOverlay}
+      />,
+    );
+
+    const toggle = screen.getByRole('button', { name: /show affected regions/i });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByText('Low star coverage')).toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(onToggleOverlay).toHaveBeenCalledOnce();
   });
 });
