@@ -4420,6 +4420,11 @@
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 
+/* Keep the score clear of the selection marker in the top-right corner. */
+.image-card-wrapper.multi-selected .quality-badge {
+  right: 40px;
+}
+
 .control-row {
   display: flex;
   justify-content: space-between;

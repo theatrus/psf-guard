@@ -637,6 +637,29 @@ test('All Projects loads scores without starting a quality scan', async ({
   expect(qualityScanRequests).toBe(0);
 });
 
+test('Grid selection marker leaves the quality score visible', async ({ page }) => {
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}`);
+
+  const cards = page.locator('.image-card');
+  await expect(cards).toHaveCount(4, { timeout: 15_000 });
+  await expect(page.locator('.image-card .quality-badge')).toHaveCount(4);
+  await cards.nth(0).click();
+
+  const selected = page.locator('.image-card-wrapper.multi-selected');
+  await expect(selected).toHaveCount(1);
+  const gap = await selected.evaluate((wrapper) => {
+    const marker = getComputedStyle(wrapper, '::after');
+    const wrapperBounds = wrapper.getBoundingClientRect();
+    const scoreBounds = wrapper.querySelector('.quality-badge')!.getBoundingClientRect();
+    const markerLeft = wrapperBounds.right
+      - Number.parseFloat(marker.right)
+      - Number.parseFloat(marker.width);
+    return markerLeft - scoreBounds.right;
+  });
+
+  expect(gap).toBeGreaterThanOrEqual(4);
+});
+
 test('Sequence chart Shift-click selects a visible range', async ({ page }) => {
   await page.goto(
     `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`
