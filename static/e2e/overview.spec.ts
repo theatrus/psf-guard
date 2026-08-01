@@ -22,6 +22,16 @@ test.beforeEach(async ({ request }) => {
 test('overview puts projects ahead of a compact catalog summary', async ({
   page,
 }) => {
+  await page.route(`**/api/db/${dbId}/projects/overview`, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    const alpha = body.data.find(
+      (project: { id: number }) => project.id === 1
+    );
+    expect(alpha).toBeTruthy();
+    alpha.total_desired = 4;
+    await route.fulfill({ response, json: body });
+  });
   await page.goto('/');
 
   const summary = page.locator('.overview-summary');
@@ -48,6 +58,52 @@ test('overview puts projects ahead of a compact catalog summary', async ({
   await expect(
     alphaCard.getByRole('button', { name: 'Edit project' })
   ).toBeVisible();
+  await expect(alphaCard.getByText('1 / 4 desired')).toBeVisible();
+  const desiredProgress = alphaCard.locator('.project-desired-progress');
+  const desiredLabel = desiredProgress.getByText('Desired progress', {
+    exact: true,
+  });
+  const desiredBar = desiredProgress.locator('.desired-progress-bar');
+  const gradingStatus = alphaCard.locator('.project-grading-progress');
+  const gradingLabel = gradingStatus.getByText('Grading status', {
+    exact: true,
+  });
+  const gradingBar = gradingStatus.getByRole('img', {
+    name: /Grading status: \d+ accepted, \d+ rejected, \d+ pending/,
+  });
+  await expect(desiredLabel).toBeVisible();
+  await expect(desiredBar).toBeVisible();
+  await expect(gradingLabel).toBeVisible();
+  await expect(gradingBar).toBeVisible();
+  const [
+    statsBounds,
+    desiredLabelBounds,
+    desiredBarBounds,
+    gradingLabelBounds,
+    gradingBarBounds,
+  ] = await Promise.all([
+    alphaCard.locator('.project-stats').boundingBox(),
+    desiredLabel.boundingBox(),
+    desiredBar.boundingBox(),
+    gradingLabel.boundingBox(),
+    gradingBar.boundingBox(),
+  ]);
+  expect(statsBounds).not.toBeNull();
+  expect(desiredLabelBounds).not.toBeNull();
+  expect(desiredBarBounds).not.toBeNull();
+  expect(gradingLabelBounds).not.toBeNull();
+  expect(gradingBarBounds).not.toBeNull();
+  expect(desiredLabelBounds!.y + desiredLabelBounds!.height)
+    .toBeLessThanOrEqual(desiredBarBounds!.y);
+  expect(desiredBarBounds!.y + desiredBarBounds!.height)
+    .toBeLessThanOrEqual(gradingLabelBounds!.y);
+  expect(gradingLabelBounds!.y + gradingLabelBounds!.height)
+    .toBeLessThanOrEqual(gradingBarBounds!.y);
+  expect(gradingBarBounds!.height).toBeLessThanOrEqual(10);
+  expect(Math.abs(desiredBarBounds!.x - statsBounds!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(desiredBarBounds!.width - statsBounds!.width)).toBeLessThanOrEqual(1);
+  expect(Math.abs(gradingBarBounds!.x - statsBounds!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(gradingBarBounds!.width - statsBounds!.width)).toBeLessThanOrEqual(1);
   const alphaTargets = alphaCard.locator('.target-compact-card');
   await expect(alphaTargets).toHaveCount(1);
   await expect(

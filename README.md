@@ -372,7 +372,7 @@ computer-vision libraries are required.
 
 The desktop app embeds the grader, so it needs no separate server or browser.
 `psf-guard server` serves the same UI for a NAS or remote setup. The overview
-shows projects, targets, completion, and grading progress; the other views add
+shows projects, targets, completion, and grading status; the other views add
 the image grid and comparison tools:
 
 - **Grid**: filter by project/target/status/date, multi-select with

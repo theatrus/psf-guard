@@ -962,7 +962,7 @@
   font-weight: 500;
 }
 
-/* Desired Progress Bar */
+/* Desired progress bar */
 .project-desired-progress {
   margin-bottom: 8px;
 }
@@ -989,16 +989,18 @@
   border-radius: 3px;
 }
 
-/* Mini Progress Bars */
+/* Grading status bar */
+.project-grading-progress {
+  margin: 4px 0 10px;
+}
+
 .project-mini-progress {
   display: flex;
   height: 6px;
   background: var(--color-bg-tertiary);
   border-radius: 3px;
   overflow: hidden;
-  margin-bottom: 10px;
   border: 1px solid var(--color-border-secondary);
-  margin-top: 4px;
 }
 
 .mini-progress-accepted {
