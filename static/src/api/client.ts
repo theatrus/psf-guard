@@ -53,6 +53,7 @@ import type {
   SatelliteAnalysisStatus,
   StackPreviewJob,
   ArtifactSearchJob,
+  ResidualFlatJob,
   ReferenceRegion,
   LatestStackPreviews,
   StackColorCatalog,
@@ -779,6 +780,65 @@ export const apiClient = {
     return `${basePath}${dbPath(
       dbId,
       `/stack-previews/artifact-searches/${encodeURIComponent(searchId)}/crops/${imageId}`
+    )}`;
+  },
+
+  startResidualFlat: async (
+    dbId: string,
+    searchId: string,
+    imageId: number,
+    maximumGain = 1.2
+  ): Promise<ResidualFlatJob> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<ResidualFlatJob>>(
+      dbPath(
+        dbId,
+        `/stack-previews/artifact-searches/${encodeURIComponent(searchId)}/residual-flats`
+      ),
+      { image_id: imageId, maximum_gain: maximumGain }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to start dust correction');
+    return data.data;
+  },
+
+  getResidualFlat: async (dbId: string, correctionId: string): Promise<ResidualFlatJob> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<ResidualFlatJob>>(
+      dbPath(dbId, `/stack-previews/residual-flats/${encodeURIComponent(correctionId)}`)
+    );
+    if (!data.data) throw new Error(data.error || 'Dust correction not found');
+    return data.data;
+  },
+
+  getResidualFlatResponseUrl: (dbId: string, correctionId: string): string => {
+    const serverUrl = getCachedServerUrl();
+    const basePath = serverUrl ? `${serverUrl}/api` : '/api';
+    return `${basePath}${dbPath(
+      dbId,
+      `/stack-previews/residual-flats/${encodeURIComponent(correctionId)}/response`
+    )}`;
+  },
+
+  getResidualFlatPreviewUrl: (
+    dbId: string,
+    correctionId: string,
+    size: 'screen' | 'original' = 'screen'
+  ): string => {
+    const serverUrl = getCachedServerUrl();
+    const basePath = serverUrl ? `${serverUrl}/api` : '/api';
+    const query = size === 'original' ? '?size=original' : '';
+    return `${basePath}${dbPath(
+      dbId,
+      `/stack-previews/residual-flats/${encodeURIComponent(correctionId)}/preview`
+    )}${query}`;
+  },
+
+  getResidualFlatFitsUrl: (dbId: string, correctionId: string): string => {
+    const serverUrl = getCachedServerUrl();
+    const basePath = serverUrl ? `${serverUrl}/api` : '/api';
+    return `${basePath}${dbPath(
+      dbId,
+      `/stack-previews/residual-flats/${encodeURIComponent(correctionId)}/fits`
     )}`;
   },
 

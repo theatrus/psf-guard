@@ -4446,7 +4446,9 @@
 
 .stack-artifact-select,
 .stack-artifact-search,
-.stack-artifact-result button {
+.stack-artifact-result button,
+.stack-residual-flat button,
+.stack-residual-flat-actions a {
   padding: 0.45rem 0.7rem;
   color: var(--color-text-primary);
   font: inherit;
@@ -4459,7 +4461,9 @@
 
 .stack-artifact-select:hover:not(:disabled),
 .stack-artifact-select.active,
-.stack-artifact-result button:hover {
+.stack-artifact-result button:hover,
+.stack-residual-flat button:hover,
+.stack-residual-flat-actions a:hover {
   color: var(--color-primary);
   border-color: var(--color-primary);
 }
@@ -4599,6 +4603,46 @@
   border-radius: 999px;
   background: var(--color-bg-tertiary);
   font-weight: 600;
+}
+
+.stack-residual-flat {
+  margin-top: 1rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--color-bg-quaternary);
+}
+
+.stack-residual-flat > header,
+.stack-residual-flat-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.stack-residual-flat > header > span,
+.stack-residual-flat p {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+}
+
+.stack-residual-flat-response {
+  width: 100%;
+  max-height: 220px;
+  margin-top: 0.65rem;
+  object-fit: contain;
+  border: 1px solid var(--color-bg-quaternary);
+  border-radius: 5px;
+  background: #05070a;
+}
+
+.stack-residual-flat-actions {
+  align-items: stretch;
+}
+
+.stack-residual-flat-actions > * {
+  flex: 1;
+  text-align: center;
+  text-decoration: none;
 }
 
 .stack-inspector-toolbar .zoom-info-compact {

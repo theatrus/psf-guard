@@ -6,9 +6,14 @@ import type {
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../api/client';
-import type { ArtifactSearchJob, ArtifactSearchResult, ReferenceRegion } from '../api/types';
+import type {
+  ArtifactSearchJob,
+  ArtifactSearchResult,
+  ReferenceRegion,
+  ResidualFlatJob,
+} from '../api/types';
 import { useImageZoom } from '../hooks/useImageZoom';
-import { morphologyLabel } from './artifactMorphology';
+import { canBuildResidualFlat, morphologyLabel } from './artifactMorphology';
 import {
   artifactRegionFromPoints,
   MAX_ARTIFACT_REGION_EDGE,
@@ -46,9 +51,9 @@ interface StackPreviewInspectorProps {
   onClose: () => void;
 }
 
-const terminalSearchStates = new Set(['completed', 'failed']);
+const terminalJobStates = new Set(['completed', 'failed']);
 
-function searchProgress(job: ArtifactSearchJob): number {
+function jobProgress(job: Pick<ArtifactSearchJob | ResidualFlatJob, 'state' | 'total_work_units' | 'completed_work_units'>): number {
   if (job.state === 'completed') return 100;
   if (!job.total_work_units) return 0;
   return Math.min(100, Math.round((job.completed_work_units / job.total_work_units) * 100));
@@ -93,6 +98,8 @@ export default function StackPreviewInspector({
   const [region, setRegion] = useState<ReferenceRegion | null>(null);
   const [regionError, setRegionError] = useState<string | null>(null);
   const [searchId, setSearchId] = useState<string | null>(null);
+  const [correctionId, setCorrectionId] = useState<string | null>(null);
+  const [showCorrected, setShowCorrected] = useState(false);
   const zoom = useImageZoom({ minScale: 0.05, maxScale: 10 });
   useHotkeys('escape', () => {
     if (selecting) {
@@ -113,15 +120,14 @@ export default function StackPreviewInspector({
   }, [zoom.containerRef]);
 
   useEffect(() => {
-    setLoaded(false);
-    setError(false);
-    setDimensions(null);
     setSelecting(false);
     setDragStart(null);
     setDragEnd(null);
     setRegion(null);
     setRegionError(null);
     setSearchId(null);
+    setCorrectionId(null);
+    setShowCorrected(false);
   }, [imageUrl]);
 
   const startSearch = useMutation({
@@ -153,10 +159,65 @@ export default function StackPreviewInspector({
     initialData: searchId && startSearch.data?.search_id === searchId ? startSearch.data : undefined,
     refetchInterval: (query) => {
       const state = query.state.data?.state;
-      return state && terminalSearchStates.has(state) ? false : 500;
+      return state && terminalJobStates.has(state) ? false : 500;
     },
   });
   const activeSearch = searchId ? (search.data ?? startSearch.data) : undefined;
+
+  const startCorrection = useMutation({
+    mutationFn: async (imageId: number) => {
+      if (!artifactSource || artifactSource.kind !== 'mono' || !activeSearch) {
+        throw new Error('Dust correction requires one mono source stack');
+      }
+      return apiClient.startResidualFlat(
+        artifactSource.dbId,
+        activeSearch.search_id,
+        imageId
+      );
+    },
+    onSuccess: (job) => {
+      setCorrectionId(job.correction_id);
+      setShowCorrected(false);
+    },
+  });
+
+  const correction = useQuery({
+    queryKey: ['db', artifactSource?.dbId, 'stack-residual-flat', correctionId],
+    queryFn: () => apiClient.getResidualFlat(artifactSource!.dbId, correctionId!),
+    enabled: !!artifactSource && correctionId !== null,
+    initialData: correctionId && startCorrection.data?.correction_id === correctionId
+      ? startCorrection.data
+      : undefined,
+    refetchInterval: (query) => {
+      const state = query.state.data?.state;
+      return state && terminalJobStates.has(state) ? false : 500;
+    },
+  });
+  const activeCorrection = correctionId
+    ? (correction.data ?? startCorrection.data)
+    : undefined;
+  const correctedReady = activeCorrection?.state === 'completed' && !!artifactSource;
+  const activeImageUrl = correctedReady && showCorrected
+    ? apiClient.getResidualFlatPreviewUrl(
+      artifactSource.dbId,
+      activeCorrection.correction_id,
+      'original'
+    )
+    : imageUrl;
+  const activeFitsUrl = correctedReady && showCorrected
+    ? apiClient.getResidualFlatFitsUrl(artifactSource.dbId, activeCorrection.correction_id)
+    : fitsUrl;
+
+  useEffect(() => {
+    setLoaded(false);
+    setError(false);
+    setDimensions(null);
+    setSelecting(false);
+    setDragStart(null);
+    setDragEnd(null);
+    setRegion(null);
+    setRegionError(null);
+  }, [activeImageUrl]);
 
   const resultsByFilter = useMemo(() => {
     const groups = new Map<string, ArtifactSearchJob['results']>();
@@ -298,7 +359,7 @@ export default function StackPreviewInspector({
           <div>
             <div className="stack-preview-eyebrow">{eyebrow}</div>
             <h2 id="stack-inspector-title">
-              {title} <span>{label}</span>
+              {title} <span>{showCorrected ? `${label} · dust-corrected` : label}</span>
             </h2>
           </div>
           <div className="stack-inspector-summary">
@@ -342,7 +403,7 @@ export default function StackPreviewInspector({
             ) : (
               <img
                 ref={zoom.imageRef}
-                src={imageUrl}
+                src={activeImageUrl}
                 alt={imageAlt}
                 data-testid="stack-inspector-image"
                 draggable={false}
@@ -393,7 +454,7 @@ export default function StackPreviewInspector({
                     <strong>{activeSearch.completed_work_units} / {activeSearch.total_work_units}</strong>
                   </div>
                   <div className="stack-preview-progress-track">
-                    <span style={{ width: `${searchProgress(activeSearch)}%` }} />
+                    <span style={{ width: `${jobProgress(activeSearch)}%` }} />
                   </div>
                 </div>
               )}
@@ -440,6 +501,25 @@ export default function StackPreviewInspector({
                           {result.direction}
                         </p>
                         <ArtifactMorphologyBadge result={result} />
+                        {artifactSource
+                          && canBuildResidualFlat(result, artifactSource.kind)
+                          && (
+                            <button
+                              type="button"
+                              disabled={startCorrection.isPending}
+                              onClick={() => {
+                                setCorrectionId(null);
+                                setShowCorrected(false);
+                                startCorrection.reset();
+                                startCorrection.mutate(result.image_id);
+                              }}
+                            >
+                              {startCorrection.isPending
+                                && startCorrection.variables === result.image_id
+                                ? 'Starting correction…'
+                                : 'Build dust-corrected preview'}
+                            </button>
+                          )}
                         {onOpenImage && (
                           <button type="button" onClick={() => {
                             onOpenImage(result.image_id);
@@ -455,6 +535,80 @@ export default function StackPreviewInspector({
               ))}
               {activeSearch.state === 'completed' && activeSearch.results.length === 0 && (
                 <div className="stack-artifact-note">No source crops had enough common coverage.</div>
+              )}
+              {activeCorrection && (
+                <section className="stack-residual-flat" aria-label="Dust-correction preview">
+                  <header>
+                    <div>
+                      <div className="stack-preview-eyebrow">Experimental correction</div>
+                      <h4>Detector-space dust residual</h4>
+                    </div>
+                    <span>{activeCorrection.filter_name}</span>
+                  </header>
+                  {activeCorrection.state !== 'completed' && activeCorrection.state !== 'failed' && (
+                    <div className="stack-artifact-progress" role="status">
+                      <div>
+                        <span>{activeCorrection.phase}</span>
+                        <strong>
+                          {activeCorrection.completed_work_units} / {activeCorrection.total_work_units || '…'}
+                        </strong>
+                      </div>
+                      <div className="stack-preview-progress-track">
+                        <span style={{ width: `${jobProgress(activeCorrection)}%` }} />
+                      </div>
+                    </div>
+                  )}
+                  {activeCorrection.error && (
+                    <div className="stack-preview-message error">{activeCorrection.error}</div>
+                  )}
+                  {activeCorrection.notes.map((note) => (
+                    <div className="stack-artifact-note" key={note}>{note}</div>
+                  ))}
+                  {correctedReady && activeCorrection.diagnostics && artifactSource && (
+                    <>
+                      <img
+                        className="stack-residual-flat-response"
+                        src={apiClient.getResidualFlatResponseUrl(
+                          artifactSource.dbId,
+                          activeCorrection.correction_id
+                        )}
+                        alt="Estimated residual-flat response; dark areas receive correction"
+                      />
+                      <p>
+                        {activeCorrection.sample_count} frames ·{' '}
+                        {activeCorrection.dither_span_pixels?.toFixed(1)}px dither span ·{' '}
+                        {activeCorrection.diagnostics.maximum_applied_gain.toFixed(3)}× peak gain
+                      </p>
+                      <p>
+                        {((activeCorrection.diagnostics.corrected_samples
+                          / activeCorrection.diagnostics.total_samples) * 100).toFixed(2)}% of the patch corrected ·{' '}
+                        {activeCorrection.diagnostics.largest_connected_pixels} connected pixels ·{' '}
+                        {activeCorrection.accepted_frames} frames stacked
+                      </p>
+                      <div className="stack-residual-flat-actions">
+                        <button type="button" onClick={() => setShowCorrected((current) => !current)}>
+                          {showCorrected ? 'Show original stack' : 'Show corrected stack'}
+                        </button>
+                        <a
+                          href={apiClient.getResidualFlatFitsUrl(
+                            artifactSource.dbId,
+                            activeCorrection.correction_id
+                          )}
+                          download
+                        >
+                          Download corrected FITS
+                        </a>
+                      </div>
+                    </>
+                  )}
+                </section>
+              )}
+              {startCorrection.error && !activeCorrection && (
+                <div className="stack-preview-message error">
+                  {startCorrection.error instanceof Error
+                    ? startCorrection.error.message
+                    : 'Dust correction could not start'}
+                </div>
               )}
             </aside>
           )}
@@ -472,7 +626,7 @@ export default function StackPreviewInspector({
               <button
                 className={`stack-artifact-select ${selecting ? 'active' : ''}`}
                 type="button"
-                disabled={!loaded || !artifactEnabled || startSearch.isPending}
+                disabled={!loaded || !artifactEnabled || showCorrected || startSearch.isPending}
                 aria-pressed={selecting}
                 onClick={() => {
                   setSelecting((current) => !current);
@@ -487,7 +641,7 @@ export default function StackPreviewInspector({
                 <button
                   className="stack-artifact-search"
                   type="button"
-                  disabled={!artifactEnabled || startSearch.isPending}
+                  disabled={!artifactEnabled || showCorrected || startSearch.isPending}
                   onClick={() => {
                     setSearchId(null);
                     startSearch.reset();
@@ -504,7 +658,9 @@ export default function StackPreviewInspector({
               {startSearch.error instanceof Error ? startSearch.error.message : 'Search failed'}
             </span>
           )}
-          <a className="stack-preview-download" href={fitsUrl} download>{downloadLabel}</a>
+          <a className="stack-preview-download" href={activeFitsUrl} download>
+            {showCorrected ? 'Download corrected FITS' : downloadLabel}
+          </a>
           <div className="zoom-info-compact">
             <span className="zoom-percentage-compact">{zoom.getZoomPercentage()}%</span>
           </div>
