@@ -103,4 +103,66 @@ describe('ImageCard quality reason', () => {
     expect(container.querySelector('.image-info .sequence-reason-trigger')).not.toBeInTheDocument();
     expect(container.querySelector('.image-preview .sequence-reason-trigger')).toBeInTheDocument();
   });
+
+  it('does not show a satellite warning for an orbital prediction alone', () => {
+    const { container } = render(
+      <ImageCard
+        dbId="db"
+        image={image}
+        isSelected={false}
+        onClick={() => {}}
+        onDoubleClick={() => {}}
+        quality={{
+          ...quality,
+          details: null,
+          satellite: {
+            predicted_tracks: 2,
+            potentially_bright_count: 2,
+            high_risk_count: 1,
+            maximum_bright_trail_risk: 0.9,
+            pixel_alignment_attempted: true,
+            pixel_aligned_count: 0,
+            pixel_aligned_high_risk_count: 0,
+            reject_recommended: false,
+            association: 'predicted_pixel_checked',
+          },
+        }}
+        selectionEffects={false}
+      />
+    );
+
+    expect(container.querySelector('.analysis-signal')).not.toBeInTheDocument();
+  });
+
+  it('shows a satellite warning when pixel evidence matches a prediction', () => {
+    render(
+      <ImageCard
+        dbId="db"
+        image={image}
+        isSelected={false}
+        onClick={() => {}}
+        onDoubleClick={() => {}}
+        quality={{
+          ...quality,
+          category: 'satellite_trail_risk',
+          details: null,
+          satellite: {
+            predicted_tracks: 2,
+            potentially_bright_count: 1,
+            high_risk_count: 0,
+            maximum_bright_trail_risk: 0.6,
+            pixel_alignment_attempted: true,
+            pixel_aligned_count: 1,
+            pixel_aligned_high_risk_count: 0,
+            reject_recommended: false,
+            association: 'predicted_with_pixel_alignment',
+          },
+        }}
+        selectionEffects={false}
+      />
+    );
+
+    expect(screen.getByText('Satellite Trail Detected')).toBeInTheDocument();
+    expect(screen.getByText('satellite pixel match')).toBeInTheDocument();
+  });
 });

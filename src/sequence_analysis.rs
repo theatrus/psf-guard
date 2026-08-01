@@ -18,9 +18,11 @@ pub enum IssueCategory {
     PointingJump,
     PointingDrift,
     PlateSolveFailed,
-    /// A solved single exposure has a predicted sunlit satellite crossing.
-    /// This is orbital prediction evidence, not a pixel-trail detection.
-    SatelliteTrailRisk,
+    /// A linear pixel trail aligns with a predicted satellite crossing.
+    /// The pixels confirm the trail, while the orbital identity remains a
+    /// candidate association.
+    #[serde(rename = "satellite_trail_risk", alias = "satellite_trail_detected")]
+    SatelliteTrailDetected,
     UnknownDegradation,
 }
 
@@ -229,8 +231,12 @@ pub struct SequenceSummary {
     pub out_of_target_count: usize,
     #[serde(default)]
     pub plate_solve_failed_count: usize,
-    #[serde(default)]
-    pub satellite_risk_count: usize,
+    #[serde(
+        default,
+        rename = "satellite_risk_count",
+        alias = "satellite_trail_count"
+    )]
+    pub satellite_trail_count: usize,
 }
 
 /// A scored capture sequence or target/filter stack-candidate rollup.
@@ -1037,26 +1043,26 @@ impl SequenceAnalyzer {
             let Some(satellite) = image.satellite.as_ref() else {
                 continue;
             };
-            if satellite.potentially_bright_count == 0 && satellite.pixel_aligned_count == 0 {
+            // Orbital geometry alone is not image-quality evidence. Keep
+            // prediction-only results in the satellite panel, but do not turn
+            // them into a warning or score penalty.
+            if satellite.pixel_aligned_count == 0 {
                 continue;
             }
-            if !result.flags.contains(&IssueCategory::SatelliteTrailRisk) {
-                result.flags.push(IssueCategory::SatelliteTrailRisk);
+            if !result
+                .flags
+                .contains(&IssueCategory::SatelliteTrailDetected)
+            {
+                result.flags.push(IssueCategory::SatelliteTrailDetected);
             }
             result
                 .category
-                .get_or_insert(IssueCategory::SatelliteTrailRisk);
+                .get_or_insert(IssueCategory::SatelliteTrailDetected);
 
-            let pixel_evidence = if satellite.pixel_aligned_count > 0 {
-                format!(
-                    "Pixel corridor alignment found {} matching trail(s), including {} high-risk candidate(s).",
-                    satellite.pixel_aligned_count, satellite.pixel_aligned_high_risk_count
-                )
-            } else if satellite.pixel_alignment_attempted {
-                "Pixel corridor alignment found no matching trail.".to_string()
-            } else {
-                "Pixel alignment was unavailable; this remains orbital prediction only.".to_string()
-            };
+            let pixel_evidence = format!(
+                "Pixel corridor alignment found {} matching trail(s), including {} high-risk candidate(s).",
+                satellite.pixel_aligned_count, satellite.pixel_aligned_high_risk_count
+            );
             let detail = format!(
                 "Predicted satellite crossing: {} track(s), {} potentially bright, {} high risk; maximum heuristic risk {:.2}. {}",
                 satellite.predicted_tracks,
@@ -2008,7 +2014,7 @@ impl SequenceAnalyzer {
             tracking_issues_detected: false,
             out_of_target_count: 0,
             plate_solve_failed_count: 0,
-            satellite_risk_count: 0,
+            satellite_trail_count: 0,
         };
 
         for r in results {
@@ -2042,8 +2048,8 @@ impl SequenceAnalyzer {
             if r.flags.contains(&IssueCategory::PlateSolveFailed) {
                 summary.plate_solve_failed_count += 1;
             }
-            if r.flags.contains(&IssueCategory::SatelliteTrailRisk) {
-                summary.satellite_risk_count += 1;
+            if r.flags.contains(&IssueCategory::SatelliteTrailDetected) {
+                summary.satellite_trail_count += 1;
             }
         }
 
@@ -2114,7 +2120,7 @@ fn apply_satellite_score(score: f64, satellite: Option<&SatelliteFrameMetrics>) 
     let Some(satellite) = satellite else {
         return score;
     };
-    if satellite.potentially_bright_count == 0 && satellite.pixel_aligned_count == 0 {
+    if satellite.pixel_aligned_count == 0 {
         return score;
     }
     if satellite.reject_recommended && satellite.pixel_aligned_high_risk_count > 0 {
@@ -3754,7 +3760,9 @@ mod tests {
             .flat_map(|sequence| &sequence.images)
             .find(|image| image.image_id == 2)
             .unwrap();
-        assert!(affected.flags.contains(&IssueCategory::SatelliteTrailRisk));
+        assert!(affected
+            .flags
+            .contains(&IssueCategory::SatelliteTrailDetected));
         assert!(affected.quality_score <= 0.35);
         assert!(affected
             .regrade_reason
@@ -3764,7 +3772,17 @@ mod tests {
             .details
             .as_deref()
             .is_some_and(|details| details.contains("Pixel corridor alignment found 1")));
-        assert_eq!(result[0].summary.satellite_risk_count, 1);
+        assert_eq!(result[0].summary.satellite_trail_count, 1);
+
+        let wire = serde_json::to_value(&result[0]).unwrap();
+        assert_eq!(wire["summary"]["satellite_risk_count"], 1);
+        assert!(wire["summary"].get("satellite_trail_count").is_none());
+        assert!(wire["images"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|image| image["flags"].as_array().unwrap())
+            .any(|flag| flag == "satellite_trail_risk"));
     }
 
     #[test]
@@ -3806,7 +3824,7 @@ mod tests {
     }
 
     #[test]
-    fn possible_satellite_risk_warns_without_regrade() {
+    fn prediction_without_pixel_match_does_not_warn_or_change_score() {
         let mut images = vec![
             make_image(1, 1000, 100.0, 2.0),
             make_image(2, 1060, 100.0, 2.0),
@@ -3831,8 +3849,12 @@ mod tests {
             .iter()
             .find(|image| image.image_id == 2)
             .unwrap();
-        assert!(affected.flags.contains(&IssueCategory::SatelliteTrailRisk));
-        assert!(affected.quality_score <= 0.75);
+        assert!(!affected
+            .flags
+            .contains(&IssueCategory::SatelliteTrailDetected));
+        assert_eq!(affected.quality_score, 1.0);
+        assert!(affected.category.is_none());
+        assert!(affected.details.is_none());
         assert!(affected.regrade_reason.is_none());
     }
 
@@ -3862,14 +3884,13 @@ mod tests {
             .iter()
             .find(|image| image.image_id == 2)
             .unwrap();
-        assert!(affected.flags.contains(&IssueCategory::SatelliteTrailRisk));
-        assert!(affected.quality_score <= 0.75);
-        assert!(affected.quality_score > 0.35);
+        assert!(!affected
+            .flags
+            .contains(&IssueCategory::SatelliteTrailDetected));
+        assert_eq!(affected.quality_score, 1.0);
+        assert!(affected.category.is_none());
         assert!(affected.regrade_reason.is_none());
-        assert!(affected
-            .details
-            .as_deref()
-            .is_some_and(|details| details.contains("found no matching trail")));
+        assert!(affected.details.is_none());
     }
 
     #[test]

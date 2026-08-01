@@ -543,10 +543,11 @@ also record the requested catalog epoch separately from download time.
 
 Bright-trail risk is a conservative geometry/illumination heuristic based on
 sunlight, range, elevation, and path length. It is not an apparent magnitude.
-Prediction alone warns and caps the score at 0.75; only a high-risk candidate
-with a pixel-aligned trail can cap the score at 0.35 and propose an `[Auto]`
-rejection through the same per-image confirmation workflow as other quality
-findings. The orbital identity remains a candidate association. See
+Prediction alone does not warn or change the score. A pixel-aligned trail adds
+a quality warning and can cap the score at 0.75. A high-risk candidate with a
+pixel-aligned trail can cap the score at 0.35 and propose an `[Auto]` rejection
+through the same per-image confirmation workflow as other quality findings.
+The orbital identity remains a candidate association. See
 **[docs/SATELLITES.md](docs/SATELLITES.md)** for provenance, caching, and
 failure semantics.
 
