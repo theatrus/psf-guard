@@ -21,7 +21,7 @@ pub enum IssueCategory {
     /// A linear pixel trail aligns with a predicted satellite crossing.
     /// The pixels confirm the trail, while the orbital identity remains a
     /// candidate association.
-    #[serde(alias = "satellite_trail_risk")]
+    #[serde(rename = "satellite_trail_risk", alias = "satellite_trail_detected")]
     SatelliteTrailDetected,
     UnknownDegradation,
 }
@@ -231,8 +231,11 @@ pub struct SequenceSummary {
     pub out_of_target_count: usize,
     #[serde(default)]
     pub plate_solve_failed_count: usize,
-    #[serde(default)]
-    #[serde(alias = "satellite_risk_count")]
+    #[serde(
+        default,
+        rename = "satellite_risk_count",
+        alias = "satellite_trail_count"
+    )]
     pub satellite_trail_count: usize,
 }
 
@@ -3770,6 +3773,16 @@ mod tests {
             .as_deref()
             .is_some_and(|details| details.contains("Pixel corridor alignment found 1")));
         assert_eq!(result[0].summary.satellite_trail_count, 1);
+
+        let wire = serde_json::to_value(&result[0]).unwrap();
+        assert_eq!(wire["summary"]["satellite_risk_count"], 1);
+        assert!(wire["summary"].get("satellite_trail_count").is_none());
+        assert!(wire["images"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|image| image["flags"].as_array().unwrap())
+            .any(|flag| flag == "satellite_trail_risk"));
     }
 
     #[test]

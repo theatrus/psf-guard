@@ -228,6 +228,7 @@ export default function ImageCard({
 }
 
 function formatCategory(category: string): string {
+  if (category === 'satellite_trail_risk') return 'Satellite Trail Detected';
   return category
     .split('_')
     .map(word => word.charAt(0).toUpperCase() + word.slice(1))

@@ -42,7 +42,7 @@ const multiSessionRollup = {
     tracking_issues_detected: false,
     out_of_target_count: 0,
     plate_solve_failed_count: 0,
-    satellite_trail_count: 0,
+    satellite_risk_count: 0,
   },
 };
 

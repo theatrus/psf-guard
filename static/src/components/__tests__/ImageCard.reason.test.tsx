@@ -144,7 +144,7 @@ describe('ImageCard quality reason', () => {
         onDoubleClick={() => {}}
         quality={{
           ...quality,
-          category: 'satellite_trail_detected',
+          category: 'satellite_trail_risk',
           details: null,
           satellite: {
             predicted_tracks: 2,
