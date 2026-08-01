@@ -122,10 +122,10 @@ length. It is deliberately not called magnitude: the active catalog does not
 provide a reliable exposure-band brightness model, and attitude/flares can
 change observed brightness.
 
-Possible or high orbital risk adds `SatelliteTrailRisk` and caps the frame
-score at 0.75 for review. Prediction alone never proposes an automatic
-rejection. A high-risk candidate must also have a pixel-aligned trail before
-the score is capped at 0.35 and regrade can propose a reason such as:
+Orbital risk alone does not add a quality warning or change the frame score.
+A pixel-aligned trail adds `SatelliteTrailDetected` and can cap the frame score
+at 0.75 for review. A high-risk candidate must also have a pixel-aligned trail
+before the score is capped at 0.35 and regrade can propose a reason such as:
 
 ```text
 [Auto] Pixel-aligned bright satellite trail - 1 high-risk candidate(s), risk 0.82; verify overlay

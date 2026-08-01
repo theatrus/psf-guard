@@ -1008,7 +1008,7 @@ fn category_label(category: &Option<IssueCategory>) -> &'static str {
         Some(IssueCategory::PointingJump) => "pointing-jump",
         Some(IssueCategory::PointingDrift) => "pointing-drift",
         Some(IssueCategory::PlateSolveFailed) => "unsolved",
-        Some(IssueCategory::SatelliteTrailRisk) => "satellite-risk",
+        Some(IssueCategory::SatelliteTrailDetected) => "satellite-trail",
         Some(IssueCategory::UnknownDegradation) => "unknown",
         None => "-",
     }

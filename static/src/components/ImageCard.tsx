@@ -201,24 +201,18 @@ export default function ImageCard({
             {quality.pointing.image_quality_evidence ? 'unsolved' : 'solve unavailable'}
           </span>
         )}
-        {qualityPresentation === 'full' && quality?.satellite
-          && (quality.satellite.potentially_bright_count > 0
-          || quality.satellite.pixel_aligned_count > 0) && (
+        {qualityPresentation === 'full'
+          && quality?.satellite
+          && quality.satellite.pixel_aligned_count > 0 && (
           <span
             className={quality.satellite.pixel_aligned_high_risk_count > 0
               ? 'analysis-signal danger'
               : 'analysis-signal warning'}
-            title={quality.satellite.pixel_aligned_count > 0
-              ? 'Pixel corridor evidence matches an orbital candidate'
-              : 'Orbital prediction only; no matching pixel trail was found'}
+            title="Pixel corridor evidence matches an orbital candidate"
           >
             satellite {quality.satellite.pixel_aligned_high_risk_count > 0
               ? 'trail matched'
-              : quality.satellite.pixel_aligned_count > 0
-                ? 'pixel match'
-                : quality.satellite.high_risk_count > 0
-                  ? 'high prediction'
-                  : 'possible'}
+              : 'pixel match'}
           </span>
         )}
         {qualityPresentation === 'full'

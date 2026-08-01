@@ -1431,7 +1431,7 @@ export interface SequenceSummary {
   tracking_issues_detected: boolean;
   out_of_target_count: number;
   plate_solve_failed_count: number;
-  satellite_risk_count: number;
+  satellite_trail_count: number;
 }
 
 export interface ReferenceValues {
