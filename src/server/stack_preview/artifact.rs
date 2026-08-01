@@ -15,6 +15,7 @@ use axum::{
     response::Response,
     Json,
 };
+use seiza_imgproc::components::{largest_connected_component, BinaryComponent, Connectivity};
 use seiza_stacking::{
     CalibrationMasters, FitsFrame, ReferenceRegion, RegisteredFrameMapping, SimilarityTransform,
 };
@@ -33,13 +34,15 @@ use crate::{
     server::{api::ApiResponse, extract::DbContext, handlers::AppError, state::AppState},
 };
 
-const ARTIFACT_SEARCH_CACHE_VERSION: u32 = 2;
+const ARTIFACT_SEARCH_CACHE_VERSION: u32 = 3;
 const MIN_REGION_EDGE: usize = 8;
 const MAX_REGION_EDGE: usize = 512;
 const MAX_ANALYSIS_SAMPLES: usize = 65_536;
 const MAX_TOTAL_ANALYSIS_SAMPLES: usize = 4_000_000;
 const MAX_RESULTS_PER_GROUP: usize = 50;
 const OUTLIER_SIGMA: f32 = 5.0;
+const ROBUST_PEAK_QUANTILE: f32 = 0.9995;
+const MIN_OUTLIER_SAMPLES: usize = 3;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ArtifactSearchRequest {
@@ -56,6 +59,18 @@ pub enum ArtifactSearchState {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactMorphology {
+    Ring,
+    BroadDark,
+    Linear,
+    Compact,
+    Diffuse,
+    #[default]
+    Unclassified,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactSearchResult {
     pub image_id: i32,
@@ -69,6 +84,8 @@ pub struct ArtifactSearchResult {
     pub coverage_fraction: f32,
     pub evidence: String,
     pub direction: String,
+    #[serde(default)]
+    pub morphology: ArtifactMorphology,
     pub crop_url: String,
 }
 
@@ -128,7 +145,13 @@ struct PreparedSearch {
 
 struct LoadedCrop {
     source: SearchSource,
-    analysis: Vec<f32>,
+    analysis: SampleGrid,
+}
+
+struct SampleGrid {
+    width: usize,
+    height: usize,
+    values: Vec<f32>,
 }
 
 impl StackPreviewManager {
@@ -548,7 +571,7 @@ fn prepare_search(
         .sum();
     Ok(PreparedSearch {
         public: ArtifactSearchJob {
-            schema_version: 1,
+            schema_version: 2,
             search_id,
             database_id: ctx.id.clone(),
             source_job_id: source_job_id.into(),
@@ -806,10 +829,14 @@ fn extract_source_crop(
     }
 }
 
-fn sampled_luminance(image: &seiza_stacking::LinearImage, max_samples: usize) -> Vec<f32> {
+fn sampled_luminance(image: &seiza_stacking::LinearImage, max_samples: usize) -> SampleGrid {
     let luminance = image.luminance();
     if luminance.len() <= max_samples {
-        return luminance;
+        return SampleGrid {
+            width: image.width,
+            height: image.height,
+            values: luminance,
+        };
     }
     let aspect_ratio = image.width as f64 / image.height as f64;
     let columns =
@@ -839,7 +866,11 @@ fn sampled_luminance(image: &seiza_stacking::LinearImage, max_samples: usize) ->
             });
         }
     }
-    sampled
+    SampleGrid {
+        width: columns,
+        height: rows,
+        values: sampled,
+    }
 }
 
 fn score_group(
@@ -850,8 +881,17 @@ fn score_group(
     if crops.len() < 3 {
         return Err("At least three source crops are required".into());
     }
-    let samples = crops[0].analysis.len();
-    if samples == 0 || crops.iter().any(|crop| crop.analysis.len() != samples) {
+    let sample_width = crops[0].analysis.width;
+    let sample_height = crops[0].analysis.height;
+    let samples = crops[0].analysis.values.len();
+    if samples == 0
+        || sample_width.saturating_mul(sample_height) != samples
+        || crops.iter().any(|crop| {
+            crop.analysis.width != sample_width
+                || crop.analysis.height != sample_height
+                || crop.analysis.values.len() != samples
+        })
+    {
         return Err("Source crops do not share a usable sample grid".into());
     }
     let mut baselines = vec![f32::NAN; samples];
@@ -861,7 +901,7 @@ fn score_group(
         values.extend(
             crops
                 .iter()
-                .map(|crop| crop.analysis[sample])
+                .map(|crop| crop.analysis.values[sample])
                 .filter(|value| value.is_finite()),
         );
         if values.len() >= 2 {
@@ -869,7 +909,7 @@ fn score_group(
         }
     }
     for crop in &mut crops {
-        for (value, baseline) in crop.analysis.iter_mut().zip(&baselines) {
+        for (value, baseline) in crop.analysis.values.iter_mut().zip(&baselines) {
             *value = if value.is_finite() && baseline.is_finite() {
                 *value - *baseline
             } else {
@@ -879,7 +919,7 @@ fn score_group(
     }
     let mut finite_residuals = crops
         .iter()
-        .flat_map(|crop| &crop.analysis)
+        .flat_map(|crop| &crop.analysis.values)
         .copied()
         .filter(|value| value.is_finite())
         .collect::<Vec<_>>();
@@ -895,16 +935,20 @@ fn score_group(
     let mut output = Vec::with_capacity(crops.len());
     for crop in crops {
         let mut absolute_sigma = Vec::new();
+        let mut sigma_values = Vec::with_capacity(samples);
         let mut bright = 0usize;
         let mut dark = 0usize;
         let mut finite = 0usize;
-        for residual in crop
-            .analysis
-            .iter()
-            .copied()
-            .filter(|value| value.is_finite())
-        {
-            let z = (residual - center) / sigma;
+        for residual in crop.analysis.values.iter().copied() {
+            let z = if residual.is_finite() {
+                (residual - center) / sigma
+            } else {
+                f32::NAN
+            };
+            sigma_values.push(z);
+            if !z.is_finite() {
+                continue;
+            }
             finite += 1;
             if z >= OUTLIER_SIGMA {
                 bright += 1;
@@ -917,7 +961,8 @@ fn score_group(
             continue;
         }
         absolute_sigma.sort_unstable_by(f32::total_cmp);
-        let peak_index = ((absolute_sigma.len() - 1) as f32 * 0.995).round() as usize;
+        let peak_index =
+            ((absolute_sigma.len() - 1) as f32 * ROBUST_PEAK_QUANTILE).round() as usize;
         let peak_sigma = absolute_sigma[peak_index];
         let bright_fraction = bright as f32 / finite as f32;
         let dark_fraction = dark as f32 / finite as f32;
@@ -930,6 +975,8 @@ fn score_group(
         } else {
             "mixed"
         };
+        let morphology =
+            classify_morphology(&sigma_values, sample_width, sample_height, bright, dark);
         output.push(ArtifactSearchResult {
             image_id: crop.source.image_id,
             filter_name: crop.source.filter_name,
@@ -942,6 +989,7 @@ fn score_group(
             coverage_fraction: finite as f32 / samples as f32,
             evidence: "low".into(),
             direction: direction.into(),
+            morphology,
             crop_url: format!(
                 "/api/db/{database_id}/stack-previews/artifact-searches/{search_id}/crops/{}",
                 crop.source.image_id
@@ -958,22 +1006,139 @@ fn score_group(
         let peer_score = median_in_place(&mut peers);
         let excess = output[index].score - peer_score;
         let outlier_fraction = output[index].bright_fraction + output[index].dark_fraction;
+        let outlier_samples = (outlier_fraction * samples as f32).round() as usize;
         output[index].evidence = if output[index].peak_sigma >= 8.0
             && outlier_fraction >= 0.002
+            && outlier_samples >= MIN_OUTLIER_SAMPLES
             && excess >= (peer_score * 0.5).max(2.0)
         {
             "strong".into()
         } else if output[index].peak_sigma >= 5.0
             && outlier_fraction >= 0.0005
+            && outlier_samples >= MIN_OUTLIER_SAMPLES
             && excess >= (peer_score * 0.25).max(1.0)
         {
             "possible".into()
         } else {
             "low".into()
         };
+        if output[index].evidence == "low" {
+            output[index].morphology = ArtifactMorphology::Unclassified;
+        }
     }
     output.sort_by(|left, right| right.score.total_cmp(&left.score));
     Ok(output)
+}
+
+fn classify_morphology(
+    sigma_values: &[f32],
+    width: usize,
+    height: usize,
+    bright_pixels: usize,
+    dark_pixels: usize,
+) -> ArtifactMorphology {
+    let bright = largest_threshold_component(sigma_values, width, height, true);
+    let dark = largest_threshold_component(sigma_values, width, height, false);
+
+    if bright
+        .as_ref()
+        .is_some_and(|component| is_ring(component, width))
+        || dark
+            .as_ref()
+            .is_some_and(|component| is_ring(component, width))
+    {
+        return ArtifactMorphology::Ring;
+    }
+
+    if let Some(component) = dark.as_ref()
+        && component.pixels.len() >= (sigma_values.len() / 200).max(12)
+        && component.width().min(component.height()) >= 5
+        && component.elongation <= 2.5
+        && component.fill_fraction() >= 0.35
+        && component.pixels.len() * 2 >= dark_pixels
+    {
+        return ArtifactMorphology::BroadDark;
+    }
+
+    let dominant = match (bright.as_ref(), dark.as_ref()) {
+        (Some(bright), Some(dark)) => {
+            if bright.pixels.len() >= dark.pixels.len() {
+                Some(bright)
+            } else {
+                Some(dark)
+            }
+        }
+        (Some(bright), None) => Some(bright),
+        (None, Some(dark)) => Some(dark),
+        (None, None) => None,
+    };
+    let Some(component) = dominant else {
+        return ArtifactMorphology::Unclassified;
+    };
+    if component.pixels.len() >= 6
+        && component.width().max(component.height()) >= 6
+        && component.elongation >= 4.0
+    {
+        return ArtifactMorphology::Linear;
+    }
+    let active_pixels = bright_pixels + dark_pixels;
+    if component.pixels.len() <= (sigma_values.len() / 500).max(12)
+        && component.width().max(component.height()) <= 8
+        && component.pixels.len() * 2 >= active_pixels
+    {
+        return ArtifactMorphology::Compact;
+    }
+    ArtifactMorphology::Diffuse
+}
+
+fn largest_threshold_component(
+    sigma_values: &[f32],
+    width: usize,
+    height: usize,
+    bright: bool,
+) -> Option<BinaryComponent> {
+    let mask = sigma_values
+        .iter()
+        .map(|value| {
+            u8::from(if bright {
+                *value >= OUTLIER_SIGMA
+            } else {
+                *value <= -OUTLIER_SIGMA
+            })
+        })
+        .collect::<Vec<_>>();
+    largest_connected_component(&mask, width, height, Connectivity::Eight)
+}
+
+fn is_ring(component: &BinaryComponent, image_width: usize) -> bool {
+    if component.pixels.len() < 12
+        || component.width().min(component.height()) < 5
+        || component.elongation > 1.8
+        || component.fill_fraction() > 0.68
+    {
+        return false;
+    }
+    let center_x = (component.min_x + component.max_x) as f32 * 0.5;
+    let center_y = (component.min_y + component.max_y) as f32 * 0.5;
+    let radius_x = (component.width() as f32 * 0.5).max(1.0);
+    let radius_y = (component.height() as f32 * 0.5).max(1.0);
+    let mut inner = 0usize;
+    let mut annulus = 0usize;
+    for &index in &component.pixels {
+        let x = index % image_width;
+        let y = index / image_width;
+        let dx = (x as f32 - center_x) / radius_x;
+        let dy = (y as f32 - center_y) / radius_y;
+        let radius = (dx * dx + dy * dy).sqrt();
+        if radius <= 0.35 {
+            inner += 1;
+        }
+        if (0.45..=1.15).contains(&radius) {
+            annulus += 1;
+        }
+    }
+    inner as f32 / component.pixels.len() as f32 <= 0.05
+        && annulus as f32 / component.pixels.len() as f32 >= 0.70
 }
 
 fn median_in_place(values: &mut [f32]) -> f32 {
@@ -1095,6 +1260,11 @@ mod tests {
     use seiza_stacking::LinearImage;
 
     fn crop(image_id: i32, values: Vec<f32>) -> LoadedCrop {
+        crop_grid(image_id, 1, values.len(), values)
+    }
+
+    fn crop_grid(image_id: i32, width: usize, height: usize, values: Vec<f32>) -> LoadedCrop {
+        assert_eq!(values.len(), width * height);
         LoadedCrop {
             source: SearchSource {
                 image_id,
@@ -1103,12 +1273,16 @@ mod tests {
                 grading_status: 0,
                 path: PathBuf::from(format!("{image_id}.fits")),
                 mapping: RegisteredFrameMapping::identity(
-                    &LinearImage::new(1, values.len(), 1, values.clone()).unwrap(),
+                    &LinearImage::new(width, height, 1, values.clone()).unwrap(),
                 ),
                 output_transform: None,
                 fingerprint: format!("{image_id}"),
             },
-            analysis: values,
+            analysis: SampleGrid {
+                width,
+                height,
+                values,
+            },
         }
     }
 
@@ -1145,6 +1319,167 @@ mod tests {
 
         assert!(results.iter().all(|result| result.evidence == "low"));
         assert!(results.iter().all(|result| result.score == 0.0));
+        assert!(results
+            .iter()
+            .all(|result| result.morphology == ArtifactMorphology::Unclassified));
+    }
+
+    #[test]
+    fn artifact_score_recognizes_a_broad_dark_shadow() {
+        let width = 64;
+        let height = 64;
+        let normal = vec![0.0; width * height];
+        let mut artifact = normal.clone();
+        for y in 0..height {
+            for x in 0..width {
+                let dx = x as isize - 32;
+                let dy = y as isize - 32;
+                if dx * dx + dy * dy <= 10 * 10 {
+                    artifact[y * width + x] = -10.0;
+                }
+            }
+        }
+        let results = score_group(
+            "db",
+            &"a".repeat(64),
+            vec![
+                crop_grid(1, width, height, normal.clone()),
+                crop_grid(2, width, height, normal),
+                crop_grid(3, width, height, artifact),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(results[0].image_id, 3);
+        assert_eq!(results[0].direction, "dark");
+        assert_eq!(results[0].morphology, ArtifactMorphology::BroadDark);
+    }
+
+    #[test]
+    fn morphology_recognizes_a_soft_dust_shadow() {
+        let width = 64;
+        let height = 64;
+        let mut sigma_values = vec![0.0; width * height];
+        let mut dark_pixels = 0;
+        for y in 0..height {
+            for x in 0..width {
+                let dx = x as f32 - 32.0;
+                let dy = y as f32 - 32.0;
+                let z = -12.0 * (-(dx * dx + dy * dy) / (2.0 * 8.0_f32.powi(2))).exp();
+                sigma_values[y * width + x] = z;
+                if z <= -OUTLIER_SIGMA {
+                    dark_pixels += 1;
+                }
+            }
+        }
+
+        assert_eq!(
+            classify_morphology(&sigma_values, width, height, 0, dark_pixels),
+            ArtifactMorphology::BroadDark
+        );
+    }
+
+    #[test]
+    fn artifact_score_recognizes_a_defocused_ring_shape() {
+        let width = 64;
+        let height = 64;
+        let normal = vec![0.0; width * height];
+        let mut artifact = normal.clone();
+        for y in 0..height {
+            for x in 0..width {
+                let dx = x as isize - 32;
+                let dy = y as isize - 32;
+                let radius_squared = dx * dx + dy * dy;
+                if (8 * 8..=12 * 12).contains(&radius_squared) {
+                    artifact[y * width + x] = 10.0;
+                }
+            }
+        }
+        let results = score_group(
+            "db",
+            &"a".repeat(64),
+            vec![
+                crop_grid(1, width, height, normal.clone()),
+                crop_grid(2, width, height, normal),
+                crop_grid(3, width, height, artifact),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(results[0].image_id, 3);
+        assert_eq!(results[0].morphology, ArtifactMorphology::Ring);
+    }
+
+    #[test]
+    fn artifact_score_recognizes_a_diagonal_trail() {
+        let width = 64;
+        let height = 64;
+        let normal = vec![0.0; width * height];
+        let mut artifact = normal.clone();
+        for position in 12..52 {
+            artifact[position * width + position] = 10.0;
+        }
+        let results = score_group(
+            "db",
+            &"a".repeat(64),
+            vec![
+                crop_grid(1, width, height, normal.clone()),
+                crop_grid(2, width, height, normal),
+                crop_grid(3, width, height, artifact),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(results[0].image_id, 3);
+        assert_eq!(results[0].morphology, ArtifactMorphology::Linear);
+    }
+
+    #[test]
+    fn artifact_score_recognizes_a_compact_spot() {
+        let width = 64;
+        let height = 64;
+        let normal = vec![0.0; width * height];
+        let mut artifact = normal.clone();
+        for y in 31..=32 {
+            for x in 31..=32 {
+                artifact[y * width + x] = 10.0;
+            }
+        }
+        let results = score_group(
+            "db",
+            &"a".repeat(64),
+            vec![
+                crop_grid(1, width, height, normal.clone()),
+                crop_grid(2, width, height, normal),
+                crop_grid(3, width, height, artifact),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(results[0].image_id, 3);
+        assert_eq!(results[0].morphology, ArtifactMorphology::Compact);
+    }
+
+    #[test]
+    fn artifact_score_does_not_promote_one_hot_sample() {
+        let width = 8;
+        let height = 8;
+        let normal = vec![0.0; width * height];
+        let mut artifact = normal.clone();
+        artifact[4 * width + 4] = 10.0;
+        let results = score_group(
+            "db",
+            &"a".repeat(64),
+            vec![
+                crop_grid(1, width, height, normal.clone()),
+                crop_grid(2, width, height, normal),
+                crop_grid(3, width, height, artifact),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(results[0].evidence, "low");
+        assert_eq!(results[0].morphology, ArtifactMorphology::Unclassified);
     }
 
     #[test]
@@ -1169,7 +1504,9 @@ mod tests {
     #[test]
     fn sampled_luminance_caps_analysis_work() {
         let image = LinearImage::new(512, 512, 1, vec![1.0; 512 * 512]).unwrap();
-        assert!(sampled_luminance(&image, MAX_ANALYSIS_SAMPLES).len() <= MAX_ANALYSIS_SAMPLES);
+        assert!(
+            sampled_luminance(&image, MAX_ANALYSIS_SAMPLES).values.len() <= MAX_ANALYSIS_SAMPLES
+        );
     }
 
     #[test]
@@ -1181,6 +1518,6 @@ mod tests {
         let image = LinearImage::new(512, 512, 1, values).unwrap();
         let sampled = sampled_luminance(&image, MAX_ANALYSIS_SAMPLES);
 
-        assert!(sampled.iter().any(|value| *value > 0.0));
+        assert!(sampled.values.iter().any(|value| *value > 0.0));
     }
 }

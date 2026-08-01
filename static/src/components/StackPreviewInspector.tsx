@@ -6,8 +6,9 @@ import type {
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../api/client';
-import type { ArtifactSearchJob, ReferenceRegion } from '../api/types';
+import type { ArtifactSearchJob, ArtifactSearchResult, ReferenceRegion } from '../api/types';
 import { useImageZoom } from '../hooks/useImageZoom';
+import { morphologyLabel } from './artifactMorphology';
 import {
   artifactRegionFromPoints,
   MAX_ARTIFACT_REGION_EDGE,
@@ -62,6 +63,11 @@ function gradeLabel(status: number): string {
   if (status === 1) return 'Accepted';
   if (status === 2) return 'Rejected';
   return 'Pending';
+}
+
+function ArtifactMorphologyBadge({ result }: { result: ArtifactSearchResult }) {
+  const label = morphologyLabel(result);
+  return label ? <p className="stack-artifact-morphology">{label}</p> : null;
 }
 
 export default function StackPreviewInspector({
@@ -402,6 +408,11 @@ export default function StackPreviewInspector({
                   No source frame clearly separates from its peers in this region.
                 </div>
               )}
+              {hasSuspect && (
+                <div className="stack-artifact-note">
+                  Shape labels describe the changed pixels. They suggest a cause but do not prove one.
+                </div>
+              )}
               {resultsByFilter.map(([filterName, results]) => (
                 <section className="stack-artifact-result-group" key={filterName}>
                   <h4>{filterName}</h4>
@@ -428,6 +439,7 @@ export default function StackPreviewInspector({
                           {((result.bright_fraction + result.dark_fraction) * 100).toFixed(2)}% changed ·{' '}
                           {result.direction}
                         </p>
+                        <ArtifactMorphologyBadge result={result} />
                         {onOpenImage && (
                           <button type="button" onClick={() => {
                             onOpenImage(result.image_id);

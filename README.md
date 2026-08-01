@@ -399,8 +399,9 @@ the image grid and comparison tools:
   beside the display PNG. Completed R/G/B, L/R/G/B, or Ha/OIII/SII stacks can
   then be registered across filters and combined into RGB, LRGB, or a selected
   narrowband palette without altering the source integrations. The full-size
-  inspector can map a selected artifact back through the saved registrations
-  and rank suspect source crops without changing their grades. See
+  inspector can map a selected artifact back through the saved registrations,
+  rank suspect source crops, and flag dust-shadow, ring, trail-like, or compact
+  shapes without changing their grades. See
   **[docs/STACKING_PREVIEWS.md](docs/STACKING_PREVIEWS.md)**.
 - **Sky context and plate solving**: coordinate-only catalog matches appear
   immediately. Choose **Solve field** (or press `O`) to run Seiza against the

@@ -345,6 +345,7 @@ export interface ArtifactSearchResult {
   coverage_fraction: number;
   evidence: 'strong' | 'possible' | 'low';
   direction: 'bright' | 'dark' | 'mixed';
+  morphology: 'ring' | 'broad_dark' | 'linear' | 'compact' | 'diffuse' | 'unclassified';
   crop_url: string;
 }
 

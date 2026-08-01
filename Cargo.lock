@@ -4915,7 +4915,7 @@ dependencies = [
 [[package]]
 name = "seiza"
 version = "0.13.0"
-source = "git+https://github.com/theatrus/seiza.git?rev=aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92#aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92"
+source = "git+https://github.com/theatrus/seiza.git?rev=df16848a2139fbc568302b8c16d3bce00deca4e4#df16848a2139fbc568302b8c16d3bce00deca4e4"
 dependencies = [
  "directories",
  "image",
@@ -4935,7 +4935,7 @@ dependencies = [
 [[package]]
 name = "seiza-background"
 version = "0.1.0"
-source = "git+https://github.com/theatrus/seiza.git?rev=aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92#aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92"
+source = "git+https://github.com/theatrus/seiza.git?rev=df16848a2139fbc568302b8c16d3bce00deca4e4#df16848a2139fbc568302b8c16d3bce00deca4e4"
 dependencies = [
  "rayon",
  "seiza-stats",
@@ -4946,7 +4946,7 @@ dependencies = [
 [[package]]
 name = "seiza-deconvolution"
 version = "0.1.0"
-source = "git+https://github.com/theatrus/seiza.git?rev=aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92#aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92"
+source = "git+https://github.com/theatrus/seiza.git?rev=df16848a2139fbc568302b8c16d3bce00deca4e4#df16848a2139fbc568302b8c16d3bce00deca4e4"
 dependencies = [
  "rayon",
  "serde",
@@ -4956,7 +4956,7 @@ dependencies = [
 [[package]]
 name = "seiza-download"
 version = "0.6.0"
-source = "git+https://github.com/theatrus/seiza.git?rev=aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92#aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92"
+source = "git+https://github.com/theatrus/seiza.git?rev=df16848a2139fbc568302b8c16d3bce00deca4e4#df16848a2139fbc568302b8c16d3bce00deca4e4"
 dependencies = [
  "async-compression",
  "directories",
@@ -4974,7 +4974,7 @@ dependencies = [
 [[package]]
 name = "seiza-fits"
 version = "0.2.1"
-source = "git+https://github.com/theatrus/seiza.git?rev=aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92#aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92"
+source = "git+https://github.com/theatrus/seiza.git?rev=df16848a2139fbc568302b8c16d3bce00deca4e4#df16848a2139fbc568302b8c16d3bce00deca4e4"
 dependencies = [
  "multiversion",
  "seiza-stretch",
@@ -4984,7 +4984,7 @@ dependencies = [
 [[package]]
 name = "seiza-imgproc"
 version = "0.3.0"
-source = "git+https://github.com/theatrus/seiza.git?rev=aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92#aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92"
+source = "git+https://github.com/theatrus/seiza.git?rev=df16848a2139fbc568302b8c16d3bce00deca4e4#df16848a2139fbc568302b8c16d3bce00deca4e4"
 dependencies = [
  "rayon",
 ]
@@ -4992,7 +4992,7 @@ dependencies = [
 [[package]]
 name = "seiza-satellites"
 version = "0.4.3"
-source = "git+https://github.com/theatrus/seiza.git?rev=aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92#aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92"
+source = "git+https://github.com/theatrus/seiza.git?rev=df16848a2139fbc568302b8c16d3bce00deca4e4#df16848a2139fbc568302b8c16d3bce00deca4e4"
 dependencies = [
  "directories",
  "fs2",
@@ -5010,7 +5010,7 @@ dependencies = [
 [[package]]
 name = "seiza-stacking"
 version = "0.2.0"
-source = "git+https://github.com/theatrus/seiza.git?rev=aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92#aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92"
+source = "git+https://github.com/theatrus/seiza.git?rev=df16848a2139fbc568302b8c16d3bce00deca4e4#df16848a2139fbc568302b8c16d3bce00deca4e4"
 dependencies = [
  "rayon",
  "seiza",
@@ -5028,12 +5028,12 @@ dependencies = [
 [[package]]
 name = "seiza-stats"
 version = "0.1.0"
-source = "git+https://github.com/theatrus/seiza.git?rev=aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92#aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92"
+source = "git+https://github.com/theatrus/seiza.git?rev=df16848a2139fbc568302b8c16d3bce00deca4e4#df16848a2139fbc568302b8c16d3bce00deca4e4"
 
 [[package]]
 name = "seiza-stretch"
 version = "0.2.0"
-source = "git+https://github.com/theatrus/seiza.git?rev=aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92#aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92"
+source = "git+https://github.com/theatrus/seiza.git?rev=df16848a2139fbc568302b8c16d3bce00deca4e4#df16848a2139fbc568302b8c16d3bce00deca4e4"
 dependencies = [
  "rayon",
  "seiza-stats",
@@ -5044,7 +5044,7 @@ dependencies = [
 [[package]]
 name = "seiza-xisf"
 version = "0.1.0"
-source = "git+https://github.com/theatrus/seiza.git?rev=aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92#aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92"
+source = "git+https://github.com/theatrus/seiza.git?rev=df16848a2139fbc568302b8c16d3bce00deca4e4#df16848a2139fbc568302b8c16d3bce00deca4e4"
 dependencies = [
  "flate2",
  "lz4_flex",

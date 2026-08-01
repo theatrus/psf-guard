@@ -113,20 +113,28 @@ source frame.
 PSF Guard calibrates and prepares each source as it did for the stack, applies
 the retained source-to-stack registration and normalization, and compares the
 aligned crops against their per-pixel median. Results rank unusually bright or
-dark crops within each filter. Each result shows its crop, capture time,
-deviation strength, changed-pixel fraction, and a link to the full source
-image. Color-preview searches also apply the retained channel-to-color
-registration, so the selected area maps through both registration steps.
+dark crops within each filter. For a result that separates from its peers, PSF
+Guard also checks the changed pixels' shape. It can label a broad dark patch as
+a dust-shadow candidate, a hollow round patch as a ring or donut candidate, a
+thin feature as trail-like, or a small feature as a compact spot. Each result
+shows its crop, capture time, deviation strength, changed-pixel fraction, shape
+label, and a link to the full source image. Color-preview searches also apply
+the retained channel-to-color registration, so the selected area maps through
+both registration steps.
 Every integrated frame contributes to the comparison. For a large stack, the
 result panel keeps the 50 strongest crops per filter instead of creating and
 loading an unbounded list of preview images.
 
 The search is evidence for review, not a grade. **Strong**, **possible**, and
 **low** describe how far one crop differs from the other crops in that small
-area. They do not identify the cause and never accept or reject an image. At
-least three integrated frames are needed for a filter. A color search skips a
-channel that has fewer than three inputs and says why. The region must measure
-8–512 pixels on each side.
+area. Shape labels describe geometry, not a proven cause: a dust-shadow
+candidate may instead be a cloud edge or obstruction, and a ring may instead
+be a reflection. Low-evidence results stay unclassified. The search never
+accepts or rejects an image. It cannot isolate a defect that appears in the
+same registered place in every source because that defect becomes part of the
+peer baseline. At least three integrated frames are needed for a filter. A
+color search skips a channel that has fewer than three inputs and says why. The
+region must measure 8–512 pixels on each side.
 
 ![A selected stack region ranked across three real source frames](stack-artifact-finder.png)
 
