@@ -272,6 +272,7 @@ async fn start_server_for_tauri(
         // The Tauri app is local-only and trusted; always enable CRUD so the
         // settings panel can add/remove databases without an extra flag.
         allow_database_management: true,
+        allow_anonymous_access: false,
         // The desktop app does not read the server TOML.
         site_banner: None,
         // Tauri binds localhost and does not use browser authentication.

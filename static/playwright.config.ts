@@ -93,6 +93,9 @@ export default defineConfig({
       command:
         `${serverCommand} server ` +
         `--port ${PORT} ` +
+        // Loopback, because database management with no user account is a
+        // localhost-only grant. The specs reach the server here anyway.
+        `--host 127.0.0.1 ` +
         `--registry ${path.join(TMP_BASE, 'registry.json')} ` +
         `--cache-dir ${path.join(TMP_BASE, 'cache')} ` +
         `--allow-database-management`,
@@ -120,6 +123,7 @@ export default defineConfig({
       command:
         `${serverCommand} server ` +
         `--port ${port} ` +
+        `--host 127.0.0.1 ` +
         `--registry ${instance.registryPath} ` +
         `--cache-dir ${instance.cacheDir} ` +
         `--config ${instance.configPath}` +

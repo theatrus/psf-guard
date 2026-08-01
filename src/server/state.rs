@@ -48,6 +48,11 @@ pub struct AppState {
     pub site_banner: RwLock<Option<crate::config::SiteBannerConfig>>,
     /// Optional browser/server authentication. Tauri leaves this unset.
     pub server_auth: RwLock<Option<crate::server::auth::ServerAuth>>,
+    /// Whether a caller without a session is trusted while no user accounts
+    /// exist. True for a loopback bind — the desktop app and local
+    /// development. False once the server listens on a routable address, so
+    /// an open port cannot read or change a catalog without a login.
+    pub anonymous_access_trusted: RwLock<bool>,
     /// Process-global 24-hour cache for the public release notice feeds.
     pub update_notices: crate::server::update_notice::UpdateNoticeManager,
     /// Tuning policy for the parallel scans and background pre-generation (see
@@ -385,6 +390,7 @@ impl AppState {
             allow_database_management: RwLock::new(false),
             site_banner: RwLock::new(None),
             server_auth: RwLock::new(None),
+            anonymous_access_trusted: RwLock::new(true),
             update_notices: crate::server::update_notice::UpdateNoticeManager::default(),
             worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             preview_encoding: RwLock::new(crate::preview_format::PreviewEncoding::default()),
@@ -415,6 +421,17 @@ impl AppState {
 
     pub fn server_auth(&self) -> Option<crate::server::auth::ServerAuth> {
         self.server_auth.read().unwrap().clone()
+    }
+
+    /// Say whether a session-less caller is trusted while the server has no
+    /// user accounts. Loopback servers set this true; a routable bind sets it
+    /// false so the API answers 401 until an operator adds a user.
+    pub fn set_anonymous_access_trusted(&self, trusted: bool) {
+        *self.anonymous_access_trusted.write().unwrap() = trusted;
+    }
+
+    pub fn anonymous_access_trusted(&self) -> bool {
+        *self.anonymous_access_trusted.read().unwrap()
     }
 
     /// Toggle the database CRUD endpoints. When false, mutating routes on
@@ -538,6 +555,7 @@ impl AppState {
             allow_database_management: RwLock::new(false),
             site_banner: RwLock::new(None),
             server_auth: RwLock::new(None),
+            anonymous_access_trusted: RwLock::new(true),
             update_notices: crate::server::update_notice::UpdateNoticeManager::default(),
             worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             preview_encoding: RwLock::new(crate::preview_format::PreviewEncoding::default()),

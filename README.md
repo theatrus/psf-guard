@@ -883,8 +883,11 @@ Viewer accounts can browse images and cached results, but cannot change
 grades, plans, files, or server settings. Set
 `allow_read_only_compute = true` only when viewers should also start stacks,
 plate solves, and satellite predictions. Editor accounts keep normal write
-and compute access. With no users, the server stays open as before. Tauri
-always stays unauthenticated on its localhost-only server. See
+and compute access. With no users, a loopback server stays open as before; a
+server bound to any other address answers 401 until you add one, unless you
+pass `--allow-anonymous-access` to keep it open to everyone. Remote sync and
+image upload keep working either way on their own bearer keys. Tauri always
+stays unauthenticated on its localhost-only server. See
 [Server authentication](docs/AUTHENTICATION.md).
 
 Signed-in editors can manage every account from the separate **Users** tab in

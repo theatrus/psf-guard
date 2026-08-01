@@ -6,6 +6,40 @@ localhost and remains trusted by the desktop UI.
 
 ![PSF Guard server login](server-login.png)
 
+## What a server with no accounts serves
+
+The bind address decides what an account-less server hands out. Reaching a
+loopback server already means reaching the machine, so it stays open:
+
+| Bind address | No accounts configured |
+|---|---|
+| `127.0.0.1`, `::1`, `localhost` | Full access, as before. The desktop app and local development use this. |
+| Anything else, including the `0.0.0.0` default | Every API request answers 401, including reads. |
+
+A network server therefore needs at least one account before it serves
+anything. `psf-guard server --allow-database-management` goes further and
+refuses to start on a network address until an account exists, because those
+routes name paths the server then reads and writes. Only an editor can use
+them once it does.
+
+Remote sync and image upload are the exception. They carry their own
+`Authorization: Bearer` keys, so those routes keep working on a server with no
+browser accounts — that is how a headless intake box runs.
+
+### Keeping a network server open
+
+`--allow-anonymous-access` gives every caller on a network address what a
+localhost server gives them, with no accounts and no login:
+
+```bash
+psf-guard server --host 0.0.0.0 --allow-anonymous-access
+```
+
+It exists for a server on a network you trust as much as the machine itself,
+and for upgrading an older deployment without an outage. It hands full editor
+access — grading, imports, and, with `--allow-database-management`, the
+registry — to anyone who can reach the port. Add accounts and drop the flag.
+
 ## Manage users from the CLI
 
 Add a viewer or editor. If `--password-file` is absent, the CLI prompts twice
@@ -129,6 +163,10 @@ continue to work when browser authentication is enabled.
   `psf-guard users add editor --role read-write --password-file PATH`. PSF Guard
   stores only the resulting hash in `auth.json`.
 - Keep `--allow-database-management` off unless browser-side database
-  management is needed. An editor login does not override that gate.
+  management is needed. An editor login does not override that gate, and the
+  gate does not override the login: on a network address the server needs
+  both.
+- Treat `--allow-anonymous-access` as a temporary measure. A public server
+  running it has no access control at all.
 - Signing out revokes the current in-memory session. Restarting the server
   revokes every browser session.

@@ -90,6 +90,37 @@ fn app_with_auth(config: ServerAuthConfig) -> Router {
     Router::new().nest("/api", api)
 }
 
+/// A server with no user accounts. `anonymous_access_trusted` is what a
+/// loopback bind sets at startup; a routable bind sets it false.
+fn app_without_users(anonymous_access_trusted: bool) -> Router {
+    let state = Arc::new(AppState::new_for_test(
+        Connection::open_in_memory().unwrap(),
+    ));
+    state.set_anonymous_access_trusted(anonymous_access_trusted);
+    state.set_allow_database_management(true);
+
+    let api = Router::new()
+        .route("/auth/status", get(auth::status))
+        .route("/auth/login", post(auth::login))
+        .route("/info", get(handlers::get_server_info))
+        .route(
+            "/databases/create",
+            post(|| async { "registered a database" }),
+        )
+        .route("/images", get(|| async { "catalog" }))
+        .route(
+            "/sync/v1/capabilities",
+            post(|| async { "remote bearer route" }),
+        )
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            auth::authorize_api,
+        ))
+        .with_state(state);
+
+    Router::new().nest("/api", api)
+}
+
 fn user_management_app(directory: &tempfile::TempDir) -> Router {
     let database_registry_path = directory.path().join("config.json");
     let auth_registry_path = AuthRegistry::path_for_database_registry(&database_registry_path);
@@ -309,6 +340,87 @@ async fn protected_api_challenges_but_remote_bearer_routes_stay_separate() {
         .body(Body::empty())
         .unwrap();
     assert_eq!(app.oneshot(remote).await.unwrap().status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_network_server_without_users_answers_nobody_but_its_api_keys() {
+    let app = app_without_users(false);
+
+    for (method, uri) in [
+        (Method::GET, "/api/images"),
+        (Method::GET, "/api/info"),
+        (Method::POST, "/api/databases/create"),
+    ] {
+        let request = Request::builder()
+            .method(method.clone())
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap();
+        let (status, headers, body) = json(&app, request).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {uri}");
+        assert_eq!(headers[CACHE_CONTROL], "no-store");
+        assert!(body["error"]
+            .as_str()
+            .unwrap()
+            .contains("psf-guard users add"));
+    }
+
+    // The login page can still ask what this server wants, and hears that it
+    // wants a login it cannot give.
+    let status_request = Request::builder()
+        .uri("/api/auth/status")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = json(&app, status_request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["authentication_required"], true);
+    assert_eq!(body["data"]["authenticated"], false);
+
+    // Signing in cannot invent an account.
+    assert_eq!(
+        login(&app, "editor", "editor-secret").await.0,
+        StatusCode::UNAUTHORIZED
+    );
+
+    // Keys carry their own proof, so remote sync and upload keep working.
+    let remote = Request::builder()
+        .method(Method::POST)
+        .uri("/api/sync/v1/capabilities")
+        .header("authorization", "Bearer remote-key")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(app.oneshot(remote).await.unwrap().status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_loopback_server_without_users_stays_open_to_its_own_machine() {
+    let app = app_without_users(true);
+
+    let create = Request::builder()
+        .method(Method::POST)
+        .uri("/api/databases/create")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        app.clone().oneshot(create).await.unwrap().status(),
+        StatusCode::OK
+    );
+
+    let info = Request::builder()
+        .uri("/api/info")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, info) = json(&app, info).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(info["data"]["allow_database_management"], true);
+
+    let auth_status = Request::builder()
+        .uri("/api/auth/status")
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, auth_status) = json(&app, auth_status).await;
+    assert_eq!(auth_status["data"]["authentication_required"], false);
+    assert_eq!(auth_status["data"]["role"], "read_write");
 }
 
 #[tokio::test]

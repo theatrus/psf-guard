@@ -727,6 +727,15 @@ pub enum Commands {
         /// trusted interface (e.g. localhost). Tauri mode always enables it.
         #[arg(long)]
         allow_database_management: bool,
+
+        /// Serve a network address with no user accounts, granting every
+        /// caller the access a localhost server grants. Off by default: a
+        /// server bound anywhere but loopback answers 401 until an operator
+        /// adds a user. Use this only on a network you trust as much as the
+        /// machine itself. Adding accounts is the better fix — see
+        /// `psf-guard users add`.
+        #[arg(long)]
+        allow_anonymous_access: bool,
     },
 }
 
