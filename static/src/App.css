@@ -4527,7 +4527,7 @@
   }
 
   .stack-inspector-toolbar {
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
   }
 
   .stack-inspector-hint,

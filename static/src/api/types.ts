@@ -309,10 +309,9 @@ export interface StackFrameDecision {
   matched_stars: number | null;
   registration_rms_pixels: number | null;
   registration_drift_pixels: number | null;
-  registration_transform: SimilarityTransform | null;
+  registered_mapping: unknown | null;
   normalization_mean_gain: number | null;
   normalization_mean_offset: number | null;
-  normalization_map: unknown | null;
   source_fingerprint: string | null;
   overlap_fraction: number | null;
   integrated_fraction: number | null;
@@ -360,8 +359,8 @@ export interface ArtifactSearchJob {
   region: ReferenceRegion;
   state: ArtifactSearchState;
   phase: string;
-  total_frames: number;
-  processed_frames: number;
+  total_work_units: number;
+  completed_work_units: number;
   created_unix_seconds: number;
   notes: string[];
   results: ArtifactSearchResult[];

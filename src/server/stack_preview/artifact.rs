@@ -16,7 +16,7 @@ use axum::{
     Json,
 };
 use seiza_stacking::{
-    resample_region_to_reference, FitsFrame, ReferenceRegion, SimilarityTransform,
+    CalibrationMasters, FitsFrame, ReferenceRegion, RegisteredFrameMapping, SimilarityTransform,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -33,10 +33,12 @@ use crate::{
     server::{api::ApiResponse, extract::DbContext, handlers::AppError, state::AppState},
 };
 
-const ARTIFACT_SEARCH_CACHE_VERSION: u32 = 1;
+const ARTIFACT_SEARCH_CACHE_VERSION: u32 = 2;
 const MIN_REGION_EDGE: usize = 8;
 const MAX_REGION_EDGE: usize = 512;
 const MAX_ANALYSIS_SAMPLES: usize = 65_536;
+const MAX_TOTAL_ANALYSIS_SAMPLES: usize = 4_000_000;
+const MAX_RESULTS_PER_GROUP: usize = 50;
 const OUTLIER_SIGMA: f32 = 5.0;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -82,8 +84,8 @@ pub struct ArtifactSearchJob {
     pub region: ReferenceRegion,
     pub state: ArtifactSearchState,
     pub phase: String,
-    pub total_frames: usize,
-    pub processed_frames: usize,
+    pub total_work_units: usize,
+    pub completed_work_units: usize,
     pub created_unix_seconds: i64,
     #[serde(default)]
     pub notes: Vec<String>,
@@ -98,8 +100,8 @@ struct SearchSource {
     acquired_unix_seconds: Option<i64>,
     grading_status: i32,
     path: PathBuf,
-    transform: SimilarityTransform,
-    normalization: Option<seiza_stacking::NormalizationMap>,
+    mapping: RegisteredFrameMapping,
+    output_transform: Option<SimilarityTransform>,
     fingerprint: String,
 }
 
@@ -109,6 +111,12 @@ struct SearchGroup {
     expected_calibration_fingerprint: String,
     sources: Vec<SearchSource>,
 }
+
+type StackSearchGroup = (
+    StackGroupStatus,
+    Option<SimilarityTransform>,
+    Option<String>,
+);
 
 struct PreparedSearch {
     public: ArtifactSearchJob,
@@ -188,12 +196,12 @@ pub async fn start_mono_artifact_search(
             "mono",
             Some(group_index),
             &request,
-            vec![(group, SimilarityTransform::IDENTITY, None)],
+            vec![(group, None, None)],
         )
     })
     .await
     .map_err(|error| AppError::InternalError(format!("Artifact preparation failed: {error}")))??;
-    start_prepared_search(state, prepared)
+    start_prepared_search(state, &ctx, prepared)
 }
 
 pub async fn start_color_artifact_search(
@@ -220,7 +228,7 @@ pub async fn start_color_artifact_search(
     })
     .await
     .map_err(|error| AppError::InternalError(format!("Artifact preparation failed: {error}")))??;
-    start_prepared_search(state, prepared)
+    start_prepared_search(state, &ctx, prepared)
 }
 
 pub async fn get_artifact_search(
@@ -229,10 +237,11 @@ pub async fn get_artifact_search(
     Path((_db_id, search_id)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<ArtifactSearchJob>>, AppError> {
     validate_search_id(&search_id)?;
-    let job = load_artifact_job(&state, &ctx, &search_id)?;
+    let mut job = load_artifact_job(&state, &ctx, &search_id)?;
     if job.database_id != ctx.id {
         return Err(AppError::NotFound);
     }
+    refresh_result_grades(&ctx, &mut job)?;
     Ok(Json(ApiResponse::success(job)))
 }
 
@@ -266,9 +275,10 @@ pub async fn get_artifact_crop(
 
 fn start_prepared_search(
     state: Arc<AppState>,
+    ctx: &DbContext,
     prepared: PreparedSearch,
 ) -> Result<Json<ApiResponse<ArtifactSearchJob>>, AppError> {
-    if let Some(existing) = state
+    if let Some(mut existing) = state
         .stack_previews
         .get_artifact_search(&prepared.public.search_id)
         && matches!(
@@ -278,14 +288,19 @@ fn start_prepared_search(
                 | ArtifactSearchState::Completed
         )
     {
+        refresh_result_grades(ctx, &mut existing)?;
+        let _ = state
+            .stack_previews
+            .insert_artifact_search(existing.clone());
         return Ok(Json(ApiResponse::success(existing)));
     }
     if let Ok(bytes) = std::fs::read(artifact_manifest_path(
         &prepared.cache_root,
         &prepared.public.search_id,
-    )) && let Ok(existing) = serde_json::from_slice::<ArtifactSearchJob>(&bytes)
+    )) && let Ok(mut existing) = serde_json::from_slice::<ArtifactSearchJob>(&bytes)
         && existing.state == ArtifactSearchState::Completed
     {
+        refresh_result_grades(ctx, &mut existing)?;
         let _ = state
             .stack_previews
             .insert_artifact_search(existing.clone());
@@ -302,6 +317,31 @@ fn start_prepared_search(
     }
     enqueue_search(state, prepared);
     Ok(Json(ApiResponse::success(response)))
+}
+
+fn refresh_result_grades(ctx: &DbContext, job: &mut ArtifactSearchJob) -> Result<(), AppError> {
+    if job.state != ArtifactSearchState::Completed || job.results.is_empty() {
+        return Ok(());
+    }
+    let image_ids = job
+        .results
+        .iter()
+        .map(|result| result.image_id)
+        .collect::<Vec<_>>();
+    let conn = ctx.db();
+    let conn = conn.lock().map_err(AppError::db)?;
+    let grades = Database::new(&conn)
+        .get_images_by_ids(&image_ids)
+        .map_err(AppError::db)?
+        .into_iter()
+        .map(|image| (image.id, image.grading_status))
+        .collect::<HashMap<_, _>>();
+    for result in &mut job.results {
+        if let Some(grading_status) = grades.get(&result.image_id) {
+            result.grading_status = *grading_status;
+        }
+    }
+    Ok(())
 }
 
 fn load_stack_job(
@@ -334,7 +374,7 @@ fn load_color_stack_sources(
     state: &Arc<AppState>,
     ctx: &DbContext,
     color_job: &StackColorJob,
-) -> Result<Vec<(StackGroupStatus, SimilarityTransform, Option<String>)>, AppError> {
+) -> Result<Vec<StackSearchGroup>, AppError> {
     color_job
         .sources
         .iter()
@@ -360,7 +400,11 @@ fn load_color_stack_sources(
                 })
                 .ok_or(AppError::NotFound)?
                 .clone();
-            Ok((group, transform, Some(source.role.label().to_string())))
+            Ok((
+                group,
+                Some(transform),
+                Some(source.role.label().to_string()),
+            ))
         })
         .collect()
 }
@@ -371,7 +415,7 @@ fn prepare_search(
     source_kind: &str,
     group_index: Option<usize>,
     request: &ArtifactSearchRequest,
-    stack_groups: Vec<(StackGroupStatus, SimilarityTransform, Option<String>)>,
+    stack_groups: Vec<StackSearchGroup>,
 ) -> Result<PreparedSearch, AppError> {
     let reference_path = if source_kind == "mono" {
         super::original_preview_path(&ctx.cache_dir_path, source_job_id, group_index.unwrap_or(0))
@@ -454,22 +498,12 @@ fn prepare_search(
                     image.id
                 )));
             }
-            let transform = decision.registration_transform.ok_or_else(|| {
+            let mapping = decision.registered_mapping.ok_or_else(|| {
                 AppError::BadRequest(
-                    "Rebuild this stack before searching; its frame transforms were not retained"
+                    "Rebuild this stack before searching; its frame mappings were not retained"
                         .into(),
                 )
             })?;
-            let normalization = if decision.disposition == "reference" {
-                None
-            } else {
-                Some(decision.normalization_map.ok_or_else(|| {
-                    AppError::BadRequest(
-                        "Rebuild this stack before searching; its frame normalization was not retained"
-                            .into(),
-                    )
-                })?)
-            };
             let source = SearchSource {
                 image_id: image.id,
                 filter_name: if group.filter_name.is_empty() {
@@ -480,18 +514,20 @@ fn prepare_search(
                 acquired_unix_seconds: image.acquired_date,
                 grading_status: image.grading_status,
                 path,
-                transform: transform.then(output_transform),
-                normalization,
+                mapping,
+                output_transform,
                 fingerprint,
             };
             hasher.update(source.image_id.to_le_bytes());
             hasher.update(source.fingerprint.as_bytes());
-            hasher.update(serde_json::to_vec(&source.transform).map_err(|error| {
-                AppError::InternalError(format!("Failed to encode frame transform: {error}"))
+            hasher.update(serde_json::to_vec(&source.mapping).map_err(|error| {
+                AppError::InternalError(format!("Failed to encode frame mapping: {error}"))
             })?);
-            hasher.update(serde_json::to_vec(&source.normalization).map_err(|error| {
-                AppError::InternalError(format!("Failed to encode frame normalization: {error}"))
-            })?);
+            hasher.update(
+                serde_json::to_vec(&source.output_transform).map_err(|error| {
+                    AppError::InternalError(format!("Failed to encode output transform: {error}"))
+                })?,
+            );
             sources.push(source);
         }
         groups.push(SearchGroup {
@@ -506,7 +542,10 @@ fn prepare_search(
         )));
     }
     let search_id = hex_digest(hasher.finalize());
-    let total_frames = groups.iter().map(|group| group.sources.len()).sum();
+    let total_work_units = groups
+        .iter()
+        .map(|group| group.sources.len() + group.sources.len().min(MAX_RESULTS_PER_GROUP))
+        .sum();
     Ok(PreparedSearch {
         public: ArtifactSearchJob {
             schema_version: 1,
@@ -519,8 +558,8 @@ fn prepare_search(
             region: request.region,
             state: ArtifactSearchState::Queued,
             phase: "Waiting for the stack processor".into(),
-            total_frames,
-            processed_frames: 0,
+            total_work_units,
+            completed_work_units: 0,
             created_unix_seconds: chrono::Utc::now().timestamp(),
             notes,
             results: Vec::new(),
@@ -576,6 +615,7 @@ fn run_search(state: &Arc<AppState>, prepared: PreparedSearch) {
                 job.results = results;
                 job.state = ArtifactSearchState::Completed;
                 job.phase = "Source-frame search complete".into();
+                job.completed_work_units = job.total_work_units;
             }
             Err(error) => {
                 job.state = ArtifactSearchState::Failed;
@@ -611,10 +651,15 @@ fn run_search_inner(
     std::fs::create_dir_all(&output_dir).map_err(|error| error.to_string())?;
 
     for group in &prepared.groups {
+        let render_during_scan = group.sources.len() <= MAX_RESULTS_PER_GROUP;
         state
             .stack_previews
             .update_artifact_search(&prepared.public.search_id, |job| {
-                job.phase = format!("Scanning {} source frames", group.label);
+                job.phase = if render_during_scan {
+                    format!("Scanning and rendering {} source frames", group.label)
+                } else {
+                    format!("Scanning {} source frames", group.label)
+                };
             });
         let paths = group
             .sources
@@ -634,6 +679,8 @@ fn run_search_inner(
                 group.label
             ));
         }
+        let max_samples_per_frame =
+            (MAX_TOTAL_ANALYSIS_SAMPLES / group.sources.len()).clamp(1, MAX_ANALYSIS_SAMPLES);
         let mut crops = Vec::with_capacity(group.sources.len());
         for source in &group.sources {
             if source_fingerprint(&source.path) != source.fingerprint {
@@ -642,51 +689,85 @@ fn run_search_inner(
                     source.image_id
                 ));
             }
-            let mut frame = FitsFrame::open(&source.path).map_err(|error| error.to_string())?;
-            masters
-                .apply(&mut frame.image, frame.exposure_seconds, frame.bayer)
-                .map_err(|error| error.to_string())?;
-            let frame = frame.into_prepared().map_err(|error| error.to_string())?;
-            let mut crop = resample_region_to_reference(
-                &frame.image,
-                prepared.reference_width,
-                prepared.reference_height,
-                prepared.public.region,
-                source.transform,
-            )
-            .map_err(|error| error.to_string())?;
-            if let Some(normalization) = &source.normalization {
-                normalization
-                    .apply_global(&mut crop)
-                    .map_err(|error| error.to_string())?;
-            }
-            let original_path = artifact_crop_path(
-                &prepared.cache_root,
-                &prepared.public.search_id,
-                source.image_id,
-            );
-            super::stretch::render_image_preview_atomic(
-                &crop,
-                &super::stretch::default_linear_config(),
-                super::stretch::StackStretchSourceTransfer::Linear,
-                &original_path,
-            )?;
-            let analysis = sampled_luminance(&crop);
+            let crop = extract_source_crop(source, &masters, prepared)?;
+            let analysis = sampled_luminance(&crop, max_samples_per_frame);
             crops.push(LoadedCrop {
                 source: source.clone(),
                 analysis,
             });
+            if render_during_scan {
+                let original_path = artifact_crop_path(
+                    &prepared.cache_root,
+                    &prepared.public.search_id,
+                    source.image_id,
+                );
+                super::stretch::render_image_preview_atomic(
+                    &crop,
+                    &super::stretch::default_linear_config(),
+                    super::stretch::StackStretchSourceTransfer::Linear,
+                    &original_path,
+                )?;
+            }
             state
                 .stack_previews
                 .update_artifact_search(&prepared.public.search_id, |job| {
-                    job.processed_frames += 1
+                    job.completed_work_units += if render_during_scan { 2 } else { 1 }
                 });
         }
-        all_results.extend(score_group(
+        state
+            .stack_previews
+            .update_artifact_search(&prepared.public.search_id, |job| {
+                job.phase = format!("Ranking {} source frames", group.label);
+            });
+        let mut ranked = score_group(
             &prepared.public.database_id,
             &prepared.public.search_id,
             crops,
-        )?);
+        )?;
+        if ranked.len() > MAX_RESULTS_PER_GROUP {
+            state
+                .stack_previews
+                .update_artifact_search(&prepared.public.search_id, |job| {
+                    job.notes.push(format!(
+                        "{} shows the {MAX_RESULTS_PER_GROUP} strongest source matches out of {} frames",
+                        group.label,
+                        ranked.len()
+                    ));
+                });
+            ranked.truncate(MAX_RESULTS_PER_GROUP);
+        }
+        if !render_during_scan {
+            state
+                .stack_previews
+                .update_artifact_search(&prepared.public.search_id, |job| {
+                    job.phase = format!("Rendering {} source crops", group.label);
+                });
+            for result in &ranked {
+                let source = group
+                    .sources
+                    .iter()
+                    .find(|source| source.image_id == result.image_id)
+                    .ok_or_else(|| format!("Image {} left the source set", result.image_id))?;
+                let crop = extract_source_crop(source, &masters, prepared)?;
+                let original_path = artifact_crop_path(
+                    &prepared.cache_root,
+                    &prepared.public.search_id,
+                    source.image_id,
+                );
+                super::stretch::render_image_preview_atomic(
+                    &crop,
+                    &super::stretch::default_linear_config(),
+                    super::stretch::StackStretchSourceTransfer::Linear,
+                    &original_path,
+                )?;
+                state
+                    .stack_previews
+                    .update_artifact_search(&prepared.public.search_id, |job| {
+                        job.completed_work_units += 1
+                    });
+            }
+        }
+        all_results.extend(ranked);
     }
     all_results.sort_by(|left, right| {
         left.filter_name
@@ -697,16 +778,74 @@ fn run_search_inner(
     Ok(all_results)
 }
 
-fn sampled_luminance(image: &seiza_stacking::LinearImage) -> Vec<f32> {
+fn extract_source_crop(
+    source: &SearchSource,
+    masters: &CalibrationMasters,
+    prepared: &PreparedSearch,
+) -> Result<seiza_stacking::LinearImage, String> {
+    let mut frame = FitsFrame::open(&source.path).map_err(|error| error.to_string())?;
+    masters
+        .apply(&mut frame.image, frame.exposure_seconds, frame.bayer)
+        .map_err(|error| error.to_string())?;
+    let frame = frame.into_prepared().map_err(|error| error.to_string())?;
+    match source.output_transform {
+        Some(output_transform) => source
+            .mapping
+            .extract_region_after(
+                &frame.image,
+                prepared.reference_width,
+                prepared.reference_height,
+                prepared.public.region,
+                output_transform,
+            )
+            .map_err(|error| error.to_string()),
+        None => source
+            .mapping
+            .extract_region(&frame.image, prepared.public.region)
+            .map_err(|error| error.to_string()),
+    }
+}
+
+fn sampled_luminance(image: &seiza_stacking::LinearImage, max_samples: usize) -> Vec<f32> {
     let luminance = image.luminance();
-    let step = luminance.len().div_ceil(MAX_ANALYSIS_SAMPLES).max(1);
-    luminance.into_iter().step_by(step).collect()
+    if luminance.len() <= max_samples {
+        return luminance;
+    }
+    let aspect_ratio = image.width as f64 / image.height as f64;
+    let columns =
+        ((max_samples as f64 * aspect_ratio).sqrt().floor() as usize).clamp(1, image.width);
+    let rows = (max_samples / columns).clamp(1, image.height);
+    let mut sampled = Vec::with_capacity(columns * rows);
+    for row in 0..rows {
+        let top = row * image.height / rows;
+        let bottom = (row + 1) * image.height / rows;
+        for column in 0..columns {
+            let left = column * image.width / columns;
+            let right = (column + 1) * image.width / columns;
+            let mut sum = 0.0_f64;
+            let mut finite = 0usize;
+            for y in top..bottom {
+                for value in &luminance[y * image.width + left..y * image.width + right] {
+                    if value.is_finite() {
+                        sum += f64::from(*value);
+                        finite += 1;
+                    }
+                }
+            }
+            sampled.push(if finite == 0 {
+                f32::NAN
+            } else {
+                (sum / finite as f64) as f32
+            });
+        }
+    }
+    sampled
 }
 
 fn score_group(
     database_id: &str,
     search_id: &str,
-    crops: Vec<LoadedCrop>,
+    mut crops: Vec<LoadedCrop>,
 ) -> Result<Vec<ArtifactSearchResult>, String> {
     if crops.len() < 3 {
         return Err("At least three source crops are required".into());
@@ -729,25 +868,18 @@ fn score_group(
             *baseline = median_in_place(&mut values);
         }
     }
-    let mut residuals = crops
+    for crop in &mut crops {
+        for (value, baseline) in crop.analysis.iter_mut().zip(&baselines) {
+            *value = if value.is_finite() && baseline.is_finite() {
+                *value - *baseline
+            } else {
+                f32::NAN
+            };
+        }
+    }
+    let mut finite_residuals = crops
         .iter()
-        .map(|crop| {
-            crop.analysis
-                .iter()
-                .zip(&baselines)
-                .map(|(value, baseline)| {
-                    if value.is_finite() && baseline.is_finite() {
-                        *value - *baseline
-                    } else {
-                        f32::NAN
-                    }
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-    let mut finite_residuals = residuals
-        .iter()
-        .flatten()
+        .flat_map(|crop| &crop.analysis)
         .copied()
         .filter(|value| value.is_finite())
         .collect::<Vec<_>>();
@@ -761,12 +893,13 @@ fn score_group(
     let sigma = (median_in_place(&mut finite_residuals) * 1.4826).max(f32::EPSILON);
 
     let mut output = Vec::with_capacity(crops.len());
-    for (crop, frame_residuals) in crops.into_iter().zip(residuals.iter_mut()) {
+    for crop in crops {
         let mut absolute_sigma = Vec::new();
         let mut bright = 0usize;
         let mut dark = 0usize;
         let mut finite = 0usize;
-        for residual in frame_residuals
+        for residual in crop
+            .analysis
             .iter()
             .copied()
             .filter(|value| value.is_finite())
@@ -969,8 +1102,10 @@ mod tests {
                 acquired_unix_seconds: Some(i64::from(image_id)),
                 grading_status: 0,
                 path: PathBuf::from(format!("{image_id}.fits")),
-                transform: SimilarityTransform::IDENTITY,
-                normalization: None,
+                mapping: RegisteredFrameMapping::identity(
+                    &LinearImage::new(1, values.len(), 1, values.clone()).unwrap(),
+                ),
+                output_transform: None,
                 fingerprint: format!("{image_id}"),
             },
             analysis: values,
@@ -1034,6 +1169,18 @@ mod tests {
     #[test]
     fn sampled_luminance_caps_analysis_work() {
         let image = LinearImage::new(512, 512, 1, vec![1.0; 512 * 512]).unwrap();
-        assert!(sampled_luminance(&image).len() <= MAX_ANALYSIS_SAMPLES);
+        assert!(sampled_luminance(&image, MAX_ANALYSIS_SAMPLES).len() <= MAX_ANALYSIS_SAMPLES);
+    }
+
+    #[test]
+    fn sampled_luminance_does_not_skip_thin_vertical_features() {
+        let mut values = vec![0.0; 512 * 512];
+        for y in 0..512 {
+            values[y * 512 + 2] = 100.0;
+        }
+        let image = LinearImage::new(512, 512, 1, values).unwrap();
+        let sampled = sampled_luminance(&image, MAX_ANALYSIS_SAMPLES);
+
+        assert!(sampled.iter().any(|value| *value > 0.0));
     }
 }

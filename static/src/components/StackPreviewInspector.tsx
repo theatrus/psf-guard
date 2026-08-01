@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { MouseEvent as ReactMouseEvent } from 'react';
+import type {
+  MouseEvent as ReactMouseEvent,
+  TouchEvent as ReactTouchEvent,
+} from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../api/client';
@@ -46,8 +49,8 @@ const terminalSearchStates = new Set(['completed', 'failed']);
 
 function searchProgress(job: ArtifactSearchJob): number {
   if (job.state === 'completed') return 100;
-  if (!job.total_frames) return 0;
-  return Math.min(100, Math.round((job.processed_frames / job.total_frames) * 100));
+  if (!job.total_work_units) return 0;
+  return Math.min(100, Math.round((job.completed_work_units / job.total_work_units) * 100));
 }
 
 function formatCaptureTime(timestamp: number | null): string {
@@ -160,19 +163,42 @@ export default function StackPreviewInspector({
   }, [activeSearch?.results]);
   const hasSuspect = activeSearch?.results.some((result) => result.evidence !== 'low') ?? false;
 
-  const imagePoint = (event: ReactMouseEvent<HTMLDivElement>): ImagePoint | null => {
+  const imagePointFromClient = (clientX: number, clientY: number): ImagePoint | null => {
     if (!dimensions || !zoom.containerRef.current) return null;
     const bounds = zoom.containerRef.current.getBoundingClientRect();
     return {
       x: Math.max(0, Math.min(
         dimensions.width,
-        (event.clientX - bounds.left - zoom.zoomState.offsetX) / zoom.zoomState.scale
+        (clientX - bounds.left - zoom.zoomState.offsetX) / zoom.zoomState.scale
       )),
       y: Math.max(0, Math.min(
         dimensions.height,
-        (event.clientY - bounds.top - zoom.zoomState.offsetY) / zoom.zoomState.scale
+        (clientY - bounds.top - zoom.zoomState.offsetY) / zoom.zoomState.scale
       )),
     };
+  };
+
+  const imagePoint = (event: ReactMouseEvent<HTMLDivElement>): ImagePoint | null =>
+    imagePointFromClient(event.clientX, event.clientY);
+
+  const finishRegionAt = (point: ImagePoint) => {
+    if (!dragStart || !dimensions) return;
+    const selected = artifactRegionFromPoints(
+      dragStart,
+      point,
+      dimensions.width,
+      dimensions.height
+    );
+    setDragEnd(point);
+    setDragStart(null);
+    if (!selected) {
+      setRegion(null);
+      setRegionError(`Choose a region from ${MIN_ARTIFACT_REGION_EDGE} to ${MAX_ARTIFACT_REGION_EDGE} pixels on each side.`);
+      return;
+    }
+    setRegion(selected);
+    setRegionError(null);
+    setSelecting(false);
   };
 
   const beginRegion = (event: ReactMouseEvent<HTMLDivElement>) => {
@@ -204,22 +230,47 @@ export default function StackPreviewInspector({
       return;
     }
     const point = imagePoint(event) ?? dragEnd ?? dragStart;
-    const selected = artifactRegionFromPoints(
-      dragStart,
-      point,
-      dimensions.width,
-      dimensions.height
-    );
-    setDragEnd(point);
-    setDragStart(null);
-    if (!selected) {
-      setRegion(null);
-      setRegionError(`Choose a region from ${MIN_ARTIFACT_REGION_EDGE} to ${MAX_ARTIFACT_REGION_EDGE} pixels on each side.`);
+    finishRegionAt(point);
+  };
+
+  const beginTouchRegion = (event: ReactTouchEvent<HTMLDivElement>) => {
+    if (!selecting || event.touches.length !== 1) {
+      if (event.touches.length >= 2) {
+        setDragStart(null);
+        setDragEnd(null);
+      }
+      zoom.handleTouchStart(event);
       return;
     }
-    setRegion(selected);
+    const touch = event.touches[0];
+    const point = imagePointFromClient(touch.clientX, touch.clientY);
+    if (!point) return;
+    event.preventDefault();
+    setDragStart(point);
+    setDragEnd(point);
+    setRegion(null);
     setRegionError(null);
-    setSelecting(false);
+  };
+
+  const moveTouchRegion = (event: ReactTouchEvent<HTMLDivElement>) => {
+    if (!selecting || !dragStart || event.touches.length !== 1) {
+      zoom.handleTouchMove(event);
+      return;
+    }
+    const touch = event.touches[0];
+    const point = imagePointFromClient(touch.clientX, touch.clientY);
+    if (!point) return;
+    event.preventDefault();
+    setDragEnd(point);
+  };
+
+  const finishTouchRegion = (event: ReactTouchEvent<HTMLDivElement>) => {
+    if (!selecting || !dragStart || event.touches.length !== 0) {
+      zoom.handleTouchEnd(event);
+      return;
+    }
+    event.preventDefault();
+    finishRegionAt(dragEnd ?? dragStart);
   };
 
   const displayedRegion = region ?? (
@@ -265,10 +316,10 @@ export default function StackPreviewInspector({
               if (dragStart) finishRegion(event);
               else zoom.handleMouseUp(event);
             }}
-            onTouchStart={zoom.handleTouchStart}
-            onTouchMove={zoom.handleTouchMove}
-            onTouchEnd={zoom.handleTouchEnd}
-            onTouchCancel={zoom.handleTouchEnd}
+            onTouchStart={beginTouchRegion}
+            onTouchMove={moveTouchRegion}
+            onTouchEnd={finishTouchRegion}
+            onTouchCancel={finishTouchRegion}
             onKeyDown={zoom.handleKeyDown}
             tabIndex={0}
           >
@@ -333,7 +384,7 @@ export default function StackPreviewInspector({
                 <div className="stack-artifact-progress" role="status">
                   <div>
                     <span>{activeSearch.phase}</span>
-                    <strong>{activeSearch.processed_frames} / {activeSearch.total_frames}</strong>
+                    <strong>{activeSearch.completed_work_units} / {activeSearch.total_work_units}</strong>
                   </div>
                   <div className="stack-preview-progress-track">
                     <span style={{ width: `${searchProgress(activeSearch)}%` }} />

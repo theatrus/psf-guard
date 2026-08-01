@@ -33,15 +33,15 @@ uuid = { version = "1", features = ["v4"] }
 regex = "1.12"
 semver = "1"
 byteorder = "1.5"
-seiza = { git = "https://github.com/theatrus/seiza.git", rev = "b86ede06434cc7c71039a837df533879996367c4", version = "0.13.0" }
-seiza-download = "0.6.0"
-seiza-imgproc = { version = "0.3.0", features = ["parallel"] }
-seiza-fits = { git = "https://github.com/theatrus/seiza.git", rev = "b86ede06434cc7c71039a837df533879996367c4", version = "=0.2.1" }
-seiza-satellites = { git = "https://github.com/theatrus/seiza.git", rev = "b86ede06434cc7c71039a837df533879996367c4", version = "0.4.2", features = ["serde"] }
-seiza-stacking = { git = "https://github.com/theatrus/seiza.git", rev = "b86ede06434cc7c71039a837df533879996367c4", version = "0.2.0" }
-seiza-stretch = { git = "https://github.com/theatrus/seiza.git", rev = "b86ede06434cc7c71039a837df533879996367c4", version = "0.2.0" }
-seiza-background = "0.1.0"
-seiza-deconvolution = "0.1.0"
+seiza = { git = "https://github.com/theatrus/seiza.git", rev = "aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92", version = "0.13.0" }
+seiza-download = { git = "https://github.com/theatrus/seiza.git", rev = "aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92", version = "0.6.0" }
+seiza-imgproc = { git = "https://github.com/theatrus/seiza.git", rev = "aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92", version = "0.3.0", features = ["parallel"] }
+seiza-fits = { git = "https://github.com/theatrus/seiza.git", rev = "aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92", version = "=0.2.1" }
+seiza-satellites = { git = "https://github.com/theatrus/seiza.git", rev = "aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92", version = "0.4.2", features = ["serde"] }
+seiza-stacking = { git = "https://github.com/theatrus/seiza.git", rev = "aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92", version = "0.2.0" }
+seiza-stretch = { git = "https://github.com/theatrus/seiza.git", rev = "aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92", version = "0.2.0" }
+seiza-background = { git = "https://github.com/theatrus/seiza.git", rev = "aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92", version = "0.1.0" }
+seiza-deconvolution = { git = "https://github.com/theatrus/seiza.git", rev = "aa1cb6917a48b94e7bbd4f49229a6f1b3988ab92", version = "0.1.0" }
 sha2 = "0.11"
 base64 = "0.23"
 rayon = "1"

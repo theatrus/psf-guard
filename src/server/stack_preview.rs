@@ -45,7 +45,7 @@ use crate::server::state::AppState;
 pub const SEIZA_STACKING_VERSION: &str = "0.2.0";
 /// Bump whenever stack admission, rendering, or persisted artifact semantics
 /// change. This deliberately versions PSF Guard policy separately from Seiza.
-const STACK_PREVIEW_CACHE_VERSION: u32 = 6;
+const STACK_PREVIEW_CACHE_VERSION: u32 = 7;
 const MAX_REQUEST_IMAGES: usize = 10_000;
 const MAX_REMEMBERED_JOBS: usize = 64;
 const PREVIEW_MAX_DIMENSION: u32 = 2400;
@@ -103,13 +103,11 @@ pub struct StackFrameDecision {
     pub registration_rms_pixels: Option<f64>,
     pub registration_drift_pixels: Option<f64>,
     #[serde(default)]
-    pub registration_transform: Option<seiza_stacking::SimilarityTransform>,
+    pub registered_mapping: Option<seiza_stacking::RegisteredFrameMapping>,
     #[serde(default)]
     pub normalization_mean_gain: Option<f32>,
     #[serde(default)]
     pub normalization_mean_offset: Option<f32>,
-    #[serde(default)]
-    pub normalization_map: Option<seiza_stacking::NormalizationMap>,
     #[serde(default)]
     pub source_fingerprint: Option<String>,
     pub overlap_fraction: Option<f32>,
@@ -912,10 +910,9 @@ fn excluded_decision(
         matched_stars: None,
         registration_rms_pixels: None,
         registration_drift_pixels: None,
-        registration_transform: None,
+        registered_mapping: None,
         normalization_mean_gain: None,
         normalization_mean_offset: None,
-        normalization_map: None,
         source_fingerprint: None,
         overlap_fraction: None,
         integrated_fraction: None,
@@ -1113,6 +1110,7 @@ fn run_group(
         };
         let mut stacker = LiveStacker::new(reference_frame, calibration_masters, options)
             .map_err(|error| error.to_string())?;
+        let reference_mapping = stacker.reference_mapping();
         state.stack_previews.update(job_id, |job| {
             let status = &mut job.groups[group.index];
             status.processed_frames = 1;
@@ -1127,10 +1125,9 @@ fn run_group(
                 matched_stars: None,
                 registration_rms_pixels: None,
                 registration_drift_pixels: None,
-                registration_transform: Some(seiza_stacking::SimilarityTransform::IDENTITY),
+                registered_mapping: Some(reference_mapping),
                 normalization_mean_gain: Some(1.0),
                 normalization_mean_offset: Some(0.0),
-                normalization_map: None,
                 source_fingerprint: Some(group.frames[0].source_fingerprint.clone()),
                 overlap_fraction: Some(1.0),
                 integrated_fraction: Some(1.0),
@@ -1154,10 +1151,9 @@ fn run_group(
                         matched_stars: Some(diagnostics.matched_stars),
                         registration_rms_pixels: Some(diagnostics.registration_rms_pixels),
                         registration_drift_pixels: Some(diagnostics.registration_drift_pixels),
-                        registration_transform: Some(diagnostics.transform),
+                        registered_mapping: Some(*diagnostics.mapping),
                         normalization_mean_gain: Some(diagnostics.normalization_mean_gain),
                         normalization_mean_offset: Some(diagnostics.normalization_mean_offset),
-                        normalization_map: Some(diagnostics.normalization),
                         source_fingerprint: Some(frame.source_fingerprint.clone()),
                         overlap_fraction: Some(diagnostics.overlap_fraction),
                         integrated_fraction: Some(diagnostics.integrated_fraction),
@@ -1170,10 +1166,9 @@ fn run_group(
                         matched_stars: None,
                         registration_rms_pixels: None,
                         registration_drift_pixels: None,
-                        registration_transform: None,
+                        registered_mapping: None,
                         normalization_mean_gain: None,
                         normalization_mean_offset: None,
-                        normalization_map: None,
                         source_fingerprint: Some(frame.source_fingerprint.clone()),
                         overlap_fraction: None,
                         integrated_fraction: None,
@@ -1187,10 +1182,9 @@ fn run_group(
                     matched_stars: None,
                     registration_rms_pixels: None,
                     registration_drift_pixels: None,
-                    registration_transform: None,
+                    registered_mapping: None,
                     normalization_mean_gain: None,
                     normalization_mean_offset: None,
-                    normalization_map: None,
                     source_fingerprint: Some(frame.source_fingerprint.clone()),
                     overlap_fraction: None,
                     integrated_fraction: None,
