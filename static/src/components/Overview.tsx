@@ -825,21 +825,27 @@ export default function Overview() {
                   )}
                   
                   {/* Grading Progress Bar */}
-                  <div className="project-mini-progress">
-                    <div className="progress-label">Grading Progress:</div>
-                    <div 
-                      className="mini-progress-accepted"
-                      style={{ width: `${progress.acceptedPct}%` }}
-                    />
-                    <div 
-                      className="mini-progress-rejected"
-                      style={{ width: `${progress.rejectedPct}%` }}
-                    />
-                    <div 
-                      className="mini-progress-pending"
-                      style={{ width: `${progress.pendingPct}%` }}
-                    />
-                  </div>
+                  <figure className="project-grading-progress">
+                    <figcaption className="progress-label">Grading progress</figcaption>
+                    <div
+                      className="project-mini-progress"
+                      role="img"
+                      aria-label={`Grading progress: ${project.accepted_images} accepted, ${project.rejected_images} rejected, ${project.pending_images} pending`}
+                    >
+                      <div
+                        className="mini-progress-accepted"
+                        style={{ width: `${progress.acceptedPct}%` }}
+                      />
+                      <div
+                        className="mini-progress-rejected"
+                        style={{ width: `${progress.rejectedPct}%` }}
+                      />
+                      <div
+                        className="mini-progress-pending"
+                        style={{ width: `${progress.pendingPct}%` }}
+                      />
+                    </div>
+                  </figure>
                   
                   <div className="project-meta">
                     <span>{formatDateRange(project.date_range)}</span>

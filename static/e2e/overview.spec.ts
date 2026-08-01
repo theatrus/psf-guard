@@ -48,6 +48,23 @@ test('overview puts projects ahead of a compact catalog summary', async ({
   await expect(
     alphaCard.getByRole('button', { name: 'Edit project' })
   ).toBeVisible();
+  const gradingProgress = alphaCard.locator('.project-grading-progress');
+  const gradingLabel = gradingProgress.getByText('Grading progress', {
+    exact: true,
+  });
+  const gradingBar = gradingProgress.getByRole('img', {
+    name: /Grading progress: \d+ accepted, \d+ rejected, \d+ pending/,
+  });
+  await expect(gradingLabel).toBeVisible();
+  await expect(gradingBar).toBeVisible();
+  const [labelBounds, barBounds] = await Promise.all([
+    gradingLabel.boundingBox(),
+    gradingBar.boundingBox(),
+  ]);
+  expect(labelBounds).not.toBeNull();
+  expect(barBounds).not.toBeNull();
+  expect(labelBounds!.y + labelBounds!.height).toBeLessThanOrEqual(barBounds!.y);
+  expect(barBounds!.height).toBeLessThanOrEqual(10);
   const alphaTargets = alphaCard.locator('.target-compact-card');
   await expect(alphaTargets).toHaveCount(1);
   await expect(
