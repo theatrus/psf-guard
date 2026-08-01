@@ -403,12 +403,28 @@ async fn run_server_internal(
             post(stack_preview::apply_stack_preview_stretch),
         )
         .route(
+            "/stack-previews/{job_id}/{group_index}/artifact-searches",
+            post(stack_preview::artifact::start_mono_artifact_search),
+        )
+        .route(
             "/stack-previews/{job_id}/{group_index}/fits",
             get(stack_preview::download_stack_preview_fits),
         )
         .route(
             "/stack-previews/color/{job_id}/preview",
             get(stack_preview::color::get_stack_color_image),
+        )
+        .route(
+            "/stack-previews/color/{job_id}/artifact-searches",
+            post(stack_preview::artifact::start_color_artifact_search),
+        )
+        .route(
+            "/stack-previews/artifact-searches/{search_id}",
+            get(stack_preview::artifact::get_artifact_search),
+        )
+        .route(
+            "/stack-previews/artifact-searches/{search_id}/crops/{image_id}",
+            get(stack_preview::artifact::get_artifact_crop),
         )
         .route(
             "/stack-previews/stretch/{stretch_id}/preview",

@@ -873,6 +873,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
             projectId={projectId}
             images={stackCandidates.images}
             selectionSource={stackCandidates.source}
+            onOpenImage={navigateToDetail}
           />
         )}
 

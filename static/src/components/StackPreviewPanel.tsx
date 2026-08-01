@@ -25,6 +25,7 @@ interface StackPreviewPanelProps {
   projectId: number;
   images: StackCandidateImage[];
   selectionSource: 'selected' | 'visible';
+  onOpenImage: (imageId: number) => void;
 }
 
 interface ChannelInput {
@@ -115,6 +116,7 @@ export default function StackPreviewPanel({
   projectId,
   images,
   selectionSource,
+  onOpenImage,
 }: StackPreviewPanelProps) {
   const queryClient = useQueryClient();
   const { canCompute } = useAccess();
@@ -366,6 +368,7 @@ export default function StackPreviewPanel({
           channelBuildRunning={running}
           outdatedTargetIds={outdatedTargetIds}
           canCompute={canCompute}
+          onOpenImage={onOpenImage}
         />
 
         {displayKeys.length > 0 && (
@@ -674,6 +677,15 @@ export default function StackPreviewPanel({
           downloadLabel={stretches[artifactStretchKey(inspector)]?.fits_url
             ? 'Download deconvolved linear FITS'
             : 'Download linear FITS'}
+          artifactSource={{
+            kind: 'mono',
+            dbId,
+            jobId: inspector.jobId,
+            groupIndex: inspector.group.index,
+            artifactRevision: inspector.artifactRevision,
+          }}
+          artifactEnabled={canCompute}
+          onOpenImage={onOpenImage}
           onClose={() => setInspector(null)}
         />
       )}

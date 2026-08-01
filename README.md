@@ -54,7 +54,8 @@ processing. Your image files stay where they are.
 - **Build stack previews** per target and channel, inspect admission decisions,
   apply matching bias, dark, and flat masters when the catalog has them,
   combine RGB, LRGB, or narrowband palettes, adjust the processing stack, and
-  download the cached linear or processed FITS result.
+  download the cached linear or processed FITS result. Draw around a visible
+  stack artifact to rank the source-frame crops that differ in that area.
 - **Review plans and imports** with project settings, target coordinates,
   shared exposure templates, and exposure plans derived from FITS headers.
 - **Take data out safely** by exporting non-rejected lights for stacking or by
@@ -397,7 +398,9 @@ the image grid and comparison tools:
   performs registration and admission, and retains a downloadable linear FITS
   beside the display PNG. Completed R/G/B, L/R/G/B, or Ha/OIII/SII stacks can
   then be registered across filters and combined into RGB, LRGB, or a selected
-  narrowband palette without altering the source integrations. See
+  narrowband palette without altering the source integrations. The full-size
+  inspector can map a selected artifact back through the saved registrations
+  and rank suspect source crops without changing their grades. See
   **[docs/STACKING_PREVIEWS.md](docs/STACKING_PREVIEWS.md)**.
 - **Sky context and plate solving**: coordinate-only catalog matches appear
   immediately. Choose **Solve field** (or press `O`) to run Seiza against the
