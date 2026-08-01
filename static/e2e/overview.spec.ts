@@ -57,14 +57,18 @@ test('overview puts projects ahead of a compact catalog summary', async ({
   });
   await expect(gradingLabel).toBeVisible();
   await expect(gradingBar).toBeVisible();
-  const [labelBounds, barBounds] = await Promise.all([
+  const [statsBounds, labelBounds, barBounds] = await Promise.all([
+    alphaCard.locator('.project-stats').boundingBox(),
     gradingLabel.boundingBox(),
     gradingBar.boundingBox(),
   ]);
+  expect(statsBounds).not.toBeNull();
   expect(labelBounds).not.toBeNull();
   expect(barBounds).not.toBeNull();
   expect(labelBounds!.y + labelBounds!.height).toBeLessThanOrEqual(barBounds!.y);
   expect(barBounds!.height).toBeLessThanOrEqual(10);
+  expect(Math.abs(barBounds!.x - statsBounds!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(barBounds!.width - statsBounds!.width)).toBeLessThanOrEqual(1);
   const alphaTargets = alphaCard.locator('.target-compact-card');
   await expect(alphaTargets).toHaveCount(1);
   await expect(
