@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ArtifactSearchResult } from '../../api/types';
-import { morphologyLabel } from '../artifactMorphology';
+import { canBuildResidualFlat, morphologyLabel } from '../artifactMorphology';
 import { artifactRegionFromPoints } from '../stackArtifactRegion';
 
 function result(
@@ -67,5 +67,14 @@ describe('morphologyLabel', () => {
 
   it('does not label low-evidence shape guesses', () => {
     expect(morphologyLabel(result('ring', 'low'))).toBeNull();
+  });
+
+  it('offers a residual flat only for a dark mono ring or broad shadow', () => {
+    expect(canBuildResidualFlat(result('ring'), 'mono')).toBe(true);
+    expect(canBuildResidualFlat(result('broad_dark', 'possible'), 'mono')).toBe(true);
+    expect(canBuildResidualFlat(result('ring'), 'color')).toBe(false);
+    expect(canBuildResidualFlat(result('ring', 'low'), 'mono')).toBe(false);
+    expect(canBuildResidualFlat({ ...result('ring'), direction: 'bright' }, 'mono')).toBe(false);
+    expect(canBuildResidualFlat(result('diffuse'), 'mono')).toBe(false);
   });
 });

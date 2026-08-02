@@ -1,5 +1,7 @@
 //! User-directed source-frame search for a suspicious stack region.
 
+pub mod residual_flat;
+
 use super::{
     color::{self, StackColorJob},
     source_fingerprint, StackGroupState, StackGroupStatus, StackJobState, StackPreviewJob,

@@ -190,6 +190,7 @@ pub struct StackPreviewManager {
     jobs: Mutex<HashMap<String, StackPreviewJob>>,
     color_jobs: Mutex<HashMap<String, color::StackColorJob>>,
     artifact_jobs: Mutex<HashMap<String, artifact::ArtifactSearchJob>>,
+    residual_flat_jobs: Mutex<HashMap<String, artifact::residual_flat::ResidualFlatJob>>,
     latest_write: Mutex<()>,
     permit: Arc<Semaphore>,
 }
@@ -200,6 +201,7 @@ impl StackPreviewManager {
             jobs: Mutex::new(HashMap::new()),
             color_jobs: Mutex::new(HashMap::new()),
             artifact_jobs: Mutex::new(HashMap::new()),
+            residual_flat_jobs: Mutex::new(HashMap::new()),
             latest_write: Mutex::new(()),
             permit: Arc::new(Semaphore::new(1)),
         }
@@ -242,6 +244,55 @@ impl StackPreviewManager {
 
     fn update(&self, job_id: &str, update: impl FnOnce(&mut StackPreviewJob)) {
         if let Some(job) = self.jobs.lock().unwrap().get_mut(job_id) {
+            update(job);
+        }
+    }
+
+    fn get_residual_flat(
+        &self,
+        correction_id: &str,
+    ) -> Option<artifact::residual_flat::ResidualFlatJob> {
+        self.residual_flat_jobs
+            .lock()
+            .unwrap()
+            .get(correction_id)
+            .cloned()
+    }
+
+    fn insert_residual_flat(&self, job: artifact::residual_flat::ResidualFlatJob) -> bool {
+        let mut jobs = self.residual_flat_jobs.lock().unwrap();
+        if jobs.len() >= MAX_REMEMBERED_JOBS && !jobs.contains_key(&job.correction_id) {
+            let Some(oldest) = jobs
+                .values()
+                .filter(|entry| {
+                    matches!(
+                        entry.state,
+                        artifact::residual_flat::ResidualFlatState::Completed
+                            | artifact::residual_flat::ResidualFlatState::Failed
+                    )
+                })
+                .min_by_key(|entry| entry.created_unix_seconds)
+                .map(|entry| entry.correction_id.clone())
+            else {
+                return false;
+            };
+            jobs.remove(&oldest);
+        }
+        jobs.insert(job.correction_id.clone(), job);
+        true
+    }
+
+    fn update_residual_flat(
+        &self,
+        correction_id: &str,
+        update: impl FnOnce(&mut artifact::residual_flat::ResidualFlatJob),
+    ) {
+        if let Some(job) = self
+            .residual_flat_jobs
+            .lock()
+            .unwrap()
+            .get_mut(correction_id)
+        {
             update(job);
         }
     }

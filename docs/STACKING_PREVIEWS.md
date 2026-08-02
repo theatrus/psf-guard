@@ -142,6 +142,42 @@ This real three-frame M44 check finds no source that clearly separates from
 its peers. PSF Guard keeps the ranked crops visible and labels each result
 **low** instead of inventing a culprit.
 
+### Build an opt-in dust-corrected preview
+
+A **strong** or **possible** dark ring or broad-shadow result can offer
+**Build dust-corrected preview** on a mono channel stack. The result starts a
+separate derived job. It does not replace the saved stack or alter source
+files, grades, or calibration records.
+
+PSF Guard maps the selected output region back to the suspect frame's detector
+coordinates, adds a clean border, and takes the same detector crop from every
+integrated light. It first applies the ordinary bias, dark, and flat masters.
+Seiza then fits each crop's local background, smooths small moving sources,
+and keeps only dark response at least 0.5% deep and shared by at least 70% of
+the frames. It also requires one region of at least 64 connected detector
+pixels, which keeps scattered low-level noise from becoming a correction. The
+response blends back to one at the crop edge and divides into each light
+before registration. The default peak gain is capped at 1.2; the API refuses
+values above 1.3.
+
+This needs more proof than the shape label alone. The channel must have at
+least five compatible integrated frames, at least three distinct dither
+positions, and enough detector-to-sky motion for sky structure to move across
+the patch. Large stacks use at most 64 evenly spaced inputs for response
+estimation, then apply the accepted patch to every integrated light. The job
+stops and explains the missing evidence when these checks fail. A matching
+master flat may still leave a residual if dust moved after the flat was
+captured; when no flat matches, the job says so. In both cases, the generated
+patch remains a small supplemental correction, not a synthetic replacement
+for a full master flat.
+
+When the job finishes, the inspector shows the estimated response, source
+count, dither span, corrected area, largest connected region, applied peak
+gain, and corrected stack count. **Show corrected stack** and **Show original stack** switch the
+full-size view for comparison. **Download corrected FITS** saves the separate
+linear result. Build the correction from a mono channel first; color
+recomposition from corrected channels remains follow-up work.
+
 Stacks made before this feature lack the retained frame mappings and source
 fingerprints. Rebuild the mono stacks and color preview once before searching
 them. PSF Guard also asks for a rebuild if a source file, calibration choice,
@@ -350,6 +386,13 @@ Artifacts live below the database cache directory:
 <cache>/<database>/stack-previews/artifact-searches/<search-id>/
   manifest.json
   image-<image-id>.png
+<cache>/<database>/stack-previews/residual-flats/<correction-id>/
+  manifest.json
+  response.fits
+  response.png
+  corrected.fits
+  corrected.png
+  corrected-original.png
 ```
 
 The content-addressed job ID includes the database/project, exact ordered
@@ -383,6 +426,9 @@ immutable cached response for the rebuilt output.
 - Source-artifact search detects local differences between registered inputs.
   It does not label the cause, replace full-frame quality analysis, or change a
   catalog grade.
+- Residual-flat correction requires repeated detector-space evidence and user
+  action. It does not infer dust from one frame, replace a master flat, or run
+  automatically during ordinary stack builds.
 
 ## HTTP API
 
@@ -404,6 +450,11 @@ POST /api/db/{db}/stack-previews/{job}/{group}/artifact-searches
 POST /api/db/{db}/stack-previews/color/{job}/artifact-searches
 GET  /api/db/{db}/stack-previews/artifact-searches/{search}
 GET  /api/db/{db}/stack-previews/artifact-searches/{search}/crops/{image}
+POST /api/db/{db}/stack-previews/artifact-searches/{search}/residual-flats
+GET  /api/db/{db}/stack-previews/residual-flats/{correction}
+GET  /api/db/{db}/stack-previews/residual-flats/{correction}/response
+GET  /api/db/{db}/stack-previews/residual-flats/{correction}/preview[?size=screen|original]
+GET  /api/db/{db}/stack-previews/residual-flats/{correction}/fits
 GET  /api/db/{db}/stack-previews/stretch/{stretch}/preview[?size=screen|original]
 GET  /api/db/{db}/stack-previews/stretch/{stretch}/fits
 ```
@@ -447,3 +498,9 @@ in stack-image pixels:
 The response names an asynchronous search. Poll its GET endpoint until the
 state is `completed` or `failed`; completed results include immutable crop
 URLs and per-frame outlier evidence.
+
+The residual-flat POST body is `{ "image_id": 42, "maximum_gain": 1.2 }`.
+The selected result must belong to the completed mono search and carry
+possible or strong dark ring/broad-shadow evidence. Poll the correction GET
+endpoint until it completes, then read the response PNG or corrected preview
+and FITS endpoints.

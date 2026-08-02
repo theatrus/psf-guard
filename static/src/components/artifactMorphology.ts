@@ -17,3 +17,13 @@ export function morphologyLabel(result: ArtifactSearchResult): string | null {
       return 'Unclassified change';
   }
 }
+
+export function canBuildResidualFlat(
+  result: ArtifactSearchResult,
+  sourceKind: 'mono' | 'color'
+): boolean {
+  return sourceKind === 'mono'
+    && result.evidence !== 'low'
+    && result.direction === 'dark'
+    && (result.morphology === 'ring' || result.morphology === 'broad_dark');
+}

@@ -423,8 +423,28 @@ async fn run_server_internal(
             get(stack_preview::artifact::get_artifact_search),
         )
         .route(
+            "/stack-previews/artifact-searches/{search_id}/residual-flats",
+            post(stack_preview::artifact::residual_flat::start_residual_flat),
+        )
+        .route(
             "/stack-previews/artifact-searches/{search_id}/crops/{image_id}",
             get(stack_preview::artifact::get_artifact_crop),
+        )
+        .route(
+            "/stack-previews/residual-flats/{correction_id}",
+            get(stack_preview::artifact::residual_flat::get_residual_flat),
+        )
+        .route(
+            "/stack-previews/residual-flats/{correction_id}/response",
+            get(stack_preview::artifact::residual_flat::get_residual_flat_response),
+        )
+        .route(
+            "/stack-previews/residual-flats/{correction_id}/preview",
+            get(stack_preview::artifact::residual_flat::get_residual_flat_preview),
+        )
+        .route(
+            "/stack-previews/residual-flats/{correction_id}/fits",
+            get(stack_preview::artifact::residual_flat::download_residual_flat_fits),
         )
         .route(
             "/stack-previews/stretch/{stretch_id}/preview",

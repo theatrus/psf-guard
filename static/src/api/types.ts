@@ -368,6 +368,56 @@ export interface ArtifactSearchJob {
   error: string | null;
 }
 
+export type ResidualFlatState = 'queued' | 'running' | 'completed' | 'failed';
+
+export interface ResidualFlatOptions {
+  minimum_samples: number;
+  minimum_depth: number;
+  minimum_consensus: number;
+  maximum_gain: number;
+  background_edge_fraction: number;
+  smoothing_sigma: number;
+  edge_feather_fraction: number;
+  minimum_corrected_samples: number;
+  minimum_connected_pixels: number;
+}
+
+export interface ResidualFlatDiagnostics {
+  algorithm_version: number;
+  sample_count: number;
+  corrected_samples: number;
+  total_samples: number;
+  largest_connected_pixels: number;
+  minimum_response: number;
+  maximum_applied_gain: number;
+}
+
+export interface ResidualFlatJob {
+  schema_version: number;
+  correction_id: string;
+  database_id: string;
+  search_id: string;
+  source_job_id: string;
+  source_image_id: number;
+  filter_name: string;
+  state: ResidualFlatState;
+  phase: string;
+  total_work_units: number;
+  completed_work_units: number;
+  created_unix_seconds: number;
+  options: ResidualFlatOptions;
+  detector_region: ReferenceRegion | null;
+  sample_count: number;
+  dither_span_pixels: number | null;
+  required_dither_span_pixels: number | null;
+  diagnostics: ResidualFlatDiagnostics | null;
+  accepted_frames: number;
+  rejected_frames: number;
+  calibration: AppliedCalibration | null;
+  notes: string[];
+  error: string | null;
+}
+
 export interface StackInputImage {
   image_id: number;
   grading_status: number;
