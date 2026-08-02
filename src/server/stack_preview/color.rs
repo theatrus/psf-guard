@@ -2738,6 +2738,7 @@ mod tests {
                 processed_frames: 3,
                 accepted_frames: 3,
                 rejected_frames: 0,
+                reused_frames: 0,
                 output_channels: 1,
                 sky_orientation: Some(stack_orientation(
                     100,

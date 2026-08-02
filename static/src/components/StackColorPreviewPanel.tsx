@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type {
   StackColorCrop,
@@ -17,7 +17,7 @@ import {
 } from './stackColorProcessing';
 import { isColorStackSkyOriented } from './stackOrientation';
 import { cropLabels, cropOrder, describeCrop, offCenterChannels } from './stackColorCrop';
-import { adoptableStackJob, useStackActivity } from '../hooks/useStackActivity';
+import { useStackActivity } from '../hooks/useStackActivity';
 
 interface StackColorPreviewPanelProps {
   dbId: string;
@@ -370,7 +370,7 @@ export default function StackColorPreviewPanel({
   onOpenImage,
 }: StackColorPreviewPanelProps) {
   const queryClient = useQueryClient();
-  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [watchedJobIds, setWatchedJobIds] = useState<string[]>([]);
   const [paletteByTarget, setPaletteByTarget] = useState<Record<number, StackNarrowbandPalette>>({});
   const [cropByCard, setCropByCard] = useState<Record<string, StackColorCrop>>({});
   const [inspector, setInspector] = useState<StackColorJob | null>(null);
@@ -397,7 +397,9 @@ export default function StackColorPreviewPanel({
     }),
     onSuccess: (job) => {
       queryClient.setQueryData(jobQueryKey(dbId, projectId, job.job_id), job);
-      setActiveJobId(job.job_id);
+      setWatchedJobIds((current) =>
+        current.includes(job.job_id) ? current : [...current, job.job_id]
+      );
       if (terminalStates.has(job.state)) {
         queryClient.invalidateQueries({
           queryKey: catalogQueryKey(dbId, projectId, sourceRevision),
@@ -406,43 +408,62 @@ export default function StackColorPreviewPanel({
     },
   });
 
-  const status = useQuery({
-    queryKey: jobQueryKey(dbId, projectId, activeJobId),
-    queryFn: () => apiClient.getStackColorJob(dbId, projectId, activeJobId!),
-    enabled: activeJobId !== null,
-    refetchInterval: (query) =>
-      query.state.data && !terminalStates.has(query.state.data.state) ? 700 : false,
+  const statuses = useQueries({
+    queries: watchedJobIds.map((jobId) => ({
+      queryKey: jobQueryKey(dbId, projectId, jobId),
+      queryFn: () => apiClient.getStackColorJob(dbId, projectId, jobId),
+      refetchInterval: (query: { state: { data?: StackColorJob } }) =>
+        query.state.data && !terminalStates.has(query.state.data.state) ? 700 : false,
+    })),
   });
-  const activeJob = status.data;
-
+  const watchedJobs = useMemo(
+    () =>
+      statuses
+        .map((status) => status.data)
+        .filter((job): job is StackColorJob => job !== undefined)
+        .sort((left, right) => left.created_unix_seconds - right.created_unix_seconds),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- useQueries returns a new array each render; the join tracks content.
+    [statuses.map((status) => status.dataUpdatedAt).join('|')]
+  );
+  const statusError = statuses.find((status) => status.error)?.error;
+  const settledCount = watchedJobs.filter((job) => terminalStates.has(job.state)).length;
   useEffect(() => {
-    if (activeJob && terminalStates.has(activeJob.state)) {
+    if (settledCount > 0) {
       queryClient.invalidateQueries({
         queryKey: catalogQueryKey(dbId, projectId, sourceRevision),
       });
     }
-  }, [activeJob, dbId, projectId, queryClient, sourceRevision]);
+  }, [settledCount, dbId, projectId, queryClient, sourceRevision]);
 
   useEffect(() => {
-    setActiveJobId(null);
+    setWatchedJobIds([]);
     setPaletteByTarget({});
     setCropByCard({});
     setInspector(null);
     resetStart();
   }, [dbId, projectId, resetStart]);
 
-  // Re-attach to a color build that is still running on the server, so
-  // navigating away and back does not hide it. Declared after the reset above
-  // so a project change adopts that project's job.
+  // Re-attach to color builds still running on the server, so navigating away
+  // and back does not hide them. Declared after the reset above so a project
+  // change adopts that project's jobs.
   const { active } = useStackActivity();
-  const adoptedJobId = adoptableStackJob(active, 'color', dbId, projectId)?.job_id ?? null;
-  const shownJobFinished = activeJob ? terminalStates.has(activeJob.state) : false;
+  const adoptableIds = useMemo(
+    () =>
+      active
+        .filter(
+          (entry) =>
+            entry.kind === 'color' && entry.database_id === dbId && entry.project_id === projectId
+        )
+        .map((entry) => entry.job_id),
+    [active, dbId, projectId]
+  );
   useEffect(() => {
-    if (!adoptedJobId) return;
-    // Keep a job this panel is already watching, but never let a build we have
-    // finished with hide one that is still running.
-    setActiveJobId((current) => (current === null || shownJobFinished ? adoptedJobId : current));
-  }, [adoptedJobId, shownJobFinished]);
+    if (adoptableIds.length === 0) return;
+    setWatchedJobIds((current) => {
+      const additions = adoptableIds.filter((jobId) => !current.includes(jobId));
+      return additions.length === 0 ? current : [...current, ...additions];
+    });
+  }, [adoptableIds]);
 
   const targets = useMemo(() => {
     const byId = new Map((catalog.data?.targets ?? []).map((target) => [target.target_id, target]));
@@ -468,9 +489,20 @@ export default function StackColorPreviewPanel({
 
   if (targets.length === 0 && !catalog.error) return null;
 
-  const colorBusy = startPending || activeJob?.state === 'queued' || activeJob?.state === 'running';
-  const busy = channelBuildRunning || colorBusy;
-  const error = startError ?? status.error ?? catalog.error;
+  // Builds queue on the server, so other cards stay available while one runs.
+  // channelBuildRunning no longer locks color out; a queued color job simply
+  // waits its turn behind the mono builds on the shared permit.
+  void channelBuildRunning;
+  const error = startError ?? statusError ?? catalog.error;
+
+  const newestWatched = (
+    targetId: number,
+    kind: StackColorKind,
+    palette?: StackNarrowbandPalette
+  ) => {
+    const mine = watchedJobs.filter((job) => jobMatches(job, targetId, kind, palette));
+    return mine[mine.length - 1];
+  };
 
   return (
     <section className="stack-color-section" aria-labelledby="stack-color-title">
@@ -496,15 +528,19 @@ export default function StackColorPreviewPanel({
             { kind: 'lrgb', available: target.lrgb_available },
           ];
           for (const { kind, available } of broadbandKinds) {
-            const artifact = activeJob?.state === 'completed' &&
-              jobMatches(activeJob, target.target_id, kind)
-              ? activeJob
+            const watched = newestWatched(target.target_id, kind);
+            const artifact = watched?.state === 'completed'
+              ? watched
               : targetJobs.find((job) => jobMatches(job, target.target_id, kind));
-            const cardActive = activeJob && jobMatches(activeJob, target.target_id, kind)
-              ? activeJob : undefined;
+            const cardActive = watched;
             if (available || artifact) {
               const key = operationKey(target.target_id, kind);
               const crop = cropByCard[key] ?? artifact?.crop ?? 'none';
+              const operationPending = startPending &&
+                (startVariables?.operationKey === key ||
+                  startVariables?.operationKey === `${key}:processing`);
+              const cardBusy = operationPending ||
+                (watched !== undefined && !terminalStates.has(watched.state));
               cards.push(
                 <ColorCard
                   key={key}
@@ -515,8 +551,8 @@ export default function StackColorPreviewPanel({
                   crop={crop}
                   artifact={artifact}
                   activeJob={cardActive}
-                  busy={busy}
-                  operationPending={startPending && startVariables?.operationKey === key}
+                  busy={cardBusy}
+                  operationPending={operationPending}
                   unavailable={!available}
                   sourceStacksOutdated={outdatedTargetIds.has(target.target_id)}
                   canCompute={canCompute}
@@ -551,15 +587,18 @@ export default function StackColorPreviewPanel({
           );
           const palette = paletteByTarget[target.target_id] ?? defaultPalette(paletteChoices);
           if (palette) {
-            const artifact = activeJob?.state === 'completed' &&
-              jobMatches(activeJob, target.target_id, 'narrowband', palette)
-              ? activeJob
+            const watched = newestWatched(target.target_id, 'narrowband', palette);
+            const artifact = watched?.state === 'completed'
+              ? watched
               : targetJobs.find((job) => jobMatches(job, target.target_id, 'narrowband', palette));
-            const cardActive = activeJob &&
-              jobMatches(activeJob, target.target_id, 'narrowband', palette)
-              ? activeJob : undefined;
+            const cardActive = watched;
             const key = operationKey(target.target_id, 'narrowband', palette);
             const crop = cropByCard[key] ?? artifact?.crop ?? 'none';
+            const operationPending = startPending &&
+              (startVariables?.operationKey === key ||
+                startVariables?.operationKey === `${key}:processing`);
+            const cardBusy = operationPending ||
+              (watched !== undefined && !terminalStates.has(watched.state));
             cards.push(
               <ColorCard
                 key={`${target.target_id}:narrowband`}
@@ -571,8 +610,8 @@ export default function StackColorPreviewPanel({
                 crop={crop}
                 artifact={artifact}
                 activeJob={cardActive}
-                busy={busy}
-                operationPending={startPending && startVariables?.operationKey === key}
+                busy={cardBusy}
+                operationPending={operationPending}
                 unavailable={!target.narrowband_palettes.includes(palette)}
                 sourceStacksOutdated={outdatedTargetIds.has(target.target_id)}
                 canCompute={canCompute}

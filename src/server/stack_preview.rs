@@ -7,6 +7,7 @@
 
 pub mod artifact;
 pub mod color;
+mod resume;
 pub mod stretch;
 
 use axum::{
@@ -202,6 +203,10 @@ pub struct StackGroupStatus {
     pub processed_frames: usize,
     pub accepted_frames: usize,
     pub rejected_frames: usize,
+    /// Frames restored from a saved accumulator instead of being registered
+    /// and integrated again. Zero for a from-scratch build.
+    #[serde(default)]
+    pub reused_frames: usize,
     #[serde(default)]
     pub output_channels: usize,
     #[serde(default)]
@@ -1109,6 +1114,7 @@ fn prepare_job(
             processed_frames: 0,
             accepted_frames: 0,
             rejected_frames: 0,
+            reused_frames: 0,
             output_channels: 0,
             sky_orientation: None,
             reference_image_id,
@@ -1389,6 +1395,7 @@ fn cancel_unfinished_groups(job: &mut StackPreviewJob) {
 fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool>) {
     let job_id = prepared.public.job_id.clone();
     let database_id = prepared.public.database_id.clone();
+    let accepted_only = prepared.public.accepted_only;
     let PreparedJob {
         public: _,
         groups,
@@ -1404,6 +1411,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
         job_id: &job_id,
         cache_root: &cache_root,
         north_up,
+        accepted_only,
         worker_policy: &worker_policy,
         cancel,
     };
@@ -1484,6 +1492,7 @@ struct GroupJob<'a> {
     job_id: &'a str,
     cache_root: &'a FsPath,
     north_up: bool,
+    accepted_only: bool,
     worker_policy: &'a crate::concurrency::WorkerPolicy,
     cancel: &'a Arc<AtomicBool>,
 }
@@ -1502,6 +1511,7 @@ fn run_group(
         job_id,
         cache_root,
         north_up,
+        accepted_only,
         worker_policy,
         cancel,
     } = job;
@@ -1534,11 +1544,35 @@ fn run_group(
         return Ok(GroupOutcome::Cancelled);
     }
     let (calibration_masters, applied_calibration) = masters.map_err(|error| error.to_string())?;
+    let calibration_fingerprint = applied_calibration.fingerprint.clone();
     state.stack_previews.update(job_id, |job| {
         let status = &mut job.groups[group.index];
         status.calibration = applied_calibration;
         status.phase = "stacking".into();
     });
+    let (group_target_id, group_filter_name) = state
+        .stack_previews
+        .get(job_id)
+        .map(|job| {
+            let status = &job.groups[group.index];
+            (status.target_id, status.filter_name.clone())
+        })
+        .ok_or_else(|| "Stack job disappeared while running".to_string())?;
+    let requested = group
+        .frames
+        .iter()
+        .map(|frame| (frame.image_id, frame.source_fingerprint.as_str()))
+        .collect::<Vec<_>>();
+    let checkpoint = resume::load(
+        cache_root,
+        database_id,
+        group_target_id,
+        &group_filter_name,
+        accepted_only,
+        SEIZA_STACKING_VERSION,
+        &calibration_fingerprint,
+        &requested,
+    );
     let reference_frame =
         FitsFrame::open(&group.frames[0].path).map_err(|error| error.to_string())?;
     let output_channels = if reference_frame.bayer.is_some() {
@@ -1578,44 +1612,158 @@ fn run_group(
     );
 
     pool.install(|| {
-        let reference_exposure = reference_frame.exposure_seconds.unwrap_or(0.0);
-        // The reference frame defines zero rotation, so it always votes upright.
-        let mut orientation_vote = OrientationVote::default();
-        orientation_vote.add(0.0, reference_exposure);
-        let options = StackOptions {
-            normalization: NormalizationMode::Global,
-            ..StackOptions::default()
-        };
-        let mut stacker = LiveStacker::new(reference_frame, calibration_masters, options)
-            .map_err(|error| error.to_string())?;
-        let reference_mapping = stacker.reference_mapping();
-        state.stack_previews.update(job_id, |job| {
-            let status = &mut job.groups[group.index];
-            status.processed_frames = 1;
-            status.accepted_frames = 1;
-            status.output_channels = output_channels as usize;
-            status.total_exposure_seconds = reference_exposure;
-            status.frames.push(StackFrameDecision {
-                image_id: group.frames[0].image_id,
-                disposition: "reference".into(),
-                reason: None,
-                quality_score: group.frames[0].quality_score,
-                matched_stars: None,
-                registration_rms_pixels: None,
-                registration_drift_pixels: None,
-                registered_mapping: Some(reference_mapping),
-                normalization_mean_gain: Some(1.0),
-                normalization_mean_offset: Some(0.0),
-                source_fingerprint: Some(group.frames[0].source_fingerprint.clone()),
-                overlap_fraction: Some(1.0),
-                integrated_fraction: Some(1.0),
-            });
+        // A checkpoint that fails to reopen — a Seiza version change, a
+        // truncated file — is discarded and the group builds from scratch.
+        let restored = checkpoint.and_then(|checkpoint| {
+            match LiveStacker::open_context(&checkpoint.context_path) {
+                Ok(stacker) => Some((stacker, checkpoint.manifest)),
+                Err(error) => {
+                    tracing::warn!(
+                        "Stack checkpoint could not be reopened ({error}); rebuilding from scratch"
+                    );
+                    resume::discard(cache_root, database_id, group_target_id, &group_filter_name);
+                    None
+                }
+            }
         });
+        let mut orientation_vote = OrientationVote::default();
+        let (mut stacker, mut ledger) = match restored {
+            Some((stacker, manifest)) => {
+                // Replay the checkpointed ledger: the per-frame record, the
+                // counters, and each accepted frame's orientation vote. The
+                // reference is the ledger's first entry and votes upright.
+                let ledger = manifest.frames;
+                for frame in &ledger {
+                    if let Some(rotation) = frame.rotation_radians {
+                        orientation_vote.add(rotation, frame.exposure_seconds);
+                    }
+                }
+                tracing::info!(
+                    "Stack preview {} group {}: resuming from a checkpoint of {} frame(s)",
+                    job_id,
+                    group.index,
+                    ledger.len()
+                );
+                state.stack_previews.update(job_id, |job| {
+                    let status = &mut job.groups[group.index];
+                    status.processed_frames = ledger.len();
+                    status.accepted_frames = ledger
+                        .iter()
+                        .filter(|frame| {
+                            matches!(
+                                frame.decision.disposition.as_str(),
+                                "reference" | "accepted"
+                            )
+                        })
+                        .count();
+                    status.rejected_frames = ledger.len() - status.accepted_frames;
+                    status.reused_frames = ledger.len();
+                    status.output_channels = output_channels as usize;
+                    status.total_exposure_seconds = ledger
+                        .iter()
+                        .filter(|frame| frame.rotation_radians.is_some())
+                        .map(|frame| frame.exposure_seconds)
+                        .sum();
+                    status.frames = ledger.iter().map(|frame| frame.decision.clone()).collect();
+                });
+                (stacker, ledger)
+            }
+            None => {
+                let reference_exposure = reference_frame.exposure_seconds.unwrap_or(0.0);
+                // The reference frame defines zero rotation; it votes upright.
+                orientation_vote.add(0.0, reference_exposure);
+                let options = StackOptions {
+                    normalization: NormalizationMode::Global,
+                    ..StackOptions::default()
+                };
+                let stacker = LiveStacker::new(reference_frame, calibration_masters, options)
+                    .map_err(|error| error.to_string())?;
+                let reference_mapping = stacker.reference_mapping();
+                let reference_decision = StackFrameDecision {
+                    image_id: group.frames[0].image_id,
+                    disposition: "reference".into(),
+                    reason: None,
+                    quality_score: group.frames[0].quality_score,
+                    matched_stars: None,
+                    registration_rms_pixels: None,
+                    registration_drift_pixels: None,
+                    registered_mapping: Some(reference_mapping),
+                    normalization_mean_gain: Some(1.0),
+                    normalization_mean_offset: Some(0.0),
+                    source_fingerprint: Some(group.frames[0].source_fingerprint.clone()),
+                    overlap_fraction: Some(1.0),
+                    integrated_fraction: Some(1.0),
+                };
+                state.stack_previews.update(job_id, |job| {
+                    let status = &mut job.groups[group.index];
+                    status.processed_frames = 1;
+                    status.accepted_frames = 1;
+                    status.output_channels = output_channels as usize;
+                    status.total_exposure_seconds = reference_exposure;
+                    status.frames.push(reference_decision.clone());
+                });
+                let ledger = vec![resume::ResumeFrame {
+                    decision: reference_decision,
+                    exposure_seconds: reference_exposure,
+                    rotation_radians: Some(0.0),
+                }];
+                (stacker, ledger)
+            }
+        };
+        let already_integrated: std::collections::HashSet<i32> =
+            ledger.iter().map(|frame| frame.decision.image_id).collect();
+        let save_checkpoint = |stacker: &LiveStacker, ledger: &[resume::ResumeFrame]| {
+            let context_path =
+                resume::context_path(cache_root, database_id, group_target_id, &group_filter_name);
+            let manifest = resume::ResumeManifest {
+                schema_version: resume::RESUME_SCHEMA_VERSION,
+                stacking_version: SEIZA_STACKING_VERSION.into(),
+                target_id: group_target_id,
+                filter_name: group_filter_name.clone(),
+                accepted_only,
+                calibration_fingerprint: calibration_fingerprint.clone(),
+                frames: ledger.to_vec(),
+            };
+            let saved = context_path
+                .parent()
+                .ok_or_else(|| "checkpoint path has no parent".to_string())
+                .and_then(|parent| {
+                    std::fs::create_dir_all(parent).map_err(|error| error.to_string())
+                })
+                .and_then(|()| {
+                    stacker
+                        .save_context(&context_path)
+                        .map_err(|error| error.to_string())
+                })
+                .and_then(|()| {
+                    resume::store_manifest(
+                        &resume::manifest_path(
+                            cache_root,
+                            database_id,
+                            group_target_id,
+                            &group_filter_name,
+                        ),
+                        &manifest,
+                    )
+                });
+            if let Err(error) = saved {
+                // A checkpoint is an optimization; a build never fails over
+                // it. Discard the pair so nothing resumes from half a save.
+                tracing::warn!("Failed to save stack checkpoint: {error}");
+                resume::discard(cache_root, database_id, group_target_id, &group_filter_name);
+            }
+        };
 
-        for frame in group.frames.iter().skip(1) {
+        for frame in group
+            .frames
+            .iter()
+            .filter(|frame| !already_integrated.contains(&frame.image_id))
+        {
             // Registering and integrating one frame is the unit of work here,
-            // so this is where a stop takes effect.
+            // so this is where a stop takes effect. The frames already pushed
+            // are checkpointed, so building again continues from them.
             if cancel.load(Ordering::Relaxed) {
+                save_checkpoint(&stacker, &ledger);
                 return Ok(GroupOutcome::Cancelled);
             }
             let opened = FitsFrame::open(&frame.path);
@@ -1677,6 +1825,18 @@ fn run_group(
                     integrated_fraction: None,
                 },
             };
+            ledger.push(resume::ResumeFrame {
+                decision: decision.clone(),
+                exposure_seconds: exposure,
+                rotation_radians: if decision.disposition == "accepted" {
+                    decision
+                        .registered_mapping
+                        .as_ref()
+                        .map(|mapping| mapping.transform().rotation_radians)
+                } else {
+                    None
+                },
+            });
             state.stack_previews.update(job_id, |job| {
                 let status = &mut job.groups[group.index];
                 status.processed_frames += 1;
@@ -1689,6 +1849,9 @@ fn run_group(
                 status.frames.push(decision);
             });
         }
+        // The accumulator is complete: checkpoint it before the snapshot
+        // consumes the stacker, so an additive rebuild can pick it up here.
+        save_checkpoint(&stacker, &ledger);
         // Last exit before the job writes anything. Orienting and rendering
         // follow, and a stop after this point would have to clean up published
         // artifacts.
@@ -1991,6 +2154,7 @@ mod tests {
             processed_frames: 2,
             accepted_frames: 2,
             rejected_frames: 0,
+            reused_frames: 0,
             output_channels: 1,
             sky_orientation: Some(sky_orientation()),
             reference_image_id: Some(image_id),
