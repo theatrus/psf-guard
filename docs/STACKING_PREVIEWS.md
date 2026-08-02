@@ -62,13 +62,15 @@ mapping, including a camera parity flip, so a selected stack region still maps
 back to the right source pixels.
 
 **Stop** appears beside the build buttons while a build is queued or running.
-The stop takes effect between frames — and between calibration inputs, so a
-long master build gives way too — which puts it within one frame's work rather
-than instantly. Nothing partial is published: a channel that stops before its
-FITS and preview are written leaves no artifact, and the card says the channel
-was stopped. Channels that already finished keep their previews and are
-remembered as usual. Build again when you are ready; a stopped job is never
-reused as a cached result.
+The stop takes effect between frames, between channels, and between
+calibration masters, so it lands within one frame's work rather than instantly.
+Building a single master runs inside Seiza and finishes before the stop is
+seen; that is a first build of a night's calibration set, not the usual case.
+Nothing partial is published: a channel that stops before its FITS and preview
+are written leaves no artifact, and the card says the channel was stopped.
+Channels that already finished keep their previews and are remembered as usual.
+Build again when you are ready; a stopped job is never reused as a cached
+result.
 
 PSF Guard remembers the last successful preview for every target/channel in the
 project cache and restores those cards after navigation, page reload, or server
