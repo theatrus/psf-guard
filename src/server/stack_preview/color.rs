@@ -26,7 +26,7 @@ use seiza_stacking::{
     ColorTransfer, CropReport, FitsFrame, ForaxxOptions, LinearImage, NarrowbandPalette, Registrar,
     RegistrationOptions,
 };
-use seiza_stretch::StretchStack;
+use seiza_stretch::{StretchStack, StretchStackOutput, StretchStageProgress};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
@@ -40,7 +40,7 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-const STACK_COLOR_CACHE_VERSION: u32 = 10;
+const STACK_COLOR_CACHE_VERSION: u32 = 11;
 const COLOR_INPUT_CACHE_VERSION: u32 = 3;
 const SEIZA_BACKGROUND_VERSION: &str = "0.2.0";
 const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
@@ -604,6 +604,46 @@ fn color_progress(
 struct ColorProgressTracker<'a> {
     state: &'a Arc<AppState>,
     job_id: &'a str,
+}
+
+/// Apply an input-channel stretch without turning registration gaps into
+/// valid black pixels. Seiza's display stretch maps non-finite samples to
+/// black, which is right for final rendering but would erase the coverage
+/// mask before color composition and cropping.
+fn apply_input_stretch_stack(
+    stack: &StretchStack,
+    data: &[f32],
+    channel_count: usize,
+    mut progress: impl FnMut(StretchStageProgress),
+) -> Result<StretchStackOutput<f32>, seiza_stretch::StretchError> {
+    let stage_count = stack.len();
+    let mut current = data.to_vec();
+    let mut plans = Vec::with_capacity(stage_count);
+    for (stage_index, config) in stack.stages().iter().cloned().enumerate() {
+        let output = StretchStack::single(config).apply_f32_with_progress(
+            &current,
+            channel_count,
+            |event| {
+                progress(StretchStageProgress {
+                    stage_index,
+                    stage_count,
+                    state: event.state,
+                });
+            },
+        )?;
+        let mut next = output.data;
+        for (sample, input) in next.iter_mut().zip(&current) {
+            if !input.is_finite() {
+                *sample = f32::NAN;
+            }
+        }
+        current = next;
+        plans.extend(output.plans);
+    }
+    Ok(StretchStackOutput {
+        data: current,
+        plans,
+    })
 }
 
 impl ColorProgressTracker<'_> {
@@ -2035,29 +2075,28 @@ fn compose_color(
                     let image = images.remove(&source.role).ok_or_else(|| {
                         format!("{} normalized image is missing", source.role.label())
                     })?;
-                    let output = stack
-                        .apply_f32_with_progress(&image.data, 1, |event| {
-                            let number = event.stage_index + 1;
-                            let action = match event.state {
-                                seiza_stretch::StretchStageState::Resolving => "Resolving",
-                                seiza_stretch::StretchStageState::Applying => "Applying",
-                                seiza_stretch::StretchStageState::Completed => "Applied",
-                            };
-                            progress.begin(
-                                StackColorProgressPhase::StretchingInputs,
-                                format!(
-                                    "{action} {} stretch {number}/{}",
-                                    source.role.label(),
-                                    event.stage_count
-                                ),
-                                Some(source.role),
-                                Some((number, event.stage_count)),
-                            );
-                            if event.state == seiza_stretch::StretchStageState::Completed {
-                                progress.advance(StackColorProgressPhase::StretchingInputs, 1);
-                            }
-                        })
-                        .map_err(|error| error.to_string())?;
+                    let output = apply_input_stretch_stack(&stack, &image.data, 1, |event| {
+                        let number = event.stage_index + 1;
+                        let action = match event.state {
+                            seiza_stretch::StretchStageState::Resolving => "Resolving",
+                            seiza_stretch::StretchStageState::Applying => "Applying",
+                            seiza_stretch::StretchStageState::Completed => "Applied",
+                        };
+                        progress.begin(
+                            StackColorProgressPhase::StretchingInputs,
+                            format!(
+                                "{action} {} stretch {number}/{}",
+                                source.role.label(),
+                                event.stage_count
+                            ),
+                            Some(source.role),
+                            Some((number, event.stage_count)),
+                        );
+                        if event.state == seiza_stretch::StretchStageState::Completed {
+                            progress.advance(StackColorProgressPhase::StretchingInputs, 1);
+                        }
+                    })
+                    .map_err(|error| error.to_string())?;
                     let resolved = output
                         .plans
                         .iter()
@@ -3575,5 +3614,51 @@ mod tests {
             decoded.registered_transforms[&StackColorRole::Green],
             transform
         );
+    }
+
+    #[test]
+    fn input_stretches_keep_registration_gaps_for_color_cropping() {
+        let covered = |left: usize, top: usize| {
+            let data = (0..8 * 8)
+                .map(|index| {
+                    let x = index % 8;
+                    let y = index / 8;
+                    if x < left || y < top {
+                        f32::NAN
+                    } else {
+                        0.25
+                    }
+                })
+                .collect::<Vec<_>>();
+            LinearImage::new(8, 8, 1, data).unwrap()
+        };
+        let stretch = StretchStack::new(vec![
+            super::super::stretch::display_identity_config(),
+            super::super::stretch::display_identity_config(),
+        ])
+        .unwrap();
+        let green = apply_input_stretch_stack(&stretch, &covered(2, 0).data, 1, |_| {}).unwrap();
+        let blue = apply_input_stretch_stack(&stretch, &covered(0, 3).data, 1, |_| {}).unwrap();
+        assert_eq!(green.plans.len(), 2);
+        assert!(green.data[0].is_nan());
+        assert_eq!(green.data[2], 0.25);
+        assert!(blue.data[0].is_nan());
+
+        let green = LinearImage::new(8, 8, 1, green.data).unwrap();
+        let blue = LinearImage::new(8, 8, 1, blue.data).unwrap();
+        let composition = combine_rgb(
+            &covered(0, 0),
+            &green,
+            &blue,
+            &ColorOptions {
+                normalization: ColorNormalization::None,
+                crop: ColorCrop::Bounds,
+                ..ColorOptions::default()
+            },
+        )
+        .unwrap();
+        let report = composition.crop.expect("a cropped composition");
+        assert_eq!((report.region.x, report.region.y), (2, 3));
+        assert_eq!((report.region.width, report.region.height), (6, 5));
     }
 }
