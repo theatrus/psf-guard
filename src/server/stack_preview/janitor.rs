@@ -11,23 +11,27 @@
 //! - the in-memory job map — panels may still be polling those jobs;
 //! - for color inputs, the `linear_input_id` of any kept color job.
 //!
-//! Everything else is deleted once it is older than a grace period, which
-//! protects a directory that a concurrent build is writing this moment.
-//! Resume checkpoints are superseded in place per target/channel, so they are
-//! pruned purely by age: one abandoned target should not hold full-frame
-//! accumulator state forever.
+//! Both indices replace entries per identity — mono per target/channel,
+//! color per target/kind/palette — so a directory leaves the index only when
+//! a newer build of the same identity supersedes it. Unreferenced therefore
+//! means the input set changed and a newer output exists (or the job never
+//! published one), and a job's output stays durable until then. A day-long
+//! grace on top protects directories a build or an open inspector may still
+//! be touching.
+//!
+//! Resume checkpoints are superseded in place per target/channel and are
+//! kept until then. The only checkpoints deleted outright are those that can
+//! never resume again — written by another pipeline version — and orphaned
+//! halves of an interrupted save.
 
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-/// Age a directory must reach before an unreferenced one is deleted. Long
-/// enough that a build writing artifacts right now is never swept.
-const UNREFERENCED_GRACE: Duration = Duration::from_secs(60 * 60);
-
-/// Age at which an untouched resume checkpoint is dropped. Additive rebuilds
-/// refresh their checkpoint on every settle, so only abandoned targets age.
-const CHECKPOINT_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+/// Age a directory must reach before an unreferenced one is deleted. A full
+/// day, so nothing a long build session or an open inspector still touches is
+/// swept out from under it.
+const UNREFERENCED_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Everything the janitor must not delete, gathered by the caller from the
 /// latest indices and the in-memory job maps.
@@ -81,22 +85,63 @@ fn prune_directories(root: &Path, keep: &HashSet<String>, now: SystemTime) -> us
     removed
 }
 
-fn prune_checkpoints(resume_root: &Path, now: SystemTime) -> usize {
+/// A checkpoint is durable until its input set changes, which replaces it in
+/// place. Deletion is reserved for pairs that can never resume again: a
+/// manifest from another pipeline version, an unreadable manifest, or an
+/// orphaned half left by an interrupted save.
+fn prune_checkpoints(resume_root: &Path, stacking_version: &str, now: SystemTime) -> usize {
     let Ok(entries) = std::fs::read_dir(resume_root) else {
         return 0;
     };
-    let mut removed = 0;
+    let mut stems: std::collections::HashMap<String, (bool, bool)> =
+        std::collections::HashMap::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.is_file() || !old_enough(&path, now, CHECKPOINT_MAX_AGE) {
+        let (Some(stem), Some(extension)) = (
+            path.file_stem().and_then(|value| value.to_str()),
+            path.extension().and_then(|value| value.to_str()),
+        ) else {
             continue;
+        };
+        let record = stems.entry(stem.to_string()).or_default();
+        match extension {
+            "seiza-stack" => record.0 = true,
+            "json" => record.1 = true,
+            _ => {}
         }
-        match std::fs::remove_file(&path) {
-            Ok(()) => removed += 1,
-            Err(error) => tracing::warn!(
-                "Failed to prune stale stack checkpoint {}: {error}",
-                path.display()
-            ),
+    }
+    let mut removed = 0;
+    let mut remove = |path: std::path::PathBuf| match std::fs::remove_file(&path) {
+        Ok(()) => removed += 1,
+        Err(error) => tracing::warn!(
+            "Failed to prune stack checkpoint {}: {error}",
+            path.display()
+        ),
+    };
+    for (stem, (has_context, has_manifest)) in stems {
+        let context = resume_root.join(format!("{stem}.seiza-stack"));
+        let manifest = resume_root.join(format!("{stem}.json"));
+        if has_context && has_manifest {
+            let resumable = std::fs::read(&manifest)
+                .ok()
+                .and_then(|bytes| {
+                    serde_json::from_slice::<super::resume::ResumeManifest>(&bytes).ok()
+                })
+                .is_some_and(|parsed| {
+                    parsed.schema_version == super::resume::RESUME_SCHEMA_VERSION
+                        && parsed.stacking_version == stacking_version
+                });
+            if !resumable {
+                remove(context);
+                remove(manifest);
+            }
+        } else {
+            // Half a checkpoint resumes nothing. The grace covers the moment
+            // between Seiza writing the context and the manifest landing.
+            let orphan = if has_context { context } else { manifest };
+            if old_enough(&orphan, now, UNREFERENCED_GRACE) {
+                remove(orphan);
+            }
         }
     }
     removed
@@ -105,14 +150,14 @@ fn prune_checkpoints(resume_root: &Path, now: SystemTime) -> usize {
 /// Delete every stack artifact nothing references, and every checkpoint no
 /// build has refreshed within its age limit. Errors are logged per entry; one
 /// undeletable directory never stops the sweep.
-pub(super) fn prune(cache_root: &Path, keep: &KeepSet) {
+pub(super) fn prune(cache_root: &Path, keep: &KeepSet, stacking_version: &str) {
     let now = SystemTime::now();
     let stack_root = cache_root.join("stack-previews");
     let removed_mono = prune_directories(&stack_root, &keep.mono_job_ids, now);
     let removed_color = prune_directories(&stack_root.join("color"), &keep.color_job_ids, now);
     let removed_inputs =
         prune_directories(&stack_root.join("color-inputs"), &keep.color_input_ids, now);
-    let removed_checkpoints = prune_checkpoints(&stack_root.join("resume"), now);
+    let removed_checkpoints = prune_checkpoints(&stack_root.join("resume"), stacking_version, now);
     if removed_mono + removed_color + removed_inputs + removed_checkpoints > 0 {
         tracing::info!(
             removed_mono,
@@ -155,26 +200,27 @@ mod tests {
         let kept = cache.path().join("stack-previews").join(hex_name('b'));
         fs::create_dir_all(&stale).unwrap();
         fs::create_dir_all(&kept).unwrap();
-        age(&stale, 2 * 60 * 60);
-        age(&kept, 2 * 60 * 60);
+        age(&stale, 25 * 60 * 60);
+        age(&kept, 25 * 60 * 60);
 
-        prune(cache.path(), &keep(&[&hex_name('b')]));
+        prune(cache.path(), &keep(&[&hex_name('b')]), "test");
 
         assert!(!stale.exists(), "unreferenced directory must be swept");
         assert!(kept.exists(), "the latest index still points here");
     }
 
     #[test]
-    fn a_fresh_directory_survives_even_when_unreferenced() {
+    fn a_directory_inside_the_day_long_grace_survives_even_when_unreferenced() {
         let cache = tempfile::tempdir().unwrap();
         let racing = cache.path().join("stack-previews").join(hex_name('c'));
         fs::create_dir_all(&racing).unwrap();
+        age(&racing, 20 * 60 * 60);
 
-        prune(cache.path(), &keep(&[]));
+        prune(cache.path(), &keep(&[]), "test");
 
         assert!(
             racing.exists(),
-            "a directory inside the grace period may belong to a build in flight"
+            "a directory inside the grace period may still be in use"
         );
     }
 
@@ -188,10 +234,10 @@ mod tests {
         fs::create_dir_all(&color).unwrap();
         fs::create_dir_all(&resume).unwrap();
         fs::write(&latest, b"{}").unwrap();
-        age(&color, 3 * 60 * 60);
-        age(&resume, 3 * 60 * 60);
+        age(&color, 30 * 60 * 60);
+        age(&resume, 30 * 60 * 60);
 
-        prune(cache.path(), &keep(&[]));
+        prune(cache.path(), &keep(&[]), "test");
 
         assert!(color.exists());
         assert!(resume.exists());
@@ -213,8 +259,8 @@ mod tests {
             .join(hex_name('e'));
         fs::create_dir_all(&stale_color).unwrap();
         fs::create_dir_all(&kept_input).unwrap();
-        age(&stale_color, 2 * 60 * 60);
-        age(&kept_input, 2 * 60 * 60);
+        age(&stale_color, 25 * 60 * 60);
+        age(&kept_input, 25 * 60 * 60);
 
         prune(
             cache.path(),
@@ -223,27 +269,74 @@ mod tests {
                 color_job_ids: HashSet::new(),
                 color_input_ids: [hex_name('e')].into_iter().collect(),
             },
+            "test",
         );
 
         assert!(!stale_color.exists());
         assert!(kept_input.exists());
     }
 
+    fn checkpoint_manifest(stacking_version: &str) -> String {
+        serde_json::json!({
+            "schema_version": super::super::resume::RESUME_SCHEMA_VERSION,
+            "stacking_version": stacking_version,
+            "target_id": 7,
+            "filter_name": "Ha",
+            "accepted_only": false,
+            "calibration_fingerprint": "cal-1",
+            "frames": [],
+        })
+        .to_string()
+    }
+
     #[test]
-    fn only_ancient_checkpoints_are_dropped() {
+    fn a_current_checkpoint_is_durable_regardless_of_age() {
         let cache = tempfile::tempdir().unwrap();
         let resume = cache.path().join("stack-previews").join("resume");
         fs::create_dir_all(&resume).unwrap();
-        let ancient = resume.join("old.seiza-stack");
-        let recent = resume.join("new.seiza-stack");
-        fs::write(&ancient, b"x").unwrap();
-        fs::write(&recent, b"x").unwrap();
-        age(&ancient, 40 * 24 * 60 * 60);
-        age(&recent, 2 * 24 * 60 * 60);
+        let context = resume.join("group.seiza-stack");
+        let manifest = resume.join("group.json");
+        fs::write(&context, b"x").unwrap();
+        fs::write(&manifest, checkpoint_manifest("test")).unwrap();
+        age(&context, 90 * 24 * 60 * 60);
+        age(&manifest, 90 * 24 * 60 * 60);
 
-        prune(cache.path(), &keep(&[]));
+        prune(cache.path(), &keep(&[]), "test");
 
-        assert!(!ancient.exists(), "an abandoned checkpoint must not linger");
-        assert!(recent.exists(), "a stop from this week must stay resumable");
+        assert!(context.exists(), "durable until its input set changes");
+        assert!(manifest.exists());
+    }
+
+    #[test]
+    fn a_checkpoint_from_another_pipeline_version_is_dropped_at_once() {
+        let cache = tempfile::tempdir().unwrap();
+        let resume = cache.path().join("stack-previews").join("resume");
+        fs::create_dir_all(&resume).unwrap();
+        let context = resume.join("group.seiza-stack");
+        let manifest = resume.join("group.json");
+        fs::write(&context, b"x").unwrap();
+        fs::write(&manifest, checkpoint_manifest("older")).unwrap();
+
+        prune(cache.path(), &keep(&[]), "test");
+
+        assert!(!context.exists(), "this checkpoint can never resume again");
+        assert!(!manifest.exists());
+    }
+
+    #[test]
+    fn an_orphaned_context_is_dropped_only_after_the_grace() {
+        let cache = tempfile::tempdir().unwrap();
+        let resume = cache.path().join("stack-previews").join("resume");
+        fs::create_dir_all(&resume).unwrap();
+        let fresh_orphan = resume.join("saving.seiza-stack");
+        let old_orphan = resume.join("stranded.seiza-stack");
+        fs::write(&fresh_orphan, b"x").unwrap();
+        fs::write(&old_orphan, b"x").unwrap();
+        age(&old_orphan, 25 * 60 * 60);
+
+        prune(cache.path(), &keep(&[]), "test");
+
+        assert!(fresh_orphan.exists(), "a save may be mid-flight");
+        assert!(!old_orphan.exists(), "half a checkpoint resumes nothing");
     }
 }

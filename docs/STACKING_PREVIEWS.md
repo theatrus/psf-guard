@@ -74,11 +74,17 @@ directory and old ones used to accumulate forever. After a build settles, a
 janitor sweeps the stack cache and deletes what nothing references any more:
 mono and color job directories absent from every durable latest index and
 from the in-memory job list, and cached color inputs no kept job points at.
-An unreferenced directory is only deleted once it is an hour old, so a build
-writing artifacts at that moment is never swept. Resume checkpoints are
-replaced in place on every settle and are dropped only after thirty days
-untouched, so a stopped build stays resumable for a month while an abandoned
-target cannot hold full-frame accumulator state forever.
+Both indices replace entries per identity — mono per target/channel, color
+per target/kind/palette — so a job's output is durable until its input set
+changes and a newer build of the same identity supersedes it. A full day of
+grace on top means nothing a long build session or an open inspector still
+touches is swept out from under it.
+
+Resume checkpoints follow the same rule: each is replaced in place when its
+group's input set changes and is otherwise kept, whatever its age. The only
+checkpoints deleted outright are ones that can never resume again — written
+by another stacking pipeline version, unreadable, or an orphaned half of an
+interrupted save.
 
 A build belongs to the server, not to the page that started it. The header
 shows a **Stacking** indicator next to the cache and quality-analysis progress

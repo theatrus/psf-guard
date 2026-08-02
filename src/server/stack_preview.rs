@@ -519,7 +519,7 @@ impl StackPreviewManager {
     /// pruning never fails a build.
     pub(super) fn prune_cache(&self, cache_root: &FsPath) {
         let keep = self.cache_keep_set(cache_root);
-        janitor::prune(cache_root, &keep);
+        janitor::prune(cache_root, &keep, SEIZA_STACKING_VERSION);
     }
 
     pub(crate) async fn acquire_maintenance_permit(
