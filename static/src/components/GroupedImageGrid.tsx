@@ -6,6 +6,7 @@ import { apiClient } from '../api/client';
 import type { Image } from '../api/types';
 import { GradingStatus } from '../api/types';
 import { useGrading } from '../hooks/useGrading';
+import { useSpatialScan } from '../hooks/useSpatialScan';
 import { useStableScrollAnchor } from '../hooks/useStableScrollAnchor';
 import { useDbProjectTarget, useGridState, useFilters } from '../hooks/useUrlState';
 import ImageCard from './ImageCard';
@@ -15,6 +16,7 @@ import StatsDashboard from './StatsDashboard';
 import UndoRedoToolbar from './UndoRedoToolbar';
 import StackPreviewPanel from './StackPreviewPanel';
 import ThumbnailSizeControl from './ThumbnailSizeControl';
+import { QualityScanButton } from './QualityScanControl';
 import { 
   type GroupingMode, 
   SINGLE_PROJECT_MODES,
@@ -162,6 +164,11 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     dbId,
     projectId,
     targetId,
+    filters.filterName === 'all' ? undefined : filters.filterName,
+  );
+  const spatialScan = useSpatialScan(
+    dbId,
+    targetId ?? undefined,
     filters.filterName === 'all' ? undefined : filters.filterName,
   );
   let qualityStatus = {
@@ -806,6 +813,12 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
               >
                 Compare
               </button>
+              <QualityScanButton
+                scan={spatialScan}
+                targetId={targetId}
+                canWrite={grading.canWrite}
+                className="toolbar-button compact quality-scan-button"
+              />
             </div>
             
             <div className="stats-section">

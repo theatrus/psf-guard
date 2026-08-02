@@ -7,7 +7,7 @@ import KeyboardShortcutHelp from './components/KeyboardShortcutHelp';
 import ServerInfoPanel from './components/ServerInfoPanel';
 import SiteBanner from './components/SiteBanner';
 import UpdateNotice from './components/UpdateNotice';
-import CacheRefreshStatus from './components/CacheRefreshStatus';
+import DatabaseActivityStatus from './components/DatabaseActivityStatus';
 import AggregatedCacheStatus from './components/AggregatedCacheStatus';
 import TauriSettings from './components/TauriSettings';
 import { useGridState } from './hooks/useUrlState';
@@ -138,10 +138,10 @@ function AppContent() {
         <div className={`header-context${isOnOverview ? ' header-context--overview' : ''}`}>
           {!isOnOverview && <ProjectTargetSelector />}
           <div className="header-cache-slot" aria-live="polite">
-          {/* CacheRefreshStatus renders for scoped views (?db= in URL);
-              AggregatedCacheStatus renders for unscoped views (e.g. overview).
-              This fixed slot keeps status changes from moving the header. */}
-            <CacheRefreshStatus className="header-cache-progress" />
+          {/* Scoped views show the active database's refresh or quality job;
+              unscoped views merge active jobs across databases. This fixed
+              slot keeps status changes from moving the header. */}
+            <DatabaseActivityStatus className="header-cache-progress" />
             <AggregatedCacheStatus className="header-cache-progress" />
           </div>
         </div>

@@ -5356,7 +5356,7 @@
 
 .sequence-primary-row {
   display: grid;
-  grid-template-columns: auto auto minmax(7rem, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.5rem 0.75rem;
   min-width: 0;
@@ -5374,25 +5374,6 @@
   font-size: 1.1rem;
   color: var(--color-primary);
   white-space: nowrap;
-}
-
-.sequence-job-status {
-  min-width: 0;
-  min-height: 1rem;
-  color: var(--color-text-muted);
-  font-size: 0.8rem;
-  overflow: hidden;
-}
-
-.sequence-job-status > span {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sequence-job-status .spatial-scan-errors {
-  color: var(--color-warning);
 }
 
 .sequence-review-row {
@@ -5497,13 +5478,11 @@
   .sequence-primary-row {
     grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas:
-      "title actions history"
-      "status status status";
+      "title actions history";
   }
 
   .sequence-primary-row h2 { grid-area: title; }
   .sequence-primary-actions { grid-area: actions; }
-  .sequence-job-status { grid-area: status; }
   .sequence-history-actions { grid-area: history; }
 
   .sequence-review-row {
