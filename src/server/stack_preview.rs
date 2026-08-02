@@ -120,7 +120,7 @@ pub struct StackInputImage {
     pub grading_status: i32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StackSkyOrientation {
     pub convention: String,
     pub version: u32,

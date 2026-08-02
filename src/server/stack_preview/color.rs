@@ -40,7 +40,7 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-const STACK_COLOR_CACHE_VERSION: u32 = 7;
+const STACK_COLOR_CACHE_VERSION: u32 = 8;
 const COLOR_INPUT_CACHE_VERSION: u32 = 3;
 const SEIZA_BACKGROUND_VERSION: &str = "0.2.0";
 const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
@@ -246,6 +246,8 @@ pub struct StackColorSource {
     #[serde(default)]
     pub reference_image_id: Option<i32>,
     #[serde(default)]
+    pub sky_orientation: Option<super::StackSkyOrientation>,
+    #[serde(default)]
     pub registration_transform: Option<seiza_stacking::SimilarityTransform>,
 }
 
@@ -257,7 +259,15 @@ pub struct StackBackgroundProtection {
     #[serde(default)]
     pub object_names: Vec<String>,
     #[serde(default)]
-    pub regions: Vec<ProtectedRegion>,
+    pub region_count: usize,
+    #[serde(default)]
+    pub region_fingerprint: String,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedBackgroundProtection {
+    summary: StackBackgroundProtection,
+    regions: Vec<ProtectedRegion>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -369,6 +379,7 @@ struct TargetSources {
 struct PreparedColorJob {
     public: StackColorJob,
     cache_root: PathBuf,
+    background_regions: BTreeMap<StackColorRole, Vec<ProtectedRegion>>,
 }
 
 fn color_progress(
@@ -648,7 +659,7 @@ pub async fn get_stack_color_catalog(
     let targets = availability(&sources);
     let mut jobs = load_latest_colors(&ctx, project_id)?.jobs;
     for job in &mut jobs {
-        job.outdated_reason = color_job_outdated_reason(&ctx.cache_dir_path, job, &latest);
+        job.outdated_reason = color_job_outdated_reason(&ctx, job, &latest)?;
         job.outdated = job.outdated_reason.is_some();
     }
     jobs.sort_by(|left, right| {
@@ -953,10 +964,16 @@ fn prepare_color_job(
         .as_ref()
         .is_some_and(|processing| processing.background_extraction.is_some())
     {
-        resolve_background_protection(ctx, &sources)
+        resolve_background_protection(ctx, &sources)?
     } else {
         BTreeMap::new()
     };
+    let mut background_regions = BTreeMap::new();
+    let mut background_protection_summary = BTreeMap::new();
+    for (role, protection) in resolved_background_protection {
+        background_regions.insert(role, protection.regions);
+        background_protection_summary.insert(role, protection.summary);
+    }
     let label = composition_label(request.kind, request.palette).to_string();
     let linear_input_id = request
         .processing
@@ -968,7 +985,7 @@ fn prepare_color_job(
                 request.target_id,
                 processing,
                 &sources,
-                &resolved_background_protection,
+                &background_protection_summary,
             )
         })
         .transpose()?;
@@ -993,7 +1010,7 @@ fn prepare_color_job(
         ))
     })?);
     hasher.update(
-        serde_json::to_vec(&resolved_background_protection).map_err(|error| {
+        serde_json::to_vec(&background_protection_summary).map_err(|error| {
             AppError::InternalError(format!("Failed to encode background protection: {error}"))
         })?,
     );
@@ -1045,7 +1062,7 @@ fn prepare_color_job(
             resolved_input_deconvolutions: BTreeMap::new(),
             resolved_output_stretches: Vec::new(),
             resolved_backgrounds: BTreeMap::new(),
-            resolved_background_protection,
+            resolved_background_protection: background_protection_summary,
             preview_url: format!(
                 "/api/db/{}/stack-previews/color/{job_id}/preview?v={artifact_revision}",
                 ctx.id
@@ -1059,6 +1076,7 @@ fn prepare_color_job(
             outdated_reason: None,
         },
         cache_root: ctx.cache_dir_path.clone(),
+        background_regions,
     })
 }
 
@@ -1109,36 +1127,60 @@ fn color_input_cache_id(
 fn resolve_background_protection(
     ctx: &crate::server::database_context::DatabaseContext,
     sources: &[StackColorSource],
-) -> BTreeMap<StackColorRole, StackBackgroundProtection> {
-    sources
-        .iter()
-        .filter_map(|source| {
-            let reference_image_id = source.reference_image_id?;
-            let analysis = ctx.astrometry_evidence.evidence_for_source(
-                &ctx.cache_dir_path,
-                reference_image_id,
-                None,
-            )?;
-            let solution = analysis.solution.as_ref()?;
-            let (regions, object_names) = background_regions_from_solution(solution);
-            Some((
-                source.role,
-                StackBackgroundProtection {
+) -> Result<BTreeMap<StackColorRole, ResolvedBackgroundProtection>, AppError> {
+    let mut resolved = BTreeMap::new();
+    for source in sources {
+        let Some(reference_image_id) = source.reference_image_id else {
+            continue;
+        };
+        let Some(orientation) = source.sky_orientation.as_ref() else {
+            continue;
+        };
+        let Some(analysis) = ctx.astrometry_evidence.evidence_for_source(
+            &ctx.cache_dir_path,
+            reference_image_id,
+            None,
+        ) else {
+            continue;
+        };
+        let Some(solution) = analysis.solution.as_ref() else {
+            continue;
+        };
+        let (regions, object_names) = background_regions_from_solution(solution, orientation);
+        let bytes = serde_json::to_vec(&regions).map_err(|error| {
+            AppError::InternalError(format!(
+                "Failed to encode background-protection regions: {error}"
+            ))
+        })?;
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        let mut region_fingerprint = String::with_capacity(64);
+        for byte in hasher.finalize() {
+            write!(&mut region_fingerprint, "{byte:02x}").expect("writing to a String cannot fail");
+        }
+        resolved.insert(
+            source.role,
+            ResolvedBackgroundProtection {
+                summary: StackBackgroundProtection {
                     reference_image_id,
                     catalog_version: solution.catalog_version.clone(),
                     object_names,
-                    regions,
+                    region_count: regions.len(),
+                    region_fingerprint,
                 },
-            ))
-        })
-        .collect()
+                regions,
+            },
+        );
+    }
+    Ok(resolved)
 }
 
 fn background_regions_from_solution(
     solution: &crate::astrometry::AstrometrySolutionResponse,
+    orientation: &super::StackSkyOrientation,
 ) -> (Vec<ProtectedRegion>, Vec<String>) {
-    let width = solution.image_width as usize;
-    let height = solution.image_height as usize;
+    let width = orientation.output_width;
+    let height = orientation.output_height;
     if width < 2 || height < 2 {
         return (Vec::new(), Vec::new());
     }
@@ -1152,11 +1194,19 @@ fn background_regions_from_solution(
                 continue;
             }
             for contour in &outline.contours {
-                if contour.closed
-                    && let Ok(region) =
-                        ProtectedRegion::polygon_from_pixels(&contour.points, width, height)
-                {
-                    regions.push(region);
+                if contour.closed {
+                    let points = contour
+                        .points
+                        .iter()
+                        .map(|point| {
+                            let (x, y) = orientation.source_to_output.apply(point[0], point[1]);
+                            [x, y]
+                        })
+                        .collect::<Vec<_>>();
+                    if let Ok(region) = ProtectedRegion::polygon_from_pixels(&points, width, height)
+                    {
+                        regions.push(region);
+                    }
                 }
             }
         }
@@ -1174,11 +1224,12 @@ fn background_regions_from_solution(
                     let phase = std::f64::consts::TAU * index as f64 / 48.0;
                     let major = object.semi_major_px * phase.cos();
                     let minor = object.semi_minor_px * phase.sin();
-                    [
+                    orientation.source_to_output.apply(
                         object.x + major * angle.cos() - minor * angle.sin(),
                         object.y + major * angle.sin() + minor * angle.cos(),
-                    ]
+                    )
                 })
+                .map(|(x, y)| [x, y])
                 .collect::<Vec<_>>();
             if let Ok(region) = ProtectedRegion::polygon_from_pixels(&points, width, height) {
                 regions.push(region);
@@ -1266,7 +1317,12 @@ fn run_color_job(state: &Arc<AppState>, prepared: PreparedColorJob) {
         job.phase = "Loading channel stacks".into();
     });
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        compose_color(state, &prepared.public, &prepared.cache_root)
+        compose_color(
+            state,
+            &prepared.public,
+            &prepared.background_regions,
+            &prepared.cache_root,
+        )
     }));
     let progress = ColorProgressTracker {
         state,
@@ -1350,6 +1406,7 @@ fn finish_color_job(job: &mut StackColorJob) {
 fn compose_color(
     state: &Arc<AppState>,
     job: &StackColorJob,
+    background_regions: &BTreeMap<StackColorRole, Vec<ProtectedRegion>>,
     cache_root: &FsPath,
 ) -> Result<(), String> {
     let progress = ColorProgressTracker {
@@ -1524,10 +1581,9 @@ fn compose_color(
                     None,
                 );
                 let mut config = extraction.config.clone();
-                config.protected_regions = job
-                    .resolved_background_protection
+                config.protected_regions = background_regions
                     .get(&source.role)
-                    .map(|protection| protection.regions.clone())
+                    .cloned()
                     .unwrap_or_default();
                 let fit = seiza_background::fit_background(
                     &frame.image.data,
@@ -2186,6 +2242,7 @@ fn collect_sources(
                 artifact_revision: entry.artifact_revision.clone(),
                 accepted_frames: entry.group.accepted_frames,
                 reference_image_id: entry.group.reference_image_id,
+                sky_orientation: entry.group.sky_orientation.clone(),
                 registration_transform: None,
             });
     }
@@ -2339,10 +2396,10 @@ fn color_artifacts_exist(cache_root: &FsPath, job_id: &str) -> bool {
 }
 
 fn color_job_outdated_reason(
-    cache_root: &FsPath,
+    ctx: &crate::server::database_context::DatabaseContext,
     job: &StackColorJob,
     latest: &LatestStackPreviews,
-) -> Option<String> {
+) -> Result<Option<String>, AppError> {
     if job.cache_version != STACK_COLOR_CACHE_VERSION
         || job.stacking_version != SEIZA_STACKING_VERSION
         || job.background_version != SEIZA_BACKGROUND_VERSION
@@ -2352,18 +2409,31 @@ fn color_job_outdated_reason(
             .is_some_and(|processing| !processing.input_deconvolutions.is_empty())
             && job.deconvolution_version != super::stretch::deconvolution_version())
     {
-        return Some("the color processing version changed".into());
+        return Ok(Some("the color processing version changed".into()));
     }
     if !job.sources.iter().all(|source| {
         source_is_current(source, latest)
-            && super::fits_path(cache_root, &source.job_id, source.group_index).is_file()
+            && super::fits_path(&ctx.cache_dir_path, &source.job_id, source.group_index).is_file()
     }) {
-        return Some("one or more source channel stacks changed".into());
+        return Ok(Some("one or more source channel stacks changed".into()));
     }
-    if !color_artifacts_exist(cache_root, &job.job_id) {
-        return Some("a cached color artifact is missing".into());
+    if job
+        .processing
+        .as_ref()
+        .is_some_and(|processing| processing.background_extraction.is_some())
+    {
+        let current = resolve_background_protection(ctx, &job.sources)?
+            .into_iter()
+            .map(|(role, protection)| (role, protection.summary))
+            .collect::<BTreeMap<_, _>>();
+        if current != job.resolved_background_protection {
+            return Ok(Some("the plate-solve background protection changed".into()));
+        }
     }
-    None
+    if !color_artifacts_exist(&ctx.cache_dir_path, &job.job_id) {
+        return Ok(Some("a cached color artifact is missing".into()));
+    }
+    Ok(None)
 }
 
 fn persist_color_manifest(cache_root: &FsPath, job: &StackColorJob) -> Result<(), String> {
@@ -2477,6 +2547,21 @@ mod tests {
         LatestStackPreviewGroup, StackGroupState, StackGroupStatus, StackSkyOrientation,
     };
 
+    fn stack_orientation(
+        output_width: usize,
+        output_height: usize,
+        source_to_output: seiza_stacking::AffineTransform,
+    ) -> StackSkyOrientation {
+        StackSkyOrientation {
+            convention: seiza_stacking::SKY_ORIENTATION_NAME.into(),
+            version: seiza_stacking::SKY_ORIENTATION_VERSION,
+            source: "embedded_wcs".into(),
+            output_width,
+            output_height,
+            source_to_output,
+        }
+    }
+
     fn source_group(filter_name: &str, index: usize) -> LatestStackPreviewGroup {
         LatestStackPreviewGroup {
             job_id: format!("{index:064x}"),
@@ -2499,14 +2584,11 @@ mod tests {
                 accepted_frames: 3,
                 rejected_frames: 0,
                 output_channels: 1,
-                sky_orientation: Some(StackSkyOrientation {
-                    convention: seiza_stacking::SKY_ORIENTATION_NAME.into(),
-                    version: seiza_stacking::SKY_ORIENTATION_VERSION,
-                    source: "embedded_wcs".into(),
-                    output_width: 100,
-                    output_height: 80,
-                    source_to_output: seiza_stacking::AffineTransform::IDENTITY,
-                }),
+                sky_orientation: Some(stack_orientation(
+                    100,
+                    80,
+                    seiza_stacking::AffineTransform::IDENTITY,
+                )),
                 reference_image_id: Some(1),
                 total_exposure_seconds: 180.0,
                 preview_url: None,
@@ -2624,13 +2706,46 @@ mod tests {
             }],
         }]);
 
-        let (regions, names) = background_regions_from_solution(&solution);
+        let orientation = stack_orientation(101, 101, seiza_stacking::AffineTransform::IDENTITY);
+        let (regions, names) = background_regions_from_solution(&solution, &orientation);
 
         assert_eq!(names, ["California Nebula"]);
         assert!(matches!(
             regions.as_slice(),
             [ProtectedRegion::Polygon { .. }]
         ));
+    }
+
+    #[test]
+    fn background_protection_follows_the_sky_orientation_transform() {
+        use crate::astrometry::{OverlayContourResponse, OverlayOutlineResponse};
+        let solution = background_solution(vec![OverlayOutlineResponse {
+            geometry_id: "outline".into(),
+            source_record_id: "ngc1499".into(),
+            role: "catalog-extent".into(),
+            quality: "catalog".into(),
+            level: None,
+            contours: vec![OverlayContourResponse {
+                closed: true,
+                points: vec![[10.0, 20.0], [90.0, 20.0], [50.0, 80.0]],
+            }],
+        }]);
+        let orientation = stack_orientation(
+            101,
+            101,
+            seiza_stacking::AffineTransform {
+                matrix: [[0.0, -1.0], [1.0, 0.0]],
+                translation_x: 100.0,
+                translation_y: 0.0,
+            },
+        );
+
+        let (regions, _) = background_regions_from_solution(&solution, &orientation);
+
+        let [ProtectedRegion::Polygon { points }] = regions.as_slice() else {
+            panic!("expected one transformed polygon");
+        };
+        assert_eq!(points, &[[0.8, 0.1], [0.8, 0.9], [0.2, 0.5]]);
     }
 
     #[test]
@@ -2648,7 +2763,8 @@ mod tests {
             }],
         }]);
 
-        let (regions, _) = background_regions_from_solution(&solution);
+        let orientation = stack_orientation(101, 101, seiza_stacking::AffineTransform::IDENTITY);
+        let (regions, _) = background_regions_from_solution(&solution, &orientation);
 
         assert!(matches!(
             regions.as_slice(),
@@ -2982,6 +3098,11 @@ mod tests {
             artifact_revision: format!("revision-{index}"),
             accepted_frames: 4,
             reference_image_id: Some(index as i32 + 1),
+            sky_orientation: Some(stack_orientation(
+                100,
+                80,
+                seiza_stacking::AffineTransform::IDENTITY,
+            )),
             registration_transform: None,
         })
         .collect::<Vec<_>>();
@@ -3025,11 +3146,8 @@ mod tests {
                 reference_image_id: 1,
                 catalog_version: Some("catalog-v2".into()),
                 object_names: vec!["California Nebula".into()],
-                regions: vec![ProtectedRegion::Ellipse {
-                    center: [0.5, 0.5],
-                    radii: [0.3, 0.2],
-                    rotation_degrees: 0.0,
-                }],
+                region_count: 1,
+                region_fingerprint: "changed-region".into(),
             },
         )]);
         let changed_protection_id =

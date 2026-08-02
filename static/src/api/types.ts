@@ -577,6 +577,7 @@ export interface StackColorSource {
   artifact_revision: string;
   accepted_frames: number;
   reference_image_id: number | null;
+  sky_orientation: StackSkyOrientation | null;
   registration_transform: SimilarityTransform | null;
 }
 
@@ -657,7 +658,8 @@ export interface StackBackgroundProtection {
   reference_image_id: number;
   catalog_version: string | null;
   object_names: string[];
-  regions: unknown[];
+  region_count: number;
+  region_fingerprint: string;
 }
 
 export type StackColorProgressState =
