@@ -642,6 +642,7 @@ test('All Projects loads scores without starting a quality scan', async ({
 test('Grid starts target quality analysis and keeps progress in the global header', async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 420, height: 900 });
   let running = false;
   let posted: Record<string, unknown> | null = null;
   const runningStatus = () => ({
@@ -705,7 +706,18 @@ test('Grid starts target quality analysis and keeps progress in the global heade
   });
 
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1&target=1`);
-  await page.getByRole('button', { name: 'Analyze Quality' }).click();
+  const analyzeQuality = page.getByRole('button', { name: 'Analyze Quality' });
+  await expect(analyzeQuality).toHaveCSS('white-space', 'nowrap');
+  const buttonFitsToolbar = await analyzeQuality.evaluate((button) => {
+    const toolbar = button.closest('.toolbar-section');
+    if (!toolbar) return false;
+    const buttonBounds = button.getBoundingClientRect();
+    const toolbarBounds = toolbar.getBoundingClientRect();
+    return buttonBounds.left >= toolbarBounds.left
+      && buttonBounds.right <= toolbarBounds.right;
+  });
+  expect(buttonFitsToolbar).toBe(true);
+  await analyzeQuality.click();
 
   await expect.poll(() => posted).toMatchObject({ target_id: 1 });
   const globalStatus = page.locator('.header-cache-slot .quality-analysis-status');
