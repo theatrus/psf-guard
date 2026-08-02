@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { CacheRefreshProgress } from '../api/types';
-import { useDbProjectTarget } from '../hooks/useUrlState';
+import { useScopedDbId } from '../hooks/useUrlState';
 import './CacheRefreshStatus.css';
 
 interface CacheRefreshStatusProps {
@@ -21,7 +21,7 @@ const STAGE_LABELS: Record<string, string> = {
 
 export default function CacheRefreshStatus({ className = '' }: CacheRefreshStatusProps) {
   const queryClient = useQueryClient();
-  const { dbId } = useDbProjectTarget();
+  const dbId = useScopedDbId();
   const [isVisible, setIsVisible] = useState(false);
   const [animationPhase, setAnimationPhase] = useState<'fade-in' | 'visible' | 'fade-out'>('fade-in');
   const [wasRefreshing, setWasRefreshing] = useState(false);

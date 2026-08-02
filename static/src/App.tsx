@@ -10,7 +10,7 @@ import UpdateNotice from './components/UpdateNotice';
 import DatabaseActivityStatus from './components/DatabaseActivityStatus';
 import AggregatedCacheStatus from './components/AggregatedCacheStatus';
 import TauriSettings from './components/TauriSettings';
-import { useGridState } from './hooks/useUrlState';
+import { isOverviewPath, useGridState } from './hooks/useUrlState';
 import { isTauriApp, tauriConfig } from './utils/tauri';
 import {
   OPEN_SETTINGS_EVENT,
@@ -33,8 +33,10 @@ function AppContent() {
   });
 
   // Carry the active (db, project, target, filter…) query context when switching
-  // between scoped views, so navigation never drops the ?db= slug and strands
-  // the user on an empty view.
+  // between views, so navigation never drops the ?db= slug and strands the user
+  // on an empty view. The Overview keeps it too: it shows every database, but
+  // holding the scope lets it point at the project the user left and hand the
+  // same scope back to Images or Sequence.
   const toScoped = (path: string) =>
     location.search ? `${path}${location.search}` : path;
   const [showHelp, setShowHelp] = useState(false);
@@ -111,7 +113,7 @@ function AppContent() {
   // Keyboard shortcut for help
   useHotkeys('?', () => setShowHelp(true), []);
   
-  const isOnOverview = location.pathname === '/' || location.pathname === '/overview';
+  const isOnOverview = isOverviewPath(location.pathname);
   const isOnGrid = location.pathname === '/grid';
   const isOnSequence = location.pathname === '/sequence';
 
@@ -122,7 +124,7 @@ function AppContent() {
           <button
             type="button"
             className="brand-button"
-            onClick={() => navigate('/')}
+            onClick={() => navigate(toScoped('/'))}
             title="Go to Overview"
           >
             <img
@@ -149,7 +151,7 @@ function AppContent() {
         <nav className="header-view-tabs" aria-label="Views">
           <button
             type="button"
-            onClick={() => navigate('/')}
+            onClick={() => navigate(toScoped('/'))}
             className="header-button"
             aria-current={isOnOverview ? 'page' : undefined}
           >

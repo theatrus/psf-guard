@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { apiClient } from '../api/client';
@@ -27,6 +27,7 @@ import {
   saveProjectSeenState,
 } from '../utils/projectRecency';
 import { formatRelativeTime } from '../utils/relativeTime';
+import { useDbProjectTarget } from '../hooks/useUrlState';
 import { imageDetailPath } from '../utils/imageDetailRoutes';
 import {
   groupProjectsByActivity,
@@ -48,6 +49,10 @@ type Organizing =
 
 function recentImageKey(dbId: string, projectId: number, imageId: number): string {
   return `${dbId}:${projectId}:${imageId}`;
+}
+
+function projectKey(dbId: string, projectId: number): string {
+  return `${dbId}:${projectId}`;
 }
 
 export default function Overview() {
@@ -204,6 +209,32 @@ export default function Overview() {
     [filteredProjects, projectSort]
   );
 
+  // The scope the user came from. Returning to a long project list at the top
+  // hides where they were, so mark that project and bring it into view once.
+  const { dbId: scopeDbId, projectId: scopeProjectId } = useDbProjectTarget();
+  const currentProjectKey =
+    scopeDbId && scopeProjectId !== null ? projectKey(scopeDbId, scopeProjectId) : null;
+  const revealedProjectKey = useRef<string | null>(null);
+  const revealProject = useCallback(
+    (node: HTMLElement | null) => {
+      if (!node || !currentProjectKey) return;
+      if (revealedProjectKey.current === currentProjectKey) return;
+      revealedProjectKey.current = currentProjectKey;
+      // jsdom has no layout, so guard for tests and older embedded webviews.
+      node.scrollIntoView?.({ block: 'center' });
+    },
+    [currentProjectKey]
+  );
+
+  // An archived project is behind a collapsed section: open it so the card the
+  // user is being sent back to exists.
+  const currentIsArchived = archivedProjects.some(
+    (project) => projectKey(project.db_id, project.id) === currentProjectKey
+  );
+  useEffect(() => {
+    if (currentIsArchived) setArchivedOpen(true);
+  }, [currentIsArchived]);
+
   const newestImageKey = useMemo(() => {
     let newest: { key: string; acquiredDate: number } | null = null;
     for (const project of projects) {
@@ -347,8 +378,6 @@ export default function Overview() {
       `/grid?db=${encodeURIComponent(target.db_id)}&project=${target.project_id}&target=${target.id}`
     );
   };
-
-  const projectKey = (dbId: string, projectId: number) => `${dbId}:${projectId}`;
 
   if (statsLoading || projectsLoading || targetsLoading) {
     return <div className="overview-loading">Loading overview...</div>;
@@ -564,13 +593,19 @@ export default function Overview() {
                 project.recent_images.length
               );
 
+              const isCurrent = key === currentProjectKey;
+
               return (
                 <div
                   key={key}
+                  ref={isCurrent ? revealProject : undefined}
+                  data-project-key={key}
+                  data-current-project={isCurrent ? 'true' : undefined}
                   className={[
                     'project-card',
                     !project.has_files ? 'no-files' : '',
                     projectNewImages > 0 ? 'has-new-images' : '',
+                    isCurrent ? 'is-current' : '',
                   ].filter(Boolean).join(' ')}
                 >
                   <div className="project-header">
@@ -1090,26 +1125,33 @@ export default function Overview() {
               </button>
               {(archivedOpen || Boolean(projectSearch)) && (
                 <div className="project-archive-list">
-                  {archivedProjects.map((project) => (
-                    <button
-                      key={`${project.db_id}:${project.id}`}
-                      type="button"
-                      className="project-archive-item"
-                      onClick={() => project.has_files && handleSelectProject(project)}
-                      disabled={!project.has_files}
-                    >
-                      <span>
-                        <strong>{project.display_name}</strong>
-                        <small>{project.db_name}</small>
-                      </span>
-                      <span>
-                        {project.total_images} images
-                        {project.date_range.latest
-                          ? ` · ${formatRelativeTime(project.date_range.latest, relativeNow)}`
-                          : ''}
-                      </span>
-                    </button>
-                  ))}
+                  {archivedProjects.map((project) => {
+                    const key = projectKey(project.db_id, project.id);
+                    const isCurrent = key === currentProjectKey;
+                    return (
+                      <button
+                        key={key}
+                        ref={isCurrent ? revealProject : undefined}
+                        data-project-key={key}
+                        data-current-project={isCurrent ? 'true' : undefined}
+                        type="button"
+                        className={`project-archive-item${isCurrent ? ' is-current' : ''}`}
+                        onClick={() => project.has_files && handleSelectProject(project)}
+                        disabled={!project.has_files}
+                      >
+                        <span>
+                          <strong>{project.display_name}</strong>
+                          <small>{project.db_name}</small>
+                        </span>
+                        <span>
+                          {project.total_images} images
+                          {project.date_range.latest
+                            ? ` · ${formatRelativeTime(project.date_range.latest, relativeNow)}`
+                            : ''}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </section>

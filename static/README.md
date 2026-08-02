@@ -54,7 +54,9 @@ cargo run --release -- server catalog.sqlite /path/to/images \
 
 ## Features
 
-- **Catalog overview** across every configured database.
+- **Catalog overview** across every configured database. It keeps the scope of
+  the view you came from, so it marks and scrolls to the project you were
+  working in, and Images or Sequence takes you straight back to it.
 - **Grid and sequence review** with project, target, grade, filter, date,
   search, and grouping controls.
 - **Keyboard-first grading**: arrows or `J`/`K` navigate, `Space` toggles

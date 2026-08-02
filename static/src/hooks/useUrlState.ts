@@ -1,4 +1,4 @@
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { useCallback, useMemo, useRef } from 'react';
 import { type GroupingMode, DEFAULT_SINGLE_PROJECT_MODE } from '../types/grouping';
 
@@ -116,6 +116,23 @@ export function useDbProjectTarget() {
     setProjectId,
     setTargetId,
   };
+}
+
+/** The Overview route, which merges every database instead of scoping to one. */
+export function isOverviewPath(pathname: string): boolean {
+  return pathname === '/' || pathname === '/overview';
+}
+
+/**
+ * The database a status widget should follow. The Overview carries the scope
+ * of the view the user came from so it can return them there, but it shows
+ * every database at once — so widgets that scope to one must ignore the slug
+ * parked in the URL while it is on screen.
+ */
+export function useScopedDbId(): string | null {
+  const { dbId } = useDbProjectTarget();
+  const { pathname } = useLocation();
+  return isOverviewPath(pathname) ? null : dbId;
 }
 
 /**
