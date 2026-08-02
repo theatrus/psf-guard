@@ -1058,6 +1058,17 @@ fn enqueue_job(state: Arc<AppState>, prepared: PreparedJob) {
     });
 }
 
+/// Whether every channel reached a state the job cannot improve on. A channel
+/// that stopped short is not settled: it is work the stop took away.
+fn every_channel_settled(job: &StackPreviewJob) -> bool {
+    job.groups.iter().all(|group| {
+        matches!(
+            group.state,
+            StackGroupState::Ready | StackGroupState::Skipped | StackGroupState::Error
+        )
+    })
+}
+
 /// Mark whatever has not finished as cancelled. Channels that already produced
 /// an artifact keep their Ready state and their preview.
 fn cancel_unfinished_groups(job: &mut StackPreviewJob) {
@@ -1124,7 +1135,10 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
     }));
     let cancelled = cancel.load(Ordering::Relaxed);
     state.stack_previews.update(&job_id, |job| match run {
-        Ok(()) if cancelled => {
+        // A stop that lands after the last channel finished took nothing away,
+        // so the job completed. Calling it cancelled would also stop the next
+        // build from reusing work that is sitting there finished.
+        Ok(()) if cancelled && !every_channel_settled(job) => {
             cancel_unfinished_groups(job);
             job.state = StackJobState::Cancelled;
         }
@@ -1698,6 +1712,23 @@ mod tests {
         assert_eq!(job.groups[0].phase, "ready");
         assert_eq!(job.groups[1].state, StackGroupState::Cancelled);
         assert_eq!(job.groups[2].state, StackGroupState::Cancelled);
+    }
+
+    #[test]
+    fn a_stop_that_lands_after_the_last_channel_leaves_the_job_complete() {
+        let mut skipped = ready_group(42, "SII", 3);
+        skipped.index = 1;
+        skipped.state = StackGroupState::Skipped;
+        let finished = completed_job("finished", vec![ready_group(42, "Ha", 1), skipped]);
+        assert!(every_channel_settled(&finished));
+
+        let mut stopped = finished.clone();
+        stopped.groups[1].state = StackGroupState::Cancelled;
+        assert!(!every_channel_settled(&stopped));
+
+        let mut queued = finished;
+        queued.groups[1].state = StackGroupState::Queued;
+        assert!(!every_channel_settled(&queued));
     }
 
     #[test]

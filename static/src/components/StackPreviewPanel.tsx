@@ -260,14 +260,20 @@ export default function StackPreviewPanel({
   const running = startPending || activeJob?.state === 'queued' || activeJob?.state === 'running';
   const error = startError ?? stopError ?? status.error ?? latest.error;
   const sourceText = selectionSource === 'selected' ? 'selected' : 'visible';
-  const beginAll = (force: boolean) =>
+  // A failed stop — "that build already finished" — belongs to the build the
+  // user was stopping, not to the next one they start.
+  const beginAll = (force: boolean) => {
+    resetStop();
     startStack({ force, imageIds: stableImageIds, operationKey: 'all' });
-  const beginChannel = (channel: ChannelInput, force: boolean) =>
+  };
+  const beginChannel = (channel: ChannelInput, force: boolean) => {
+    resetStop();
     startStack({
       force,
       imageIds: channel.images.map((image) => image.id),
       operationKey: channel.key,
     });
+  };
 
   const staleCount = displayKeys.filter((key) => {
     const activeGroup = activeByChannel.get(key);
