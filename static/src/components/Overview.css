@@ -426,6 +426,14 @@
     var(--color-bg-elevated);
 }
 
+/* The project the user was working in before they opened the Overview. The
+   ring says "you were here" without competing with the new-images accent. */
+.project-card.is-current,
+.project-archive-item.is-current {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-alpha-20);
+}
+
 .project-card.no-files {
   opacity: 0.6;
   background: var(--color-bg-hover);

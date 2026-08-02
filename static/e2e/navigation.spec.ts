@@ -195,6 +195,27 @@ test('direct deep link to the grid loads when ?db= matches a configured DB', asy
   });
 });
 
+test('the Overview keeps the project scope and points back at it', async ({
+  page,
+}) => {
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+  await expect(page.locator('.image-card').first()).toBeVisible({ timeout: 15_000 });
+
+  await page.getByRole('button', { name: 'Overview', exact: true }).click();
+
+  // The project the user left is marked, and the scope stays in the URL.
+  const current = page.locator('[data-current-project="true"]');
+  await expect(current).toHaveCount(1);
+  await expect(current).toContainText('Project Alpha');
+  expect(page.url()).toContain(`db=${encodeURIComponent(dbId)}`);
+  expect(page.url()).toContain('project=1');
+
+  // Going back to Images returns to the same project rather than an empty view.
+  await page.getByRole('button', { name: 'Images', exact: true }).click();
+  expect(page.url()).toContain('project=1');
+  await expect(page.locator('.image-card').first()).toBeVisible({ timeout: 15_000 });
+});
+
 test('session grouping opens the newest time run and keeps its URL state intact', async ({
   page,
 }) => {

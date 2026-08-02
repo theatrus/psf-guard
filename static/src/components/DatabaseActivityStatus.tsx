@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useDbProjectTarget } from '../hooks/useUrlState';
+import { useScopedDbId } from '../hooks/useUrlState';
 import { useQualityBackfillStatus } from '../hooks/useQualityBackfill';
 import { useSpatialScanStatus } from '../hooks/useSpatialScan';
 import CacheRefreshStatus from './CacheRefreshStatus';
@@ -21,7 +21,7 @@ interface QualityCompletion {
 export default function DatabaseActivityStatus({
   className = '',
 }: DatabaseActivityStatusProps) {
-  const { dbId } = useDbProjectTarget();
+  const dbId = useScopedDbId();
   const qualityScan = useSpatialScanStatus(dbId);
   const qualityBackfill = useQualityBackfillStatus(dbId);
   const scanProgress = qualityScan.status?.progress;
