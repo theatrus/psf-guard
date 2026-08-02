@@ -219,6 +219,30 @@ pub fn astrometry_metrics_from_analysis(
 fn cataloged_extended_emission(
     solution: &crate::astrometry::AstrometrySolutionResponse,
 ) -> Vec<CatalogedExtendedEmission> {
+    cataloged_extended_emission_objects(solution)
+        .into_iter()
+        .map(|object| CatalogedExtendedEmission {
+            name: if object.common_name.is_empty() {
+                object.name.clone()
+            } else {
+                object.common_name.clone()
+            },
+            kind: object.kind.clone(),
+            x: object.x,
+            y: object.y,
+            semi_major_px: object.semi_major_px,
+            semi_minor_px: object.semi_minor_px,
+            angle_deg: object.angle_deg,
+        })
+        .collect()
+}
+
+/// Return solved catalog objects large enough to affect a background model.
+/// Grading and stack correction share this filter so they protect the same
+/// real emission instead of making separate guesses.
+pub(crate) fn cataloged_extended_emission_objects(
+    solution: &crate::astrometry::AstrometrySolutionResponse,
+) -> Vec<&crate::astrometry::OverlayObjectResponse> {
     let width = f64::from(solution.image_width);
     let height = f64::from(solution.image_height);
     let short_axis = width.min(height);
@@ -249,19 +273,6 @@ fn cataloged_extended_emission(
                 && object.x - radius <= width
                 && object.y + radius >= 0.0
                 && object.y - radius <= height
-        })
-        .map(|object| CatalogedExtendedEmission {
-            name: if object.common_name.is_empty() {
-                object.name.clone()
-            } else {
-                object.common_name.clone()
-            },
-            kind: object.kind.clone(),
-            x: object.x,
-            y: object.y,
-            semi_major_px: object.semi_major_px,
-            semi_minor_px: object.semi_minor_px,
-            angle_deg: object.angle_deg,
         })
         .collect()
 }

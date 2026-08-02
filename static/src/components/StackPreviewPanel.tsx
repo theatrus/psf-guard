@@ -457,6 +457,8 @@ export default function StackPreviewPanel({
                     : progressState === 'running'
                       ? progressGroup?.phase === 'calibration'
                         ? 'Building calibration masters'
+                        : progressGroup?.phase === 'orienting'
+                          ? 'Solving and orienting sky view'
                         : progressGroup?.phase === 'rendering'
                           ? 'Rendering preview'
                           : artifact
@@ -546,6 +548,7 @@ export default function StackPreviewPanel({
                           )}
                           alt={`${targetName} ${filterName} stack preview`}
                         />
+                        <span className="stack-preview-orientation">N ↑ · E ←</span>
                       </div>
                     )}
                     {artifact && stretchKey && (
@@ -675,6 +678,7 @@ export default function StackPreviewPanel({
           summary={[
             `${inspector.group.accepted_frames} frames`,
             `${Math.round(inspector.group.total_exposure_seconds)} s`,
+            'North up · East left',
           ]}
           imageUrl={stretches[artifactStretchKey(inspector)]?.original_preview_url ??
             apiClient.getStackPreviewUrl(

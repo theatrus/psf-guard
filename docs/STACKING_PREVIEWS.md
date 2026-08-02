@@ -39,11 +39,35 @@ the running job, so leaving the page and coming back restores the live per-card
 progress instead of an idle panel. The indicator names the target and channel
 being stacked, its frame counts, and how many further builds are waiting.
 
+## Sky orientation
+
+Every completed mono and color stack uses the same celestial display frame:
+north is up and east is left. PSF Guard reprojects the integrated image after
+registration and expands the output grid to keep the source frame's four
+corners. A rotated camera can therefore produce blank, masked wedges around the
+valid sky footprint instead of losing data to a crop.
+
+PSF Guard first uses a current pixel-derived solve, then a valid embedded FITS
+WCS. If neither exists, it plate-solves the reference frame before it publishes
+the result. The stack fails with a catalog or solve error when it cannot prove
+the orientation; it never marks an unknown view as sky-up. Install the Seiza
+solver catalogs or solve one of the source images, then rebuild the channel.
+
+The downloaded FITS contains a replacement TAN WCS for the reprojected pixels
+and records `SKYORIEN='N-UP E-LEFT'`. Color previews register their channel
+stacks onto one of these canonical grids, so RGB, LRGB, and narrowband outputs
+keep the same convention. The small `N ↑ · E ←` marker on each result makes the
+display contract clear. Source-artifact search retains the exact affine
+mapping, including a camera parity flip, so a selected stack region still maps
+back to the right source pixels.
+
 PSF Guard remembers the last successful preview for every target/channel in the
 project cache and restores those cards after navigation, page reload, or server
 restart. Each card retains the exact input image IDs and scheduler grades used
-to build it. The card is marked **Out of date**—without hiding the usable older
-preview—when the current filter/selection changes the image set, an image is
+to build it. PSF Guard hides previews made before the sky-orientation rule; build
+each channel once to replace them. The card is marked **Out of date**—without
+hiding the usable older preview—when the current filter/selection changes the
+image set, an image is
 accepted/rejected/pended, or the **Accepted only** policy changes. A failed
 rebuild never replaces the last successful result.
 
@@ -104,9 +128,9 @@ opened, so the project grid continues to use the smaller screen preview.
 
 Choose **Download linear FITS** on the card or in the inspector to retrieve the
 full-resolution floating-point integration from the cache. The FITS is
-unstretched and retains the reference frame's supported WCS headers plus
-Seiza's accepted/rejected frame counters, making it suitable for inspection or
-as an input to a separate processing workflow.
+unstretched and contains the canonical north-up, east-left WCS plus Seiza's
+accepted/rejected frame counters, making it suitable for inspection or as an
+input to a separate processing workflow.
 
 ![Frame-by-frame stack admission details](stack-preview-decisions.png)
 
@@ -232,15 +256,33 @@ linear channel independently. Background extraction is enabled for new UI
 builds and defaults to additive subtraction, which removes the fitted gradient
 while preserving that channel's robust sky reference level. Multiplicative
 division is available for vignetting-like fields, and extraction can be
-disabled when the source stacks are already corrected. After correction, each
+disabled when the source stacks are already corrected. A strength control can
+apply part of the fitted correction when a full pass is too strong.
+
+The default automatic model compares constant, linear, and quadratic surfaces
+on held-out samples, then picks the simplest model that earns a clear
+improvement. It does not consider a radial-basis surface by default. That model
+can follow smaller-scale variation, but costs more to apply and can mistake
+real extended emission for sky. Enable it only as an advanced option, or select
+a fixed polynomial or radial-basis model for manual control.
+
+When a channel stack has a fresh pixel-derived plate solve, PSF Guard protects
+large cataloged emission regions from background sampling. It uses closed
+catalog or curated contours when the object catalog supplies them, then falls
+back to the object's projected ellipse. Embedded FITS WCS alone does not enable
+this protection. Each channel uses its own stack reference frame. The manifest
+records the reference image, catalog version, object names, and normalized
+regions. These values also form part of the cache key, so a new solve or
+catalog projection cannot reuse a fit made with stale bounds. After correction,
+each
 non-reference stack is registered to R for RGB, L for LRGB, or H-alpha for
 narrowband, using the same bounded Seiza star/similarity registration used by
 the Seiza color CLI.
 
-The **Processing stack** editor exposes the background correction mode plus
-Seiza's polynomial degree, sample-grid density and radius, sample-search steps,
-sample and fit rejection thresholds, rejection passes, border exclusion, and
-ridge regularization. After registration it applies optional per-role
+The **Processing stack** editor exposes correction mode and strength, automatic
+or fixed surface selection, sample-grid density and radius, sample-search
+steps, sample and fit rejection thresholds, rejection passes, border exclusion,
+and model-specific controls. After registration it applies optional per-role
 deconvolution while each physical input is still linear, then robustly
 normalizes the result and applies that role's ordered stretch stages before
 composition. Deconvolution is independently opt-in for L/R/G/B or
@@ -263,9 +305,10 @@ the exact processed color result, records `COLORSPC`, `SEIZACLR`, and
 stack. The manifest retains the requested background configuration,
 per-channel deconvolution parameters and peak/flux diagnostics, and stage
 arrays, plus each resolved background model and Seiza stretch plan. The UI
-reports accepted/candidate sample counts and the resolved sample radius for
-every input role. The complete processing definition,
-resolved dependency versions, and source revisions are part of the job ID, so
+reports the chosen surface, accepted/candidate sample counts, resolved sample
+radius, protected-region count, and protected object names for every input
+role. The complete processing definition, resolved dependency versions, source
+revisions, and solver-derived protection are part of the job ID, so
 applying the same pipeline restores its prior artifact. Artifacts from before
 background extraction are rebuilt with the new additive default; a current
 artifact whose extraction was explicitly disabled keeps that choice.
@@ -423,7 +466,10 @@ endpoint returns the durable last-successful result for each target/channel.
 The color catalog reports role/palette availability and durable results. Its
 POST body is `{ "target_id": 42, "kind": "rgb", "force": false,
 "processing": { "background_extraction": { "correction_mode": "subtract",
-"config": { "model": { "kind": "polynomial", "degree": 2, "ridge": 1e-8 },
+"strength": 1.0, "config": { "model": { "kind": "automatic",
+"max_degree": 2, "ridge": 1e-8, "rbf_smoothing": 0.01,
+"max_control_points": 192, "allow_radial_basis": false,
+"minimum_improvement": 0.08 },
 "samples_per_axis": 12, "sample_radius": null, "search_steps": 4,
 "sample_rejection_sigma": 3.5, "fit_rejection_sigma": 3.0,
 "fit_rejection_iterations": 3, "border_fraction": 0.03 } },
@@ -436,7 +482,9 @@ POST body is `{ "target_id": 42, "kind": "rgb", "force": false,
 `{ "target_id": 42, "kind": "lrgb", "force": false }`, or
 `{ "target_id": 42, "kind": "narrowband", "palette": "foraxx-hoo",
 "force": false }`. Omitting `processing` retains the earlier linear quick-look
-behavior for API compatibility. Mono stretch POST bodies use Seiza's tagged model shape, for
+behavior for API compatibility. Clients cannot submit `protected_regions`;
+the server derives them from fresh plate-solve evidence. Mono stretch POST
+bodies use Seiza's tagged model shape, for
 example `{ "model": { "type": "percentile-asinh", "black_percentile":
 0.01, "white_percentile": 0.995, "strength": 8.0 }, "color_strategy":
 "luminance-preserving", "deconvolution": null }`. Replace `null` with the

@@ -13,6 +13,22 @@ function fitsIntegerCard(keyword: string, value: number): string {
   return `${keyword.padEnd(8)}= ${value.toString().padStart(20)}`.padEnd(80);
 }
 
+function fitsFloatCard(keyword: string, value: number): string {
+  return `${keyword.padEnd(8)}= ${value.toExponential(12).padStart(20)}`.padEnd(80);
+}
+
+function fitsStringCard(keyword: string, value: string): string {
+  return `${keyword.padEnd(8)}= '${value}'`.padEnd(80);
+}
+
+function fitsNumericValue(header: string, keyword: string): number {
+  const card = Array.from({ length: header.length / 80 }, (_, index) =>
+    header.slice(index * 80, (index + 1) * 80)
+  ).find((candidate) => candidate.slice(0, 8).trim() === keyword);
+  expect(card, `missing FITS card ${keyword}`).toBeDefined();
+  return Number(card!.slice(10).split('/')[0].trim().replace('D', 'E'));
+}
+
 function writeSyntheticMonoStack(destination: string, variant: number): void {
   const width = 512;
   const height = 384;
@@ -50,6 +66,20 @@ function writeSyntheticMonoStack(destination: string, variant: number): void {
     fitsIntegerCard('NAXIS1', width),
     fitsIntegerCard('NAXIS2', height),
     'EXTEND  =                    T'.padEnd(80),
+    fitsStringCard('CTYPE1', 'RA---TAN'),
+    fitsStringCard('CTYPE2', 'DEC--TAN'),
+    fitsStringCard('CUNIT1', 'deg'),
+    fitsStringCard('CUNIT2', 'deg'),
+    fitsStringCard('RADESYS', 'ICRS'),
+    fitsFloatCard('CRVAL1', 130.1),
+    fitsFloatCard('CRVAL2', 19.66),
+    fitsFloatCard('CRPIX1', width / 2 + 0.5),
+    fitsFloatCard('CRPIX2', height / 2 + 0.5),
+    fitsFloatCard('CD1_1', -0.0004160277777778),
+    fitsFloatCard('CD1_2', 0),
+    fitsFloatCard('CD2_1', 0),
+    fitsFloatCard('CD2_2', -0.0004160277777778),
+    fitsStringCard('SKYORIEN', 'N-UP E-LEFT'),
     'END'.padEnd(80),
   ];
   const headerText = cards.join('');
@@ -77,12 +107,14 @@ function seedSyntheticColorStacks(databaseId: string, projectId: number): void {
       artifact_revision: `synthetic-${index}`,
       accepted_only: false,
       created_unix_seconds: 1_760_000_000 + index,
+      cache_version: 8,
       group: {
         index: 0,
         target_id: 2,
         target_name: 'Beta Field',
         filter_name: filterName,
         state: 'ready',
+        phase: 'ready',
         total_candidates: 3,
         eligible_frames: 3,
         quality_excluded: 0,
@@ -90,6 +122,19 @@ function seedSyntheticColorStacks(databaseId: string, projectId: number): void {
         processed_frames: 3,
         accepted_frames: 3,
         rejected_frames: 0,
+        output_channels: 1,
+        sky_orientation: {
+          convention: 'north_up_east_left',
+          version: 1,
+          source: 'embedded_wcs',
+          output_width: 512,
+          output_height: 384,
+          source_to_output: {
+            matrix: [[1, 0], [0, 1]],
+            translation_x: 0,
+            translation_y: 0,
+          },
+        },
         reference_image_id: 4,
         total_exposure_seconds: 180,
         preview_url: null,
@@ -159,6 +204,7 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   await expect(panel).toContainText('Alpha M44');
   await expect(panel.locator('.stack-preview-channel')).toHaveText('B');
   await expect(panel).toContainText('Stack preview');
+  await expect(panel.locator('.stack-preview-orientation')).toHaveText('N ↑ · E ←');
 
   const preview = panel.getByRole('img', { name: /stack preview/i });
   await expect(preview).toBeVisible();
@@ -183,6 +229,14 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   expect(fitsHead.headers()['content-type']).toContain('application/fits');
   expect(fitsHead.headers()['content-disposition']).toMatch(/attachment; filename=.*\.fits/);
   expect(Number(fitsHead.headers()['content-length'])).toBeGreaterThan(10_000_000);
+  const fitsResponse = await page.request.get(fitsHref!);
+  const fitsHeaderText = (await fitsResponse.body()).subarray(0, 2880).toString('ascii');
+  expect(fitsHeaderText).toContain('SKYORIEN');
+  expect(fitsHeaderText).toContain('N-UP E-LEFT');
+  expect(fitsNumericValue(fitsHeaderText, 'CD1_1')).toBeLessThan(0);
+  expect(Math.abs(fitsNumericValue(fitsHeaderText, 'CD1_2'))).toBeLessThan(1e-10);
+  expect(Math.abs(fitsNumericValue(fitsHeaderText, 'CD2_1'))).toBeLessThan(1e-10);
+  expect(fitsNumericValue(fitsHeaderText, 'CD2_2')).toBeLessThan(0);
 
   const defaultPreviewSrc = await preview.getAttribute('src');
   const stretchControls = panel.locator('.stack-preview-card .stack-stretch-controls');
@@ -553,6 +607,10 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   expect(rgbHeader).toContain('COLORSPC');
   expect(rgbHeader).toContain('RGB');
   expect(rgbHeader).toContain('DISPLAY');
+  expect(rgbHeader).toContain('SKYORIEN');
+  expect(rgbHeader).toContain('N-UP E-LEFT');
+  expect(fitsNumericValue(rgbHeader, 'CD1_1')).toBeLessThan(0);
+  expect(fitsNumericValue(rgbHeader, 'CD2_2')).toBeLessThan(0);
 
   const rgbImage = rgbCard.getByRole('img', { name: /RGB color stack preview/i });
   const defaultRgbSrc = await rgbImage.getAttribute('src');
@@ -562,8 +620,14 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await expect(backgroundControls.getByRole('checkbox', { name: 'Background extraction' }))
     .toBeChecked();
   await expect(backgroundControls.getByLabel('Background fit diagnostics')).toContainText('samples');
-  await backgroundControls.getByRole('spinbutton', { name: 'Background Polynomial degree' })
+  await expect(backgroundControls.getByRole('combobox', { name: 'Background surface model' }))
+    .toHaveValue('automatic');
+  await expect(backgroundControls.getByRole('checkbox', {
+    name: 'Allow radial-basis background model',
+  })).not.toBeChecked();
+  await backgroundControls.getByRole('spinbutton', { name: 'Background Maximum degree' })
     .fill('1');
+  await backgroundControls.getByRole('spinbutton', { name: 'Background Strength' }).fill('0.8');
   await expect(rgbProcessing.getByRole('region', { name: 'R input stretch stack' }))
     .toContainText('1 stage');
   await expect(rgbProcessing.getByRole('region', { name: 'G input stretch stack' }))

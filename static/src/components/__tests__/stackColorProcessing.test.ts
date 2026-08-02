@@ -26,7 +26,12 @@ describe('stack color processing defaults', () => {
     expect(processing.output_stretches).toEqual([]);
     expect(processing.input_deconvolutions).toEqual({});
     expect(processing.background_extraction?.correction_mode).toBe('subtract');
-    expect(processing.background_extraction?.config.model.degree).toBe(2);
+    expect(processing.background_extraction?.strength).toBe(1);
+    expect(processing.background_extraction?.config.model).toMatchObject({
+      kind: 'automatic',
+      max_degree: 2,
+      allow_radial_basis: false,
+    });
   });
 
   it('does not alias stage objects between channel lanes', () => {
@@ -69,6 +74,18 @@ describe('stack color processing defaults', () => {
       cache_version: BACKGROUND_COLOR_CACHE_VERSION,
       processing: legacy as typeof processing,
     }, ['red', 'green', 'blue']).input_deconvolutions).toEqual({});
+  });
+
+  it('gives an older background request full correction strength', () => {
+    const processing = defaultColorProcessing(['red', 'green', 'blue']);
+    delete (processing.background_extraction as Partial<
+      NonNullable<typeof processing.background_extraction>
+    >).strength;
+
+    expect(processingForColorBuild({
+      cache_version: BACKGROUND_COLOR_CACHE_VERSION,
+      processing,
+    }, ['red', 'green', 'blue']).background_extraction?.strength).toBe(1);
   });
 
   it('uses conservative upstream defaults only after deconvolution is enabled', () => {

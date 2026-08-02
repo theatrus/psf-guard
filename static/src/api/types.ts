@@ -373,6 +373,15 @@ export interface StackInputImage {
   grading_status: number;
 }
 
+export interface StackSkyOrientation {
+  convention: 'north_up_east_left';
+  version: number;
+  source: 'cached_pixel_solve' | 'embedded_wcs' | 'stack_reference_solve';
+  output_width: number;
+  output_height: number;
+  source_to_output: unknown;
+}
+
 export interface StackGroupStatus {
   index: number;
   target_id: number;
@@ -388,6 +397,7 @@ export interface StackGroupStatus {
   accepted_frames: number;
   rejected_frames: number;
   output_channels: number;
+  sky_orientation: StackSkyOrientation | null;
   reference_image_id: number | null;
   total_exposure_seconds: number;
   preview_url: string | null;
@@ -432,6 +442,7 @@ export interface LatestStackPreviewGroup {
   artifact_revision: string;
   accepted_only: boolean;
   created_unix_seconds: number;
+  cache_version: number;
   group: StackGroupStatus;
 }
 
@@ -565,6 +576,7 @@ export interface StackColorSource {
   group_index: number;
   artifact_revision: string;
   accepted_frames: number;
+  reference_image_id: number | null;
   registration_transform: SimilarityTransform | null;
 }
 
@@ -576,7 +588,18 @@ export interface StackColorProcessing {
 }
 
 export interface StackBackgroundConfig {
-  model: { kind: 'polynomial'; degree: number; ridge: number };
+  model:
+    | {
+        kind: 'automatic';
+        max_degree: number;
+        ridge: number;
+        rbf_smoothing: number;
+        max_control_points: number;
+        allow_radial_basis: boolean;
+        minimum_improvement: number;
+      }
+    | { kind: 'polynomial'; degree: number; ridge: number }
+    | { kind: 'radial_basis'; smoothing: number; max_control_points: number };
   samples_per_axis: number;
   sample_radius: number | null;
   search_steps: number;
@@ -584,18 +607,28 @@ export interface StackBackgroundConfig {
   fit_rejection_sigma: number;
   fit_rejection_iterations: number;
   border_fraction: number;
+  /** The server derives these from fresh pixel solves. */
+  protected_regions?: never[];
 }
 
 export interface StackBackgroundExtraction {
   config: StackBackgroundConfig;
   correction_mode: 'subtract' | 'divide';
+  strength: number;
 }
 
 export interface StackBackgroundFit {
   width: number;
   height: number;
   channels: number;
-  model: { kind: 'polynomial'; degree: number; coefficients: number[][] };
+  model:
+    | { kind: 'polynomial'; degree: number; coefficients: number[][] }
+    | {
+        kind: 'radial_basis';
+        smoothing: number;
+        centers: number[][];
+        coefficients: number[][];
+      };
   reference: number[];
   samples: Array<{
     x: number;
@@ -612,7 +645,19 @@ export interface StackBackgroundFit {
     rejected_residual: number;
     rejection_iterations: number;
     sample_radius: number;
+    protected_regions: number;
+    model_selection?: {
+      selected: string;
+      candidates: Array<{ model: string; validation_error: number }>;
+    };
   };
+}
+
+export interface StackBackgroundProtection {
+  reference_image_id: number;
+  catalog_version: string | null;
+  object_names: string[];
+  regions: unknown[];
 }
 
 export type StackColorProgressState =
@@ -683,6 +728,7 @@ export interface StackColorJob {
   resolved_input_deconvolutions: Partial<Record<StackColorRole, StackDeconvolutionResult>>;
   resolved_output_stretches: unknown[];
   resolved_backgrounds: Partial<Record<StackColorRole, StackBackgroundFit>>;
+  resolved_background_protection: Partial<Record<StackColorRole, StackBackgroundProtection>>;
   preview_url: string;
   fits_url: string;
   error: string | null;

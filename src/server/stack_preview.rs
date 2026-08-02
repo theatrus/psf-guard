@@ -42,10 +42,10 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-pub const SEIZA_STACKING_VERSION: &str = "0.2.0";
+pub const SEIZA_STACKING_VERSION: &str = "0.2.1";
 /// Bump whenever stack admission, rendering, or persisted artifact semantics
 /// change. This deliberately versions PSF Guard policy separately from Seiza.
-const STACK_PREVIEW_CACHE_VERSION: u32 = 7;
+pub(super) const STACK_PREVIEW_CACHE_VERSION: u32 = 8;
 const MAX_REQUEST_IMAGES: usize = 10_000;
 const MAX_REMEMBERED_JOBS: usize = 64;
 const PREVIEW_MAX_DIMENSION: u32 = 2400;
@@ -121,6 +121,16 @@ pub struct StackInputImage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StackSkyOrientation {
+    pub convention: String,
+    pub version: u32,
+    pub source: String,
+    pub output_width: usize,
+    pub output_height: usize,
+    pub source_to_output: seiza_stacking::AffineTransform,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StackGroupStatus {
     pub index: usize,
     pub target_id: i32,
@@ -138,6 +148,8 @@ pub struct StackGroupStatus {
     pub rejected_frames: usize,
     #[serde(default)]
     pub output_channels: usize,
+    #[serde(default)]
+    pub sky_orientation: Option<StackSkyOrientation>,
     pub reference_image_id: Option<i32>,
     pub total_exposure_seconds: f64,
     pub preview_url: Option<String>,
@@ -174,6 +186,8 @@ pub struct LatestStackPreviewGroup {
     pub artifact_revision: String,
     pub accepted_only: bool,
     pub created_unix_seconds: i64,
+    #[serde(default)]
+    pub cache_version: u32,
     pub group: StackGroupStatus,
 }
 
@@ -428,6 +442,7 @@ struct PreparedFrame {
     quality_score: Option<f64>,
     path: PathBuf,
     source_fingerprint: String,
+    expected_target: Option<(f64, f64)>,
 }
 
 #[derive(Clone)]
@@ -535,6 +550,7 @@ pub async fn get_latest_stack_previews(
             )))
         }
     };
+    let latest = current_latest_stacks(latest);
     if latest.database_id != ctx.id || latest.project_id != project_id {
         return Err(AppError::NotFound);
     }
@@ -781,6 +797,8 @@ fn prepare_job(
     hasher.update([request.accepted_only as u8]);
     hasher.update(STACK_PREVIEW_CACHE_VERSION.to_le_bytes());
     hasher.update(SEIZA_STACKING_VERSION.as_bytes());
+    hasher.update(seiza_stacking::SKY_ORIENTATION_VERSION.to_le_bytes());
+    hasher.update(seiza_stacking::SKY_ORIENTATION_NAME.as_bytes());
     hasher.update(PREVIEW_MAX_DIMENSION.to_le_bytes());
     hasher.update(stretch::SEIZA_STRETCH_VERSION.as_bytes());
 
@@ -849,6 +867,7 @@ fn prepare_job(
                 quality_score: Some(scored.quality_score),
                 path,
                 source_fingerprint,
+                expected_target: expected_by_image.get(&image.id).copied().flatten(),
             });
         }
 
@@ -902,6 +921,7 @@ fn prepare_job(
             accepted_frames: 0,
             rejected_frames: 0,
             output_channels: 0,
+            sky_orientation: None,
             reference_image_id,
             total_exposure_seconds: 0.0,
             preview_url: None,
@@ -1379,10 +1399,34 @@ fn run_group(
             });
         }
         state.stack_previews.update(job_id, |job| {
-            job.groups[group.index].phase = "rendering".into();
+            job.groups[group.index].phase = "orienting".into();
         });
         let reference_headers = stacker.reference_headers().to_vec();
         let snapshot = stacker.into_snapshot().map_err(|error| error.to_string())?;
+        let (source_wcs, orientation_source) =
+            resolve_stack_wcs(state, &ctx, &group.frames[0], &reference_headers)?;
+        let orientation = seiza_stacking::SkyOrientationPlan::new(
+            snapshot.image.width,
+            snapshot.image.height,
+            &source_wcs,
+        )
+        .map_err(|error| error.to_string())?;
+        let oriented = orientation
+            .apply(&snapshot.image)
+            .map_err(|error| error.to_string())?;
+        let sky_orientation = StackSkyOrientation {
+            convention: seiza_stacking::SKY_ORIENTATION_NAME.into(),
+            version: seiza_stacking::SKY_ORIENTATION_VERSION,
+            source: orientation_source,
+            output_width: orientation.output_width(),
+            output_height: orientation.output_height(),
+            source_to_output: orientation.source_to_output(),
+        };
+        state.stack_previews.update(job_id, |job| {
+            let status = &mut job.groups[group.index];
+            status.phase = "rendering".into();
+            status.sky_orientation = Some(sky_orientation);
+        });
         let fits_destination = fits_path(cache_root, job_id, group.index);
         let fits_parent = fits_destination
             .parent()
@@ -1390,11 +1434,31 @@ fn run_group(
         std::fs::create_dir_all(fits_parent).map_err(|error| error.to_string())?;
         let fits_temporary =
             fits_destination.with_extension(format!("{}.tmp.fits", std::process::id()));
-        seiza_stacking::write_fits_f32(&fits_temporary, &snapshot, &reference_headers)
-            .map_err(|error| error.to_string())?;
+        let mut output_cards = orientation.fits_header_cards();
+        output_cards.push(
+            seiza_fits::WriteHeaderCard::new(
+                "STACKCNT",
+                seiza_fits::HeaderValue::Integer(i64::from(snapshot.accepted_frames)),
+            )
+            .with_comment("accepted input frames"),
+        );
+        output_cards.push(
+            seiza_fits::WriteHeaderCard::new(
+                "STACKREJ",
+                seiza_fits::HeaderValue::Integer(i64::from(snapshot.rejected_frames)),
+            )
+            .with_comment("rejected input frames"),
+        );
+        seiza_stacking::write_linear_image_fits_f32(
+            &fits_temporary,
+            &oriented,
+            &reference_headers,
+            &output_cards,
+        )
+        .map_err(|error| error.to_string())?;
         std::fs::rename(&fits_temporary, &fits_destination).map_err(|error| error.to_string())?;
         stretch::render_image_previews_atomic(
-            &snapshot.image,
+            &oriented,
             &stretch::default_linear_config(),
             stretch::StackStretchSourceTransfer::Linear,
             &preview_path(cache_root, job_id, group.index),
@@ -1402,6 +1466,62 @@ fn run_group(
         )
         .map(|_| ())
     })
+}
+
+fn resolve_stack_wcs(
+    state: &AppState,
+    ctx: &DatabaseContext,
+    reference: &PreparedFrame,
+    headers: &[(String, seiza_fits::HeaderValue)],
+) -> Result<(seiza::Wcs, String), String> {
+    if let Some(solution) = ctx
+        .astrometry_evidence
+        .evidence_for_source(
+            &ctx.cache_dir_path,
+            reference.image_id,
+            reference.expected_target,
+        )
+        .and_then(|analysis| analysis.solution)
+    {
+        return Ok((
+            crate::astrometry::wcs_from_response(&solution.wcs),
+            "cached_pixel_solve".into(),
+        ));
+    }
+    if let Some(embedded) =
+        crate::astrometry_headers::FitsAstrometryHeaders::from_headers(headers).embedded_wcs
+    {
+        let value = embedded.value;
+        return Ok((
+            seiza::Wcs {
+                crval: (value.crval[0], value.crval[1]),
+                crpix: (value.crpix[0], value.crpix[1]),
+                cd: value.cd,
+                sip: None,
+            },
+            "embedded_wcs".into(),
+        ));
+    }
+    let analysis = state
+        .astrometry
+        .solve_image(
+            reference.image_id,
+            &reference.path,
+            reference.expected_target,
+        )
+        .map_err(|error| format!("Plate solving the stack reference failed: {error}"))?;
+    let solution = analysis.solution.ok_or_else(|| {
+        let detail = analysis
+            .error
+            .unwrap_or_else(|| "the solver found no match".into());
+        format!(
+            "Stack preview needs a plate solution for north-up display, but {detail}. Install the Seiza solver catalogs or solve a source image first."
+        )
+    })?;
+    Ok((
+        crate::astrometry::wcs_from_response(&solution.wcs),
+        "stack_reference_solve".into(),
+    ))
 }
 
 fn save_png_atomic(image: &image::DynamicImage, destination: &FsPath) -> Result<(), String> {
@@ -1438,8 +1558,9 @@ fn persist_latest_groups(cache_root: &FsPath, job: &StackPreviewJob) -> Result<(
         .ok()
         .and_then(|bytes| serde_json::from_slice::<LatestStackPreviews>(&bytes).ok())
         .filter(|value| value.database_id == job.database_id && value.project_id == job.project_id)
+        .map(current_latest_stacks)
         .unwrap_or_else(|| LatestStackPreviews {
-            schema_version: 1,
+            schema_version: 2,
             database_id: job.database_id.clone(),
             project_id: job.project_id,
             updated_unix_seconds: 0,
@@ -1452,6 +1573,7 @@ fn persist_latest_groups(cache_root: &FsPath, job: &StackPreviewJob) -> Result<(
             artifact_revision: job.artifact_revision.clone(),
             accepted_only: job.accepted_only,
             created_unix_seconds: job.created_unix_seconds,
+            cache_version: job.cache_version,
             group,
         };
         if let Some(existing) = latest.groups.iter_mut().find(|existing| {
@@ -1480,6 +1602,21 @@ fn persist_latest_groups(cache_root: &FsPath, job: &StackPreviewJob) -> Result<(
     let bytes = serde_json::to_vec_pretty(&latest).map_err(|error| error.to_string())?;
     std::fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
     std::fs::rename(&temporary, path).map_err(|error| error.to_string())
+}
+
+pub(super) fn current_latest_stacks(mut latest: LatestStackPreviews) -> LatestStackPreviews {
+    latest.groups.retain(|entry| {
+        entry.cache_version == STACK_PREVIEW_CACHE_VERSION
+            && entry
+                .group
+                .sky_orientation
+                .as_ref()
+                .is_some_and(|orientation| {
+                    orientation.version == seiza_stacking::SKY_ORIENTATION_VERSION
+                        && orientation.convention == seiza_stacking::SKY_ORIENTATION_NAME
+                })
+    });
+    latest
 }
 
 fn stack_dir(cache_root: &FsPath, job_id: &str) -> PathBuf {
@@ -1512,6 +1649,17 @@ fn fits_path(cache_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
 mod tests {
     use super::*;
 
+    fn sky_orientation() -> StackSkyOrientation {
+        StackSkyOrientation {
+            convention: seiza_stacking::SKY_ORIENTATION_NAME.into(),
+            version: seiza_stacking::SKY_ORIENTATION_VERSION,
+            source: "embedded_wcs".into(),
+            output_width: 100,
+            output_height: 80,
+            source_to_output: seiza_stacking::AffineTransform::IDENTITY,
+        }
+    }
+
     fn ready_group(target_id: i32, filter_name: &str, image_id: i32) -> StackGroupStatus {
         StackGroupStatus {
             index: 0,
@@ -1528,6 +1676,7 @@ mod tests {
             accepted_frames: 2,
             rejected_frames: 0,
             output_channels: 1,
+            sky_orientation: Some(sky_orientation()),
             reference_image_id: Some(image_id),
             total_exposure_seconds: 120.0,
             preview_url: None,
@@ -1712,6 +1861,32 @@ mod tests {
         assert_eq!(blue.group.reference_image_id, Some(3));
         assert_eq!(red.job_id, "first");
         assert_eq!(red.group.reference_image_id, Some(2));
+    }
+
+    #[test]
+    fn latest_index_hides_pre_orientation_artifacts() {
+        let current = LatestStackPreviewGroup {
+            job_id: "current".into(),
+            artifact_revision: "current-revision".into(),
+            accepted_only: false,
+            created_unix_seconds: 100,
+            cache_version: STACK_PREVIEW_CACHE_VERSION,
+            group: ready_group(10, "B", 1),
+        };
+        let mut legacy = current.clone();
+        legacy.job_id = "legacy".into();
+        legacy.cache_version = STACK_PREVIEW_CACHE_VERSION - 1;
+        legacy.group.sky_orientation = None;
+        let latest = current_latest_stacks(LatestStackPreviews {
+            schema_version: 2,
+            database_id: "db-test".into(),
+            project_id: 7,
+            updated_unix_seconds: 100,
+            groups: vec![legacy, current],
+        });
+
+        assert_eq!(latest.groups.len(), 1);
+        assert_eq!(latest.groups[0].job_id, "current");
     }
 
     #[test]
