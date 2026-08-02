@@ -4906,9 +4906,9 @@ dependencies = [
 
 [[package]]
 name = "seiza"
-version = "0.15.0"
+version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e0e19c1983f135a319ae46fa8a51cb6392eff58fe8f4bf5dc1c795161d8458b"
+checksum = "b9eb8fe848b31588a4533a8195c0aa202a1c5398b4dd59bc614276621460282b"
 dependencies = [
  "directories",
  "image",
@@ -4928,9 +4928,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-background"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce27c654312993dceef01e654de2fdce5d3adeddbac19ea0c45c0b94a91b271b"
+checksum = "7de02ad32155f0110b8643ee35e3c2b8259a37c6492230f0a9a10873c902b87a"
 dependencies = [
  "rayon",
  "seiza-stats",
