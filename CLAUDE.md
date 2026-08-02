@@ -202,7 +202,10 @@ Current behavior: [importing](docs/IMPORTING.md) and
    browser layers before handoff.
 5. Run `git diff --check` and review the final diff for stale links, generated
    files, and unrelated changes.
-6. For a PR, state exactly which checks ran. Do not treat hosted CI as a local
+6. Add a line to `docs/releases/unreleased.md` when the change is visible to a
+   user. Describe the behavior they get, not the commit. Skip it for internal
+   refactors, test-only work, and dependency bumps.
+7. For a PR, state exactly which checks ran. Do not treat hosted CI as a local
    test result.
 
 ## Documentation
