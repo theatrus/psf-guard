@@ -36,7 +36,11 @@ function wrapper(route: string) {
   };
 }
 
-function scanStatus(running: boolean) {
+function scanStatus(running: boolean, scope?: {
+  new_frames: number;
+  outdated_frames: number;
+  needs_analysis: boolean;
+}) {
   return {
     success: true,
     data: {
@@ -61,6 +65,15 @@ function scanStatus(running: boolean) {
         last_error: null,
       },
       cached_count: 0,
+      ...(scope ? {
+        scope: {
+          target_id: 42,
+          filter_name: 'R',
+          total_frames: 1,
+          pending_frames: scope.new_frames + scope.outdated_frames,
+          ...scope,
+        },
+      } : {}),
     },
     error: null,
     status: 'ready',
@@ -81,6 +94,14 @@ describe('GroupedImageGrid quality analysis', () => {
     let posted: unknown = null;
     server.use(
       http.get('/api/db/:dbId/images', () => HttpResponse.json(imagesResponse())),
+      http.get('/api/db/:dbId/analysis/quality-scan', ({ request }) => {
+        const scoped = new URL(request.url).searchParams.has('target_id');
+        return HttpResponse.json(scanStatus(false, scoped ? {
+          new_frames: 1,
+          outdated_frames: 0,
+          needs_analysis: true,
+        } : undefined));
+      }),
       http.post('/api/db/:dbId/analysis/quality-scan', async ({ request }) => {
         posted = await request.json();
         return HttpResponse.json(scanStatus(true));
@@ -92,6 +113,10 @@ describe('GroupedImageGrid quality analysis', () => {
     });
 
     const button = await screen.findByRole('button', { name: 'Analyze Quality' });
+    expect(button).toHaveAttribute(
+      'title',
+      'Analyze 1 frame added since the last quality scan.',
+    );
     await userEvent.click(button);
 
     await waitFor(() => {
@@ -100,7 +125,7 @@ describe('GroupedImageGrid quality analysis', () => {
     expect(await screen.findByRole('button', { name: 'Analysis running…' })).toBeDisabled();
   });
 
-  it('asks for a target before starting a project-wide grid scan', async () => {
+  it('does not offer target analysis for a project-wide grid', async () => {
     server.use(
       http.get('/api/db/:dbId/images', () => HttpResponse.json(imagesResponse())),
     );
@@ -109,11 +134,30 @@ describe('GroupedImageGrid quality analysis', () => {
       wrapper: wrapper('/grid?db=test&project=1'),
     });
 
-    const button = await screen.findByRole('button', { name: 'Analyze Quality' });
-    expect(button).toBeDisabled();
-    expect(button).toHaveAttribute(
-      'title',
-      'Choose a target from the header before starting quality analysis.',
+    await screen.findAllByText('Sh2 86');
+    expect(screen.queryByRole('button', { name: 'Analyze Quality' })).not.toBeInTheDocument();
+  });
+
+  it('hides analysis when every frame uses the current quality model', async () => {
+    server.use(
+      http.get('/api/db/:dbId/images', () => HttpResponse.json(imagesResponse())),
+      http.get('/api/db/:dbId/analysis/quality-scan', ({ request }) => {
+        const scoped = new URL(request.url).searchParams.has('target_id');
+        return HttpResponse.json(scanStatus(false, scoped ? {
+          new_frames: 0,
+          outdated_frames: 0,
+          needs_analysis: false,
+        } : undefined));
+      }),
     );
+
+    render(<GroupedImageGrid />, {
+      wrapper: wrapper('/grid?db=test&project=1&target=42&filter=R'),
+    });
+
+    await screen.findAllByText('Sh2 86');
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Analyze Quality' })).not.toBeInTheDocument();
+    });
   });
 });

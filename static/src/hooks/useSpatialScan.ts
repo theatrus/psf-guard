@@ -23,6 +23,7 @@ export function useSpatialScanStatus(dbId: string | null | undefined) {
     if (wasRunning.current && !isRunning) {
       queryClient.invalidateQueries({ queryKey: ['db', dbId, 'sequence-analysis'] });
       queryClient.invalidateQueries({ queryKey: ['db', dbId, 'image-quality'] });
+      queryClient.invalidateQueries({ queryKey: ['db', dbId, 'quality-scan-scope'] });
     }
     wasRunning.current = isRunning;
   }, [isRunning, dbId, queryClient]);
@@ -42,6 +43,14 @@ export function useSpatialScan(
 ) {
   const queryClient = useQueryClient();
   const status = useSpatialScanStatus(dbId);
+  const scopeQuery = useQuery<SpatialScanStatus>({
+    queryKey: ['db', dbId, 'quality-scan-scope', targetId, filterName ?? null],
+    queryFn: () => apiClient.getSpatialScanStatus(dbId!, {
+      target_id: targetId,
+      filter_name: filterName,
+    }),
+    enabled: !!dbId && targetId != null,
+  });
 
   const startMutation = useMutation({
     mutationFn: (force?: boolean) =>
@@ -56,6 +65,7 @@ export function useSpatialScan(
       if (!status.started && !status.progress.running) {
         // Nothing needed computing; metrics may still be newly relevant.
         queryClient.invalidateQueries({ queryKey: ['db', dbId, 'sequence-analysis'] });
+        queryClient.invalidateQueries({ queryKey: ['db', dbId, 'quality-scan-scope'] });
       }
     },
   });
@@ -65,5 +75,8 @@ export function useSpatialScan(
     start: startMutation.mutate,
     isStarting: startMutation.isPending,
     startError: startMutation.error,
+    scope: scopeQuery.data?.scope,
+    scopeError: scopeQuery.error,
+    isScopeLoading: scopeQuery.isLoading,
   };
 }

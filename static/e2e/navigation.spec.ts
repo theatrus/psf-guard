@@ -672,7 +672,7 @@ test('Grid starts target quality analysis and keeps progress in the global heade
     error: null,
     status: 'ready',
   });
-  await page.route(`**/api/db/${dbId}/analysis/quality-scan`, async (route) => {
+  await page.route(`**/api/db/${dbId}/analysis/quality-scan*`, async (route) => {
     if (route.request().method() === 'POST') {
       posted = route.request().postDataJSON();
       running = true;
@@ -681,6 +681,24 @@ test('Grid starts target quality analysis and keeps progress in the global heade
     }
     if (running) {
       await route.fulfill({ json: runningStatus() });
+      return;
+    }
+    if (new URL(route.request().url()).searchParams.has('target_id')) {
+      const status = runningStatus();
+      status.data.started = false;
+      status.data.progress.running = false;
+      Object.assign(status.data, {
+        scope: {
+          target_id: 1,
+          filter_name: null,
+          total_frames: 3,
+          pending_frames: 1,
+          new_frames: 1,
+          outdated_frames: 0,
+          needs_analysis: true,
+        },
+      });
+      await route.fulfill({ json: status });
       return;
     }
     await route.continue();

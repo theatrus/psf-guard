@@ -12,6 +12,15 @@ function scanStatus(overrides: {
   total?: number;
   processed?: number;
   cached_count?: number;
+  scope?: {
+    target_id: number;
+    filter_name: string | null;
+    total_frames: number;
+    pending_frames: number;
+    new_frames: number;
+    outdated_frames: number;
+    needs_analysis: boolean;
+  };
 }) {
   return {
     success: true,
@@ -31,6 +40,7 @@ function scanStatus(overrides: {
         last_error: null,
       },
       cached_count: overrides.cached_count ?? 0,
+      ...(overrides.scope ? { scope: overrides.scope } : {}),
     },
     error: null,
     status: 'ready',
@@ -66,6 +76,36 @@ describe('useSpatialScan', () => {
     expect(result.current.status?.cached_count).toBe(0);
   });
 
+  it('reports whether the selected target has quality work', async () => {
+    server.use(
+      http.get('/api/db/:dbId/analysis/quality-scan', ({ request }) => {
+        const params = new URL(request.url).searchParams;
+        if (!params.has('target_id')) {
+          return HttpResponse.json(scanStatus({}));
+        }
+        return HttpResponse.json(scanStatus({
+          scope: {
+            target_id: 42,
+            filter_name: 'R',
+            total_frames: 5,
+            pending_frames: 2,
+            new_frames: 1,
+            outdated_frames: 1,
+            needs_analysis: true,
+          },
+        }));
+      }),
+    );
+
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useSpatialScan('test', 42, 'R'), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.scope?.pending_frames).toBe(2);
+    });
+    expect(result.current.scope?.needs_analysis).toBe(true);
+  });
+
   it('start() posts the scan request and seeds running progress', async () => {
     let postedBody: unknown = null;
     server.use(
@@ -75,9 +115,22 @@ describe('useSpatialScan', () => {
           scanStatus({ started: true, running: true, total: 12, processed: 0 })
         );
       }),
-      http.get('/api/db/:dbId/analysis/quality-scan', () =>
-        HttpResponse.json(scanStatus({ running: true, total: 12, processed: 3 }))
-      )
+      http.get('/api/db/:dbId/analysis/quality-scan', ({ request }) => {
+        if (new URL(request.url).searchParams.has('target_id')) {
+          return HttpResponse.json(scanStatus({
+            scope: {
+              target_id: 42,
+              filter_name: 'R',
+              total_frames: 12,
+              pending_frames: 12,
+              new_frames: 12,
+              outdated_frames: 0,
+              needs_analysis: true,
+            },
+          }));
+        }
+        return HttpResponse.json(scanStatus({ running: true, total: 12, processed: 3 }));
+      })
     );
 
     const { wrapper } = createWrapper();
@@ -98,7 +151,20 @@ describe('useSpatialScan', () => {
     // First poll: running. Later polls: finished.
     let polls = 0;
     server.use(
-      http.get('/api/db/:dbId/analysis/quality-scan', () => {
+      http.get('/api/db/:dbId/analysis/quality-scan', ({ request }) => {
+        if (new URL(request.url).searchParams.has('target_id')) {
+          return HttpResponse.json(scanStatus({
+            scope: {
+              target_id: 1,
+              filter_name: null,
+              total_frames: 5,
+              pending_frames: 0,
+              new_frames: 0,
+              outdated_frames: 0,
+              needs_analysis: false,
+            },
+          }));
+        }
         polls += 1;
         return HttpResponse.json(
           scanStatus({ running: polls < 2, total: 5, processed: polls < 2 ? 2 : 5 })
@@ -128,6 +194,11 @@ describe('useSpatialScan', () => {
       expect(
         invalidated.some(
           (key) => Array.isArray(key) && key.includes('sequence-analysis')
+        )
+      ).toBe(true);
+      expect(
+        invalidated.some(
+          (key) => Array.isArray(key) && key.includes('quality-scan-scope')
         )
       ).toBe(true);
     });

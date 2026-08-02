@@ -747,6 +747,25 @@ pub struct SpatialScanRequest {
     pub force_satellites: bool,
 }
 
+/// Optional target/filter scope for the quality-scan status endpoint.
+#[derive(Debug, Deserialize, Default)]
+pub struct SpatialScanStatusQuery {
+    pub target_id: Option<i32>,
+    pub filter_name: Option<String>,
+}
+
+/// Cached pixel-quality work left in a target/filter scope.
+#[derive(Debug, Serialize)]
+pub struct QualityScanScopeStatus {
+    pub target_id: i32,
+    pub filter_name: Option<String>,
+    pub total_frames: usize,
+    pub pending_frames: usize,
+    pub new_frames: usize,
+    pub outdated_frames: usize,
+    pub needs_analysis: bool,
+}
+
 /// Status returned by both the scan-start and scan-progress endpoints.
 #[derive(Debug, Serialize)]
 pub struct SpatialScanStatusResponse {
@@ -756,6 +775,9 @@ pub struct SpatialScanStatusResponse {
     pub progress: crate::server::spatial_scan::SpatialScanProgress,
     /// Total number of images with cached spatial metrics in this database.
     pub cached_count: usize,
+    /// Work left in the requested target/filter scope. GET only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<QualityScanScopeStatus>,
 }
 
 #[derive(Debug, Deserialize, Default)]

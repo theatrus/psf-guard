@@ -100,10 +100,12 @@ psf-guard screen-fits "/path/to/LIGHT" --regrade-db my-db-slug
 psf-guard move-rejects --db my-db-slug
 ```
 
-From the **web UI**: choose one target, then press **Analyze Quality** in either
-the Images grid or Sequence view. A project-wide grid keeps the action disabled
-until you choose a target, so the scan scope stays clear. The scan runs
-spatial/photometric screening and fresh plate solves in the background, then
+From the **web UI**: choose one target. **Analyze Quality** appears in the
+Images grid or Sequence view when that target/filter has new frames or cached
+results from an older quality model. It stays hidden when every frame is up to
+date. Use **Rescan All Quality** in Settings when you need to force a full
+rescan. The target scan runs spatial/photometric screening and fresh plate
+solves in the background, then
 refreshes the sequence scores. The fixed header status shows frame and solve
 progress while you move between views; Overview folds the work into its
 cross-database status. Results persist across restarts. The
