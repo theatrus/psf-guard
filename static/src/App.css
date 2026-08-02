@@ -3563,7 +3563,23 @@
 }
 
 .stack-preview-image {
+  position: relative;
   overflow: hidden;
+}
+
+.stack-preview-orientation {
+  position: absolute;
+  right: 0.55rem;
+  bottom: 0.5rem;
+  padding: 0.18rem 0.4rem;
+  border: 1px solid rgb(255 255 255 / 24%);
+  border-radius: 4px;
+  color: rgb(255 255 255 / 88%);
+  background: rgb(0 0 0 / 62%);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  pointer-events: none;
 }
 
 .stack-preview-image > img {

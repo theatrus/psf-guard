@@ -40,8 +40,8 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-const STACK_COLOR_CACHE_VERSION: u32 = 6;
-const COLOR_INPUT_CACHE_VERSION: u32 = 2;
+const STACK_COLOR_CACHE_VERSION: u32 = 7;
+const COLOR_INPUT_CACHE_VERSION: u32 = 3;
 const SEIZA_BACKGROUND_VERSION: &str = "0.1.0";
 const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
 const COLOR_BYTES_PER_PIXEL: u64 = 64;
@@ -1944,7 +1944,7 @@ fn load_latest_stacks(
             if latest.database_id != ctx.id || latest.project_id != project_id {
                 return Err(AppError::NotFound);
             }
-            Ok(latest)
+            Ok(super::current_latest_stacks(latest))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(LatestStackPreviews {
             schema_version: 1,
@@ -1972,7 +1972,7 @@ fn load_latest_colors(
             if latest.database_id != ctx.id || latest.project_id != project_id {
                 return Err(AppError::NotFound);
             }
-            Ok(latest)
+            Ok(current_latest_colors(latest))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             Ok(LatestStackColorPreviews {
@@ -2210,6 +2210,7 @@ fn persist_latest_color(cache_root: &FsPath, job: &StackColorJob) -> Result<(), 
         .ok()
         .and_then(|bytes| serde_json::from_slice::<LatestStackColorPreviews>(&bytes).ok())
         .filter(|value| value.database_id == job.database_id && value.project_id == job.project_id)
+        .map(current_latest_colors)
         .unwrap_or_else(|| LatestStackColorPreviews {
             schema_version: 1,
             database_id: job.database_id.clone(),
@@ -2228,6 +2229,14 @@ fn persist_latest_color(cache_root: &FsPath, job: &StackColorJob) -> Result<(), 
     }
     latest.updated_unix_seconds = chrono::Utc::now().timestamp();
     write_json_atomic(&path, &latest)
+}
+
+fn current_latest_colors(mut latest: LatestStackColorPreviews) -> LatestStackColorPreviews {
+    latest.jobs.retain(|job| {
+        job.cache_version == STACK_COLOR_CACHE_VERSION
+            && job.stacking_version == SEIZA_STACKING_VERSION
+    });
+    latest
 }
 
 fn write_json_atomic(path: &FsPath, value: &impl Serialize) -> Result<(), String> {
@@ -2299,7 +2308,7 @@ fn latest_color_path(cache_root: &FsPath, project_id: i32) -> PathBuf {
 mod tests {
     use super::*;
     use crate::server::stack_preview::{
-        LatestStackPreviewGroup, StackGroupState, StackGroupStatus,
+        LatestStackPreviewGroup, StackGroupState, StackGroupStatus, StackSkyOrientation,
     };
 
     fn source_group(filter_name: &str, index: usize) -> LatestStackPreviewGroup {
@@ -2308,6 +2317,7 @@ mod tests {
             artifact_revision: format!("rev-{index}"),
             accepted_only: false,
             created_unix_seconds: 10,
+            cache_version: super::super::STACK_PREVIEW_CACHE_VERSION,
             group: StackGroupStatus {
                 index,
                 target_id: 7,
@@ -2323,6 +2333,14 @@ mod tests {
                 accepted_frames: 3,
                 rejected_frames: 0,
                 output_channels: 1,
+                sky_orientation: Some(StackSkyOrientation {
+                    convention: seiza_stacking::SKY_ORIENTATION_NAME.into(),
+                    version: seiza_stacking::SKY_ORIENTATION_VERSION,
+                    source: "embedded_wcs".into(),
+                    output_width: 100,
+                    output_height: 80,
+                    source_to_output: seiza_stacking::AffineTransform::IDENTITY,
+                }),
                 reference_image_id: Some(1),
                 total_exposure_seconds: 180.0,
                 preview_url: None,

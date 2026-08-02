@@ -17,7 +17,7 @@ use axum::{
 };
 use seiza_imgproc::components::{largest_connected_component, BinaryComponent, Connectivity};
 use seiza_stacking::{
-    CalibrationMasters, FitsFrame, ReferenceRegion, RegisteredFrameMapping, SimilarityTransform,
+    AffineTransform, CalibrationMasters, FitsFrame, ReferenceRegion, RegisteredFrameMapping,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -34,7 +34,7 @@ use crate::{
     server::{api::ApiResponse, extract::DbContext, handlers::AppError, state::AppState},
 };
 
-const ARTIFACT_SEARCH_CACHE_VERSION: u32 = 3;
+const ARTIFACT_SEARCH_CACHE_VERSION: u32 = 4;
 const MIN_REGION_EDGE: usize = 8;
 const MAX_REGION_EDGE: usize = 512;
 const MAX_ANALYSIS_SAMPLES: usize = 65_536;
@@ -118,7 +118,7 @@ struct SearchSource {
     grading_status: i32,
     path: PathBuf,
     mapping: RegisteredFrameMapping,
-    output_transform: Option<SimilarityTransform>,
+    output_transform: Option<AffineTransform>,
     fingerprint: String,
 }
 
@@ -129,11 +129,7 @@ struct SearchGroup {
     sources: Vec<SearchSource>,
 }
 
-type StackSearchGroup = (
-    StackGroupStatus,
-    Option<SimilarityTransform>,
-    Option<String>,
-);
+type StackSearchGroup = (StackGroupStatus, Option<AffineTransform>, Option<String>);
 
 struct PreparedSearch {
     public: ArtifactSearchJob,
@@ -211,6 +207,20 @@ pub async fn start_mono_artifact_search(
         .filter(|group| group.index == group_index && group.state == StackGroupState::Ready)
         .ok_or(AppError::NotFound)?
         .clone();
+    let output_transform = group
+        .sky_orientation
+        .as_ref()
+        .filter(|orientation| {
+            orientation.version == seiza_stacking::SKY_ORIENTATION_VERSION
+                && orientation.convention == seiza_stacking::SKY_ORIENTATION_NAME
+        })
+        .map(|orientation| orientation.source_to_output)
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "Rebuild this stack before searching; its sky-orientation mapping is missing"
+                    .into(),
+            )
+        })?;
     let ctx_arc = Arc::clone(&ctx.0);
     let prepared = tokio::task::spawn_blocking(move || {
         prepare_search(
@@ -219,7 +229,7 @@ pub async fn start_mono_artifact_search(
             "mono",
             Some(group_index),
             &request,
-            vec![(group, None, None)],
+            vec![(group, Some(output_transform), None)],
         )
     })
     .await
@@ -423,9 +433,23 @@ fn load_color_stack_sources(
                 })
                 .ok_or(AppError::NotFound)?
                 .clone();
+            let sky_transform = group
+                .sky_orientation
+                .as_ref()
+                .filter(|orientation| {
+                    orientation.version == seiza_stacking::SKY_ORIENTATION_VERSION
+                        && orientation.convention == seiza_stacking::SKY_ORIENTATION_NAME
+                })
+                .map(|orientation| orientation.source_to_output)
+                .ok_or_else(|| {
+                    AppError::BadRequest(format!(
+                        "Rebuild the {} stack before searching; its sky-orientation mapping is missing",
+                        source.role.label()
+                    ))
+                })?;
             Ok((
                 group,
-                Some(transform),
+                Some(sky_transform.then(transform.as_affine())),
                 Some(source.role.label().to_string()),
             ))
         })
@@ -814,7 +838,7 @@ fn extract_source_crop(
     match source.output_transform {
         Some(output_transform) => source
             .mapping
-            .extract_region_after(
+            .extract_region_after_affine(
                 &frame.image,
                 prepared.reference_width,
                 prepared.reference_height,
