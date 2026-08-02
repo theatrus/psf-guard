@@ -262,11 +262,12 @@ When a channel stack has a fresh pixel-derived plate solve, PSF Guard protects
 large cataloged emission regions from background sampling. It uses closed
 catalog or curated contours when the object catalog supplies them, then falls
 back to the object's projected ellipse. Embedded FITS WCS alone does not enable
-this protection. Each channel uses its own stack reference frame. The manifest
-records the reference image, catalog version, object names, and normalized
-regions. These values also form part of the cache key, so a new solve or
-catalog projection cannot reuse a fit made with stale bounds. After correction,
-each
+this protection. Each channel uses its own stack reference frame, and PSF Guard
+maps its catalog bounds through the stack's saved sky-up transform before it
+fits the background. The manifest records the reference image, catalog version,
+object names, region count, and a geometry fingerprint. These values form part
+of the cache key and stale check, so a new solve or catalog projection cannot
+reuse or present a fit made with stale bounds. After correction, each
 non-reference stack is registered to R for RGB, L for LRGB, or H-alpha for
 narrowband, using the same bounded Seiza star/similarity registration used by
 the Seiza color CLI.
