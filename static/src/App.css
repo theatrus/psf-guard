@@ -2957,6 +2957,11 @@
   font-size: 0.8rem;
 }
 
+.quality-scan-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .compare-button.compact {
   padding: 0.3rem 0.6rem;
   font-size: 0.8rem;
@@ -2989,6 +2994,7 @@
   
   .toolbar-section {
     justify-content: space-between;
+    flex-wrap: wrap;
   }
   
   .controls-row-combined > .stats-section {

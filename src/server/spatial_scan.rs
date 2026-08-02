@@ -89,6 +89,7 @@ pub const STORED_CATALOG_STARS: usize = 300;
 /// fast detector. Rescans must use the same detector family so sequence
 /// baselines do not mix incompatible measurements.
 pub const QUALITY_DETECTOR: &str = "nina_fast";
+/// Bump when any cached pixel-quality input or measurement rule changes.
 pub const QUALITY_DETECTOR_VERSION: u32 = 1;
 
 /// Progress of the (singleton per-DB) spatial scan.
@@ -459,16 +460,20 @@ pub fn valid_quality_entry(
     image_id: i32,
     filename: &str,
 ) -> Option<StoredSpatialMetrics> {
-    valid_entry(store, image_id, filename).filter(|entry| {
-        let cells = entry.grid_cols.saturating_mul(entry.grid_rows);
-        entry.detector == QUALITY_DETECTOR
-            && entry.detector_version == QUALITY_DETECTOR_VERSION
-            && entry.width > 0
-            && entry.height > 0
-            && cells > 0
-            && entry.star_cell_counts.len() == cells
-            && entry.bg_cell_medians.len() == cells
-    })
+    valid_entry(store, image_id, filename).filter(|entry| quality_entry_is_current(entry, filename))
+}
+
+/// Whether a cached entry matches the source and current quality model.
+pub fn quality_entry_is_current(entry: &StoredSpatialMetrics, filename: &str) -> bool {
+    let cells = entry.grid_cols.saturating_mul(entry.grid_rows);
+    entry.filename == filename
+        && entry.detector == QUALITY_DETECTOR
+        && entry.detector_version == QUALITY_DETECTOR_VERSION
+        && entry.width > 0
+        && entry.height > 0
+        && cells > 0
+        && entry.star_cell_counts.len() == cells
+        && entry.bg_cell_medians.len() == cells
 }
 
 /// Snapshot of progress plus store size, for the progress endpoint.

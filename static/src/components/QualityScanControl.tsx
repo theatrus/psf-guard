@@ -15,15 +15,23 @@ export function QualityScanButton({
   canWrite,
   className,
 }: QualityScanButtonProps) {
-  let title = 'Analyze FITS pixels, then refresh sequence scores. Shift-click to recompute all cached evidence from the current catalogs.';
+  const scope = scan.scope;
+  if (targetId == null || !scope?.needs_analysis) {
+    return null;
+  }
+
+  const frameLabel = (count: number) => `${count} ${count === 1 ? 'frame' : 'frames'}`;
+  let title = scope.new_frames > 0 && scope.outdated_frames > 0
+    ? `Analyze ${frameLabel(scope.new_frames)} and update ${frameLabel(scope.outdated_frames)} for the current quality model.`
+    : scope.new_frames > 0
+      ? `Analyze ${frameLabel(scope.new_frames)} added since the last quality scan.`
+      : `Update ${frameLabel(scope.outdated_frames)} for the current quality model.`;
   if (scan.startError) {
     title = `Quality analysis did not start: ${scan.startError.message}`;
   } else if (scan.isRunning) {
     title = 'A quality scan is already running for this database.';
   } else if (!canWrite) {
     title = 'A read-only account cannot start quality analysis.';
-  } else if (targetId == null) {
-    title = 'Choose a target from the header before starting quality analysis.';
   }
 
   let label = 'Analyze Quality';
@@ -39,8 +47,8 @@ export function QualityScanButton({
     <button
       type="button"
       className={className}
-      onClick={(event) => scan.start(event.shiftKey || undefined)}
-      disabled={!canWrite || targetId == null || scan.isStarting || scan.isRunning}
+      onClick={() => scan.start(undefined)}
+      disabled={!canWrite || scan.isStarting || scan.isRunning}
       title={title}
     >
       {label}

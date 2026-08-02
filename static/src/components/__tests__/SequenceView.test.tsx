@@ -1084,6 +1084,41 @@ describe('SequenceView: batch operations', () => {
     setupDefaultHandlers();
     let scanRequests = 0;
     server.use(
+      http.get('/api/db/:dbId/analysis/quality-scan', ({ request }) => {
+        const scoped = new URL(request.url).searchParams.has('target_id');
+        return HttpResponse.json({
+          success: true,
+          data: {
+            started: false,
+            progress: {
+              running: false,
+              target_id: null,
+              filter_name: null,
+              total: 0,
+              processed: 0,
+              skipped_cached: 0,
+              errors: 0,
+              current_file: null,
+              last_error: null,
+              stage: 'idle',
+            },
+            cached_count: 0,
+            ...(scoped ? {
+              scope: {
+                target_id: 1,
+                filter_name: null,
+                total_frames: 2,
+                pending_frames: 1,
+                new_frames: 0,
+                outdated_frames: 1,
+                needs_analysis: true,
+              },
+            } : {}),
+          },
+          error: null,
+          status: 'ready',
+        });
+      }),
       http.post('/api/db/:dbId/analysis/quality-scan', () => {
         scanRequests += 1;
         return HttpResponse.json({
@@ -1114,6 +1149,10 @@ describe('SequenceView: batch operations', () => {
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     const analyzeQuality = await screen.findByRole('button', { name: 'Analyze Quality' });
+    expect(analyzeQuality).toHaveAttribute(
+      'title',
+      'Update 1 frame for the current quality model.',
+    );
     expect(screen.queryByRole('button', { name: 'Re-analyze' })).not.toBeInTheDocument();
 
     await user.click(analyzeQuality);

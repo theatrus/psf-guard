@@ -4293,6 +4293,7 @@ async fn start_spatial_scan_with_priority(
             started: false,
             progress,
             cached_count,
+            scope: None,
         })));
     }
 
@@ -4308,6 +4309,7 @@ async fn start_spatial_scan_with_priority(
             started: false,
             progress,
             cached_count,
+            scope: None,
         })));
     }
 
@@ -4536,21 +4538,66 @@ async fn start_spatial_scan_with_priority(
         started: true,
         progress,
         cached_count,
+        scope: None,
     })))
 }
 
 /// GET /api/db/{db_id}/analysis/spatial-scan — progress + store size.
 pub async fn get_spatial_scan_progress(
     ctx: DbContext,
+    Query(query): Query<SpatialScanStatusQuery>,
 ) -> Result<Json<ApiResponse<SpatialScanStatusResponse>>, AppError> {
     use crate::server::spatial_scan as scan;
 
     scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
+    let scope = if let Some(target_id) = query.target_id {
+        let images = {
+            let conn = ctx.db();
+            let conn = conn.lock().map_err(AppError::db)?;
+            Database::new(&conn)
+                .query_images_scoped(None, None, Some(target_id), None, 0)
+                .map_err(AppError::db)?
+        };
+        let mut total_frames = 0usize;
+        let mut new_frames = 0usize;
+        let mut outdated_frames = 0usize;
+        let store = ctx.spatial_metrics.read().unwrap();
+        for (image, _, _) in images.into_iter().filter(|(image, _, _)| {
+            query
+                .filter_name
+                .as_ref()
+                .is_none_or(|filter| image.filter_name == *filter)
+        }) {
+            let Some(filename) = filename_from_metadata(&image.metadata) else {
+                continue;
+            };
+            total_frames += 1;
+            match store.metrics.get(&image.id) {
+                Some(entry) if scan::quality_entry_is_current(entry, &filename) => {}
+                Some(entry) if entry.filename == filename => outdated_frames += 1,
+                _ => new_frames += 1,
+            }
+        }
+        drop(store);
+        let pending_frames = new_frames + outdated_frames;
+        Some(QualityScanScopeStatus {
+            target_id,
+            filter_name: query.filter_name,
+            total_frames,
+            pending_frames,
+            new_frames,
+            outdated_frames,
+            needs_analysis: pending_frames > 0,
+        })
+    } else {
+        None
+    };
     let (progress, cached_count) = scan::progress_snapshot(&ctx.spatial_metrics);
     Ok(Json(ApiResponse::success(SpatialScanStatusResponse {
         started: progress.running,
         progress,
         cached_count,
+        scope,
     })))
 }
 

@@ -44,6 +44,7 @@ import type {
   ImageQualityResponse,
   SpatialScanRequest,
   SpatialScanStatus,
+  SpatialScanStatusRequest,
   QualityBackfillRequest,
   QualityBackfillStatus,
   PreviewDescriptor,
@@ -1146,10 +1147,14 @@ export const apiClient = {
     return data.data;
   },
 
-  getSpatialScanStatus: async (dbId: string): Promise<SpatialScanStatus> => {
+  getSpatialScanStatus: async (
+    dbId: string,
+    request?: SpatialScanStatusRequest
+  ): Promise<SpatialScanStatus> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<SpatialScanStatus>>(
-      dbPath(dbId, '/analysis/quality-scan')
+      dbPath(dbId, '/analysis/quality-scan'),
+      { params: request }
     );
     if (!data.data) throw new Error('Failed to get spatial scan status');
     return data.data;

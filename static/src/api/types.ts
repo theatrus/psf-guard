@@ -1462,6 +1462,23 @@ export interface SpatialScanStatus {
   progress: SpatialScanProgress;
   /** Images with cached spatial metrics in this database. */
   cached_count: number;
+  /** Work left in a requested target/filter scope. GET only. */
+  scope?: QualityScanScopeStatus;
+}
+
+export interface QualityScanScopeStatus {
+  target_id: number;
+  filter_name: string | null;
+  total_frames: number;
+  pending_frames: number;
+  new_frames: number;
+  outdated_frames: number;
+  needs_analysis: boolean;
+}
+
+export interface SpatialScanStatusRequest {
+  target_id?: number;
+  filter_name?: string;
 }
 
 export interface SpatialScanRequest {

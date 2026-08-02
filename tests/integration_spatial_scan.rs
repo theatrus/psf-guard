@@ -186,6 +186,53 @@ async fn spatial_scan_progress_idle_by_default() {
     assert_eq!(json["data"]["started"], false);
     assert_eq!(json["data"]["progress"]["running"], false);
     assert_eq!(json["data"]["cached_count"], 0);
+    assert!(json["data"].get("scope").is_none());
+}
+
+#[tokio::test]
+async fn scoped_status_reports_new_and_outdated_quality_work() {
+    let conn = Connection::open_in_memory().unwrap();
+    create_test_schema(&conn);
+    seed_target_with_images(&conn, 3);
+    let tmp = tempfile::tempdir().unwrap();
+    let (app, state) = create_test_app(conn, tmp.path());
+
+    let uri = "/api/db/test/analysis/spatial-scan?target_id=1&filter_name=R";
+    let (status, json) = get_json(app.clone(), uri).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["scope"]["total_frames"], 3);
+    assert_eq!(json["data"]["scope"]["pending_frames"], 3);
+    assert_eq!(json["data"]["scope"]["new_frames"], 3);
+    assert_eq!(json["data"]["scope"]["outdated_frames"], 0);
+    assert_eq!(json["data"]["scope"]["needs_analysis"], true);
+
+    {
+        let ctx = state.get_database("test").unwrap();
+        let mut store = ctx.spatial_metrics.write().unwrap();
+        for i in 0..3i32 {
+            store.metrics.insert(
+                i + 1,
+                stored_entry(i + 1, &format!("frame_{i:04}.fits"), 0.02, 0.05),
+            );
+        }
+    }
+
+    let (_, json) = get_json(app.clone(), uri).await;
+    assert_eq!(json["data"]["scope"]["pending_frames"], 0);
+    assert_eq!(json["data"]["scope"]["needs_analysis"], false);
+
+    {
+        let ctx = state.get_database("test").unwrap();
+        let mut store = ctx.spatial_metrics.write().unwrap();
+        store.metrics.get_mut(&2).unwrap().detector_version =
+            psf_guard::server::spatial_scan::QUALITY_DETECTOR_VERSION.saturating_sub(1);
+    }
+
+    let (_, json) = get_json(app, uri).await;
+    assert_eq!(json["data"]["scope"]["pending_frames"], 1);
+    assert_eq!(json["data"]["scope"]["new_frames"], 0);
+    assert_eq!(json["data"]["scope"]["outdated_frames"], 1);
+    assert_eq!(json["data"]["scope"]["needs_analysis"], true);
 }
 
 #[tokio::test]

@@ -642,6 +642,7 @@ test('All Projects loads scores without starting a quality scan', async ({
 test('Grid starts target quality analysis and keeps progress in the global header', async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 420, height: 900 });
   let running = false;
   let posted: Record<string, unknown> | null = null;
   const runningStatus = () => ({
@@ -672,7 +673,7 @@ test('Grid starts target quality analysis and keeps progress in the global heade
     error: null,
     status: 'ready',
   });
-  await page.route(`**/api/db/${dbId}/analysis/quality-scan`, async (route) => {
+  await page.route(`**/api/db/${dbId}/analysis/quality-scan*`, async (route) => {
     if (route.request().method() === 'POST') {
       posted = route.request().postDataJSON();
       running = true;
@@ -683,11 +684,40 @@ test('Grid starts target quality analysis and keeps progress in the global heade
       await route.fulfill({ json: runningStatus() });
       return;
     }
+    if (new URL(route.request().url()).searchParams.has('target_id')) {
+      const status = runningStatus();
+      status.data.started = false;
+      status.data.progress.running = false;
+      Object.assign(status.data, {
+        scope: {
+          target_id: 1,
+          filter_name: null,
+          total_frames: 3,
+          pending_frames: 1,
+          new_frames: 1,
+          outdated_frames: 0,
+          needs_analysis: true,
+        },
+      });
+      await route.fulfill({ json: status });
+      return;
+    }
     await route.continue();
   });
 
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1&target=1`);
-  await page.getByRole('button', { name: 'Analyze Quality' }).click();
+  const analyzeQuality = page.getByRole('button', { name: 'Analyze Quality' });
+  await expect(analyzeQuality).toHaveCSS('white-space', 'nowrap');
+  const buttonFitsToolbar = await analyzeQuality.evaluate((button) => {
+    const toolbar = button.closest('.toolbar-section');
+    if (!toolbar) return false;
+    const buttonBounds = button.getBoundingClientRect();
+    const toolbarBounds = toolbar.getBoundingClientRect();
+    return buttonBounds.left >= toolbarBounds.left
+      && buttonBounds.right <= toolbarBounds.right;
+  });
+  expect(buttonFitsToolbar).toBe(true);
+  await analyzeQuality.click();
 
   await expect.poll(() => posted).toMatchObject({ target_id: 1 });
   const globalStatus = page.locator('.header-cache-slot .quality-analysis-status');
