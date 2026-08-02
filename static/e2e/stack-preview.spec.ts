@@ -106,7 +106,7 @@ function seedSyntheticColorStacks(databaseId: string, projectId: number): void {
       artifact_revision: `synthetic-${index}`,
       accepted_only: false,
       created_unix_seconds: 1_760_000_000 + index,
-      cache_version: 9,
+      cache_version: 10,
       group: {
         index: 0,
         target_id: 2,
@@ -237,6 +237,18 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   // the pixels nor stamps the canonical sky-up WCS over them.
   expect(fitsHeaderText).not.toContain('SKYORIEN');
   expect(fitsHeaderText).not.toContain('N-UP E-LEFT');
+
+  // The published mapping is what artifact search and background protection
+  // read back, so the build must record which way it laid the pixels out.
+  const jobResponse = await page.request.get(
+    `/api/db/${encodeURIComponent(dbId)}/projects/1/stack-previews/${jobId}`
+  );
+  expect(jobResponse.status()).toBe(200);
+  const orientation = (await jobResponse.json()).data.groups[0].sky_orientation;
+  expect(orientation.convention).toBe('source_frame');
+  expect(['source_frame', 'majority_half_turn']).toContain(orientation.source);
+  expect(orientation.output_width).toBeGreaterThan(0);
+  expect(orientation.output_height).toBeGreaterThan(0);
 
   const defaultPreviewSrc = await preview.getAttribute('src');
   const stretchControls = panel.locator('.stack-preview-card .stack-stretch-controls');

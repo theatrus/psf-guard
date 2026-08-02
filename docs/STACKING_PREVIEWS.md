@@ -47,10 +47,27 @@ on the same grid without a reprojection, and the result looks like the frames
 you graded. The downloaded FITS carries the reference frame's own WCS when it
 has one.
 
+### Which side of a meridian flip
+
+A German equatorial mount turns the field 180 degrees when it flips. Both
+halves of such a night stack cleanly, but the reference frame alone decides
+which way up the result comes out, and the reference is whichever frame scored
+best — it can sit on either side of the flip, and it can move to the other
+side when a regrade or a quality rescan changes the scores.
+
+So PSF Guard follows the exposure instead. If most of the integrated seconds
+came from frames half a turn from the reference, it turns the finished stack
+half a turn to match them. That is an exact reversal of the pixel order, so it
+costs no resampling and loses no accuracy. A night that never flipped is never
+turned, an even split keeps the reference frame's rotation, and the choice does
+not move when scores do.
+
 PSF Guard records the source-to-output mapping on every stack, so
 source-artifact search maps a selected stack region back to the right source
 pixels, and background protection maps catalog bounds forward onto the stack.
-For an unrotated build that mapping is the identity.
+That mapping is the identity for an untouched build and the half turn for a
+turned one, so both consumers follow the published pixels without special
+cases.
 
 ### The shared north-up grid
 

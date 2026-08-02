@@ -376,12 +376,19 @@ export interface StackInputImage {
 /**
  * How the published stack pixels are laid out. `source_frame` keeps the
  * reference frame's own rotation and is the default; `north_up_east_left`
- * means the build was reprojected onto the shared celestial grid.
+ * means the build was reprojected onto the shared celestial grid. A
+ * `source_frame` stack whose source is `majority_half_turn` was turned half a
+ * turn so it faces the side of a meridian flip most of its exposure came from.
  */
 export interface StackSkyOrientation {
   convention: 'north_up_east_left' | 'source_frame';
   version: number;
-  source: 'cached_pixel_solve' | 'embedded_wcs' | 'stack_reference_solve' | 'source_frame';
+  source:
+    | 'cached_pixel_solve'
+    | 'embedded_wcs'
+    | 'stack_reference_solve'
+    | 'source_frame'
+    | 'majority_half_turn';
   output_width: number;
   output_height: number;
   source_to_output: unknown;

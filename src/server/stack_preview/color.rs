@@ -40,7 +40,7 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-const STACK_COLOR_CACHE_VERSION: u32 = 9;
+const STACK_COLOR_CACHE_VERSION: u32 = 10;
 const COLOR_INPUT_CACHE_VERSION: u32 = 3;
 const SEIZA_BACKGROUND_VERSION: &str = "0.2.0";
 const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
