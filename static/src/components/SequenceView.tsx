@@ -20,6 +20,7 @@ import UndoRedoToolbar from './UndoRedoToolbar';
 import ImageCard from './ImageCard';
 import Dialog from './Dialog';
 import ThumbnailSizeControl from './ThumbnailSizeControl';
+import { QualityScanButton } from './QualityScanControl';
 import type { Image, ScoredSequence, ImageQualityResult } from '../api/types';
 import {
   imageDetailNavigationState,
@@ -704,39 +705,12 @@ export default function SequenceView() {
                 </select>
               </div>
             )}
-            <button
-              type="button"
+            <QualityScanButton
+              scan={spatialScan}
+              targetId={targetId}
+              canWrite={grading.canWrite}
               className="header-button"
-              onClick={(event) => spatialScan.start(event.shiftKey || undefined)}
-              disabled={!grading.canWrite || spatialScan.isStarting || spatialScan.isRunning}
-              title={grading.canWrite
-                ? 'Analyze FITS pixels, then refresh sequence scores. Shift-click to recompute all cached evidence from the current catalogs.'
-                : 'A read-only account cannot start quality analysis.'}
-            >
-              {spatialScan.isRunning
-                ? `${spatialScan.status?.progress.stage === 'astrometry' ? 'Solving' : 'Scanning'} ${spatialScan.status?.progress.processed ?? 0}/${spatialScan.status?.progress.total ?? 0}...`
-                : 'Analyze Quality'}
-            </button>
-          </div>
-          <div className="sequence-job-status" aria-live="polite">
-            {spatialScan.isRunning && spatialScan.status?.progress.current_file && (
-              <span
-                className="spatial-scan-current"
-                title={spatialScan.status.progress.current_file}
-              >
-                {spatialScan.status.progress.current_file}
-              </span>
-            )}
-            {!spatialScan.isRunning
-              && (spatialScan.status?.progress.errors ?? 0) > 0
-              && spatialScan.status?.progress.last_error && (
-                <span
-                  className="spatial-scan-errors"
-                  title={spatialScan.status.progress.last_error}
-                >
-                  {spatialScan.status.progress.errors} quality scan errors
-                </span>
-              )}
+            />
           </div>
           <div className="sequence-history-actions">
             <UndoRedoToolbar

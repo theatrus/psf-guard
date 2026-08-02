@@ -5,6 +5,7 @@
 //! ordered accumulation. Jobs are process-global and run one at a time so a
 //! multi-database server cannot multiply the stacker's full-frame buffers.
 
+pub mod artifact;
 pub mod color;
 pub mod stretch;
 
@@ -41,10 +42,10 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-pub const SEIZA_STACKING_VERSION: &str = "0.1.0";
+pub const SEIZA_STACKING_VERSION: &str = "0.2.0";
 /// Bump whenever stack admission, rendering, or persisted artifact semantics
 /// change. This deliberately versions PSF Guard policy separately from Seiza.
-const STACK_PREVIEW_CACHE_VERSION: u32 = 5;
+const STACK_PREVIEW_CACHE_VERSION: u32 = 7;
 const MAX_REQUEST_IMAGES: usize = 10_000;
 const MAX_REMEMBERED_JOBS: usize = 64;
 const PREVIEW_MAX_DIMENSION: u32 = 2400;
@@ -101,6 +102,14 @@ pub struct StackFrameDecision {
     pub matched_stars: Option<usize>,
     pub registration_rms_pixels: Option<f64>,
     pub registration_drift_pixels: Option<f64>,
+    #[serde(default)]
+    pub registered_mapping: Option<seiza_stacking::RegisteredFrameMapping>,
+    #[serde(default)]
+    pub normalization_mean_gain: Option<f32>,
+    #[serde(default)]
+    pub normalization_mean_offset: Option<f32>,
+    #[serde(default)]
+    pub source_fingerprint: Option<String>,
     pub overlap_fraction: Option<f32>,
     pub integrated_fraction: Option<f32>,
 }
@@ -180,6 +189,7 @@ pub struct LatestStackPreviews {
 pub struct StackPreviewManager {
     jobs: Mutex<HashMap<String, StackPreviewJob>>,
     color_jobs: Mutex<HashMap<String, color::StackColorJob>>,
+    artifact_jobs: Mutex<HashMap<String, artifact::ArtifactSearchJob>>,
     latest_write: Mutex<()>,
     permit: Arc<Semaphore>,
 }
@@ -189,6 +199,7 @@ impl StackPreviewManager {
         Self {
             jobs: Mutex::new(HashMap::new()),
             color_jobs: Mutex::new(HashMap::new()),
+            artifact_jobs: Mutex::new(HashMap::new()),
             latest_write: Mutex::new(()),
             permit: Arc::new(Semaphore::new(1)),
         }
@@ -253,6 +264,7 @@ struct PreparedFrame {
     acquired_date: Option<i64>,
     quality_score: Option<f64>,
     path: PathBuf,
+    source_fingerprint: String,
 }
 
 #[derive(Clone)]
@@ -654,12 +666,14 @@ fn prepare_job(
                     continue;
                 }
             };
-            hash_source(&mut hasher, &path);
+            let source_fingerprint = source_fingerprint(&path);
+            hasher.update(source_fingerprint.as_bytes());
             frames.push(PreparedFrame {
                 image_id: image.id,
                 acquired_date: image.acquired_date,
                 quality_score: Some(scored.quality_score),
                 path,
+                source_fingerprint,
             });
         }
 
@@ -877,6 +891,7 @@ fn fallback_quality(image_id: i32) -> ImageQualityResult {
             pointing: None,
         },
         regrade_reason: None,
+        spatial_overlay: None,
         pointing: None,
         satellite: None,
         details: None,
@@ -896,12 +911,17 @@ fn excluded_decision(
         matched_stars: None,
         registration_rms_pixels: None,
         registration_drift_pixels: None,
+        registered_mapping: None,
+        normalization_mean_gain: None,
+        normalization_mean_offset: None,
+        source_fingerprint: None,
         overlap_fraction: None,
         integrated_fraction: None,
     }
 }
 
-fn hash_source(hasher: &mut Sha256, path: &FsPath) {
+fn source_fingerprint(path: &FsPath) -> String {
+    let mut hasher = Sha256::new();
     hasher.update(path.to_string_lossy().as_bytes());
     if let Ok(metadata) = path.metadata() {
         hasher.update(metadata.len().to_le_bytes());
@@ -912,6 +932,11 @@ fn hash_source(hasher: &mut Sha256, path: &FsPath) {
             hasher.update(duration.subsec_nanos().to_le_bytes());
         }
     }
+    let mut output = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        write!(&mut output, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    output
 }
 
 fn enqueue_job(state: Arc<AppState>, prepared: PreparedJob) {
@@ -1086,6 +1111,7 @@ fn run_group(
         };
         let mut stacker = LiveStacker::new(reference_frame, calibration_masters, options)
             .map_err(|error| error.to_string())?;
+        let reference_mapping = stacker.reference_mapping();
         state.stack_previews.update(job_id, |job| {
             let status = &mut job.groups[group.index];
             status.processed_frames = 1;
@@ -1100,6 +1126,10 @@ fn run_group(
                 matched_stars: None,
                 registration_rms_pixels: None,
                 registration_drift_pixels: None,
+                registered_mapping: Some(reference_mapping),
+                normalization_mean_gain: Some(1.0),
+                normalization_mean_offset: Some(0.0),
+                source_fingerprint: Some(group.frames[0].source_fingerprint.clone()),
                 overlap_fraction: Some(1.0),
                 integrated_fraction: Some(1.0),
             });
@@ -1122,6 +1152,10 @@ fn run_group(
                         matched_stars: Some(diagnostics.matched_stars),
                         registration_rms_pixels: Some(diagnostics.registration_rms_pixels),
                         registration_drift_pixels: Some(diagnostics.registration_drift_pixels),
+                        registered_mapping: Some(*diagnostics.mapping),
+                        normalization_mean_gain: Some(diagnostics.normalization_mean_gain),
+                        normalization_mean_offset: Some(diagnostics.normalization_mean_offset),
+                        source_fingerprint: Some(frame.source_fingerprint.clone()),
                         overlap_fraction: Some(diagnostics.overlap_fraction),
                         integrated_fraction: Some(diagnostics.integrated_fraction),
                     },
@@ -1133,6 +1167,10 @@ fn run_group(
                         matched_stars: None,
                         registration_rms_pixels: None,
                         registration_drift_pixels: None,
+                        registered_mapping: None,
+                        normalization_mean_gain: None,
+                        normalization_mean_offset: None,
+                        source_fingerprint: Some(frame.source_fingerprint.clone()),
                         overlap_fraction: None,
                         integrated_fraction: None,
                     },
@@ -1145,6 +1183,10 @@ fn run_group(
                     matched_stars: None,
                     registration_rms_pixels: None,
                     registration_drift_pixels: None,
+                    registered_mapping: None,
+                    normalization_mean_gain: None,
+                    normalization_mean_offset: None,
+                    source_fingerprint: Some(frame.source_fingerprint.clone()),
                     overlap_fraction: None,
                     integrated_fraction: None,
                 },

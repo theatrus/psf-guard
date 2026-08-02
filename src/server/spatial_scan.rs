@@ -54,6 +54,9 @@ pub struct StoredSpatialMetrics {
     /// Star counts per cell at the configured grid (row-major).
     #[serde(default)]
     pub star_cell_counts: Vec<f64>,
+    /// Dead-cell evidence expanded to the configured grid for overlays.
+    #[serde(default)]
+    pub star_dead_cells: Vec<bool>,
     /// Background medians per cell in ADU (row-major).
     #[serde(default)]
     pub bg_cell_medians: Vec<f64>,
@@ -72,6 +75,10 @@ pub struct StoredSpatialMetrics {
     /// fraction of sky).
     #[serde(default)]
     pub bg_glow_max: f64,
+    /// Grid cells that contributed to `bg_glow_max`. Older cache entries do
+    /// not contain this field; a later quality scan fills it.
+    #[serde(default)]
+    pub bg_glow_cells: Vec<bool>,
 }
 
 /// Stars kept per stored catalog: matching quality saturates well below full
@@ -419,6 +426,7 @@ fn compute_one(
         computed_at: chrono::Utc::now().timestamp(),
         catalog,
         star_cell_counts: spatial.star_cell_counts,
+        star_dead_cells: spatial.star_dead_cells,
         bg_cell_medians: spatial.bg_cell_medians,
         grid_cols: config.grid_cols,
         grid_rows: config.grid_rows,
@@ -426,6 +434,7 @@ fn compute_one(
         height: fits.height,
         exposure_s: headers.exposure_s,
         bg_glow_max: spatial.bg_glow_max,
+        bg_glow_cells: spatial.bg_glow_cells,
     })
 }
 
@@ -497,6 +506,7 @@ mod tests {
             computed_at: 0,
             catalog: crate::photometry::FrameCatalog::default(),
             star_cell_counts: vec![],
+            star_dead_cells: vec![],
             bg_cell_medians: vec![],
             grid_cols: 8,
             grid_rows: 6,
@@ -504,6 +514,7 @@ mod tests {
             height: 0,
             exposure_s: None,
             bg_glow_max: 0.0,
+            bg_glow_cells: vec![],
         }
     }
 

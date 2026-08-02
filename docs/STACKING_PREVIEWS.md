@@ -102,6 +102,52 @@ as an input to a separate processing workflow.
 
 ![Frame-by-frame stack admission details](stack-preview-decisions.png)
 
+## Find a stack artifact in its source frames
+
+A stack can make a satellite trail, reflection, hot region, or other local
+defect easier to see. Open **Inspect full size**, choose **Find source
+artifact**, and drag a box around the suspect area. **Search this region**
+starts a background job that maps the same sky area back into every integrated
+source frame.
+
+PSF Guard calibrates and prepares each source as it did for the stack, applies
+the retained source-to-stack registration and normalization, and compares the
+aligned crops against their per-pixel median. Results rank unusually bright or
+dark crops within each filter. For a result that separates from its peers, PSF
+Guard also checks the changed pixels' shape. It can label a broad dark patch as
+a dust-shadow candidate, a hollow round patch as a ring or donut candidate, a
+thin feature as trail-like, or a small feature as a compact spot. Each result
+shows its crop, capture time, deviation strength, changed-pixel fraction, shape
+label, and a link to the full source image. Color-preview searches also apply
+the retained channel-to-color registration, so the selected area maps through
+both registration steps.
+Every integrated frame contributes to the comparison. For a large stack, the
+result panel keeps the 50 strongest crops per filter instead of creating and
+loading an unbounded list of preview images.
+
+The search is evidence for review, not a grade. **Strong**, **possible**, and
+**low** describe how far one crop differs from the other crops in that small
+area. Shape labels describe geometry, not a proven cause: a dust-shadow
+candidate may instead be a cloud edge or obstruction, and a ring may instead
+be a reflection. Low-evidence results stay unclassified. The search never
+accepts or rejects an image. It cannot isolate a defect that appears in the
+same registered place in every source because that defect becomes part of the
+peer baseline. At least three integrated frames are needed for a filter. A
+color search skips a channel that has fewer than three inputs and says why. The
+region must measure 8–512 pixels on each side.
+
+![A selected stack region ranked across three real source frames](stack-artifact-finder.png)
+
+This real three-frame M44 check finds no source that clearly separates from
+its peers. PSF Guard keeps the ranked crops visible and labels each result
+**low** instead of inventing a culprit.
+
+Stacks made before this feature lack the retained frame mappings and source
+fingerprints. Rebuild the mono stacks and color preview once before searching
+them. PSF Guard also asks for a rebuild if a source file, calibration choice,
+channel stack, or color registration changed after the displayed preview was
+built.
+
 ## Reversible view processing
 
 Expand **View processing** on any mono stack card to configure its optional
@@ -301,6 +347,9 @@ Artifacts live below the database cache directory:
   preview-original.png
   color.fits
 <cache>/<database>/stack-previews/color/latest-project-<project-id>.json
+<cache>/<database>/stack-previews/artifact-searches/<search-id>/
+  manifest.json
+  image-<image-id>.png
 ```
 
 The content-addressed job ID includes the database/project, exact ordered
@@ -331,6 +380,9 @@ immutable cached response for the rebuilt output.
 - Satellite predictions and image-detail overlays are not applied to a stack.
   They describe individual shutter intervals, while one preview represents
   several exposures.
+- Source-artifact search detects local differences between registered inputs.
+  It does not label the cause, replace full-frame quality analysis, or change a
+  catalog grade.
 
 ## HTTP API
 
@@ -348,6 +400,10 @@ POST /api/db/{db}/projects/{project}/stack-previews/color
 GET  /api/db/{db}/projects/{project}/stack-previews/color/{job}
 GET  /api/db/{db}/stack-previews/color/{job}/preview[?size=screen|original]
 GET  /api/db/{db}/stack-previews/color/{job}/fits
+POST /api/db/{db}/stack-previews/{job}/{group}/artifact-searches
+POST /api/db/{db}/stack-previews/color/{job}/artifact-searches
+GET  /api/db/{db}/stack-previews/artifact-searches/{search}
+GET  /api/db/{db}/stack-previews/artifact-searches/{search}/crops/{image}
 GET  /api/db/{db}/stack-previews/stretch/{stretch}/preview[?size=screen|original]
 GET  /api/db/{db}/stack-previews/stretch/{stretch}/fits
 ```
@@ -377,3 +433,17 @@ example `{ "model": { "type": "percentile-asinh", "black_percentile":
 0.01, "white_percentile": 0.995, "strength": 8.0 }, "color_strategy":
 "luminance-preserving", "deconvolution": null }`. Replace `null` with the
 same deconvolution object shown above to opt in.
+
+Both artifact-search POSTs take the displayed artifact revision and a region
+in stack-image pixels:
+
+```json
+{
+  "artifact_revision": "<revision>",
+  "region": { "x": 1200, "y": 800, "width": 96, "height": 64 }
+}
+```
+
+The response names an asynchronous search. Poll its GET endpoint until the
+state is `completed` or `failed`; completed results include immutable crop
+URLs and per-frame outlier evidence.

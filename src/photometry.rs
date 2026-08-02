@@ -360,12 +360,15 @@ pub fn sequence_photometry(
             if transparency > 0.0 {
                 let mut measurable = 0usize;
                 let mut extinguished = 0usize;
-                for ratios in cell_ratios.iter_mut() {
+                result.cell_relative_ratios = vec![None; cols * rows];
+                for (cell, ratios) in cell_ratios.iter_mut().enumerate() {
                     if ratios.len() < config.min_stars_per_cell {
                         continue;
                     }
                     measurable += 1;
-                    if median(ratios) / transparency < config.local_extinction_ratio {
+                    let relative_ratio = median(ratios) / transparency;
+                    result.cell_relative_ratios[cell] = Some(relative_ratio);
+                    if relative_ratio < config.local_extinction_ratio {
                         extinguished += 1;
                     }
                 }
@@ -1073,6 +1076,8 @@ mod tests {
         assert!(s5.star_drop_cells.iter().take(3).all(|&f| f));
         assert_eq!(signals[4].bg_cell_fall_fraction, Some(0.0));
         assert!(s5.transparency.is_some());
+        assert_eq!(s5.cell_relative_ratios.len(), cells);
+        assert!(s5.cell_relative_ratios.iter().any(Option::is_some));
     }
 
     #[test]

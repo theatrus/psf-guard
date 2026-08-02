@@ -138,6 +138,9 @@ async fn post_json(app: Router, uri: &str, body: &Value) -> (StatusCode, Value) 
 }
 
 fn stored_entry(image_id: i32, filename: &str, dead: f64, bg_spread: f64) -> StoredSpatialMetrics {
+    let cells = 8 * 6;
+    let dead_cells = (dead * cells as f64).round() as usize;
+    let star_dead_cells: Vec<bool> = (0..cells).map(|cell| cell < dead_cells).collect();
     StoredSpatialMetrics {
         image_id,
         filename: filename.to_string(),
@@ -152,14 +155,19 @@ fn stored_entry(image_id: i32, filename: &str, dead: f64, bg_spread: f64) -> Sto
         median_adu: 1500.0,
         computed_at: 0,
         catalog: psf_guard::photometry::FrameCatalog::default(),
-        star_cell_counts: vec![],
-        bg_cell_medians: vec![],
+        star_cell_counts: star_dead_cells
+            .iter()
+            .map(|&flagged| if flagged { 0.0 } else { 100.0 })
+            .collect(),
+        star_dead_cells,
+        bg_cell_medians: vec![1500.0; cells],
         grid_cols: 8,
         grid_rows: 6,
-        width: 0,
-        height: 0,
+        width: 800,
+        height: 600,
         exposure_s: None,
         bg_glow_max: 0.0,
+        bg_glow_cells: vec![],
     }
 }
 
@@ -323,6 +331,18 @@ async fn scanned_metrics_merge_into_sequence_analysis() {
         .as_f64()
         .expect("spatial_coverage populated from scan store");
     assert!(coverage < 0.5, "occluded frame coverage: {}", coverage);
+    let overlay = &occluded["spatial_overlay"];
+    assert_eq!(overlay["grid_cols"], 8);
+    assert_eq!(overlay["grid_rows"], 6);
+    assert!(
+        overlay["low_star_cells"]
+            .as_array()
+            .expect("localized obstruction should expose measured cells")
+            .iter()
+            .filter(|flagged| flagged.as_bool() == Some(true))
+            .count()
+            >= 16
+    );
 
     let clean = images.iter().find(|img| img["image_id"] == 3).unwrap();
     assert!(

@@ -100,14 +100,22 @@ psf-guard screen-fits "/path/to/LIGHT" --regrade-db my-db-slug
 psf-guard move-rejects --db my-db-slug
 ```
 
-From the **web UI**: open a target's Sequence view and press **Analyze Quality**.
-The scan runs spatial/photometric screening and fresh plate solves in the
-background (progress shown live), then refreshes the sequence scores. Results
-persist across restarts. The
+From the **web UI**: choose one target, then press **Analyze Quality** in either
+the Images grid or Sequence view. A project-wide grid keeps the action disabled
+until you choose a target, so the scan scope stays clear. The scan runs
+spatial/photometric screening and fresh plate solves in the background, then
+refreshes the sequence scores. The fixed header status shows frame and solve
+progress while you move between views; Overview folds the work into its
+cross-database status. Results persist across restarts. The
 sequence analysis shows coverage badges, classifications, solved-center
 scatter, a session view, and an all-session stack comparison for each filter.
 When analysis names a cause, the same reason and supporting evidence appear on
 the Sequence card, the matching Grid card, and the image detail panel.
+For a localized finding, image detail also offers **Show affected regions**.
+The optional overlay marks the measured 8×6 scan cells behind the finding and
+shows a legend for low star coverage, dimming, star loss, background shifts,
+or glow. Whole-frame findings, such as a thin uniform veil, do not offer a
+region overlay because the scan has no local boundary to draw.
 Grid reuses one target, project, or database-wide scoring request. **All
 Projects** scores each target/filter group on its own; it never compares frames
 from unrelated targets. This request reads stored metadata and cached evidence

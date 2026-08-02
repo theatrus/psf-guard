@@ -52,6 +52,8 @@ import type {
   SatelliteAnalysis,
   SatelliteAnalysisStatus,
   StackPreviewJob,
+  ArtifactSearchJob,
+  ReferenceRegion,
   LatestStackPreviews,
   StackColorCatalog,
   StackColorJob,
@@ -726,6 +728,58 @@ export const apiClient = {
       dbId,
       `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/fits`
     )}${revision}`;
+  },
+
+  startMonoArtifactSearch: async (
+    dbId: string,
+    jobId: string,
+    groupIndex: number,
+    artifactRevision: string,
+    region: ReferenceRegion
+  ): Promise<ArtifactSearchJob> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<ArtifactSearchJob>>(
+      dbPath(
+        dbId,
+        `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/artifact-searches`
+      ),
+      { artifact_revision: artifactRevision, region }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to start source-frame search');
+    return data.data;
+  },
+
+  startColorArtifactSearch: async (
+    dbId: string,
+    jobId: string,
+    artifactRevision: string,
+    region: ReferenceRegion
+  ): Promise<ArtifactSearchJob> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<ArtifactSearchJob>>(
+      dbPath(dbId, `/stack-previews/color/${encodeURIComponent(jobId)}/artifact-searches`),
+      { artifact_revision: artifactRevision, region }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to start source-frame search');
+    return data.data;
+  },
+
+  getArtifactSearch: async (dbId: string, searchId: string): Promise<ArtifactSearchJob> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<ArtifactSearchJob>>(
+      dbPath(dbId, `/stack-previews/artifact-searches/${encodeURIComponent(searchId)}`)
+    );
+    if (!data.data) throw new Error(data.error || 'Source-frame search not found');
+    return data.data;
+  },
+
+  getArtifactCropUrl: (dbId: string, searchId: string, imageId: number): string => {
+    const serverUrl = getCachedServerUrl();
+    const basePath = serverUrl ? `${serverUrl}/api` : '/api';
+    return `${basePath}${dbPath(
+      dbId,
+      `/stack-previews/artifact-searches/${encodeURIComponent(searchId)}/crops/${imageId}`
+    )}`;
   },
 
   applyStackStretch: async (

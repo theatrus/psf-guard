@@ -3,23 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { SpatialScanStatus } from '../api/types';
 
-/**
- * Trigger and monitor the server-side quality scan (spatial metrics,
- * pixel-derived astrometry, and cached satellite catalogs).
- *
- * The scan reads every FITS file of the target and runs star detection, so it
- * takes seconds per frame; the server runs it in the background and this hook
- * polls progress at 1s while it runs (same pattern as cache refresh). When a
- * scan finishes, all sequence-analysis queries for the DB are invalidated so
- * the view re-fetches with the merged occlusion metrics.
- */
-export function useSpatialScan(
-  dbId: string | null | undefined,
-  targetId: number | undefined,
-  filterName?: string
-) {
+/** Monitor the database's quality scan from any view. */
+export function useSpatialScanStatus(dbId: string | null | undefined) {
   const queryClient = useQueryClient();
-
   const statusQuery = useQuery<SpatialScanStatus>({
     queryKey: ['db', dbId, 'quality-scan'],
     queryFn: () => apiClient.getSpatialScanStatus(dbId!),
@@ -41,6 +27,22 @@ export function useSpatialScan(
     wasRunning.current = isRunning;
   }, [isRunning, dbId, queryClient]);
 
+  return {
+    status: statusQuery.data,
+    statusError: statusQuery.error,
+    isRunning,
+  };
+}
+
+/** Start a target scan and share its progress with global status consumers. */
+export function useSpatialScan(
+  dbId: string | null | undefined,
+  targetId: number | undefined,
+  filterName?: string
+) {
+  const queryClient = useQueryClient();
+  const status = useSpatialScanStatus(dbId);
+
   const startMutation = useMutation({
     mutationFn: (force?: boolean) =>
       apiClient.startSpatialScan(dbId!, {
@@ -59,8 +61,7 @@ export function useSpatialScan(
   });
 
   return {
-    status: statusQuery.data,
-    isRunning,
+    ...status,
     start: startMutation.mutate,
     isStarting: startMutation.isPending,
     startError: startMutation.error,

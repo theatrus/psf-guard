@@ -309,8 +309,63 @@ export interface StackFrameDecision {
   matched_stars: number | null;
   registration_rms_pixels: number | null;
   registration_drift_pixels: number | null;
+  registered_mapping: unknown | null;
+  normalization_mean_gain: number | null;
+  normalization_mean_offset: number | null;
+  source_fingerprint: string | null;
   overlap_fraction: number | null;
   integrated_fraction: number | null;
+}
+
+export interface SimilarityTransform {
+  scale: number;
+  rotation_radians: number;
+  translation_x: number;
+  translation_y: number;
+}
+
+export interface ReferenceRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type ArtifactSearchState = 'queued' | 'running' | 'completed' | 'failed';
+
+export interface ArtifactSearchResult {
+  image_id: number;
+  filter_name: string;
+  acquired_unix_seconds: number | null;
+  grading_status: number;
+  score: number;
+  peak_sigma: number;
+  bright_fraction: number;
+  dark_fraction: number;
+  coverage_fraction: number;
+  evidence: 'strong' | 'possible' | 'low';
+  direction: 'bright' | 'dark' | 'mixed';
+  morphology: 'ring' | 'broad_dark' | 'linear' | 'compact' | 'diffuse' | 'unclassified';
+  crop_url: string;
+}
+
+export interface ArtifactSearchJob {
+  schema_version: number;
+  search_id: string;
+  database_id: string;
+  source_job_id: string;
+  source_kind: 'mono' | 'color';
+  group_index: number | null;
+  artifact_revision: string;
+  region: ReferenceRegion;
+  state: ArtifactSearchState;
+  phase: string;
+  total_work_units: number;
+  completed_work_units: number;
+  created_unix_seconds: number;
+  notes: string[];
+  results: ArtifactSearchResult[];
+  error: string | null;
 }
 
 export interface StackInputImage {
@@ -489,6 +544,7 @@ export interface StackColorSource {
   group_index: number;
   artifact_revision: string;
   accepted_frames: number;
+  registration_transform: SimilarityTransform | null;
 }
 
 export interface StackColorProcessing {
@@ -1308,6 +1364,19 @@ export interface ScoredSequence {
   summary: SequenceSummary;
 }
 
+export interface QualityRegionOverlay {
+  grid_cols: number;
+  grid_rows: number;
+  image_width: number;
+  image_height: number;
+  low_star_cells: boolean[];
+  extinction_cells: boolean[];
+  star_loss_cells: boolean[];
+  background_rise_cells: boolean[];
+  background_fall_cells: boolean[];
+  glow_cells: boolean[];
+}
+
 export interface ImageQualityResult {
   image_id: number;
   quality_score: number;
@@ -1361,6 +1430,9 @@ export interface ImageQualityResult {
     association: 'predicted_not_pixel_detected' | 'predicted_pixel_checked' | 'predicted_with_pixel_alignment';
   };
   regrade_reason?: string;
+  /** Measured grid cells that support a localized quality finding. Global
+   * findings do not offer an overlay. */
+  spatial_overlay?: QualityRegionOverlay;
   details: string | null;
 }
 

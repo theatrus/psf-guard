@@ -40,8 +40,8 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-const STACK_COLOR_CACHE_VERSION: u32 = 5;
-const COLOR_INPUT_CACHE_VERSION: u32 = 1;
+const STACK_COLOR_CACHE_VERSION: u32 = 6;
+const COLOR_INPUT_CACHE_VERSION: u32 = 2;
 const SEIZA_BACKGROUND_VERSION: &str = "0.1.0";
 const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
 const COLOR_BYTES_PER_PIXEL: u64 = 64;
@@ -60,7 +60,7 @@ pub enum StackColorRole {
 }
 
 impl StackColorRole {
-    fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             Self::Luminance => "L",
             Self::Red => "R",
@@ -228,7 +228,7 @@ pub struct StackColorProgress {
     pub phases: Vec<StackColorPhaseProgress>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StackColorSource {
     pub role: StackColorRole,
     pub filter_name: String,
@@ -236,6 +236,8 @@ pub struct StackColorSource {
     pub group_index: usize,
     pub artifact_revision: String,
     pub accepted_frames: usize,
+    #[serde(default)]
+    pub registration_transform: Option<seiza_stacking::SimilarityTransform>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -318,6 +320,8 @@ struct CachedColorInputs {
     schema_version: u32,
     input_id: String,
     roles: Vec<StackColorRole>,
+    #[serde(default)]
+    registered_transforms: BTreeMap<StackColorRole, seiza_stacking::SimilarityTransform>,
     resolved_backgrounds: BTreeMap<StackColorRole, BackgroundFit>,
     resolved_deconvolutions: BTreeMap<StackColorRole, super::stretch::StackDeconvolutionResult>,
 }
@@ -563,7 +567,7 @@ impl ColorProgressTracker<'_> {
 }
 
 impl StackPreviewManager {
-    fn get_color(&self, job_id: &str) -> Option<StackColorJob> {
+    pub(super) fn get_color(&self, job_id: &str) -> Option<StackColorJob> {
         self.color_jobs.lock().unwrap().get(job_id).cloned()
     }
 
@@ -599,6 +603,16 @@ impl StackPreviewManager {
         let _guard = self.latest_write.lock().unwrap();
         persist_latest_color(cache_root, job)
     }
+}
+
+pub(super) fn load_persisted_color_job(
+    cache_root: &FsPath,
+    job_id: &str,
+) -> Result<StackColorJob, AppError> {
+    let bytes =
+        std::fs::read(color_manifest_path(cache_root, job_id)).map_err(|_| AppError::NotFound)?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| AppError::InternalError(format!("Invalid color manifest: {error}")))
 }
 
 pub async fn get_stack_color_catalog(
@@ -1201,35 +1215,56 @@ fn compose_color(
         load_cached_color_input_manifest(cache_root, input_id, reference_role, &job.sources)
     });
     let reused_inputs = cached_inputs.is_some();
-    let (mut reference, mut resolved_backgrounds, mut resolved_deconvolutions) =
-        if let Some((manifest, reference)) = cached_inputs {
-            state.stack_previews.update_color(&job.job_id, |current| {
-                current.processed_channels = current.total_channels;
-                current.resolved_backgrounds = manifest.resolved_backgrounds.clone();
-                current.resolved_input_deconvolutions = manifest.resolved_deconvolutions.clone();
-            });
-            (
-                reference,
-                manifest.resolved_backgrounds,
-                manifest.resolved_deconvolutions,
-            )
-        } else {
-            progress.begin(
-                StackColorProgressPhase::LoadingSources,
-                "Loading source stacks",
-                None,
-                None,
-            );
-            progress.begin(
-                StackColorProgressPhase::LoadingSources,
-                format!("Loading {} stack", reference_role.label()),
-                Some(reference_role),
-                None,
-            );
-            let reference = load_source_frame(cache_root, reference_source)?;
-            progress.advance(StackColorProgressPhase::LoadingSources, 1);
-            (reference, BTreeMap::new(), BTreeMap::new())
-        };
+    let (
+        mut reference,
+        mut resolved_backgrounds,
+        mut resolved_deconvolutions,
+        mut registered_transforms,
+    ) = if let Some((manifest, reference)) = cached_inputs {
+        state.stack_previews.update_color(&job.job_id, |current| {
+            current.processed_channels = current.total_channels;
+            current.resolved_backgrounds = manifest.resolved_backgrounds.clone();
+            current.resolved_input_deconvolutions = manifest.resolved_deconvolutions.clone();
+            for source in &mut current.sources {
+                source.registration_transform =
+                    manifest.registered_transforms.get(&source.role).copied();
+            }
+        });
+        (
+            reference,
+            manifest.resolved_backgrounds,
+            manifest.resolved_deconvolutions,
+            manifest.registered_transforms,
+        )
+    } else {
+        progress.begin(
+            StackColorProgressPhase::LoadingSources,
+            "Loading source stacks",
+            None,
+            None,
+        );
+        progress.begin(
+            StackColorProgressPhase::LoadingSources,
+            format!("Loading {} stack", reference_role.label()),
+            Some(reference_role),
+            None,
+        );
+        let reference = load_source_frame(cache_root, reference_source)?;
+        progress.advance(StackColorProgressPhase::LoadingSources, 1);
+        (reference, BTreeMap::new(), BTreeMap::new(), BTreeMap::new())
+    };
+    registered_transforms
+        .entry(reference_role)
+        .or_insert(seiza_stacking::SimilarityTransform::IDENTITY);
+    state.stack_previews.update_color(&job.job_id, |current| {
+        if let Some(source) = current
+            .sources
+            .iter_mut()
+            .find(|source| source.role == reference_role)
+        {
+            source.registration_transform = Some(seiza_stacking::SimilarityTransform::IDENTITY);
+        }
+    });
     let pixels = reference.image.pixel_count();
     let bytes_per_pixel = COLOR_BYTES_PER_PIXEL
         + if job
@@ -1451,6 +1486,16 @@ fn compose_color(
                         reference_role.label()
                     )
                 })?;
+                registered_transforms.insert(source.role, registration.transform);
+                state.stack_previews.update_color(&job.job_id, |current| {
+                    if let Some(current_source) = current
+                        .sources
+                        .iter_mut()
+                        .find(|current_source| current_source.role == source.role)
+                    {
+                        current_source.registration_transform = Some(registration.transform);
+                    }
+                });
                 images.insert(source.role, aligned);
                 progress.advance(StackColorProgressPhase::RegisteringSources, 1);
                 state.stack_previews.update_color(&job.job_id, |current| {
@@ -1531,14 +1576,21 @@ fn compose_color(
                 }
                 progress.finish(StackColorProgressPhase::NormalizingInputs);
                 if let Some(input_id) = job.linear_input_id.as_deref() {
+                    let manifest = CachedColorInputs {
+                        schema_version: COLOR_INPUT_CACHE_VERSION,
+                        input_id: input_id.into(),
+                        roles: job.sources.iter().map(|source| source.role).collect(),
+                        registered_transforms: registered_transforms.clone(),
+                        resolved_backgrounds: resolved_backgrounds.clone(),
+                        resolved_deconvolutions: resolved_deconvolutions.clone(),
+                    };
                     store_cached_color_inputs(
                         cache_root,
                         input_id,
                         &job.sources,
                         &images,
                         &reference_headers,
-                        &resolved_backgrounds,
-                        &resolved_deconvolutions,
+                        &manifest,
                     )?;
                 }
             }
@@ -1831,8 +1883,7 @@ fn store_cached_color_inputs(
     sources: &[StackColorSource],
     images: &BTreeMap<StackColorRole, LinearImage>,
     reference_headers: &[(String, seiza_fits::HeaderValue)],
-    resolved_backgrounds: &BTreeMap<StackColorRole, BackgroundFit>,
-    resolved_deconvolutions: &BTreeMap<StackColorRole, super::stretch::StackDeconvolutionResult>,
+    manifest: &CachedColorInputs,
 ) -> Result<(), String> {
     for source in sources {
         let image = images
@@ -1848,16 +1899,7 @@ fn store_cached_color_inputs(
             .map_err(|error| error.to_string())?;
         std::fs::rename(&temporary, &destination).map_err(|error| error.to_string())?;
     }
-    write_json_atomic(
-        &color_input_manifest_path(cache_root, input_id),
-        &CachedColorInputs {
-            schema_version: COLOR_INPUT_CACHE_VERSION,
-            input_id: input_id.into(),
-            roles: sources.iter().map(|source| source.role).collect(),
-            resolved_backgrounds: resolved_backgrounds.clone(),
-            resolved_deconvolutions: resolved_deconvolutions.clone(),
-        },
-    )
+    write_json_atomic(&color_input_manifest_path(cache_root, input_id), manifest)
 }
 
 fn render_progress_phase(
@@ -1978,6 +2020,7 @@ fn collect_sources(
                 group_index: entry.group.index,
                 artifact_revision: entry.artifact_revision.clone(),
                 accepted_frames: entry.group.accepted_frames,
+                registration_transform: None,
             });
     }
     for target in targets.values_mut() {
@@ -2210,7 +2253,7 @@ fn color_preview_path(cache_root: &FsPath, job_id: &str) -> PathBuf {
     color_dir(cache_root, job_id).join("preview.png")
 }
 
-fn color_original_preview_path(cache_root: &FsPath, job_id: &str) -> PathBuf {
+pub(super) fn color_original_preview_path(cache_root: &FsPath, job_id: &str) -> PathBuf {
     color_dir(cache_root, job_id).join("preview-original.png")
 }
 
@@ -2545,6 +2588,7 @@ mod tests {
             group_index: 0,
             artifact_revision: format!("revision-{index}"),
             accepted_frames: 4,
+            registration_transform: None,
         })
         .collect::<Vec<_>>();
         let mut first = StackColorProcessing::default();
@@ -2583,5 +2627,37 @@ mod tests {
 
         assert_eq!(first_id, changed_stretch_id);
         assert_ne!(first_id, changed_linear_id);
+    }
+
+    #[test]
+    fn cached_color_inputs_retain_channel_registration() {
+        let transform = seiza_stacking::SimilarityTransform {
+            scale: 1.01,
+            rotation_radians: 0.02,
+            translation_x: 3.0,
+            translation_y: -4.0,
+        };
+        let cached = CachedColorInputs {
+            schema_version: COLOR_INPUT_CACHE_VERSION,
+            input_id: "input".into(),
+            roles: vec![StackColorRole::Red, StackColorRole::Green],
+            registered_transforms: BTreeMap::from([
+                (
+                    StackColorRole::Red,
+                    seiza_stacking::SimilarityTransform::IDENTITY,
+                ),
+                (StackColorRole::Green, transform),
+            ]),
+            resolved_backgrounds: BTreeMap::new(),
+            resolved_deconvolutions: BTreeMap::new(),
+        };
+
+        let encoded = serde_json::to_vec(&cached).unwrap();
+        let decoded = serde_json::from_slice::<CachedColorInputs>(&encoded).unwrap();
+
+        assert_eq!(
+            decoded.registered_transforms[&StackColorRole::Green],
+            transform
+        );
     }
 }

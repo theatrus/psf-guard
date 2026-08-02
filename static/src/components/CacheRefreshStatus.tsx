@@ -27,8 +27,7 @@ export default function CacheRefreshStatus({ className = '' }: CacheRefreshStatu
   const [wasRefreshing, setWasRefreshing] = useState(false);
   const [recentDirectories, setRecentDirectories] = useState<string[]>([]);
 
-  // Poll for cache refresh status of the active DB.
-  // The merged cross-DB indicator will arrive in F4.
+  // Poll for cache refresh status of the active database.
   const { data: progress } = useQuery<CacheRefreshProgress>({
     queryKey: ['db', dbId, 'cache-progress'],
     queryFn: () => apiClient.getCacheProgress(dbId!),

@@ -3,12 +3,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { QualityBackfillStatus } from '../api/types';
 
-export function useQualityBackfill(dbId: string) {
+export function useQualityBackfillStatus(dbId: string | null | undefined) {
   const queryClient = useQueryClient();
   const queryKey = ['db', dbId, 'quality-backfill'] as const;
   const statusQuery = useQuery<QualityBackfillStatus>({
     queryKey,
-    queryFn: () => apiClient.getQualityBackfillStatus(dbId),
+    queryFn: () => apiClient.getQualityBackfillStatus(dbId!),
+    enabled: !!dbId,
     refetchInterval: (query) => (query.state.data?.progress.running ? 1000 : false),
     refetchIntervalInBackground: true,
   });
@@ -22,16 +23,27 @@ export function useQualityBackfill(dbId: string) {
     wasRunning.current = isRunning;
   }, [dbId, isRunning, queryClient]);
 
+  return {
+    status: statusQuery.data,
+    isRunning,
+    error: statusQuery.error,
+  };
+}
+
+export function useQualityBackfill(dbId: string | null | undefined) {
+  const queryClient = useQueryClient();
+  const status = useQualityBackfillStatus(dbId);
+  const queryKey = ['db', dbId, 'quality-backfill'] as const;
+
   const startMutation = useMutation({
-    mutationFn: (force: boolean) => apiClient.startQualityBackfill(dbId, { force }),
+    mutationFn: (force: boolean) => apiClient.startQualityBackfill(dbId!, { force }),
     onSuccess: (status) => queryClient.setQueryData(queryKey, status),
   });
 
   return {
-    status: statusQuery.data,
-    isRunning,
+    ...status,
     isStarting: startMutation.isPending,
-    error: startMutation.error ?? statusQuery.error,
+    error: startMutation.error ?? status.error,
     start: startMutation.mutate,
   };
 }

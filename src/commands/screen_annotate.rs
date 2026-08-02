@@ -25,9 +25,8 @@ use seiza_stretch::{stretch_u16_to_u16, StretchParams};
 pub(crate) struct AnnotationData {
     pub grid_cols: usize,
     pub grid_rows: usize,
-    /// Raw star counts per cell (dead-cell tint is derived from these the
-    /// same way the metric is: count < 0.25 x median cell count).
-    pub star_cell_counts: Vec<f64>,
+    /// Cells that support the spatial dead-cell metric.
+    pub low_star_cells: Vec<bool>,
     pub cell_relative_ratios: Vec<Option<f64>>,
     pub star_drop_cells: Vec<bool>,
     pub bg_rise_cells: Vec<bool>,
@@ -74,25 +73,8 @@ pub(crate) fn render_annotated_frame(
     let cell_w = out_w as f64 / cols as f64;
     let cell_h = out_h as f64 / rows as f64;
 
-    // Dead cells from raw counts, mirroring star_grid_metrics including its
-    // sparse branch: when most cells are empty the median is 0 and the dead
-    // criterion becomes "no stars at all" (a mostly-occluded frame must
-    // still tint red).
-    let dead_cells: Vec<bool> = if data.star_cell_counts.len() == cols * rows {
-        let mut sorted = data.star_cell_counts.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let median = sorted[sorted.len() / 2];
-        let any_stars = sorted.last().copied().unwrap_or(0.0) > 0.0;
-        data.star_cell_counts
-            .iter()
-            .map(|&c| {
-                if median > 0.0 {
-                    c < 0.25 * median
-                } else {
-                    any_stars && c == 0.0
-                }
-            })
-            .collect()
+    let dead_cells: Vec<bool> = if data.low_star_cells.len() == cols * rows {
+        data.low_star_cells.clone()
     } else {
         vec![false; cols * rows]
     };
@@ -346,14 +328,14 @@ mod tests {
             raw_scale: 1.0,
             bzero: 0.0,
         };
-        let mut star_cells = vec![100.0; 48];
-        star_cells[0] = 0.0; // dead cell -> red tint
+        let mut low_star_cells = vec![false; 48];
+        low_star_cells[0] = true; // dead cell -> red tint
         let mut ratios = vec![Some(1.0); 48];
         ratios[5] = Some(0.5); // extinction cell -> orange tint + label
         let data = AnnotationData {
             grid_cols: 8,
             grid_rows: 6,
-            star_cell_counts: star_cells,
+            low_star_cells,
             cell_relative_ratios: ratios,
             star_drop_cells: vec![false; 48],
             bg_rise_cells: {

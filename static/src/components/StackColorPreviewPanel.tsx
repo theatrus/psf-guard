@@ -22,6 +22,7 @@ interface StackColorPreviewPanelProps {
   channelBuildRunning: boolean;
   outdatedTargetIds: ReadonlySet<number>;
   canCompute: boolean;
+  onOpenImage: (imageId: number) => void;
 }
 
 interface ColorOperation {
@@ -327,6 +328,7 @@ export default function StackColorPreviewPanel({
   channelBuildRunning,
   outdatedTargetIds,
   canCompute,
+  onOpenImage,
 }: StackColorPreviewPanelProps) {
   const queryClient = useQueryClient();
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -557,6 +559,14 @@ export default function StackColorPreviewPanel({
           downloadLabel={inspector.label === 'RGB'
             ? 'Download RGB FITS'
             : `Download ${inspector.label} RGB FITS`}
+          artifactSource={{
+            kind: 'color',
+            dbId,
+            jobId: inspector.job_id,
+            artifactRevision: inspector.artifact_revision,
+          }}
+          artifactEnabled={canCompute}
+          onOpenImage={onOpenImage}
           onClose={() => setInspector(null)}
         />
       )}

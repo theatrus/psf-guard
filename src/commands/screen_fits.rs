@@ -76,6 +76,7 @@ struct FrameRecord {
     /// detectors without flux measurements).
     catalog: FrameCatalog,
     star_cell_counts: Vec<f64>,
+    star_dead_cells: Vec<bool>,
     bg_cell_medians: Vec<f64>,
     bg_glow_max: f64,
     bg_glow_cells: Vec<bool>,
@@ -262,7 +263,7 @@ fn annotate_flagged(
         let data = AnnotationData {
             grid_cols: spatial_config.grid_cols,
             grid_rows: spatial_config.grid_rows,
-            star_cell_counts: record.star_cell_counts.clone(),
+            low_star_cells: record.star_dead_cells.clone(),
             cell_relative_ratios: sig
                 .map(|s| s.cell_relative_ratios.clone())
                 .unwrap_or_default(),
@@ -695,6 +696,7 @@ fn analyze_one_frame(path: &Path, options: &ScreenOptions) -> Result<FrameRecord
         height: fits.height,
         catalog,
         star_cell_counts: spatial.star_cell_counts,
+        star_dead_cells: spatial.star_dead_cells,
         bg_cell_medians: spatial.bg_cell_medians,
         bg_glow_max: spatial.bg_glow_max,
         bg_glow_cells: spatial.bg_glow_cells,
@@ -937,6 +939,7 @@ fn score_records(
                     bg_glow_max: (r.bg_glow_max > 0.0).then_some(r.bg_glow_max),
                     astrometry: r.astrometry.clone(),
                     satellite: r.satellite.clone(),
+                    spatial_evidence: None,
                 }
             })
             .collect();

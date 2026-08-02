@@ -54,7 +54,8 @@ processing. Your image files stay where they are.
 - **Build stack previews** per target and channel, inspect admission decisions,
   apply matching bias, dark, and flat masters when the catalog has them,
   combine RGB, LRGB, or narrowband palettes, adjust the processing stack, and
-  download the cached linear or processed FITS result.
+  download the cached linear or processed FITS result. Draw around a visible
+  stack artifact to rank the source-frame crops that differ in that area.
 - **Review plans and imports** with project settings, target coordinates,
   shared exposure templates, and exposure plans derived from FITS headers.
 - **Take data out safely** by exporting non-rejected lights for stacking or by
@@ -397,7 +398,10 @@ the image grid and comparison tools:
   performs registration and admission, and retains a downloadable linear FITS
   beside the display PNG. Completed R/G/B, L/R/G/B, or Ha/OIII/SII stacks can
   then be registered across filters and combined into RGB, LRGB, or a selected
-  narrowband palette without altering the source integrations. See
+  narrowband palette without altering the source integrations. The full-size
+  inspector can map a selected artifact back through the saved registrations,
+  rank suspect source crops, and flag dust-shadow, ring, trail-like, or compact
+  shapes without changing their grades. See
   **[docs/STACKING_PREVIEWS.md](docs/STACKING_PREVIEWS.md)**.
 - **Sky context and plate solving**: coordinate-only catalog matches appear
   immediately. Choose **Solve field** (or press `O`) to run Seiza against the
@@ -566,9 +570,10 @@ bright trail, not catalog presence alone.
 PSF Guard screens for occlusion, clouds, veils, stray light, off-target
 pointing, and tracking loss. These faults can pass star-count and HFR grading.
 
-**In the app:** open a target's Sequence view and choose **Analyze Quality**. Use
-the selectors to focus Clouded, Off Target, Unsolved, or all Recommended
-frames.
+**In the app:** choose a target, then select **Analyze Quality** from Images or
+Sequence. The fixed header keeps scan and database-backfill progress visible
+across views. Use the Sequence selectors to focus Clouded, Off Target,
+Unsolved, or all Recommended frames.
 
 The scan runs spatial, photometric, and astrometric analysis on the server. It
 shows solved-center scatter, field-relative offsets, and named issue evidence.

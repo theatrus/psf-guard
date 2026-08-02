@@ -197,6 +197,27 @@ pub(super) fn render_image_previews_atomic(
     )
 }
 
+pub(super) fn render_image_preview_atomic(
+    image: &LinearImage,
+    config: &StretchConfig,
+    source_transfer: StackStretchSourceTransfer,
+    destination: &FsPath,
+) -> Result<serde_json::Value, String> {
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "Stack preview path has no parent".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let normalized = if source_transfer == StackStretchSourceTransfer::Linear {
+        Some(normalize_linear_image(image)?.0)
+    } else {
+        None
+    };
+    let prepared = normalized.as_ref().unwrap_or(image);
+    let (dynamic, render) = render_dynamic_image(prepared, config)?;
+    save_png_atomic(&dynamic, destination)?;
+    serde_json::to_value(render.plan).map_err(|error| error.to_string())
+}
+
 pub(super) fn render_image_previews_atomic_with_progress(
     image: &LinearImage,
     config: &StretchConfig,
@@ -279,6 +300,23 @@ fn render_image_previews_with_details(
             .ok_or_else(|| "Stack preview path has no parent".to_string())?;
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
+    let (dynamic, render) = render_dynamic_image(image, config)?;
+    progress(StackPreviewRenderPhase::Original);
+    save_png_atomic(&dynamic, original_destination)?;
+    progress(StackPreviewRenderPhase::Screen);
+    let resized = dynamic.resize(
+        PREVIEW_MAX_DIMENSION,
+        PREVIEW_MAX_DIMENSION,
+        image::imageops::FilterType::Lanczos3,
+    );
+    save_png_atomic(&resized, screen_destination)?;
+    Ok(render)
+}
+
+fn render_dynamic_image(
+    image: &LinearImage,
+    config: &StretchConfig,
+) -> Result<(image::DynamicImage, StretchRender), String> {
     if !matches!(image.channels, 1 | 3) {
         return Err(format!(
             "Stack stretch requires one or three channels, found {}",
@@ -305,16 +343,7 @@ fn render_image_previews_with_details(
                 .ok_or_else(|| "Stack preview dimensions do not match pixels".to_string())?,
         )
     };
-    progress(StackPreviewRenderPhase::Original);
-    save_png_atomic(&dynamic, original_destination)?;
-    progress(StackPreviewRenderPhase::Screen);
-    let resized = dynamic.resize(
-        PREVIEW_MAX_DIMENSION,
-        PREVIEW_MAX_DIMENSION,
-        image::imageops::FilterType::Lanczos3,
-    );
-    save_png_atomic(&resized, screen_destination)?;
-    Ok(StretchRender { plan })
+    Ok((dynamic, StretchRender { plan }))
 }
 
 pub(super) async fn apply_to_fits(
@@ -798,6 +827,36 @@ mod tests {
         assert!(original.is_file());
         assert_eq!(image.data, source);
         assert_eq!(plan["curves"][0]["type"], "asinh");
+    }
+
+    #[test]
+    fn single_preview_render_writes_only_the_requested_crop() {
+        let cache = tempfile::tempdir().unwrap();
+        let image = LinearImage::new(
+            16,
+            12,
+            1,
+            (0..16 * 12).map(|index| index as f32 + 1.0).collect(),
+        )
+        .unwrap();
+        let destination = cache.path().join("crop").join("source.png");
+
+        let plan = render_image_preview_atomic(
+            &image,
+            &default_linear_config(),
+            StackStretchSourceTransfer::Linear,
+            &destination,
+        )
+        .unwrap();
+
+        assert!(destination.is_file());
+        assert_eq!(
+            std::fs::read_dir(destination.parent().unwrap())
+                .unwrap()
+                .count(),
+            1
+        );
+        assert_eq!(plan["curves"][0]["type"], "mtf");
     }
 
     #[test]

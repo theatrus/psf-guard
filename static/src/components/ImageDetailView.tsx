@@ -16,6 +16,7 @@ import SatelliteTrackOverlay from './SatelliteTrackOverlay';
 import ImageFileLocation from './ImageFileLocation';
 import { useScopedQuality } from '../hooks/useSequenceAnalysis';
 import QualityAnalysisSummary from './QualityAnalysisSummary';
+import QualityRegionOverlay from './QualityRegionOverlay';
 import {
   colorPreviewEnabled,
   setColorPreview,
@@ -78,6 +79,7 @@ export default function ImageDetailView({
   const [useOriginalImage, setUseOriginalImage] = useState(false);
   const [imageError, setImageError] = useState(false);
   const [showAstrometry, setShowAstrometry] = useState(true);
+  const [showQualityRegions, setShowQualityRegions] = useState(false);
   const [showSatellites, setShowSatellites] = useState(false);
   const [displayedBitmapDimensions, setDisplayedBitmapDimensions] = useState<{
     width: number;
@@ -649,6 +651,22 @@ export default function ImageDetailView({
                       }}
                     />
                   )}
+                {!showPsf &&
+                  showQualityRegions &&
+                  !hideMainImage &&
+                  displayedBitmapDimensions &&
+                  quality?.spatial_overlay && (
+                    <QualityRegionOverlay
+                      overlay={quality.spatial_overlay}
+                      className="detail-quality-region-overlay"
+                      style={{
+                        width: `${displayedBitmapDimensions.width}px`,
+                        height: `${displayedBitmapDimensions.height}px`,
+                        transform: `translate(${zoom.zoomState.offsetX}px, ${zoom.zoomState.offsetY}px) scale(${zoom.zoomState.scale})`,
+                        transformOrigin: '0 0',
+                      }}
+                    />
+                  )}
                 </>
               )}
               {!showPsf &&
@@ -773,7 +791,16 @@ export default function ImageDetailView({
               )}
             </div>
 
-            <QualityAnalysisSummary quality={quality} statusMessage={qualityStatus} />
+            <QualityAnalysisSummary
+              quality={quality}
+              statusMessage={qualityStatus}
+              overlayVisible={showQualityRegions && !!quality?.spatial_overlay}
+              onToggleOverlay={quality?.spatial_overlay ? () => {
+                setShowQualityRegions((visible) => !visible);
+                setShowStars(false);
+                setShowPsf(false);
+              } : undefined}
+            />
 
             <AstrometryPanel
               analysis={astrometry}

@@ -10,8 +10,9 @@ be matched to the sky.
 
 ## Run a quality scan
 
-Open a catalog target in the **Sequence Analysis** view and press **Analyze
-Quality**. The background job runs two stages, then refreshes the sequence
+Choose a catalog target in the **Images** or **Sequence Analysis** view and
+press **Analyze Quality**. The fixed header reports live progress even if you
+change views. The background job runs two stages, then refreshes the sequence
 scores:
 
 1. spatial and photometric screening for clouds, occlusion, transparency, and

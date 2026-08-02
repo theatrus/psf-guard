@@ -177,6 +177,7 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   const fitsLink = panel.getByRole('link', { name: 'Download linear FITS' });
   const fitsHref = await fitsLink.getAttribute('href');
   expect(fitsHref).toMatch(/\/stack-previews\/[a-f0-9]{64}\/0\/fits\?v=[a-f0-9-]+$/);
+  const jobId = fitsHref!.match(/\/stack-previews\/([a-f0-9]{64})\/0\/fits/)![1];
   const fitsHead = await page.request.head(fitsHref!);
   expect(fitsHead.status()).toBe(200);
   expect(fitsHead.headers()['content-type']).toContain('application/fits');
@@ -278,6 +279,30 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
     await inspector.screenshot({ path: path.join(docs, 'stack-preview-inspection.png') });
   }
 
+  await inspector.getByRole('button', { name: 'Find source artifact' }).click();
+  await page.mouse.move(canvasBox!.x + 160, canvasBox!.y + 140);
+  await page.mouse.down();
+  await page.mouse.move(canvasBox!.x + 280, canvasBox!.y + 230, { steps: 4 });
+  await page.mouse.up();
+  await expect(inspector.getByTestId('stack-artifact-region')).toBeVisible();
+  await inspector.getByRole('button', { name: 'Search this region' }).click();
+  const suspects = inspector.getByRole('complementary', { name: 'Source-frame search results' });
+  await expect(suspects).toContainText('Source-frame ranking');
+  await expect(suspects.locator('.stack-artifact-result')).toHaveCount(3, { timeout: 90_000 });
+  await expect(suspects.locator('.stack-artifact-result').first()).toContainText('σ peak');
+  await expect(suspects.getByRole('button', { name: 'Inspect source image' })).toHaveCount(3);
+  for (const crop of await suspects.locator('.stack-artifact-result > img').all()) {
+    await expect.poll(() => crop.evaluate((image) => (
+      image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0
+    ))).toBe(true);
+  }
+
+  if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
+    const docs = path.resolve(process.cwd(), '..', 'docs');
+    fs.mkdirSync(docs, { recursive: true });
+    await inspector.screenshot({ path: path.join(docs, 'stack-artifact-finder.png') });
+  }
+
   await page.keyboard.press('Escape');
   await expect(inspector).toHaveCount(0);
   const firstProcessedSrc = await preview.getAttribute('src');
@@ -292,7 +317,6 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   await expect(preview).toHaveAttribute('src', defaultPreviewSrc!);
   await expect(stretchControls).toContainText('Deconvolution off');
 
-  const jobId = fitsHref!.match(/\/stack-previews\/([a-f0-9]{64})\/0\/fits/)![1];
   const fitsPath = path.join(
     process.env.PSF_GUARD_E2E_TMP!,
     'cache',

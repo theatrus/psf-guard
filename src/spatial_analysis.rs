@@ -114,6 +114,10 @@ pub struct SpatialMetrics {
     /// temporal analysis across a sequence (`photometry` module).
     #[serde(default)]
     pub star_cell_counts: Vec<f64>,
+    /// Cells that support the dead-cell metric, expanded to the configured
+    /// grid when the metric used its coarser sparse-field grid.
+    #[serde(default)]
+    pub star_dead_cells: Vec<bool>,
     /// Per-cell background medians in physical ADU at the configured grid
     /// resolution (row-major). Input for transient errant-light detection.
     #[serde(default)]
@@ -154,6 +158,18 @@ pub fn compute_spatial_metrics(
         .as_ref()
         .map(|grid| star_grid_metrics(grid, config.dead_cell_ratio))
         .map_or((None, None), |(dead, unif)| (Some(dead), Some(unif)));
+    let star_dead_cells = star_grid
+        .as_ref()
+        .map(|grid| {
+            expand_cell_mask(
+                &star_dead_cell_flags(grid, config.dead_cell_ratio),
+                grid_cols,
+                grid_rows,
+                config.grid_cols,
+                config.grid_rows,
+            )
+        })
+        .unwrap_or_else(|| vec![false; config.grid_cols * config.grid_rows]);
 
     // Background grid always uses the configured (full) resolution: it does
     // not depend on star statistics.
@@ -194,10 +210,37 @@ pub fn compute_spatial_metrics(
         bg_cell_spread,
         bg_cell_max_dev,
         star_cell_counts,
+        star_dead_cells,
         bg_cell_medians,
         bg_glow_max,
         bg_glow_cells,
     }
+}
+
+fn expand_cell_mask(
+    source: &[bool],
+    source_cols: usize,
+    source_rows: usize,
+    target_cols: usize,
+    target_rows: usize,
+) -> Vec<bool> {
+    if source_cols == 0
+        || source_rows == 0
+        || target_cols == 0
+        || target_rows == 0
+        || source.len() != source_cols * source_rows
+    {
+        return vec![false; target_cols.saturating_mul(target_rows)];
+    }
+    (0..target_rows)
+        .flat_map(|target_y| {
+            (0..target_cols).map(move |target_x| {
+                let source_x = target_x * source_cols / target_cols;
+                let source_y = target_y * source_rows / target_rows;
+                source[source_y * source_cols + source_x]
+            })
+        })
+        .collect()
 }
 
 /// (max positive plane residual / sky over flagged cells, per-cell flags).
@@ -318,23 +361,38 @@ fn star_grid_counts(
 fn star_grid_metrics(cell_counts: &[f64], dead_cell_ratio: f64) -> (f64, f64) {
     let med = median(cell_counts);
     let p95 = percentile(cell_counts, 0.95);
-
-    let dead = if p95 <= 0.0 {
-        // No cell has any stars: the whole frame is dead.
-        1.0
-    } else if med <= 0.0 {
-        // Most of the frame is empty while some cells have stars: count the
-        // empty cells directly (a threshold of ratio*median would be 0 and
-        // report nothing dead).
-        cell_counts.iter().filter(|&&c| c == 0.0).count() as f64 / cell_counts.len() as f64
+    let dead_flags = star_dead_cell_flags(cell_counts, dead_cell_ratio);
+    let dead = if dead_flags.is_empty() {
+        0.0
     } else {
-        let threshold = dead_cell_ratio * med;
-        cell_counts.iter().filter(|&&c| c < threshold).count() as f64 / cell_counts.len() as f64
+        dead_flags.into_iter().filter(|&flagged| flagged).count() as f64 / cell_counts.len() as f64
     };
 
     let uniformity = if p95 > 0.0 { (med / p95).min(1.0) } else { 0.0 };
 
     (dead, uniformity)
+}
+
+/// Mark the cells used by the spatial dead-cell metric. Keeping this decision
+/// shared makes saved scores, CLI diagnostics, and UI overlays agree.
+pub(crate) fn star_dead_cell_flags(cell_counts: &[f64], dead_cell_ratio: f64) -> Vec<bool> {
+    if cell_counts.is_empty() {
+        return Vec::new();
+    }
+    let med = median(cell_counts);
+    let p95 = percentile(cell_counts, 0.95);
+    if p95 <= 0.0 {
+        // No cell has any stars: the whole frame is dead.
+        return vec![true; cell_counts.len()];
+    }
+    if med <= 0.0 {
+        // Most of the frame is empty while some cells have stars: count the
+        // empty cells directly (a threshold of ratio*median would be 0 and
+        // report nothing dead).
+        return cell_counts.iter().map(|&count| count == 0.0).collect();
+    }
+    let threshold = dead_cell_ratio * med;
+    cell_counts.iter().map(|&count| count < threshold).collect()
 }
 
 /// Compute (bg_cell_spread, bg_cell_max_dev, cell_medians) from per-cell
@@ -488,6 +546,10 @@ mod tests {
             "expected ~half the cells dead, got {}",
             dead
         );
+        assert_eq!(m.star_dead_cells.len(), 48);
+        assert!(m.star_dead_cells.chunks(8).all(|row| {
+            row[..4].iter().all(|&flagged| !flagged) && row[4..].iter().all(|&flagged| flagged)
+        }));
     }
 
     #[test]
@@ -496,6 +558,7 @@ mod tests {
         let m = compute_spatial_metrics(&[], &data, W, H, &Default::default(), &Default::default());
         assert_eq!(m.star_dead_cell_fraction, Some(1.0));
         assert_eq!(m.star_uniformity, Some(0.0));
+        assert!(m.star_dead_cells.iter().all(|&flagged| flagged));
     }
 
     #[test]
@@ -524,6 +587,7 @@ mod tests {
             "uniformly sparse frame must abstain, got {:?}",
             m.star_dead_cell_fraction
         );
+        assert!(m.star_dead_cells.iter().all(|&flagged| !flagged));
     }
 
     #[test]

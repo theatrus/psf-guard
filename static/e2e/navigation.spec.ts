@@ -617,14 +617,16 @@ test('All Projects loads scores without starting a quality scan', async ({
   page,
 }) => {
   let sequenceRequests = 0;
-  let qualityScanRequests = 0;
+  let qualityScanStarts = 0;
   let databaseScope = false;
   page.on('request', (request) => {
     if (request.url().includes('/analysis/sequence')) {
       sequenceRequests += 1;
       databaseScope = new URL(request.url()).searchParams.get('all_projects') === 'true';
     }
-    if (request.url().includes('/analysis/quality-scan')) qualityScanRequests += 1;
+    if (request.url().includes('/analysis/quality-scan') && request.method() === 'POST') {
+      qualityScanStarts += 1;
+    }
   });
 
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}`);
@@ -634,7 +636,66 @@ test('All Projects loads scores without starting a quality scan', async ({
   await expect(page.locator('.image-card .quality-badge')).toHaveCount(4);
   expect(sequenceRequests).toBe(1);
   expect(databaseScope).toBe(true);
-  expect(qualityScanRequests).toBe(0);
+  expect(qualityScanStarts).toBe(0);
+});
+
+test('Grid starts target quality analysis and keeps progress in the global header', async ({
+  page,
+}) => {
+  let running = false;
+  let posted: Record<string, unknown> | null = null;
+  const runningStatus = () => ({
+    success: true,
+    data: {
+      started: true,
+      progress: {
+        running: true,
+        stage: 'astrometry',
+        target_id: 1,
+        filter_name: null,
+        total: 3,
+        processed: 1,
+        skipped_cached: 0,
+        spatial_processed: 3,
+        astrometry_processed: 1,
+        solved: 1,
+        solve_failed: 0,
+        operational_errors: 0,
+        errors: 0,
+        current_file: 'alpha-2.fits',
+        started_at: Math.floor(Date.now() / 1000),
+        finished_at: null,
+        last_error: null,
+      },
+      cached_count: 3,
+    },
+    error: null,
+    status: 'ready',
+  });
+  await page.route(`**/api/db/${dbId}/analysis/quality-scan`, async (route) => {
+    if (route.request().method() === 'POST') {
+      posted = route.request().postDataJSON();
+      running = true;
+      await route.fulfill({ json: runningStatus() });
+      return;
+    }
+    if (running) {
+      await route.fulfill({ json: runningStatus() });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1&target=1`);
+  await page.getByRole('button', { name: 'Analyze Quality' }).click();
+
+  await expect.poll(() => posted).toMatchObject({ target_id: 1 });
+  const globalStatus = page.locator('.header-cache-slot .quality-analysis-status');
+  await expect(globalStatus).toContainText('Analyzing quality');
+  await expect(globalStatus).toContainText('Solving 1/3 frames');
+
+  await page.getByRole('button', { name: 'Sequence' }).click();
+  await expect(globalStatus).toContainText('Analyzing quality');
 });
 
 test('Grid selection marker leaves the quality score visible', async ({ page }) => {
