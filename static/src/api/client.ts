@@ -56,6 +56,7 @@ import type {
   ArtifactSearchJob,
   ReferenceRegion,
   LatestStackPreviews,
+  StackActivity,
   StackColorCatalog,
   StackColorJob,
   StackColorKind,
@@ -683,6 +684,12 @@ export const apiClient = {
     );
     if (!data.data) throw new Error(data.error || 'Stack preview job not found');
     return data.data;
+  },
+
+  getStackActivity: async (): Promise<StackActivity> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<StackActivity>>('/stack-activity');
+    return data.data ?? { schema_version: 1, active: [] };
   },
 
   getLatestStackPreviews: async (

@@ -513,6 +513,7 @@ async fn run_server_internal(
             put(user_admin::update_user).delete(user_admin::remove_user),
         )
         .route("/info", get(handlers::get_server_info))
+        .route("/stack-activity", get(stack_preview::get_stack_activity))
         .route("/update-notice", get(handlers::get_update_notice))
         .route(
             "/astrometry/capabilities",

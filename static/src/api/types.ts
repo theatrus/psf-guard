@@ -454,6 +454,27 @@ export interface LatestStackPreviews {
   groups: LatestStackPreviewGroup[];
 }
 
+export type StackActivityKind = 'mono' | 'color';
+
+/** One queued or running stack build, reported across databases. */
+export interface StackActivityEntry {
+  kind: StackActivityKind;
+  job_id: string;
+  database_id: string;
+  project_id: number;
+  state: StackJobState;
+  label: string;
+  detail: string;
+  processed_units: number;
+  total_units: number;
+  created_unix_seconds: number;
+}
+
+export interface StackActivity {
+  schema_version: number;
+  active: StackActivityEntry[];
+}
+
 export type StackStretchColorStrategy = 'linked' | 'unlinked' | 'luminance-preserving';
 
 export type StackStretchModel =

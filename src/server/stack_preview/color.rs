@@ -2569,6 +2569,46 @@ mod tests {
         }
     }
 
+    fn running_color_job(job_id: &str, state: StackJobState) -> StackColorJob {
+        let mut progress = color_progress(3, None);
+        progress.completed_units = 4;
+        StackColorJob {
+            schema_version: 1,
+            job_id: job_id.into(),
+            database_id: "db-test".into(),
+            project_id: 7,
+            target_id: 42,
+            target_name: "Color target".into(),
+            kind: StackColorKind::Narrowband,
+            palette: Some(StackNarrowbandPalette::Sho),
+            label: "SHO".into(),
+            state,
+            phase: "Registering source channels".into(),
+            processed_channels: 1,
+            total_channels: 3,
+            progress,
+            created_unix_seconds: 200,
+            artifact_revision: "rev".into(),
+            cache_version: STACK_COLOR_CACHE_VERSION,
+            stacking_version: SEIZA_STACKING_VERSION.into(),
+            background_version: SEIZA_BACKGROUND_VERSION.into(),
+            deconvolution_version: String::new(),
+            linear_input_id: None,
+            sources: Vec::new(),
+            processing: None,
+            resolved_input_stretches: BTreeMap::new(),
+            resolved_input_deconvolutions: BTreeMap::new(),
+            resolved_output_stretches: Vec::new(),
+            resolved_backgrounds: BTreeMap::new(),
+            resolved_background_protection: BTreeMap::new(),
+            preview_url: String::new(),
+            fits_url: String::new(),
+            error: None,
+            outdated: false,
+            outdated_reason: None,
+        }
+    }
+
     #[test]
     fn catalog_outline_is_preferred_for_background_protection() {
         use crate::astrometry::{OverlayContourResponse, OverlayOutlineResponse};
@@ -2614,6 +2654,46 @@ mod tests {
             regions.as_slice(),
             [ProtectedRegion::Polygon { .. }]
         ));
+    }
+
+    #[test]
+    fn active_reports_running_color_jobs_by_phase_units() {
+        let manager = StackPreviewManager::new();
+        assert!(manager.insert_color(running_color_job("color-running", StackJobState::Running)));
+        assert!(manager.insert_color(running_color_job(
+            "color-finished",
+            StackJobState::Completed
+        )));
+
+        let active = manager.active();
+        assert_eq!(active.len(), 1);
+        let entry = &active[0];
+        assert_eq!(
+            entry.kind,
+            crate::server::stack_preview::StackActivityKind::Color
+        );
+        assert_eq!(entry.job_id, "color-running");
+        assert_eq!(entry.database_id, "db-test");
+        assert_eq!(entry.project_id, 7);
+        assert_eq!(entry.label, "Color target · SHO");
+        assert_eq!(entry.detail, "Registering source channels");
+        assert_eq!(entry.processed_units, 4);
+        assert_eq!(entry.total_units, color_progress(3, None).total_units);
+    }
+
+    #[test]
+    fn active_falls_back_to_channel_counts_without_phase_units() {
+        let manager = StackPreviewManager::new();
+        let mut job = running_color_job("color-legacy", StackJobState::Running);
+        job.progress = StackColorProgress::default();
+        job.phase = String::new();
+        assert!(manager.insert_color(job));
+
+        let active = manager.active();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].detail, "Composing color");
+        assert_eq!(active[0].processed_units, 1);
+        assert_eq!(active[0].total_units, 3);
     }
 
     #[test]

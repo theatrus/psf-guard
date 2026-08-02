@@ -31,6 +31,14 @@ databases, so full-frame accumulator buffers cannot multiply unexpectedly.
 Cards are capped at two columns on wide displays so the inspection preview does
 not become excessively wide.
 
+A build belongs to the server, not to the page that started it. The header
+shows a **Stacking** indicator next to the cache and quality-analysis progress
+for as long as any mono or color build is queued or running, in every view and
+in every database. Reopening the project grid re-attaches the stack panels to
+the running job, so leaving the page and coming back restores the live per-card
+progress instead of an idle panel. The indicator names the target and channel
+being stacked, its frame counts, and how many further builds are waiting.
+
 ## Sky orientation
 
 Every completed mono and color stack uses the same celestial display frame:
