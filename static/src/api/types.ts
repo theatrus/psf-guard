@@ -373,6 +373,15 @@ export interface StackInputImage {
   grading_status: number;
 }
 
+export interface StackSkyOrientation {
+  convention: 'north_up_east_left';
+  version: number;
+  source: 'cached_pixel_solve' | 'embedded_wcs' | 'stack_reference_solve';
+  output_width: number;
+  output_height: number;
+  source_to_output: unknown;
+}
+
 export interface StackGroupStatus {
   index: number;
   target_id: number;
@@ -388,6 +397,7 @@ export interface StackGroupStatus {
   accepted_frames: number;
   rejected_frames: number;
   output_channels: number;
+  sky_orientation: StackSkyOrientation | null;
   reference_image_id: number | null;
   total_exposure_seconds: number;
   preview_url: string | null;
@@ -432,6 +442,7 @@ export interface LatestStackPreviewGroup {
   artifact_revision: string;
   accepted_only: boolean;
   created_unix_seconds: number;
+  cache_version: number;
   group: StackGroupStatus;
 }
 

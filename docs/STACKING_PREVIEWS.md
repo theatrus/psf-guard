@@ -31,11 +31,35 @@ databases, so full-frame accumulator buffers cannot multiply unexpectedly.
 Cards are capped at two columns on wide displays so the inspection preview does
 not become excessively wide.
 
+## Sky orientation
+
+Every completed mono and color stack uses the same celestial display frame:
+north is up and east is left. PSF Guard reprojects the integrated image after
+registration and expands the output grid to keep the source frame's four
+corners. A rotated camera can therefore produce blank, masked wedges around the
+valid sky footprint instead of losing data to a crop.
+
+PSF Guard first uses a current pixel-derived solve, then a valid embedded FITS
+WCS. If neither exists, it plate-solves the reference frame before it publishes
+the result. The stack fails with a catalog or solve error when it cannot prove
+the orientation; it never marks an unknown view as sky-up. Install the Seiza
+solver catalogs or solve one of the source images, then rebuild the channel.
+
+The downloaded FITS contains a replacement TAN WCS for the reprojected pixels
+and records `SKYORIEN='N-UP E-LEFT'`. Color previews register their channel
+stacks onto one of these canonical grids, so RGB, LRGB, and narrowband outputs
+keep the same convention. The small `N ↑ · E ←` marker on each result makes the
+display contract clear. Source-artifact search retains the exact affine
+mapping, including a camera parity flip, so a selected stack region still maps
+back to the right source pixels.
+
 PSF Guard remembers the last successful preview for every target/channel in the
 project cache and restores those cards after navigation, page reload, or server
 restart. Each card retains the exact input image IDs and scheduler grades used
-to build it. The card is marked **Out of date**—without hiding the usable older
-preview—when the current filter/selection changes the image set, an image is
+to build it. PSF Guard hides previews made before the sky-orientation rule; build
+each channel once to replace them. The card is marked **Out of date**—without
+hiding the usable older preview—when the current filter/selection changes the
+image set, an image is
 accepted/rejected/pended, or the **Accepted only** policy changes. A failed
 rebuild never replaces the last successful result.
 
@@ -96,9 +120,9 @@ opened, so the project grid continues to use the smaller screen preview.
 
 Choose **Download linear FITS** on the card or in the inspector to retrieve the
 full-resolution floating-point integration from the cache. The FITS is
-unstretched and retains the reference frame's supported WCS headers plus
-Seiza's accepted/rejected frame counters, making it suitable for inspection or
-as an input to a separate processing workflow.
+unstretched and contains the canonical north-up, east-left WCS plus Seiza's
+accepted/rejected frame counters, making it suitable for inspection or as an
+input to a separate processing workflow.
 
 ![Frame-by-frame stack admission details](stack-preview-decisions.png)
 
