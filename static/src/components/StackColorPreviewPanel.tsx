@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type {
+  StackColorCrop,
   StackColorJob,
   StackColorKind,
   StackColorProcessing,
@@ -15,6 +16,7 @@ import {
   processingForColorBuild,
 } from './stackColorProcessing';
 import { isColorStackSkyOriented } from './stackOrientation';
+import { cropLabels, cropOrder, describeCrop, offCenterChannels } from './stackColorCrop';
 import { adoptableStackJob, useStackActivity } from '../hooks/useStackActivity';
 
 interface StackColorPreviewPanelProps {
@@ -33,6 +35,7 @@ interface ColorOperation {
   palette?: StackNarrowbandPalette;
   force: boolean;
   operationKey: string;
+  crop: StackColorCrop;
   processing: StackColorProcessing;
 }
 
@@ -111,6 +114,7 @@ function ColorCard({
   kind,
   palette,
   paletteChoices,
+  crop,
   artifact,
   activeJob,
   busy,
@@ -119,6 +123,7 @@ function ColorCard({
   sourceStacksOutdated,
   canCompute,
   onPaletteChange,
+  onCropChange,
   onBuild,
   onInspect,
   onProcessingApply,
@@ -128,6 +133,7 @@ function ColorCard({
   kind: StackColorKind;
   palette?: StackNarrowbandPalette;
   paletteChoices: StackNarrowbandPalette[];
+  crop: StackColorCrop;
   artifact?: StackColorJob;
   activeJob?: StackColorJob;
   busy: boolean;
@@ -136,6 +142,7 @@ function ColorCard({
   sourceStacksOutdated: boolean;
   canCompute: boolean;
   onPaletteChange?: (palette: StackNarrowbandPalette) => void;
+  onCropChange: (crop: StackColorCrop) => void;
   onBuild: () => void;
   onInspect: (job: StackColorJob) => void;
   onProcessingApply: (processing: StackColorProcessing) => void;
@@ -188,6 +195,19 @@ function ColorCard({
               </select>
             </label>
           ) : <span className="stack-preview-channel">{label}</span>}
+          <label className="stack-color-crop">
+            <span>Edges</span>
+            <select
+              aria-label={`${target.target_name} ${label} edge crop`}
+              value={crop}
+              disabled={busy}
+              onChange={(event) => onCropChange(event.target.value as StackColorCrop)}
+            >
+              {cropOrder.map((choice) => (
+                <option key={choice} value={choice}>{cropLabels[choice]}</option>
+              ))}
+            </select>
+          </label>
         </div>
         <div className="stack-preview-card-actions">
           <span className={`stack-group-state ${state}`}>{state.replace('-', ' ')}</span>
@@ -254,6 +274,19 @@ function ColorCard({
           {activeJob?.error ?? (unavailable
             ? 'The required channel stacks are not currently available.'
             : `Build an on-demand ${label} quick look from the channel stacks.`)}
+        </div>
+      )}
+
+      {artifact && describeCrop(artifact) && (
+        <div className="stack-color-crop-summary">
+          <span>{describeCrop(artifact)}</span>
+          {offCenterChannels(artifact).map((channel) => (
+            <strong key={channel.name} role="alert">
+              {channel.role ? roleLabels[channel.role] : channel.name} sits
+              {' '}{Math.round(channel.center_offset_pixels)}px off center from the other
+              channels and bounds the crop
+            </strong>
+          ))}
         </div>
       )}
 
@@ -339,6 +372,7 @@ export default function StackColorPreviewPanel({
   const queryClient = useQueryClient();
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [paletteByTarget, setPaletteByTarget] = useState<Record<number, StackNarrowbandPalette>>({});
+  const [cropByCard, setCropByCard] = useState<Record<string, StackColorCrop>>({});
   const [inspector, setInspector] = useState<StackColorJob | null>(null);
 
   const catalog = useQuery({
@@ -358,6 +392,7 @@ export default function StackColorPreviewPanel({
       kind: operation.kind,
       palette: operation.palette,
       force: operation.force,
+      crop: operation.crop,
       processing: operation.processing,
     }),
     onSuccess: (job) => {
@@ -391,6 +426,7 @@ export default function StackColorPreviewPanel({
   useEffect(() => {
     setActiveJobId(null);
     setPaletteByTarget({});
+    setCropByCard({});
     setInspector(null);
     resetStart();
   }, [dbId, projectId, resetStart]);
@@ -468,6 +504,7 @@ export default function StackColorPreviewPanel({
               ? activeJob : undefined;
             if (available || artifact) {
               const key = operationKey(target.target_id, kind);
+              const crop = cropByCard[key] ?? artifact?.crop ?? 'none';
               cards.push(
                 <ColorCard
                   key={key}
@@ -475,6 +512,7 @@ export default function StackColorPreviewPanel({
                   target={target}
                   kind={kind}
                   paletteChoices={[]}
+                  crop={crop}
                   artifact={artifact}
                   activeJob={cardActive}
                   busy={busy}
@@ -482,11 +520,15 @@ export default function StackColorPreviewPanel({
                   unavailable={!available}
                   sourceStacksOutdated={outdatedTargetIds.has(target.target_id)}
                   canCompute={canCompute}
+                  onCropChange={(next) => setCropByCard((current) => ({
+                    ...current, [key]: next,
+                  }))}
                   onBuild={() => startColor({
                     targetId: target.target_id,
                     kind,
                     force: Boolean(artifact && !artifact.outdated),
                     operationKey: key,
+                    crop,
                     processing: processingForColorBuild(artifact, requiredRoles(kind)),
                   })}
                   onInspect={setInspector}
@@ -495,6 +537,7 @@ export default function StackColorPreviewPanel({
                     kind,
                     force: false,
                     operationKey: `${key}:processing`,
+                    crop,
                     processing,
                   })}
                 />
@@ -516,6 +559,7 @@ export default function StackColorPreviewPanel({
               jobMatches(activeJob, target.target_id, 'narrowband', palette)
               ? activeJob : undefined;
             const key = operationKey(target.target_id, 'narrowband', palette);
+            const crop = cropByCard[key] ?? artifact?.crop ?? 'none';
             cards.push(
               <ColorCard
                 key={`${target.target_id}:narrowband`}
@@ -524,6 +568,7 @@ export default function StackColorPreviewPanel({
                 kind="narrowband"
                 palette={palette}
                 paletteChoices={paletteChoices}
+                crop={crop}
                 artifact={artifact}
                 activeJob={cardActive}
                 busy={busy}
@@ -534,12 +579,16 @@ export default function StackColorPreviewPanel({
                 onPaletteChange={(next) => setPaletteByTarget((current) => ({
                   ...current, [target.target_id]: next,
                 }))}
+                onCropChange={(next) => setCropByCard((current) => ({
+                  ...current, [key]: next,
+                }))}
                 onBuild={() => startColor({
                   targetId: target.target_id,
                   kind: 'narrowband',
                   palette,
                   force: Boolean(artifact && !artifact.outdated),
                   operationKey: key,
+                  crop,
                   processing: processingForColorBuild(
                     artifact, requiredRoles('narrowband', palette)
                   ),
@@ -551,6 +600,7 @@ export default function StackColorPreviewPanel({
                   palette,
                   force: false,
                   operationKey: `${key}:processing`,
+                  crop,
                   processing,
                 })}
               />

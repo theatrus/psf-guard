@@ -22,8 +22,8 @@ use rayon::ThreadPoolBuilder;
 use seiza_background::{BackgroundConfig, BackgroundFit, CorrectionMode, ProtectedRegion};
 use seiza_stacking::{
     combine_lrgb, combine_narrowband, combine_rgb, resample_to_reference, write_color_fits_f32,
-    write_processed_image_fits_f32, ColorComposition, ColorNormalization, ColorOptions,
-    ColorTransfer, FitsFrame, ForaxxOptions, LinearImage, NarrowbandPalette, Registrar,
+    write_processed_image_fits_f32, ColorComposition, ColorCrop, ColorNormalization, ColorOptions,
+    ColorTransfer, CropReport, FitsFrame, ForaxxOptions, LinearImage, NarrowbandPalette, Registrar,
     RegistrationOptions,
 };
 use seiza_stretch::StretchStack;
@@ -71,6 +71,100 @@ impl StackColorRole {
             Self::Sii => "SII",
         }
     }
+}
+
+/// How a color preview is trimmed to the sky every channel covers.
+///
+/// Registering one filter stack onto another leaves blank edges where a source
+/// frame did not reach. Previews default to keeping them, which is the shape
+/// every earlier release produced.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StackColorCrop {
+    /// Keep the whole reference grid, blank edges included.
+    #[default]
+    None,
+    /// Keep the box the covered pixels span.
+    Bounds,
+    /// Keep the largest rectangle every channel covers in full.
+    Inscribed,
+}
+
+impl StackColorCrop {
+    fn seiza(self) -> ColorCrop {
+        match self {
+            Self::None => ColorCrop::None,
+            Self::Bounds => ColorCrop::Bounds,
+            Self::Inscribed => ColorCrop::Inscribed,
+        }
+    }
+}
+
+/// What a crop kept, and which channel is most likely to have bounded it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StackColorCropReport {
+    /// Width of the shared input grid.
+    pub grid_width: usize,
+    /// Height of the shared input grid.
+    pub grid_height: usize,
+    /// Horizontal origin of the kept region on that grid.
+    pub x: usize,
+    /// Vertical origin of the kept region on that grid.
+    pub y: usize,
+    /// Width of the kept region.
+    pub width: usize,
+    /// Height of the kept region.
+    pub height: usize,
+    /// Share of the input grid the kept region covers, from zero to one.
+    pub retained_fraction: f64,
+    /// One entry per input channel, in the order they were composed.
+    pub channels: Vec<StackColorChannelCoverage>,
+}
+
+impl StackColorCropReport {
+    /// Convert a `seiza-stacking` report, naming each entry with the role that
+    /// produced it.
+    ///
+    /// `roles` lists the channels in the order they were passed to the
+    /// composition, which is the order the report preserves.
+    fn from_seiza(report: &CropReport, roles: &[StackColorRole]) -> Self {
+        Self {
+            grid_width: report.grid_width,
+            grid_height: report.grid_height,
+            x: report.region.x,
+            y: report.region.y,
+            width: report.region.width,
+            height: report.region.height,
+            retained_fraction: report.retained_fraction(),
+            channels: report
+                .channels
+                .iter()
+                .enumerate()
+                .map(|(index, channel)| StackColorChannelCoverage {
+                    role: roles.get(index).copied(),
+                    name: channel.name.clone(),
+                    covered_pixels: channel.covered_pixels,
+                    center_offset_pixels: channel.center_offset_pixels(),
+                    off_center: channel.off_center,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// What one channel covered of the shared grid.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StackColorChannelCoverage {
+    pub role: Option<StackColorRole>,
+    /// Channel name as `seiza-stacking` reported it, for example `OIII`.
+    pub name: String,
+    pub covered_pixels: usize,
+    /// Offset of this channel's coverage center from the median center of
+    /// every channel, in pixels.
+    pub center_offset_pixels: f64,
+    /// Whether that offset looks like a pointing error rather than dither.
+    /// A flagged channel is the one that bounded the crop.
+    pub off_center: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,6 +241,10 @@ pub struct StackColorRequest {
     pub palette: Option<StackNarrowbandPalette>,
     #[serde(default)]
     pub force: bool,
+    /// How the composed preview is trimmed to the sky every channel covers.
+    /// Absent requests keep the whole reference grid, as earlier releases did.
+    #[serde(default)]
+    pub crop: StackColorCrop,
     /// Optional non-destructive display pipeline. Absent requests retain the
     /// original quick-look behavior for API compatibility.
     #[serde(default)]
@@ -298,6 +396,12 @@ pub struct StackColorJob {
     #[serde(default)]
     pub linear_input_id: Option<String>,
     pub sources: Vec<StackColorSource>,
+    #[serde(default)]
+    pub crop: StackColorCrop,
+    /// What the crop kept, once the composition has run. Absent while the job
+    /// is queued, and for an uncropped preview, which measures no coverage.
+    #[serde(default)]
+    pub crop_report: Option<StackColorCropReport>,
     #[serde(default)]
     pub processing: Option<StackColorProcessing>,
     #[serde(default)]
@@ -1004,6 +1108,9 @@ fn prepare_color_job(
     {
         hasher.update(super::stretch::deconvolution_version().as_bytes());
     }
+    hasher.update(serde_json::to_vec(&request.crop).map_err(|error| {
+        AppError::InternalError(format!("Failed to encode color crop mode: {error}"))
+    })?);
     hasher.update(serde_json::to_vec(&request.processing).map_err(|error| {
         AppError::InternalError(format!(
             "Failed to encode color processing options: {error}"
@@ -1057,6 +1164,8 @@ fn prepare_color_job(
                 .unwrap_or_default(),
             linear_input_id,
             sources,
+            crop: request.crop,
+            crop_report: None,
             processing: request.processing.clone(),
             resolved_input_stretches: BTreeMap::new(),
             resolved_input_deconvolutions: BTreeMap::new(),
@@ -1886,6 +1995,7 @@ fn compose_color(
             ColorOptions {
                 normalization: ColorNormalization::None,
                 input_transfer: ColorTransfer::DisplayReferred,
+                crop: job.crop.seiza(),
             }
         } else {
             progress.begin(
@@ -1902,7 +2012,10 @@ fn compose_color(
                 StackColorProgressPhase::StretchingInputs,
                 "Input stretch stages skipped (legacy quick look)",
             );
-            ColorOptions::default()
+            ColorOptions {
+                crop: job.crop.seiza(),
+                ..ColorOptions::default()
+            }
         };
 
         progress.begin(
@@ -1911,6 +2024,33 @@ fn compose_color(
             None,
             None,
         );
+        // The order the composition receives its channels, which is the order
+        // its coverage report preserves.
+        let composed_roles: Vec<StackColorRole> = match job.kind {
+            StackColorKind::Rgb => vec![
+                StackColorRole::Red,
+                StackColorRole::Green,
+                StackColorRole::Blue,
+            ],
+            StackColorKind::Lrgb => vec![
+                StackColorRole::Luminance,
+                StackColorRole::Red,
+                StackColorRole::Green,
+                StackColorRole::Blue,
+            ],
+            StackColorKind::Narrowband => {
+                let mut roles = vec![StackColorRole::Ha, StackColorRole::Oiii];
+                // A palette that does not use SII leaves it out of the
+                // composition, and so out of the report.
+                if job
+                    .palette
+                    .is_some_and(|palette| palette.seiza().requires_sii())
+                {
+                    roles.push(StackColorRole::Sii);
+                }
+                roles
+            }
+        };
         let mut composition = match job.kind {
             StackColorKind::Rgb => combine_rgb(
                 &images[&StackColorRole::Red],
@@ -1941,6 +2081,20 @@ fn compose_color(
         .map_err(|error| error.to_string())?;
         if job.processing.is_none() {
             progress.finish(StackColorProgressPhase::NormalizingInputs);
+        }
+        if let Some(report) = composition.crop.as_ref() {
+            let report = StackColorCropReport::from_seiza(report, &composed_roles);
+            for channel in report.channels.iter().filter(|channel| channel.off_center) {
+                tracing::warn!(
+                    channel = %channel.name,
+                    offset_pixels = channel.center_offset_pixels,
+                    job_id = %job.job_id,
+                    "color channel sits off center from the others and bounds the crop"
+                );
+            }
+            state.stack_previews.update_color(&job.job_id, |current| {
+                current.crop_report = Some(report.clone());
+            });
         }
         progress.finish(StackColorProgressPhase::ComposingColor);
 
@@ -1993,6 +2147,7 @@ fn compose_color(
                     )
                     .map_err(|error| error.to_string())?,
                     transfer: ColorTransfer::DisplayReferred,
+                    ..composition
                 };
                 progress.finish(StackColorProgressPhase::StretchingOutput);
             }
@@ -2663,6 +2818,8 @@ mod tests {
             target_name: "Color target".into(),
             kind: StackColorKind::Narrowband,
             palette: Some(StackNarrowbandPalette::Sho),
+            crop: StackColorCrop::None,
+            crop_report: None,
             label: "SHO".into(),
             state,
             phase: "Registering source channels".into(),
@@ -2945,12 +3102,79 @@ mod tests {
     }
 
     #[test]
+    fn a_request_without_a_crop_keeps_the_whole_grid() {
+        let request: StackColorRequest =
+            serde_json::from_str(r#"{"target_id":1,"kind":"rgb"}"#).expect("older clients omit it");
+        assert_eq!(request.crop, StackColorCrop::None);
+        let inscribed: StackColorRequest =
+            serde_json::from_str(r#"{"target_id":1,"kind":"rgb","crop":"inscribed"}"#).unwrap();
+        assert_eq!(inscribed.crop, StackColorCrop::Inscribed);
+        assert_eq!(
+            serde_json::to_value(StackColorCrop::Bounds).unwrap(),
+            serde_json::json!("bounds")
+        );
+    }
+
+    #[test]
+    fn a_crop_report_names_channels_by_composition_order() {
+        let covered = |blank_rows: usize| {
+            let values = (0..64 * 64)
+                .map(|index| {
+                    if index / 64 < blank_rows {
+                        f32::NAN
+                    } else {
+                        0.25
+                    }
+                })
+                .collect::<Vec<_>>();
+            LinearImage::new(64, 64, 1, values).unwrap()
+        };
+        let composition = combine_rgb(
+            &covered(0),
+            &covered(2),
+            &covered(6),
+            &ColorOptions {
+                normalization: ColorNormalization::None,
+                crop: ColorCrop::Inscribed,
+                ..ColorOptions::default()
+            },
+        )
+        .unwrap();
+        let report = StackColorCropReport::from_seiza(
+            composition.crop.as_ref().expect("a cropped composition"),
+            &[
+                StackColorRole::Red,
+                StackColorRole::Green,
+                StackColorRole::Blue,
+            ],
+        );
+        assert_eq!((report.grid_width, report.grid_height), (64, 64));
+        assert_eq!((report.x, report.y), (0, 6));
+        assert_eq!((report.width, report.height), (64, 58));
+        assert!((report.retained_fraction - 58.0 / 64.0).abs() < 1.0e-9);
+        assert_eq!(
+            report
+                .channels
+                .iter()
+                .map(|channel| channel.role)
+                .collect::<Vec<_>>(),
+            vec![
+                Some(StackColorRole::Red),
+                Some(StackColorRole::Green),
+                Some(StackColorRole::Blue),
+            ]
+        );
+        assert!(report.channels.iter().all(|channel| !channel.off_center));
+    }
+
+    #[test]
     fn rejects_palette_shape_mismatches_before_preparing_a_job() {
         assert!(validate_request(&StackColorRequest {
             target_id: 1,
             kind: StackColorKind::Rgb,
             palette: Some(StackNarrowbandPalette::Sho),
             force: false,
+            crop: StackColorCrop::None,
             processing: None,
         })
         .is_err());
@@ -2959,6 +3183,7 @@ mod tests {
             kind: StackColorKind::Lrgb,
             palette: Some(StackNarrowbandPalette::Sho),
             force: false,
+            crop: StackColorCrop::None,
             processing: None,
         })
         .is_err());
@@ -2967,6 +3192,7 @@ mod tests {
             kind: StackColorKind::Narrowband,
             palette: None,
             force: false,
+            crop: StackColorCrop::None,
             processing: None,
         })
         .is_err());
@@ -2979,6 +3205,7 @@ mod tests {
             kind: StackColorKind::Rgb,
             palette: None,
             force: false,
+            crop: StackColorCrop::None,
             processing: Some(StackColorProcessing {
                 background_extraction: Some(extraction),
                 ..StackColorProcessing::default()

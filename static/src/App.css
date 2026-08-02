@@ -3911,6 +3911,46 @@
   font-size: 0.68rem;
 }
 
+.stack-color-crop {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.3rem;
+}
+
+.stack-color-crop > span {
+  color: var(--color-text-tertiary);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.stack-color-crop select {
+  max-width: 210px;
+  min-height: 27px;
+  padding: 0.2rem 1.6rem 0.2rem 0.45rem;
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-bg-quaternary);
+  border-radius: 4px;
+  font-size: 0.68rem;
+}
+
+.stack-color-crop-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.4rem 0.65rem;
+  color: var(--color-text-secondary);
+  border-top: 1px solid var(--color-bg-tertiary);
+  font-size: 0.68rem;
+}
+
+.stack-color-crop-summary strong {
+  color: var(--color-warning, #d9a441);
+  font-weight: 600;
+}
+
 .stack-color-image {
   background:
     linear-gradient(45deg, rgb(255 255 255 / 3%) 25%, transparent 25% 75%, rgb(255 255 255 / 3%) 75%),
