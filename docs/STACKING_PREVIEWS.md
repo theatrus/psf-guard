@@ -364,6 +364,35 @@ loading, background fits, registration, or deconvolution. Registered channels
 may contain `NaN` at uncovered borders; Seiza keeps that mask through
 deconvolution instead of failing the color build or treating gaps as data.
 
+### Edge crop
+
+Registering one channel onto another leaves blank edges where that frame did
+not reach. The **Edges** picker on each color card chooses what the composition
+keeps:
+
+| Choice | Keeps |
+| --- | --- |
+| Keep blank edges (default) | the whole reference grid, as earlier releases produced |
+| Trim to covered box | the box the covered pixels span |
+| Trim to full coverage | the largest rectangle every channel covers in full |
+
+Dithered channels overlap in a rectangle, so the covered box is enough for
+them. A meridian flip or a rotator leaves uncovered corners inside that box,
+and only full coverage removes them. Pick full coverage when a later step
+cannot handle `NaN`.
+
+The crop is chosen before normalization, so every channel is scaled from the
+same patch of sky and a bright edge that the crop discards cannot set a white
+point. The downloadable FITS moves `CRPIX` onto the cropped grid and records
+that origin in `SEIZACRX`/`SEIZACRY`, so the preview keeps the reference plate
+solution. The choice is part of the job ID: each crop keeps its own cached
+artifact, and applying a processing stack retains the crop the card is showing.
+
+A completed card reports the kept size and the share of the grid retained. When
+one channel's coverage sits far enough from the others to look like a pointing
+error rather than dither, the card names it: that channel bounded the crop, and
+reshooting or dropping it recovers the field. The server logs the same warning.
+
 | Standard SHO | Foraxx SHO |
 |:--:|:--:|
 | ![Real Gulf of Mexico standard SHO preview built from cached H-alpha, OIII, and SII stacks](stack-narrowband-sho-real.jpg) | ![Real Gulf of Mexico Foraxx SHO preview built from the same cached channel stacks](stack-color-real-previews.jpg) |
@@ -526,7 +555,10 @@ POST body is `{ "target_id": 42, "kind": "rgb", "force": false,
 `{ "target_id": 42, "kind": "lrgb", "force": false }`, or
 `{ "target_id": 42, "kind": "narrowband", "palette": "foraxx-hoo",
 "force": false }`. Omitting `processing` retains the earlier linear quick-look
-behavior for API compatibility. Clients cannot submit `protected_regions`;
+behavior for API compatibility. The optional `"crop"` field takes `"none"`
+(the default), `"bounds"`, or `"inscribed"` and trims the result to the area
+every channel covers; a completed job reports `crop_report` with the kept
+region, the retained fraction, and each channel's coverage. Clients cannot submit `protected_regions`;
 the server derives them from fresh plate-solve evidence. Mono stretch POST
 bodies use Seiza's tagged model shape, for
 example `{ "model": { "type": "percentile-asinh", "black_percentile":

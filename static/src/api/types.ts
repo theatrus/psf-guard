@@ -720,6 +720,27 @@ export interface StackColorProgress {
   phases: StackColorPhaseProgress[];
 }
 
+export type StackColorCrop = 'none' | 'bounds' | 'inscribed';
+
+export interface StackColorChannelCoverage {
+  role: StackColorRole | null;
+  name: string;
+  covered_pixels: number;
+  center_offset_pixels: number;
+  off_center: boolean;
+}
+
+export interface StackColorCropReport {
+  grid_width: number;
+  grid_height: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  retained_fraction: number;
+  channels: StackColorChannelCoverage[];
+}
+
 export interface StackColorJob {
   schema_version: number;
   job_id: string;
@@ -743,6 +764,8 @@ export interface StackColorJob {
   deconvolution_version: string;
   linear_input_id: string | null;
   sources: StackColorSource[];
+  crop: StackColorCrop;
+  crop_report: StackColorCropReport | null;
   processing: StackColorProcessing | null;
   resolved_input_stretches: Partial<Record<StackColorRole, unknown[]>>;
   resolved_input_deconvolutions: Partial<Record<StackColorRole, StackDeconvolutionResult>>;

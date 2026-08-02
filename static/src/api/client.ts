@@ -58,6 +58,7 @@ import type {
   LatestStackPreviews,
   StackActivity,
   StackColorCatalog,
+  StackColorCrop,
   StackColorJob,
   StackColorKind,
   StackColorProcessing,
@@ -851,6 +852,7 @@ export const apiClient = {
       kind: StackColorKind;
       palette?: StackNarrowbandPalette;
       force?: boolean;
+      crop?: StackColorCrop;
       processing?: StackColorProcessing;
     }
   ): Promise<StackColorJob> => {
