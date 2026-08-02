@@ -21,7 +21,8 @@ use crate::photometry::{
     PhotometryConfig,
 };
 use crate::sequence_analysis::{
-    AstrometryFrameMetrics, ImageMetrics, IssueCategory, SequenceAnalyzer, SequenceAnalyzerConfig,
+    AstrometryFrameMetrics, ImageMetrics, IssueCategory, QualityRegionEvidence, SequenceAnalyzer,
+    SequenceAnalyzerConfig,
 };
 use crate::spatial_analysis::{compute_spatial_metrics, PixelCalibration, SpatialAnalysisConfig};
 use anyhow::Result;
@@ -919,6 +920,16 @@ fn score_records(
             .map(|&idx| {
                 let r = &records[idx];
                 let sig = signals_by_idx.get(&idx);
+                let spatial_evidence = sig.map(|signal| {
+                    QualityRegionEvidence::from_scan(
+                        grid,
+                        (r.width, r.height),
+                        &r.star_dead_cells,
+                        &r.bg_glow_cells,
+                        signal,
+                        phot_config.local_extinction_ratio,
+                    )
+                });
                 ImageMetrics {
                     image_id: idx as i32,
                     timestamp: r.timestamp,
@@ -939,7 +950,7 @@ fn score_records(
                     bg_glow_max: (r.bg_glow_max > 0.0).then_some(r.bg_glow_max),
                     astrometry: r.astrometry.clone(),
                     satellite: r.satellite.clone(),
-                    spatial_evidence: None,
+                    spatial_evidence,
                 }
             })
             .collect();

@@ -4051,13 +4051,6 @@ pub(crate) fn merge_photometric_signals(
                 if let Some(entry) = entries[i].as_ref() {
                     let cells = entry.grid_cols.saturating_mul(entry.grid_rows);
                     if cells > 0 && entry.width > 0 && entry.height > 0 {
-                        let checked_mask = |mask: Vec<bool>| {
-                            if mask.len() == cells {
-                                mask
-                            } else {
-                                vec![false; cells]
-                            }
-                        };
                         let low_star_cells = if entry.star_dead_cells.len() == cells {
                             entry.star_dead_cells.clone()
                         } else if entry.star_cell_counts.len() == cells {
@@ -4069,31 +4062,15 @@ pub(crate) fn merge_photometric_signals(
                         } else {
                             vec![false; cells]
                         };
-                        let extinction_cells = if sig.cell_relative_ratios.len() == cells {
-                            sig.cell_relative_ratios
-                                .iter()
-                                .map(|ratio| {
-                                    ratio.is_some_and(|value| {
-                                        value < phot_config.local_extinction_ratio
-                                    })
-                                })
-                                .collect()
-                        } else {
-                            vec![false; cells]
-                        };
                         m.spatial_evidence =
-                            Some(crate::sequence_analysis::QualityRegionEvidence {
-                                grid_cols: entry.grid_cols,
-                                grid_rows: entry.grid_rows,
-                                image_width: entry.width,
-                                image_height: entry.height,
-                                low_star_cells,
-                                extinction_cells,
-                                star_loss_cells: checked_mask(sig.star_drop_cells),
-                                background_rise_cells: checked_mask(sig.bg_rise_cells),
-                                background_fall_cells: checked_mask(sig.bg_fall_cells),
-                                glow_cells: checked_mask(entry.bg_glow_cells.clone()),
-                            });
+                            Some(crate::sequence_analysis::QualityRegionEvidence::from_scan(
+                                (entry.grid_cols, entry.grid_rows),
+                                (entry.width, entry.height),
+                                &low_star_cells,
+                                &entry.bg_glow_cells,
+                                &sig,
+                                phot_config.local_extinction_ratio,
+                            ));
                     }
                 }
             }
