@@ -108,8 +108,27 @@ pub struct AstrometryFrameMetrics {
     pub matched_stars: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rms_arcsec: Option<f64>,
+    /// Large cataloged emission regions projected through this frame's fresh
+    /// pixel-derived solution. These are context for background screening,
+    /// not proof that the emission is visible in the pixels.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cataloged_extended_emission: Vec<CatalogedExtendedEmission>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// Solver-projected catalog context that may explain persistent background
+/// structure. Coordinates and axes use image pixels.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CatalogedExtendedEmission {
+    pub name: String,
+    pub kind: String,
+    pub x: f64,
+    pub y: f64,
+    pub semi_major_px: f64,
+    pub semi_minor_px: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle_deg: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -164,6 +183,15 @@ pub fn astrometry_metrics_from_analysis(
         solution.pixel_scale_arcsec_per_pixel
             * f64::from(solution.image_width.min(solution.image_height))
     });
+    let cataloged_extended_emission = if pixel_solved {
+        analysis
+            .solution
+            .as_ref()
+            .map(cataloged_extended_emission)
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     Some(AstrometryFrameMetrics {
         pixel_solved,
         solve_failed,
@@ -183,8 +211,59 @@ pub fn astrometry_metrics_from_analysis(
         field_short_axis_arcsec,
         matched_stars: analysis.solution.as_ref().map(|s| s.matched_stars),
         rms_arcsec: analysis.solution.as_ref().map(|s| s.rms_arcsec),
+        cataloged_extended_emission,
         error: analysis.error.clone(),
     })
+}
+
+fn cataloged_extended_emission(
+    solution: &crate::astrometry::AstrometrySolutionResponse,
+) -> Vec<CatalogedExtendedEmission> {
+    let width = f64::from(solution.image_width);
+    let height = f64::from(solution.image_height);
+    let short_axis = width.min(height);
+
+    solution
+        .objects
+        .iter()
+        .filter(|object| {
+            matches!(
+                object.kind.as_str(),
+                "nebula"
+                    | "planetary-nebula"
+                    | "hii-region"
+                    | "supernova-remnant"
+                    | "cluster-nebula"
+            )
+        })
+        // A source must span enough pixels to alter an 8x6 background cell.
+        // Small planetary nebulae and compact catalog objects cannot explain
+        // a cell-wide median shift.
+        .filter(|object| {
+            object.semi_major_px * 2.0 >= short_axis / 6.0
+                && object.semi_minor_px * 2.0 >= short_axis / 12.0
+        })
+        .filter(|object| {
+            let radius = object.semi_major_px.max(object.semi_minor_px);
+            object.x + radius >= 0.0
+                && object.x - radius <= width
+                && object.y + radius >= 0.0
+                && object.y - radius <= height
+        })
+        .map(|object| CatalogedExtendedEmission {
+            name: if object.common_name.is_empty() {
+                object.name.clone()
+            } else {
+                object.common_name.clone()
+            },
+            kind: object.kind.clone(),
+            x: object.x,
+            y: object.y,
+            semi_major_px: object.semi_major_px,
+            semi_minor_px: object.semi_minor_px,
+            angle_deg: object.angle_deg,
+        })
+        .collect()
 }
 
 /// Quality analysis result for a single image within its sequence context.
@@ -241,6 +320,50 @@ pub(crate) struct QualityRegionEvidence {
     pub background_rise_cells: Vec<bool>,
     pub background_fall_cells: Vec<bool>,
     pub glow_cells: Vec<bool>,
+}
+
+impl QualityRegionEvidence {
+    pub(crate) fn from_scan(
+        grid: (usize, usize),
+        image_size: (usize, usize),
+        low_star_cells: &[bool],
+        glow_cells: &[bool],
+        signal: &crate::photometry::FrameSignals,
+        local_extinction_ratio: f64,
+    ) -> Self {
+        let (grid_cols, grid_rows) = grid;
+        let (image_width, image_height) = image_size;
+        let cells = grid_cols.saturating_mul(grid_rows);
+        let checked_mask = |values: &[bool]| {
+            if values.len() == cells {
+                values.to_vec()
+            } else {
+                vec![false; cells]
+            }
+        };
+        let extinction_cells = if signal.cell_relative_ratios.len() == cells {
+            signal
+                .cell_relative_ratios
+                .iter()
+                .map(|ratio| ratio.is_some_and(|value| value < local_extinction_ratio))
+                .collect()
+        } else {
+            vec![false; cells]
+        };
+
+        Self {
+            grid_cols,
+            grid_rows,
+            image_width,
+            image_height,
+            low_star_cells: checked_mask(low_star_cells),
+            extinction_cells,
+            star_loss_cells: checked_mask(&signal.star_drop_cells),
+            background_rise_cells: checked_mask(&signal.bg_rise_cells),
+            background_fall_cells: checked_mask(&signal.bg_fall_cells),
+            glow_cells: checked_mask(glow_cells),
+        }
+    }
 }
 
 /// Reference values representing the best metrics observed in a sequence.
@@ -437,6 +560,88 @@ fn quality_region_overlay(
         background_fall_cells,
         glow_cells,
     })
+}
+
+fn quality_region_overlay_with_glow_cells(
+    evidence: Option<&QualityRegionEvidence>,
+    glow_cells: Option<&[bool]>,
+) -> Option<QualityRegionOverlay> {
+    let evidence = evidence?;
+    let mut filtered = evidence.clone();
+    if let Some(glow_cells) = glow_cells {
+        filtered.glow_cells = glow_cells.to_vec();
+    }
+    quality_region_overlay(Some(&filtered), QualityOverlayKind::StaticGlow)
+}
+
+/// Remove static-glow cells that a fresh solve places on a large cataloged
+/// emission region. The catalog is context only: if the scan lacks its cell
+/// mask, or any bright cell lies outside the projected regions, the detector
+/// keeps the finding.
+fn unexplained_static_glow_cells(image: &ImageMetrics) -> Option<Vec<bool>> {
+    let evidence = image.spatial_evidence.as_ref()?;
+    let cells = evidence.grid_cols.checked_mul(evidence.grid_rows)?;
+    if cells == 0
+        || evidence.image_width == 0
+        || evidence.image_height == 0
+        || evidence.glow_cells.len() != cells
+        || !evidence.glow_cells.iter().any(|&flagged| flagged)
+    {
+        return None;
+    }
+
+    let regions = image
+        .astrometry
+        .as_ref()
+        .filter(|astrometry| astrometry.pixel_solved)
+        .map(|astrometry| astrometry.cataloged_extended_emission.as_slice())
+        .unwrap_or_default();
+    if regions.is_empty() {
+        return Some(evidence.glow_cells.clone());
+    }
+
+    let cell_width = evidence.image_width as f64 / evidence.grid_cols as f64;
+    let cell_height = evidence.image_height as f64 / evidence.grid_rows as f64;
+
+    Some(
+        evidence
+            .glow_cells
+            .iter()
+            .enumerate()
+            .map(|(index, &flagged)| {
+                if !flagged {
+                    return false;
+                }
+                let col = index % evidence.grid_cols;
+                let row = index / evidence.grid_cols;
+                let x = (col as f64 + 0.5) * cell_width;
+                let y = (row as f64 + 0.5) * cell_height;
+                let explained = regions
+                    .iter()
+                    .any(|region| emission_region_covers_cell(region, x, y));
+                !explained
+            })
+            .collect(),
+    )
+}
+
+fn emission_region_covers_cell(
+    region: &CatalogedExtendedEmission,
+    cell_x: f64,
+    cell_y: f64,
+) -> bool {
+    let angle = region.angle_deg.unwrap_or(0.0).to_radians();
+    let cos = angle.cos();
+    let sin = angle.sin();
+    let dx = cell_x - region.x;
+    let dy = cell_y - region.y;
+    let major_offset = cos * dx + sin * dy;
+    let minor_offset = -sin * dx + cos * dy;
+    let major = region.semi_major_px.max(0.0);
+    let minor = region.semi_minor_px.max(0.0);
+    major > 0.0
+        && minor > 0.0
+        && (major_offset / major).powi(2) + (minor_offset / minor).powi(2) <= 1.0
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -928,6 +1133,11 @@ impl SequenceAnalyzer {
         scope: ScoreScope,
     ) -> ScoredSequence {
         let image_count = images.len();
+        let cataloged_extended_emission = images.iter().any(|image| {
+            image.astrometry.as_ref().is_some_and(|astrometry| {
+                astrometry.pixel_solved && !astrometry.cataloged_extended_emission.is_empty()
+            })
+        });
 
         let session_start = images.first().and_then(|i| i.timestamp);
         let session_end = images.last().and_then(|i| i.timestamp);
@@ -956,7 +1166,11 @@ impl SequenceAnalyzer {
                         hfr: img.hfr.map(|_| 1.0),
                         eccentricity: img.eccentricity.map(|_| 1.0),
                         snr: img.snr.map(|_| 1.0),
-                        background: img.background.map(|_| 1.0),
+                        background: if cataloged_extended_emission {
+                            None
+                        } else {
+                            img.background.map(|_| 1.0)
+                        },
                         spatial_coverage: img.dead_cell_fraction.map(|dead| {
                             1.0 - (dead / self.config.dead_cell_abs_threshold).clamp(0.0, 1.0)
                         }),
@@ -1016,10 +1230,18 @@ impl SequenceAnalyzer {
             &images.iter().map(|i| i.snr).collect::<Vec<_>>(),
             SNR_TOLERANCE,
         );
-        let norm_bg = score_relative_lower_better(
-            &images.iter().map(|i| i.background).collect::<Vec<_>>(),
-            BACKGROUND_TOLERANCE,
-        );
+        // In a solved field that contains large cataloged emission, lower sky
+        // values are not necessarily better: the darker frame may have lost
+        // signal. Leave raw background out and let matched-star transparency
+        // and the other pixel signals judge those frames.
+        let norm_bg = if cataloged_extended_emission {
+            vec![None; image_count]
+        } else {
+            score_relative_lower_better(
+                &images.iter().map(|i| i.background).collect::<Vec<_>>(),
+                BACKGROUND_TOLERANCE,
+            )
+        };
         // Spatial coverage uses an absolute mapping instead of the
         // sequence-relative percentile normalization: dead_cell_fraction is
         // already a dimensionless fraction of the frame, and relative
@@ -1117,7 +1339,11 @@ impl SequenceAnalyzer {
             best_hfr: best_value(&images, |i| i.hfr, false),
             best_eccentricity: best_value(&images, |i| i.eccentricity, false),
             best_snr: best_value(&images, |i| i.snr, true),
-            best_background: best_value(&images, |i| i.background, false),
+            best_background: if cataloged_extended_emission {
+                None
+            } else {
+                best_value(&images, |i| i.background, false)
+            },
         };
 
         // Build summary
@@ -1844,8 +2070,15 @@ impl SequenceAnalyzer {
             let bg_cell_rise = images[i].bg_cell_rise_fraction.unwrap_or(0.0);
             let errant_light = bg_cell_rise > self.config.bg_rise_cells_threshold;
             // Static glow is invisible to every temporal detector when the
-            // haze is present from the sequence's first frame.
-            let static_glow = images[i].bg_glow_max.unwrap_or(0.0) > self.config.bg_glow_threshold;
+            // haze is present from the sequence's first frame. A fresh solve
+            // may explain some cells as large cataloged emission; any bright
+            // cell outside those regions still keeps the finding.
+            let unexplained_glow_cells = unexplained_static_glow_cells(&images[i]);
+            let static_glow = images[i].bg_glow_max.unwrap_or(0.0) > self.config.bg_glow_threshold
+                && unexplained_glow_cells
+                    .as_ref()
+                    .map(|cells| cells.iter().any(|&flagged| flagged))
+                    .unwrap_or(true);
 
             if results[i].quality_score >= 0.7
                 && !occluded
@@ -1889,9 +2122,9 @@ impl SequenceAnalyzer {
                     QualityOverlayKind::BackgroundRise,
                 )
             } else if !veiled && !errant_light && static_glow && star_stable {
-                quality_region_overlay(
+                quality_region_overlay_with_glow_cells(
                     images[i].spatial_evidence.as_ref(),
-                    QualityOverlayKind::StaticGlow,
+                    unexplained_glow_cells.as_deref(),
                 )
             } else {
                 None
@@ -1944,10 +2177,19 @@ impl SequenceAnalyzer {
             } else if static_glow && star_stable {
                 (
                     Some(IssueCategory::SkyBrightening),
-                    Some(format!(
-                        "Static localized glow: a region reads {:.0}% above the frame's own gradient model in every frame of the session. Haze or a lit occluder edge at the field boundary.",
-                        images[i].bg_glow_max.unwrap_or(0.0) * 100.0
-                    )),
+                    Some(
+                        if images[i].astrometry.as_ref().is_some_and(|astrometry| {
+                            !astrometry.cataloged_extended_emission.is_empty()
+                        }) {
+                            "Static localized glow remains outside the large emission regions projected by the fresh plate solution. Haze or a lit occluder edge may affect the field."
+                            .to_string()
+                        } else {
+                            format!(
+                            "Static localized glow: a region reads {:.0}% above the frame's own gradient model in every frame of the session. Haze or a lit occluder edge at the field boundary.",
+                            images[i].bg_glow_max.unwrap_or(0.0) * 100.0
+                        )
+                        },
+                    ),
                 )
             } else if stray_gradient && star_stable {
                 (
@@ -2810,6 +3052,7 @@ mod tests {
             field_short_axis_arcsec: Some(field),
             matched_stars: Some(30),
             rms_arcsec: Some(0.8),
+            cataloged_extended_emission: Vec::new(),
             error: None,
         }
     }
@@ -2834,6 +3077,68 @@ mod tests {
             rms_arcsec: Some(0.8),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn catalog_context_keeps_only_large_emission_regions_in_frame() {
+        use crate::astrometry::{
+            AstrometrySolutionResponse, CatalogObjectIdentity, OverlayObjectResponse, WcsResponse,
+        };
+
+        let object = |name: &str, kind: &str, major: f64, minor: f64, x: f64, y: f64| {
+            OverlayObjectResponse {
+                identity: CatalogObjectIdentity::default(),
+                name: name.to_string(),
+                common_name: String::new(),
+                kind: kind.to_string(),
+                mag: None,
+                x,
+                y,
+                semi_major_px: major,
+                semi_minor_px: minor,
+                angle_deg: None,
+                ra_deg: 0.0,
+                dec_deg: 0.0,
+                prominence: None,
+                discovered: None,
+                near_capture: None,
+                distance_au: None,
+                direction_pa_deg: None,
+                direction_angle_deg: None,
+                outlines: Vec::new(),
+            }
+        };
+        let solution = AstrometrySolutionResponse {
+            center_ra_deg: 0.0,
+            center_dec_deg: 0.0,
+            pixel_scale_arcsec_per_pixel: 1.5,
+            matched_stars: 100,
+            rms_arcsec: 1.0,
+            image_width: 9576,
+            image_height: 6388,
+            wcs: WcsResponse {
+                crval: [0.0, 0.0],
+                crpix: [0.0, 0.0],
+                cd: [[0.0, 0.0], [0.0, 0.0]],
+                ctype: ["RA---TAN".to_string(), "DEC--TAN".to_string()],
+                cunit: ["deg".to_string(), "deg".to_string()],
+                radesys: "ICRS".to_string(),
+                equinox: 2000.0,
+            },
+            footprint: Vec::new(),
+            objects: vec![
+                object("NGC 1499", "nebula", 3200.0, 900.0, 5900.0, 3500.0),
+                object("small PN", "planetary-nebula", 25.0, 20.0, 4000.0, 3000.0),
+                object("LDN 1449", "dark-nebula", 2100.0, 1000.0, 1000.0, 3000.0),
+                object("off-frame nebula", "nebula", 1000.0, 800.0, -5000.0, 3000.0),
+            ],
+            catalog_version: None,
+            capture_time: None,
+        };
+
+        let regions = cataloged_extended_emission(&solution);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].name, "NGC 1499");
     }
 
     #[test]
@@ -3256,6 +3561,119 @@ mod tests {
                     .glow_cells,
                 vec![false, false, false, true]
             );
+        }
+    }
+
+    #[test]
+    fn solved_extended_emission_explains_static_glow_and_background_rank() {
+        // Real California Nebula Ha frames show a stable 16-18% residual in
+        // the cells crossed by NGC 1499. The solved catalog context should
+        // explain that structure instead of warning on every healthy frame.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            min_sequence_length: 3,
+            ..Default::default()
+        });
+        let mut images: Vec<ImageMetrics> = (0..8)
+            .map(|i| {
+                let mut image = make_full_image(
+                    i,
+                    i as i64 * 300,
+                    700.0,
+                    2.6,
+                    420.0 + i as f64 * 8.0,
+                    20.0,
+                    0.4,
+                );
+                image.transparency = Some(1.0);
+                image.bg_glow_max = Some(0.17);
+                image.spatial_evidence = Some(QualityRegionEvidence {
+                    grid_cols: 2,
+                    grid_rows: 2,
+                    image_width: 2000,
+                    image_height: 1500,
+                    glow_cells: vec![false, false, false, true],
+                    ..Default::default()
+                });
+                image.astrometry = Some(AstrometryFrameMetrics {
+                    pixel_solved: true,
+                    cataloged_extended_emission: vec![CatalogedExtendedEmission {
+                        name: "California Nebula".to_string(),
+                        kind: "nebula".to_string(),
+                        x: 1500.0,
+                        y: 1125.0,
+                        semi_major_px: 700.0,
+                        semi_minor_px: 500.0,
+                        angle_deg: Some(0.0),
+                    }],
+                    ..Default::default()
+                });
+                image
+            })
+            .collect();
+
+        let sequence = &analyzer.analyze(&images, 1, "California Nebula", "HA")[0];
+        for result in &sequence.images {
+            assert_eq!(result.category, None, "unexpected: {:?}", result.details);
+            assert!(result.normalized_metrics.background.is_none());
+            assert!(result.spatial_overlay.is_none());
+        }
+        assert!(sequence.reference_values.best_background.is_none());
+
+        // A darker frame is not rewarded for its raw background. Independent
+        // matched-star dimming still identifies the real loss of signal.
+        images[3].background = Some(350.0);
+        images[3].transparency = Some(0.70);
+        let sequence = &analyzer.analyze(&images, 1, "California Nebula", "HA")[0];
+        assert_eq!(
+            sequence.images[3].category,
+            Some(IssueCategory::LikelyClouds)
+        );
+        assert!(sequence.images[3].quality_score < sequence.images[2].quality_score);
+    }
+
+    #[test]
+    fn solved_emission_does_not_hide_glow_elsewhere_in_frame() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            min_sequence_length: 3,
+            ..Default::default()
+        });
+        let images: Vec<ImageMetrics> = (0..8)
+            .map(|i| {
+                let mut image = make_photometric_image(i, i as i64 * 300, 1.0, 0.0, 0.0, 0.0);
+                image.bg_glow_max = Some(0.10);
+                image.spatial_evidence = Some(QualityRegionEvidence {
+                    grid_cols: 2,
+                    grid_rows: 2,
+                    image_width: 2000,
+                    image_height: 1500,
+                    glow_cells: vec![false, false, false, true],
+                    ..Default::default()
+                });
+                image.astrometry = Some(AstrometryFrameMetrics {
+                    pixel_solved: true,
+                    cataloged_extended_emission: vec![CatalogedExtendedEmission {
+                        name: "Cataloged nebula".to_string(),
+                        kind: "nebula".to_string(),
+                        x: 0.0,
+                        y: 0.0,
+                        semi_major_px: 200.0,
+                        semi_minor_px: 100.0,
+                        angle_deg: Some(0.0),
+                    }],
+                    ..Default::default()
+                });
+                image
+            })
+            .collect();
+
+        let sequence = &analyzer.analyze(&images, 1, "test", "HA")[0];
+        for result in &sequence.images {
+            assert_eq!(result.category, Some(IssueCategory::SkyBrightening));
+            let overlay = result
+                .spatial_overlay
+                .as_ref()
+                .expect("unexplained glow should retain its overlay");
+            assert_eq!(overlay.glow_cells, vec![false, false, false, true]);
         }
     }
 

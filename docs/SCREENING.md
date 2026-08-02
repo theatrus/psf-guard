@@ -52,7 +52,7 @@ problems away.
 | **Star-share drops** | Small opaque clouds | Each cell's *share* of the frame's stars vs that cell's own temporal median (Poisson-aware) |
 | **Background rise** | Errant light (headlights, flashlights) | Per-cell background vs the cell's own history, after subtracting the frame's gradient (robust plane fit) |
 | **Background fall** | Dark occluders, cloud shadow | Same, downward: something blocking skyglow reads *darker*, not milky |
-| **Static glow** | Corner haze, lit occluder edges | Cells brighter than the frame's own gradient model — catches problems present from a session's *first* frame, which temporal baselines can never see |
+| **Static glow** | Corner haze, lit occluder edges | Cells brighter than the frame's own gradient model — catches problems present from a session's *first* frame, while a fresh solve masks cells covered by large cataloged emission nebulae |
 | **Fresh plate solution** | Off-target frames, pointing jumps/drift, deterministic no-solves | Seiza solves the current pixels; solved centers are compared to the authoritative target, stable framing clusters, and within-segment drift |
 | **Satellite prediction + pixel alignment** | Potentially bright satellite trails | A solved WCS plus FITS exposure/site metadata projects cached orbital elements through the shutter-open interval, then a bounded matched-filter search tests the nearby pixels; prediction and aligned-path evidence remain separate |
 
@@ -67,7 +67,10 @@ The signals feed two comparisons:
 
 Both scores run from 0 to 1. They are relative ranks, not verdicts. Catalog
 star count, HFR, eccentricity, SNR, and background use a robust good reference
-with a no-penalty band for normal variation. Missing signals receive no weight.
+with a no-penalty band for normal variation. When a fresh solve places a large
+cataloged emission region in the field, raw background receives no score
+weight: lower can mean lost target signal, not a better frame. Matched-star
+transparency still detects that loss. Missing signals receive no weight.
 Fresh spatial, photometric, and plate-solve results add pixel evidence when a
 quality scan has run.
 
@@ -202,6 +205,14 @@ compares each cell against the frame's own gradient model instead: the cyan
 cells sit exactly on the haze at 4.7% above the plane. Found because a human
 reviewer spotted it in a frame the pipeline had passed; now it's a detector.
 
+Real nebulae can produce the same stable shape. If a fresh pixel-derived solve
+projects a large emission nebula across a bright cell, PSF Guard treats that
+cell as explained catalog context. It keeps any bright cells outside those
+regions. This rule uses solved geometry only; a target name or FITS header does
+not suppress the detector. The California Nebula Ha test set drove this guard:
+healthy frames held a stable 16-18% residual over NGC 1499, while matched-star
+flux still found the dim frames.
+
 ![Static glow](screening-glow.jpg)
 
 ## Tuning
@@ -214,7 +225,7 @@ Defaults were calibrated against measured clean-frame envelopes (42+ frames,
 | `--min-score` | 0.35 | Composite score below which a frame is rejected |
 | `--dead-cell-rise` | 0.08 | Occlusion onset sensitivity; clean-frame jitter is ≤0.04, so 0.08 is a 2× margin |
 | `--session-gap` | 60 min | Splits sequences into sessions |
-| glow threshold | 2.5% of sky **and** >30 ADU | The ADU floor keeps real narrowband nebulosity (measured 19–22 ADU) from false-flagging; true haze measured 48–103 ADU. Rig-specific — tune `glow_min_adu` for your camera/exposures |
+| glow threshold | 2.5% of sky **and** >30 ADU | The ADU floor rejects weak structure. Fresh solved catalog geometry handles bright, large emission regions that exceed the floor. True haze measured 48–103 ADU. Rig-specific — tune `glow_min_adu` for your camera/exposures |
 | transparency threshold | 0.80 | Global veil rejection level |
 
 Safety properties worth knowing:
@@ -225,7 +236,8 @@ Safety properties worth knowing:
 - **Fresh pixels are authoritative**: embedded FITS WCS and coordinate-only
   catalog association are never grading evidence. A quality scan plate-solves
   the current pixels, and cache reuse is fingerprinted against the FITS and
-  solver resources.
+  solver resources. Only that fresh solve can exempt a background cell covered
+  by a large cataloged emission region; unexplained cells still warn.
 - **No-solve abstention**: a deterministic isolated solve failure lowers the
   score but is not automatically rejected without independent degradation.
   Missing catalogs, decode failures, and other operational errors abstain.
