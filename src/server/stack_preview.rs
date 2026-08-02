@@ -7,6 +7,7 @@
 
 pub mod artifact;
 pub mod color;
+mod janitor;
 mod resume;
 pub mod stretch;
 
@@ -207,6 +208,10 @@ pub struct StackGroupStatus {
     /// and integrated again. Zero for a from-scratch build.
     #[serde(default)]
     pub reused_frames: usize,
+    /// Why a checkpoint that existed could not be extended, when that
+    /// happened. Absent for a resumed build and for a first build.
+    #[serde(default)]
+    pub resume_note: Option<String>,
     #[serde(default)]
     pub output_channels: usize,
     #[serde(default)]
@@ -474,6 +479,47 @@ impl StackPreviewManager {
                 .then_with(|| left.job_id.cmp(&right.job_id))
         });
         active
+    }
+
+    /// Everything on disk that is still referenced: jobs a panel may poll,
+    /// and jobs a durable latest index still names. Reads every project's
+    /// index because a cache root hosts every project of a database.
+    fn cache_keep_set(&self, cache_root: &FsPath) -> janitor::KeepSet {
+        let mut mono_job_ids: std::collections::HashSet<String> =
+            self.jobs.lock().unwrap().keys().cloned().collect();
+        let mut color_job_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut color_input_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for job in self.color_jobs.lock().unwrap().values() {
+            color_job_ids.insert(job.job_id.clone());
+            if let Some(input_id) = &job.linear_input_id {
+                color_input_ids.insert(input_id.clone());
+            }
+        }
+        for latest in read_latest_indices::<LatestStackPreviews>(&cache_root.join("stack-previews"))
+        {
+            for group in latest.groups {
+                mono_job_ids.insert(group.job_id);
+            }
+        }
+        for (job_id, input_id) in color::latest_color_references(cache_root) {
+            color_job_ids.insert(job_id);
+            if let Some(input_id) = input_id {
+                color_input_ids.insert(input_id);
+            }
+        }
+        janitor::KeepSet {
+            mono_job_ids,
+            color_job_ids,
+            color_input_ids,
+        }
+    }
+
+    /// Sweep superseded artifacts after a build settles. Failures are logged;
+    /// pruning never fails a build.
+    pub(super) fn prune_cache(&self, cache_root: &FsPath) {
+        let keep = self.cache_keep_set(cache_root);
+        janitor::prune(cache_root, &keep);
     }
 
     pub(crate) async fn acquire_maintenance_permit(
@@ -1115,6 +1161,7 @@ fn prepare_job(
             accepted_frames: 0,
             rejected_frames: 0,
             reused_frames: 0,
+            resume_note: None,
             output_channels: 0,
             sky_orientation: None,
             reference_image_id,
@@ -1476,6 +1523,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
     {
         tracing::warn!("Failed to persist latest stack preview index: {error}");
     }
+    state.stack_previews.prune_cache(&cache_root);
 }
 
 /// Whether a channel produced an artifact or stopped on request. A failure is
@@ -1563,7 +1611,7 @@ fn run_group(
         .iter()
         .map(|frame| (frame.image_id, frame.source_fingerprint.as_str()))
         .collect::<Vec<_>>();
-    let checkpoint = resume::load(
+    let decision = resume::load(
         cache_root,
         database_id,
         group_target_id,
@@ -1573,6 +1621,17 @@ fn run_group(
         &calibration_fingerprint,
         &requested,
     );
+    if let Some(reason) = decision.fresh_reason() {
+        tracing::info!(
+            target_id = group_target_id,
+            filter = %group_filter_name,
+            "Full restack: {reason}"
+        );
+        state.stack_previews.update(job_id, |job| {
+            job.groups[group.index].resume_note = Some(format!("Full restack: {reason}"));
+        });
+    }
+    let checkpoint = decision.state();
     let reference_frame =
         FitsFrame::open(&group.frames[0].path).map_err(|error| error.to_string())?;
     let output_channels = if reference_frame.bayer.is_some() {
@@ -1622,6 +1681,10 @@ fn run_group(
                         "Stack checkpoint could not be reopened ({error}); rebuilding from scratch"
                     );
                     resume::discard(cache_root, database_id, group_target_id, &group_filter_name);
+                    state.stack_previews.update(job_id, |job| {
+                        job.groups[group.index].resume_note =
+                            Some("Full restack: the checkpoint could not be reopened".into());
+                    });
                     None
                 }
             }
@@ -2113,6 +2176,24 @@ fn manifest_path(cache_root: &FsPath, job_id: &str) -> PathBuf {
     stack_dir(cache_root, job_id).join("manifest.json")
 }
 
+/// Parse every `latest-project-*.json` directly inside a directory.
+pub(super) fn read_latest_indices<T: serde::de::DeserializeOwned>(directory: &FsPath) -> Vec<T> {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("latest-project-") && name.ends_with(".json"))
+        })
+        .filter_map(|entry| std::fs::read(entry.path()).ok())
+        .filter_map(|bytes| serde_json::from_slice(&bytes).ok())
+        .collect()
+}
+
 fn latest_path(cache_root: &FsPath, project_id: i32) -> PathBuf {
     cache_root
         .join("stack-previews")
@@ -2155,6 +2236,7 @@ mod tests {
             accepted_frames: 2,
             rejected_frames: 0,
             reused_frames: 0,
+            resume_note: None,
             output_channels: 1,
             sky_orientation: Some(sky_orientation()),
             reference_image_id: Some(image_id),

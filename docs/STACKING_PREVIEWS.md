@@ -60,10 +60,25 @@ checkpoint is only reused when it is provably an ancestor of the request:
 every recorded frame must still be requested with an identical source
 fingerprint, and the calibration set, Accepted-only policy, and stacking
 pipeline version must match. Removing a frame, regrading one in place,
-changing calibration, or upgrading Seiza rebuilds from scratch. A stopped
-build checkpoints the frames it finished, so building again continues where
-the stop landed instead of starting over. Checkpoints live in the project
-cache and cost one full-frame state file per target/channel.
+changing calibration, or upgrading Seiza rebuilds from scratch — and when a
+checkpoint existed but could not be extended, the card says why (`Full
+restack: calibration changed`), so a slow rebuild is never a mystery. A
+stopped build checkpoints the frames it finished, so building again continues
+where the stop landed instead of starting over. Checkpoints live in the
+project cache and cost one full-frame state file per target/channel.
+
+### Cache housekeeping
+
+Stack artifacts are content-addressed by job, so every rebuild writes a new
+directory and old ones used to accumulate forever. After a build settles, a
+janitor sweeps the stack cache and deletes what nothing references any more:
+mono and color job directories absent from every durable latest index and
+from the in-memory job list, and cached color inputs no kept job points at.
+An unreferenced directory is only deleted once it is an hour old, so a build
+writing artifacts at that moment is never swept. Resume checkpoints are
+replaced in place on every settle and are dropped only after thirty days
+untouched, so a stopped build stays resumable for a month while an abandoned
+target cannot hold full-frame accumulator state forever.
 
 A build belongs to the server, not to the page that started it. The header
 shows a **Stacking** indicator next to the cache and quality-analysis progress

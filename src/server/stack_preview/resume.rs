@@ -52,6 +52,30 @@ pub(super) struct ResumeState {
     pub manifest: ResumeManifest,
 }
 
+/// Whether a build may extend the checkpoint or must start over, and — when a
+/// checkpoint existed but could not be used — the reason, stated for the user.
+pub(super) enum ResumeDecision {
+    Resume(Box<ResumeState>),
+    /// `None` when no checkpoint existed: starting fresh is unremarkable.
+    Fresh(Option<&'static str>),
+}
+
+impl ResumeDecision {
+    pub fn state(self) -> Option<ResumeState> {
+        match self {
+            Self::Resume(state) => Some(*state),
+            Self::Fresh(_) => None,
+        }
+    }
+
+    pub fn fresh_reason(&self) -> Option<&'static str> {
+        match self {
+            Self::Resume(_) => None,
+            Self::Fresh(reason) => *reason,
+        }
+    }
+}
+
 /// One group identity has one checkpoint, replaced on every settle. The key
 /// hashes the identity so filter names never reach the filesystem.
 fn group_key(database_id: &str, target_id: i32, filter_name: &str) -> String {
@@ -94,9 +118,9 @@ pub(super) fn manifest_path(
     ))
 }
 
-/// Load and validate a checkpoint for this exact request. `None` means the
-/// build starts fresh; the reasons are logged, not surfaced, because a fresh
-/// build is always a correct answer.
+/// Load and validate a checkpoint for this exact request. A fresh decision is
+/// always a correct answer; when a checkpoint existed but was refused, the
+/// decision carries the reason so the build can say why it starts over.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn load(
     cache_root: &Path,
@@ -107,37 +131,30 @@ pub(super) fn load(
     stacking_version: &str,
     calibration_fingerprint: &str,
     requested: &[(i32, &str)],
-) -> Option<ResumeState> {
+) -> ResumeDecision {
     let manifest_path = manifest_path(cache_root, database_id, target_id, filter_name);
     let context_path = context_path(cache_root, database_id, target_id, filter_name);
     if !context_path.exists() {
-        return None;
+        return ResumeDecision::Fresh(None);
     }
-    let manifest: ResumeManifest = serde_json::from_slice(&std::fs::read(&manifest_path).ok()?)
-        .inspect_err(|error| {
-            tracing::warn!("Ignoring unreadable stack resume manifest: {error}");
-        })
-        .ok()?;
+    let manifest: Option<ResumeManifest> = std::fs::read(&manifest_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let Some(manifest) = manifest else {
+        return ResumeDecision::Fresh(Some("the last checkpoint was unreadable"));
+    };
     if manifest.schema_version != RESUME_SCHEMA_VERSION
         || manifest.stacking_version != stacking_version
         || manifest.target_id != target_id
         || manifest.filter_name != filter_name
-        || manifest.accepted_only != accepted_only
     {
-        tracing::info!(
-            target_id,
-            filter_name,
-            "Stack checkpoint predates the current pipeline; rebuilding from scratch"
-        );
-        return None;
+        return ResumeDecision::Fresh(Some("the stacking pipeline changed"));
+    }
+    if manifest.accepted_only != accepted_only {
+        return ResumeDecision::Fresh(Some("the Accepted-only policy changed"));
     }
     if manifest.calibration_fingerprint != calibration_fingerprint {
-        tracing::info!(
-            target_id,
-            filter_name,
-            "Calibration changed since the stack checkpoint; rebuilding from scratch"
-        );
-        return None;
+        return ResumeDecision::Fresh(Some("calibration changed"));
     }
     // Every checkpointed frame must still be requested, byte-identical. A
     // fingerprint mismatch means the file changed under the same image id.
@@ -151,17 +168,12 @@ pub(super) fn load(
         )
     });
     if !all_present {
-        tracing::info!(
-            target_id,
-            filter_name,
-            "Requested frames are not a superset of the stack checkpoint; rebuilding from scratch"
-        );
-        return None;
+        return ResumeDecision::Fresh(Some("frames were removed or changed since the last build"));
     }
-    Some(ResumeState {
+    ResumeDecision::Resume(Box::new(ResumeState {
         context_path,
         manifest,
-    })
+    }))
 }
 
 /// Persist a settled group's checkpoint: the manifest first to a temporary
@@ -250,7 +262,7 @@ mod tests {
     }
 
     fn try_load(cache_root: &Path, requested: &[(i32, &str)]) -> Option<ResumeState> {
-        load(cache_root, "db", 7, "Ha", false, "test", "cal-1", requested)
+        load(cache_root, "db", 7, "Ha", false, "test", "cal-1", requested).state()
     }
 
     #[test]
@@ -298,7 +310,7 @@ mod tests {
     fn changed_calibration_rebuilds_from_scratch() {
         let cache = tempfile::tempdir().unwrap();
         store(cache.path(), &manifest(vec![frame(1, "f1")]));
-        let resumed = load(
+        let decision = load(
             cache.path(),
             "db",
             7,
@@ -308,14 +320,14 @@ mod tests {
             "cal-2",
             &[(1, "f1"), (2, "f2")],
         );
-        assert!(resumed.is_none());
+        assert_eq!(decision.fresh_reason(), Some("calibration changed"));
     }
 
     #[test]
     fn another_pipeline_version_rebuilds_from_scratch() {
         let cache = tempfile::tempdir().unwrap();
         store(cache.path(), &manifest(vec![frame(1, "f1")]));
-        let resumed = load(
+        let decision = load(
             cache.path(),
             "db",
             7,
@@ -325,14 +337,17 @@ mod tests {
             "cal-1",
             &[(1, "f1"), (2, "f2")],
         );
-        assert!(resumed.is_none());
+        assert_eq!(
+            decision.fresh_reason(),
+            Some("the stacking pipeline changed")
+        );
     }
 
     #[test]
     fn a_different_accepted_only_policy_rebuilds_from_scratch() {
         let cache = tempfile::tempdir().unwrap();
         store(cache.path(), &manifest(vec![frame(1, "f1")]));
-        let resumed = load(
+        let decision = load(
             cache.path(),
             "db",
             7,
@@ -342,7 +357,10 @@ mod tests {
             "cal-1",
             &[(1, "f1"), (2, "f2")],
         );
-        assert!(resumed.is_none());
+        assert_eq!(
+            decision.fresh_reason(),
+            Some("the Accepted-only policy changed")
+        );
     }
 
     #[test]

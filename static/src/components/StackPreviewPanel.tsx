@@ -614,6 +614,9 @@ export default function StackPreviewPanel({
                     </header>
 
                     {outdated && <div className="stack-preview-outdated">{outdated}</div>}
+                    {progressGroup?.resume_note && (
+                      <div className="stack-preview-resume-note">{progressGroup.resume_note}</div>
+                    )}
 
                     {artifact && (
                       <div className="stack-preview-image">
