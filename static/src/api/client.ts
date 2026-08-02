@@ -692,6 +692,19 @@ export const apiClient = {
     return data.data;
   },
 
+  cancelStackPreviewJob: async (
+    dbId: string,
+    projectId: number,
+    jobId: string
+  ): Promise<StackPreviewJob> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<StackPreviewJob>>(
+      dbPath(dbId, `/projects/${projectId}/stack-previews/${encodeURIComponent(jobId)}/cancel`)
+    );
+    if (!data.data) throw new Error(data.error || 'Stack build could not be stopped');
+    return data.data;
+  },
+
   getStackActivity: async (): Promise<StackActivity> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<StackActivity>>('/stack-activity');

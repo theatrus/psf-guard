@@ -711,6 +711,7 @@ fn run_search_inner(
             &prepared.cache_root,
             &paths,
             Some(&directory_tree),
+            None,
         )
         .map_err(|error| error.to_string())?;
         if applied.fingerprint != group.expected_calibration_fingerprint {

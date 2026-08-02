@@ -39,6 +39,19 @@ the running job, so leaving the page and coming back restores the live per-card
 progress instead of an idle panel. The indicator names the target and channel
 being stacked, its frame counts, and how many further builds are waiting.
 
+## Stop a build
+
+**Stop** appears beside the build buttons while a build is queued or running.
+The stop takes effect between frames, between channels, and between
+calibration masters, so it lands within one frame's work rather than instantly.
+Building a single master runs inside Seiza and finishes before the stop is
+seen; that is a first build of a night's calibration set, not the usual case.
+Nothing partial is published: a channel that stops before its FITS and preview
+are written leaves no artifact, and the card says the channel was stopped.
+Channels that already finished keep their previews and are remembered as usual.
+Build again when you are ready; a stopped job is never reused as a cached
+result.
+
 ## Stack orientation
 
 A stack keeps the rotation of its reference frame. Registration matches star

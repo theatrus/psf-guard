@@ -25,6 +25,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path as FsPath, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Semaphore;
@@ -87,6 +88,9 @@ pub enum StackJobState {
     Running,
     Completed,
     Failed,
+    /// Stopped on request. Whatever the job had built is discarded; the
+    /// project's last successful previews are left alone.
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,6 +101,8 @@ pub enum StackGroupState {
     Ready,
     Skipped,
     Error,
+    /// Stopped before this channel finished, on request.
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -387,6 +393,10 @@ pub struct StackPreviewManager {
     jobs: Mutex<HashMap<String, StackPreviewJob>>,
     color_jobs: Mutex<HashMap<String, color::StackColorJob>>,
     artifact_jobs: Mutex<HashMap<String, artifact::ArtifactSearchJob>>,
+    /// Stop flags for stack jobs that are queued or running. The worker reads
+    /// its own flag between frames and phases; the entry is dropped when the
+    /// job leaves the queue.
+    cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     latest_write: Mutex<()>,
     permit: Arc<Semaphore>,
 }
@@ -397,6 +407,7 @@ impl StackPreviewManager {
             jobs: Mutex::new(HashMap::new()),
             color_jobs: Mutex::new(HashMap::new()),
             artifact_jobs: Mutex::new(HashMap::new()),
+            cancels: Mutex::new(HashMap::new()),
             latest_write: Mutex::new(()),
             permit: Arc::new(Semaphore::new(1)),
         }
@@ -404,6 +415,30 @@ impl StackPreviewManager {
 
     pub fn get(&self, job_id: &str) -> Option<StackPreviewJob> {
         self.jobs.lock().unwrap().get(job_id).cloned()
+    }
+
+    /// Register a stop flag for a job about to be queued.
+    fn track_cancel(&self, job_id: &str) -> Arc<AtomicBool> {
+        let flag = Arc::new(AtomicBool::new(false));
+        self.cancels
+            .lock()
+            .unwrap()
+            .insert(job_id.to_string(), Arc::clone(&flag));
+        flag
+    }
+
+    fn forget_cancel(&self, job_id: &str) {
+        self.cancels.lock().unwrap().remove(job_id);
+    }
+
+    /// Ask a queued or running job to stop. Returns false when the job is not
+    /// in flight, which includes a job that already finished.
+    pub fn request_cancel(&self, job_id: &str) -> bool {
+        let Some(flag) = self.cancels.lock().unwrap().get(job_id).cloned() else {
+            return false;
+        };
+        flag.store(true, Ordering::Relaxed);
+        true
     }
 
     /// Every queued or running stack build, oldest first. Jobs outlive the
@@ -453,7 +488,7 @@ impl StackPreviewManager {
                 .filter(|entry| {
                     matches!(
                         entry.state,
-                        StackJobState::Completed | StackJobState::Failed
+                        StackJobState::Completed | StackJobState::Failed | StackJobState::Cancelled
                     )
                 })
                 .min_by_key(|entry| entry.created_unix_seconds)
@@ -640,6 +675,33 @@ pub async fn start_stack_previews(
     }
     enqueue_job(Arc::clone(&state), prepared);
     Ok(Json(ApiResponse::success(response)))
+}
+
+/// Ask a queued or running stack build to stop. Returns the job as it stands;
+/// the worker settles it into `cancelled` within a frame's work. A job that
+/// already finished is refused rather than silently accepted, so the UI can
+/// tell "stopped" from "too late".
+pub async fn cancel_stack_preview_job(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, project_id, job_id)): Path<(String, i32, String)>,
+) -> Result<Json<ApiResponse<StackPreviewJob>>, AppError> {
+    validate_job_id(&job_id)?;
+    let job = state
+        .stack_previews
+        .get(&job_id)
+        .ok_or(AppError::NotFound)?;
+    if job.database_id != ctx.id || job.project_id != project_id {
+        return Err(AppError::NotFound);
+    }
+    if !state.stack_previews.request_cancel(&job_id) {
+        return Err(AppError::BadRequest(
+            "This stack build has already finished".into(),
+        ));
+    }
+    Ok(Json(ApiResponse::success(
+        state.stack_previews.get(&job_id).unwrap_or(job),
+    )))
 }
 
 /// Cross-database view of stack builds still in flight. The manager is
@@ -1264,16 +1326,29 @@ fn source_fingerprint(path: &FsPath) -> String {
 
 fn enqueue_job(state: Arc<AppState>, prepared: PreparedJob) {
     let permit = Arc::clone(&state.stack_previews.permit);
+    let cancel = state.stack_previews.track_cancel(&prepared.public.job_id);
     tokio::spawn(async move {
+        let job_id = prepared.public.job_id.clone();
         let Ok(_permit) = permit.acquire_owned().await else {
+            state.stack_previews.forget_cancel(&job_id);
             return;
         };
+        // Stack jobs run one at a time, so a job can wait here for minutes.
+        // A cancel during that wait means the work never starts.
+        if cancel.load(Ordering::Relaxed) {
+            state.stack_previews.update(&job_id, |job| {
+                cancel_unfinished_groups(job);
+                job.state = StackJobState::Cancelled;
+            });
+            state.stack_previews.forget_cancel(&job_id);
+            return;
+        }
         let guard = state.begin_interactive_job();
         let state_for_job = Arc::clone(&state);
-        let job_id = prepared.public.job_id.clone();
+        let cancel_for_job = Arc::clone(&cancel);
         let result = tokio::task::spawn_blocking(move || {
             let _guard = guard;
-            run_job(&state_for_job, prepared)
+            run_job(&state_for_job, prepared, &cancel_for_job)
         })
         .await;
         if let Err(error) = result {
@@ -1282,10 +1357,36 @@ fn enqueue_job(state: Arc<AppState>, prepared: PreparedJob) {
                 job.error = Some(format!("Stack worker panicked: {error}"));
             });
         }
+        state.stack_previews.forget_cancel(&job_id);
     });
 }
 
-fn run_job(state: &Arc<AppState>, prepared: PreparedJob) {
+/// Whether every channel reached a state the job cannot improve on. A channel
+/// that stopped short is not settled: it is work the stop took away.
+fn every_channel_settled(job: &StackPreviewJob) -> bool {
+    job.groups.iter().all(|group| {
+        matches!(
+            group.state,
+            StackGroupState::Ready | StackGroupState::Skipped | StackGroupState::Error
+        )
+    })
+}
+
+/// Mark whatever has not finished as cancelled. Channels that already produced
+/// an artifact keep their Ready state and their preview.
+fn cancel_unfinished_groups(job: &mut StackPreviewJob) {
+    for group in &mut job.groups {
+        if matches!(
+            group.state,
+            StackGroupState::Queued | StackGroupState::Running
+        ) {
+            group.state = StackGroupState::Cancelled;
+            group.phase = "cancelled".into();
+        }
+    }
+}
+
+fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool>) {
     let job_id = prepared.public.job_id.clone();
     let database_id = prepared.public.database_id.clone();
     let PreparedJob {
@@ -1298,28 +1399,35 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob) {
         job.state = StackJobState::Running;
     });
     let worker_policy = state.worker_policy();
+    let group_job = GroupJob {
+        database_id: &database_id,
+        job_id: &job_id,
+        cache_root: &cache_root,
+        north_up,
+        worker_policy: &worker_policy,
+        cancel,
+    };
     let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         for group in groups {
             if group.frames.len() < 2 {
                 continue;
             }
+            if cancel.load(Ordering::Relaxed) {
+                return;
+            }
             state.stack_previews.update(&job_id, |job| {
                 job.groups[group.index].state = StackGroupState::Running;
                 job.groups[group.index].phase = "calibration".into();
             });
-            let result = run_group(
-                state,
-                &database_id,
-                &job_id,
-                &cache_root,
-                group.clone(),
-                north_up,
-                &worker_policy,
-            );
+            let result = run_group(state, &group_job, group.clone());
             state.stack_previews.update(&job_id, |job| match result {
-                Ok(()) => {
+                Ok(GroupOutcome::Built) => {
                     job.groups[group.index].state = StackGroupState::Ready;
                     job.groups[group.index].phase = "ready".into();
+                }
+                Ok(GroupOutcome::Cancelled) => {
+                    job.groups[group.index].state = StackGroupState::Cancelled;
+                    job.groups[group.index].phase = "cancelled".into();
                 }
                 Err(error) => {
                     job.groups[group.index].state = StackGroupState::Error;
@@ -1329,7 +1437,15 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob) {
             });
         }
     }));
+    let cancelled = cancel.load(Ordering::Relaxed);
     state.stack_previews.update(&job_id, |job| match run {
+        // A stop that lands after the last channel finished took nothing away,
+        // so the job completed. Calling it cancelled would also stop the next
+        // build from reusing work that is sitting there finished.
+        Ok(()) if cancelled && !every_channel_settled(job) => {
+            cancel_unfinished_groups(job);
+            job.state = StackJobState::Cancelled;
+        }
         Ok(()) => job.state = StackJobState::Completed,
         Err(_) => {
             job.state = StackJobState::Failed;
@@ -1341,27 +1457,54 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob) {
     {
         tracing::warn!("Failed to persist stack preview manifest: {error}");
     }
+    // A cancelled job still remembers the channels it finished before the
+    // stop: those artifacts are complete and are what the user asked for.
     if let Some(job) = state.stack_previews.get(&job_id)
-        && job.state == StackJobState::Completed
+        && matches!(
+            job.state,
+            StackJobState::Completed | StackJobState::Cancelled
+        )
         && let Err(error) = state.stack_previews.persist_latest(&cache_root, &job)
     {
         tracing::warn!("Failed to persist latest stack preview index: {error}");
     }
 }
 
+/// Whether a channel produced an artifact or stopped on request. A failure is
+/// the error arm instead: a cancel is not a fault to report.
+enum GroupOutcome {
+    Built,
+    Cancelled,
+}
+
+/// Everything a group build needs from the job that owns it: where it writes,
+/// how the caller asked for it, and how it is told to stop.
+struct GroupJob<'a> {
+    database_id: &'a str,
+    job_id: &'a str,
+    cache_root: &'a FsPath,
+    north_up: bool,
+    worker_policy: &'a crate::concurrency::WorkerPolicy,
+    cancel: &'a Arc<AtomicBool>,
+}
+
 fn run_group(
     state: &Arc<AppState>,
-    database_id: &str,
-    job_id: &str,
-    cache_root: &FsPath,
+    job: &GroupJob<'_>,
     group: PreparedGroup,
-    north_up: bool,
-    worker_policy: &crate::concurrency::WorkerPolicy,
-) -> Result<(), String> {
+) -> Result<GroupOutcome, String> {
     use seiza_stacking::{
         FitsFrame, FrameDisposition, LiveStacker, NormalizationMode, StackOptions,
     };
 
+    let &GroupJob {
+        database_id,
+        job_id,
+        cache_root,
+        north_up,
+        worker_policy,
+        cancel,
+    } = job;
     let ctx = state
         .get_database(database_id)
         .ok_or_else(|| format!("Database {database_id} is no longer configured"))?;
@@ -1378,14 +1521,19 @@ fn run_group(
         .iter()
         .map(|frame| frame.path.clone())
         .collect::<Vec<_>>();
-    let (calibration_masters, applied_calibration) =
-        crate::calibration::resolve_or_build_masters_for_group(
-            &calibration_conn,
-            cache_root,
-            &light_paths,
-            Some(&directory_tree),
-        )
-        .map_err(|error| error.to_string())?;
+    // Building a night of masters is minutes of work, so the stop flag reaches
+    // between them too.
+    let masters = crate::calibration::resolve_or_build_masters_for_group(
+        &calibration_conn,
+        cache_root,
+        &light_paths,
+        Some(&directory_tree),
+        Some(cancel.as_ref()),
+    );
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(GroupOutcome::Cancelled);
+    }
+    let (calibration_masters, applied_calibration) = masters.map_err(|error| error.to_string())?;
     state.stack_previews.update(job_id, |job| {
         let status = &mut job.groups[group.index];
         status.calibration = applied_calibration;
@@ -1465,6 +1613,11 @@ fn run_group(
         });
 
         for frame in group.frames.iter().skip(1) {
+            // Registering and integrating one frame is the unit of work here,
+            // so this is where a stop takes effect.
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(GroupOutcome::Cancelled);
+            }
             let opened = FitsFrame::open(&frame.path);
             let exposure = opened
                 .as_ref()
@@ -1536,6 +1689,14 @@ fn run_group(
                 status.frames.push(decision);
             });
         }
+        // Last exit before the job writes anything. Orienting and rendering
+        // follow, and a stop after this point would have to clean up published
+        // artifacts.
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(GroupOutcome::Cancelled);
+        }
+        // Only a north-up build has a solve and a reprojection worth naming;
+        // keeping the reference frame's rotation goes straight to rendering.
         if north_up {
             state.stack_previews.update(job_id, |job| {
                 job.groups[group.index].phase = "orienting".into();
@@ -1629,7 +1790,7 @@ fn run_group(
             &preview_path(cache_root, job_id, group.index),
             &original_preview_path(cache_root, job_id, group.index),
         )
-        .map(|_| ())
+        .map(|_| GroupOutcome::Built)
     })
 }
 
@@ -1861,6 +2022,82 @@ mod tests {
             groups,
             error: None,
         }
+    }
+
+    #[test]
+    fn cancel_reaches_a_tracked_job_and_nothing_else() {
+        let manager = StackPreviewManager::new();
+        assert!(!manager.request_cancel("never-queued"));
+
+        let flag = manager.track_cancel("queued");
+        assert!(!flag.load(Ordering::Relaxed));
+        assert!(manager.request_cancel("queued"));
+        assert!(flag.load(Ordering::Relaxed));
+
+        // A job that has left the queue cannot be cancelled again, so the
+        // handler can answer "too late" instead of pretending it stopped.
+        manager.forget_cancel("queued");
+        assert!(!manager.request_cancel("queued"));
+    }
+
+    #[test]
+    fn cancelling_keeps_the_channels_that_already_finished() {
+        let ready = ready_group(42, "Ha", 1);
+        let mut running = ready_group(42, "OIII", 2);
+        running.index = 1;
+        running.state = StackGroupState::Running;
+        let mut queued = ready_group(42, "SII", 3);
+        queued.index = 2;
+        queued.state = StackGroupState::Queued;
+        let mut job = completed_job("mixed", vec![ready, running, queued]);
+
+        cancel_unfinished_groups(&mut job);
+
+        assert_eq!(job.groups[0].state, StackGroupState::Ready);
+        assert_eq!(job.groups[0].phase, "ready");
+        assert_eq!(job.groups[1].state, StackGroupState::Cancelled);
+        assert_eq!(job.groups[2].state, StackGroupState::Cancelled);
+    }
+
+    #[test]
+    fn a_stop_that_lands_after_the_last_channel_leaves_the_job_complete() {
+        let mut skipped = ready_group(42, "SII", 3);
+        skipped.index = 1;
+        skipped.state = StackGroupState::Skipped;
+        let finished = completed_job("finished", vec![ready_group(42, "Ha", 1), skipped]);
+        assert!(every_channel_settled(&finished));
+
+        let mut stopped = finished.clone();
+        stopped.groups[1].state = StackGroupState::Cancelled;
+        assert!(!every_channel_settled(&stopped));
+
+        let mut queued = finished;
+        queued.groups[1].state = StackGroupState::Queued;
+        assert!(!every_channel_settled(&queued));
+    }
+
+    #[test]
+    fn a_cancelled_job_still_remembers_the_channel_it_finished() {
+        let cache = tempfile::tempdir().unwrap();
+        let mut job = completed_job(
+            "stopped",
+            vec![ready_group(42, "Ha", 1), {
+                let mut cancelled = ready_group(42, "OIII", 2);
+                cancelled.index = 1;
+                cancelled.state = StackGroupState::Cancelled;
+                cancelled
+            }],
+        );
+        job.state = StackJobState::Cancelled;
+
+        persist_latest_groups(cache.path(), &job).unwrap();
+
+        let latest: LatestStackPreviews = serde_json::from_slice(
+            &std::fs::read(latest_path(cache.path(), job.project_id)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(latest.groups.len(), 1);
+        assert_eq!(latest.groups[0].group.filter_name, "Ha");
     }
 
     #[test]
