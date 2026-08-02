@@ -248,15 +248,33 @@ linear channel independently. Background extraction is enabled for new UI
 builds and defaults to additive subtraction, which removes the fitted gradient
 while preserving that channel's robust sky reference level. Multiplicative
 division is available for vignetting-like fields, and extraction can be
-disabled when the source stacks are already corrected. After correction, each
+disabled when the source stacks are already corrected. A strength control can
+apply part of the fitted correction when a full pass is too strong.
+
+The default automatic model compares constant, linear, and quadratic surfaces
+on held-out samples, then picks the simplest model that earns a clear
+improvement. It does not consider a radial-basis surface by default. That model
+can follow smaller-scale variation, but costs more to apply and can mistake
+real extended emission for sky. Enable it only as an advanced option, or select
+a fixed polynomial or radial-basis model for manual control.
+
+When a channel stack has a fresh pixel-derived plate solve, PSF Guard protects
+large cataloged emission regions from background sampling. It uses closed
+catalog or curated contours when the object catalog supplies them, then falls
+back to the object's projected ellipse. Embedded FITS WCS alone does not enable
+this protection. Each channel uses its own stack reference frame. The manifest
+records the reference image, catalog version, object names, and normalized
+regions. These values also form part of the cache key, so a new solve or
+catalog projection cannot reuse a fit made with stale bounds. After correction,
+each
 non-reference stack is registered to R for RGB, L for LRGB, or H-alpha for
 narrowband, using the same bounded Seiza star/similarity registration used by
 the Seiza color CLI.
 
-The **Processing stack** editor exposes the background correction mode plus
-Seiza's polynomial degree, sample-grid density and radius, sample-search steps,
-sample and fit rejection thresholds, rejection passes, border exclusion, and
-ridge regularization. After registration it applies optional per-role
+The **Processing stack** editor exposes correction mode and strength, automatic
+or fixed surface selection, sample-grid density and radius, sample-search
+steps, sample and fit rejection thresholds, rejection passes, border exclusion,
+and model-specific controls. After registration it applies optional per-role
 deconvolution while each physical input is still linear, then robustly
 normalizes the result and applies that role's ordered stretch stages before
 composition. Deconvolution is independently opt-in for L/R/G/B or
@@ -279,9 +297,10 @@ the exact processed color result, records `COLORSPC`, `SEIZACLR`, and
 stack. The manifest retains the requested background configuration,
 per-channel deconvolution parameters and peak/flux diagnostics, and stage
 arrays, plus each resolved background model and Seiza stretch plan. The UI
-reports accepted/candidate sample counts and the resolved sample radius for
-every input role. The complete processing definition,
-resolved dependency versions, and source revisions are part of the job ID, so
+reports the chosen surface, accepted/candidate sample counts, resolved sample
+radius, protected-region count, and protected object names for every input
+role. The complete processing definition, resolved dependency versions, source
+revisions, and solver-derived protection are part of the job ID, so
 applying the same pipeline restores its prior artifact. Artifacts from before
 background extraction are rebuilt with the new additive default; a current
 artifact whose extraction was explicitly disabled keeps that choice.
@@ -439,7 +458,10 @@ endpoint returns the durable last-successful result for each target/channel.
 The color catalog reports role/palette availability and durable results. Its
 POST body is `{ "target_id": 42, "kind": "rgb", "force": false,
 "processing": { "background_extraction": { "correction_mode": "subtract",
-"config": { "model": { "kind": "polynomial", "degree": 2, "ridge": 1e-8 },
+"strength": 1.0, "config": { "model": { "kind": "automatic",
+"max_degree": 2, "ridge": 1e-8, "rbf_smoothing": 0.01,
+"max_control_points": 192, "allow_radial_basis": false,
+"minimum_improvement": 0.08 },
 "samples_per_axis": 12, "sample_radius": null, "search_steps": 4,
 "sample_rejection_sigma": 3.5, "fit_rejection_sigma": 3.0,
 "fit_rejection_iterations": 3, "border_fraction": 0.03 } },
@@ -452,7 +474,9 @@ POST body is `{ "target_id": 42, "kind": "rgb", "force": false,
 `{ "target_id": 42, "kind": "lrgb", "force": false }`, or
 `{ "target_id": 42, "kind": "narrowband", "palette": "foraxx-hoo",
 "force": false }`. Omitting `processing` retains the earlier linear quick-look
-behavior for API compatibility. Mono stretch POST bodies use Seiza's tagged model shape, for
+behavior for API compatibility. Clients cannot submit `protected_regions`;
+the server derives them from fresh plate-solve evidence. Mono stretch POST
+bodies use Seiza's tagged model shape, for
 example `{ "model": { "type": "percentile-asinh", "black_percentile":
 0.01, "white_percentile": 0.995, "strength": 8.0 }, "color_strategy":
 "luminance-preserving", "deconvolution": null }`. Replace `null` with the

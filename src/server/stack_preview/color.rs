@@ -19,7 +19,7 @@ use axum::{
     Json,
 };
 use rayon::ThreadPoolBuilder;
-use seiza_background::{BackgroundConfig, BackgroundFit, CorrectionMode};
+use seiza_background::{BackgroundConfig, BackgroundFit, CorrectionMode, ProtectedRegion};
 use seiza_stacking::{
     combine_lrgb, combine_narrowband, combine_rgb, resample_to_reference, write_color_fits_f32,
     write_processed_image_fits_f32, ColorComposition, ColorNormalization, ColorOptions,
@@ -42,7 +42,7 @@ use crate::server::state::AppState;
 
 const STACK_COLOR_CACHE_VERSION: u32 = 7;
 const COLOR_INPUT_CACHE_VERSION: u32 = 3;
-const SEIZA_BACKGROUND_VERSION: &str = "0.1.0";
+const SEIZA_BACKGROUND_VERSION: &str = "0.2.0";
 const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
 const COLOR_BYTES_PER_PIXEL: u64 = 64;
 const COLOR_DECONVOLUTION_BYTES_PER_PIXEL: u64 = 40;
@@ -178,6 +178,13 @@ pub struct StackBackgroundExtraction {
     pub config: BackgroundConfig,
     #[serde(default)]
     pub correction_mode: CorrectionMode,
+    /// Fraction of the fitted correction applied to each channel.
+    #[serde(default = "full_background_strength")]
+    pub strength: f64,
+}
+
+const fn full_background_strength() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,7 +244,20 @@ pub struct StackColorSource {
     pub artifact_revision: String,
     pub accepted_frames: usize,
     #[serde(default)]
+    pub reference_image_id: Option<i32>,
+    #[serde(default)]
     pub registration_transform: Option<seiza_stacking::SimilarityTransform>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StackBackgroundProtection {
+    pub reference_image_id: i32,
+    #[serde(default)]
+    pub catalog_version: Option<String>,
+    #[serde(default)]
+    pub object_names: Vec<String>,
+    #[serde(default)]
+    pub regions: Vec<ProtectedRegion>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -279,6 +299,10 @@ pub struct StackColorJob {
     pub resolved_output_stretches: Vec<serde_json::Value>,
     #[serde(default)]
     pub resolved_backgrounds: BTreeMap<StackColorRole, BackgroundFit>,
+    /// Fresh pixel-solve catalog regions used to keep real extended emission
+    /// out of the background samples. These are part of the cache identity.
+    #[serde(default)]
+    pub resolved_background_protection: BTreeMap<StackColorRole, StackBackgroundProtection>,
     pub preview_url: String,
     pub fits_url: String,
     pub error: Option<String>,
@@ -834,6 +858,22 @@ fn validate_request(request: &StackColorRequest) -> Result<(), AppError> {
                     composition_label(request.kind, request.palette)
                 )));
             }
+            if let Some(extraction) = &processing.background_extraction {
+                if !extraction.config.protected_regions.is_empty() {
+                    return Err(AppError::BadRequest(
+                        "Background protected regions come from fresh plate solves and cannot be supplied by the client"
+                            .into(),
+                    ));
+                }
+                if !extraction.strength.is_finite() || !(0.0..=1.0).contains(&extraction.strength) {
+                    return Err(AppError::BadRequest(
+                        "Background correction strength must be between 0 and 1".into(),
+                    ));
+                }
+                extraction.config.validate().map_err(|error| {
+                    AppError::BadRequest(format!("Invalid background settings: {error}"))
+                })?;
+            }
             if let Some(error) = processing
                 .input_deconvolutions
                 .values()
@@ -908,12 +948,28 @@ fn prepare_color_job(
         }
     }
 
+    let resolved_background_protection = if request
+        .processing
+        .as_ref()
+        .is_some_and(|processing| processing.background_extraction.is_some())
+    {
+        resolve_background_protection(ctx, &sources)
+    } else {
+        BTreeMap::new()
+    };
     let label = composition_label(request.kind, request.palette).to_string();
     let linear_input_id = request
         .processing
         .as_ref()
         .map(|processing| {
-            color_input_cache_id(&ctx.id, project_id, request.target_id, processing, &sources)
+            color_input_cache_id(
+                &ctx.id,
+                project_id,
+                request.target_id,
+                processing,
+                &sources,
+                &resolved_background_protection,
+            )
         })
         .transpose()?;
     let mut hasher = Sha256::new();
@@ -936,6 +992,11 @@ fn prepare_color_job(
             "Failed to encode color processing options: {error}"
         ))
     })?);
+    hasher.update(
+        serde_json::to_vec(&resolved_background_protection).map_err(|error| {
+            AppError::InternalError(format!("Failed to encode background protection: {error}"))
+        })?,
+    );
     for source in &sources {
         hasher.update([source.role as u8]);
         hasher.update(source.filter_name.as_bytes());
@@ -984,6 +1045,7 @@ fn prepare_color_job(
             resolved_input_deconvolutions: BTreeMap::new(),
             resolved_output_stretches: Vec::new(),
             resolved_backgrounds: BTreeMap::new(),
+            resolved_background_protection,
             preview_url: format!(
                 "/api/db/{}/stack-previews/color/{job_id}/preview?v={artifact_revision}",
                 ctx.id
@@ -1006,6 +1068,7 @@ fn color_input_cache_id(
     target_id: i32,
     processing: &StackColorProcessing,
     sources: &[StackColorSource],
+    resolved_background_protection: &BTreeMap<StackColorRole, StackBackgroundProtection>,
 ) -> Result<String, AppError> {
     let mut hasher = Sha256::new();
     hasher.update(database_id.as_bytes());
@@ -1023,6 +1086,7 @@ fn color_input_cache_id(
         serde_json::to_vec(&(
             &processing.background_extraction,
             &processing.input_deconvolutions,
+            resolved_background_protection,
         ))
         .map_err(|error| {
             AppError::InternalError(format!("Failed to encode color input processing: {error}"))
@@ -1040,6 +1104,97 @@ fn color_input_cache_id(
         write!(&mut id, "{byte:02x}").expect("writing to a String cannot fail");
     }
     Ok(id)
+}
+
+fn resolve_background_protection(
+    ctx: &crate::server::database_context::DatabaseContext,
+    sources: &[StackColorSource],
+) -> BTreeMap<StackColorRole, StackBackgroundProtection> {
+    sources
+        .iter()
+        .filter_map(|source| {
+            let reference_image_id = source.reference_image_id?;
+            let analysis = ctx.astrometry_evidence.evidence_for_source(
+                &ctx.cache_dir_path,
+                reference_image_id,
+                None,
+            )?;
+            let solution = analysis.solution.as_ref()?;
+            let (regions, object_names) = background_regions_from_solution(solution);
+            Some((
+                source.role,
+                StackBackgroundProtection {
+                    reference_image_id,
+                    catalog_version: solution.catalog_version.clone(),
+                    object_names,
+                    regions,
+                },
+            ))
+        })
+        .collect()
+}
+
+fn background_regions_from_solution(
+    solution: &crate::astrometry::AstrometrySolutionResponse,
+) -> (Vec<ProtectedRegion>, Vec<String>) {
+    let width = solution.image_width as usize;
+    let height = solution.image_height as usize;
+    if width < 2 || height < 2 {
+        return (Vec::new(), Vec::new());
+    }
+
+    let mut regions = Vec::new();
+    let mut object_names = Vec::new();
+    for object in crate::sequence_analysis::cataloged_extended_emission_objects(solution) {
+        let before = regions.len();
+        for outline in &object.outlines {
+            if !matches!(outline.quality.as_str(), "catalog" | "curated") {
+                continue;
+            }
+            for contour in &outline.contours {
+                if contour.closed
+                    && let Ok(region) =
+                        ProtectedRegion::polygon_from_pixels(&contour.points, width, height)
+                {
+                    regions.push(region);
+                }
+            }
+        }
+        if regions.len() == before
+            && object.x.is_finite()
+            && object.y.is_finite()
+            && object.semi_major_px.is_finite()
+            && object.semi_minor_px.is_finite()
+            && object.semi_major_px > 0.0
+            && object.semi_minor_px > 0.0
+        {
+            let angle = object.angle_deg.unwrap_or(0.0).to_radians();
+            let points = (0..48)
+                .map(|index| {
+                    let phase = std::f64::consts::TAU * index as f64 / 48.0;
+                    let major = object.semi_major_px * phase.cos();
+                    let minor = object.semi_minor_px * phase.sin();
+                    [
+                        object.x + major * angle.cos() - minor * angle.sin(),
+                        object.y + major * angle.sin() + minor * angle.cos(),
+                    ]
+                })
+                .collect::<Vec<_>>();
+            if let Ok(region) = ProtectedRegion::polygon_from_pixels(&points, width, height) {
+                regions.push(region);
+            }
+        }
+        if regions.len() > before {
+            object_names.push(if object.common_name.is_empty() {
+                object.name.clone()
+            } else {
+                object.common_name.clone()
+            });
+        }
+    }
+    object_names.sort();
+    object_names.dedup();
+    (regions, object_names)
 }
 
 fn required_roles(
@@ -1368,12 +1523,18 @@ fn compose_color(
                     Some(source.role),
                     None,
                 );
+                let mut config = extraction.config.clone();
+                config.protected_regions = job
+                    .resolved_background_protection
+                    .get(&source.role)
+                    .map(|protection| protection.regions.clone())
+                    .unwrap_or_default();
                 let fit = seiza_background::fit_background(
                     &frame.image.data,
                     frame.image.width,
                     frame.image.height,
                     frame.image.channels,
-                    &extraction.config,
+                    &config,
                 )
                 .map_err(|error| {
                     format!("Failed to fit {} background: {error}", source.role.label())
@@ -1385,13 +1546,17 @@ fn compose_color(
                     Some(source.role),
                     None,
                 );
-                fit.correct_in_place(&mut frame.image.data, extraction.correction_mode)
-                    .map_err(|error| {
-                        format!(
-                            "Failed to correct {} background: {error}",
-                            source.role.label()
-                        )
-                    })?;
+                fit.correct_in_place_with_strength(
+                    &mut frame.image.data,
+                    extraction.correction_mode,
+                    extraction.strength,
+                )
+                .map_err(|error| {
+                    format!(
+                        "Failed to correct {} background: {error}",
+                        source.role.label()
+                    )
+                })?;
                 progress.advance(StackColorProgressPhase::BackgroundPreparation, 1);
                 state.stack_previews.update_color(&job.job_id, |current| {
                     current
@@ -2020,6 +2185,7 @@ fn collect_sources(
                 group_index: entry.group.index,
                 artifact_revision: entry.artifact_revision.clone(),
                 accepted_frames: entry.group.accepted_frames,
+                reference_image_id: entry.group.reference_image_id,
                 registration_transform: None,
             });
     }
@@ -2353,6 +2519,103 @@ mod tests {
         }
     }
 
+    fn background_solution(
+        outlines: Vec<crate::astrometry::OverlayOutlineResponse>,
+    ) -> crate::astrometry::AstrometrySolutionResponse {
+        use crate::astrometry::{
+            AstrometrySolutionResponse, CatalogObjectIdentity, OverlayObjectResponse, WcsResponse,
+        };
+        AstrometrySolutionResponse {
+            center_ra_deg: 0.0,
+            center_dec_deg: 0.0,
+            pixel_scale_arcsec_per_pixel: 1.0,
+            matched_stars: 30,
+            rms_arcsec: 0.5,
+            image_width: 101,
+            image_height: 101,
+            wcs: WcsResponse {
+                crval: [0.0, 0.0],
+                crpix: [50.0, 50.0],
+                cd: [[0.0, 0.0], [0.0, 0.0]],
+                ctype: ["RA---TAN".into(), "DEC--TAN".into()],
+                cunit: ["deg".into(), "deg".into()],
+                radesys: "ICRS".into(),
+                equinox: 2000.0,
+            },
+            footprint: Vec::new(),
+            objects: vec![OverlayObjectResponse {
+                identity: CatalogObjectIdentity::default(),
+                name: "NGC 1499".into(),
+                common_name: "California Nebula".into(),
+                kind: "nebula".into(),
+                mag: None,
+                x: 50.0,
+                y: 50.0,
+                semi_major_px: 30.0,
+                semi_minor_px: 18.0,
+                angle_deg: Some(12.0),
+                ra_deg: 0.0,
+                dec_deg: 0.0,
+                prominence: None,
+                discovered: None,
+                near_capture: None,
+                distance_au: None,
+                direction_pa_deg: None,
+                direction_angle_deg: None,
+                outlines,
+            }],
+            catalog_version: Some("openngc-test".into()),
+            capture_time: None,
+        }
+    }
+
+    #[test]
+    fn catalog_outline_is_preferred_for_background_protection() {
+        use crate::astrometry::{OverlayContourResponse, OverlayOutlineResponse};
+        let solution = background_solution(vec![OverlayOutlineResponse {
+            geometry_id: "outline".into(),
+            source_record_id: "ngc1499".into(),
+            role: "catalog-extent".into(),
+            quality: "catalog".into(),
+            level: None,
+            contours: vec![OverlayContourResponse {
+                closed: true,
+                points: vec![[10.0, 20.0], [90.0, 20.0], [50.0, 80.0]],
+            }],
+        }]);
+
+        let (regions, names) = background_regions_from_solution(&solution);
+
+        assert_eq!(names, ["California Nebula"]);
+        assert!(matches!(
+            regions.as_slice(),
+            [ProtectedRegion::Polygon { .. }]
+        ));
+    }
+
+    #[test]
+    fn estimated_outline_falls_back_to_projected_catalog_ellipse() {
+        use crate::astrometry::{OverlayContourResponse, OverlayOutlineResponse};
+        let solution = background_solution(vec![OverlayOutlineResponse {
+            geometry_id: "estimate".into(),
+            source_record_id: "ngc1499".into(),
+            role: "fallback-extent".into(),
+            quality: "estimated".into(),
+            level: None,
+            contours: vec![OverlayContourResponse {
+                closed: true,
+                points: vec![[10.0, 20.0], [90.0, 20.0], [50.0, 80.0]],
+            }],
+        }]);
+
+        let (regions, _) = background_regions_from_solution(&solution);
+
+        assert!(matches!(
+            regions.as_slice(),
+            [ProtectedRegion::Polygon { .. }]
+        ));
+    }
+
     #[test]
     fn recognizes_common_scheduler_filter_names_conservatively() {
         assert_eq!(
@@ -2514,11 +2777,43 @@ mod tests {
     }
 
     #[test]
+    fn rejects_client_background_regions_and_invalid_strength() {
+        let request = |extraction| StackColorRequest {
+            target_id: 1,
+            kind: StackColorKind::Rgb,
+            palette: None,
+            force: false,
+            processing: Some(StackColorProcessing {
+                background_extraction: Some(extraction),
+                ..StackColorProcessing::default()
+            }),
+        };
+        let mut invalid_strength = StackBackgroundExtraction {
+            config: BackgroundConfig::default(),
+            correction_mode: CorrectionMode::Subtract,
+            strength: 1.1,
+        };
+        assert!(validate_request(&request(invalid_strength.clone())).is_err());
+
+        invalid_strength.strength = 1.0;
+        invalid_strength
+            .config
+            .protected_regions
+            .push(ProtectedRegion::Ellipse {
+                center: [0.5, 0.5],
+                radii: [0.2, 0.1],
+                rotation_degrees: 0.0,
+            });
+        assert!(validate_request(&request(invalid_strength)).is_err());
+    }
+
+    #[test]
     fn progress_ledger_accounts_for_every_pipeline_phase() {
         let processing = StackColorProcessing {
             background_extraction: Some(StackBackgroundExtraction {
                 config: BackgroundConfig::default(),
                 correction_mode: CorrectionMode::Subtract,
+                strength: 1.0,
             }),
             input_deconvolutions: BTreeMap::from([(
                 StackColorRole::Red,
@@ -2606,6 +2901,7 @@ mod tests {
             group_index: 0,
             artifact_revision: format!("revision-{index}"),
             accepted_frames: 4,
+            reference_image_id: Some(index as i32 + 1),
             registration_transform: None,
         })
         .collect::<Vec<_>>();
@@ -2631,9 +2927,10 @@ mod tests {
                 }),
                 color_strategy: seiza_stretch::ColorStrategy::Linked,
             });
-        let first_id = color_input_cache_id("db", 2, 3, &first, &sources).unwrap();
+        let protection = BTreeMap::new();
+        let first_id = color_input_cache_id("db", 2, 3, &first, &sources, &protection).unwrap();
         let changed_stretch_id =
-            color_input_cache_id("db", 2, 3, &changed_stretch, &sources).unwrap();
+            color_input_cache_id("db", 2, 3, &changed_stretch, &sources, &protection).unwrap();
         let mut changed_linear = first;
         changed_linear
             .input_deconvolutions
@@ -2641,10 +2938,27 @@ mod tests {
             .unwrap()
             .amount = 0.5;
         let changed_linear_id =
-            color_input_cache_id("db", 2, 3, &changed_linear, &sources).unwrap();
+            color_input_cache_id("db", 2, 3, &changed_linear, &sources, &protection).unwrap();
+        let changed_protection = BTreeMap::from([(
+            StackColorRole::Red,
+            StackBackgroundProtection {
+                reference_image_id: 1,
+                catalog_version: Some("catalog-v2".into()),
+                object_names: vec!["California Nebula".into()],
+                regions: vec![ProtectedRegion::Ellipse {
+                    center: [0.5, 0.5],
+                    radii: [0.3, 0.2],
+                    rotation_degrees: 0.0,
+                }],
+            },
+        )]);
+        let changed_protection_id =
+            color_input_cache_id("db", 2, 3, &changed_stretch, &sources, &changed_protection)
+                .unwrap();
 
         assert_eq!(first_id, changed_stretch_id);
         assert_ne!(first_id, changed_linear_id);
+        assert_ne!(first_id, changed_protection_id);
     }
 
     #[test]
