@@ -55,6 +55,8 @@ color stacks, and a Sequence view that keeps its place as you grade.
 ## Fixed
 
 - Opening the Overview no longer loses the project you were working in.
+- Color background extraction retries without catalog protection when a
+  protected fit fails. The processing stack also lets you turn protection off.
 - Closing an image detail returns to the view that opened it, at the position
   it was left, including a partly visible Sequence card.
 - Background protection follows the stack's own geometry.

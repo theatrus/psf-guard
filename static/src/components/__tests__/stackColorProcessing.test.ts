@@ -27,6 +27,7 @@ describe('stack color processing defaults', () => {
     expect(processing.input_deconvolutions).toEqual({});
     expect(processing.background_extraction?.correction_mode).toBe('subtract');
     expect(processing.background_extraction?.strength).toBe(1);
+    expect(processing.background_extraction?.protect_catalog_emission).toBe(true);
     expect(processing.background_extraction?.config.model).toMatchObject({
       kind: 'automatic',
       max_degree: 2,
@@ -86,6 +87,28 @@ describe('stack color processing defaults', () => {
       cache_version: BACKGROUND_COLOR_CACHE_VERSION,
       processing,
     }, ['red', 'green', 'blue']).background_extraction?.strength).toBe(1);
+  });
+
+  it('enables catalog protection for older background requests', () => {
+    const processing = defaultColorProcessing(['red', 'green', 'blue']);
+    delete (processing.background_extraction as Partial<
+      NonNullable<typeof processing.background_extraction>
+    >).protect_catalog_emission;
+
+    expect(processingForColorBuild({
+      cache_version: BACKGROUND_COLOR_CACHE_VERSION,
+      processing,
+    }, ['red', 'green', 'blue']).background_extraction?.protect_catalog_emission).toBe(true);
+  });
+
+  it('keeps an explicit catalog protection opt-out', () => {
+    const processing = defaultColorProcessing(['red', 'green', 'blue']);
+    processing.background_extraction!.protect_catalog_emission = false;
+
+    expect(processingForColorBuild({
+      cache_version: BACKGROUND_COLOR_CACHE_VERSION,
+      processing,
+    }, ['red', 'green', 'blue']).background_extraction?.protect_catalog_emission).toBe(false);
   });
 
   it('uses conservative upstream defaults only after deconvolution is enabled', () => {
