@@ -395,6 +395,10 @@ async fn run_server_internal(
             get(stack_preview::get_stack_preview_job),
         )
         .route(
+            "/projects/{project_id}/stack-previews/{job_id}/cancel",
+            post(stack_preview::cancel_stack_preview_job),
+        )
+        .route(
             "/stack-previews/{job_id}/{group_index}/preview",
             get(stack_preview::get_stack_preview_image),
         )

@@ -3335,7 +3335,8 @@
 }
 
 .stack-preview-build,
-.stack-preview-rebuild {
+.stack-preview-rebuild,
+.stack-preview-stop {
   padding: 0.48rem 0.8rem;
   border-radius: 5px;
   font-size: 0.82rem;
@@ -3352,6 +3353,15 @@
   color: var(--color-text-primary);
   background: var(--color-bg-tertiary);
   border-color: var(--color-bg-quaternary);
+}
+
+/* Stopping a build is destructive of work in flight, so it reads as a
+   warning rather than a second primary action. */
+.stack-preview-stop {
+  color: var(--color-warning);
+  background: var(--color-bg-tertiary);
+  border-color: var(--color-warning);
+  font-weight: 600;
 }
 
 .stack-preview-message {
@@ -3405,6 +3415,12 @@
 
 .stack-preview-state.remembered {
   color: var(--color-text-muted);
+}
+
+.stack-preview-state.cancelled,
+.stack-group-state.cancelled {
+  color: var(--color-warning);
+  border-color: var(--color-warning);
 }
 
 .stack-group-state.not-built {
@@ -3653,6 +3669,10 @@
   color: var(--color-error);
 }
 
+.stack-preview-progress.cancelled .stack-preview-progress-copy {
+  color: var(--color-warning);
+}
+
 .stack-preview-progress.failed .stack-preview-progress-copy {
   color: var(--color-error);
 }
@@ -3679,6 +3699,10 @@
 
 .stack-preview-progress.completed .stack-preview-progress-track > span {
   background: var(--color-success);
+}
+
+.stack-preview-progress.cancelled .stack-preview-progress-track > span {
+  background: var(--color-warning);
 }
 
 .stack-preview-progress.error .stack-preview-progress-track > span {

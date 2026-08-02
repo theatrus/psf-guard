@@ -882,11 +882,15 @@ pub fn selection_fingerprint(
     Ok(selection_hash(&selected))
 }
 
+/// Match a light against the calibration library and build whatever masters
+/// it needs. `cancel` is handed to Seiza, which checks it once per input
+/// frame; a cancelled build leaves no master behind.
 pub fn resolve_or_build_masters(
     conn: &Connection,
     cache_root: &Path,
     light_path: &Path,
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
+    cancel: Option<seiza_stacking::CancelSignal>,
 ) -> Result<(seiza_stacking::CalibrationMasters, AppliedCalibration)> {
     let light = crate::commands::import::headers::read_frame_meta(light_path);
     let mut selected = select_for_light(conn, &light)?;
@@ -929,6 +933,7 @@ pub fn resolve_or_build_masters(
         CalibrationKind::Bias,
         &selected.bias,
         MasterInputs::default(),
+        cancel.as_ref(),
     )?;
     applied.bias_master = bias.as_ref().map(|master| master.label());
 
@@ -947,6 +952,7 @@ pub fn resolve_or_build_masters(
             bias_dependency: bias.as_ref(),
             ..Default::default()
         },
+        cancel.as_ref(),
     )?;
     applied.dark_flat_master = dark_flat.as_ref().map(|master| master.label());
     let flat_dark = dark_flat
@@ -974,6 +980,7 @@ pub fn resolve_or_build_masters(
             bias_dependency: bias.as_ref(),
             ..Default::default()
         },
+        cancel.as_ref(),
     )?;
     applied.dark_master = dark.as_ref().map(|master| master.label());
     let flat = build_master(
@@ -987,6 +994,7 @@ pub fn resolve_or_build_masters(
             bias_dependency: bias.as_ref(),
             dark_dependency: dark_flat.as_ref(),
         },
+        cancel.as_ref(),
     )?;
     applied.flat_master = flat.as_ref().map(|master| master.label());
 
@@ -1033,6 +1041,7 @@ pub fn resolve_or_build_masters_for_group(
     cache_root: &Path,
     light_paths: &[PathBuf],
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
+    cancel: Option<seiza_stacking::CancelSignal>,
 ) -> Result<(seiza_stacking::CalibrationMasters, AppliedCalibration)> {
     let Some(reference) = light_paths.first() else {
         return Ok((
@@ -1062,7 +1071,7 @@ pub fn resolve_or_build_masters_for_group(
             },
         ));
     }
-    resolve_or_build_masters(conn, cache_root, reference, directory_tree)
+    resolve_or_build_masters(conn, cache_root, reference, directory_tree, cancel)
 }
 
 struct BuiltMaster {
@@ -1094,6 +1103,7 @@ fn build_master(
     kind: CalibrationKind,
     frames: &[CalibrationFrame],
     inputs: MasterInputs<'_>,
+    cancel: Option<&seiza_stacking::CancelSignal>,
 ) -> Result<Option<BuiltMaster>> {
     if frames.len() < MIN_MASTER_FRAMES {
         return Ok(None);
@@ -1139,6 +1149,7 @@ fn build_master(
         exposure_seconds: frames.first().and_then(|frame| frame.exposure_s),
         bias,
         dark,
+        cancel: cancel.cloned(),
         ..Default::default()
     };
     let paths = frames
@@ -2035,7 +2046,7 @@ mod tests {
         }
         let cache = temp.path().join("cache");
         let (masters, applied) =
-            resolve_or_build_masters(&conn, &cache, &light_path, None).unwrap();
+            resolve_or_build_masters(&conn, &cache, &light_path, None, None).unwrap();
         assert!(!masters.is_empty());
         assert_eq!(applied.state, "applied");
         assert!(applied
@@ -2075,7 +2086,7 @@ mod tests {
         assert!(flat_dependencies.0.is_some());
         assert!(flat_dependencies.1.is_some());
 
-        let (_, reused) = resolve_or_build_masters(&conn, &cache, &light_path, None).unwrap();
+        let (_, reused) = resolve_or_build_masters(&conn, &cache, &light_path, None, None).unwrap();
         assert_eq!(reused.fingerprint, applied.fingerprint);
         assert_eq!(library_summary(&conn).unwrap().master_count, 4);
 
@@ -2119,6 +2130,7 @@ mod tests {
             &conn,
             &temp.path().join("cache"),
             &[first, second],
+            None,
             None,
         )
         .unwrap();

@@ -43,7 +43,7 @@ interface StackArtifact {
   group: StackGroupStatus;
 }
 
-const terminalStates = new Set(['completed', 'failed']);
+const terminalStates = new Set(['completed', 'failed', 'cancelled']);
 
 function stackJobQueryKey(dbId: string, projectId: number, jobId: string | null) {
   return ['db', dbId, 'project', projectId, 'stack-preview', jobId] as const;
@@ -184,6 +184,18 @@ export default function StackPreviewPanel({
     },
   });
 
+  const {
+    mutate: stopStack,
+    isPending: stopPending,
+    error: stopError,
+    reset: resetStop,
+  } = useMutation({
+    mutationFn: (jobId: string) => apiClient.cancelStackPreviewJob(dbId, projectId, jobId),
+    onSuccess: (job) => {
+      queryClient.setQueryData(stackJobQueryKey(dbId, projectId, job.job_id), job);
+    },
+  });
+
   const status = useQuery({
     queryKey: stackJobQueryKey(dbId, projectId, activeJobId),
     queryFn: () => apiClient.getStackPreviewJob(dbId, projectId, activeJobId!),
@@ -204,7 +216,8 @@ export default function StackPreviewPanel({
     setInspector(null);
     setStretches({});
     resetStart();
-  }, [dbId, projectId, resetStart]);
+    resetStop();
+  }, [dbId, projectId, resetStart, resetStop]);
 
   const latestByChannel = useMemo(
     () =>
@@ -245,7 +258,7 @@ export default function StackPreviewPanel({
   }, [activeByChannel, currentChannels, latestByChannel]);
 
   const running = startPending || activeJob?.state === 'queued' || activeJob?.state === 'running';
-  const error = startError ?? status.error ?? latest.error;
+  const error = startError ?? stopError ?? status.error ?? latest.error;
   const sourceText = selectionSource === 'selected' ? 'selected' : 'visible';
   const beginAll = (force: boolean) =>
     startStack({ force, imageIds: stableImageIds, operationKey: 'all' });
@@ -337,15 +350,26 @@ export default function StackPreviewPanel({
                   ? 'Build current set'
                   : 'Build stack previews'}
             </button>
-            {!!latest.data?.groups.length && (
+            {!!latest.data?.groups.length && !running && (
               <button
                 className="stack-preview-rebuild"
                 type="button"
-                disabled={!canCompute || running || stableImageIds.length < 2}
+                disabled={!canCompute || stableImageIds.length < 2}
                 title={canCompute ? undefined : 'This account can view cached stacks but cannot rebuild them.'}
                 onClick={() => beginAll(true)}
               >
                 Rebuild current set
+              </button>
+            )}
+            {running && activeJobId && (
+              <button
+                className="stack-preview-stop"
+                type="button"
+                disabled={stopPending || activeJob?.state === 'cancelled'}
+                title="Stop this build. Channels already finished keep their previews."
+                onClick={() => stopStack(activeJobId)}
+              >
+                {stopPending ? 'Stopping…' : 'Stop'}
               </button>
             )}
           </div>
@@ -450,9 +474,11 @@ export default function StackPreviewPanel({
                         ? 'Stack ready'
                         : progressState === 'skipped'
                           ? 'Stack skipped'
-                          : progressState === 'error'
-                            ? 'Stack failed'
-                            : 'Not built';
+                          : progressState === 'cancelled'
+                            ? 'Stack stopped'
+                            : progressState === 'error'
+                              ? 'Stack failed'
+                              : 'Not built';
                 const progressDetail = progressGroup
                   ? `${processedFrames}/${eligibleFrames} frames`
                   : `${current?.images.length ?? 0} candidates`;
@@ -569,9 +595,11 @@ export default function StackPreviewPanel({
                     {!artifact && !groupBusy && (
                       <div className={`stack-preview-placeholder ${activeGroup?.state === 'error' ? 'error' : ''}`}>
                         {activeGroup?.error ??
-                          (canBuildChannel
-                            ? 'No preview has been built for this channel.'
-                            : 'At least two current images are required for this channel.')}
+                          (activeGroup?.state === 'cancelled'
+                            ? 'This channel was stopped before it finished. Build it again when you are ready.'
+                            : canBuildChannel
+                              ? 'No preview has been built for this channel.'
+                              : 'At least two current images are required for this channel.')}
                       </div>
                     )}
 
