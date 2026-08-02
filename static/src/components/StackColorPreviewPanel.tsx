@@ -14,6 +14,7 @@ import StackColorProcessingControls from './StackColorProcessingControls';
 import {
   processingForColorBuild,
 } from './stackColorProcessing';
+import { adoptableStackJob, useStackActivity } from '../hooks/useStackActivity';
 
 interface StackColorPreviewPanelProps {
   dbId: string;
@@ -388,6 +389,17 @@ export default function StackColorPreviewPanel({
     setInspector(null);
     resetStart();
   }, [dbId, projectId, resetStart]);
+
+  // Re-attach to a color build that is still running on the server, so
+  // navigating away and back does not hide it. Declared after the reset above
+  // so a project change adopts that project's job.
+  const { active } = useStackActivity();
+  const adoptedJobId = adoptableStackJob(active, 'color', dbId, projectId)?.job_id ?? null;
+  useEffect(() => {
+    if (adoptedJobId) {
+      setActiveJobId((current) => current ?? adoptedJobId);
+    }
+  }, [adoptedJobId]);
 
   const targets = useMemo(() => {
     const byId = new Map((catalog.data?.targets ?? []).map((target) => [target.target_id, target]));

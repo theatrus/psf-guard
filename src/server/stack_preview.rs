@@ -186,6 +186,139 @@ pub struct LatestStackPreviews {
     pub groups: Vec<LatestStackPreviewGroup>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StackActivityKind {
+    Mono,
+    Color,
+}
+
+/// One queued or running stack build, described well enough for a header
+/// indicator and for a panel to re-attach to a job it did not start.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StackActivityEntry {
+    pub kind: StackActivityKind,
+    pub job_id: String,
+    pub database_id: String,
+    pub project_id: i32,
+    pub state: StackJobState,
+    /// Target and channel of the work in flight.
+    pub label: String,
+    /// Short phase text, for example `Registering frames`.
+    pub detail: String,
+    pub processed_units: usize,
+    pub total_units: usize,
+    pub created_unix_seconds: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StackActivity {
+    pub schema_version: u32,
+    pub active: Vec<StackActivityEntry>,
+}
+
+fn channel_label(target_name: &str, filter_name: &str) -> String {
+    if filter_name.is_empty() {
+        target_name.to_string()
+    } else {
+        format!("{target_name} · {filter_name}")
+    }
+}
+
+fn mono_activity(job: &StackPreviewJob) -> StackActivityEntry {
+    let pending = job.groups.iter().find(|group| {
+        matches!(
+            group.state,
+            StackGroupState::Running | StackGroupState::Queued
+        )
+    });
+    let label = match pending {
+        Some(group) => {
+            let base = channel_label(&group.target_name, &group.filter_name);
+            let remaining = job
+                .groups
+                .iter()
+                .filter(|entry| {
+                    entry.index != group.index
+                        && matches!(
+                            entry.state,
+                            StackGroupState::Running | StackGroupState::Queued
+                        )
+                })
+                .count();
+            if remaining > 0 {
+                format!("{base} +{remaining} more")
+            } else {
+                base
+            }
+        }
+        None => format!("{} channels", job.groups.len()),
+    };
+    let detail = match pending {
+        Some(group) if group.state == StackGroupState::Queued => "Waiting for stacker".to_string(),
+        Some(group) => match group.phase.as_str() {
+            "calibration" => "Building calibration masters".to_string(),
+            "rendering" => "Rendering preview".to_string(),
+            _ => "Registering frames".to_string(),
+        },
+        None => "Preparing stack".to_string(),
+    };
+    let total_units = job
+        .groups
+        .iter()
+        .filter(|group| group.state != StackGroupState::Skipped)
+        .map(|group| group.eligible_frames)
+        .sum();
+    let processed_units = job
+        .groups
+        .iter()
+        .filter(|group| group.state != StackGroupState::Skipped)
+        .map(|group| {
+            if group.state == StackGroupState::Ready {
+                group.eligible_frames
+            } else {
+                group.processed_frames.min(group.eligible_frames)
+            }
+        })
+        .sum();
+    StackActivityEntry {
+        kind: StackActivityKind::Mono,
+        job_id: job.job_id.clone(),
+        database_id: job.database_id.clone(),
+        project_id: job.project_id,
+        state: job.state,
+        label,
+        detail,
+        processed_units,
+        total_units,
+        created_unix_seconds: job.created_unix_seconds,
+    }
+}
+
+fn color_activity(job: &color::StackColorJob) -> StackActivityEntry {
+    let (processed_units, total_units) = if job.progress.total_units > 0 {
+        (job.progress.completed_units, job.progress.total_units)
+    } else {
+        (job.processed_channels, job.total_channels)
+    };
+    StackActivityEntry {
+        kind: StackActivityKind::Color,
+        job_id: job.job_id.clone(),
+        database_id: job.database_id.clone(),
+        project_id: job.project_id,
+        state: job.state,
+        label: channel_label(&job.target_name, &job.label),
+        detail: if job.phase.is_empty() {
+            "Composing color".to_string()
+        } else {
+            job.phase.clone()
+        },
+        processed_units,
+        total_units,
+        created_unix_seconds: job.created_unix_seconds,
+    }
+}
+
 pub struct StackPreviewManager {
     jobs: Mutex<HashMap<String, StackPreviewJob>>,
     color_jobs: Mutex<HashMap<String, color::StackColorJob>>,
@@ -207,6 +340,36 @@ impl StackPreviewManager {
 
     pub fn get(&self, job_id: &str) -> Option<StackPreviewJob> {
         self.jobs.lock().unwrap().get(job_id).cloned()
+    }
+
+    /// Every queued or running stack build, oldest first. Jobs outlive the
+    /// page that started them, so a client that navigated away can still see
+    /// the work and re-attach to it.
+    pub fn active(&self) -> Vec<StackActivityEntry> {
+        let mut active: Vec<StackActivityEntry> = {
+            let jobs = self.jobs.lock().unwrap();
+            jobs.values()
+                .filter(|job| matches!(job.state, StackJobState::Queued | StackJobState::Running))
+                .map(mono_activity)
+                .collect()
+        };
+        {
+            let color_jobs = self.color_jobs.lock().unwrap();
+            active.extend(
+                color_jobs
+                    .values()
+                    .filter(|job| {
+                        matches!(job.state, StackJobState::Queued | StackJobState::Running)
+                    })
+                    .map(color_activity),
+            );
+        }
+        active.sort_by(|left, right| {
+            left.created_unix_seconds
+                .cmp(&right.created_unix_seconds)
+                .then_with(|| left.job_id.cmp(&right.job_id))
+        });
+        active
     }
 
     pub(crate) async fn acquire_maintenance_permit(
@@ -336,6 +499,18 @@ pub async fn start_stack_previews(
     }
     enqueue_job(Arc::clone(&state), prepared);
     Ok(Json(ApiResponse::success(response)))
+}
+
+/// Cross-database view of stack builds still in flight. The manager is
+/// process-global, so this stays outside the per-database routes and lets the
+/// header report stacking from any view.
+pub async fn get_stack_activity(
+    State(state): State<Arc<AppState>>,
+) -> Json<ApiResponse<StackActivity>> {
+    Json(ApiResponse::success(StackActivity {
+        schema_version: 1,
+        active: state.stack_previews.active(),
+    }))
 }
 
 pub async fn get_latest_stack_previews(
@@ -1382,6 +1557,56 @@ mod tests {
             groups,
             error: None,
         }
+    }
+
+    #[test]
+    fn active_reports_running_jobs_and_hides_finished_ones() {
+        let manager = StackPreviewManager::new();
+
+        let mut running_group = ready_group(42, "Ha", 1);
+        running_group.state = StackGroupState::Running;
+        running_group.phase = "stacking".into();
+        running_group.processed_frames = 1;
+        let mut queued_group = ready_group(42, "OIII", 2);
+        queued_group.index = 1;
+        queued_group.state = StackGroupState::Queued;
+        queued_group.processed_frames = 0;
+        let mut running = completed_job("running", vec![running_group, queued_group]);
+        running.state = StackJobState::Running;
+        assert!(manager.insert(running));
+        assert!(manager.insert(completed_job("finished", vec![ready_group(42, "SII", 3)])));
+
+        let active = manager.active();
+        assert_eq!(active.len(), 1);
+        let entry = &active[0];
+        assert_eq!(entry.kind, StackActivityKind::Mono);
+        assert_eq!(entry.job_id, "running");
+        assert_eq!(entry.database_id, "db-test");
+        assert_eq!(entry.project_id, 7);
+        assert_eq!(entry.label, "Target 42 · Ha +1 more");
+        assert_eq!(entry.detail, "Registering frames");
+        assert_eq!(entry.processed_units, 1);
+        assert_eq!(entry.total_units, 4);
+    }
+
+    #[test]
+    fn active_counts_ready_groups_as_finished_frames() {
+        let manager = StackPreviewManager::new();
+        let mut running_group = ready_group(42, "OIII", 2);
+        running_group.index = 1;
+        running_group.state = StackGroupState::Running;
+        running_group.phase = "calibration".into();
+        running_group.processed_frames = 0;
+        let mut job = completed_job("mixed", vec![ready_group(42, "Ha", 1), running_group]);
+        job.state = StackJobState::Running;
+        assert!(manager.insert(job));
+
+        let active = manager.active();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].label, "Target 42 · OIII");
+        assert_eq!(active[0].detail, "Building calibration masters");
+        assert_eq!(active[0].processed_units, 2);
+        assert_eq!(active[0].total_units, 4);
     }
 
     #[test]

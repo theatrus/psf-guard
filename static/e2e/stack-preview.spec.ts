@@ -430,6 +430,97 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   expect(rebuiltSrc).not.toBe(cachedSrc);
 });
 
+test('keeps a running stack visible in the header and re-attaches the panel', async ({
+  page,
+}) => {
+  // A real fixture stack finishes in seconds, so the in-flight report is
+  // served from a stub. The server side of the same view is covered by the
+  // `StackPreviewManager::active` unit tests.
+  const jobId = 'a'.repeat(64);
+  const group = {
+    index: 0,
+    target_id: 1,
+    target_name: 'Alpha M44',
+    filter_name: 'B',
+    state: 'running',
+    phase: 'stacking',
+    total_candidates: 3,
+    eligible_frames: 3,
+    quality_excluded: 0,
+    missing_files: 0,
+    processed_frames: 1,
+    accepted_frames: 1,
+    rejected_frames: 0,
+    output_channels: 1,
+    reference_image_id: 1,
+    total_exposure_seconds: 180,
+    preview_url: null,
+    fits_url: null,
+    error: null,
+    input_images: [],
+    frames: [],
+  };
+  await page.route('**/api/stack-activity', (route) => route.fulfill({
+    json: {
+      success: true,
+      data: {
+        schema_version: 1,
+        active: [{
+          kind: 'mono',
+          job_id: jobId,
+          database_id: dbId,
+          project_id: 1,
+          state: 'running',
+          label: 'Alpha M44 · B',
+          detail: 'Registering frames',
+          processed_units: 1,
+          total_units: 3,
+          created_unix_seconds: 1_760_000_000,
+        }],
+      },
+      error: null,
+      status: 'ready',
+    },
+  }));
+  await page.route(`**/stack-previews/${jobId}`, (route) => route.fulfill({
+    json: {
+      success: true,
+      data: {
+        schema_version: 2,
+        job_id: jobId,
+        database_id: dbId,
+        project_id: 1,
+        state: 'running',
+        accepted_only: false,
+        created_unix_seconds: 1_760_000_000,
+        artifact_revision: 'stub',
+        cache_version: 7,
+        stacking_version: '0.2.0',
+        groups: [group],
+        error: null,
+      },
+      error: null,
+      status: 'ready',
+    },
+  }));
+
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+
+  // The panel re-attaches to a build it did not start.
+  const progress = page.locator('.stack-preview-progress');
+  await expect(progress).toHaveAttribute('data-stack-state', 'running', { timeout: 15_000 });
+  await expect(progress).toContainText('1/3 frames');
+
+  // The header keeps reporting it from every view.
+  const headerStacking = page.locator('.header-cache-slot .stack-activity-status');
+  await expect(headerStacking).toContainText('Stacking');
+  await expect(headerStacking).toContainText('Alpha M44 · B · 1/3 frames');
+  await page.getByRole('button', { name: 'Sequence' }).click();
+  await expect(headerStacking).toContainText('Stacking');
+  await page.getByRole('button', { name: 'Overview' }).click();
+  await expect(headerStacking).toContainText('Stacking');
+});
+
 test('composes cached channel stacks into RGB, LRGB, and selectable narrowband previews', async ({
   page,
 }) => {

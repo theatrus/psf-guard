@@ -3,6 +3,7 @@ import { useDbProjectTarget } from '../hooks/useUrlState';
 import { useQualityBackfillStatus } from '../hooks/useQualityBackfill';
 import { useSpatialScanStatus } from '../hooks/useSpatialScan';
 import CacheRefreshStatus from './CacheRefreshStatus';
+import StackActivityStatus from './StackActivityStatus';
 import './CacheRefreshStatus.css';
 
 interface DatabaseActivityStatusProps {
@@ -80,8 +81,15 @@ export default function DatabaseActivityStatus({
     scanProgress?.total,
   ]);
 
+  // Stacking shares this slot with analysis and cache refresh: it stays a
+  // secondary chip so a long stack build is visible from every view.
   if (!qualityRunning && !completion) {
-    return <CacheRefreshStatus className={className} />;
+    return (
+      <>
+        <CacheRefreshStatus className={className} />
+        <StackActivityStatus className={className} />
+      </>
+    );
   }
 
   const showingBackfill = qualityRunning
@@ -123,30 +131,33 @@ export default function DatabaseActivityStatus({
     : completion?.lastError;
 
   return (
-    <div
-      className={`cache-refresh-status visible quality-analysis-status ${className}`}
-      aria-live="polite"
-      title={title}
-    >
-      <div className="cache-status-content">
-        <div className="progress-indicator">
-          {qualityRunning
-            ? <div className="pulsating-bar" />
-            : <span aria-hidden="true">{errors > 0 ? '!' : '✓'}</span>}
-        </div>
-        <div className="cache-status-main">
-          <div className="cache-status-label">{label}</div>
-          {total > 0 && (
-            <div className="cache-progress-bar">
-              <div className="cache-progress-fill" style={{ width: `${percentage}%` }} />
-              <span className="cache-progress-text">{Math.round(percentage)}%</span>
-            </div>
-          )}
-        </div>
-        <div className="cache-status-details">
-          <div className="progress-info-row">{detail}</div>
+    <>
+      <div
+        className={`cache-refresh-status visible quality-analysis-status ${className}`}
+        aria-live="polite"
+        title={title}
+      >
+        <div className="cache-status-content">
+          <div className="progress-indicator">
+            {qualityRunning
+              ? <div className="pulsating-bar" />
+              : <span aria-hidden="true">{errors > 0 ? '!' : '✓'}</span>}
+          </div>
+          <div className="cache-status-main">
+            <div className="cache-status-label">{label}</div>
+            {total > 0 && (
+              <div className="cache-progress-bar">
+                <div className="cache-progress-fill" style={{ width: `${percentage}%` }} />
+                <span className="cache-progress-text">{Math.round(percentage)}%</span>
+              </div>
+            )}
+          </div>
+          <div className="cache-status-details">
+            <div className="progress-info-row">{detail}</div>
+          </div>
         </div>
       </div>
-    </div>
+      <StackActivityStatus className={className} />
+    </>
   );
 }
