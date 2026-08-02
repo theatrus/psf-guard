@@ -279,10 +279,18 @@ pub struct StackBackgroundExtraction {
     /// Fraction of the fitted correction applied to each channel.
     #[serde(default = "full_background_strength")]
     pub strength: f64,
+    /// Keep solved catalog emission out of the background samples. Older
+    /// requests retain the protected behavior.
+    #[serde(default = "catalog_background_protection_enabled")]
+    pub protect_catalog_emission: bool,
 }
 
 const fn full_background_strength() -> f64 {
     1.0
+}
+
+const fn catalog_background_protection_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -417,6 +425,9 @@ pub struct StackColorJob {
     /// out of the background samples. These are part of the cache identity.
     #[serde(default)]
     pub resolved_background_protection: BTreeMap<StackColorRole, StackBackgroundProtection>,
+    /// Protected fits that failed and were retried without catalog regions.
+    #[serde(default)]
+    pub background_protection_fallbacks: BTreeMap<StackColorRole, String>,
     pub preview_url: String,
     pub fits_url: String,
     pub error: Option<String>,
@@ -461,6 +472,8 @@ struct CachedColorInputs {
     #[serde(default)]
     registered_transforms: BTreeMap<StackColorRole, seiza_stacking::SimilarityTransform>,
     resolved_backgrounds: BTreeMap<StackColorRole, BackgroundFit>,
+    #[serde(default)]
+    background_protection_fallbacks: BTreeMap<StackColorRole, String>,
     resolved_deconvolutions: BTreeMap<StackColorRole, super::stretch::StackDeconvolutionResult>,
 }
 
@@ -1063,11 +1076,12 @@ fn prepare_color_job(
         }
     }
 
-    let resolved_background_protection = if request
-        .processing
-        .as_ref()
-        .is_some_and(|processing| processing.background_extraction.is_some())
-    {
+    let resolved_background_protection = if request.processing.as_ref().is_some_and(|processing| {
+        processing
+            .background_extraction
+            .as_ref()
+            .is_some_and(|extraction| extraction.protect_catalog_emission)
+    }) {
         resolve_background_protection(ctx, &sources)?
     } else {
         BTreeMap::new()
@@ -1172,6 +1186,7 @@ fn prepare_color_job(
             resolved_output_stretches: Vec::new(),
             resolved_backgrounds: BTreeMap::new(),
             resolved_background_protection: background_protection_summary,
+            background_protection_fallbacks: BTreeMap::new(),
             preview_url: format!(
                 "/api/db/{}/stack-previews/color/{job_id}/preview?v={artifact_revision}",
                 ctx.id
@@ -1513,6 +1528,44 @@ fn finish_color_job(job: &mut StackColorJob) {
     job.progress.stage_count = None;
 }
 
+fn fit_channel_background(
+    image: &LinearImage,
+    extraction: &StackBackgroundExtraction,
+    protected_regions: Vec<ProtectedRegion>,
+    mut on_fallback: impl FnMut(&str),
+) -> Result<(BackgroundFit, Option<String>), seiza_background::Error> {
+    let mut config = extraction.config.clone();
+    if extraction.protect_catalog_emission {
+        config.protected_regions = protected_regions;
+    } else {
+        config.protected_regions.clear();
+    }
+    let protected_fit = !config.protected_regions.is_empty();
+    match seiza_background::fit_background(
+        &image.data,
+        image.width,
+        image.height,
+        image.channels,
+        &config,
+    ) {
+        Ok(fit) => Ok((fit, None)),
+        Err(error) if protected_fit => {
+            let reason = error.to_string();
+            on_fallback(&reason);
+            config.protected_regions.clear();
+            seiza_background::fit_background(
+                &image.data,
+                image.width,
+                image.height,
+                image.channels,
+                &config,
+            )
+            .map(|fit| (fit, Some(reason)))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn compose_color(
     state: &Arc<AppState>,
     job: &StackColorJob,
@@ -1540,12 +1593,15 @@ fn compose_color(
     let (
         mut reference,
         mut resolved_backgrounds,
+        mut background_protection_fallbacks,
         mut resolved_deconvolutions,
         mut registered_transforms,
     ) = if let Some((manifest, reference)) = cached_inputs {
         state.stack_previews.update_color(&job.job_id, |current| {
             current.processed_channels = current.total_channels;
             current.resolved_backgrounds = manifest.resolved_backgrounds.clone();
+            current.background_protection_fallbacks =
+                manifest.background_protection_fallbacks.clone();
             current.resolved_input_deconvolutions = manifest.resolved_deconvolutions.clone();
             for source in &mut current.sources {
                 source.registration_transform =
@@ -1555,6 +1611,7 @@ fn compose_color(
         (
             reference,
             manifest.resolved_backgrounds,
+            manifest.background_protection_fallbacks,
             manifest.resolved_deconvolutions,
             manifest.registered_transforms,
         )
@@ -1573,7 +1630,13 @@ fn compose_color(
         );
         let reference = load_source_frame(cache_root, reference_source)?;
         progress.advance(StackColorProgressPhase::LoadingSources, 1);
-        (reference, BTreeMap::new(), BTreeMap::new(), BTreeMap::new())
+        (
+            reference,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        )
     };
     registered_transforms
         .entry(reference_role)
@@ -1690,17 +1753,28 @@ fn compose_color(
                     Some(source.role),
                     None,
                 );
-                let mut config = extraction.config.clone();
-                config.protected_regions = background_regions
-                    .get(&source.role)
-                    .cloned()
-                    .unwrap_or_default();
-                let fit = seiza_background::fit_background(
-                    &frame.image.data,
-                    frame.image.width,
-                    frame.image.height,
-                    frame.image.channels,
-                    &config,
+                let (fit, fallback) = fit_channel_background(
+                    &frame.image,
+                    extraction,
+                    background_regions
+                        .get(&source.role)
+                        .cloned()
+                        .unwrap_or_default(),
+                    |error| {
+                        tracing::warn!(
+                            "Protected {} background fit failed; retrying without catalog protection: {error}",
+                            source.role.label()
+                        );
+                        progress.begin(
+                            StackColorProgressPhase::BackgroundPreparation,
+                            format!(
+                                "Retrying {} background without catalog protection",
+                                source.role.label()
+                            ),
+                            Some(source.role),
+                            None,
+                        );
+                    },
                 )
                 .map_err(|error| {
                     format!("Failed to fit {} background: {error}", source.role.label())
@@ -1728,7 +1802,15 @@ fn compose_color(
                     current
                         .resolved_backgrounds
                         .insert(source.role, fit.clone());
+                    if let Some(reason) = fallback.as_ref() {
+                        current
+                            .background_protection_fallbacks
+                            .insert(source.role, reason.clone());
+                    }
                 });
+                if let Some(reason) = fallback {
+                    background_protection_fallbacks.insert(source.role, reason);
+                }
                 resolved_backgrounds.insert(source.role, fit);
             }
             Ok::<(), String>(())
@@ -1913,6 +1995,7 @@ fn compose_color(
                         roles: job.sources.iter().map(|source| source.role).collect(),
                         registered_transforms: registered_transforms.clone(),
                         resolved_backgrounds: resolved_backgrounds.clone(),
+                        background_protection_fallbacks: background_protection_fallbacks.clone(),
                         resolved_deconvolutions: resolved_deconvolutions.clone(),
                     };
                     store_cached_color_inputs(
@@ -2573,11 +2656,12 @@ fn color_job_outdated_reason(
     }) {
         return Ok(Some("one or more source channel stacks changed".into()));
     }
-    if job
-        .processing
-        .as_ref()
-        .is_some_and(|processing| processing.background_extraction.is_some())
-    {
+    if job.processing.as_ref().is_some_and(|processing| {
+        processing
+            .background_extraction
+            .as_ref()
+            .is_some_and(|extraction| extraction.protect_catalog_emission)
+    }) {
         let current = resolve_background_protection(ctx, &job.sources)?
             .into_iter()
             .map(|(role, protection)| (role, protection.summary))
@@ -2854,6 +2938,7 @@ mod tests {
             resolved_output_stretches: Vec::new(),
             resolved_backgrounds: BTreeMap::new(),
             resolved_background_protection: BTreeMap::new(),
+            background_protection_fallbacks: BTreeMap::new(),
             preview_url: String::new(),
             fits_url: String::new(),
             error: None,
@@ -3229,6 +3314,7 @@ mod tests {
             config: BackgroundConfig::default(),
             correction_mode: CorrectionMode::Subtract,
             strength: 1.1,
+            protect_catalog_emission: true,
         };
         assert!(validate_request(&request(invalid_strength.clone())).is_err());
 
@@ -3245,12 +3331,70 @@ mod tests {
     }
 
     #[test]
+    fn older_background_requests_keep_catalog_protection_enabled() {
+        let extraction: StackBackgroundExtraction = serde_json::from_value(serde_json::json!({
+            "config": BackgroundConfig::default(),
+            "correction_mode": "subtract",
+            "strength": 1.0
+        }))
+        .unwrap();
+
+        assert!(extraction.protect_catalog_emission);
+    }
+
+    #[test]
+    fn protected_background_fit_retries_without_regions_after_any_error() {
+        let values = (0..64 * 64)
+            .map(|index| {
+                let x = (index % 64) as f32 / 63.0;
+                let y = (index / 64) as f32 / 63.0;
+                0.1 + x * 0.02 + y * 0.03
+            })
+            .collect();
+        let image = LinearImage::new(64, 64, 1, values).unwrap();
+        let whole_image = ProtectedRegion::Polygon {
+            points: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        };
+        let mut fallback_messages = Vec::new();
+        let extraction = StackBackgroundExtraction {
+            config: BackgroundConfig::default(),
+            correction_mode: CorrectionMode::Subtract,
+            strength: 1.0,
+            protect_catalog_emission: true,
+        };
+
+        let (fit, fallback) =
+            fit_channel_background(&image, &extraction, vec![whole_image.clone()], |error| {
+                fallback_messages.push(error.to_string())
+            })
+            .unwrap();
+
+        assert!(fallback.is_some());
+        assert_eq!(fallback_messages, fallback.into_iter().collect::<Vec<_>>());
+        assert_eq!(fit.diagnostics.protected_regions, 0);
+
+        let (unprotected_fit, fallback) = fit_channel_background(
+            &image,
+            &StackBackgroundExtraction {
+                protect_catalog_emission: false,
+                ..extraction
+            },
+            vec![whole_image],
+            |_| panic!("disabled protection must not need a fallback"),
+        )
+        .unwrap();
+        assert!(fallback.is_none());
+        assert_eq!(unprotected_fit.diagnostics.protected_regions, 0);
+    }
+
+    #[test]
     fn progress_ledger_accounts_for_every_pipeline_phase() {
         let processing = StackColorProcessing {
             background_extraction: Some(StackBackgroundExtraction {
                 config: BackgroundConfig::default(),
                 correction_mode: CorrectionMode::Subtract,
                 strength: 1.0,
+                protect_catalog_emission: true,
             }),
             input_deconvolutions: BTreeMap::from([(
                 StackColorRole::Red,
@@ -3420,6 +3564,7 @@ mod tests {
                 (StackColorRole::Green, transform),
             ]),
             resolved_backgrounds: BTreeMap::new(),
+            background_protection_fallbacks: BTreeMap::new(),
             resolved_deconvolutions: BTreeMap::new(),
         };
 

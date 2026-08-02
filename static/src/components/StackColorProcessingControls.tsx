@@ -139,11 +139,12 @@ function BackgroundNumberField({
 }
 
 function BackgroundControls({
-  extraction, backgrounds, protections, disabled, onChange,
+  extraction, backgrounds, protections, fallbacks, disabled, onChange,
 }: {
   extraction: StackBackgroundExtraction | null;
   backgrounds: Partial<Record<StackColorRole, StackBackgroundFit>>;
   protections: Partial<Record<StackColorRole, StackBackgroundProtection>>;
+  fallbacks: Partial<Record<StackColorRole, string>>;
   disabled: boolean;
   onChange: (extraction: StackBackgroundExtraction | null) => void;
 }) {
@@ -212,6 +213,15 @@ function BackgroundControls({
           <BackgroundNumberField label="Strength" value={extraction.strength}
             min={0} max={1} step={0.05} disabled={disabled}
             onChange={(strength) => onChange({ ...extraction, strength: strength ?? 0 })} />
+          <label className="stack-stretch-field stack-background-toggle">
+            <span>Protect catalog emission</span>
+            <input type="checkbox" aria-label="Protect catalog emission from background fitting"
+              checked={extraction.protect_catalog_emission ?? true} disabled={disabled}
+              onChange={(event) => onChange({
+                ...extraction,
+                protect_catalog_emission: event.target.checked,
+              })} />
+          </label>
           <label className="stack-stretch-field">
             <span>Surface model</span>
             <select
@@ -239,7 +249,7 @@ function BackgroundControls({
                 onChange={(minimum_improvement) => updateAutomaticModel({
                   minimum_improvement: minimum_improvement ?? 0,
                 })} />
-              <label className="stack-stretch-field stack-background-rbf-toggle">
+              <label className="stack-stretch-field stack-background-toggle">
                 <span>Flexible surface</span>
                 <input type="checkbox" aria-label="Allow radial-basis background model"
                   checked={extraction.config.model.allow_radial_basis} disabled={disabled}
@@ -341,7 +351,11 @@ function BackgroundControls({
                 {' · '}radius {fit.diagnostics.sample_radius}
                 {' · '}{fit.diagnostics.protected_regions ?? 0} protected
               </small>
-              {!!protections[role]?.object_names.length && (
+              {fallbacks[role] ? (
+                <small title={`Protected fit failed: ${fallbacks[role]}`}>
+                  Catalog protection skipped after the protected fit failed
+                </small>
+              ) : !!protections[role]?.object_names.length && (
                 <small title={protections[role]?.object_names.join(', ')}>
                   Protected: {protections[role]?.object_names.join(', ')}
                 </small>
@@ -436,13 +450,14 @@ function StageLane({
 }
 
 export default function StackColorProcessingControls({
-  label, roles, applied, backgrounds, protections, deconvolutions, disabled, onApply,
+  label, roles, applied, backgrounds, protections, fallbacks, deconvolutions, disabled, onApply,
 }: {
   label: string;
   roles: StackColorRole[];
   applied: StackColorProcessing | null;
   backgrounds: Partial<Record<StackColorRole, StackBackgroundFit>>;
   protections: Partial<Record<StackColorRole, StackBackgroundProtection>>;
+  fallbacks: Partial<Record<StackColorRole, string>>;
   deconvolutions: Partial<Record<StackColorRole, StackDeconvolutionResult>>;
   disabled: boolean;
   onApply: (processing: StackColorProcessing) => void;
@@ -509,6 +524,7 @@ export default function StackColorProcessingControls({
           extraction={draft.background_extraction}
           backgrounds={backgrounds}
           protections={protections}
+          fallbacks={fallbacks}
           disabled={disabled}
           onChange={(background_extraction) => setDraft((current) => ({
             ...current, background_extraction,

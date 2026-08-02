@@ -4242,7 +4242,7 @@
   margin-top: 0.5rem;
 }
 
-.stack-background-rbf-toggle input[type='checkbox'] {
+.stack-background-toggle input[type='checkbox'] {
   width: 18px;
   min-height: 18px;
   justify-self: start;

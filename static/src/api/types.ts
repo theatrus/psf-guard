@@ -638,6 +638,7 @@ export interface StackBackgroundExtraction {
   config: StackBackgroundConfig;
   correction_mode: 'subtract' | 'divide';
   strength: number;
+  protect_catalog_emission: boolean;
 }
 
 export interface StackBackgroundFit {
@@ -776,6 +777,7 @@ export interface StackColorJob {
   resolved_output_stretches: unknown[];
   resolved_backgrounds: Partial<Record<StackColorRole, StackBackgroundFit>>;
   resolved_background_protection: Partial<Record<StackColorRole, StackBackgroundProtection>>;
+  background_protection_fallbacks: Partial<Record<StackColorRole, string>>;
   preview_url: string;
   fits_url: string;
   error: string | null;

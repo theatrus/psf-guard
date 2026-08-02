@@ -39,6 +39,7 @@ export function defaultBackgroundExtraction(): StackBackgroundExtraction {
     },
     correction_mode: 'subtract',
     strength: 1,
+    protect_catalog_emission: true,
   };
 }
 
@@ -67,6 +68,8 @@ export function processingForColorBuild(
       ? {
           ...processing.background_extraction,
           strength: processing.background_extraction.strength ?? 1,
+          protect_catalog_emission:
+            processing.background_extraction.protect_catalog_emission ?? true,
         }
       : null,
     input_deconvolutions: processing.input_deconvolutions ?? {},
