@@ -46,7 +46,7 @@ use crate::server::state::AppState;
 pub const SEIZA_STACKING_VERSION: &str = "0.2.1";
 /// Bump whenever stack admission, rendering, or persisted artifact semantics
 /// change. This deliberately versions PSF Guard policy separately from Seiza.
-pub(super) const STACK_PREVIEW_CACHE_VERSION: u32 = 8;
+pub(super) const STACK_PREVIEW_CACHE_VERSION: u32 = 10;
 const MAX_REQUEST_IMAGES: usize = 10_000;
 const MAX_REMEMBERED_JOBS: usize = 64;
 const PREVIEW_MAX_DIMENSION: u32 = 2400;
@@ -59,6 +59,12 @@ pub struct StackPreviewRequest {
     pub accepted_only: bool,
     #[serde(default)]
     pub force: bool,
+    /// Reproject the integration onto the canonical north-up, east-left grid.
+    /// Off by default: a stack keeps the rotation of its reference frame, and
+    /// registration already absorbs a meridian flip. Turn this on when several
+    /// stacks must share one sky frame, such as a mosaic.
+    #[serde(default)]
+    pub north_up: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -126,6 +132,15 @@ pub struct StackInputImage {
     pub grading_status: i32,
 }
 
+/// Convention recorded when a stack keeps the rotation of its reference frame.
+/// The stored mapping is the identity, so every consumer of `source_to_output`
+/// works the same way for an oriented and an unoriented stack.
+pub const SOURCE_ORIENTATION_NAME: &str = "source_frame";
+
+/// Recorded when the stack was turned half a turn so it faces the same way as
+/// the side of a meridian flip most of its exposure came from.
+pub const MAJORITY_HALF_TURN_SOURCE: &str = "majority_half_turn";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StackSkyOrientation {
     pub convention: String,
@@ -134,6 +149,41 @@ pub struct StackSkyOrientation {
     pub output_width: usize,
     pub output_height: usize,
     pub source_to_output: seiza_stacking::AffineTransform,
+}
+
+impl StackSkyOrientation {
+    /// The mapping recorded when the integration is published in the reference
+    /// frame's own rotation.
+    fn source_frame(width: usize, height: usize) -> Self {
+        Self {
+            convention: SOURCE_ORIENTATION_NAME.into(),
+            version: seiza_stacking::SKY_ORIENTATION_VERSION,
+            source: SOURCE_ORIENTATION_NAME.into(),
+            output_width: width,
+            output_height: height,
+            source_to_output: seiza_stacking::AffineTransform::IDENTITY,
+        }
+    }
+
+    /// The mapping recorded when the integration is turned half a turn out of
+    /// the reference frame's rotation to match the rest of its exposure.
+    fn source_frame_half_turn(width: usize, height: usize) -> Self {
+        Self {
+            source: MAJORITY_HALF_TURN_SOURCE.into(),
+            source_to_output: half_turn_transform(width, height),
+            ..Self::source_frame(width, height)
+        }
+    }
+
+    /// Whether this record still describes how the current code lays out a
+    /// stack. Artifacts written before stacks recorded a mapping fail here.
+    pub(super) fn is_current(&self) -> bool {
+        self.version == seiza_stacking::SKY_ORIENTATION_VERSION
+            && matches!(
+                self.convention.as_str(),
+                seiza_stacking::SKY_ORIENTATION_NAME | SOURCE_ORIENTATION_NAME
+            )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -490,6 +540,82 @@ struct PreparedJob {
     public: StackPreviewJob,
     groups: Vec<PreparedGroup>,
     cache_root: PathBuf,
+    north_up: bool,
+}
+
+/// Weighs how much integrated exposure faces the same way as the reference
+/// frame against how much faces half a turn away.
+///
+/// A German equatorial mount turns the field 180 degrees across a meridian
+/// flip. Registration matches star triangles at any angle, so both halves of
+/// such a night stack cleanly, but the reference frame alone decides which way
+/// up the result comes out — and the reference is the best-scoring frame, which
+/// may sit on either side of the flip and may move between rebuilds. Following
+/// the exposure instead keeps the published stack facing the way most of the
+/// night was shot, and keeps it there when scores change.
+#[derive(Debug, Default)]
+struct OrientationVote {
+    upright: f64,
+    half_turned: f64,
+}
+
+impl OrientationVote {
+    /// Count one integrated frame at its registered rotation. Frames without a
+    /// usable exposure time count once each, so a session that records no
+    /// exposure still votes by frame.
+    fn add(&mut self, rotation_radians: f64, exposure_seconds: f64) {
+        let weight = if exposure_seconds > 0.0 {
+            exposure_seconds
+        } else {
+            1.0
+        };
+        if is_half_turn(rotation_radians) {
+            self.half_turned += weight;
+        } else {
+            self.upright += weight;
+        }
+    }
+
+    /// Whether most of the integrated exposure sits half a turn from the
+    /// reference frame. A tie keeps the reference frame's own rotation.
+    fn prefers_half_turn(&self) -> bool {
+        self.half_turned > self.upright
+    }
+}
+
+/// Whether a registered rotation lies closer to half a turn than to none.
+/// Ordinary field rotation and guiding drift stay near zero; only a meridian
+/// flip lands a frame out here.
+fn is_half_turn(rotation_radians: f64) -> bool {
+    if !rotation_radians.is_finite() {
+        return false;
+    }
+    let wrapped = rotation_radians.rem_euclid(std::f64::consts::TAU);
+    let from_upright = wrapped.min(std::f64::consts::TAU - wrapped);
+    from_upright > std::f64::consts::FRAC_PI_2
+}
+
+/// Turn a row-major, channel-interleaved image half a turn about its centre.
+/// This is an exact reversal of the pixel order, so it costs no resampling and
+/// loses no accuracy.
+fn half_turn(mut image: seiza_stacking::LinearImage) -> seiza_stacking::LinearImage {
+    let channels = image.channels;
+    let mut turned = Vec::with_capacity(image.data.len());
+    for pixel in image.data.chunks_exact(channels).rev() {
+        turned.extend_from_slice(pixel);
+    }
+    image.data = turned;
+    image
+}
+
+/// The source-to-output mapping matching [`half_turn`]: pixel `(0, 0)` lands at
+/// the far corner and the grid keeps its size.
+fn half_turn_transform(width: usize, height: usize) -> seiza_stacking::AffineTransform {
+    seiza_stacking::AffineTransform {
+        matrix: [[-1.0, 0.0], [0.0, -1.0]],
+        translation_x: width.saturating_sub(1) as f64,
+        translation_y: height.saturating_sub(1) as f64,
+    }
 }
 
 pub async fn start_stack_previews(
@@ -857,6 +983,7 @@ fn prepare_job(
     hasher.update(ctx.id.as_bytes());
     hasher.update(project_id.to_le_bytes());
     hasher.update([request.accepted_only as u8]);
+    hasher.update([request.north_up as u8]);
     hasher.update(STACK_PREVIEW_CACHE_VERSION.to_le_bytes());
     hasher.update(SEIZA_STACKING_VERSION.as_bytes());
     hasher.update(seiza_stacking::SKY_ORIENTATION_VERSION.to_le_bytes());
@@ -1031,6 +1158,7 @@ fn prepare_job(
         },
         groups: prepared_groups,
         cache_root: ctx.cache_dir_path.clone(),
+        north_up: request.north_up,
     })
 }
 
@@ -1265,11 +1393,20 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
         public: _,
         groups,
         cache_root,
+        north_up,
     } = prepared;
     state.stack_previews.update(&job_id, |job| {
         job.state = StackJobState::Running;
     });
     let worker_policy = state.worker_policy();
+    let group_job = GroupJob {
+        database_id: &database_id,
+        job_id: &job_id,
+        cache_root: &cache_root,
+        north_up,
+        worker_policy: &worker_policy,
+        cancel,
+    };
     let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         for group in groups {
             if group.frames.len() < 2 {
@@ -1282,15 +1419,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
                 job.groups[group.index].state = StackGroupState::Running;
                 job.groups[group.index].phase = "calibration".into();
             });
-            let result = run_group(
-                state,
-                &database_id,
-                &job_id,
-                &cache_root,
-                group.clone(),
-                &worker_policy,
-                cancel,
-            );
+            let result = run_group(state, &group_job, group.clone());
             state.stack_previews.update(&job_id, |job| match result {
                 Ok(GroupOutcome::Built) => {
                     job.groups[group.index].state = StackGroupState::Ready;
@@ -1348,19 +1477,34 @@ enum GroupOutcome {
     Cancelled,
 }
 
+/// Everything a group build needs from the job that owns it: where it writes,
+/// how the caller asked for it, and how it is told to stop.
+struct GroupJob<'a> {
+    database_id: &'a str,
+    job_id: &'a str,
+    cache_root: &'a FsPath,
+    north_up: bool,
+    worker_policy: &'a crate::concurrency::WorkerPolicy,
+    cancel: &'a Arc<AtomicBool>,
+}
+
 fn run_group(
     state: &Arc<AppState>,
-    database_id: &str,
-    job_id: &str,
-    cache_root: &FsPath,
+    job: &GroupJob<'_>,
     group: PreparedGroup,
-    worker_policy: &crate::concurrency::WorkerPolicy,
-    cancel: &Arc<AtomicBool>,
 ) -> Result<GroupOutcome, String> {
     use seiza_stacking::{
         FitsFrame, FrameDisposition, LiveStacker, NormalizationMode, StackOptions,
     };
 
+    let &GroupJob {
+        database_id,
+        job_id,
+        cache_root,
+        north_up,
+        worker_policy,
+        cancel,
+    } = job;
     let ctx = state
         .get_database(database_id)
         .ok_or_else(|| format!("Database {database_id} is no longer configured"))?;
@@ -1435,6 +1579,9 @@ fn run_group(
 
     pool.install(|| {
         let reference_exposure = reference_frame.exposure_seconds.unwrap_or(0.0);
+        // The reference frame defines zero rotation, so it always votes upright.
+        let mut orientation_vote = OrientationVote::default();
+        orientation_vote.add(0.0, reference_exposure);
         let options = StackOptions {
             normalization: NormalizationMode::Global,
             ..StackOptions::default()
@@ -1479,21 +1626,25 @@ fn run_group(
                 .unwrap_or(0.0);
             let decision = match opened {
                 Ok(opened) => match stacker.push(opened).map_err(|error| error.to_string())? {
-                    FrameDisposition::Accepted(diagnostics) => StackFrameDecision {
-                        image_id: frame.image_id,
-                        disposition: "accepted".into(),
-                        reason: None,
-                        quality_score: frame.quality_score,
-                        matched_stars: Some(diagnostics.matched_stars),
-                        registration_rms_pixels: Some(diagnostics.registration_rms_pixels),
-                        registration_drift_pixels: Some(diagnostics.registration_drift_pixels),
-                        registered_mapping: Some(*diagnostics.mapping),
-                        normalization_mean_gain: Some(diagnostics.normalization_mean_gain),
-                        normalization_mean_offset: Some(diagnostics.normalization_mean_offset),
-                        source_fingerprint: Some(frame.source_fingerprint.clone()),
-                        overlap_fraction: Some(diagnostics.overlap_fraction),
-                        integrated_fraction: Some(diagnostics.integrated_fraction),
-                    },
+                    FrameDisposition::Accepted(diagnostics) => {
+                        orientation_vote
+                            .add(diagnostics.mapping.transform().rotation_radians, exposure);
+                        StackFrameDecision {
+                            image_id: frame.image_id,
+                            disposition: "accepted".into(),
+                            reason: None,
+                            quality_score: frame.quality_score,
+                            matched_stars: Some(diagnostics.matched_stars),
+                            registration_rms_pixels: Some(diagnostics.registration_rms_pixels),
+                            registration_drift_pixels: Some(diagnostics.registration_drift_pixels),
+                            registered_mapping: Some(*diagnostics.mapping),
+                            normalization_mean_gain: Some(diagnostics.normalization_mean_gain),
+                            normalization_mean_offset: Some(diagnostics.normalization_mean_offset),
+                            source_fingerprint: Some(frame.source_fingerprint.clone()),
+                            overlap_fraction: Some(diagnostics.overlap_fraction),
+                            integrated_fraction: Some(diagnostics.integrated_fraction),
+                        }
+                    }
                     FrameDisposition::Rejected(reason) => StackFrameDecision {
                         image_id: frame.image_id,
                         disposition: "rejected".into(),
@@ -1538,35 +1689,65 @@ fn run_group(
                 status.frames.push(decision);
             });
         }
-        // Last exit before the job writes anything. Orienting, solving, and
-        // rendering follow, and a stop after this point would have to clean up
-        // published artifacts.
+        // Last exit before the job writes anything. Orienting and rendering
+        // follow, and a stop after this point would have to clean up published
+        // artifacts.
         if cancel.load(Ordering::Relaxed) {
             return Ok(GroupOutcome::Cancelled);
         }
-        state.stack_previews.update(job_id, |job| {
-            job.groups[group.index].phase = "orienting".into();
-        });
+        // Only a north-up build has a solve and a reprojection worth naming;
+        // keeping the reference frame's rotation goes straight to rendering.
+        if north_up {
+            state.stack_previews.update(job_id, |job| {
+                job.groups[group.index].phase = "orienting".into();
+            });
+        }
         let reference_headers = stacker.reference_headers().to_vec();
         let snapshot = stacker.into_snapshot().map_err(|error| error.to_string())?;
-        let (source_wcs, orientation_source) =
-            resolve_stack_wcs(state, &ctx, &group.frames[0], &reference_headers)?;
-        let orientation = seiza_stacking::SkyOrientationPlan::new(
-            snapshot.image.width,
-            snapshot.image.height,
-            &source_wcs,
-        )
-        .map_err(|error| error.to_string())?;
-        let oriented = orientation
-            .apply(&snapshot.image)
+        let accepted_frames = snapshot.accepted_frames;
+        let rejected_frames = snapshot.rejected_frames;
+        // Registration already absorbs a meridian flip, so a stack is published
+        // in the reference frame's own rotation unless the caller asks for the
+        // shared north-up grid that a mosaic needs. The one correction it still
+        // makes is a half turn when the reference sits on the thinner side of a
+        // flip, so the result faces the way most of the night was shot.
+        let (image, sky_orientation, mut output_cards) = if north_up {
+            let (source_wcs, orientation_source) =
+                resolve_stack_wcs(state, &ctx, &group.frames[0], &reference_headers)?;
+            let orientation = seiza_stacking::SkyOrientationPlan::new(
+                snapshot.image.width,
+                snapshot.image.height,
+                &source_wcs,
+            )
             .map_err(|error| error.to_string())?;
-        let sky_orientation = StackSkyOrientation {
-            convention: seiza_stacking::SKY_ORIENTATION_NAME.into(),
-            version: seiza_stacking::SKY_ORIENTATION_VERSION,
-            source: orientation_source,
-            output_width: orientation.output_width(),
-            output_height: orientation.output_height(),
-            source_to_output: orientation.source_to_output(),
+            let oriented = orientation
+                .apply(&snapshot.image)
+                .map_err(|error| error.to_string())?;
+            let record = StackSkyOrientation {
+                convention: seiza_stacking::SKY_ORIENTATION_NAME.into(),
+                version: seiza_stacking::SKY_ORIENTATION_VERSION,
+                source: orientation_source,
+                output_width: orientation.output_width(),
+                output_height: orientation.output_height(),
+                source_to_output: orientation.source_to_output(),
+            };
+            (oriented, record, orientation.fits_header_cards())
+        } else if orientation_vote.prefers_half_turn() {
+            let record = StackSkyOrientation::source_frame_half_turn(
+                snapshot.image.width,
+                snapshot.image.height,
+            );
+            tracing::info!(
+                "Stack preview {} group {}: turning the result half a turn; the reference frame \
+                 faces the thinner side of a meridian flip",
+                job_id,
+                group.index
+            );
+            (half_turn(snapshot.image), record, Vec::new())
+        } else {
+            let record =
+                StackSkyOrientation::source_frame(snapshot.image.width, snapshot.image.height);
+            (snapshot.image, record, Vec::new())
         };
         state.stack_previews.update(job_id, |job| {
             let status = &mut job.groups[group.index];
@@ -1580,31 +1761,30 @@ fn run_group(
         std::fs::create_dir_all(fits_parent).map_err(|error| error.to_string())?;
         let fits_temporary =
             fits_destination.with_extension(format!("{}.tmp.fits", std::process::id()));
-        let mut output_cards = orientation.fits_header_cards();
         output_cards.push(
             seiza_fits::WriteHeaderCard::new(
                 "STACKCNT",
-                seiza_fits::HeaderValue::Integer(i64::from(snapshot.accepted_frames)),
+                seiza_fits::HeaderValue::Integer(i64::from(accepted_frames)),
             )
             .with_comment("accepted input frames"),
         );
         output_cards.push(
             seiza_fits::WriteHeaderCard::new(
                 "STACKREJ",
-                seiza_fits::HeaderValue::Integer(i64::from(snapshot.rejected_frames)),
+                seiza_fits::HeaderValue::Integer(i64::from(rejected_frames)),
             )
             .with_comment("rejected input frames"),
         );
         seiza_stacking::write_linear_image_fits_f32(
             &fits_temporary,
-            &oriented,
+            &image,
             &reference_headers,
             &output_cards,
         )
         .map_err(|error| error.to_string())?;
         std::fs::rename(&fits_temporary, &fits_destination).map_err(|error| error.to_string())?;
         stretch::render_image_previews_atomic(
-            &oriented,
+            &image,
             &stretch::default_linear_config(),
             stretch::StackStretchSourceTransfer::Linear,
             &preview_path(cache_root, job_id, group.index),
@@ -1757,10 +1937,7 @@ pub(super) fn current_latest_stacks(mut latest: LatestStackPreviews) -> LatestSt
                 .group
                 .sky_orientation
                 .as_ref()
-                .is_some_and(|orientation| {
-                    orientation.version == seiza_stacking::SKY_ORIENTATION_VERSION
-                        && orientation.convention == seiza_stacking::SKY_ORIENTATION_NAME
-                })
+                .is_some_and(StackSkyOrientation::is_current)
     });
     latest
 }
@@ -1796,14 +1973,7 @@ mod tests {
     use super::*;
 
     fn sky_orientation() -> StackSkyOrientation {
-        StackSkyOrientation {
-            convention: seiza_stacking::SKY_ORIENTATION_NAME.into(),
-            version: seiza_stacking::SKY_ORIENTATION_VERSION,
-            source: "embedded_wcs".into(),
-            output_width: 100,
-            output_height: 80,
-            source_to_output: seiza_stacking::AffineTransform::IDENTITY,
-        }
+        StackSkyOrientation::source_frame(100, 80)
     }
 
     fn ready_group(target_id: i32, filter_name: &str, image_id: i32) -> StackGroupStatus {
@@ -2007,18 +2177,21 @@ mod tests {
             image_ids: vec![1],
             accepted_only: false,
             force: false,
+            north_up: false,
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
             image_ids: vec![1, 1],
             accepted_only: false,
             force: false,
+            north_up: false,
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
             image_ids: vec![1, 2],
             accepted_only: false,
             force: false,
+            north_up: false,
         })
         .is_ok());
     }
@@ -2109,6 +2282,168 @@ mod tests {
 
         assert_eq!(latest.groups.len(), 1);
         assert_eq!(latest.groups[0].job_id, "current");
+    }
+
+    #[test]
+    fn latest_index_keeps_both_orientation_conventions() {
+        let source_frame = LatestStackPreviewGroup {
+            job_id: "source-frame".into(),
+            artifact_revision: "source-revision".into(),
+            accepted_only: false,
+            created_unix_seconds: 100,
+            cache_version: STACK_PREVIEW_CACHE_VERSION,
+            group: ready_group(10, "B", 1),
+        };
+        let mut north_up = source_frame.clone();
+        north_up.job_id = "north-up".into();
+        north_up.group.filter_name = "R".into();
+        north_up.group.sky_orientation = Some(StackSkyOrientation {
+            convention: seiza_stacking::SKY_ORIENTATION_NAME.into(),
+            version: seiza_stacking::SKY_ORIENTATION_VERSION,
+            source: "embedded_wcs".into(),
+            output_width: 120,
+            output_height: 90,
+            source_to_output: seiza_stacking::AffineTransform::IDENTITY,
+        });
+        let latest = current_latest_stacks(LatestStackPreviews {
+            schema_version: 2,
+            database_id: "db-test".into(),
+            project_id: 7,
+            updated_unix_seconds: 100,
+            groups: vec![source_frame, north_up],
+        });
+
+        assert_eq!(latest.groups.len(), 2);
+    }
+
+    #[test]
+    fn requests_keep_the_source_rotation_by_default() {
+        let request: StackPreviewRequest =
+            serde_json::from_str(r#"{"image_ids":[1,2]}"#).expect("request parses");
+        assert!(!request.north_up);
+
+        let request: StackPreviewRequest =
+            serde_json::from_str(r#"{"image_ids":[1,2],"north_up":true}"#).expect("request parses");
+        assert!(request.north_up);
+    }
+
+    #[test]
+    fn a_source_frame_stack_records_an_identity_mapping() {
+        let orientation = StackSkyOrientation::source_frame(120, 90);
+        assert!(orientation.is_current());
+        assert_eq!(orientation.convention, SOURCE_ORIENTATION_NAME);
+        assert_eq!(
+            orientation.source_to_output,
+            seiza_stacking::AffineTransform::IDENTITY
+        );
+        assert_eq!(
+            (orientation.output_width, orientation.output_height),
+            (120, 90)
+        );
+    }
+
+    #[test]
+    fn only_a_meridian_flip_counts_as_half_a_turn() {
+        use std::f64::consts::{FRAC_PI_2, PI, TAU};
+
+        // Guiding drift and ordinary field rotation stay upright.
+        assert!(!is_half_turn(0.0));
+        assert!(!is_half_turn(0.02));
+        assert!(!is_half_turn(-0.02));
+        assert!(!is_half_turn(FRAC_PI_2));
+        assert!(!is_half_turn(TAU));
+
+        // A meridian flip lands near half a turn, from either direction.
+        assert!(is_half_turn(PI));
+        assert!(is_half_turn(-PI));
+        assert!(is_half_turn(PI - 0.02));
+        assert!(is_half_turn(PI + 0.02));
+
+        // A rotation that never fitted must not vote.
+        assert!(!is_half_turn(f64::NAN));
+        assert!(!is_half_turn(f64::INFINITY));
+    }
+
+    #[test]
+    fn the_stack_faces_the_side_of_the_flip_it_mostly_came_from() {
+        use std::f64::consts::PI;
+
+        // Reference on the thin side: three 60 s frames outvote it.
+        let mut minority_reference = OrientationVote::default();
+        minority_reference.add(0.0, 60.0);
+        for _ in 0..3 {
+            minority_reference.add(PI, 60.0);
+        }
+        assert!(minority_reference.prefers_half_turn());
+
+        // Reference on the thick side: the stack stays as it is.
+        let mut majority_reference = OrientationVote::default();
+        for _ in 0..3 {
+            majority_reference.add(0.0, 60.0);
+        }
+        majority_reference.add(PI, 60.0);
+        assert!(!majority_reference.prefers_half_turn());
+
+        // Long subs outweigh a larger count of short ones.
+        let mut by_exposure = OrientationVote::default();
+        by_exposure.add(0.0, 30.0);
+        by_exposure.add(0.0, 30.0);
+        by_exposure.add(PI, 300.0);
+        assert!(by_exposure.prefers_half_turn());
+
+        // Missing exposure times fall back to counting frames.
+        let mut unmeasured = OrientationVote::default();
+        unmeasured.add(0.0, 0.0);
+        unmeasured.add(PI, 0.0);
+        unmeasured.add(PI, 0.0);
+        assert!(unmeasured.prefers_half_turn());
+
+        // An even split keeps the reference frame's own rotation.
+        let mut tied = OrientationVote::default();
+        tied.add(0.0, 60.0);
+        tied.add(PI, 60.0);
+        assert!(!tied.prefers_half_turn());
+
+        // A night that never flipped is never turned.
+        let mut unflipped = OrientationVote::default();
+        for _ in 0..5 {
+            unflipped.add(0.001, 60.0);
+        }
+        assert!(!unflipped.prefers_half_turn());
+    }
+
+    #[test]
+    fn a_half_turn_reverses_the_pixels_and_records_its_mapping() {
+        let mono =
+            seiza_stacking::LinearImage::new(3, 2, 1, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+        let turned = half_turn(mono.clone());
+        assert_eq!(turned.data, vec![6.0, 5.0, 4.0, 3.0, 2.0, 1.0]);
+        assert_eq!((turned.width, turned.height), (3, 2));
+        // Turning twice returns the original, so the operation loses nothing.
+        assert_eq!(half_turn(turned), mono);
+
+        // RGB samples are interleaved, so channel order survives the reversal.
+        let rgb =
+            seiza_stacking::LinearImage::new(2, 1, 3, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+        assert_eq!(half_turn(rgb).data, vec![4.0, 5.0, 6.0, 1.0, 2.0, 3.0]);
+
+        // The recorded mapping must match what the pixels did: the first pixel
+        // lands in the far corner, and the grid keeps its size.
+        let orientation = StackSkyOrientation::source_frame_half_turn(3, 2);
+        assert!(orientation.is_current());
+        assert_eq!(orientation.convention, SOURCE_ORIENTATION_NAME);
+        assert_eq!(orientation.source, MAJORITY_HALF_TURN_SOURCE);
+        assert_eq!(
+            (orientation.output_width, orientation.output_height),
+            (3, 2)
+        );
+        assert_eq!(orientation.source_to_output.apply(0.0, 0.0), (2.0, 1.0));
+        assert_eq!(orientation.source_to_output.apply(2.0, 1.0), (0.0, 0.0));
+        assert_eq!(orientation.source_to_output.apply(1.0, 0.0), (1.0, 1.0));
+        orientation
+            .source_to_output
+            .validate()
+            .expect("the half-turn mapping is a usable affine");
     }
 
     #[test]

@@ -79,7 +79,6 @@ function writeSyntheticMonoStack(destination: string, variant: number): void {
     fitsFloatCard('CD1_2', 0),
     fitsFloatCard('CD2_1', 0),
     fitsFloatCard('CD2_2', -0.0004160277777778),
-    fitsStringCard('SKYORIEN', 'N-UP E-LEFT'),
     'END'.padEnd(80),
   ];
   const headerText = cards.join('');
@@ -107,7 +106,7 @@ function seedSyntheticColorStacks(databaseId: string, projectId: number): void {
       artifact_revision: `synthetic-${index}`,
       accepted_only: false,
       created_unix_seconds: 1_760_000_000 + index,
-      cache_version: 8,
+      cache_version: 10,
       group: {
         index: 0,
         target_id: 2,
@@ -124,9 +123,9 @@ function seedSyntheticColorStacks(databaseId: string, projectId: number): void {
         rejected_frames: 0,
         output_channels: 1,
         sky_orientation: {
-          convention: 'north_up_east_left',
+          convention: 'source_frame',
           version: 1,
-          source: 'embedded_wcs',
+          source: 'source_frame',
           output_width: 512,
           output_height: 384,
           source_to_output: {
@@ -204,7 +203,8 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   await expect(panel).toContainText('Alpha M44');
   await expect(panel.locator('.stack-preview-channel')).toHaveText('B');
   await expect(panel).toContainText('Stack preview');
-  await expect(panel.locator('.stack-preview-orientation')).toHaveText('N ↑ · E ←');
+  // Builds keep the reference frame's rotation, so no sky-orientation marker.
+  await expect(panel.locator('.stack-preview-orientation')).toHaveCount(0);
 
   const preview = panel.getByRole('img', { name: /stack preview/i });
   await expect(preview).toBeVisible();
@@ -231,12 +231,24 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   expect(Number(fitsHead.headers()['content-length'])).toBeGreaterThan(10_000_000);
   const fitsResponse = await page.request.get(fitsHref!);
   const fitsHeaderText = (await fitsResponse.body()).subarray(0, 2880).toString('ascii');
-  expect(fitsHeaderText).toContain('SKYORIEN');
-  expect(fitsHeaderText).toContain('N-UP E-LEFT');
-  expect(fitsNumericValue(fitsHeaderText, 'CD1_1')).toBeLessThan(0);
-  expect(Math.abs(fitsNumericValue(fitsHeaderText, 'CD1_2'))).toBeLessThan(1e-10);
-  expect(Math.abs(fitsNumericValue(fitsHeaderText, 'CD2_1'))).toBeLessThan(1e-10);
-  expect(fitsNumericValue(fitsHeaderText, 'CD2_2')).toBeLessThan(0);
+  expect(fitsHeaderText).toContain('STACKCNT');
+  expect(fitsHeaderText).toContain('STACKREJ');
+  // The build keeps the reference frame's rotation, so it neither reprojects
+  // the pixels nor stamps the canonical sky-up WCS over them.
+  expect(fitsHeaderText).not.toContain('SKYORIEN');
+  expect(fitsHeaderText).not.toContain('N-UP E-LEFT');
+
+  // The published mapping is what artifact search and background protection
+  // read back, so the build must record which way it laid the pixels out.
+  const jobResponse = await page.request.get(
+    `/api/db/${encodeURIComponent(dbId)}/projects/1/stack-previews/${jobId}`
+  );
+  expect(jobResponse.status()).toBe(200);
+  const orientation = (await jobResponse.json()).data.groups[0].sky_orientation;
+  expect(orientation.convention).toBe('source_frame');
+  expect(['source_frame', 'majority_half_turn']).toContain(orientation.source);
+  expect(orientation.output_width).toBeGreaterThan(0);
+  expect(orientation.output_height).toBeGreaterThan(0);
 
   const defaultPreviewSrc = await preview.getAttribute('src');
   const stretchControls = panel.locator('.stack-preview-card .stack-stretch-controls');
@@ -607,8 +619,8 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   expect(rgbHeader).toContain('COLORSPC');
   expect(rgbHeader).toContain('RGB');
   expect(rgbHeader).toContain('DISPLAY');
-  expect(rgbHeader).toContain('SKYORIEN');
-  expect(rgbHeader).toContain('N-UP E-LEFT');
+  expect(rgbHeader).not.toContain('SKYORIEN');
+  // The composite still inherits the reference channel's WCS.
   expect(fitsNumericValue(rgbHeader, 'CD1_1')).toBeLessThan(0);
   expect(fitsNumericValue(rgbHeader, 'CD2_2')).toBeLessThan(0);
 

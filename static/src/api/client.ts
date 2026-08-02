@@ -662,7 +662,13 @@ export const apiClient = {
   startStackPreviews: async (
     dbId: string,
     projectId: number,
-    request: { image_ids: number[]; accepted_only: boolean; force?: boolean }
+    request: {
+      image_ids: number[];
+      accepted_only: boolean;
+      force?: boolean;
+      /** Reproject onto the shared north-up, east-left grid. Off by default. */
+      north_up?: boolean;
+    }
   ): Promise<StackPreviewJob> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.post<ApiResponse<StackPreviewJob>>(

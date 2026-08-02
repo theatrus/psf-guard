@@ -13,6 +13,7 @@ import type {
 import StackPreviewInspector from './StackPreviewInspector';
 import StackColorPreviewPanel from './StackColorPreviewPanel';
 import StackStretchControls from './StackStretchControls';
+import { isSkyOriented } from './stackOrientation';
 import { useAccess } from '../auth/access';
 import { adoptableStackJob, useStackActivity } from '../hooks/useStackActivity';
 
@@ -582,7 +583,9 @@ export default function StackPreviewPanel({
                           )}
                           alt={`${targetName} ${filterName} stack preview`}
                         />
-                        <span className="stack-preview-orientation">N ↑ · E ←</span>
+                        {isSkyOriented(artifact.group.sky_orientation) && (
+                          <span className="stack-preview-orientation">N ↑ · E ←</span>
+                        )}
                       </div>
                     )}
                     {artifact && stretchKey && (
@@ -714,7 +717,9 @@ export default function StackPreviewPanel({
           summary={[
             `${inspector.group.accepted_frames} frames`,
             `${Math.round(inspector.group.total_exposure_seconds)} s`,
-            'North up · East left',
+            ...(isSkyOriented(inspector.group.sky_orientation)
+              ? ['North up · East left']
+              : []),
           ]}
           imageUrl={stretches[artifactStretchKey(inspector)]?.original_preview_url ??
             apiClient.getStackPreviewUrl(

@@ -39,27 +39,7 @@ the running job, so leaving the page and coming back restores the live per-card
 progress instead of an idle panel. The indicator names the target and channel
 being stacked, its frame counts, and how many further builds are waiting.
 
-## Sky orientation
-
-Every completed mono and color stack uses the same celestial display frame:
-north is up and east is left. PSF Guard reprojects the integrated image after
-registration and expands the output grid to keep the source frame's four
-corners. A rotated camera can therefore produce blank, masked wedges around the
-valid sky footprint instead of losing data to a crop.
-
-PSF Guard first uses a current pixel-derived solve, then a valid embedded FITS
-WCS. If neither exists, it plate-solves the reference frame before it publishes
-the result. The stack fails with a catalog or solve error when it cannot prove
-the orientation; it never marks an unknown view as sky-up. Install the Seiza
-solver catalogs or solve one of the source images, then rebuild the channel.
-
-The downloaded FITS contains a replacement TAN WCS for the reprojected pixels
-and records `SKYORIEN='N-UP E-LEFT'`. Color previews register their channel
-stacks onto one of these canonical grids, so RGB, LRGB, and narrowband outputs
-keep the same convention. The small `N ↑ · E ←` marker on each result makes the
-display contract clear. Source-artifact search retains the exact affine
-mapping, including a camera parity flip, so a selected stack region still maps
-back to the right source pixels.
+## Stop a build
 
 **Stop** appears beside the build buttons while a build is queued or running.
 The stop takes effect between frames, between channels, and between
@@ -72,10 +52,62 @@ Channels that already finished keep their previews and are remembered as usual.
 Build again when you are ready; a stopped job is never reused as a cached
 result.
 
+## Stack orientation
+
+A stack keeps the rotation of its reference frame. Registration matches star
+triangles at any angle, so frames taken on either side of a meridian flip land
+on the same grid without a reprojection, and the result looks like the frames
+you graded. The downloaded FITS carries the reference frame's own WCS when it
+has one.
+
+### Which side of a meridian flip
+
+A German equatorial mount turns the field 180 degrees when it flips. Both
+halves of such a night stack cleanly, but the reference frame alone decides
+which way up the result comes out, and the reference is whichever frame scored
+best — it can sit on either side of the flip, and it can move to the other
+side when a regrade or a quality rescan changes the scores.
+
+So PSF Guard follows the exposure instead. If most of the integrated seconds
+came from frames half a turn from the reference, it turns the finished stack
+half a turn to match them. That is an exact reversal of the pixel order, so it
+costs no resampling and loses no accuracy. A night that never flipped is never
+turned, an even split keeps the reference frame's rotation, and the choice does
+not move when scores do.
+
+PSF Guard records the source-to-output mapping on every stack, so
+source-artifact search maps a selected stack region back to the right source
+pixels, and background protection maps catalog bounds forward onto the stack.
+That mapping is the identity for an untouched build and the half turn for a
+turned one, so both consumers follow the published pixels without special
+cases.
+
+### The shared north-up grid
+
+A caller can ask for the canonical celestial frame instead — north up, east
+left — by sending `north_up: true` when it starts a build. Several stacks then
+share one grid, which is what a sky mosaic needs. The UI never sets it; each
+card and inspector shows the `N ↑ · E ←` marker only for a stack built this
+way.
+
+An oriented build reprojects the integration after registration and expands the
+output grid to keep the source frame's four corners, so a rotated camera
+produces blank, masked wedges around the valid sky footprint instead of losing
+data to a crop. PSF Guard first uses a current pixel-derived solve, then a valid
+embedded FITS WCS. If neither exists, it plate-solves the reference frame before
+it publishes the result. The build fails with a catalog or solve error when it
+cannot prove the orientation; it never marks an unknown view as sky-up. The
+FITS then contains a replacement TAN WCS for the reprojected pixels and records
+`SKYORIEN='N-UP E-LEFT'`. A color preview registers its channel stacks onto the
+reference channel's grid, so RGB, LRGB, and narrowband outputs inherit whichever
+frame their channels were built in.
+
+## Cached results
+
 PSF Guard remembers the last successful preview for every target/channel in the
 project cache and restores those cards after navigation, page reload, or server
 restart. Each card retains the exact input image IDs and scheduler grades used
-to build it. PSF Guard hides previews made before the sky-orientation rule; build
+to build it. PSF Guard hides previews built by an older orientation rule; build
 each channel once to replace them. The card is marked **Out of date**—without
 hiding the usable older preview—when the current filter/selection changes the
 image set, an image is
@@ -139,9 +171,9 @@ opened, so the project grid continues to use the smaller screen preview.
 
 Choose **Download linear FITS** on the card or in the inspector to retrieve the
 full-resolution floating-point integration from the cache. The FITS is
-unstretched and contains the canonical north-up, east-left WCS plus Seiza's
-accepted/rejected frame counters, making it suitable for inspection or as an
-input to a separate processing workflow.
+unstretched and contains the stack's WCS plus Seiza's accepted/rejected frame
+counters, making it suitable for inspection or as an input to a separate
+processing workflow.
 
 ![Frame-by-frame stack admission details](stack-preview-decisions.png)
 
@@ -282,14 +314,14 @@ large cataloged emission regions from background sampling. It uses closed
 catalog or curated contours when the object catalog supplies them, then falls
 back to the object's projected ellipse. Embedded FITS WCS alone does not enable
 this protection. Each channel uses its own stack reference frame, and PSF Guard
-maps its catalog bounds through the stack's saved sky-up transform before it
-fits the background. The manifest records the reference image, catalog version,
-object names, region count, and a geometry fingerprint. These values form part
-of the cache key and stale check, so a new solve or catalog projection cannot
-reuse or present a fit made with stale bounds. After correction, each
-non-reference stack is registered to R for RGB, L for LRGB, or H-alpha for
-narrowband, using the same bounded Seiza star/similarity registration used by
-the Seiza color CLI.
+maps its catalog bounds through the stack's saved source-to-output transform
+before it fits the background. The manifest records the reference image,
+catalog version, object names, region count, and a geometry fingerprint. These
+values form part of the cache key and stale check, so a new solve or catalog
+projection cannot reuse or present a fit made with stale bounds. After
+correction, each non-reference stack is registered to R for RGB, L for LRGB, or
+H-alpha for narrowband, using the same bounded Seiza star/similarity
+registration used by the Seiza color CLI.
 
 The **Processing stack** editor exposes correction mode and strength, automatic
 or fixed surface selection, sample-grid density and radius, sample-search

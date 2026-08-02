@@ -14,6 +14,7 @@ import StackColorProcessingControls from './StackColorProcessingControls';
 import {
   processingForColorBuild,
 } from './stackColorProcessing';
+import { isColorStackSkyOriented } from './stackOrientation';
 import { adoptableStackJob, useStackActivity } from '../hooks/useStackActivity';
 
 interface StackColorPreviewPanelProps {
@@ -239,7 +240,9 @@ function ColorCard({
             src={apiClient.getStackColorPreviewUrl(dbId, artifact.job_id, artifact.artifact_revision)}
             alt={`${target.target_name} ${label} color stack preview`}
           />
-          <span className="stack-preview-orientation">N ↑ · E ←</span>
+          {isColorStackSkyOriented(artifact) && (
+            <span className="stack-preview-orientation">N ↑ · E ←</span>
+          )}
         </div>
       ) : activeJob && !terminalStates.has(activeJob.state) ? (
         <div className="stack-preview-placeholder">
@@ -564,7 +567,7 @@ export default function StackColorPreviewPanel({
           summary={[
             `${inspector.sources.length} channel stacks`,
             `${inspector.sources.reduce((sum, source) => sum + source.accepted_frames, 0)} integrated inputs`,
-            'North up · East left',
+            ...(isColorStackSkyOriented(inspector) ? ['North up · East left'] : []),
           ]}
           imageUrl={apiClient.getStackColorPreviewUrl(
             dbId, inspector.job_id, inspector.artifact_revision, 'original'
