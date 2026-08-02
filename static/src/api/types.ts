@@ -373,10 +373,15 @@ export interface StackInputImage {
   grading_status: number;
 }
 
+/**
+ * How the published stack pixels are laid out. `source_frame` keeps the
+ * reference frame's own rotation and is the default; `north_up_east_left`
+ * means the build was reprojected onto the shared celestial grid.
+ */
 export interface StackSkyOrientation {
-  convention: 'north_up_east_left';
+  convention: 'north_up_east_left' | 'source_frame';
   version: number;
-  source: 'cached_pixel_solve' | 'embedded_wcs' | 'stack_reference_solve';
+  source: 'cached_pixel_solve' | 'embedded_wcs' | 'stack_reference_solve' | 'source_frame';
   output_width: number;
   output_height: number;
   source_to_output: unknown;

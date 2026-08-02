@@ -45,7 +45,7 @@ use crate::server::state::AppState;
 pub const SEIZA_STACKING_VERSION: &str = "0.2.1";
 /// Bump whenever stack admission, rendering, or persisted artifact semantics
 /// change. This deliberately versions PSF Guard policy separately from Seiza.
-pub(super) const STACK_PREVIEW_CACHE_VERSION: u32 = 8;
+pub(super) const STACK_PREVIEW_CACHE_VERSION: u32 = 9;
 const MAX_REQUEST_IMAGES: usize = 10_000;
 const MAX_REMEMBERED_JOBS: usize = 64;
 const PREVIEW_MAX_DIMENSION: u32 = 2400;
@@ -58,6 +58,12 @@ pub struct StackPreviewRequest {
     pub accepted_only: bool,
     #[serde(default)]
     pub force: bool,
+    /// Reproject the integration onto the canonical north-up, east-left grid.
+    /// Off by default: a stack keeps the rotation of its reference frame, and
+    /// registration already absorbs a meridian flip. Turn this on when several
+    /// stacks must share one sky frame, such as a mosaic.
+    #[serde(default)]
+    pub north_up: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -120,6 +126,11 @@ pub struct StackInputImage {
     pub grading_status: i32,
 }
 
+/// Convention recorded when a stack keeps the rotation of its reference frame.
+/// The stored mapping is the identity, so every consumer of `source_to_output`
+/// works the same way for an oriented and an unoriented stack.
+pub const SOURCE_ORIENTATION_NAME: &str = "source_frame";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StackSkyOrientation {
     pub convention: String,
@@ -128,6 +139,31 @@ pub struct StackSkyOrientation {
     pub output_width: usize,
     pub output_height: usize,
     pub source_to_output: seiza_stacking::AffineTransform,
+}
+
+impl StackSkyOrientation {
+    /// The mapping recorded when the integration is published in the reference
+    /// frame's own rotation.
+    fn source_frame(width: usize, height: usize) -> Self {
+        Self {
+            convention: SOURCE_ORIENTATION_NAME.into(),
+            version: seiza_stacking::SKY_ORIENTATION_VERSION,
+            source: SOURCE_ORIENTATION_NAME.into(),
+            output_width: width,
+            output_height: height,
+            source_to_output: seiza_stacking::AffineTransform::IDENTITY,
+        }
+    }
+
+    /// Whether this record still describes how the current code lays out a
+    /// stack. Artifacts written before stacks recorded a mapping fail here.
+    pub(super) fn is_current(&self) -> bool {
+        self.version == seiza_stacking::SKY_ORIENTATION_VERSION
+            && matches!(
+                self.convention.as_str(),
+                seiza_stacking::SKY_ORIENTATION_NAME | SOURCE_ORIENTATION_NAME
+            )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -455,6 +491,7 @@ struct PreparedJob {
     public: StackPreviewJob,
     groups: Vec<PreparedGroup>,
     cache_root: PathBuf,
+    north_up: bool,
 }
 
 pub async fn start_stack_previews(
@@ -795,6 +832,7 @@ fn prepare_job(
     hasher.update(ctx.id.as_bytes());
     hasher.update(project_id.to_le_bytes());
     hasher.update([request.accepted_only as u8]);
+    hasher.update([request.north_up as u8]);
     hasher.update(STACK_PREVIEW_CACHE_VERSION.to_le_bytes());
     hasher.update(SEIZA_STACKING_VERSION.as_bytes());
     hasher.update(seiza_stacking::SKY_ORIENTATION_VERSION.to_le_bytes());
@@ -969,6 +1007,7 @@ fn prepare_job(
         },
         groups: prepared_groups,
         cache_root: ctx.cache_dir_path.clone(),
+        north_up: request.north_up,
     })
 }
 
@@ -1164,6 +1203,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob) {
         public: _,
         groups,
         cache_root,
+        north_up,
     } = prepared;
     state.stack_previews.update(&job_id, |job| {
         job.state = StackJobState::Running;
@@ -1184,6 +1224,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob) {
                 &job_id,
                 &cache_root,
                 group.clone(),
+                north_up,
                 &worker_policy,
             );
             state.stack_previews.update(&job_id, |job| match result {
@@ -1225,6 +1266,7 @@ fn run_group(
     job_id: &str,
     cache_root: &FsPath,
     group: PreparedGroup,
+    north_up: bool,
     worker_policy: &crate::concurrency::WorkerPolicy,
 ) -> Result<(), String> {
     use seiza_stacking::{
@@ -1398,29 +1440,43 @@ fn run_group(
                 status.frames.push(decision);
             });
         }
-        state.stack_previews.update(job_id, |job| {
-            job.groups[group.index].phase = "orienting".into();
-        });
+        if north_up {
+            state.stack_previews.update(job_id, |job| {
+                job.groups[group.index].phase = "orienting".into();
+            });
+        }
         let reference_headers = stacker.reference_headers().to_vec();
         let snapshot = stacker.into_snapshot().map_err(|error| error.to_string())?;
-        let (source_wcs, orientation_source) =
-            resolve_stack_wcs(state, &ctx, &group.frames[0], &reference_headers)?;
-        let orientation = seiza_stacking::SkyOrientationPlan::new(
-            snapshot.image.width,
-            snapshot.image.height,
-            &source_wcs,
-        )
-        .map_err(|error| error.to_string())?;
-        let oriented = orientation
-            .apply(&snapshot.image)
+        let accepted_frames = snapshot.accepted_frames;
+        let rejected_frames = snapshot.rejected_frames;
+        // Registration already absorbs a meridian flip, so a stack is published
+        // in the reference frame's own rotation unless the caller asks for the
+        // shared north-up grid that a mosaic needs.
+        let (image, sky_orientation, mut output_cards) = if north_up {
+            let (source_wcs, orientation_source) =
+                resolve_stack_wcs(state, &ctx, &group.frames[0], &reference_headers)?;
+            let orientation = seiza_stacking::SkyOrientationPlan::new(
+                snapshot.image.width,
+                snapshot.image.height,
+                &source_wcs,
+            )
             .map_err(|error| error.to_string())?;
-        let sky_orientation = StackSkyOrientation {
-            convention: seiza_stacking::SKY_ORIENTATION_NAME.into(),
-            version: seiza_stacking::SKY_ORIENTATION_VERSION,
-            source: orientation_source,
-            output_width: orientation.output_width(),
-            output_height: orientation.output_height(),
-            source_to_output: orientation.source_to_output(),
+            let oriented = orientation
+                .apply(&snapshot.image)
+                .map_err(|error| error.to_string())?;
+            let record = StackSkyOrientation {
+                convention: seiza_stacking::SKY_ORIENTATION_NAME.into(),
+                version: seiza_stacking::SKY_ORIENTATION_VERSION,
+                source: orientation_source,
+                output_width: orientation.output_width(),
+                output_height: orientation.output_height(),
+                source_to_output: orientation.source_to_output(),
+            };
+            (oriented, record, orientation.fits_header_cards())
+        } else {
+            let record =
+                StackSkyOrientation::source_frame(snapshot.image.width, snapshot.image.height);
+            (snapshot.image, record, Vec::new())
         };
         state.stack_previews.update(job_id, |job| {
             let status = &mut job.groups[group.index];
@@ -1434,31 +1490,30 @@ fn run_group(
         std::fs::create_dir_all(fits_parent).map_err(|error| error.to_string())?;
         let fits_temporary =
             fits_destination.with_extension(format!("{}.tmp.fits", std::process::id()));
-        let mut output_cards = orientation.fits_header_cards();
         output_cards.push(
             seiza_fits::WriteHeaderCard::new(
                 "STACKCNT",
-                seiza_fits::HeaderValue::Integer(i64::from(snapshot.accepted_frames)),
+                seiza_fits::HeaderValue::Integer(i64::from(accepted_frames)),
             )
             .with_comment("accepted input frames"),
         );
         output_cards.push(
             seiza_fits::WriteHeaderCard::new(
                 "STACKREJ",
-                seiza_fits::HeaderValue::Integer(i64::from(snapshot.rejected_frames)),
+                seiza_fits::HeaderValue::Integer(i64::from(rejected_frames)),
             )
             .with_comment("rejected input frames"),
         );
         seiza_stacking::write_linear_image_fits_f32(
             &fits_temporary,
-            &oriented,
+            &image,
             &reference_headers,
             &output_cards,
         )
         .map_err(|error| error.to_string())?;
         std::fs::rename(&fits_temporary, &fits_destination).map_err(|error| error.to_string())?;
         stretch::render_image_previews_atomic(
-            &oriented,
+            &image,
             &stretch::default_linear_config(),
             stretch::StackStretchSourceTransfer::Linear,
             &preview_path(cache_root, job_id, group.index),
@@ -1611,10 +1666,7 @@ pub(super) fn current_latest_stacks(mut latest: LatestStackPreviews) -> LatestSt
                 .group
                 .sky_orientation
                 .as_ref()
-                .is_some_and(|orientation| {
-                    orientation.version == seiza_stacking::SKY_ORIENTATION_VERSION
-                        && orientation.convention == seiza_stacking::SKY_ORIENTATION_NAME
-                })
+                .is_some_and(StackSkyOrientation::is_current)
     });
     latest
 }
@@ -1650,14 +1702,7 @@ mod tests {
     use super::*;
 
     fn sky_orientation() -> StackSkyOrientation {
-        StackSkyOrientation {
-            convention: seiza_stacking::SKY_ORIENTATION_NAME.into(),
-            version: seiza_stacking::SKY_ORIENTATION_VERSION,
-            source: "embedded_wcs".into(),
-            output_width: 100,
-            output_height: 80,
-            source_to_output: seiza_stacking::AffineTransform::IDENTITY,
-        }
+        StackSkyOrientation::source_frame(100, 80)
     }
 
     fn ready_group(target_id: i32, filter_name: &str, image_id: i32) -> StackGroupStatus {
@@ -1785,18 +1830,21 @@ mod tests {
             image_ids: vec![1],
             accepted_only: false,
             force: false,
+            north_up: false,
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
             image_ids: vec![1, 1],
             accepted_only: false,
             force: false,
+            north_up: false,
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
             image_ids: vec![1, 2],
             accepted_only: false,
             force: false,
+            north_up: false,
         })
         .is_ok());
     }
@@ -1887,6 +1935,64 @@ mod tests {
 
         assert_eq!(latest.groups.len(), 1);
         assert_eq!(latest.groups[0].job_id, "current");
+    }
+
+    #[test]
+    fn latest_index_keeps_both_orientation_conventions() {
+        let source_frame = LatestStackPreviewGroup {
+            job_id: "source-frame".into(),
+            artifact_revision: "source-revision".into(),
+            accepted_only: false,
+            created_unix_seconds: 100,
+            cache_version: STACK_PREVIEW_CACHE_VERSION,
+            group: ready_group(10, "B", 1),
+        };
+        let mut north_up = source_frame.clone();
+        north_up.job_id = "north-up".into();
+        north_up.group.filter_name = "R".into();
+        north_up.group.sky_orientation = Some(StackSkyOrientation {
+            convention: seiza_stacking::SKY_ORIENTATION_NAME.into(),
+            version: seiza_stacking::SKY_ORIENTATION_VERSION,
+            source: "embedded_wcs".into(),
+            output_width: 120,
+            output_height: 90,
+            source_to_output: seiza_stacking::AffineTransform::IDENTITY,
+        });
+        let latest = current_latest_stacks(LatestStackPreviews {
+            schema_version: 2,
+            database_id: "db-test".into(),
+            project_id: 7,
+            updated_unix_seconds: 100,
+            groups: vec![source_frame, north_up],
+        });
+
+        assert_eq!(latest.groups.len(), 2);
+    }
+
+    #[test]
+    fn requests_keep_the_source_rotation_by_default() {
+        let request: StackPreviewRequest =
+            serde_json::from_str(r#"{"image_ids":[1,2]}"#).expect("request parses");
+        assert!(!request.north_up);
+
+        let request: StackPreviewRequest =
+            serde_json::from_str(r#"{"image_ids":[1,2],"north_up":true}"#).expect("request parses");
+        assert!(request.north_up);
+    }
+
+    #[test]
+    fn a_source_frame_stack_records_an_identity_mapping() {
+        let orientation = StackSkyOrientation::source_frame(120, 90);
+        assert!(orientation.is_current());
+        assert_eq!(orientation.convention, SOURCE_ORIENTATION_NAME);
+        assert_eq!(
+            orientation.source_to_output,
+            seiza_stacking::AffineTransform::IDENTITY
+        );
+        assert_eq!(
+            (orientation.output_width, orientation.output_height),
+            (120, 90)
+        );
     }
 
     #[test]

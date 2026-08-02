@@ -210,15 +210,11 @@ pub async fn start_mono_artifact_search(
     let output_transform = group
         .sky_orientation
         .as_ref()
-        .filter(|orientation| {
-            orientation.version == seiza_stacking::SKY_ORIENTATION_VERSION
-                && orientation.convention == seiza_stacking::SKY_ORIENTATION_NAME
-        })
+        .filter(|orientation| orientation.is_current())
         .map(|orientation| orientation.source_to_output)
         .ok_or_else(|| {
             AppError::BadRequest(
-                "Rebuild this stack before searching; its sky-orientation mapping is missing"
-                    .into(),
+                "Rebuild this stack before searching; its output mapping is missing".into(),
             )
         })?;
     let ctx_arc = Arc::clone(&ctx.0);
@@ -433,23 +429,20 @@ fn load_color_stack_sources(
                 })
                 .ok_or(AppError::NotFound)?
                 .clone();
-            let sky_transform = group
+            let stack_transform = group
                 .sky_orientation
                 .as_ref()
-                .filter(|orientation| {
-                    orientation.version == seiza_stacking::SKY_ORIENTATION_VERSION
-                        && orientation.convention == seiza_stacking::SKY_ORIENTATION_NAME
-                })
+                .filter(|orientation| orientation.is_current())
                 .map(|orientation| orientation.source_to_output)
                 .ok_or_else(|| {
                     AppError::BadRequest(format!(
-                        "Rebuild the {} stack before searching; its sky-orientation mapping is missing",
+                        "Rebuild the {} stack before searching; its output mapping is missing",
                         source.role.label()
                     ))
                 })?;
             Ok((
                 group,
-                Some(sky_transform.then(transform.as_affine())),
+                Some(stack_transform.then(transform.as_affine())),
                 Some(source.role.label().to_string()),
             ))
         })
