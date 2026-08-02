@@ -529,8 +529,14 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await expect(backgroundControls.getByRole('checkbox', { name: 'Background extraction' }))
     .toBeChecked();
   await expect(backgroundControls.getByLabel('Background fit diagnostics')).toContainText('samples');
-  await backgroundControls.getByRole('spinbutton', { name: 'Background Polynomial degree' })
+  await expect(backgroundControls.getByRole('combobox', { name: 'Background surface model' }))
+    .toHaveValue('automatic');
+  await expect(backgroundControls.getByRole('checkbox', {
+    name: 'Allow radial-basis background model',
+  })).not.toBeChecked();
+  await backgroundControls.getByRole('spinbutton', { name: 'Background Maximum degree' })
     .fill('1');
+  await backgroundControls.getByRole('spinbutton', { name: 'Background Strength' }).fill('0.8');
   await expect(rgbProcessing.getByRole('region', { name: 'R input stretch stack' }))
     .toContainText('1 stage');
   await expect(rgbProcessing.getByRole('region', { name: 'G input stretch stack' }))

@@ -4143,6 +4143,12 @@
   margin-top: 0.5rem;
 }
 
+.stack-background-rbf-toggle input[type='checkbox'] {
+  width: 18px;
+  min-height: 18px;
+  justify-self: start;
+}
+
 .stack-background-diagnostics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));

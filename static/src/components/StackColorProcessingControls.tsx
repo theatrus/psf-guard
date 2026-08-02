@@ -3,6 +3,7 @@ import type {
   StackBackgroundConfig,
   StackBackgroundExtraction,
   StackBackgroundFit,
+  StackBackgroundProtection,
   StackColorProcessing,
   StackColorRole,
   StackDeconvolutionResult,
@@ -13,6 +14,7 @@ import { validateDeconvolution } from './stackDeconvolution';
 import StackStretchStageEditor from './StackStretchStageEditor';
 import { defaultStretchRequest, stretchModelLabels } from './stackStretchModels';
 import {
+  defaultBackgroundModel,
   defaultBackgroundExtraction,
   defaultColorProcessing,
 } from './stackColorProcessing';
@@ -20,6 +22,16 @@ import {
 const roleLabels: Record<StackColorRole, string> = {
   luminance: 'L', red: 'R', green: 'G', blue: 'B', ha: 'Hα', oiii: 'OIII', sii: 'SII',
 };
+
+type AutomaticBackgroundModel = Extract<
+  StackBackgroundConfig['model'], { kind: 'automatic' }
+>;
+type PolynomialBackgroundModel = Extract<
+  StackBackgroundConfig['model'], { kind: 'polynomial' }
+>;
+type RadialBasisBackgroundModel = Extract<
+  StackBackgroundConfig['model'], { kind: 'radial_basis' }
+>;
 
 function cloneProcessing(processing: StackColorProcessing): StackColorProcessing {
   return JSON.parse(JSON.stringify(processing)) as StackColorProcessing;
@@ -40,11 +52,33 @@ function hasInvalidNumbers(processing: StackColorProcessing): boolean {
 function validateBackground(extraction: StackBackgroundExtraction | null): string | null {
   if (!extraction) return null;
   const { config } = extraction;
-  if (!Number.isInteger(config.model.degree) || config.model.degree < 0 || config.model.degree > 4) {
-    return 'Background polynomial degree must be an integer from 0 to 4';
+  if (!Number.isFinite(extraction.strength) || extraction.strength < 0 || extraction.strength > 1) {
+    return 'Background correction strength must be between 0 and 1';
   }
-  if (!Number.isFinite(config.model.ridge) || config.model.ridge < 0) {
-    return 'Background ridge must be finite and non-negative';
+  if (config.model.kind === 'polynomial') {
+    if (!Number.isInteger(config.model.degree) || config.model.degree < 0 || config.model.degree > 4) {
+      return 'Background polynomial degree must be an integer from 0 to 4';
+    }
+    if (!Number.isFinite(config.model.ridge) || config.model.ridge < 0) {
+      return 'Background ridge must be finite and non-negative';
+    }
+  } else if (config.model.kind === 'radial_basis') {
+    if (!Number.isFinite(config.model.smoothing) || config.model.smoothing < 0 ||
+        !Number.isInteger(config.model.max_control_points) ||
+        config.model.max_control_points < 16 || config.model.max_control_points > 512) {
+      return 'Radial-basis smoothing must be non-negative and control points must be 16 to 512';
+    }
+  } else {
+    if (!Number.isInteger(config.model.max_degree) ||
+        config.model.max_degree < 0 || config.model.max_degree > 4 ||
+        !Number.isFinite(config.model.ridge) || config.model.ridge < 0 ||
+        !Number.isFinite(config.model.rbf_smoothing) || config.model.rbf_smoothing < 0 ||
+        !Number.isInteger(config.model.max_control_points) ||
+        config.model.max_control_points < 16 || config.model.max_control_points > 512 ||
+        !Number.isFinite(config.model.minimum_improvement) ||
+        config.model.minimum_improvement < 0 || config.model.minimum_improvement > 0.75) {
+      return 'Automatic background model settings are outside their supported ranges';
+    }
   }
   if (!Number.isInteger(config.samples_per_axis) ||
       config.samples_per_axis < 3 || config.samples_per_axis > 512) {
@@ -105,10 +139,11 @@ function BackgroundNumberField({
 }
 
 function BackgroundControls({
-  extraction, backgrounds, disabled, onChange,
+  extraction, backgrounds, protections, disabled, onChange,
 }: {
   extraction: StackBackgroundExtraction | null;
   backgrounds: Partial<Record<StackColorRole, StackBackgroundFit>>;
+  protections: Partial<Record<StackColorRole, StackBackgroundProtection>>;
   disabled: boolean;
   onChange: (extraction: StackBackgroundExtraction | null) => void;
 }) {
@@ -116,9 +151,24 @@ function BackgroundControls({
     if (!extraction) return;
     onChange({ ...extraction, config: { ...extraction.config, ...change } });
   };
-  const updateModel = (change: Partial<StackBackgroundConfig['model']>) => {
+  const updateModel = (model: StackBackgroundConfig['model']) => {
     if (!extraction) return;
-    updateConfig({ model: { ...extraction.config.model, ...change } });
+    updateConfig({ model });
+  };
+  const selectModel = (kind: StackBackgroundConfig['model']['kind']) => {
+    updateModel(defaultBackgroundModel(kind));
+  };
+  const updateAutomaticModel = (change: Partial<AutomaticBackgroundModel>) => {
+    const model = extraction?.config.model;
+    if (model?.kind === 'automatic') updateModel({ ...model, ...change });
+  };
+  const updatePolynomialModel = (change: Partial<PolynomialBackgroundModel>) => {
+    const model = extraction?.config.model;
+    if (model?.kind === 'polynomial') updateModel({ ...model, ...change });
+  };
+  const updateRadialBasisModel = (change: Partial<RadialBasisBackgroundModel>) => {
+    const model = extraction?.config.model;
+    if (model?.kind === 'radial_basis') updateModel({ ...model, ...change });
   };
   const fits = Object.entries(backgrounds) as Array<[StackColorRole, StackBackgroundFit]>;
 
@@ -159,9 +209,82 @@ function BackgroundControls({
               <option value="divide">Divide</option>
             </select>
           </label>
-          <BackgroundNumberField label="Polynomial degree" value={extraction.config.model.degree}
-            min={0} max={4} step={1} disabled={disabled}
-            onChange={(degree) => updateModel({ degree: degree ?? 0 })} />
+          <BackgroundNumberField label="Strength" value={extraction.strength}
+            min={0} max={1} step={0.05} disabled={disabled}
+            onChange={(strength) => onChange({ ...extraction, strength: strength ?? 0 })} />
+          <label className="stack-stretch-field">
+            <span>Surface model</span>
+            <select
+              aria-label="Background surface model"
+              value={extraction.config.model.kind}
+              disabled={disabled}
+              onChange={(event) => selectModel(
+                event.target.value as StackBackgroundConfig['model']['kind']
+              )}
+            >
+              <option value="automatic">Automatic</option>
+              <option value="polynomial">Polynomial</option>
+              <option value="radial_basis">Radial basis (advanced)</option>
+            </select>
+          </label>
+          {extraction.config.model.kind === 'automatic' && (
+            <>
+              <BackgroundNumberField label="Maximum degree"
+                value={extraction.config.model.max_degree}
+                min={0} max={4} step={1} disabled={disabled}
+                onChange={(max_degree) => updateAutomaticModel({ max_degree: max_degree ?? 0 })} />
+              <BackgroundNumberField label="Minimum improvement"
+                value={extraction.config.model.minimum_improvement}
+                min={0} max={0.75} step={0.01} disabled={disabled}
+                onChange={(minimum_improvement) => updateAutomaticModel({
+                  minimum_improvement: minimum_improvement ?? 0,
+                })} />
+              <label className="stack-stretch-field stack-background-rbf-toggle">
+                <span>Flexible surface</span>
+                <input type="checkbox" aria-label="Allow radial-basis background model"
+                  checked={extraction.config.model.allow_radial_basis} disabled={disabled}
+                  onChange={(event) => updateAutomaticModel({
+                    allow_radial_basis: event.target.checked,
+                  })} />
+              </label>
+              {extraction.config.model.allow_radial_basis && (
+                <>
+                  <BackgroundNumberField label="RBF smoothing"
+                    value={extraction.config.model.rbf_smoothing}
+                    min={0} step="any" disabled={disabled}
+                    onChange={(rbf_smoothing) => updateAutomaticModel({
+                      rbf_smoothing: rbf_smoothing ?? 0,
+                    })} />
+                  <BackgroundNumberField label="RBF control points"
+                    value={extraction.config.model.max_control_points}
+                    min={16} max={512} step={1} disabled={disabled}
+                    onChange={(max_control_points) => updateAutomaticModel({
+                      max_control_points: max_control_points ?? 16,
+                    })} />
+                </>
+              )}
+            </>
+          )}
+          {extraction.config.model.kind === 'polynomial' && (
+            <BackgroundNumberField label="Polynomial degree"
+              value={extraction.config.model.degree}
+              min={0} max={4} step={1} disabled={disabled}
+              onChange={(degree) => updatePolynomialModel({ degree: degree ?? 0 })} />
+          )}
+          {extraction.config.model.kind === 'radial_basis' && (
+            <>
+              <BackgroundNumberField label="RBF smoothing"
+                value={extraction.config.model.smoothing}
+                min={0} step="any" disabled={disabled}
+                onChange={(smoothing) => updateRadialBasisModel({ smoothing: smoothing ?? 0 })} />
+              <BackgroundNumberField label="RBF control points"
+                value={extraction.config.model.max_control_points}
+                min={16} max={512} step={1} disabled={disabled}
+                onChange={(max_control_points) => updateRadialBasisModel({
+                  max_control_points: max_control_points ?? 16,
+                })} />
+            </>
+          )}
           <BackgroundNumberField label="Samples per axis" value={extraction.config.samples_per_axis}
             min={3} max={512} step={1} disabled={disabled}
             onChange={(samples_per_axis) => updateConfig({ samples_per_axis: samples_per_axis ?? 3 })} />
@@ -190,10 +313,22 @@ function BackgroundControls({
           <BackgroundNumberField label="Border fraction" value={extraction.config.border_fraction}
             min={0} max={0.449} step={0.01} disabled={disabled}
             onChange={(border_fraction) => updateConfig({ border_fraction: border_fraction ?? 0 })} />
-          <BackgroundNumberField label="Ridge" value={extraction.config.model.ridge}
-            min={0} step="any" disabled={disabled}
-            onChange={(ridge) => updateModel({ ridge: ridge ?? 0 })} />
+          {extraction.config.model.kind !== 'radial_basis' && (
+            <BackgroundNumberField label="Ridge" value={extraction.config.model.ridge}
+              min={0} step="any" disabled={disabled}
+              onChange={(ridge) => extraction.config.model.kind === 'automatic'
+                ? updateAutomaticModel({ ridge: ridge ?? 0 })
+                : updatePolynomialModel({ ridge: ridge ?? 0 })} />
+          )}
         </div>
+      )}
+      {extraction && (extraction.config.model.kind === 'radial_basis' ||
+        (extraction.config.model.kind === 'automatic' &&
+          extraction.config.model.allow_radial_basis)) && (
+        <p>
+          Radial-basis fitting is slower and can follow real nebulosity. Check the result against
+          the original stack.
+        </p>
       )}
       {fits.length > 0 && (
         <div className="stack-background-diagnostics" aria-label="Background fit diagnostics">
@@ -201,7 +336,16 @@ function BackgroundControls({
             <span key={role}>
               <strong>{roleLabels[role]}</strong>
               {fit.diagnostics.accepted_samples}/{fit.diagnostics.candidate_samples} samples
-              <small>radius {fit.diagnostics.sample_radius}</small>
+              <small>
+                {fit.diagnostics.model_selection?.selected ?? fit.model.kind}
+                {' · '}radius {fit.diagnostics.sample_radius}
+                {' · '}{fit.diagnostics.protected_regions ?? 0} protected
+              </small>
+              {!!protections[role]?.object_names.length && (
+                <small title={protections[role]?.object_names.join(', ')}>
+                  Protected: {protections[role]?.object_names.join(', ')}
+                </small>
+              )}
             </span>
           ))}
         </div>
@@ -292,12 +436,13 @@ function StageLane({
 }
 
 export default function StackColorProcessingControls({
-  label, roles, applied, backgrounds, deconvolutions, disabled, onApply,
+  label, roles, applied, backgrounds, protections, deconvolutions, disabled, onApply,
 }: {
   label: string;
   roles: StackColorRole[];
   applied: StackColorProcessing | null;
   backgrounds: Partial<Record<StackColorRole, StackBackgroundFit>>;
+  protections: Partial<Record<StackColorRole, StackBackgroundProtection>>;
   deconvolutions: Partial<Record<StackColorRole, StackDeconvolutionResult>>;
   disabled: boolean;
   onApply: (processing: StackColorProcessing) => void;
@@ -363,6 +508,7 @@ export default function StackColorProcessingControls({
         <BackgroundControls
           extraction={draft.background_extraction}
           backgrounds={backgrounds}
+          protections={protections}
           disabled={disabled}
           onChange={(background_extraction) => setDraft((current) => ({
             ...current, background_extraction,

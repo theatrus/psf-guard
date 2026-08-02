@@ -301,6 +301,7 @@ function ColorCard({
         roles={requiredRoles(kind, palette)}
         applied={artifact?.processing ?? null}
         backgrounds={artifact?.resolved_backgrounds ?? {}}
+        protections={artifact?.resolved_background_protection ?? {}}
         deconvolutions={artifact?.resolved_input_deconvolutions ?? {}}
         disabled={!canCompute || busy || unavailable}
         onApply={onProcessingApply}
