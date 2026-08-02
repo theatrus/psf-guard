@@ -169,7 +169,13 @@ export default function ProjectTargetSelector() {
     : selectedTarget && selectedProject
       ? `${selectedProject.display_name} · ${selectedTarget.name}`
       : selectedProject?.display_name ??
-        (selectedDatabase ? `All projects · ${selectedDatabase.name}` : 'Choose project or target');
+        (selectedDatabase ? 'All projects' : 'Choose project or target');
+  // Closed, the trigger is the only place the current database is named, and
+  // project names repeat across catalogs. Every row inside the picker already
+  // carries its database this way.
+  const scopeDatabase = projectsLoading
+    ? null
+    : selectedProject?.db_name ?? selectedDatabase?.name ?? null;
   const refreshPending = refreshCacheMutation.isPending || refreshBothCachesMutation.isPending;
 
   const renderProject = (project: NavigationProject) => (
@@ -207,7 +213,10 @@ export default function ProjectTargetSelector() {
           disabled={projectsLoading}
           onClick={openPicker}
         >
-          <span>{scopeLabel}</span>
+          <span className="selector-trigger-scope">
+            <span>{scopeLabel}</span>
+            {scopeDatabase && <small>{scopeDatabase}</small>}
+          </span>
           <span aria-hidden="true">▾</span>
         </button>
 
