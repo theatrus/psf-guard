@@ -87,6 +87,7 @@ libc = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }
 
 [dev-dependencies]
+filetime = "0.2"
 http-body-util = "0.1"
 
 [features]

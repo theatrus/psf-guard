@@ -1456,6 +1456,7 @@ fn run_color_job(state: &Arc<AppState>, prepared: PreparedColorJob) {
                 match persisted {
                     Ok(()) => {
                         let _ = state.stack_previews.insert_color(completed);
+                        state.stack_previews.prune_cache(&prepared.cache_root);
                     }
                     Err(error) => {
                         tracing::warn!("Failed to publish color preview: {error}");
@@ -2688,6 +2689,17 @@ fn role_cache_name(role: StackColorRole) -> &'static str {
     }
 }
 
+/// Job and cached-input references from every project's durable color index.
+pub(super) fn latest_color_references(cache_root: &FsPath) -> Vec<(String, Option<String>)> {
+    super::read_latest_indices::<LatestStackColorPreviews>(
+        &cache_root.join("stack-previews").join("color"),
+    )
+    .into_iter()
+    .flat_map(|latest| latest.jobs)
+    .map(|job| (job.job_id, job.linear_input_id))
+    .collect()
+}
+
 fn latest_color_path(cache_root: &FsPath, project_id: i32) -> PathBuf {
     cache_root
         .join("stack-previews")
@@ -2738,6 +2750,8 @@ mod tests {
                 processed_frames: 3,
                 accepted_frames: 3,
                 rejected_frames: 0,
+                reused_frames: 0,
+                resume_note: None,
                 output_channels: 1,
                 sky_orientation: Some(stack_orientation(
                     100,

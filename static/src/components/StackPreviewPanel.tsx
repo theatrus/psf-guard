@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type {
   Image,
@@ -15,7 +15,7 @@ import StackColorPreviewPanel from './StackColorPreviewPanel';
 import StackStretchControls from './StackStretchControls';
 import { isSkyOriented } from './stackOrientation';
 import { useAccess } from '../auth/access';
-import { adoptableStackJob, useStackActivity } from '../hooks/useStackActivity';
+import { useStackActivity } from '../hooks/useStackActivity';
 
 type StackCandidateImage = Pick<
   Image,
@@ -123,7 +123,7 @@ export default function StackPreviewPanel({
   const queryClient = useQueryClient();
   const { canCompute } = useAccess();
   const [acceptedOnly, setAcceptedOnly] = useState(false);
-  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [watchedJobIds, setWatchedJobIds] = useState<string[]>([]);
   const [inspector, setInspector] = useState<StackArtifact | null>(null);
   const [stretches, setStretches] = useState<Record<string, StackStretchPreview>>({});
 
@@ -179,7 +179,9 @@ export default function StackPreviewPanel({
       }),
     onSuccess: (job) => {
       queryClient.setQueryData(stackJobQueryKey(dbId, projectId, job.job_id), job);
-      setActiveJobId(job.job_id);
+      setWatchedJobIds((current) =>
+        current.includes(job.job_id) ? current : [...current, job.job_id]
+      );
       if (terminalStates.has(job.state)) {
         queryClient.invalidateQueries({ queryKey: latestStackQueryKey(dbId, projectId) });
       }
@@ -198,42 +200,68 @@ export default function StackPreviewPanel({
     },
   });
 
-  const status = useQuery({
-    queryKey: stackJobQueryKey(dbId, projectId, activeJobId),
-    queryFn: () => apiClient.getStackPreviewJob(dbId, projectId, activeJobId!),
-    enabled: activeJobId !== null,
-    refetchInterval: (query) =>
-      query.state.data && !terminalStates.has(query.state.data.state) ? 1000 : false,
+  const statuses = useQueries({
+    queries: watchedJobIds.map((jobId) => ({
+      queryKey: stackJobQueryKey(dbId, projectId, jobId),
+      queryFn: () => apiClient.getStackPreviewJob(dbId, projectId, jobId),
+      refetchInterval: (query: { state: { data?: StackPreviewJob } }) =>
+        query.state.data && !terminalStates.has(query.state.data.state) ? 1000 : false,
+    })),
   });
-
-  const activeJob: StackPreviewJob | undefined = status.data;
+  const watchedJobs = useMemo(
+    () =>
+      statuses
+        .map((status) => status.data)
+        .filter((job): job is StackPreviewJob => job !== undefined)
+        .sort((left, right) => left.created_unix_seconds - right.created_unix_seconds),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- useQueries returns a new array each render; the join tracks content.
+    [statuses.map((status) => status.dataUpdatedAt).join('|')]
+  );
+  const unfinishedJobs = watchedJobs.filter((job) => !terminalStates.has(job.state));
+  const statusError = statuses.find((status) => status.error)?.error;
+  // The job a shared status line describes: running work first, then the
+  // newest of whatever remains.
+  const activeJob: StackPreviewJob | undefined =
+    unfinishedJobs.find((job) => job.state === 'running') ??
+    unfinishedJobs[unfinishedJobs.length - 1] ??
+    watchedJobs[watchedJobs.length - 1];
+  const settledCount = watchedJobs.filter((job) => terminalStates.has(job.state)).length;
   useEffect(() => {
-    if (activeJob && terminalStates.has(activeJob.state)) {
+    if (settledCount > 0) {
       queryClient.invalidateQueries({ queryKey: latestStackQueryKey(dbId, projectId) });
     }
-  }, [activeJob, dbId, projectId, queryClient]);
+  }, [settledCount, dbId, projectId, queryClient]);
 
   useEffect(() => {
-    setActiveJobId(null);
+    setWatchedJobIds([]);
     setInspector(null);
     setStretches({});
     resetStart();
     resetStop();
   }, [dbId, projectId, resetStart, resetStop]);
 
-  // A build started before this panel mounted — or before the last navigation
-  // — keeps running on the server. Re-attach to it so its progress is visible
-  // again. This must follow the reset above so a project change adopts the new
-  // project's job rather than the old one.
+  // Builds started before this panel mounted — or before the last navigation
+  // — keep running on the server. Re-attach to every one of them so a queue
+  // built up elsewhere stays visible. This must follow the reset above so a
+  // project change adopts the new project's jobs rather than the old ones.
   const { active } = useStackActivity();
-  const adoptedJobId = adoptableStackJob(active, 'mono', dbId, projectId)?.job_id ?? null;
-  const shownJobFinished = activeJob ? terminalStates.has(activeJob.state) : false;
+  const adoptableIds = useMemo(
+    () =>
+      active
+        .filter(
+          (entry) =>
+            entry.kind === 'mono' && entry.database_id === dbId && entry.project_id === projectId
+        )
+        .map((entry) => entry.job_id),
+    [active, dbId, projectId]
+  );
   useEffect(() => {
-    if (!adoptedJobId) return;
-    // Keep a job this panel is already watching, but never let a build we have
-    // finished with hide one that is still running.
-    setActiveJobId((current) => (current === null || shownJobFinished ? adoptedJobId : current));
-  }, [adoptedJobId, shownJobFinished]);
+    if (adoptableIds.length === 0) return;
+    setWatchedJobIds((current) => {
+      const additions = adoptableIds.filter((jobId) => !current.includes(jobId));
+      return additions.length === 0 ? current : [...current, ...additions];
+    });
+  }, [adoptableIds]);
 
   const latestByChannel = useMemo(
     () =>
@@ -245,16 +273,24 @@ export default function StackPreviewPanel({
       ),
     [latest.data]
   );
-  const activeByChannel = useMemo(
-    () =>
-      new Map(
-        (activeJob?.groups ?? []).map((group) => [
-          channelKey(group.target_id, group.filter_name),
-          group,
-        ])
-      ),
-    [activeJob]
-  );
+  const activeByChannel = useMemo(() => {
+    const merged = new Map<string, { job: StackPreviewJob; group: StackPreviewJob['groups'][number] }>();
+    for (const job of watchedJobs) {
+      for (const group of job.groups) {
+        const key = channelKey(group.target_id, group.filter_name);
+        const existing = merged.get(key);
+        // A build still holding the channel outranks a settled one; among
+        // equals the newer request wins, matching iteration order.
+        const groupBusy = group.state === 'queued' || group.state === 'running';
+        const existingBusy =
+          existing?.group.state === 'queued' || existing?.group.state === 'running';
+        if (!existing || groupBusy || !existingBusy) {
+          merged.set(key, { job, group });
+        }
+      }
+    }
+    return merged;
+  }, [watchedJobs]);
 
   const displayKeys = useMemo(() => {
     const keys = new Set([...currentChannels.keys(), ...latestByChannel.keys(), ...activeByChannel.keys()]);
@@ -273,17 +309,10 @@ export default function StackPreviewPanel({
     });
   }, [activeByChannel, currentChannels, latestByChannel]);
 
-  const running = startPending || activeJob?.state === 'queued' || activeJob?.state === 'running';
-  // A running build may have been started elsewhere, so the label falls back to
-  // the whole-set wording when this panel did not start it.
-  const buildLabel = running
-    ? startVariables && startVariables.operationKey !== 'all'
-      ? 'Building channel…'
-      : 'Building previews…'
-    : latest.data?.groups.length
-      ? 'Build current set'
-      : 'Build stack previews';
-  const error = startError ?? stopError ?? status.error ?? latest.error;
+  const running = startPending || unfinishedJobs.length > 0;
+  const queuedBuilds = unfinishedJobs.length;
+  const buildLabel = latest.data?.groups.length ? 'Build current set' : 'Build stack previews';
+  const error = startError ?? stopError ?? statusError ?? latest.error;
   const sourceText = selectionSource === 'selected' ? 'selected' : 'visible';
   // A failed stop — "that build already finished" — belongs to the build the
   // user was stopping, not to the next one they start.
@@ -301,13 +330,13 @@ export default function StackPreviewPanel({
   };
 
   const staleCount = displayKeys.filter((key) => {
-    const activeGroup = activeByChannel.get(key);
+    const activeEntry = activeByChannel.get(key);
     const latestEntry = latestByChannel.get(key);
     const artifact =
-      activeGroup?.state === 'ready' && activeJob
+      activeEntry && activeEntry.group.state === 'ready'
         ? {
-            acceptedOnly: activeJob.accepted_only,
-            group: activeGroup,
+            acceptedOnly: activeEntry.job.accepted_only,
+            group: activeEntry.group,
           }
         : latestEntry
           ? { acceptedOnly: latestEntry.accepted_only, group: latestEntry.group }
@@ -371,11 +400,11 @@ export default function StackPreviewPanel({
             <button
               className="stack-preview-build"
               type="button"
-              disabled={!canCompute || running || stableImageIds.length < 2}
+              disabled={!canCompute || startPending || stableImageIds.length < 2}
               title={canCompute ? undefined : 'This account can view cached stacks but cannot build them.'}
               onClick={() => beginAll(false)}
             >
-              {buildLabel}
+              {startPending && startVariables?.operationKey === 'all' ? 'Queueing…' : buildLabel}
             </button>
             {!!latest.data?.groups.length && !running && (
               <button
@@ -388,15 +417,19 @@ export default function StackPreviewPanel({
                 Rebuild current set
               </button>
             )}
-            {running && activeJobId && (
+            {unfinishedJobs.length > 0 && (
               <button
                 className="stack-preview-stop"
                 type="button"
-                disabled={stopPending || activeJob?.state === 'cancelled'}
-                title="Stop this build. Channels already finished keep their previews."
-                onClick={() => stopStack(activeJobId)}
+                disabled={stopPending}
+                title="Stop every queued and running build. Channels already finished keep their previews."
+                onClick={() => unfinishedJobs.forEach((job) => stopStack(job.job_id))}
               >
-                {stopPending ? 'Stopping…' : 'Stop'}
+                {stopPending
+                  ? 'Stopping…'
+                  : unfinishedJobs.length > 1
+                    ? `Stop all (${unfinishedJobs.length})`
+                    : 'Stop'}
               </button>
             )}
           </div>
@@ -435,6 +468,9 @@ export default function StackPreviewPanel({
                 {displayKeys.length} target/channel group{displayKeys.length === 1 ? '' : 's'}
               </span>
               <span>Stack preview</span>
+              {queuedBuilds > 1 && (
+                <span className="stack-preview-queue-depth">{queuedBuilds} builds in the queue</span>
+              )}
               {staleCount > 0 && (
                 <span className="stack-preview-outdated-count">{staleCount} out of date</span>
               )}
@@ -442,15 +478,16 @@ export default function StackPreviewPanel({
             <div className="stack-preview-grid">
               {displayKeys.map((key) => {
                 const current = currentChannels.get(key);
-                const activeGroup = activeByChannel.get(key);
+                const activeEntry = activeByChannel.get(key);
+                const activeGroup = activeEntry?.group;
                 const latestEntry = latestByChannel.get(key);
                 const activeArtifact: StackArtifact | undefined =
-                  activeGroup?.state === 'ready' && activeJob
+                  activeEntry && activeEntry.group.state === 'ready'
                     ? {
-                        jobId: activeJob.job_id,
-                        artifactRevision: activeJob.artifact_revision,
-                        acceptedOnly: activeJob.accepted_only,
-                        group: activeGroup,
+                        jobId: activeEntry.job.job_id,
+                        artifactRevision: activeEntry.job.artifact_revision,
+                        acceptedOnly: activeEntry.job.accepted_only,
+                        group: activeEntry.group,
                       }
                     : undefined;
                 const artifact = activeArtifact ?? artifactFromLatest(latestEntry);
@@ -506,8 +543,11 @@ export default function StackPreviewPanel({
                             : progressState === 'error'
                               ? 'Stack failed'
                               : 'Not built';
+                const reusedFrames = progressGroup?.reused_frames ?? 0;
                 const progressDetail = progressGroup
-                  ? `${processedFrames}/${eligibleFrames} frames`
+                  ? `${processedFrames}/${eligibleFrames} frames${
+                      reusedFrames > 0 ? ` · ${reusedFrames} resumed` : ''
+                    }`
                   : `${current?.images.length ?? 0} candidates`;
 
                 return (
@@ -556,7 +596,7 @@ export default function StackPreviewPanel({
                           <button
                             className="stack-preview-card-action"
                             type="button"
-                            disabled={!canCompute || running || !canBuildChannel}
+                            disabled={!canCompute || groupBusy || startPending || !canBuildChannel}
                             aria-label={artifact ? 'Rebuild channel' : 'Build channel'}
                             title={!canCompute
                               ? 'This account can view cached stacks but cannot build them.'
@@ -574,6 +614,9 @@ export default function StackPreviewPanel({
                     </header>
 
                     {outdated && <div className="stack-preview-outdated">{outdated}</div>}
+                    {progressGroup?.resume_note && (
+                      <div className="stack-preview-resume-note">{progressGroup.resume_note}</div>
+                    )}
 
                     {artifact && (
                       <div className="stack-preview-image">

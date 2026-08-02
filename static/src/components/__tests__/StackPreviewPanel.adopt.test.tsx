@@ -116,7 +116,10 @@ describe('StackPreviewPanel job adoption', () => {
     expect(await screen.findByText('1/2 frames')).toBeInTheDocument();
     expect(screen.getByRole('progressbar', { name: /Sh2 86 Ha stack progress/i }))
       .toHaveAttribute('aria-valuenow', '1');
-    expect(screen.getByRole('button', { name: 'Building previews…' })).toBeDisabled();
+    // The queue stays open while the adopted build runs: the header button
+    // keeps its label and stays clickable, and a Stop appears for the build.
+    expect(screen.getByRole('button', { name: 'Build stack previews' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
   });
 
   it('drops a finished build for one that is still running', async () => {

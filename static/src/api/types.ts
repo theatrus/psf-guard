@@ -412,6 +412,10 @@ export interface StackGroupStatus {
   quality_excluded: number;
   missing_files: number;
   processed_frames: number;
+  /** Frames restored from a saved accumulator; zero for a fresh build. */
+  reused_frames?: number;
+  /** Why an existing checkpoint could not be extended, when that happened. */
+  resume_note?: string | null;
   accepted_frames: number;
   rejected_frames: number;
   output_channels: number;

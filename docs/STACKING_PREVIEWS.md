@@ -31,6 +31,61 @@ databases, so full-frame accumulator buffers cannot multiply unexpectedly.
 Cards are capped at two columns on wide displays so the inspection preview does
 not become excessively wide.
 
+### Queue builds by hand
+
+Build buttons stay available while a build runs. Clicking **Build channel** on
+another card — or a color build, or **Build stack previews** for the whole set
+— queues that job behind the running one on the same single-job worker, so
+memory use does not grow with the queue. Each card shows its own state:
+`queued` cards wait, the `running` card shows live progress, and the status
+line counts the builds in the queue. The header **Stacking** indicator lists
+the same queue in every view. **Stop** becomes **Stop all** when more than one
+build is pending and stops every queued and running job; channels that already
+finished keep their previews.
+
+### Additive rebuilds resume
+
+A finished or stopped channel build checkpoints its integration state — the
+running accumulator, the online rejection statistics, and the registration
+reference — beside a ledger of every frame it integrated or turned away. A
+later build of the same target and channel whose frame set only grew reopens
+that checkpoint and integrates just the new frames, so adding a night to a
+season-long target costs one night's stacking, not the whole season's. The
+card marks restored work as `resumed` in its frame counter.
+
+The resumed result is exactly the stack a from-scratch build would produce;
+Seiza's checkpoint round trip is bit-for-bit and validates the format version,
+dimensions, configuration, and payload checksum before continuing. The
+checkpoint is only reused when it is provably an ancestor of the request:
+every recorded frame must still be requested with an identical source
+fingerprint, and the calibration set, Accepted-only policy, and stacking
+pipeline version must match. Removing a frame, regrading one in place,
+changing calibration, or upgrading Seiza rebuilds from scratch — and when a
+checkpoint existed but could not be extended, the card says why (`Full
+restack: calibration changed`), so a slow rebuild is never a mystery. A
+stopped build checkpoints the frames it finished, so building again continues
+where the stop landed instead of starting over. Checkpoints live in the
+project cache and cost one full-frame state file per target/channel.
+
+### Cache housekeeping
+
+Stack artifacts are content-addressed by job, so every rebuild writes a new
+directory and old ones used to accumulate forever. After a build settles, a
+janitor sweeps the stack cache and deletes what nothing references any more:
+mono and color job directories absent from every durable latest index and
+from the in-memory job list, and cached color inputs no kept job points at.
+Both indices replace entries per identity — mono per target/channel, color
+per target/kind/palette — so a job's output is durable until its input set
+changes and a newer build of the same identity supersedes it. A full day of
+grace on top means nothing a long build session or an open inspector still
+touches is swept out from under it.
+
+Resume checkpoints follow the same rule: each is replaced in place when its
+group's input set changes and is otherwise kept, whatever its age. The only
+checkpoints deleted outright are ones that can never resume again — written
+by another stacking pipeline version, unreadable, or an orphaned half of an
+interrupted save.
+
 A build belongs to the server, not to the page that started it. The header
 shows a **Stacking** indicator next to the cache and quality-analysis progress
 for as long as any mono or color build is queued or running, in every view and

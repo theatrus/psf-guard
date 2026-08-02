@@ -3926,6 +3926,12 @@
   font-size: 0.68rem;
 }
 
+.stack-preview-resume-note {
+  padding: 0.3rem 0.65rem;
+  color: var(--color-text-tertiary);
+  font-size: 0.68rem;
+}
+
 .stack-color-crop {
   display: flex;
   align-items: center;
