@@ -14,6 +14,7 @@ import StackPreviewInspector from './StackPreviewInspector';
 import StackColorPreviewPanel from './StackColorPreviewPanel';
 import StackStretchControls from './StackStretchControls';
 import { useAccess } from '../auth/access';
+import { adoptableStackJob, useStackActivity } from '../hooks/useStackActivity';
 
 type StackCandidateImage = Pick<
   Image,
@@ -219,6 +220,20 @@ export default function StackPreviewPanel({
     resetStop();
   }, [dbId, projectId, resetStart, resetStop]);
 
+  // A build started before this panel mounted — or before the last navigation
+  // — keeps running on the server. Re-attach to it so its progress is visible
+  // again. This must follow the reset above so a project change adopts the new
+  // project's job rather than the old one.
+  const { active } = useStackActivity();
+  const adoptedJobId = adoptableStackJob(active, 'mono', dbId, projectId)?.job_id ?? null;
+  const shownJobFinished = activeJob ? terminalStates.has(activeJob.state) : false;
+  useEffect(() => {
+    if (!adoptedJobId) return;
+    // Keep a job this panel is already watching, but never let a build we have
+    // finished with hide one that is still running.
+    setActiveJobId((current) => (current === null || shownJobFinished ? adoptedJobId : current));
+  }, [adoptedJobId, shownJobFinished]);
+
   const latestByChannel = useMemo(
     () =>
       new Map(
@@ -258,6 +273,15 @@ export default function StackPreviewPanel({
   }, [activeByChannel, currentChannels, latestByChannel]);
 
   const running = startPending || activeJob?.state === 'queued' || activeJob?.state === 'running';
+  // A running build may have been started elsewhere, so the label falls back to
+  // the whole-set wording when this panel did not start it.
+  const buildLabel = running
+    ? startVariables && startVariables.operationKey !== 'all'
+      ? 'Building channel…'
+      : 'Building previews…'
+    : latest.data?.groups.length
+      ? 'Build current set'
+      : 'Build stack previews';
   const error = startError ?? stopError ?? status.error ?? latest.error;
   const sourceText = selectionSource === 'selected' ? 'selected' : 'visible';
   // A failed stop — "that build already finished" — belongs to the build the
@@ -350,11 +374,7 @@ export default function StackPreviewPanel({
               title={canCompute ? undefined : 'This account can view cached stacks but cannot build them.'}
               onClick={() => beginAll(false)}
             >
-              {running && startVariables?.operationKey === 'all'
-                ? 'Building previews…'
-                : latest.data?.groups.length
-                  ? 'Build current set'
-                  : 'Build stack previews'}
+              {buildLabel}
             </button>
             {!!latest.data?.groups.length && !running && (
               <button

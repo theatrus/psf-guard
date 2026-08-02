@@ -56,6 +56,7 @@ import type {
   ArtifactSearchJob,
   ReferenceRegion,
   LatestStackPreviews,
+  StackActivity,
   StackColorCatalog,
   StackColorJob,
   StackColorKind,
@@ -696,6 +697,12 @@ export const apiClient = {
     );
     if (!data.data) throw new Error(data.error || 'Stack build could not be stopped');
     return data.data;
+  },
+
+  getStackActivity: async (): Promise<StackActivity> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<StackActivity>>('/stack-activity');
+    return data.data ?? { schema_version: 1, active: [] };
   },
 
   getLatestStackPreviews: async (

@@ -31,6 +31,14 @@ databases, so full-frame accumulator buffers cannot multiply unexpectedly.
 Cards are capped at two columns on wide displays so the inspection preview does
 not become excessively wide.
 
+A build belongs to the server, not to the page that started it. The header
+shows a **Stacking** indicator next to the cache and quality-analysis progress
+for as long as any mono or color build is queued or running, in every view and
+in every database. Reopening the project grid re-attaches the stack panels to
+the running job, so leaving the page and coming back restores the live per-card
+progress instead of an idle panel. The indicator names the target and channel
+being stacked, its frame counts, and how many further builds are waiting.
+
 ## Sky orientation
 
 Every completed mono and color stack uses the same celestial display frame:
@@ -271,11 +279,12 @@ When a channel stack has a fresh pixel-derived plate solve, PSF Guard protects
 large cataloged emission regions from background sampling. It uses closed
 catalog or curated contours when the object catalog supplies them, then falls
 back to the object's projected ellipse. Embedded FITS WCS alone does not enable
-this protection. Each channel uses its own stack reference frame. The manifest
-records the reference image, catalog version, object names, and normalized
-regions. These values also form part of the cache key, so a new solve or
-catalog projection cannot reuse a fit made with stale bounds. After correction,
-each
+this protection. Each channel uses its own stack reference frame, and PSF Guard
+maps its catalog bounds through the stack's saved sky-up transform before it
+fits the background. The manifest records the reference image, catalog version,
+object names, region count, and a geometry fingerprint. These values form part
+of the cache key and stale check, so a new solve or catalog projection cannot
+reuse or present a fit made with stale bounds. After correction, each
 non-reference stack is registered to R for RGB, L for LRGB, or H-alpha for
 narrowband, using the same bounded Seiza star/similarity registration used by
 the Seiza color CLI.

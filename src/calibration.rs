@@ -10,6 +10,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::UNIX_EPOCH;
 
 pub const CALIBRATION_SCHEMA_VERSION: i64 = 1;
@@ -883,14 +884,27 @@ pub fn selection_fingerprint(
 }
 
 /// Match a light against the calibration library and build whatever masters
-/// it needs. `cancel` is handed to Seiza, which checks it once per input
-/// frame; a cancelled build leaves no master behind.
+/// it needs. `cancel` is read between masters, so a caller that stops an
+/// interactive job does not wait for the whole set. Cancelling leaves the
+/// masters already written in place — they are complete and cached.
+/// A stop between masters. Building one master is a single Seiza call over up
+/// to 64 frames, so this is the finest granularity PSF Guard can offer on its
+/// own; seiza#107 adds the per-frame check inside a master.
+fn stop_requested(cancel: Option<&AtomicBool>) -> Result<()> {
+    match cancel {
+        Some(flag) if flag.load(Ordering::Relaxed) => {
+            anyhow::bail!("calibration stopped before the masters were built")
+        }
+        _ => Ok(()),
+    }
+}
+
 pub fn resolve_or_build_masters(
     conn: &Connection,
     cache_root: &Path,
     light_path: &Path,
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
-    cancel: Option<seiza_stacking::CancelSignal>,
+    cancel: Option<&AtomicBool>,
 ) -> Result<(seiza_stacking::CalibrationMasters, AppliedCalibration)> {
     let light = crate::commands::import::headers::read_frame_meta(light_path);
     let mut selected = select_for_light(conn, &light)?;
@@ -927,13 +941,13 @@ pub fn resolve_or_build_masters(
     std::fs::create_dir_all(&master_root)
         .with_context(|| format!("creating {}", master_root.display()))?;
 
+    stop_requested(cancel)?;
     let bias = build_master(
         conn,
         &master_root,
         CalibrationKind::Bias,
         &selected.bias,
         MasterInputs::default(),
-        cancel.as_ref(),
     )?;
     applied.bias_master = bias.as_ref().map(|master| master.label());
 
@@ -942,6 +956,7 @@ pub fn resolve_or_build_masters(
         .map(|master| seiza_stacking::FitsFrame::open(&master.path).map(|frame| frame.image))
         .transpose()
         .context("loading the cached master bias")?;
+    stop_requested(cancel)?;
     let dark_flat = build_master(
         conn,
         &master_root,
@@ -952,7 +967,6 @@ pub fn resolve_or_build_masters(
             bias_dependency: bias.as_ref(),
             ..Default::default()
         },
-        cancel.as_ref(),
     )?;
     applied.dark_flat_master = dark_flat.as_ref().map(|master| master.label());
     let flat_dark = dark_flat
@@ -970,6 +984,7 @@ pub fn resolve_or_build_masters(
         })
         .transpose()
         .context("preparing the master dark-flat")?;
+    stop_requested(cancel)?;
     let dark = build_master(
         conn,
         &master_root,
@@ -980,9 +995,9 @@ pub fn resolve_or_build_masters(
             bias_dependency: bias.as_ref(),
             ..Default::default()
         },
-        cancel.as_ref(),
     )?;
     applied.dark_master = dark.as_ref().map(|master| master.label());
+    stop_requested(cancel)?;
     let flat = build_master(
         conn,
         &master_root,
@@ -994,7 +1009,6 @@ pub fn resolve_or_build_masters(
             bias_dependency: bias.as_ref(),
             dark_dependency: dark_flat.as_ref(),
         },
-        cancel.as_ref(),
     )?;
     applied.flat_master = flat.as_ref().map(|master| master.label());
 
@@ -1041,7 +1055,7 @@ pub fn resolve_or_build_masters_for_group(
     cache_root: &Path,
     light_paths: &[PathBuf],
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
-    cancel: Option<seiza_stacking::CancelSignal>,
+    cancel: Option<&AtomicBool>,
 ) -> Result<(seiza_stacking::CalibrationMasters, AppliedCalibration)> {
     let Some(reference) = light_paths.first() else {
         return Ok((
@@ -1103,7 +1117,6 @@ fn build_master(
     kind: CalibrationKind,
     frames: &[CalibrationFrame],
     inputs: MasterInputs<'_>,
-    cancel: Option<&seiza_stacking::CancelSignal>,
 ) -> Result<Option<BuiltMaster>> {
     if frames.len() < MIN_MASTER_FRAMES {
         return Ok(None);
@@ -1149,7 +1162,6 @@ fn build_master(
         exposure_seconds: frames.first().and_then(|frame| frame.exposure_s),
         bias,
         dark,
-        cancel: cancel.cloned(),
         ..Default::default()
     };
     let paths = frames

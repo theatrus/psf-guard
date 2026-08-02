@@ -7,16 +7,14 @@ import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
 import DatabaseActivityStatus from '../DatabaseActivityStatus';
 
-function wrapper() {
+function wrapper(route = '/grid?db=test&project=1&target=42') {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
   return function Wrapper({ children }: { children: ReactNode }) {
     return (
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/grid?db=test&project=1&target=42']}>
-          {children}
-        </MemoryRouter>
+        <MemoryRouter initialEntries={[route]}>{children}</MemoryRouter>
       </QueryClientProvider>
     );
   };
@@ -164,5 +162,52 @@ describe('DatabaseActivityStatus quality activity', () => {
 
     expect(await screen.findByText('Analyzing database quality')).toBeInTheDocument();
     expect(screen.getByText(/2\/5 targets · Scanning 4\/10 frames/)).toBeInTheDocument();
+  });
+
+  it('ignores the return scope the Overview parks in the URL', async () => {
+    // The Overview shows every database, so the slug it holds for the trip
+    // back must not turn this into a scoped status: the merged indicator
+    // reports cross-database work there.
+    let scanPolls = 0;
+    server.use(
+      http.get('/api/db/:dbId/analysis/quality-scan', () => {
+        scanPolls += 1;
+        return HttpResponse.json({
+          success: true,
+          data: {
+            started: false,
+            progress: {
+              running: true,
+              stage: 'spatial',
+              target_id: 42,
+              filter_name: null,
+              total: 10,
+              processed: 4,
+              skipped_cached: 0,
+              spatial_processed: 4,
+              astrometry_processed: 0,
+              solved: 0,
+              solve_failed: 0,
+              operational_errors: 0,
+              errors: 0,
+              current_file: 'sh2-86-r-004.fits',
+              started_at: 1_705_352_400,
+              finished_at: null,
+              last_error: null,
+            },
+            cached_count: 4,
+          },
+          error: null,
+          status: 'ready',
+        });
+      }),
+    );
+
+    render(<DatabaseActivityStatus />, { wrapper: wrapper('/?db=test&project=1') });
+
+    // Long enough that a scoped status would have fetched and rendered.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(scanPolls).toBe(0);
+    expect(screen.queryByText('Analyzing quality')).not.toBeInTheDocument();
   });
 });

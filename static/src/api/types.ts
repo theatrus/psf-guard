@@ -460,6 +460,27 @@ export interface LatestStackPreviews {
   groups: LatestStackPreviewGroup[];
 }
 
+export type StackActivityKind = 'mono' | 'color';
+
+/** One queued or running stack build, reported across databases. */
+export interface StackActivityEntry {
+  kind: StackActivityKind;
+  job_id: string;
+  database_id: string;
+  project_id: number;
+  state: StackJobState;
+  label: string;
+  detail: string;
+  processed_units: number;
+  total_units: number;
+  created_unix_seconds: number;
+}
+
+export interface StackActivity {
+  schema_version: number;
+  active: StackActivityEntry[];
+}
+
 export type StackStretchColorStrategy = 'linked' | 'unlinked' | 'luminance-preserving';
 
 export type StackStretchModel =
@@ -562,6 +583,7 @@ export interface StackColorSource {
   artifact_revision: string;
   accepted_frames: number;
   reference_image_id: number | null;
+  sky_orientation: StackSkyOrientation | null;
   registration_transform: SimilarityTransform | null;
 }
 
@@ -642,7 +664,8 @@ export interface StackBackgroundProtection {
   reference_image_id: number;
   catalog_version: string | null;
   object_names: string[];
-  regions: unknown[];
+  region_count: number;
+  region_fingerprint: string;
 }
 
 export type StackColorProgressState =

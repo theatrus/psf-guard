@@ -249,4 +249,12 @@ export const handlers = [
       status: 'ready',
     })
   ),
+  http.get('/api/stack-activity', () =>
+    HttpResponse.json({
+      success: true,
+      data: { schema_version: 1, active: [] },
+      error: null,
+      status: 'ready',
+    })
+  ),
 ];
