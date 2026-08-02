@@ -397,11 +397,13 @@ export default function StackColorPreviewPanel({
   // so a project change adopts that project's job.
   const { active } = useStackActivity();
   const adoptedJobId = adoptableStackJob(active, 'color', dbId, projectId)?.job_id ?? null;
+  const shownJobFinished = activeJob ? terminalStates.has(activeJob.state) : false;
   useEffect(() => {
-    if (adoptedJobId) {
-      setActiveJobId((current) => current ?? adoptedJobId);
-    }
-  }, [adoptedJobId]);
+    if (!adoptedJobId) return;
+    // Keep a job this panel is already watching, but never let a build we have
+    // finished with hide one that is still running.
+    setActiveJobId((current) => (current === null || shownJobFinished ? adoptedJobId : current));
+  }, [adoptedJobId, shownJobFinished]);
 
   const targets = useMemo(() => {
     const byId = new Map((catalog.data?.targets ?? []).map((target) => [target.target_id, target]));

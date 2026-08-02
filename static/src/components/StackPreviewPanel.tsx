@@ -213,11 +213,13 @@ export default function StackPreviewPanel({
   // project's job rather than the old one.
   const { active } = useStackActivity();
   const adoptedJobId = adoptableStackJob(active, 'mono', dbId, projectId)?.job_id ?? null;
+  const shownJobFinished = activeJob ? terminalStates.has(activeJob.state) : false;
   useEffect(() => {
-    if (adoptedJobId) {
-      setActiveJobId((current) => current ?? adoptedJobId);
-    }
-  }, [adoptedJobId]);
+    if (!adoptedJobId) return;
+    // Keep a job this panel is already watching, but never let a build we have
+    // finished with hide one that is still running.
+    setActiveJobId((current) => (current === null || shownJobFinished ? adoptedJobId : current));
+  }, [adoptedJobId, shownJobFinished]);
 
   const latestByChannel = useMemo(
     () =>
