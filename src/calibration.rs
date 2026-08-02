@@ -10,6 +10,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::UNIX_EPOCH;
 
 pub const CALIBRATION_SCHEMA_VERSION: i64 = 1;
@@ -882,11 +883,28 @@ pub fn selection_fingerprint(
     Ok(selection_hash(&selected))
 }
 
+/// Match a light against the calibration library and build whatever masters
+/// it needs. `cancel` is read between masters, so a caller that stops an
+/// interactive job does not wait for the whole set. Cancelling leaves the
+/// masters already written in place — they are complete and cached.
+/// A stop between masters. Building one master is a single Seiza call over up
+/// to 64 frames, so this is the finest granularity PSF Guard can offer on its
+/// own; seiza#107 adds the per-frame check inside a master.
+fn stop_requested(cancel: Option<&AtomicBool>) -> Result<()> {
+    match cancel {
+        Some(flag) if flag.load(Ordering::Relaxed) => {
+            anyhow::bail!("calibration stopped before the masters were built")
+        }
+        _ => Ok(()),
+    }
+}
+
 pub fn resolve_or_build_masters(
     conn: &Connection,
     cache_root: &Path,
     light_path: &Path,
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
+    cancel: Option<&AtomicBool>,
 ) -> Result<(seiza_stacking::CalibrationMasters, AppliedCalibration)> {
     let light = crate::commands::import::headers::read_frame_meta(light_path);
     let mut selected = select_for_light(conn, &light)?;
@@ -923,6 +941,7 @@ pub fn resolve_or_build_masters(
     std::fs::create_dir_all(&master_root)
         .with_context(|| format!("creating {}", master_root.display()))?;
 
+    stop_requested(cancel)?;
     let bias = build_master(
         conn,
         &master_root,
@@ -937,6 +956,7 @@ pub fn resolve_or_build_masters(
         .map(|master| seiza_stacking::FitsFrame::open(&master.path).map(|frame| frame.image))
         .transpose()
         .context("loading the cached master bias")?;
+    stop_requested(cancel)?;
     let dark_flat = build_master(
         conn,
         &master_root,
@@ -964,6 +984,7 @@ pub fn resolve_or_build_masters(
         })
         .transpose()
         .context("preparing the master dark-flat")?;
+    stop_requested(cancel)?;
     let dark = build_master(
         conn,
         &master_root,
@@ -976,6 +997,7 @@ pub fn resolve_or_build_masters(
         },
     )?;
     applied.dark_master = dark.as_ref().map(|master| master.label());
+    stop_requested(cancel)?;
     let flat = build_master(
         conn,
         &master_root,
@@ -1033,6 +1055,7 @@ pub fn resolve_or_build_masters_for_group(
     cache_root: &Path,
     light_paths: &[PathBuf],
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
+    cancel: Option<&AtomicBool>,
 ) -> Result<(seiza_stacking::CalibrationMasters, AppliedCalibration)> {
     let Some(reference) = light_paths.first() else {
         return Ok((
@@ -1062,7 +1085,7 @@ pub fn resolve_or_build_masters_for_group(
             },
         ));
     }
-    resolve_or_build_masters(conn, cache_root, reference, directory_tree)
+    resolve_or_build_masters(conn, cache_root, reference, directory_tree, cancel)
 }
 
 struct BuiltMaster {
@@ -2035,7 +2058,7 @@ mod tests {
         }
         let cache = temp.path().join("cache");
         let (masters, applied) =
-            resolve_or_build_masters(&conn, &cache, &light_path, None).unwrap();
+            resolve_or_build_masters(&conn, &cache, &light_path, None, None).unwrap();
         assert!(!masters.is_empty());
         assert_eq!(applied.state, "applied");
         assert!(applied
@@ -2075,7 +2098,7 @@ mod tests {
         assert!(flat_dependencies.0.is_some());
         assert!(flat_dependencies.1.is_some());
 
-        let (_, reused) = resolve_or_build_masters(&conn, &cache, &light_path, None).unwrap();
+        let (_, reused) = resolve_or_build_masters(&conn, &cache, &light_path, None, None).unwrap();
         assert_eq!(reused.fingerprint, applied.fingerprint);
         assert_eq!(library_summary(&conn).unwrap().master_count, 4);
 
@@ -2119,6 +2142,7 @@ mod tests {
             &conn,
             &temp.path().join("cache"),
             &[first, second],
+            None,
             None,
         )
         .unwrap();

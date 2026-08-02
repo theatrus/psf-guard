@@ -298,8 +298,14 @@ export interface PreviewDescriptor {
   color?: boolean;
 }
 
-export type StackJobState = 'queued' | 'running' | 'completed' | 'failed';
-export type StackGroupState = 'queued' | 'running' | 'ready' | 'skipped' | 'error';
+export type StackJobState = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type StackGroupState =
+  | 'queued'
+  | 'running'
+  | 'ready'
+  | 'skipped'
+  | 'error'
+  | 'cancelled';
 
 export interface StackFrameDecision {
   image_id: number;
