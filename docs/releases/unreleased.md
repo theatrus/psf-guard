@@ -35,12 +35,12 @@ color stacks, and a Sequence view that keeps its place as you grade.
 - Stack previews keep the rotation of their reference frame instead of being
   reprojected, and are turned half a turn when that frame faces the wrong way
   across a meridian flip. Which way is right is read from the reference frame's
-  cached solve or embedded WCS, then its `PIERSIDE` header, then the stack's
-  own exposure — so every channel of a target agrees rather than each following
-  its own frames. The shared north-up, east-left grid is still available to an
-  API caller through `north_up: true`, which is what a mosaic needs. Dropping
-  the required plate solve also made a three-frame build about twenty times
-  faster.
+  cached solve or embedded WCS, then its `PIERSIDE` header read through what a
+  solved channel in the same build taught, then the stack's own exposure — so
+  every channel of a target agrees rather than each following its own frames.
+  The shared north-up, east-left grid is still available to an API caller
+  through `north_up: true`, which is what a mosaic needs. Dropping the required
+  plate solve also made a three-frame build about twenty times faster.
 - A color composite crops before normalization, so every channel is scaled
   from the same patch of sky, and its FITS keeps the reference plate solution.
 - Sequence navigation matches the image grid: the same arrow keys, the same

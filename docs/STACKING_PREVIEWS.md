@@ -131,18 +131,25 @@ always a half turn — the camera's own rotation is kept either way.
 1. **The sky.** A cached pixel-derived solve of the reference frame, or a valid
    embedded FITS WCS, says which way north points across the frame. PSF Guard
    publishes with north the upper half of the frame. No plate solve is run for
-   this; if neither is already there, it falls through.
-2. **The pier.** Failing that, the reference frame's `PIERSIDE` header. Every
-   stack is published on the same side, whichever side that is.
+   this; if neither is already there, it falls through. A matrix that cannot
+   describe a sky rotation is not trusted over the anchors below it.
+2. **The pier.** Failing that, the reference frame's `PIERSIDE` header. A pier
+   side on its own says nothing about where north is, so PSF Guard reads every
+   reference frame in the build before it stacks anything, and learns from any
+   channel that reported both which way a west-of-pier frame faces. Channels
+   that were never solved then follow that mapping instead of an assumption
+   that need not match. Frames that disagree are counted rather than trusted in
+   order, so one bad solve cannot invert the rest. When nothing in the build
+   was solved there is nothing to learn, and the shared assumption still leaves
+   every channel agreeing with the others.
 3. **Its own exposure.** Failing both, whichever way most of that stack's own
    integrated seconds faced.
 
 The first two anchors are absolute, so every channel of a target reaches the
-same answer on its own and the cards agree. The third only knows about one
-stack: it keeps that stack facing the way most of its night was shot, but two
-channels whose reference frames sit on opposite sides of a flip can still come
-out half a turn apart. Solve one frame per channel, or record `PIERSIDE`, to
-pin them together.
+same answer and the cards agree. The third only knows about one stack: it keeps
+that stack facing the way most of its night was shot, but two channels whose
+reference frames sit on opposite sides of a flip can still come out half a turn
+apart. Solve one frame per channel, or record `PIERSIDE`, to pin them together.
 
 A night that never flipped is never turned, and the choice does not move when
 quality scores change the reference frame. Each card records which anchor
