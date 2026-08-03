@@ -48,7 +48,7 @@ use crate::server::state::AppState;
 pub const SEIZA_STACKING_VERSION: &str = "0.2.1";
 /// Bump whenever stack admission, rendering, or persisted artifact semantics
 /// change. This deliberately versions PSF Guard policy separately from Seiza.
-pub(super) const STACK_PREVIEW_CACHE_VERSION: u32 = 10;
+pub(super) const STACK_PREVIEW_CACHE_VERSION: u32 = 11;
 const MAX_REQUEST_IMAGES: usize = 10_000;
 const MAX_REMEMBERED_JOBS: usize = 64;
 const PREVIEW_MAX_DIMENSION: u32 = 2400;
@@ -139,10 +139,6 @@ pub struct StackInputImage {
 /// works the same way for an oriented and an unoriented stack.
 pub const SOURCE_ORIENTATION_NAME: &str = "source_frame";
 
-/// Recorded when the stack was turned half a turn so it faces the same way as
-/// the side of a meridian flip most of its exposure came from.
-pub const MAJORITY_HALF_TURN_SOURCE: &str = "majority_half_turn";
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StackSkyOrientation {
     pub convention: String,
@@ -155,12 +151,12 @@ pub struct StackSkyOrientation {
 
 impl StackSkyOrientation {
     /// The mapping recorded when the integration is published in the reference
-    /// frame's own rotation.
-    fn source_frame(width: usize, height: usize) -> Self {
+    /// frame's own rotation. `decided_by` names the anchor that chose it.
+    fn source_frame(width: usize, height: usize, decided_by: &str) -> Self {
         Self {
             convention: SOURCE_ORIENTATION_NAME.into(),
             version: seiza_stacking::SKY_ORIENTATION_VERSION,
-            source: SOURCE_ORIENTATION_NAME.into(),
+            source: decided_by.into(),
             output_width: width,
             output_height: height,
             source_to_output: seiza_stacking::AffineTransform::IDENTITY,
@@ -168,12 +164,11 @@ impl StackSkyOrientation {
     }
 
     /// The mapping recorded when the integration is turned half a turn out of
-    /// the reference frame's rotation to match the rest of its exposure.
-    fn source_frame_half_turn(width: usize, height: usize) -> Self {
+    /// the reference frame's rotation.
+    fn source_frame_half_turn(width: usize, height: usize, decided_by: &str) -> Self {
         Self {
-            source: MAJORITY_HALF_TURN_SOURCE.into(),
             source_to_output: half_turn_transform(width, height),
-            ..Self::source_frame(width, height)
+            ..Self::source_frame(width, height, decided_by)
         }
     }
 
@@ -632,6 +627,90 @@ impl OrientationVote {
     fn prefers_half_turn(&self) -> bool {
         self.half_turned > self.upright
     }
+}
+
+/// What decided which way up a stack was published. Recorded so a reader can
+/// tell an anchored choice from a guess.
+mod orientation_source {
+    /// The reference frame's own solved or embedded sky rotation.
+    pub const SKY_ANCHOR: &str = "sky_anchor";
+    /// The reference frame's side of the pier.
+    pub const PIER_SIDE: &str = "pier_side";
+    /// Which way most of the stack's own exposure faced.
+    pub const EXPOSURE_MAJORITY: &str = "exposure_majority";
+}
+
+/// Whether a solved frame already faces north-ish up.
+///
+/// `CD` maps a pixel offset to a world offset, so its second row is the
+/// gradient of declination across the frame — the direction north points in
+/// pixel space. Seiza's unrotated, unflipped WCS puts north toward decreasing
+/// Y, so a negative Y component means the frame is already the right way up.
+///
+/// A frame whose north runs along a row has no meaningful Y component, and
+/// solve noise either side of zero would split two channels that should agree.
+/// Those fall back to the X component, which is far from zero exactly when the
+/// Y one is not.
+fn faces_north_up(cd: [[f64; 2]; 2]) -> bool {
+    let north_x = cd[1][0];
+    let north_y = cd[1][1];
+    if !north_x.is_finite() || !north_y.is_finite() {
+        return true;
+    }
+    if north_y.abs() > north_x.abs() * 1.0e-6 {
+        return north_y < 0.0;
+    }
+    north_x > 0.0
+}
+
+/// Whether a frame's recorded pier side is the one stacks are published in.
+/// The choice of side is arbitrary — only holding to one of them matters.
+fn faces_canonical_pier_side(pier_side: &str) -> Option<bool> {
+    let side = pier_side.trim().to_ascii_lowercase();
+    let side = side.strip_prefix("pier").unwrap_or(&side).trim_start();
+    match side.chars().next()? {
+        'w' => Some(true),
+        'e' => Some(false),
+        _ => None,
+    }
+}
+
+/// The reference frame's pier side, as N.I.N.A. and friends record it.
+fn pier_side_from_headers(headers: &[(String, seiza_fits::HeaderValue)]) -> Option<&str> {
+    headers.iter().find_map(|(key, value)| {
+        if !key.eq_ignore_ascii_case("PIERSIDE") {
+            return None;
+        }
+        match value {
+            seiza_fits::HeaderValue::String(text) => Some(text.as_str()),
+            _ => None,
+        }
+    })
+}
+
+/// Whether the finished stack should be turned half a turn, and what decided
+/// it.
+///
+/// The anchors are tried strongest first. A solved sky rotation and a pier side
+/// are both absolute, so every channel of a target reaches the same answer on
+/// its own and the cards agree. The exposure majority is only relative to the
+/// stack's own reference frame, so it keeps one stack self-consistent but
+/// cannot make two of them agree; it is the last resort.
+fn half_turn_decision(
+    wcs: Option<&seiza::Wcs>,
+    pier_side: Option<&str>,
+    vote: &OrientationVote,
+) -> (bool, &'static str) {
+    if let Some(wcs) = wcs {
+        return (!faces_north_up(wcs.cd), orientation_source::SKY_ANCHOR);
+    }
+    if let Some(faces_canonical) = pier_side.and_then(faces_canonical_pier_side) {
+        return (!faces_canonical, orientation_source::PIER_SIDE);
+    }
+    (
+        vote.prefers_half_turn(),
+        orientation_source::EXPOSURE_MAJORITY,
+    )
 }
 
 /// Whether a registered rotation lies closer to half a turn than to none.
@@ -1958,22 +2037,37 @@ fn run_group(
                 source_to_output: orientation.source_to_output(),
             };
             (oriented, record, orientation.fits_header_cards())
-        } else if orientation_vote.prefers_half_turn() {
-            let record = StackSkyOrientation::source_frame_half_turn(
-                snapshot.image.width,
-                snapshot.image.height,
+        } else {
+            let anchor = cached_or_embedded_wcs(&ctx, &group.frames[0], &reference_headers);
+            let (turn, decided_by) = half_turn_decision(
+                anchor.as_ref().map(|(wcs, _)| wcs),
+                pier_side_from_headers(&reference_headers),
+                &orientation_vote,
             );
             tracing::info!(
-                "Stack preview {} group {}: turning the result half a turn; the reference frame \
-                 faces the thinner side of a meridian flip",
+                "Stack preview {} group {}: publishing {}, decided by {decided_by}",
                 job_id,
-                group.index
+                group.index,
+                if turn {
+                    "half a turn out of the reference frame"
+                } else {
+                    "in the reference frame's rotation"
+                }
             );
-            (half_turn(snapshot.image), record, Vec::new())
-        } else {
-            let record =
-                StackSkyOrientation::source_frame(snapshot.image.width, snapshot.image.height);
-            (snapshot.image, record, Vec::new())
+            let (width, height) = (snapshot.image.width, snapshot.image.height);
+            if turn {
+                (
+                    half_turn(snapshot.image),
+                    StackSkyOrientation::source_frame_half_turn(width, height, decided_by),
+                    Vec::new(),
+                )
+            } else {
+                (
+                    snapshot.image,
+                    StackSkyOrientation::source_frame(width, height, decided_by),
+                    Vec::new(),
+                )
+            }
         };
         state.stack_previews.update(job_id, |job| {
             let status = &mut job.groups[group.index];
@@ -2020,12 +2114,15 @@ fn run_group(
     })
 }
 
-fn resolve_stack_wcs(
-    state: &AppState,
+/// The reference frame's WCS from sources already at hand: a cached
+/// pixel-derived solve first, then a valid embedded FITS WCS. Never solves, so
+/// a caller that only wants to know which way up the frame is does not pay for
+/// a plate solve.
+fn cached_or_embedded_wcs(
     ctx: &DatabaseContext,
     reference: &PreparedFrame,
     headers: &[(String, seiza_fits::HeaderValue)],
-) -> Result<(seiza::Wcs, String), String> {
+) -> Option<(seiza::Wcs, String)> {
     if let Some(solution) = ctx
         .astrometry_evidence
         .evidence_for_source(
@@ -2035,24 +2132,33 @@ fn resolve_stack_wcs(
         )
         .and_then(|analysis| analysis.solution)
     {
-        return Ok((
+        return Some((
             crate::astrometry::wcs_from_response(&solution.wcs),
             "cached_pixel_solve".into(),
         ));
     }
-    if let Some(embedded) =
-        crate::astrometry_headers::FitsAstrometryHeaders::from_headers(headers).embedded_wcs
-    {
-        let value = embedded.value;
-        return Ok((
-            seiza::Wcs {
-                crval: (value.crval[0], value.crval[1]),
-                crpix: (value.crpix[0], value.crpix[1]),
-                cd: value.cd,
-                sip: None,
-            },
-            "embedded_wcs".into(),
-        ));
+    let embedded =
+        crate::astrometry_headers::FitsAstrometryHeaders::from_headers(headers).embedded_wcs?;
+    let value = embedded.value;
+    Some((
+        seiza::Wcs {
+            crval: (value.crval[0], value.crval[1]),
+            crpix: (value.crpix[0], value.crpix[1]),
+            cd: value.cd,
+            sip: None,
+        },
+        "embedded_wcs".into(),
+    ))
+}
+
+fn resolve_stack_wcs(
+    state: &AppState,
+    ctx: &DatabaseContext,
+    reference: &PreparedFrame,
+    headers: &[(String, seiza_fits::HeaderValue)],
+) -> Result<(seiza::Wcs, String), String> {
+    if let Some(resolved) = cached_or_embedded_wcs(ctx, reference, headers) {
+        return Ok(resolved);
     }
     let analysis = state
         .astrometry
@@ -2217,7 +2323,7 @@ mod tests {
     use super::*;
 
     fn sky_orientation() -> StackSkyOrientation {
-        StackSkyOrientation::source_frame(100, 80)
+        StackSkyOrientation::source_frame(100, 80, orientation_source::SKY_ANCHOR)
     }
 
     fn ready_group(target_id: i32, filter_name: &str, image_id: i32) -> StackGroupStatus {
@@ -2573,9 +2679,133 @@ mod tests {
         assert!(request.north_up);
     }
 
+    /// A TAN WCS at the given roll, in Seiza's convention: no roll puts north
+    /// toward decreasing Y and east toward decreasing X.
+    fn wcs_at_roll(roll_degrees: f64) -> seiza::Wcs {
+        let scale = 0.0004;
+        let (sine, cosine) = roll_degrees.to_radians().sin_cos();
+        seiza::Wcs {
+            crval: (305.5, 40.25),
+            crpix: (512.0, 384.0),
+            cd: [
+                [-scale * cosine, scale * sine],
+                [-scale * sine, -scale * cosine],
+            ],
+            sip: None,
+        }
+    }
+
+    #[test]
+    fn two_channels_agree_when_their_references_sit_across_a_flip() {
+        // The whole point of the anchor: one channel's best frame landed
+        // before the meridian flip and the other's after, so their reference
+        // frames are half a turn apart. Each decides on its own, and the two
+        // cards must still come out facing the same way.
+        for roll in [0.0, 17.0, 90.0, 143.0, 270.0] {
+            let before = wcs_at_roll(roll);
+            let after = wcs_at_roll(roll + 180.0);
+            let vote = OrientationVote::default();
+
+            let (turn_before, source_before) = half_turn_decision(Some(&before), None, &vote);
+            let (turn_after, source_after) = half_turn_decision(Some(&after), None, &vote);
+
+            assert_eq!(source_before, orientation_source::SKY_ANCHOR);
+            assert_eq!(source_after, orientation_source::SKY_ANCHOR);
+            // Exactly one of the pair turns, which lands both the same way up.
+            assert_ne!(
+                turn_before, turn_after,
+                "roll {roll} left both channels facing the same way before turning"
+            );
+        }
+    }
+
+    #[test]
+    fn the_anchor_leaves_a_north_up_reference_alone() {
+        let vote = OrientationVote::default();
+        assert_eq!(
+            half_turn_decision(Some(&wcs_at_roll(0.0)), None, &vote),
+            (false, orientation_source::SKY_ANCHOR)
+        );
+        assert_eq!(
+            half_turn_decision(Some(&wcs_at_roll(180.0)), None, &vote),
+            (true, orientation_source::SKY_ANCHOR)
+        );
+        // A camera rolled onto its side has no usable Y component; the choice
+        // still has to be steady rather than riding on solve noise.
+        let sideways = half_turn_decision(Some(&wcs_at_roll(90.0)), None, &vote).0;
+        let nudged = half_turn_decision(Some(&wcs_at_roll(90.000_001)), None, &vote).0;
+        assert_eq!(sideways, nudged);
+    }
+
+    #[test]
+    fn pier_side_anchors_a_stack_that_has_no_solve() {
+        let vote = OrientationVote::default();
+        assert_eq!(
+            half_turn_decision(None, Some("West"), &vote),
+            (false, orientation_source::PIER_SIDE)
+        );
+        assert_eq!(
+            half_turn_decision(None, Some("East"), &vote),
+            (true, orientation_source::PIER_SIDE)
+        );
+        // N.I.N.A. writes the prefixed spelling; both forms mean the same side.
+        assert_eq!(
+            half_turn_decision(None, Some("pierEast"), &vote),
+            half_turn_decision(None, Some("east"), &vote)
+        );
+        // An unusable value must not be read as a side.
+        assert_eq!(
+            half_turn_decision(None, Some("Unknown"), &vote).1,
+            orientation_source::EXPOSURE_MAJORITY
+        );
+    }
+
+    #[test]
+    fn the_exposure_majority_is_the_last_resort() {
+        use std::f64::consts::PI;
+
+        let mut flipped = OrientationVote::default();
+        flipped.add(0.0, 60.0);
+        flipped.add(PI, 60.0);
+        flipped.add(PI, 60.0);
+
+        // With nothing absolute to anchor to, the stack still faces the way
+        // most of its own exposure faced.
+        assert_eq!(
+            half_turn_decision(None, None, &flipped),
+            (true, orientation_source::EXPOSURE_MAJORITY)
+        );
+        // An anchor outranks it, even when the majority disagrees.
+        assert_eq!(
+            half_turn_decision(Some(&wcs_at_roll(0.0)), None, &flipped),
+            (false, orientation_source::SKY_ANCHOR)
+        );
+        assert_eq!(
+            half_turn_decision(None, Some("West"), &flipped),
+            (false, orientation_source::PIER_SIDE)
+        );
+    }
+
+    #[test]
+    fn pier_side_is_read_from_the_reference_headers() {
+        let headers = vec![
+            (
+                "EXPOSURE".to_string(),
+                seiza_fits::HeaderValue::Float(300.0),
+            ),
+            (
+                "pierside".to_string(),
+                seiza_fits::HeaderValue::String("West".into()),
+            ),
+        ];
+        assert_eq!(pier_side_from_headers(&headers), Some("West"));
+        assert_eq!(pier_side_from_headers(&headers[..1]), None);
+    }
+
     #[test]
     fn a_source_frame_stack_records_an_identity_mapping() {
-        let orientation = StackSkyOrientation::source_frame(120, 90);
+        let orientation =
+            StackSkyOrientation::source_frame(120, 90, orientation_source::SKY_ANCHOR);
         assert!(orientation.is_current());
         assert_eq!(orientation.convention, SOURCE_ORIENTATION_NAME);
         assert_eq!(
@@ -2675,10 +2905,14 @@ mod tests {
 
         // The recorded mapping must match what the pixels did: the first pixel
         // lands in the far corner, and the grid keeps its size.
-        let orientation = StackSkyOrientation::source_frame_half_turn(3, 2);
+        let orientation = StackSkyOrientation::source_frame_half_turn(
+            3,
+            2,
+            orientation_source::EXPOSURE_MAJORITY,
+        );
         assert!(orientation.is_current());
         assert_eq!(orientation.convention, SOURCE_ORIENTATION_NAME);
-        assert_eq!(orientation.source, MAJORITY_HALF_TURN_SOURCE);
+        assert_eq!(orientation.source, orientation_source::EXPOSURE_MAJORITY);
         assert_eq!(
             (orientation.output_width, orientation.output_height),
             (3, 2)

@@ -106,7 +106,10 @@ function seedSyntheticColorStacks(databaseId: string, projectId: number): void {
       artifact_revision: `synthetic-${index}`,
       accepted_only: false,
       created_unix_seconds: 1_760_000_000 + index,
-      cache_version: 10,
+      // Must track STACK_PREVIEW_CACHE_VERSION in src/server/stack_preview.rs.
+      // The server hides remembered stacks from an older build, so a stale
+      // number here leaves the color panel with no channels to combine.
+      cache_version: 11,
       group: {
         index: 0,
         target_id: 2,
@@ -125,7 +128,7 @@ function seedSyntheticColorStacks(databaseId: string, projectId: number): void {
         sky_orientation: {
           convention: 'source_frame',
           version: 1,
-          source: 'source_frame',
+          source: 'sky_anchor',
           output_width: 512,
           output_height: 384,
           source_to_output: {
@@ -246,7 +249,7 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   expect(jobResponse.status()).toBe(200);
   const orientation = (await jobResponse.json()).data.groups[0].sky_orientation;
   expect(orientation.convention).toBe('source_frame');
-  expect(['source_frame', 'majority_half_turn']).toContain(orientation.source);
+  expect(['sky_anchor', 'pier_side', 'exposure_majority']).toContain(orientation.source);
   expect(orientation.output_width).toBeGreaterThan(0);
   expect(orientation.output_height).toBeGreaterThan(0);
 

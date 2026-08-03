@@ -6,7 +6,7 @@ function orientation(convention: StackSkyOrientation['convention']): StackSkyOri
   return {
     convention,
     version: 1,
-    source: convention === 'source_frame' ? 'source_frame' : 'embedded_wcs',
+    source: convention === 'source_frame' ? 'sky_anchor' : 'embedded_wcs',
     output_width: 512,
     output_height: 384,
     source_to_output: { matrix: [[1, 0], [0, 1]], translation_x: 0, translation_y: 0 },

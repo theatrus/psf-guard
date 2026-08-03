@@ -123,12 +123,30 @@ which way up the result comes out, and the reference is whichever frame scored
 best — it can sit on either side of the flip, and it can move to the other
 side when a regrade or a quality rescan changes the scores.
 
-So PSF Guard follows the exposure instead. If most of the integrated seconds
-came from frames half a turn from the reference, it turns the finished stack
-half a turn to match them. That is an exact reversal of the pixel order, so it
-costs no resampling and loses no accuracy. A night that never flipped is never
-turned, an even split keeps the reference frame's rotation, and the choice does
-not move when scores do.
+So PSF Guard turns the finished stack when the reference faces the wrong way,
+choosing that by the strongest anchor it has. The turn is an exact reversal of
+the pixel order, so it costs no resampling and loses no accuracy, and it is
+always a half turn — the camera's own rotation is kept either way.
+
+1. **The sky.** A cached pixel-derived solve of the reference frame, or a valid
+   embedded FITS WCS, says which way north points across the frame. PSF Guard
+   publishes with north the upper half of the frame. No plate solve is run for
+   this; if neither is already there, it falls through.
+2. **The pier.** Failing that, the reference frame's `PIERSIDE` header. Every
+   stack is published on the same side, whichever side that is.
+3. **Its own exposure.** Failing both, whichever way most of that stack's own
+   integrated seconds faced.
+
+The first two anchors are absolute, so every channel of a target reaches the
+same answer on its own and the cards agree. The third only knows about one
+stack: it keeps that stack facing the way most of its night was shot, but two
+channels whose reference frames sit on opposite sides of a flip can still come
+out half a turn apart. Solve one frame per channel, or record `PIERSIDE`, to
+pin them together.
+
+A night that never flipped is never turned, and the choice does not move when
+quality scores change the reference frame. Each card records which anchor
+decided it, as `sky_anchor`, `pier_side`, or `exposure_majority`.
 
 PSF Guard records the source-to-output mapping on every stack, so
 source-artifact search maps a selected stack region back to the right source
