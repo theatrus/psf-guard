@@ -7,7 +7,7 @@
 %global debug_package %{nil}
 
 Name:           psf-guard
-Version:        0.6.6
+Version:        0.7.0
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -90,6 +90,12 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Sun Aug 02 2026 Yann Ramin <github@theatr.us> - 0.7.0-1
+- Queue stack builds and resume them as a night grows
+- Require a login on a server that listens beyond loopback
+- Keep every channel of a target facing the same way
+- Crop color previews to the sky every channel covers
+
 * Tue Jul 28 2026 Yann Ramin <github@theatr.us> - 0.6.6-1
 - Notarize and staple the macOS disk image for Gatekeeper
 
