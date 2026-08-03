@@ -3882,13 +3882,19 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.65rem;
+  gap: 0.4rem 0.65rem;
   padding: 0.48rem 0.7rem;
+  /* A narrowband card carries a palette picker the RGB one does not. Two
+     columns of cards leave the row too narrow for both selects, the status
+     badge and three buttons, so let the actions drop to their own line
+     instead of sliding underneath them. */
+  flex-wrap: wrap;
 }
 
 .stack-color-card > header > div:first-child {
   min-width: 0;
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
   gap: 0.45rem;
 }
@@ -3902,6 +3908,7 @@
 }
 
 .stack-color-palette {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 0.35rem;
@@ -3916,6 +3923,7 @@
 }
 
 .stack-color-palette select {
+  min-width: 0;
   max-width: 210px;
   min-height: 27px;
   padding: 0.2rem 1.6rem 0.2rem 0.45rem;
@@ -3933,10 +3941,10 @@
 }
 
 .stack-color-crop {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 0.35rem;
-  margin-top: 0.3rem;
 }
 
 .stack-color-crop > span {
@@ -3947,6 +3955,7 @@
 }
 
 .stack-color-crop select {
+  min-width: 0;
   max-width: 210px;
   min-height: 27px;
   padding: 0.2rem 1.6rem 0.2rem 0.45rem;

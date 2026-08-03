@@ -780,6 +780,40 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   expect(foraxxHeader).toContain('FORAXX-HOO');
   expect(foraxxHeader).toContain('DISPLAY');
 
+  // The narrowband header's worst case: a built card carries a status badge
+  // and three buttons, and SHO is the widest palette label. The colour grid is
+  // two fixed columns, so a laptop-width window is what users actually get.
+  await palette.selectOption('sho');
+  await section.getByRole('button', { name: 'Build SHO color preview' }).click();
+  await expect(narrowbandCard.locator('.stack-preview-progress')).toHaveAttribute(
+    'data-stack-color-state', 'completed', { timeout: 90_000 }
+  );
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.waitForTimeout(300);
+  const header = await narrowbandCard.evaluate((card) => {
+    const row = card.querySelector('header')!;
+    const left = row.querySelector(':scope > div:first-child')!.getBoundingClientRect();
+    const actions = row.querySelector('.stack-preview-card-actions')!.getBoundingClientRect();
+    const title = card.querySelector('h3')!.getBoundingClientRect();
+    return {
+      overlap: Math.round(left.right - actions.left),
+      sameRow: Math.abs(left.top - actions.top) < 4,
+      overflow: row.scrollWidth - row.clientWidth,
+      titleWidth: Math.round(title.width),
+      actionItems: row.querySelectorAll('.stack-preview-card-actions > *').length,
+    };
+  });
+  expect(header.actionItems, 'expected a built card with its full actions').toBeGreaterThan(3);
+  // Either the two groups share a row without touching, or the actions wrapped
+  // onto their own. Neither may push the row wider than the card.
+  if (header.sameRow) {
+    expect(header.overlap, 'header groups overlap').toBeLessThanOrEqual(1);
+  }
+  expect(header.overflow, 'narrowband header overflows its card').toBeLessThanOrEqual(1);
+  // The card has to say which target it belongs to. A longer target name than
+  // this fixture's squeezes the title to nothing when the row cannot wrap.
+  expect(header.titleWidth, 'target name squeezed out of the header').toBeGreaterThan(0);
+
   if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
     const docs = path.resolve(process.cwd(), '..', 'docs');
     fs.mkdirSync(docs, { recursive: true });
