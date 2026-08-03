@@ -63,6 +63,9 @@ color stacks, and a Sequence view that keeps its place as you grade.
 - Closing an image detail returns to the view that opened it, at the position
   it was left, including a partly visible Sequence card.
 - Background protection follows the stack's own geometry.
+- Dragging past the largest searchable region when finding a source artifact
+  now stops the box at the limit. It used to disappear mid-drag, so the
+  selection had to be started over.
 - Flagged Sequence thumbnails stay bright.
 - Shift-click range selection keeps a stable anchor.
 

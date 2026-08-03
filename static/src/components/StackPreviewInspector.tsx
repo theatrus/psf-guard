@@ -11,6 +11,7 @@ import { useImageZoom } from '../hooks/useImageZoom';
 import { morphologyLabel } from './artifactMorphology';
 import {
   artifactRegionFromPoints,
+  isArtifactRegionCapped,
   MAX_ARTIFACT_REGION_EDGE,
   MIN_ARTIFACT_REGION_EDGE,
 } from './stackArtifactRegion';
@@ -199,7 +200,7 @@ export default function StackPreviewInspector({
     setDragStart(null);
     if (!selected) {
       setRegion(null);
-      setRegionError(`Choose a region from ${MIN_ARTIFACT_REGION_EDGE} to ${MAX_ARTIFACT_REGION_EDGE} pixels on each side.`);
+      setRegionError(`Drag a box at least ${MIN_ARTIFACT_REGION_EDGE} pixels on each side.`);
       return;
     }
     setRegion(selected);
@@ -462,9 +463,11 @@ export default function StackPreviewInspector({
 
         <footer className="stack-inspector-toolbar">
           <div className="stack-inspector-hint">
-            {selecting
-              ? `Drag a ${MIN_ARTIFACT_REGION_EDGE}–${MAX_ARTIFACT_REGION_EDGE}px box over the artifact`
-              : 'Wheel to zoom · drag to pan · F fit · 1 actual size'}
+            {!selecting
+              ? 'Wheel to zoom · drag to pan · F fit · 1 actual size'
+              : displayedRegion && isArtifactRegionCapped(displayedRegion)
+                ? `${MAX_ARTIFACT_REGION_EDGE}px is as wide as the search looks — drag from another corner to move the box`
+                : `Drag a box over the artifact, up to ${MAX_ARTIFACT_REGION_EDGE}px a side`}
           </div>
           {regionError && <span className="stack-artifact-region-error" role="alert">{regionError}</span>}
           {artifactSource && (

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ArtifactSearchResult } from '../../api/types';
 import { morphologyLabel } from '../artifactMorphology';
-import { artifactRegionFromPoints } from '../stackArtifactRegion';
+import { artifactRegionFromPoints, isArtifactRegionCapped } from '../stackArtifactRegion';
 
 function result(
   morphology: ArtifactSearchResult['morphology'],
@@ -43,19 +43,59 @@ describe('artifactRegionFromPoints', () => {
     )).toEqual({ x: 0, y: 90, width: 20, height: 10 });
   });
 
-  it('rejects regions that are too small or too large', () => {
+  it('rejects a drag that is still too small to search', () => {
     expect(artifactRegionFromPoints(
       { x: 0, y: 0 },
       { x: 7, y: 20 },
       100,
       100
     )).toBeNull();
+  });
+
+  it('stops a long drag at the limit instead of voiding the box', () => {
+    // Dragging past the limit used to return null, so the box vanished
+    // mid-drag and the selection had to be started over.
+    expect(artifactRegionFromPoints(
+      { x: 100, y: 100 },
+      { x: 900, y: 900 },
+      2000,
+      2000
+    )).toEqual({ x: 100, y: 100, width: 512, height: 512 });
+  });
+
+  it('keeps the corner the drag began at when it clamps backwards', () => {
+    // Dragging up and left, the anchor is the bottom-right corner, so that is
+    // the edge that has to stay put.
+    expect(artifactRegionFromPoints(
+      { x: 600, y: 700 },
+      { x: 0, y: 0 },
+      2000,
+      2000
+    )).toEqual({ x: 88, y: 188, width: 512, height: 512 });
+  });
+
+  it('clamps each side on its own', () => {
     expect(artifactRegionFromPoints(
       { x: 0, y: 0 },
-      { x: 513, y: 20 },
+      { x: 900, y: 40 },
+      2000,
+      2000
+    )).toEqual({ x: 0, y: 0, width: 512, height: 40 });
+  });
+
+  it('clamps a drag that runs off the image to the limit, not the edge', () => {
+    expect(artifactRegionFromPoints(
+      { x: 50, y: 50 },
+      { x: 5000, y: 5000 },
       1000,
       1000
-    )).toBeNull();
+    )).toEqual({ x: 50, y: 50, width: 512, height: 512 });
+  });
+
+  it('reports when a region has grown to the limit', () => {
+    expect(isArtifactRegionCapped({ x: 0, y: 0, width: 512, height: 40 })).toBe(true);
+    expect(isArtifactRegionCapped({ x: 0, y: 0, width: 40, height: 512 })).toBe(true);
+    expect(isArtifactRegionCapped({ x: 0, y: 0, width: 511, height: 511 })).toBe(false);
   });
 });
 

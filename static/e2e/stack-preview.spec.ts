@@ -349,6 +349,28 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   }
 
   await inspector.getByRole('button', { name: 'Find source artifact' }).click();
+
+  // Dragging past the largest searchable region clamps the box. It used to
+  // vanish mid-drag, which read as the selection cancelling itself. The
+  // inspector is at 100%, so one screen pixel is one image pixel here.
+  const marquee = inspector.getByTestId('stack-artifact-region');
+  const longDragX = Math.min(canvasBox!.width - 20, 760);
+  const longDragY = Math.min(canvasBox!.height - 20, 660);
+  expect(longDragX, 'canvas too narrow to drag past the limit').toBeGreaterThan(560);
+  expect(longDragY, 'canvas too short to drag past the limit').toBeGreaterThan(560);
+  await page.mouse.move(canvasBox!.x + 10, canvasBox!.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(canvasBox!.x + longDragX, canvasBox!.y + longDragY, { steps: 6 });
+  await expect(marquee).toBeVisible();
+  const midDrag = await marquee.boundingBox();
+  expect(Math.round(midDrag!.width)).toBe(512);
+  expect(Math.round(midDrag!.height)).toBe(512);
+  await expect(inspector.locator('.stack-inspector-hint')).toContainText('512px is as wide');
+  await page.mouse.up();
+  await expect(marquee).toBeVisible();
+  await expect(inspector.getByRole('button', { name: 'Search this region' })).toBeVisible();
+
+  await inspector.getByRole('button', { name: 'Find source artifact' }).click();
   await page.mouse.move(canvasBox!.x + 160, canvasBox!.y + 140);
   await page.mouse.down();
   await page.mouse.move(canvasBox!.x + 280, canvasBox!.y + 230, { steps: 4 });

@@ -288,8 +288,9 @@ be a reflection. Low-evidence results stay unclassified. The search never
 accepts or rejects an image. It cannot isolate a defect that appears in the
 same registered place in every source because that defect becomes part of the
 peer baseline. At least three integrated frames are needed for a filter. A
-color search skips a channel that has fewer than three inputs and says why. The
-region must measure 8–512 pixels on each side.
+color search skips a channel that has fewer than three inputs and says why. A
+region must measure at least 8 pixels on each side; dragging past 512 stops the
+box at 512 rather than clearing it, keeping the corner the drag started from.
 
 ![A selected stack region ranked across three real source frames](stack-artifact-finder.png)
 
