@@ -27,8 +27,19 @@ interface StackPreviewPanelProps {
   projectId: number;
   images: StackCandidateImage[];
   selectionSource: 'selected' | 'visible';
+  /** The grid's thumbnail size; large zooms widen the result cards too. */
+  imageSize?: number;
   onOpenImage: (imageId: number) => void;
 }
+
+/**
+ * Above this grid zoom the result cards go single-column and full width.
+ * Below it the layout is untouched: zooming out never shrinks a stack card,
+ * it only stops widening them, because a preview that is too small to judge
+ * defeats the panel. A two-column stack card is about 600px on a typical
+ * window, so this is the point where the grid's own thumbnails catch up.
+ */
+export const STACK_WIDE_IMAGE_SIZE = 600;
 
 interface ChannelInput {
   key: string;
@@ -134,6 +145,7 @@ export default function StackPreviewPanel({
   projectId,
   images,
   selectionSource,
+  imageSize,
   onOpenImage,
 }: StackPreviewPanelProps) {
   const queryClient = useQueryClient();
@@ -407,6 +419,7 @@ export default function StackPreviewPanel({
         className="stack-preview-panel"
         aria-labelledby="stack-preview-title"
         data-collapsed={collapsed || undefined}
+        data-wide={(imageSize ?? 0) >= STACK_WIDE_IMAGE_SIZE || undefined}
       >
         <div className="stack-preview-heading">
           <div>

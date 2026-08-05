@@ -386,7 +386,10 @@ every saved or imported setup against the same types the build endpoints
 parse, so a setup that saves is a setup a build can use.
 
 The whole **Stack previews** panel collapses from its title, like the detail
-sections inside it, and stays collapsed across reloads. A collapsed panel
+sections inside it, and stays collapsed across reloads. The result cards also
+follow the grid's thumbnail-size slider: from 600&nbsp;px up they widen to one
+full-width column, and below that they keep the two-column layout — zooming
+out never makes a stack preview smaller. A collapsed panel
 shows how many remembered channels it is holding, or that a build is running;
 the header's Stacking indicator keeps reporting progress either way.
 

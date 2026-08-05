@@ -3892,6 +3892,15 @@
   margin: 0 auto;
 }
 
+/* At large grid zooms the result cards follow: one column, full width. The
+   cards never get narrower than the two-column layout — zooming out only
+   returns them to it. */
+.stack-preview-panel[data-wide] .stack-preview-grid,
+.stack-preview-panel[data-wide] .stack-color-grid {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: none;
+}
+
 .stack-color-card {
   overflow: hidden;
   background: var(--color-bg-primary);

@@ -13,4 +13,5 @@
   Built-in setups cover the editors' defaults. See [stack
   previews](https://github.com/theatrus/psf-guard/blob/main/docs/STACKING_PREVIEWS.md#named-processing-setups).
 - The Stack previews panel collapses from its title and stays collapsed
-  across reloads.
+  across reloads, and its result cards follow the grid's thumbnail-size
+  slider up to one full-width column.

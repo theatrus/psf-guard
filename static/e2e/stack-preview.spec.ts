@@ -936,6 +936,24 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await expect(stackPanel).not.toHaveAttribute('data-collapsed', 'true');
   await expect(stackPanel.locator('.stack-color-card').first()).toBeVisible();
 
+  // At a large grid zoom the result cards follow: one full-width column for
+  // both the mono and the color grids. Zooming back returns the two-column
+  // layout — the cards never get narrower than it.
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=2&size=700`);
+  await expect(stackPanel).toBeVisible({ timeout: 15_000 });
+  await expect(stackPanel).toHaveAttribute('data-wide', 'true');
+  const wideColumns = await stackPanel.locator('.stack-color-grid').first().evaluate(
+    (grid) => getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length
+  );
+  expect(wideColumns).toBe(1);
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=2&size=300`);
+  await expect(stackPanel).toBeVisible({ timeout: 15_000 });
+  await expect(stackPanel).not.toHaveAttribute('data-wide', 'true');
+  const normalColumns = await stackPanel.locator('.stack-color-grid').first().evaluate(
+    (grid) => getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length
+  );
+  expect(normalColumns).toBe(2);
+
   if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
     const docs = path.resolve(process.cwd(), '..', 'docs');
     fs.mkdirSync(docs, { recursive: true });
