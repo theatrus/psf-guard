@@ -4107,6 +4107,71 @@
   gap: 0.38rem;
 }
 
+/* Named processing setups: one bar shared by the mono view-processing and
+   color processing editors. */
+.processing-setups-bar {
+  display: grid;
+  gap: 0.35rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-bg-tertiary);
+}
+
+.processing-setups-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.38rem;
+}
+
+.processing-setups-label {
+  color: var(--color-text-tertiary);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.processing-setups-row select,
+.processing-setups-row input[type='text'] {
+  min-width: 0;
+  min-height: 28px;
+  flex: 0 1 auto;
+  padding: 0.2rem 0.45rem;
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-bg-quaternary);
+  border-radius: 4px;
+  font-size: 0.68rem;
+}
+
+.processing-setups-row button {
+  min-height: 28px;
+  padding: 0.28rem 0.55rem;
+  color: var(--color-primary);
+  background: transparent;
+  border: 1px solid var(--color-primary-alpha-50);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.68rem;
+}
+
+.processing-setups-row button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.processing-setups-notice,
+.processing-setups-error {
+  font-size: 0.62rem;
+}
+
+.processing-setups-notice {
+  color: var(--color-text-muted);
+}
+
+.processing-setups-error {
+  color: var(--color-error);
+}
+
 .stack-stretch-actions button {
   min-height: 28px;
   padding: 0.28rem 0.55rem;

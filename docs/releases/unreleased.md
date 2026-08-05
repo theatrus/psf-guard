@@ -4,4 +4,10 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
-Nothing has landed since 0.7.0 yet.
+## Added
+
+- Named processing setups. Save the parameters of the mono view-processing or
+  color processing editor under a name, apply them to any card in any
+  database, and import or export them as one JSON file. Built-in setups cover
+  the editors' defaults. See [stack
+  previews](https://github.com/theatrus/psf-guard/blob/main/docs/STACKING_PREVIEWS.md#named-processing-setups).

@@ -618,6 +618,34 @@ export interface StackColorProcessing {
   output_stretches: StackStretchRequest[];
 }
 
+/**
+ * A named, database-independent capture of one processing editor's
+ * parameters. `view` setups hold a StackViewProcessingRequest; `color` setups
+ * hold a StackColorProcessing. The server stores the canonical form and
+ * validates the shape on save and import.
+ */
+export type ProcessingSetupKind = 'view' | 'color';
+
+export interface ProcessingSetup {
+  name: string;
+  kind: ProcessingSetupKind;
+  settings: unknown;
+  created_unix_seconds: number;
+  updated_unix_seconds: number;
+}
+
+/** Also the export document: save it verbatim and the import accepts it. */
+export interface ProcessingSetupsDocument {
+  schema_version: number;
+  setups: ProcessingSetup[];
+}
+
+export interface ProcessingSetupsImportResult {
+  imported: number;
+  replaced: number;
+  setups: ProcessingSetup[];
+}
+
 export interface StackBackgroundConfig {
   model:
     | {

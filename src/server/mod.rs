@@ -9,6 +9,7 @@ pub mod handlers;
 pub mod import_job;
 pub mod peers;
 pub mod preview_queue;
+pub mod processing_setups;
 pub mod quality_backfill;
 pub mod remote_audit;
 pub mod remote_sync;
@@ -518,6 +519,18 @@ async fn run_server_internal(
         )
         .route("/info", get(handlers::get_server_info))
         .route("/stack-activity", get(stack_preview::get_stack_activity))
+        .route(
+            "/processing-setups",
+            get(processing_setups::list_setups).post(processing_setups::save_setup),
+        )
+        .route(
+            "/processing-setups/import",
+            post(processing_setups::import_setups),
+        )
+        .route(
+            "/processing-setups/{name}",
+            axum::routing::delete(processing_setups::delete_setup),
+        )
         .route("/update-notice", get(handlers::get_update_notice))
         .route(
             "/astrometry/capabilities",

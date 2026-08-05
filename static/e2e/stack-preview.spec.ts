@@ -256,6 +256,11 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   const defaultPreviewSrc = await preview.getAttribute('src');
   const stretchControls = panel.locator('.stack-preview-card .stack-stretch-controls');
   await stretchControls.locator('summary').click();
+  await expect(
+    stretchControls.locator('.processing-setups-bar').getByRole('combobox', {
+      name: 'Saved view processing setups',
+    })
+  ).toBeVisible();
   await expect(stretchControls.getByRole('checkbox', { name: 'Deconvolution' }))
     .not.toBeChecked();
   await expect(stretchControls).toContainText('this is off unless enabled');
@@ -813,6 +818,87 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   // The card has to say which target it belongs to. A longer target name than
   // this fixture's squeezes the title to nothing when the row cannot wrap.
   expect(header.titleWidth, 'target name squeezed out of the header').toBeGreaterThan(0);
+
+  // Named processing setups: save the RGB pipeline, see it offered on the
+  // narrowband card (setups are global, scoped only by kind), survive a
+  // reload, round-trip through export/import, and delete cleanly.
+  if (!(await currentProcessing.getAttribute('open'))) {
+    await currentProcessing.locator(':scope > summary').click();
+  }
+  const rgbSetupsBar = currentProcessing.locator('.processing-setups-bar');
+  await rgbSetupsBar.getByRole('button', { name: 'Save as…' }).click();
+  await rgbSetupsBar.getByRole('textbox', { name: 'New setup name' }).fill('E2E color pipeline');
+  await rgbSetupsBar.getByRole('button', { name: 'Save current settings' }).click();
+  await expect(rgbSetupsBar).toContainText('Saved “E2E color pipeline”');
+
+  const setupsResponse = await page.request.get('/api/processing-setups');
+  expect(setupsResponse.status()).toBe(200);
+  const setupsDocument = (await setupsResponse.json()).data;
+  const savedSetup = setupsDocument.setups.find(
+    (setup: { name: string }) => setup.name === 'E2E color pipeline'
+  );
+  expect(savedSetup.kind).toBe('color');
+  // The saved pipeline carries the edited output stretch, canonicalized.
+  expect(JSON.stringify(savedSetup.settings)).toContain('"target_median":0.3');
+
+  // The same setup is offered on the narrowband card and applies to its
+  // different channel set.
+  const narrowbandProcessing = narrowbandCard.locator('.stack-color-processing');
+  if (!(await narrowbandProcessing.getAttribute('open'))) {
+    await narrowbandProcessing.locator(':scope > summary').click();
+  }
+  const narrowbandBar = narrowbandProcessing.locator('.processing-setups-bar');
+  const narrowbandSelect = narrowbandBar.getByRole('combobox', {
+    name: 'Saved color processing setups',
+  });
+  await narrowbandSelect.selectOption({ label: 'E2E color pipeline' });
+  await narrowbandBar.getByRole('button', { name: 'Apply setup' }).click();
+  await expect(narrowbandBar).toContainText('Applied “E2E color pipeline”');
+  await expect(
+    narrowbandProcessing.getByRole('spinbutton', { name: 'RGB output stage 1 Target median' })
+  ).toHaveValue('0.3');
+
+  // The registry survives a reload: the file sits beside the e2e registry.
+  await page.reload();
+  await expect(section).toBeVisible({ timeout: 15_000 });
+  const reloadedProcessing = rgbCard.locator('.stack-color-processing');
+  await reloadedProcessing.locator(':scope > summary').click();
+  const reloadedBar = reloadedProcessing.locator('.processing-setups-bar');
+  const reloadedSelect = reloadedBar.getByRole('combobox', {
+    name: 'Saved color processing setups',
+  });
+  await expect(reloadedSelect.locator('option', { hasText: 'E2E color pipeline' }))
+    .toHaveCount(1);
+
+  // Export produces the import document; a renamed copy imports as new.
+  const downloadPromise = page.waitForEvent('download');
+  await reloadedSelect.selectOption({ label: 'E2E color pipeline' });
+  await reloadedBar.getByRole('button', { name: 'Export' }).click();
+  const download = await downloadPromise;
+  const exportPath = path.join(process.env.PSF_GUARD_E2E_TMP!, 'setups-export.json');
+  await download.saveAs(exportPath);
+  const exported = JSON.parse(fs.readFileSync(exportPath, 'utf8'));
+  expect(exported.setups.map((setup: { name: string }) => setup.name))
+    .toContain('E2E color pipeline');
+  const renamed = {
+    ...exported,
+    setups: exported.setups
+      .filter((setup: { name: string }) => setup.name === 'E2E color pipeline')
+      .map((setup: { name: string }) => ({ ...setup, name: 'Imported pipeline' })),
+  };
+  const importPath = path.join(process.env.PSF_GUARD_E2E_TMP!, 'setups-import.json');
+  fs.writeFileSync(importPath, JSON.stringify(renamed));
+  await reloadedBar.locator('input[type="file"]').setInputFiles(importPath);
+  await expect(reloadedBar).toContainText('Imported 1 new, replaced 0');
+  await expect(reloadedSelect.locator('option', { hasText: 'Imported pipeline' }))
+    .toHaveCount(1);
+
+  // Delete removes the imported copy and reports the miss on a second try.
+  await reloadedSelect.selectOption({ label: 'Imported pipeline' });
+  await reloadedBar.getByRole('button', { name: 'Delete' }).click();
+  await expect(reloadedBar).toContainText('Setup deleted');
+  await expect(reloadedSelect.locator('option', { hasText: 'Imported pipeline' }))
+    .toHaveCount(0);
 
   if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
     const docs = path.resolve(process.cwd(), '..', 'docs');

@@ -351,6 +351,37 @@ truth.
 
 ![Opt-in Seiza deconvolution and display stretch controls applied to a real M44 stack preview](stack-preview-stretch.png)
 
+## Named processing setups
+
+Both processing editors can save their parameters under a name and load them
+back later. **Setups** at the top of **View processing** and the color
+**Processing stack** offers the built-in setups, the saved ones, **Apply
+setup**, **Save as…**, **Delete**, **Import**, and **Export**. Applying a
+setup only fills the editor; nothing renders until **Apply processing** runs
+it, so a setup is always inspectable before it costs anything.
+
+Setups are global. One list serves every configured database, stored in
+`processing-setups.json` beside the database registry, so the desktop app and
+a server keep them across restarts. On a server with accounts, viewers can
+list, apply, and export setups; saving, deleting, and importing need an
+editor.
+
+A **view** setup holds a display stretch and optional deconvolution. A
+**color** setup holds the whole pipeline: background extraction, per-channel
+input processing, and output stretches. A color setup remembers the channels
+it was saved from, and applying it to a card with different channels matches
+channels by name: the rest fall back to the default input stretch, except that
+one treatment shared by several saved channels follows the setup to every
+channel. Deconvolution never follows a setup onto a channel it did not name —
+sharpening stays opt-in per channel.
+
+The built-in setups are derived from the editors' own defaults and cannot be
+deleted. **Export** downloads every saved setup as one JSON file;
+**Import** merges such a file, replacing same-named setups, and refuses the
+whole file if any entry does not validate. The server checks every saved or
+imported setup against the same types the build endpoints parse, so a setup
+that saves is a setup a build can use.
+
 ## Color previews from channel stacks
 
 Once one target has completed mono stacks for **L/R/G/B** or **H-alpha/OIII**,
@@ -612,6 +643,20 @@ GET  /api/db/{db}/stack-previews/artifact-searches/{search}/crops/{image}
 GET  /api/db/{db}/stack-previews/stretch/{stretch}/preview[?size=screen|original]
 GET  /api/db/{db}/stack-previews/stretch/{stretch}/fits
 ```
+
+Named processing setups are global rather than per-database:
+
+```text
+GET    /api/processing-setups
+POST   /api/processing-setups
+POST   /api/processing-setups/import
+DELETE /api/processing-setups/{name}
+```
+
+The save body is `{ "name": "Deep SHO", "kind": "view" | "color",
+"settings": { ... } }` with settings shaped exactly like the matching build
+request fragment above. The GET response is also the export document: the
+import endpoint accepts it verbatim and replaces same-named setups.
 
 The POST body is `{ "image_ids": [...], "accepted_only": false, "force":
 false }`. Status responses contain the group counters, captured image/grade
