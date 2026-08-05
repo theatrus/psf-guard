@@ -378,8 +378,10 @@ sharpening stays opt-in per channel.
 
 The built-in setups are derived from the editors' own defaults and cannot be
 deleted. In **Settings → Setups**, **Export all** downloads every saved setup
-as one JSON file; **Import…** merges such a file, replacing same-named setups,
-and refuses the whole file if any entry does not validate. The server checks
+as one JSON file, and each row exports on its own; both use the same document
+shape, so any export feeds the import. **Import…** merges such a file,
+replacing same-named setups, and refuses the whole file if any entry does not
+validate. The server checks
 every saved or imported setup against the same types the build endpoints
 parse, so a setup that saves is a setup a build can use.
 

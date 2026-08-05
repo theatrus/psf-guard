@@ -4,6 +4,7 @@ import {
   builtinColorSetups,
   builtinViewSetups,
   colorSetupForRoles,
+  setupExportFilename,
 } from '../processingSetups';
 import { defaultStretchRequest } from '../stackStretchModels';
 
@@ -83,5 +84,13 @@ describe('built-in setups', () => {
     expect(Object.keys(rgb.input_stretches).sort()).toEqual(['blue', 'green', 'red']);
     const bare = builtinColorSetups[1].settings(['ha', 'oiii']);
     expect(bare.background_extraction).toBeNull();
+  });
+});
+
+describe('setupExportFilename', () => {
+  it('slugs a name into a safe download filename', () => {
+    expect(setupExportFilename('Deep SHO pipeline')).toBe('psf-guard-setup-deep-sho-pipeline.json');
+    expect(setupExportFilename('Gentle Hα view')).toBe('psf-guard-setup-gentle-h-view.json');
+    expect(setupExportFilename('···')).toBe('psf-guard-setup-unnamed.json');
   });
 });

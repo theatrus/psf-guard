@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
-import type { ProcessingSetupsDocument } from '../api/types';
+import type { ProcessingSetup, ProcessingSetupsDocument } from '../api/types';
+import { setupExportFilename } from './processingSetups';
 import { useAccess } from '../auth/access';
 import { formatRelativeTime } from '../utils/relativeTime';
 
@@ -57,17 +58,31 @@ export default function ProcessingSetupsManager() {
     onError: (cause) => fail(cause, 'Importing setups failed'),
   });
 
-  const exportSetups = () => {
-    const document_ = setups.data ?? { schema_version: 1, setups: [] };
+  const download = (document_: ProcessingSetupsDocument, filename: string) => {
     const blob = new Blob([`${JSON.stringify(document_, null, 2)}\n`], {
       type: 'application/json',
     });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = 'psf-guard-processing-setups.json';
+    anchor.download = filename;
     anchor.click();
     URL.revokeObjectURL(url);
+  };
+
+  const exportAll = () => {
+    download(
+      setups.data ?? { schema_version: 1, setups: [] },
+      'psf-guard-processing-setups.json'
+    );
+  };
+
+  // One setup in the same document shape, so any export feeds any import.
+  const exportOne = (setup: ProcessingSetup) => {
+    download(
+      { schema_version: setups.data?.schema_version ?? 1, setups: [setup] },
+      setupExportFilename(setup.name)
+    );
   };
 
   const importFile = async (file: File) => {
@@ -128,7 +143,7 @@ export default function ProcessingSetupsManager() {
             type="button"
             className="browse-button"
             disabled={busy || list.length === 0}
-            onClick={exportSetups}
+            onClick={exportAll}
           >
             Export all
           </button>
@@ -150,7 +165,7 @@ export default function ProcessingSetupsManager() {
               <th>Name</th>
               <th>Editor</th>
               <th>Updated</th>
-              {access.canWrite && <th aria-label="Actions" />}
+              <th aria-label="Actions" />
             </tr>
           </thead>
           <tbody>
@@ -159,8 +174,16 @@ export default function ProcessingSetupsManager() {
                 <td>{setup.name}</td>
                 <td>{kindLabels[setup.kind]}</td>
                 <td>{formatRelativeTime(setup.updated_unix_seconds)}</td>
-                {access.canWrite && (
-                  <td>
+                <td className="processing-setups-row-actions">
+                  <button
+                    type="button"
+                    className="browse-button"
+                    disabled={busy}
+                    onClick={() => exportOne(setup)}
+                  >
+                    Export
+                  </button>
+                  {access.canWrite && (
                     <button
                       type="button"
                       className="remove-button"
@@ -169,8 +192,8 @@ export default function ProcessingSetupsManager() {
                     >
                       Delete
                     </button>
-                  </td>
-                )}
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>

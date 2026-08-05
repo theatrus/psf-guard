@@ -4239,6 +4239,13 @@
   text-transform: uppercase;
 }
 
+.processing-setups-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+
 .processing-setups-error {
   color: var(--color-error);
 }

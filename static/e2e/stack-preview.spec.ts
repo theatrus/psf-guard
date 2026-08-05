@@ -889,6 +889,20 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   expect(exported.setups.map((setup: { name: string }) => setup.name))
     .toContain('E2E color pipeline');
 
+  // A row exports on its own, in the same document shape.
+  const singlePromise = page.waitForEvent('download');
+  await manager
+    .locator('tbody tr', { hasText: 'E2E color pipeline' })
+    .getByRole('button', { name: 'Export' })
+    .click();
+  const single = await singlePromise;
+  expect(single.suggestedFilename()).toBe('psf-guard-setup-e2e-color-pipeline.json');
+  const singlePath = path.join(process.env.PSF_GUARD_E2E_TMP!, 'setup-single.json');
+  await single.saveAs(singlePath);
+  const singleDocument = JSON.parse(fs.readFileSync(singlePath, 'utf8'));
+  expect(singleDocument.setups).toHaveLength(1);
+  expect(singleDocument.setups[0].name).toBe('E2E color pipeline');
+
   const renamed = {
     ...exported,
     setups: exported.setups

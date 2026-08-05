@@ -118,3 +118,16 @@ export function colorSetupForRoles(
     ),
   };
 }
+
+/**
+ * A filesystem-safe download name for one exported setup. The collection
+ * export keeps its fixed name; a single setup carries its own.
+ */
+export function setupExportFilename(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `psf-guard-setup-${slug || 'unnamed'}.json`;
+}
