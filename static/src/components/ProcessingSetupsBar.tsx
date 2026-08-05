@@ -1,7 +1,7 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
-import type { ProcessingSetupKind, ProcessingSetupsDocument } from '../api/types';
+import type { ProcessingSetupKind } from '../api/types';
 import { useAccess } from '../auth/access';
 
 const SETUPS_QUERY_KEY = ['processing-setups'] as const;
@@ -20,9 +20,10 @@ interface ProcessingSetupsBarProps {
 }
 
 /**
- * Save, apply, import, and export named processing setups. Setups are global —
- * one list serves every database — so this bar is the same everywhere it
- * appears; only `kind` scopes which setups it lists.
+ * Apply a named processing setup, or save the editor's current parameters as
+ * one. Setups are global — one list serves every database — so this bar is
+ * the same everywhere it appears; only `kind` scopes which setups it lists.
+ * Deleting, importing, and exporting live in Settings → Setups.
  */
 export default function ProcessingSetupsBar({
   kind,
@@ -33,7 +34,6 @@ export default function ProcessingSetupsBar({
 }: ProcessingSetupsBarProps) {
   const access = useAccess();
   const queryClient = useQueryClient();
-  const fileRef = useRef<HTMLInputElement>(null);
   const [selected, setSelected] = useState('');
   const [saveName, setSaveName] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -66,25 +66,6 @@ export default function ProcessingSetupsBar({
     },
     onError: (cause) => fail(cause, 'Saving the setup failed'),
   });
-  const remove = useMutation({
-    mutationFn: (name: string) => apiClient.deleteProcessingSetup(name),
-    onSuccess: () => {
-      refresh();
-      setSelected('');
-      report('Setup deleted');
-    },
-    onError: (cause) => fail(cause, 'Deleting the setup failed'),
-  });
-  const importSetups = useMutation({
-    mutationFn: (document: ProcessingSetupsDocument) =>
-      apiClient.importProcessingSetups(document),
-    onSuccess: (result) => {
-      refresh();
-      report(`Imported ${result.imported} new, replaced ${result.replaced}`);
-    },
-    onError: (cause) => fail(cause, 'Importing setups failed'),
-  });
-
   const apply = () => {
     if (selected.startsWith(BUILTIN_PREFIX)) {
       const setup = builtins.find(
@@ -105,38 +86,10 @@ export default function ProcessingSetupsBar({
     }
   };
 
-  const exportSetups = () => {
-    const document_ = setups.data ?? { schema_version: 1, setups: [] };
-    const blob = new Blob([`${JSON.stringify(document_, null, 2)}\n`], {
-      type: 'application/json',
-    });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = 'psf-guard-processing-setups.json';
-    anchor.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const importFile = async (file: File) => {
-    try {
-      const parsed: unknown = JSON.parse(await file.text());
-      if (
-        typeof parsed !== 'object' || parsed === null ||
-        !Array.isArray((parsed as ProcessingSetupsDocument).setups)
-      ) {
-        throw new Error('This file is not a processing setups export');
-      }
-      importSetups.mutate(parsed as ProcessingSetupsDocument);
-    } catch (cause) {
-      fail(cause, 'Importing setups failed');
-    }
-  };
-
   const selectedSaved = selected.startsWith(SAVED_PREFIX)
     ? selected.slice(SAVED_PREFIX.length)
     : null;
-  const busy = disabled || save.isPending || remove.isPending || importSetups.isPending;
+  const busy = disabled || save.isPending;
 
   return (
     <div className="processing-setups-bar">
@@ -174,54 +127,21 @@ export default function ProcessingSetupsBar({
           Apply setup
         </button>
         {access.canWrite && (
-          <>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => {
-                setSaveName(saveName === null ? (selectedSaved ?? '') : null);
-                setNotice(null);
-                setError(null);
-              }}
-            >
-              Save as…
-            </button>
-            {selectedSaved && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => remove.mutate(selectedSaved)}
-              >
-                Delete
-              </button>
-            )}
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => fileRef.current?.click()}
-            >
-              Import
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="application/json,.json"
-              hidden
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                event.target.value = '';
-                if (file) void importFile(file);
-              }}
-            />
-          </>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setSaveName(saveName === null ? (selectedSaved ?? '') : null);
+              setNotice(null);
+              setError(null);
+            }}
+          >
+            Save as…
+          </button>
         )}
-        <button
-          type="button"
-          disabled={busy || (setups.data?.setups.length ?? 0) === 0}
-          onClick={exportSetups}
-        >
-          Export
-        </button>
+        <span className="processing-setups-hint">
+          Manage, import, and export in Settings → Setups
+        </span>
       </div>
       {saveName !== null && (
         <form

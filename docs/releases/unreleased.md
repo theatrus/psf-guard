@@ -7,7 +7,9 @@
 ## Added
 
 - Named processing setups. Save the parameters of the mono view-processing or
-  color processing editor under a name, apply them to any card in any
-  database, and import or export them as one JSON file. Built-in setups cover
-  the editors' defaults. See [stack
+  color processing editor under a name and apply them to any card in any
+  database; manage, import, and export the collection in Settings → Setups.
+  Built-in setups cover the editors' defaults. See [stack
   previews](https://github.com/theatrus/psf-guard/blob/main/docs/STACKING_PREVIEWS.md#named-processing-setups).
+- The Stack previews panel collapses from its title and stays collapsed
+  across reloads.

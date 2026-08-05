@@ -16,6 +16,7 @@ import QualityBackfillControls from './QualityBackfillControls';
 import RemotePeerSync from './RemotePeerSync';
 import SchedulerSyncControls from './SchedulerSyncControls';
 import SeizaCatalogControls from './SeizaCatalogControls';
+import ProcessingSetupsManager from './ProcessingSetupsManager';
 import CalibrationLibrarySummary from './CalibrationLibrarySummary';
 import UserManagement from './UserManagement';
 import './TauriSettings.css';
@@ -23,7 +24,7 @@ import './TauriSettings.css';
 /**
  * Settings groups unrelated jobs into named tabs so each stays easy to find.
  */
-type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'users';
+type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'users';
 
 interface TauriSettingsProps {
   isOpen: boolean;
@@ -592,6 +593,9 @@ export default function TauriSettings({
     ...(managementAllowed && hasDatabases
       ? ([{ id: 'sync', label: 'Sync' }] as const)
       : []),
+    // Setups are global display parameters, not filesystem paths, so the tab
+    // is not management-gated.
+    { id: 'setups', label: 'Setups' },
     ...(!isTauri && access.status.authentication_required
       ? ([{ id: 'users', label: 'Users' }] as const)
       : []),
@@ -1145,6 +1149,8 @@ export default function TauriSettings({
               <RemotePeerSync databases={databases} disabled={isApplying} />
             </>
           )}
+
+          {currentTab === 'setups' && <ProcessingSetupsManager />}
 
           {currentTab === 'users' && (
             <UserManagement currentUsername={access.status.username} />

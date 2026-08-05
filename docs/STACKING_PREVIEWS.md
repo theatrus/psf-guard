@@ -356,9 +356,10 @@ truth.
 Both processing editors can save their parameters under a name and load them
 back later. **Setups** at the top of **View processing** and the color
 **Processing stack** offers the built-in setups, the saved ones, **Apply
-setup**, **Save as…**, **Delete**, **Import**, and **Export**. Applying a
-setup only fills the editor; nothing renders until **Apply processing** runs
-it, so a setup is always inspectable before it costs anything.
+setup**, and **Save as…**. Applying a setup only fills the editor; nothing
+renders until **Apply processing** runs it, so a setup is always inspectable
+before it costs anything. The rest of the management — the full list across
+both editors, deletion, import, and export — lives in **Settings → Setups**.
 
 Setups are global. One list serves every configured database, stored in
 `processing-setups.json` beside the database registry, so the desktop app and
@@ -376,11 +377,16 @@ channel. Deconvolution never follows a setup onto a channel it did not name —
 sharpening stays opt-in per channel.
 
 The built-in setups are derived from the editors' own defaults and cannot be
-deleted. **Export** downloads every saved setup as one JSON file;
-**Import** merges such a file, replacing same-named setups, and refuses the
-whole file if any entry does not validate. The server checks every saved or
-imported setup against the same types the build endpoints parse, so a setup
-that saves is a setup a build can use.
+deleted. In **Settings → Setups**, **Export all** downloads every saved setup
+as one JSON file; **Import…** merges such a file, replacing same-named setups,
+and refuses the whole file if any entry does not validate. The server checks
+every saved or imported setup against the same types the build endpoints
+parse, so a setup that saves is a setup a build can use.
+
+The whole **Stack previews** panel collapses from its title, like the detail
+sections inside it, and stays collapsed across reloads. A collapsed panel
+shows how many remembered channels it is holding, or that a build is running;
+the header's Stacking indicator keeps reporting progress either way.
 
 ## Color previews from channel stacks
 

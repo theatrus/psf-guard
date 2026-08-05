@@ -870,16 +870,25 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await expect(reloadedSelect.locator('option', { hasText: 'E2E color pipeline' }))
     .toHaveCount(1);
 
-  // Export produces the import document; a renamed copy imports as new.
+  // Management moved to Settings → Setups: export the collection, re-import
+  // a renamed copy, and delete it from the table.
+  await page.getByRole('button', { name: 'Settings' }).click();
+  const settingsModal = page.locator('.tauri-settings .modal-content');
+  await settingsModal.getByRole('tab', { name: 'Setups' }).click();
+  const manager = settingsModal.locator('.processing-setups-manager');
+  await expect(manager.locator('tbody tr')).toHaveCount(1);
+  await expect(manager).toContainText('E2E color pipeline');
+  await expect(manager).toContainText('Color pipeline');
+
   const downloadPromise = page.waitForEvent('download');
-  await reloadedSelect.selectOption({ label: 'E2E color pipeline' });
-  await reloadedBar.getByRole('button', { name: 'Export' }).click();
+  await manager.getByRole('button', { name: 'Export all' }).click();
   const download = await downloadPromise;
   const exportPath = path.join(process.env.PSF_GUARD_E2E_TMP!, 'setups-export.json');
   await download.saveAs(exportPath);
   const exported = JSON.parse(fs.readFileSync(exportPath, 'utf8'));
   expect(exported.setups.map((setup: { name: string }) => setup.name))
     .toContain('E2E color pipeline');
+
   const renamed = {
     ...exported,
     setups: exported.setups
@@ -888,17 +897,30 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   };
   const importPath = path.join(process.env.PSF_GUARD_E2E_TMP!, 'setups-import.json');
   fs.writeFileSync(importPath, JSON.stringify(renamed));
-  await reloadedBar.locator('input[type="file"]').setInputFiles(importPath);
-  await expect(reloadedBar).toContainText('Imported 1 new, replaced 0');
-  await expect(reloadedSelect.locator('option', { hasText: 'Imported pipeline' }))
-    .toHaveCount(1);
+  await manager.locator('input[type="file"]').setInputFiles(importPath);
+  await expect(manager).toContainText('Imported 1 new, replaced 0');
+  await expect(manager.locator('tbody tr')).toHaveCount(2);
 
-  // Delete removes the imported copy and reports the miss on a second try.
-  await reloadedSelect.selectOption({ label: 'Imported pipeline' });
-  await reloadedBar.getByRole('button', { name: 'Delete' }).click();
-  await expect(reloadedBar).toContainText('Setup deleted');
-  await expect(reloadedSelect.locator('option', { hasText: 'Imported pipeline' }))
-    .toHaveCount(0);
+  const importedRow = manager.locator('tbody tr', { hasText: 'Imported pipeline' });
+  await importedRow.getByRole('button', { name: 'Delete' }).click();
+  await expect(manager).toContainText('Deleted “Imported pipeline”');
+  await expect(manager.locator('tbody tr')).toHaveCount(1);
+  await settingsModal.locator('.close-button').click();
+
+  // The whole stack panel collapses like the detail sections do, and the
+  // preference survives a reload.
+  const stackPanel = page.locator('.stack-preview-panel');
+  const collapseToggle = stackPanel.locator('.stack-preview-collapse');
+  await collapseToggle.click();
+  await expect(stackPanel).toHaveAttribute('data-collapsed', 'true');
+  await expect(stackPanel.locator('.stack-color-card')).toHaveCount(0);
+  await expect(stackPanel).toContainText('remembered channel');
+  await page.reload();
+  await expect(stackPanel).toBeVisible({ timeout: 15_000 });
+  await expect(stackPanel).toHaveAttribute('data-collapsed', 'true');
+  await collapseToggle.click();
+  await expect(stackPanel).not.toHaveAttribute('data-collapsed', 'true');
+  await expect(stackPanel.locator('.stack-color-card').first()).toBeVisible();
 
   if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
     const docs = path.resolve(process.cwd(), '..', 'docs');
