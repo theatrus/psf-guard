@@ -76,6 +76,10 @@ import type {
   PeerCheck,
   RemoteSyncRequest,
   RemoteSyncResult,
+  ProcessingSetup,
+  ProcessingSetupKind,
+  ProcessingSetupsDocument,
+  ProcessingSetupsImportResult,
 } from './types';
 
 // Store the initialized API instance and server URL
@@ -658,6 +662,50 @@ export const apiClient = {
       dbPath(dbId, '/targets')
     );
     return data.data || [];
+  },
+
+  /** Global across every database, so no dbId parameter. */
+  getProcessingSetups: async (): Promise<ProcessingSetupsDocument> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<ProcessingSetupsDocument>>(
+      '/processing-setups'
+    );
+    return data.data ?? { schema_version: 1, setups: [] };
+  },
+
+  saveProcessingSetup: async (
+    name: string,
+    kind: ProcessingSetupKind,
+    settings: unknown
+  ): Promise<ProcessingSetup> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<ProcessingSetup>>(
+      '/processing-setups',
+      { name, kind, settings }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to save the processing setup');
+    return data.data;
+  },
+
+  deleteProcessingSetup: async (name: string): Promise<ProcessingSetupsDocument> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.delete<ApiResponse<ProcessingSetupsDocument>>(
+      `/processing-setups/${encodeURIComponent(name)}`
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to delete the processing setup');
+    return data.data;
+  },
+
+  importProcessingSetups: async (
+    document: ProcessingSetupsDocument
+  ): Promise<ProcessingSetupsImportResult> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<ProcessingSetupsImportResult>>(
+      '/processing-setups/import',
+      document
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to import processing setups');
+    return data.data;
   },
 
   startStackPreviews: async (

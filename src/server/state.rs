@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -39,6 +39,9 @@ pub struct AppState {
     /// set, the CRUD endpoints (`POST/PUT/DELETE /api/databases/...`) persist
     /// changes here. `None` disables the CRUD endpoints (e.g. in tests).
     pub registry_path: RwLock<Option<PathBuf>>,
+    /// Serializes read-modify-write cycles on the processing-setups file that
+    /// sits beside the registry. The file is tiny; a mutex beats a cache.
+    pub processing_setups_write: Mutex<()>,
     /// Whether HTTP clients are allowed to call the database CRUD endpoints.
     /// Required *in addition to* `registry_path` being set, so an
     /// untrustworthy client cannot mutate the user's configuration even if
@@ -387,6 +390,7 @@ impl AppState {
             pregeneration_config,
             cache_dir_root: cache_dir.clone(),
             registry_path: RwLock::new(None),
+            processing_setups_write: Mutex::new(()),
             allow_database_management: RwLock::new(false),
             site_banner: RwLock::new(None),
             server_auth: RwLock::new(None),
@@ -552,6 +556,7 @@ impl AppState {
             pregeneration_config: crate::cli::PregenerationConfig::default(),
             cache_dir_root: "/tmp/psf-guard-test".to_string(),
             registry_path: RwLock::new(None),
+            processing_setups_write: Mutex::new(()),
             allow_database_management: RwLock::new(false),
             site_banner: RwLock::new(None),
             server_auth: RwLock::new(None),

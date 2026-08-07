@@ -256,6 +256,11 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   const defaultPreviewSrc = await preview.getAttribute('src');
   const stretchControls = panel.locator('.stack-preview-card .stack-stretch-controls');
   await stretchControls.locator('summary').click();
+  await expect(
+    stretchControls.locator('.processing-setups-bar').getByRole('combobox', {
+      name: 'Saved view processing setups',
+    })
+  ).toBeVisible();
   await expect(stretchControls.getByRole('checkbox', { name: 'Deconvolution' }))
     .not.toBeChecked();
   await expect(stretchControls).toContainText('this is off unless enabled');
@@ -813,6 +818,141 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   // The card has to say which target it belongs to. A longer target name than
   // this fixture's squeezes the title to nothing when the row cannot wrap.
   expect(header.titleWidth, 'target name squeezed out of the header').toBeGreaterThan(0);
+
+  // Named processing setups: save the RGB pipeline, see it offered on the
+  // narrowband card (setups are global, scoped only by kind), survive a
+  // reload, round-trip through export/import, and delete cleanly.
+  if (!(await currentProcessing.getAttribute('open'))) {
+    await currentProcessing.locator(':scope > summary').click();
+  }
+  const rgbSetupsBar = currentProcessing.locator('.processing-setups-bar');
+  await rgbSetupsBar.getByRole('button', { name: 'Save as…' }).click();
+  await rgbSetupsBar.getByRole('textbox', { name: 'New setup name' }).fill('E2E color pipeline');
+  await rgbSetupsBar.getByRole('button', { name: 'Save current settings' }).click();
+  await expect(rgbSetupsBar).toContainText('Saved “E2E color pipeline”');
+
+  const setupsResponse = await page.request.get('/api/processing-setups');
+  expect(setupsResponse.status()).toBe(200);
+  const setupsDocument = (await setupsResponse.json()).data;
+  const savedSetup = setupsDocument.setups.find(
+    (setup: { name: string }) => setup.name === 'E2E color pipeline'
+  );
+  expect(savedSetup.kind).toBe('color');
+  // The saved pipeline carries the edited output stretch, canonicalized.
+  expect(JSON.stringify(savedSetup.settings)).toContain('"target_median":0.3');
+
+  // The same setup is offered on the narrowband card and applies to its
+  // different channel set.
+  const narrowbandProcessing = narrowbandCard.locator('.stack-color-processing');
+  if (!(await narrowbandProcessing.getAttribute('open'))) {
+    await narrowbandProcessing.locator(':scope > summary').click();
+  }
+  const narrowbandBar = narrowbandProcessing.locator('.processing-setups-bar');
+  const narrowbandSelect = narrowbandBar.getByRole('combobox', {
+    name: 'Saved color processing setups',
+  });
+  await narrowbandSelect.selectOption({ label: 'E2E color pipeline' });
+  await narrowbandBar.getByRole('button', { name: 'Apply setup' }).click();
+  await expect(narrowbandBar).toContainText('Applied “E2E color pipeline”');
+  await expect(
+    narrowbandProcessing.getByRole('spinbutton', { name: 'RGB output stage 1 Target median' })
+  ).toHaveValue('0.3');
+
+  // The registry survives a reload: the file sits beside the e2e registry.
+  await page.reload();
+  await expect(section).toBeVisible({ timeout: 15_000 });
+  const reloadedProcessing = rgbCard.locator('.stack-color-processing');
+  await reloadedProcessing.locator(':scope > summary').click();
+  const reloadedBar = reloadedProcessing.locator('.processing-setups-bar');
+  const reloadedSelect = reloadedBar.getByRole('combobox', {
+    name: 'Saved color processing setups',
+  });
+  await expect(reloadedSelect.locator('option', { hasText: 'E2E color pipeline' }))
+    .toHaveCount(1);
+
+  // Management moved to Settings → Setups: export the collection, re-import
+  // a renamed copy, and delete it from the table.
+  await page.getByRole('button', { name: 'Settings' }).click();
+  const settingsModal = page.locator('.tauri-settings .modal-content');
+  await settingsModal.getByRole('tab', { name: 'Setups' }).click();
+  const manager = settingsModal.locator('.processing-setups-manager');
+  await expect(manager.locator('tbody tr')).toHaveCount(1);
+  await expect(manager).toContainText('E2E color pipeline');
+  await expect(manager).toContainText('Color pipeline');
+
+  const downloadPromise = page.waitForEvent('download');
+  await manager.getByRole('button', { name: 'Export all' }).click();
+  const download = await downloadPromise;
+  const exportPath = path.join(process.env.PSF_GUARD_E2E_TMP!, 'setups-export.json');
+  await download.saveAs(exportPath);
+  const exported = JSON.parse(fs.readFileSync(exportPath, 'utf8'));
+  expect(exported.setups.map((setup: { name: string }) => setup.name))
+    .toContain('E2E color pipeline');
+
+  // A row exports on its own, in the same document shape.
+  const singlePromise = page.waitForEvent('download');
+  await manager
+    .locator('tbody tr', { hasText: 'E2E color pipeline' })
+    .getByRole('button', { name: 'Export' })
+    .click();
+  const single = await singlePromise;
+  expect(single.suggestedFilename()).toBe('psf-guard-setup-e2e-color-pipeline.json');
+  const singlePath = path.join(process.env.PSF_GUARD_E2E_TMP!, 'setup-single.json');
+  await single.saveAs(singlePath);
+  const singleDocument = JSON.parse(fs.readFileSync(singlePath, 'utf8'));
+  expect(singleDocument.setups).toHaveLength(1);
+  expect(singleDocument.setups[0].name).toBe('E2E color pipeline');
+
+  const renamed = {
+    ...exported,
+    setups: exported.setups
+      .filter((setup: { name: string }) => setup.name === 'E2E color pipeline')
+      .map((setup: { name: string }) => ({ ...setup, name: 'Imported pipeline' })),
+  };
+  const importPath = path.join(process.env.PSF_GUARD_E2E_TMP!, 'setups-import.json');
+  fs.writeFileSync(importPath, JSON.stringify(renamed));
+  await manager.locator('input[type="file"]').setInputFiles(importPath);
+  await expect(manager).toContainText('Imported 1 new, replaced 0');
+  await expect(manager.locator('tbody tr')).toHaveCount(2);
+
+  const importedRow = manager.locator('tbody tr', { hasText: 'Imported pipeline' });
+  await importedRow.getByRole('button', { name: 'Delete' }).click();
+  await expect(manager).toContainText('Deleted “Imported pipeline”');
+  await expect(manager.locator('tbody tr')).toHaveCount(1);
+  await settingsModal.locator('.close-button').click();
+
+  // The whole stack panel collapses like the detail sections do, and the
+  // preference survives a reload.
+  const stackPanel = page.locator('.stack-preview-panel');
+  const collapseToggle = stackPanel.locator('.stack-preview-collapse');
+  await collapseToggle.click();
+  await expect(stackPanel).toHaveAttribute('data-collapsed', 'true');
+  await expect(stackPanel.locator('.stack-color-card')).toHaveCount(0);
+  await expect(stackPanel).toContainText('remembered channel');
+  await page.reload();
+  await expect(stackPanel).toBeVisible({ timeout: 15_000 });
+  await expect(stackPanel).toHaveAttribute('data-collapsed', 'true');
+  await collapseToggle.click();
+  await expect(stackPanel).not.toHaveAttribute('data-collapsed', 'true');
+  await expect(stackPanel.locator('.stack-color-card').first()).toBeVisible();
+
+  // At a large grid zoom the result cards follow: one full-width column for
+  // both the mono and the color grids. Zooming back returns the two-column
+  // layout — the cards never get narrower than it.
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=2&size=700`);
+  await expect(stackPanel).toBeVisible({ timeout: 15_000 });
+  await expect(stackPanel).toHaveAttribute('data-wide', 'true');
+  const wideColumns = await stackPanel.locator('.stack-color-grid').first().evaluate(
+    (grid) => getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length
+  );
+  expect(wideColumns).toBe(1);
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=2&size=300`);
+  await expect(stackPanel).toBeVisible({ timeout: 15_000 });
+  await expect(stackPanel).not.toHaveAttribute('data-wide', 'true');
+  const normalColumns = await stackPanel.locator('.stack-color-grid').first().evaluate(
+    (grid) => getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length
+  );
+  expect(normalColumns).toBe(2);
 
   if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
     const docs = path.resolve(process.cwd(), '..', 'docs');

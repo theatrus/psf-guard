@@ -128,6 +128,8 @@ The editor can also:
 - grade images and use undo or redo;
 - update projects, targets, coordinates, and exposure plans;
 - start quality scans and imports;
+- save, delete, and import named processing setups (viewers can list, apply,
+  and export them);
 - manage databases, peers, catalogs, and calibration records when the matching
   server management gate is also enabled;
 - write local exports and apply database sync previews.

@@ -18,6 +18,8 @@ import {
   defaultBackgroundExtraction,
   defaultColorProcessing,
 } from './stackColorProcessing';
+import ProcessingSetupsBar from './ProcessingSetupsBar';
+import { builtinColorSetups, colorSetupForRoles } from './processingSetups';
 
 const roleLabels: Record<StackColorRole, string> = {
   luminance: 'L', red: 'R', green: 'G', blue: 'B', ha: 'Hα', oiii: 'OIII', sii: 'SII',
@@ -514,6 +516,21 @@ export default function StackColorProcessingControls({
           {' · '}RGB {draft.output_stretches.length}</small>
       </summary>
       <div className="stack-color-processing-body">
+        <ProcessingSetupsBar
+          kind="color"
+          builtins={builtinColorSetups.map((setup) => ({
+            name: setup.name,
+            settings: setup.settings(roles),
+          }))}
+          current={() => draft}
+          disabled={disabled}
+          onApply={(settings) => {
+            setDraft(cloneProcessing(
+              colorSetupForRoles(settings as StackColorProcessing, roles)
+            ));
+            setError(null);
+          }}
+        />
         <p className="stack-stretch-note">
           Background correction runs on each linear input before registration. Optional
           per-channel deconvolution runs after alignment while the data is still linear;

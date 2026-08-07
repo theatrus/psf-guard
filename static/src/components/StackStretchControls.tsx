@@ -2,6 +2,8 @@ import { useState } from 'react';
 import type { StackStretchPreview, StackViewProcessingRequest } from '../api/types';
 import StackStretchStageEditor from './StackStretchStageEditor';
 import StackDeconvolutionControls from './StackDeconvolutionControls';
+import ProcessingSetupsBar from './ProcessingSetupsBar';
+import { builtinViewSetups } from './processingSetups';
 import { validateDeconvolution } from './stackDeconvolution';
 import {
   defaultStretchRequest,
@@ -72,6 +74,19 @@ export default function StackStretchControls({
           : 'Deconvolution off · default stretch'}</small>
       </summary>
       <div className="stack-stretch-body">
+        <ProcessingSetupsBar
+          kind="view"
+          builtins={builtinViewSetups(displayReferred)}
+          current={() => request}
+          disabled={disabled || pending}
+          onApply={(settings) => {
+            setRequest({
+              deconvolution: null,
+              ...(settings as StackViewProcessingRequest),
+            });
+            setError(null);
+          }}
+        />
         <StackDeconvolutionControls
           label={label}
           config={request.deconvolution}

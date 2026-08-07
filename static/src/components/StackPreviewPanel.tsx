@@ -27,8 +27,19 @@ interface StackPreviewPanelProps {
   projectId: number;
   images: StackCandidateImage[];
   selectionSource: 'selected' | 'visible';
+  /** The grid's thumbnail size; large zooms widen the result cards too. */
+  imageSize?: number;
   onOpenImage: (imageId: number) => void;
 }
+
+/**
+ * Above this grid zoom the result cards go single-column and full width.
+ * Below it the layout is untouched: zooming out never shrinks a stack card,
+ * it only stops widening them, because a preview that is too small to judge
+ * defeats the panel. A two-column stack card is about 600px on a typical
+ * window, so this is the point where the grid's own thumbnails catch up.
+ */
+export const STACK_WIDE_IMAGE_SIZE = 600;
 
 interface ChannelInput {
   key: string;
@@ -113,15 +124,42 @@ function artifactFromLatest(latest: LatestStackPreviewGroup | undefined): StackA
   };
 }
 
+/**
+ * Whether the stack panel starts collapsed. Like the thumbnail size, this is a
+ * preference about how someone reads the grid rather than about any image, so
+ * it survives reloads. Storage can be unavailable (private browsing); the
+ * panel then simply starts expanded.
+ */
+const PANEL_COLLAPSED_KEY = 'psf-guard.stack-panel-collapsed';
+
+function readCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(PANEL_COLLAPSED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 export default function StackPreviewPanel({
   dbId,
   projectId,
   images,
   selectionSource,
+  imageSize,
   onOpenImage,
 }: StackPreviewPanelProps) {
   const queryClient = useQueryClient();
   const { canCompute } = useAccess();
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const toggleCollapsed = () => setCollapsed((current) => {
+    const next = !current;
+    try {
+      window.localStorage.setItem(PANEL_COLLAPSED_KEY, String(next));
+    } catch {
+      // Keep the in-memory preference even when it cannot be persisted.
+    }
+    return next;
+  });
   const [acceptedOnly, setAcceptedOnly] = useState(false);
   const [watchedJobIds, setWatchedJobIds] = useState<string[]>([]);
   const [inspector, setInspector] = useState<StackArtifact | null>(null);
@@ -377,16 +415,48 @@ export default function StackPreviewPanel({
 
   return (
     <>
-      <section className="stack-preview-panel" aria-labelledby="stack-preview-title">
+      <section
+        className="stack-preview-panel"
+        aria-labelledby="stack-preview-title"
+        data-collapsed={collapsed || undefined}
+        data-wide={(imageSize ?? 0) >= STACK_WIDE_IMAGE_SIZE || undefined}
+      >
         <div className="stack-preview-heading">
           <div>
             <div className="stack-preview-eyebrow">Project integration</div>
-            <h2 id="stack-preview-title">Stack previews</h2>
-            <p>
-              Register and integrate the {stableImageIds.length} {sourceText} images by exact target
-              and channel. Rejected and quality-regrade frames are left out automatically.
-            </p>
+            <h2 id="stack-preview-title">
+              <button
+                type="button"
+                className="stack-preview-collapse"
+                aria-expanded={!collapsed}
+                onClick={toggleCollapsed}
+              >
+                <span
+                  className={`selector-chevron ${collapsed ? '' : 'expanded'}`}
+                  aria-hidden="true"
+                >
+                  ▶
+                </span>
+                Stack previews
+              </button>
+              {collapsed && (
+                <small className="stack-preview-collapsed-summary">
+                  {running
+                    ? 'building…'
+                    : `${latest.data?.groups.length ?? 0} remembered channel${
+                        (latest.data?.groups.length ?? 0) === 1 ? '' : 's'
+                      }`}
+                </small>
+              )}
+            </h2>
+            {!collapsed && (
+              <p>
+                Register and integrate the {stableImageIds.length} {sourceText} images by exact
+                target and channel. Rejected and quality-regrade frames are left out automatically.
+              </p>
+            )}
           </div>
+          {!collapsed && (
           <div className="stack-preview-actions">
             <label className="stack-preview-checkbox">
               <input
@@ -433,8 +503,10 @@ export default function StackPreviewPanel({
               </button>
             )}
           </div>
+          )}
         </div>
 
+        {!collapsed && <>
         {stableImageIds.length < 2 && (
           <div className="stack-preview-message">At least two visible images are required.</div>
         )}
@@ -751,6 +823,7 @@ export default function StackPreviewPanel({
             </div>
           </div>
         )}
+        </>}
       </section>
       {inspector && (
         <StackPreviewInspector

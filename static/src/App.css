@@ -3327,8 +3327,34 @@
 }
 
 .stack-preview-heading h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
   margin: 0.1rem 0 0.25rem;
   font-size: 1.25rem;
+}
+
+/* The title is the collapse control, styled as the heading it replaces. */
+.stack-preview-collapse {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.stack-preview-collapsed-summary {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 400;
+}
+
+.stack-preview-panel[data-collapsed] {
+  padding-bottom: 0.6rem;
 }
 
 .stack-preview-heading p {
@@ -3866,6 +3892,15 @@
   margin: 0 auto;
 }
 
+/* At large grid zooms the result cards follow: one column, full width. The
+   cards never get narrower than the two-column layout — zooming out only
+   returns them to it. */
+.stack-preview-panel[data-wide] .stack-preview-grid,
+.stack-preview-panel[data-wide] .stack-color-grid {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: none;
+}
+
 .stack-color-card {
   overflow: hidden;
   background: var(--color-bg-primary);
@@ -4105,6 +4140,123 @@
   display: flex;
   justify-content: flex-end;
   gap: 0.38rem;
+}
+
+/* Named processing setups: one bar shared by the mono view-processing and
+   color processing editors. */
+.processing-setups-bar {
+  display: grid;
+  gap: 0.35rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-bg-tertiary);
+}
+
+.processing-setups-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.38rem;
+}
+
+.processing-setups-label {
+  color: var(--color-text-tertiary);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.processing-setups-row select,
+.processing-setups-row input[type='text'] {
+  min-width: 0;
+  min-height: 28px;
+  flex: 0 1 auto;
+  padding: 0.2rem 0.45rem;
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-bg-quaternary);
+  border-radius: 4px;
+  font-size: 0.68rem;
+}
+
+.processing-setups-row button {
+  min-height: 28px;
+  padding: 0.28rem 0.55rem;
+  color: var(--color-primary);
+  background: transparent;
+  border: 1px solid var(--color-primary-alpha-50);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.68rem;
+}
+
+.processing-setups-row button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.processing-setups-notice,
+.processing-setups-error {
+  font-size: 0.62rem;
+}
+
+.processing-setups-notice {
+  color: var(--color-text-muted);
+}
+
+.processing-setups-hint {
+  color: var(--color-text-hint);
+  font-size: 0.62rem;
+}
+
+/* Settings → Setups management table. */
+.processing-setups-manager-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+
+.processing-setups-manager .processing-setups-notice,
+.processing-setups-manager .processing-setups-error {
+  margin-bottom: 0.6rem;
+  font-size: 0.8rem;
+}
+
+.processing-setups-empty {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.processing-setups-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.processing-setups-table th,
+.processing-setups-table td {
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--color-bg-tertiary);
+  text-align: left;
+}
+
+.processing-setups-table th {
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.processing-setups-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+
+.processing-setups-error {
+  color: var(--color-error);
 }
 
 .stack-stretch-actions button {
