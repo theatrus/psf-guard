@@ -53,11 +53,6 @@ jobs:
         shell: bash
         run: az account show --query "{sub:name,user:user.name,type:user.type}" -o json
 
-      - name: Install trusted-signing-cli
-        uses: taiki-e/install-action@v2
-        with:
-          tool: trusted-signing-cli
-
       # A throwaway PE to sign. Rust is preinstalled on the runner, so this is
       # far cheaper than building the real app just to test the credential path.
       - name: Build a throwaway binary
@@ -66,20 +61,26 @@ jobs:
           cargo new --bin "$RUNNER_TEMP/sigtest" --vcs none
           cd "$RUNNER_TEMP/sigtest"
           cargo build --release
-          cp target/release/sigtest.exe "$RUNNER_TEMP/sigtest.exe"
-          ls -l "$RUNNER_TEMP/sigtest.exe"
+          cp target/release/sigtest.exe "$GITHUB_WORKSPACE/sigtest.exe"
+          ls -l "$GITHUB_WORKSPACE/sigtest.exe"
 
-      # Exercises the Certificate Profile Signer role assignment and every one
-      # of the endpoint/account/profile values.
+      # Must use the same signing tool as release.yml, or this stops testing
+      # the thing it claims to test. Microsoft's action authenticates through
+      # DefaultAzureCredential and so rides the azure/login session above.
+      #
+      # The community `trusted-signing-cli` was tried first and rejected: it
+      # hard-requires AZURE_CLIENT_SECRET with no OIDC path, which would have
+      # meant storing a signing secret in the repo.
       - name: Sign it
-        shell: bash
-        run: |
-          trusted-signing-cli \
-            -e "${{ vars.SIGNING_ENDPOINT }}" \
-            -a "${{ vars.SIGNING_ACCOUNT }}" \
-            -c "${{ vars.SIGNING_PROFILE }}" \
-            -d "PSF Guard signing smoke test" \
-            "$RUNNER_TEMP/sigtest.exe"
+        uses: azure/trusted-signing-action@v0
+        with:
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ vars.SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\sigtest.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
 
       - name: Verify the signature and publisher
         shell: bash
@@ -88,7 +89,7 @@ jobs:
           signtool=$(find "/c/Program Files (x86)/Windows Kits/10/bin" \
                        -name signtool.exe -path "*x64*" | sort | tail -1)
           echo "using: $signtool"
-          "$signtool" verify //pa //v "$RUNNER_TEMP/sigtest.exe" | tee "$RUNNER_TEMP/verify.txt"
+          "$signtool" verify //pa //v  "$GITHUB_WORKSPACE/sigtest.exe" | tee "$RUNNER_TEMP/verify.txt"
           grep -q "StackFoundry LLC" "$RUNNER_TEMP/verify.txt" \
             || { echo "FAIL: expected publisher StackFoundry LLC"; exit 1; }
           echo "OK: signed and chains to a trusted root as StackFoundry LLC"
