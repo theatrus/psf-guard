@@ -366,9 +366,16 @@ jobs:
         # What a user downloads.
         verify "$installer"
         verify "$msi"
-        # The loose binaries we signed before bundling.
-        verify target/release/psf-guard.exe
+        # The standalone CLI, which is its own release asset and is signed
+        # explicitly because it is built outside the bundler.
         verify target/release/psf-guard-cli.exe
+
+        # target/release/psf-guard.exe is deliberately NOT checked. Under
+        # signCommand, Tauri signs the copies it packages, not the build output
+        # they came from, so that file is correctly unsigned and ships to
+        # nobody. Asserting otherwise is a leftover from the sign-then-bundle
+        # approach -- the one that did not work -- and it failed the run with
+        # "No signature found" after everything that matters had passed.
 
         # And -- the point of the two-phase build -- the copies that are
         # actually sealed inside the installer.
