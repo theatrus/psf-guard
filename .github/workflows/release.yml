@@ -402,19 +402,25 @@ jobs:
           #   hashes differ   -> the bundler shipped different bytes, so the
           #                      signing happened too early to matter and the
           #                      two-phase build does not do what it claims.
-          signed_hash=$(sha256sum "target/release/$name" | cut -d' ' -f1)
+          # Reported for context only -- a difference here is expected and is
+          # NOT a failure. Under signCommand the build output stays unsigned,
+          # so the packaged copy is normally the same bytes plus a signature
+          # block, and comes out larger. psf-guard.exe therefore differs while
+          # psf-guard-cli.exe is byte-identical, because that one was signed
+          # separately as a standalone asset before bundling. What decides the
+          # outcome is the `verify` below, not this comparison.
+          build_hash=$(sha256sum "target/release/$name" | tr -d '\\' | cut -d' ' -f1)
           inner_hash=$(sha256sum "$inner" | tr -d '\\' | cut -d' ' -f1)
-          signed_size=$(stat -c %s "target/release/$name")
+          build_size=$(stat -c %s "target/release/$name")
           inner_size=$(stat -c %s "$inner")
           echo "--- (from NSIS) $name"
-          echo "    signed : $signed_hash  ($signed_size bytes)"
-          echo "    inside : $inner_hash  ($inner_size bytes)"
-          if [ "$signed_hash" = "$inner_hash" ]; then
-            echo "    -> byte-identical"
-          elif [ "$signed_size" != "$inner_size" ]; then
-            echo "    -> SIZE DIFFERS by $((inner_size - signed_size)) bytes"
+          echo "    build output : $build_hash  ($build_size bytes)"
+          echo "    in installer : $inner_hash  ($inner_size bytes)"
+          if [ "$build_hash" = "$inner_hash" ]; then
+            echo "    -> byte-identical (this one was signed before bundling)"
           else
-            echo "    -> same size, different content"
+            echo "    -> differs by $((inner_size - build_size)) bytes, consistent"
+            echo "       with a signature block added during bundling"
           fi
           # Fatal again. This was made non-fatal only while diagnosing whether
           # the mismatch came from the bundler or from 7z; that question is
