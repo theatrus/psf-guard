@@ -93,3 +93,69 @@ jobs:
           grep -q "StackFoundry LLC" "$RUNNER_TEMP/verify.txt" \
             || { echo "FAIL: expected publisher StackFoundry LLC"; exit 1; }
           echo "OK: signed and chains to a trusted root as StackFoundry LLC"
+
+      # ----------------------------------------------------------------------
+      # Second half: establish the `dotnet sign` CLI surface.
+      #
+      # The action above cannot be used as a Tauri `bundle.windows.signCommand`
+      # because it is an action, not a shell command -- and signCommand turns
+      # out to be the only correct integration point for a Tauri app. Signing
+      # the main binary before `tauri bundle` does not survive: bundling
+      # rewrites that executable, leaving a signature whose digest no longer
+      # matches (verified with both signtool and osslsigncode, while the
+      # auxiliary binary from the same installer stayed byte-identical).
+      #
+      # `dotnet sign` is a plain shell command AND authenticates through
+      # DefaultAzureCredential, so it can be a signCommand without a stored
+      # secret. Its exact subcommand name is undocumented in the README and
+      # moved with the Trusted Signing -> Artifact Signing rename, so probe it
+      # here in a two-minute job rather than discovering it thirty minutes into
+      # a release build.
+      # ----------------------------------------------------------------------
+      - name: Install dotnet sign
+        shell: bash
+        run: |
+          dotnet tool install --tool-path "$RUNNER_TEMP/signtool-dotnet" --prerelease sign
+          "$RUNNER_TEMP/signtool-dotnet/sign" --version || true
+
+      - name: Probe the sign CLI surface
+        shell: bash
+        run: |
+          sign="$RUNNER_TEMP/signtool-dotnet/sign"
+          echo "=== sign code --help ==="
+          "$sign" code --help || true
+          for sub in artifact-signing trusted-signing azure-trusted-signing; do
+            echo "=== sign code $sub --help ==="
+            "$sign" code "$sub" --help 2>&1 | head -40 || true
+          done
+
+      - name: Sign a second binary with dotnet sign
+        shell: bash
+        run: |
+          set -euo pipefail
+          sign="$RUNNER_TEMP/signtool-dotnet/sign"
+          cp "$RUNNER_TEMP/sigtest/target/release/sigtest.exe" "$GITHUB_WORKSPACE/sigtest2.exe"
+
+          # Try whichever subcommand exists. Recorded as a loop rather than
+          # hardcoded so this keeps working across the ongoing rename.
+          ok=0
+          for sub in artifact-signing trusted-signing; do
+            if "$sign" code "$sub" --help >/dev/null 2>&1; then
+              echo "using subcommand: $sub"
+              "$sign" code "$sub" \
+                --artifact-signing-endpoint "${{ vars.SIGNING_ENDPOINT }}" \
+                --artifact-signing-account "${{ vars.SIGNING_ACCOUNT }}" \
+                --artifact-signing-certificate-profile "${{ vars.SIGNING_PROFILE }}" \
+                --timestamp-url http://timestamp.acs.microsoft.com \
+                "$GITHUB_WORKSPACE/sigtest2.exe" && ok=1 && break
+              echo "subcommand $sub failed with those option names; see help above"
+            fi
+          done
+          test "$ok" = "1" || { echo "FAIL: could not sign with dotnet sign -- read the help output above and fix the option names"; exit 1; }
+
+          signtool=$(find "/c/Program Files (x86)/Windows Kits/10/bin" \
+                       -name signtool.exe -path "*x64*" | sort | tail -1)
+          "$signtool" verify //pa //v "$GITHUB_WORKSPACE/sigtest2.exe" | tee "$RUNNER_TEMP/v2.txt"
+          grep -q "StackFoundry LLC" "$RUNNER_TEMP/v2.txt" \
+            || { echo "FAIL: unexpected identity from dotnet sign"; exit 1; }
+          echo "OK: dotnet sign works with OIDC and is usable as a Tauri signCommand"
