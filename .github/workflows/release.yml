@@ -334,20 +334,39 @@ jobs:
         installer=$(find target/release/bundle/nsis -name "*-setup.exe" -print -quit)
         msi=$(find target/release/bundle/msi -name "*.msi" -print -quit)
 
-        # Four things must be signed, not two. The installers are what a user
-        # downloads; the two loose binaries are what actually gets installed and
-        # run, and they are the copies sealed into the installer. Checking only
-        # the installers would pass happily while shipping unsigned executables
-        # inside a signed wrapper.
-        for f in "$installer" \
-                 "$msi" \
-                 target/release/psf-guard.exe \
-                 target/release/psf-guard-cli.exe; do
+        verify() {
+          local f="$1"
           test -n "$f" && test -f "$f" || { echo "missing artifact: $f"; exit 1; }
           echo "--- $f"
           "$signtool" verify //pa //v "$f" | tee "$RUNNER_TEMP/v.txt"
           grep -q "StackFoundry LLC" "$RUNNER_TEMP/v.txt" \
             || { echo "FAIL: unexpected signing identity for $f"; exit 1; }
+        }
+
+        # What a user downloads.
+        verify "$installer"
+        verify "$msi"
+        # The loose binaries we signed before bundling.
+        verify target/release/psf-guard.exe
+        verify target/release/psf-guard-cli.exe
+
+        # And -- the point of the two-phase build -- the copies that are
+        # actually sealed inside the installer.
+        #
+        # Verifying target/release only proves those files were signed at some
+        # point. It says nothing about which bytes `tauri bundle` picked up, so
+        # it would pass just as happily if bundling had rebuilt or substituted
+        # them and shipped unsigned executables inside a signed wrapper. Since
+        # the whole two-phase build exists to prevent exactly that, the check
+        # has to open the installer and look.
+        extract="$RUNNER_TEMP/nsis-contents"
+        rm -rf "$extract"
+        7z x -o"$extract" "$installer" > /dev/null
+        for name in psf-guard.exe psf-guard-cli.exe; do
+          inner=$(find "$extract" -name "$name" -print -quit)
+          test -n "$inner" || { echo "FAIL: $name not found inside the installer"; exit 1; }
+          echo "--- (inside installer) $inner"
+          verify "$inner"
         done
 
         # Ordering: the .sig must be at least as new as the signed installer.
