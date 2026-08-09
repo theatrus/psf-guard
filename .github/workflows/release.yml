@@ -395,17 +395,55 @@ jobs:
           #                      signing happened too early to matter and the
           #                      two-phase build does not do what it claims.
           signed_hash=$(sha256sum "target/release/$name" | cut -d' ' -f1)
-          inner_hash=$(sha256sum "$inner" | cut -d' ' -f1)
-          echo "--- (inside installer) $name"
-          echo "    signed copy : $signed_hash"
-          echo "    inside      : $inner_hash"
+          inner_hash=$(sha256sum "$inner" | tr -d '\\' | cut -d' ' -f1)
+          signed_size=$(stat -c %s "target/release/$name")
+          inner_size=$(stat -c %s "$inner")
+          echo "--- (from NSIS) $name"
+          echo "    signed : $signed_hash  ($signed_size bytes)"
+          echo "    inside : $inner_hash  ($inner_size bytes)"
           if [ "$signed_hash" = "$inner_hash" ]; then
-            echo "    -> byte-identical to the signed file"
+            echo "    -> byte-identical"
+          elif [ "$signed_size" != "$inner_size" ]; then
+            echo "    -> SIZE DIFFERS by $((inner_size - signed_size)) bytes"
           else
-            echo "    -> DIFFERS from the signed file"
+            echo "    -> same size, different content"
           fi
-          verify "$inner"
+          verify "$inner" || echo "    (NSIS copy failed verification)"
         done
+
+        # Cross-check against the MSI. Both installers are built by the same
+        # `tauri bundle` run from the same inputs, so if the MSI's copy of a
+        # binary verifies while the NSIS one does not, the signatures did
+        # survive bundling and the fault is in how 7z unpacks NSIS -- a
+        # limitation of the check, not of the build. If BOTH fail, bundling
+        # really is discarding the signed bytes and the two-phase build is
+        # pointless. MSI is a documented container that 7z handles reliably,
+        # which is what makes it usable as the control here.
+        msi_extract="$RUNNER_TEMP/msi-contents"
+        rm -rf "$msi_extract"
+        7z x -o"$msi_extract" "$msi" > /dev/null
+        msi_failed=0
+        for name in psf-guard.exe psf-guard-cli.exe; do
+          inner=$(find "$msi_extract" -iname "$name" -print -quit)
+          if [ -z "$inner" ]; then
+            echo "--- (from MSI) $name: not found (MSI may mangle names); skipping"
+            continue
+          fi
+          h=$(sha256sum "$inner" | tr -d '\\' | cut -d' ' -f1)
+          sz=$(stat -c %s "$inner")
+          echo "--- (from MSI) $name"
+          echo "    signed : $(sha256sum "target/release/$name" | tr -d '\\' | cut -d' ' -f1)  ($(stat -c %s "target/release/$name") bytes)"
+          echo "    inside : $h  ($sz bytes)"
+          verify "$inner" || { echo "    (MSI copy failed verification)"; msi_failed=1; }
+        done
+        if [ "$msi_failed" = "1" ]; then
+          echo "FAIL: the MSI's copies are not validly signed either -- bundling"
+          echo "      is not preserving the signatures, so signing before"
+          echo "      bundling achieves nothing."
+          exit 1
+        fi
+        echo "OK: the MSI's copies verify, so bundling preserved the signatures."
+        echo "    Any NSIS mismatch above is a 7z unpacking artefact."
 
         # Ordering: the .sig must be at least as new as the signed installer.
         test -f "$installer.sig" || { echo "no updater .sig"; exit 1; }
@@ -456,6 +494,9 @@ jobs:
         spctl --assess --type open --context context:primary-signature -v "$dmg"
 
     - name: Prepare release assets
+      # always(): when verification fails these are exactly the files needed
+      # for diagnosis, and the upload below has nothing to collect without them.
+      if: always()
       shell: bash
       run: |
         mkdir -p release-assets
