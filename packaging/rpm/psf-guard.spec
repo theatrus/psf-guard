@@ -7,7 +7,7 @@
 %global debug_package %{nil}
 
 Name:           psf-guard
-Version:        0.7.0
+Version:        0.7.1
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
