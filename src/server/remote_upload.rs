@@ -69,12 +69,23 @@ pub async fn upload_image(
             .ok_or_else(|| AppError::BadRequest("image field has no filename".into()))?;
         validate_filename(&filename)?;
 
-        let temporary = tempfile::NamedTempFile::new_in(&upload_dir).map_err(|error| {
-            AppError::InternalError(format!(
-                "creating upload temporary file in {}: {error}",
-                upload_dir.display()
-            ))
-        })?;
+        // Keep the uploaded extension on the temporary file: the header read
+        // below picks its decoder from it, so a `.xisf` body landing under a
+        // bare temporary name would be read as FITS and rejected.
+        let suffix = Path::new(&filename)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| format!(".{extension}"))
+            .unwrap_or_default();
+        let temporary = tempfile::Builder::new()
+            .suffix(&suffix)
+            .tempfile_in(&upload_dir)
+            .map_err(|error| {
+                AppError::InternalError(format!(
+                    "creating upload temporary file in {}: {error}",
+                    upload_dir.display()
+                ))
+            })?;
         let reopened = temporary.reopen().map_err(|error| {
             AppError::InternalError(format!("opening upload temporary file: {error}"))
         })?;
@@ -127,11 +138,11 @@ pub async fn upload_image(
         tokio::task::spawn_blocking(move || import::headers::read_frame_meta(&temporary_path))
             .await
             .map_err(|error| {
-                AppError::InternalError(format!("FITS header validation task failed: {error}"))
+                AppError::InternalError(format!("image header validation task failed: {error}"))
             })?;
     if !frame.readable {
         return Err(AppError::BadRequest(
-            "uploaded image is not a readable FITS file".into(),
+            "uploaded image is not a readable FITS or XISF file".into(),
         ));
     }
     if !frame.is_light() {
@@ -422,15 +433,15 @@ fn validate_filename(filename: &str) -> Result<(), AppError> {
             "image filename is not filesystem-safe".into(),
         ));
     }
-    let extension = Path::new(filename)
-        .extension()
-        .and_then(|extension| extension.to_str());
-    if !extension.is_some_and(|extension| {
-        extension.eq_ignore_ascii_case("fit") || extension.eq_ignore_ascii_case("fits")
-    }) {
-        return Err(AppError::BadRequest(
-            "remote image upload currently accepts only .fit and .fits files".into(),
-        ));
+    if !crate::image_io::is_image_path(Path::new(filename)) {
+        return Err(AppError::BadRequest(format!(
+            "remote image upload accepts only {} files",
+            crate::image_io::IMAGE_EXTENSIONS
+                .iter()
+                .map(|extension| format!(".{extension}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
     }
     Ok(())
 }

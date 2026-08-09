@@ -120,17 +120,19 @@ exposure value, which means “use the template default.” Both the desktop app
 and the web server can edit these fields: they change rows inside a database
 you already configured, so they need no extra flag.
 
-### Build an image catalog from FITS folders
+### Build an image catalog from image folders
 
 Use this path when no catalog exists or when frames are missing from one you
 already use.
 
 ![New Database from Images with separate background quality analysis](docs/import-from-images.png)
 
-Open **Settings → New Database from Images** to build a catalog from plain FITS
-folders. PSF Guard uses the Target Scheduler database structure, but does not
-require Target Scheduler. The first pass reads headers only. It creates one
-project per target by default, joins only strong same-rig mosaic panel matches,
+Open **Settings → New Database from Images** to build a catalog from plain
+image folders. A scan picks up `.fits`, `.fit`, `.fts`, and `.xisf`, so
+PixInsight-written frames come in beside camera-written ones. PSF Guard uses
+the Target Scheduler database structure, but does not require Target
+Scheduler. The first pass reads headers only. It creates one project per
+target by default, joins only strong same-rig mosaic panel matches,
 derives target coordinates, and builds shared exposure templates and plans from
 filter, gain, offset, binning, readout mode, and exposure time. Pixel work stays
 off by default, so a large import does not wait for star detection or plate
@@ -148,7 +150,7 @@ photometric, spatial, and pointing evidence in a low-priority job;
 a dry preview, skips basenames already present, and attaches new frames to an
 existing target by name or nearby coordinates before it creates new structure.
 
-Remote acquisition clients can send one FITS light at a time without sharing
+Remote acquisition clients can send one light frame at a time without sharing
 the image folder or running Target Scheduler. Edit a database in Settings,
 generate its per-database **Remote API key**, enable **Accept remote image
 uploads**, and select its receive directory. The authenticated

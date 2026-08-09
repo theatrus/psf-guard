@@ -405,8 +405,9 @@ image=@capture.fits
 The database settings select one of that database's registered image roots as
 the receive directory. The server requires the URL slug and echoed database ID
 to agree, authenticates with the selected database's salted token hash, streams
-at most 512 MiB to a sibling temporary file, verifies SHA-256 and FITS headers,
-and publishes without overwriting an existing basename.
+at most 512 MiB to a sibling temporary file, verifies SHA-256 and the frame
+headers, and publishes without overwriting an existing basename. The filename
+must carry a frame extension: `.fits`, `.fit`, `.fts`, or `.xisf`.
 
 The normal one-frame importer then resolves an existing target by object name
 or coordinates and reuses its exposure plan. If no target matches, it builds

@@ -209,15 +209,9 @@ impl DirectoryTree {
             .collect()
     }
 
-    /// Get all FITS files in the tree
+    /// Get all image files in the tree (FITS and XISF)
     pub fn get_fits_files(&self) -> Vec<&PathBuf> {
-        self.find_files_matching(|filename| {
-            filename.ends_with(".fits")
-                || filename.ends_with(".fit")
-                || filename.ends_with(".FIT")
-                || filename.ends_with(".FITS")
-                || filename.ends_with(".fts")
-        })
+        self.find_files_matching(crate::image_io::has_image_extension)
     }
 
     /// Get contents of a specific directory
@@ -306,6 +300,34 @@ mod tests {
         let stats = tree.stats();
         assert_eq!(stats.total_files, 3);
         assert_eq!(stats.unique_filenames, 3);
+
+        Ok(())
+    }
+
+    #[test]
+    fn scan_picks_up_xisf_alongside_fits() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let root = temp_dir.path();
+
+        fs::create_dir_all(root.join("LIGHT"))?;
+        fs::write(root.join("LIGHT/frame1.fits"), "test")?;
+        fs::write(root.join("LIGHT/frame2.xisf"), "test")?;
+        fs::write(root.join("LIGHT/frame3.XISF"), "test")?;
+        fs::write(root.join("LIGHT/frame4.fts"), "test")?;
+        // A plate-solve sidecar is not a frame.
+        fs::write(root.join("LIGHT/frame1.json"), "test")?;
+
+        let tree = DirectoryTree::build(root)?;
+        let mut names: Vec<String> = tree
+            .get_fits_files()
+            .into_iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            ["frame1.fits", "frame2.xisf", "frame3.XISF", "frame4.fts"]
+        );
 
         Ok(())
     }

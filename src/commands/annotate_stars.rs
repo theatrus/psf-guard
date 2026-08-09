@@ -196,8 +196,10 @@ pub fn annotate_stars(
 
     // Generate output filename
     let output_path = output.unwrap_or_else(|| {
-        let base = fits_path.trim_end_matches(".fits").trim_end_matches(".fit");
-        format!("{}_annotated.png", base)
+        format!(
+            "{}_annotated.png",
+            crate::image_io::strip_image_extension(fits_path)
+        )
     });
 
     // Save the annotated image with compression

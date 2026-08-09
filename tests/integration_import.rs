@@ -105,6 +105,38 @@ fn write_fits(path: &std::path::Path, object: &str, filter: &str, date_obs: &str
     file.write_all(&[0u8; 2880]).unwrap(); // 10*10*2 bytes, padded
 }
 
+/// The same light frame in a monolithic XISF container. Written by the XISF
+/// writer rather than hand-assembled, so the sample stays a real file.
+fn write_xisf(path: &std::path::Path, object: &str, filter: &str, date_obs: &str, ra: f64) {
+    use seiza_fits::{F32ImageData, HeaderValue, WriteHeaderCard};
+
+    let pixels = vec![0.0f32; 100];
+    seiza_xisf::write_f32_image(
+        path,
+        10,
+        10,
+        F32ImageData::Mono(&pixels),
+        &[
+            WriteHeaderCard::new("IMAGETYP", HeaderValue::String("LIGHT".into())),
+            WriteHeaderCard::new("OBJECT", HeaderValue::String(object.into())),
+            WriteHeaderCard::new("FILTER", HeaderValue::String(filter.into())),
+            WriteHeaderCard::new("DATE-OBS", HeaderValue::String(date_obs.into())),
+            WriteHeaderCard::new("EXPTIME", HeaderValue::Float(300.0)),
+            WriteHeaderCard::new("GAIN", HeaderValue::Integer(100)),
+            WriteHeaderCard::new("OFFSET", HeaderValue::Integer(30)),
+            WriteHeaderCard::new("XBINNING", HeaderValue::Integer(1)),
+            WriteHeaderCard::new("YBINNING", HeaderValue::Integer(1)),
+            WriteHeaderCard::new("READOUTM", HeaderValue::Integer(2)),
+            WriteHeaderCard::new("RA", HeaderValue::Float(ra)),
+            WriteHeaderCard::new("DEC", HeaderValue::Float(41.2687)),
+            WriteHeaderCard::new("TELESCOP", HeaderValue::String("TestScope".into())),
+            WriteHeaderCard::new("INSTRUME", HeaderValue::String("TestCam".into())),
+            WriteHeaderCard::new("FOCALLEN", HeaderValue::Float(518.0)),
+        ],
+    )
+    .unwrap();
+}
+
 async fn json_request(
     app: Router,
     method: &str,
@@ -1108,5 +1140,75 @@ async fn reimport_attaches_to_existing_targets_after_preview() {
         (projects, targets, images_n, distinct_targets),
         (1, 1, 2, 1),
         "both frames on the one existing target"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn import_scans_xisf_frames_alongside_fits() {
+    let dir = tempdir().unwrap();
+    let images = dir.path().join("lights");
+    std::fs::create_dir_all(&images).unwrap();
+    write_fits(
+        &images.join("m31_ha_0001.fits"),
+        "M31",
+        "Ha",
+        "2026-01-15T04:00:00.000",
+        10.6847,
+    );
+    write_xisf(
+        &images.join("m31_ha_0002.xisf"),
+        "M31",
+        "Ha",
+        "2026-01-15T04:05:10.000",
+        10.6851,
+    );
+    // PixInsight leaves these next to the frames; they are not frames.
+    std::fs::write(images.join("m31_ha_0001.json"), "{}").unwrap();
+
+    let state = state_with_management(dir.path());
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        "/api/databases/create",
+        Some(serde_json::json!({
+            "name": "XISF Rig",
+            "image_dirs": [images.to_string_lossy()],
+            "backfill": false,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create failed: {body}");
+    let slug = body["data"]["database"]["id"].as_str().unwrap().to_string();
+
+    let progress = wait_for_import(&state, &slug).await;
+    assert_eq!(progress["stage"], "complete", "progress: {progress}");
+    let outcome = &progress["outcome"];
+    assert_eq!(outcome["scanned"], 2, "the sidecar must not be scanned");
+    assert_eq!(outcome["unreadable"], 0);
+    assert_eq!(outcome["imported"], 2);
+    // Both frames carry the same target, filter, and equipment, so they land
+    // on one target rather than splitting on container format.
+    assert_eq!(outcome["targets_created"], 1);
+
+    let db_path = body["data"]["database"]["database_path"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let mut statement = conn
+        .prepare("SELECT metadata FROM acquiredimage ORDER BY acquireddate")
+        .unwrap();
+    let filenames: Vec<String> = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .map(|metadata| {
+            let value: Value = serde_json::from_str(&metadata.unwrap()).unwrap();
+            value["FileName"].as_str().unwrap().to_string()
+        })
+        .collect();
+    assert_eq!(filenames.len(), 2, "{filenames:?}");
+    assert!(
+        filenames.iter().any(|name| name.ends_with(".xisf")),
+        "the XISF frame should be recorded with its own path: {filenames:?}"
     );
 }

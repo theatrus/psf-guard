@@ -35,7 +35,7 @@ pub enum Commands {
         format: String,
     },
 
-    /// Create a new Target Scheduler database and import FITS folders into it.
+    /// Create a new Target Scheduler database and import image folders into it.
     ///
     /// Bootstraps a fully-faithful scheduler database (vendored upstream
     /// schema, user_version 23) at the given path, then scans the supplied
@@ -48,7 +48,7 @@ pub enum Commands {
         /// Path of the new .sqlite database file to create.
         database: String,
 
-        /// Directories (or single FITS files) to import.
+        /// Directories (or single FITS or XISF files) to import.
         #[arg(required = true)]
         directories: Vec<String>,
 
@@ -80,7 +80,7 @@ pub enum Commands {
         registry: Option<String>,
     },
 
-    /// Import FITS folders into an existing Target Scheduler database.
+    /// Import image folders into an existing Target Scheduler database.
     ///
     /// Accepts a registry slug or a path to a .sqlite file. Frames whose
     /// basename is already recorded are skipped; remaining frames attach to
@@ -91,7 +91,7 @@ pub enum Commands {
         /// Registry slug or path of the target database.
         db: String,
 
-        /// Directories (or single FITS files) to import.
+        /// Directories (or single FITS or XISF files) to import.
         #[arg(required = true)]
         directories: Vec<String>,
 

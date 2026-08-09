@@ -15,6 +15,7 @@ pub mod directory_tree;
 pub mod grading;
 pub mod hocus_focus_star_detection;
 pub mod image_analysis;
+pub mod image_io;
 pub mod models;
 pub mod nina_star_detection;
 pub mod photometry;

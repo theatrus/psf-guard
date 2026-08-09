@@ -5,7 +5,7 @@ Use this index for detailed behavior and engineering records.
 
 ## Catalog and review workflows
 
-- [Adding FITS folders](IMPORTING.md)
+- [Adding image folders](IMPORTING.md)
 - [Calibration libraries](CALIBRATION_LIBRARY.md)
 - [Project stack previews](STACKING_PREVIEWS.md)
 - [Statistical grading](STATISTICAL_GRADING.md)

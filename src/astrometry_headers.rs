@@ -89,9 +89,9 @@ pub struct FitsWcsHeaders {
 }
 
 impl FitsAstrometryHeaders {
-    /// Read only the FITS header blocks, without touching the pixel payload.
-    pub fn from_path(path: &Path) -> Result<Self, seiza_fits::FitsError> {
-        seiza_fits::read_header(path).map(|headers| Self::from_headers(&headers))
+    /// Read only the header cards, without touching the pixel payload.
+    pub fn from_path(path: &Path) -> Result<Self, crate::image_io::ImageError> {
+        crate::image_io::read_header(path).map(|headers| Self::from_headers(&headers))
     }
 
     /// Normalize an already-parsed FITS header.

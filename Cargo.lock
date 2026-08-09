@@ -4049,6 +4049,7 @@ dependencies = [
  "seiza-satellites",
  "seiza-stacking",
  "seiza-stretch",
+ "seiza-xisf",
  "semver",
  "serde",
  "serde_json",

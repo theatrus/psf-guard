@@ -595,11 +595,7 @@ fn collect_fits_files(dir: &Path) -> Result<Vec<PathBuf>> {
             let p = entry.path();
             if p.is_dir() {
                 stack.push(p);
-            } else if p
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| e.eq_ignore_ascii_case("fits") || e.eq_ignore_ascii_case("fit"))
-            {
+            } else if crate::image_io::is_image_path(&p) {
                 files.push(p);
             }
         }
@@ -785,7 +781,7 @@ pub(crate) struct FrameHeaders {
 /// Extract filter, exposure and observation time from the FITS header.
 pub(crate) fn extract_headers(path: &Path) -> FrameHeaders {
     let mut out = FrameHeaders::default();
-    let Ok(headers) = seiza_fits::read_header(path) else {
+    let Ok(headers) = crate::image_io::read_header(path) else {
         return out;
     };
 

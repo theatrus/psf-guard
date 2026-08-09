@@ -151,8 +151,8 @@ pub struct ImageInfo {
 
 /// Read metadata from a FITS file
 pub fn read_fits_metadata(path: &Path) -> Result<FitsMetadata> {
-    let fits = seiza_fits::FitsImage::open(path)
-        .map_err(|e| anyhow::anyhow!("Failed to open FITS file {}: {:?}", path.display(), e))?;
+    let fits = crate::image_io::open(path)
+        .map_err(|e| anyhow::anyhow!("Failed to open image file {}: {:?}", path.display(), e))?;
 
     let filename = path
         .file_name()

@@ -166,7 +166,10 @@ Current behavior: [satellites](docs/SATELLITES.md) and
 
 ### Imports, files, and calibration
 
-- Initial FITS import is header-first. Expensive star, photometry, spatial, and
+- A frame is a FITS or an XISF file. Detect one with `src/image_io.rs` and read
+  one through it; do not test extensions or call `seiza_fits` directly at a new
+  site. Both containers decode to the same `seiza_fits::FitsImage`.
+- Initial import is header-first. Expensive star, photometry, spatial, and
   astrometry work belongs to the background quality job.
 - Import creates Target Scheduler-compatible lights and PSF Guard-owned
   calibration records. Never put calibration frames in `acquiredimage`.

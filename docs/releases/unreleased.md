@@ -6,6 +6,11 @@
 
 ## Added
 
+- XISF frames count as images everywhere FITS frames do. Folder scans,
+  imports, screening, and remote uploads now pick up `.xisf` next to `.fits`,
+  `.fit`, and `.fts`, and a PixInsight-written frame grades, previews, and
+  stacks like any other. See [adding image
+  folders](https://github.com/theatrus/psf-guard/blob/main/docs/IMPORTING.md).
 - Named processing setups. Save the parameters of the mono view-processing or
   color processing editor under a name and apply them to any card in any
   database; manage, import, and export them — singly or as one file — in

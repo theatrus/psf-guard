@@ -1,10 +1,18 @@
-# Adding FITS folders
+# Adding image folders
 
 PSF Guard can start from an existing N.I.N.A. Target Scheduler database or
-build a compatible image catalog from folders of FITS frames. The first
-import reads FITS headers only. It does not decode every image or run quality
+build a compatible image catalog from folders of image frames. The first
+import reads headers only. It does not decode every image or run quality
 analysis, so a large library becomes usable without waiting for star
 detection, photometry, or plate solving.
+
+## What counts as a frame
+
+A scan picks up `.fits`, `.fit`, `.fts`, and `.xisf`, in any letter case.
+Monolithic XISF files — what PixInsight writes — carry the same FITS keywords,
+so they group, grade, preview, and stack exactly like FITS frames. Everything
+else in the folder, including plate-solve `.json` and other sidecars, is left
+alone.
 
 ## Create a catalog in the UI
 

@@ -1602,7 +1602,7 @@ fn reference_anchors(
         if group.frames.len() < 2 {
             continue;
         }
-        let headers = seiza_fits::read_header(&reference.path).unwrap_or_default();
+        let headers = crate::image_io::read_header(&reference.path).unwrap_or_default();
         let orientation = ReferenceOrientation {
             north_up: cached_or_embedded_wcs(&ctx, reference, &headers)
                 .and_then(|(wcs, _)| faces_north_up(wcs.cd)),

@@ -135,6 +135,36 @@ fn fits_bytes(object: &str, date_obs: &str) -> Vec<u8> {
     bytes
 }
 
+/// The same light frame in a monolithic XISF container, written by the XISF
+/// writer rather than hand-assembled, so the sample stays a real file.
+fn xisf_bytes(object: &str, date_obs: &str) -> Vec<u8> {
+    use seiza_fits::{F32ImageData, HeaderValue, WriteHeaderCard};
+
+    let pixels = vec![0.0f32; 100];
+    let mut bytes = Vec::new();
+    seiza_xisf::write_f32_image_to(
+        &mut bytes,
+        10,
+        10,
+        F32ImageData::Mono(&pixels),
+        &[
+            WriteHeaderCard::new("IMAGETYP", HeaderValue::String("LIGHT".into())),
+            WriteHeaderCard::new("OBJECT", HeaderValue::String(object.into())),
+            WriteHeaderCard::new("FILTER", HeaderValue::String("Ha".into())),
+            WriteHeaderCard::new("DATE-OBS", HeaderValue::String(date_obs.into())),
+            WriteHeaderCard::new("EXPTIME", HeaderValue::Float(300.0)),
+            WriteHeaderCard::new("GAIN", HeaderValue::Integer(100)),
+            WriteHeaderCard::new("OFFSET", HeaderValue::Integer(30)),
+            WriteHeaderCard::new("XBINNING", HeaderValue::Integer(1)),
+            WriteHeaderCard::new("YBINNING", HeaderValue::Integer(1)),
+            WriteHeaderCard::new("RA", HeaderValue::Float(10.68)),
+            WriteHeaderCard::new("DEC", HeaderValue::Float(41.2687)),
+        ],
+    )
+    .unwrap();
+    bytes
+}
+
 fn sha256(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut encoded = String::with_capacity(64);
@@ -345,4 +375,50 @@ async fn database_echo_token_and_checksum_are_required_before_publish() {
     assert!(!fixture.images_a.join("m33-001.fits").exists());
     assert_eq!(image_count(&fixture.database_a), 0);
     assert_eq!(image_count(&fixture.database_b), 0);
+}
+
+#[tokio::test]
+async fn upload_accepts_an_xisf_frame_and_imports_it_like_a_fits_one() {
+    let fixture = Fixture::new();
+    let image = xisf_bytes("M 81", "2026-07-24T06:00:00");
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "m81-001.xisf",
+        &image,
+        &sha256(&image),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["resolution"]["target_name"], "M 81");
+    assert_eq!(body["data"]["import"]["imported"], 1);
+    assert_eq!(body["data"]["import"]["unreadable"], 0);
+    assert!(fixture.images_a.join("m81-001.xisf").is_file());
+    assert_eq!(image_count(&fixture.database_a), 1);
+}
+
+#[tokio::test]
+async fn upload_still_rejects_a_non_image_extension() {
+    let fixture = Fixture::new();
+    let image = fits_bytes("M 81", "2026-07-24T06:00:00");
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "m81-001.png",
+        &image,
+        &sha256(&image),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body.to_string().contains(".xisf"),
+        "the error should list what is accepted: {body}"
+    );
+    assert_eq!(image_count(&fixture.database_a), 0);
 }

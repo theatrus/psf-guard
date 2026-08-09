@@ -77,7 +77,7 @@ pub fn read_frame_meta(path: &Path) -> FrameMeta {
         path: path.to_path_buf(),
         ..Default::default()
     };
-    let Ok(headers) = seiza_fits::read_header(path) else {
+    let Ok(headers) = crate::image_io::read_header(path) else {
         return meta;
     };
     meta.readable = true;

@@ -107,7 +107,7 @@ pub struct ImportOutcome {
     pub attached_target_ids: Vec<i32>,
 }
 
-/// Recursively collect `.fits` / `.fit` files (a bare file argument is
+/// Recursively collect image files — FITS or XISF (a bare file argument is
 /// accepted too). Sorted for deterministic plans.
 pub fn collect_fits_files(dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
@@ -130,9 +130,7 @@ pub fn collect_fits_files(dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
                 let p = entry?.path();
                 if p.is_dir() {
                     stack.push(p);
-                } else if p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-                    e.eq_ignore_ascii_case("fits") || e.eq_ignore_ascii_case("fit")
-                }) {
+                } else if crate::image_io::is_image_path(&p) {
                     files.push(p);
                 }
             }
