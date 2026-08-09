@@ -259,6 +259,12 @@ jobs:
     # walk its chain. azure/login has established exactly that session, and
     # naming it turns a failure into one clear message rather than eight
     # stacked ones.
+    #
+    # The tool path is NOT quoted. Tauri splits signCommand on whitespace and
+    # takes the first token as the program name, so quotes end up inside the
+    # filename and bundling dies with os error 123, ERROR_INVALID_NAME. The
+    # path is installed under RUNNER_TEMP and contains no spaces, so it does
+    # not need them.
     - name: Enable Authenticode signing in the build config
       if: matrix.os == 'windows-latest' && vars.AZURE_CLIENT_ID != ''
       shell: bash
@@ -270,7 +276,7 @@ jobs:
           cfg.bundle ??= {};
           cfg.bundle.windows ??= {};
           cfg.bundle.windows.signCommand =
-            `"${process.env.SIGN_TOOL}" code artifact-signing`
+            `${process.env.SIGN_TOOL} code artifact-signing`
             + ` --azure-credential-type azure-cli`
             + ` --artifact-signing-endpoint ${process.env.SIGNING_ENDPOINT}`
             + ` --artifact-signing-account ${process.env.SIGNING_ACCOUNT}`
