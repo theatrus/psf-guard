@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - 'v*'
+  # Dry run: exercise the full build + signing path on demand without
+  # publishing anything. The Windows signing chain (two-phase build, signature
+  # survival through bundling, updater .sig regeneration) is otherwise only
+  # exercised by a real release, which is a poor place to discover a mistake.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -142,7 +147,16 @@ jobs:
     - name: Check release versions and notes
       shell: bash
       run: |
-        version=$(node scripts/check-release-version.mjs "$GITHUB_REF_NAME")
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          # No tag to check against on a dry run, so derive the expected tag
+          # from Cargo.toml. The script still enforces that Cargo.toml,
+          # Cargo.lock, tauri.conf.json and the RPM spec agree.
+          ref="v$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')"
+          echo "dry run: checking against derived tag $ref"
+        else
+          ref="$GITHUB_REF_NAME"
+        fi
+        version=$(node scripts/check-release-version.mjs "$ref")
         echo "APP_VERSION=$version" >> "$GITHUB_ENV"
 
     - name: Write signed updater build config
@@ -186,15 +200,48 @@ jobs:
         TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       run: cargo tauri build --verbose --config "${{ runner.temp }}/psf-guard-updater.json"
 
-    - name: Build Tauri desktop app (Windows, with bundled CLI)
-      # externalBin (the CLI sidecar staged above) + the NSIS PATH hook live in
-      # tauri.bundle-windows.json, applied only here via --config so other
-      # tauri-feature compiles don't require the sidecar.
+    # Windows builds in two phases so the app binaries can be signed *before*
+    # they are packaged. Bundling in one pass would seal unsigned executables
+    # inside a signed installer: the download would look fine, but the program
+    # a user actually runs afterwards would carry no publisher identity, and
+    # enterprise unsigned-binary scans would flag it post-install.
+    #
+    # The NSIS PATH hook lives in tauri.bundle-windows.json, applied via
+    # --config so other tauri-feature compiles don't require it.
+    - name: Compile Tauri desktop app (Windows, no bundle yet)
       if: matrix.os == 'windows-latest'
       env:
         TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      run: cargo tauri build --verbose --config "${{ runner.temp }}/psf-guard-updater.json"
+      run: cargo tauri build --verbose --no-bundle --config "${{ runner.temp }}/psf-guard-updater.json"
+
+    # Both binaries end up inside the installer: psf-guard.exe is the app, and
+    # psf-guard-cli.exe is auto-bundled from the src/bin target and put on PATH
+    # by nsis/hooks.nsh. Sign them here, while they are still loose files.
+    - name: Sign the app binaries (before bundling)
+      if: matrix.os == 'windows-latest' && vars.AZURE_CLIENT_ID != ''
+      uses: azure/trusted-signing-action@v0
+      with:
+        endpoint: ${{ vars.SIGNING_ENDPOINT }}
+        trusted-signing-account-name: ${{ vars.SIGNING_ACCOUNT }}
+        certificate-profile-name: ${{ vars.SIGNING_PROFILE }}
+        files: |
+          ${{ github.workspace }}\target\release\psf-guard.exe
+          ${{ github.workspace }}\target\release\psf-guard-cli.exe
+        file-digest: SHA256
+        timestamp-rfc3161: http://timestamp.acs.microsoft.com
+        timestamp-digest: SHA256
+
+    # `tauri bundle` packages the already-compiled binaries; it does not
+    # recompile, so the signatures applied above survive into the installer.
+    # It also emits the updater .sig, which is regenerated further down once the
+    # installer itself has been signed.
+    - name: Bundle Tauri installers (Windows)
+      if: matrix.os == 'windows-latest'
+      env:
+        TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      run: cargo tauri bundle --verbose --config "${{ runner.temp }}/psf-guard-updater.json"
 
     # Sign after bundling, not via Tauri's `signCommand`.
     #
@@ -221,22 +268,24 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
+        # Installers only. The two loose binaries were already signed before
+        # bundling; re-signing them here would spend quota twice and append a
+        # second signature to a file that already has a valid one.
         installer=$(find target/release/bundle/nsis -name "*-setup.exe" -print -quit)
         msi=$(find target/release/bundle/msi -name "*.msi" -print -quit)
-        cli=target/release/psf-guard-cli.exe
-        for f in "$installer" "$msi" "$cli"; do
+        for f in "$installer" "$msi"; do
           test -n "$f" && test -f "$f" || { echo "missing artifact: '$f'"; exit 1; }
         done
-        # The action wants absolute paths, comma separated.
+        # The action wants absolute Windows paths.
         ws=$(cygpath -w "$GITHUB_WORKSPACE")
         {
           echo "SIGN_FILES<<EOF"
-          for f in "$installer" "$msi" "$cli"; do
+          for f in "$installer" "$msi"; do
             echo "$ws\\$(echo "$f" | tr '/' '\\')"
           done
           echo "EOF"
         } >> "$GITHUB_ENV"
-        printf 'will sign:\n%s\n%s\n%s\n' "$installer" "$msi" "$cli"
+        printf 'will sign:\n%s\n%s\n' "$installer" "$msi"
 
     - name: Sign Windows binaries and installers
       if: matrix.os == 'windows-latest' && vars.AZURE_CLIENT_ID != ''
@@ -284,11 +333,16 @@ jobs:
 
         installer=$(find target/release/bundle/nsis -name "*-setup.exe" -print -quit)
         msi=$(find target/release/bundle/msi -name "*.msi" -print -quit)
-        cli=target/release/psf-guard-cli.exe
 
-        # Everything a user can download must carry a signature, including the
-        # standalone CLI that ships as its own release asset.
-        for f in "$installer" "$msi" "$cli"; do
+        # Four things must be signed, not two. The installers are what a user
+        # downloads; the two loose binaries are what actually gets installed and
+        # run, and they are the copies sealed into the installer. Checking only
+        # the installers would pass happily while shipping unsigned executables
+        # inside a signed wrapper.
+        for f in "$installer" \
+                 "$msi" \
+                 target/release/psf-guard.exe \
+                 target/release/psf-guard-cli.exe; do
           test -n "$f" && test -f "$f" || { echo "missing artifact: $f"; exit 1; }
           echo "--- $f"
           "$signtool" verify //pa //v "$f" | tee "$RUNNER_TEMP/v.txt"
@@ -410,6 +464,9 @@ jobs:
         ls -la release-assets/
 
     - name: Upload release assets
+      # Never publish from a dry run -- it would create a GitHub release for
+      # whatever version happens to be in Cargo.toml.
+      if: github.event_name == 'push'
       uses: softprops/action-gh-release@v3
       with:
         files: release-assets/*
@@ -425,6 +482,7 @@ jobs:
     name: Publish updater and server notice feeds
     runs-on: ubuntu-22.04
     needs: build
+    if: github.event_name == 'push'
     steps:
     - uses: actions/checkout@v7
 
