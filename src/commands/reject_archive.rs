@@ -25,7 +25,10 @@ use crate::models::GradingStatus;
 /// rules.
 pub const DEFAULT_SEGMENT_NAME: &str = "REJECT";
 pub const DEFAULT_DEPTH: u32 = 1;
-pub const DEFAULT_SIDECAR_EXTS: &[&str] = &[".xisf", ".json", ".txt"];
+/// A sidecar is a companion file, never a frame: PSF Guard catalogs `.xisf`
+/// as an image in its own right, so archiving one as a sibling's sidecar
+/// would move a frame that has its own grade.
+pub const DEFAULT_SIDECAR_EXTS: &[&str] = &[".json", ".txt"];
 
 /// Resolved (CLI ∪ per-DB ∪ defaults) configuration used at command time.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -305,7 +308,16 @@ fn validate_sidecar_ext(ext: &str) -> Result<()> {
     if !ext.starts_with('.') {
         return Err(anyhow::anyhow!(
             "reject_archive.sidecar_exts entry '{}' must start with a dot \
-             (e.g. \".xisf\")",
+             (e.g. \".json\")",
+            ext
+        ));
+    }
+    if crate::image_io::is_image_extension(ext) {
+        return Err(anyhow::anyhow!(
+            "reject_archive.sidecar_exts entry '{}' names an image container. \
+             PSF Guard catalogs those as frames with their own grade, so \
+             archiving one as another frame's sidecar would move a file the \
+             catalog still calls accepted",
             ext
         ));
     }
@@ -1339,7 +1351,7 @@ mod tests {
               sidecar_files, source_db_slug)
              VALUES ('abc', 42, 1700000000,
                      '/src/img.fits', '/src/REJECT/img.fits',
-                     'REJECT', 1, '[\"img.xisf\"]', 'imaging-rig')",
+                     'REJECT', 1, '[\"img.json\"]', 'imaging-rig')",
             [],
         )
         .unwrap();
@@ -1351,7 +1363,7 @@ mod tests {
         assert_eq!(by_guid.archive_path, "/src/REJECT/img.fits");
         assert_eq!(by_guid.segment_name, "REJECT");
         assert_eq!(by_guid.archive_depth, 1);
-        assert_eq!(by_guid.sidecar_files, vec!["img.xisf"]);
+        assert_eq!(by_guid.sidecar_files, vec!["img.json"]);
         assert_eq!(by_guid.source_db_slug.as_deref(), Some("imaging-rig"));
 
         let by_id = get_archive_record_by_image_id(&conn, 42).unwrap().unwrap();
@@ -1363,7 +1375,7 @@ mod tests {
         let cfg = resolve_config(None, None, None, None).unwrap();
         assert_eq!(cfg.segment_name, "REJECT");
         assert_eq!(cfg.depth, 1);
-        assert_eq!(cfg.sidecar_exts, vec![".xisf", ".json", ".txt"]);
+        assert_eq!(cfg.sidecar_exts, vec![".json", ".txt"]);
     }
 
     #[test]
@@ -1371,12 +1383,12 @@ mod tests {
         let per_db = RejectArchiveOverrides {
             segment_name: Some("BAD".into()),
             depth: Some(2),
-            sidecar_exts: Some(vec![".xisf".into()]),
+            sidecar_exts: Some(vec![".wcs".into()]),
         };
         let cfg = resolve_config(Some(&per_db), None, None, None).unwrap();
         assert_eq!(cfg.segment_name, "BAD");
         assert_eq!(cfg.depth, 2);
-        assert_eq!(cfg.sidecar_exts, vec![".xisf"]);
+        assert_eq!(cfg.sidecar_exts, vec![".wcs"]);
     }
 
     #[test]
@@ -1385,7 +1397,7 @@ mod tests {
         let per_db = RejectArchiveOverrides {
             segment_name: Some("BAD".into()),
             depth: Some(2),
-            sidecar_exts: Some(vec![".xisf".into()]),
+            sidecar_exts: Some(vec![".wcs".into()]),
         };
         let cli_exts: Option<&[String]> = None;
         let cfg = resolve_config(Some(&per_db), Some("KEPT-AWAY"), None, cli_exts).unwrap();
@@ -1396,7 +1408,7 @@ mod tests {
         );
         assert_eq!(
             cfg.sidecar_exts,
-            vec![".xisf"],
+            vec![".wcs"],
             "per-DB exts win when CLI doesn't supply"
         );
     }
@@ -1416,9 +1428,24 @@ mod tests {
 
     #[test]
     fn resolve_config_rejects_invalid_sidecar_exts() {
-        let bad_exts: Vec<String> = vec!["xisf".into()]; // missing dot
+        let bad_exts: Vec<String> = vec!["json".into()]; // missing dot
         let err = resolve_config(None, None, None, Some(&bad_exts)).unwrap_err();
         assert!(format!("{err}").contains("sidecar_exts"));
+    }
+
+    /// A frame has its own grade, so it must never be archived as another
+    /// frame's companion.
+    #[test]
+    fn resolve_config_refuses_a_frame_container_as_a_sidecar() {
+        for bad in [".xisf", ".XISF", ".fits", ".fit", ".fts"] {
+            let exts: Vec<String> = vec![bad.into()];
+            let err = resolve_config(None, None, None, Some(&exts)).unwrap_err();
+            let message = format!("{err}");
+            assert!(
+                message.contains("image container"),
+                "error for {bad:?} should explain why: {message}"
+            );
+        }
     }
 
     fn p(s: &str) -> std::path::PathBuf {
@@ -1622,23 +1649,23 @@ mod tests {
         fs::write(&primary, b"").unwrap();
 
         // Sidecars (should be picked up):
-        fs::write(dir.path().join("img_0028.xisf"), b"").unwrap();
-        fs::write(dir.path().join("img_0028.json"), b"").unwrap();
         fs::write(dir.path().join("img_0028.txt"), b"").unwrap();
+        fs::write(dir.path().join("img_0028.json"), b"").unwrap();
+        fs::write(dir.path().join("img_0028.wcs"), b"").unwrap();
 
         // Same stem but extension not in the list:
         fs::write(dir.path().join("img_0028.log"), b"").unwrap();
 
         // Different stem — typical calibration-master shape:
         fs::write(dir.path().join("Bias_master.fits"), b"").unwrap();
-        fs::write(dir.path().join("Dark_60s.xisf"), b"").unwrap();
+        fs::write(dir.path().join("Dark_60s.txt"), b"").unwrap();
 
         // Subdirectory should not be descended into:
         let sub = dir.path().join("nested");
         fs::create_dir(&sub).unwrap();
-        fs::write(sub.join("img_0028.xisf"), b"").unwrap();
+        fs::write(sub.join("img_0028.txt"), b"").unwrap();
 
-        let exts: Vec<String> = [".xisf", ".json", ".txt"]
+        let exts: Vec<String> = [".json", ".txt", ".wcs"]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -1647,7 +1674,7 @@ mod tests {
         let expected = vec![
             dir.path().join("img_0028.json"),
             dir.path().join("img_0028.txt"),
-            dir.path().join("img_0028.xisf"),
+            dir.path().join("img_0028.wcs"),
         ];
         assert_eq!(found, expected);
     }
@@ -1658,14 +1685,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let primary = dir.path().join("img.fits");
         fs::write(&primary, b"").unwrap();
-        fs::write(dir.path().join("img.XISF"), b"").unwrap();
+        fs::write(dir.path().join("img.TXT"), b"").unwrap();
         fs::write(dir.path().join("img.Json"), b"").unwrap();
 
-        let exts: Vec<String> = [".xisf", ".json"].iter().map(|s| s.to_string()).collect();
+        let exts: Vec<String> = [".txt", ".json"].iter().map(|s| s.to_string()).collect();
         let mut found = find_sidecars(&primary, &exts);
         found.sort();
         assert_eq!(found.len(), 2);
-        assert!(found.iter().any(|p| p.file_name().unwrap() == "img.XISF"));
+        assert!(found.iter().any(|p| p.file_name().unwrap() == "img.TXT"));
         assert!(found.iter().any(|p| p.file_name().unwrap() == "img.Json"));
     }
 
@@ -1673,15 +1700,16 @@ mod tests {
     fn find_sidecars_returns_empty_when_parent_missing() {
         let found = find_sidecars(
             std::path::Path::new("/no/such/dir/img.fits"),
-            &[".xisf".to_string()],
+            &[".txt".to_string()],
         );
         assert!(found.is_empty());
     }
 
     #[test]
     fn find_sidecars_excludes_the_primary_itself() {
-        // If exts somehow listed `.fits` (caller bug), the primary file
-        // itself should still not be returned as its own sidecar.
+        // `validate_sidecar_ext` refuses a frame container, so this list
+        // cannot come from config. Kept as a second line of defence: even
+        // then the primary must not be returned as its own sidecar.
         use std::fs;
         let dir = tempfile::tempdir().unwrap();
         let primary = dir.path().join("img.fits");

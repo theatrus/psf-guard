@@ -34,7 +34,7 @@ struct Fixture {
 ///   M31/
 ///     2026-04-16/
 ///       LIGHT/
-///         img_0028.fits          (rejected) + .xisf + .json sidecars
+///         img_0028.fits          (rejected) + .txt + .json sidecars
 ///         img_0029.fits          (rejected, no sidecars)
 ///         img_0030.fits          (accepted)
 ///   M42/
@@ -54,7 +54,7 @@ fn build_fixture() -> Fixture {
 
     let img1_src = m31_light.join("img_0028.fits");
     fs::write(&img1_src, b"primary 28").unwrap();
-    fs::write(m31_light.join("img_0028.xisf"), b"xisf 28").unwrap();
+    fs::write(m31_light.join("img_0028.txt"), b"notes 28").unwrap();
     fs::write(m31_light.join("img_0028.json"), b"json 28").unwrap();
     // Non-matching extension; should NOT move.
     fs::write(m31_light.join("img_0028.log"), b"log 28").unwrap();
@@ -251,8 +251,8 @@ fn live_run_moves_primary_plus_matching_sidecars_only() {
         "primary 28 should have moved"
     );
     assert!(
-        archive_dir.join("img_0028.xisf").exists(),
-        "matching .xisf sidecar should have moved"
+        archive_dir.join("img_0028.txt").exists(),
+        "matching .txt sidecar should have moved"
     );
     assert!(
         archive_dir.join("img_0028.json").exists(),
@@ -298,7 +298,7 @@ fn live_run_moves_primary_plus_matching_sidecars_only() {
     let sidecars: Vec<String> = serde_json::from_str(&sidecar_json).unwrap();
     let mut sidecars_sorted = sidecars.clone();
     sidecars_sorted.sort();
-    assert_eq!(sidecars_sorted, vec!["img_0028.json", "img_0028.xisf"]);
+    assert_eq!(sidecars_sorted, vec!["img_0028.json", "img_0028.txt"]);
 
     // Manifest lives at the REJECT root (<image_dir>/M31/REJECT), not in the
     // leaf archive directory — one manifest per archive tree.
@@ -384,7 +384,7 @@ fn restore_default_only_moves_un_rejected() {
     // img1 primary + sidecars are back at their original paths.
     assert!(fixture.img1_src.exists(), "primary 28 restored");
     let orig_dir = fixture.img1_src.parent().unwrap();
-    assert!(orig_dir.join("img_0028.xisf").exists());
+    assert!(orig_dir.join("img_0028.txt").exists());
     assert!(orig_dir.join("img_0028.json").exists());
 
     // img2 is still archived (still Rejected); its row remains.

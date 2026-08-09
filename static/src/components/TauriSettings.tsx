@@ -660,8 +660,9 @@ export default function TauriSettings({
             <div className="welcome-message">
               <h3>🚀 Welcome to PSF Guard!</h3>
               <p>
-                Start from folders of FITS images, or from a N.I.N.A. scheduler
-                database you already have. You can add more catalogs later.
+                Start from folders of FITS or XISF images, or from a N.I.N.A.
+                scheduler database you already have. You can add more catalogs
+                later.
               </p>
               {!showAddForm && (
                 <div className="welcome-choices">
@@ -674,8 +675,8 @@ export default function TauriSettings({
                       ✨ New Database from Images
                     </span>
                     <span className="welcome-choice-detail">
-                      Pick folders of FITS files. PSF Guard builds a Target
-                      Scheduler database and imports them.
+                      Pick folders of FITS or XISF files. PSF Guard builds a
+                      Target Scheduler database and imports them.
                     </span>
                   </button>
                   <button
@@ -756,7 +757,7 @@ export default function TauriSettings({
                       className="browse-button"
                       onClick={() => handleImport(entry)}
                       disabled={isApplying || (importRunning && importDbId === entry.id)}
-                      title="Scan this database's image directories and import new FITS frames"
+                      title="Scan this database's image directories and import new frames"
                     >
                       {importRunning && importDbId === entry.id ? 'Importing…' : 'Import'}
                     </button>
@@ -795,7 +796,7 @@ export default function TauriSettings({
                   className="add-directory-button"
                   onClick={startCreate}
                   disabled={isApplying}
-                  title="Create a brand-new Target Scheduler database and import folders of FITS images into it"
+                  title="Create a brand-new Target Scheduler database and import folders of images into it"
                 >
                   ✨ New Database from Images
                 </button>

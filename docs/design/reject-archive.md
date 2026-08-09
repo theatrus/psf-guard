@@ -48,7 +48,7 @@ discoverable per-project, configurable per-rig, and reversible.
 - **Core**: `src/commands/filter_rejected.rs` — queries DB for `gradingStatus = 2`, generates ~28 candidate paths per image via `get_possible_paths` (date ±1 day, several reject-folder naming conventions), falls back to `DirectoryTree::find_file_first`.
 - **Move action**: `process_file_movement:258-266` — string-substitutes `/LIGHT/` → `/LIGHT_REJECT/` in the source path, `fs::rename` to that. Sibling folder, same tree.
 - **No state tracking**: `gradingStatus = 2` means "user rejected"; no flag for "file has been physically moved." Re-runs hit not-found errors silently.
-- **No sidecar handling**: only the primary FITS file moves. `.xisf`, plate-solve `.json`, mask files stay.
+- **No sidecar handling**: only the primary frame moves. Plate-solve `.json`, mask files stay.
 - **No undo**.
 - **Zero integration tests**.
 - **UI never invokes it**: web UI's reject button only sets `gradingStatus = 2`; users drop to a terminal afterward.
@@ -117,7 +117,8 @@ Example with depth=1, segment="REJECT":
 
 CLI flag > per-DB registry override > global default.
 
-- Global default: `{ segment_name: "REJECT", depth: 1, sidecar_exts: [".xisf", ".json", ".txt"] }`. Hardcoded in source.
+- Global default: `{ segment_name: "REJECT", depth: 1, sidecar_exts: [".json", ".txt"] }`. Hardcoded in source.
+- A sidecar extension may not name a frame container (`.fits`, `.fit`, `.fts`, `.xisf`). PSF Guard catalogs those as images with their own grade, so archiving one as a sibling's companion would move a file the catalog still calls accepted. Such a list is refused with an error.
 - Per-DB registry override: optional `reject_archive` block in each `DbEntry`. New fields on the JSON shape (additive — old configs keep working):
   ```jsonc
   {
@@ -128,11 +129,11 @@ CLI flag > per-DB registry override > global default.
     "reject_archive": {            // optional
       "segment_name": "REJECT",    // optional
       "depth": 1,                  // optional
-      "sidecar_exts": [".xisf", ".json"]  // optional
+      "sidecar_exts": [".wcs", ".json"]  // optional
     }
   }
   ```
-- CLI: `--reject-segment NAME`, `--reject-depth N`, `--sidecar-exts ".xisf,.json"` override the per-DB / global values for this invocation only.
+- CLI: `--reject-segment NAME`, `--reject-depth N`, `--sidecar-exts ".wcs,.json"` override the per-DB / global values for this invocation only.
 
 ### 4.3 Sidecar handling
 
@@ -191,7 +192,7 @@ A redundant JSON file lives at `<image_dir>/<P>/REJECT/.psf-guard-manifest.json`
       "moved_at": 1776470400,
       "original_path": "...",
       "archive_path": "...",
-      "sidecar_files": ["img.xisf", "img.json"],
+      "sidecar_files": ["img.wcs", "img.json"],
       "segment_name": "REJECT",
       "archive_depth": 1
     }
@@ -210,7 +211,7 @@ alias):
 ```
 psf-guard move-rejects --db <slug> [--dry-run]
                        [--reject-segment NAME] [--reject-depth N]
-                       [--sidecar-exts ".xisf,.json,.txt"]
+                       [--sidecar-exts ".json,.txt"]
                        [--registry <path>]
                        [--project NAME] [--target NAME]
 ```

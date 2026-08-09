@@ -391,8 +391,8 @@ export default function Overview() {
         {managementAllowed ? (
           <>
             <p>
-              Build a catalog from folders of FITS images, or open a N.I.N.A.
-              scheduler database you already have.
+              Build a catalog from folders of FITS or XISF images, or open a
+              N.I.N.A. scheduler database you already have.
             </p>
             <div className="overview-empty-actions">
               <button

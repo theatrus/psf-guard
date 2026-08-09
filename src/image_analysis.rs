@@ -70,8 +70,8 @@ impl ColorFrame {
     /// fall back to the ordinary greyscale rendition rather than inventing
     /// one.
     pub fn from_file(path: &Path) -> Result<Option<Self>> {
-        let fits = seiza_fits::FitsImage::open(path)
-            .map_err(|e| anyhow::anyhow!("Failed to open FITS file {}: {e:?}", path.display()))?;
+        let fits = crate::image_io::open(path)
+            .map_err(|e| anyhow::anyhow!("Failed to open image file {}: {e:?}", path.display()))?;
         Ok(fits.debayer().map(|rgb| Self {
             width: rgb.width,
             height: rgb.height,
@@ -108,7 +108,7 @@ impl ColorFrame {
 impl FitsImage {
     /// Extract temperature from FITS headers
     pub fn extract_temperature(path: &Path) -> Option<f64> {
-        let headers = seiza_fits::read_header(path).ok()?;
+        let headers = crate::image_io::read_header(path).ok()?;
         let temp_keywords = [
             "CCD-TEMP", "TEMP", "SET-TEMP", "CCD_TEMP", "TEMPERAT", "CCDTEMP",
         ];
@@ -122,7 +122,7 @@ impl FitsImage {
 
     /// Extract camera model from FITS headers
     pub fn extract_camera_model(path: &Path) -> Option<String> {
-        let headers = seiza_fits::read_header(path).ok()?;
+        let headers = crate::image_io::read_header(path).ok()?;
         let camera_keywords = ["INSTRUME", "CAMERA", "DETECTOR", "CCD_NAME", "CCDNAME"];
         camera_keywords.iter().find_map(|keyword| {
             headers
@@ -141,8 +141,8 @@ impl FitsImage {
     /// the per-channel sampling, and N.I.N.A. itself measures the
     /// debayered image, so this keeps numbers comparable.
     pub fn from_file(path: &Path) -> Result<Self> {
-        let fits = seiza_fits::FitsImage::open(path)
-            .map_err(|e| anyhow::anyhow!("Failed to open FITS file {}: {e:?}", path.display()))?;
+        let fits = crate::image_io::open(path)
+            .map_err(|e| anyhow::anyhow!("Failed to open image file {}: {e:?}", path.display()))?;
 
         if let Some(rgb) = fits.debayer() {
             // Luminance of the debayered mosaic, already in physical ADU

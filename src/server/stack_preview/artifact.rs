@@ -17,7 +17,7 @@ use axum::{
 };
 use seiza_imgproc::components::{largest_connected_component, BinaryComponent, Connectivity};
 use seiza_stacking::{
-    AffineTransform, CalibrationMasters, FitsFrame, ReferenceRegion, RegisteredFrameMapping,
+    AffineTransform, CalibrationMasters, ReferenceRegion, RegisteredFrameMapping,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -824,7 +824,8 @@ fn extract_source_crop(
     masters: &CalibrationMasters,
     prepared: &PreparedSearch,
 ) -> Result<seiza_stacking::LinearImage, String> {
-    let mut frame = FitsFrame::open(&source.path).map_err(|error| error.to_string())?;
+    let mut frame =
+        crate::image_io::open_linear_frame(&source.path).map_err(|error| error.to_string())?;
     masters
         .apply(&mut frame.image, frame.exposure_seconds, frame.bayer)
         .map_err(|error| error.to_string())?;

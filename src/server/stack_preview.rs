@@ -1602,7 +1602,7 @@ fn reference_anchors(
         if group.frames.len() < 2 {
             continue;
         }
-        let headers = seiza_fits::read_header(&reference.path).unwrap_or_default();
+        let headers = crate::image_io::read_header(&reference.path).unwrap_or_default();
         let orientation = ReferenceOrientation {
             north_up: cached_or_embedded_wcs(&ctx, reference, &headers)
                 .and_then(|(wcs, _)| faces_north_up(wcs.cd)),
@@ -1740,9 +1740,7 @@ fn run_group(
     group: PreparedGroup,
     anchor: Option<(bool, &'static str)>,
 ) -> Result<GroupOutcome, String> {
-    use seiza_stacking::{
-        FitsFrame, FrameDisposition, LiveStacker, NormalizationMode, StackOptions,
-    };
+    use seiza_stacking::{FrameDisposition, LiveStacker, NormalizationMode, StackOptions};
 
     let &GroupJob {
         database_id,
@@ -1822,8 +1820,8 @@ fn run_group(
         });
     }
     let checkpoint = decision.state();
-    let reference_frame =
-        FitsFrame::open(&group.frames[0].path).map_err(|error| error.to_string())?;
+    let reference_frame = crate::image_io::open_linear_frame(&group.frames[0].path)
+        .map_err(|error| error.to_string())?;
     let output_channels = if reference_frame.bayer.is_some() {
         3_u64
     } else {
@@ -2019,7 +2017,7 @@ fn run_group(
                 save_checkpoint(&stacker, &ledger);
                 return Ok(GroupOutcome::Cancelled);
             }
-            let opened = FitsFrame::open(&frame.path);
+            let opened = crate::image_io::open_linear_frame(&frame.path);
             let exposure = opened
                 .as_ref()
                 .ok()

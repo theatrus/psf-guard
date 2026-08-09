@@ -953,7 +953,7 @@ pub fn resolve_or_build_masters(
 
     let bias_image = bias
         .as_ref()
-        .map(|master| seiza_stacking::FitsFrame::open(&master.path).map(|frame| frame.image))
+        .map(|master| crate::image_io::open_linear_frame(&master.path).map(|frame| frame.image))
         .transpose()
         .context("loading the cached master bias")?;
     stop_requested(cancel)?;
@@ -972,7 +972,7 @@ pub fn resolve_or_build_masters(
     let flat_dark = dark_flat
         .as_ref()
         .map(|master| {
-            seiza_stacking::FitsFrame::open(&master.path).and_then(|frame| {
+            crate::image_io::open_linear_frame(&master.path).and_then(|frame| {
                 seiza_stacking::MasterDark::from_fits_frame(
                     frame,
                     selected
@@ -1144,7 +1144,7 @@ fn build_master(
             )
             .optional()?
             .is_some();
-        let file_valid = seiza_stacking::FitsFrame::open(&path)
+        let file_valid = crate::image_io::open_linear_frame(&path)
             .and_then(|frame| frame.validate_master_kind(expected_kind))
             .is_ok();
         if row_exists && file_valid {

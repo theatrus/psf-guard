@@ -125,7 +125,10 @@ Design records: [multi-database](docs/design/multi-database.md),
 - A lone no-solve is advisory. Automatic rejection needs corroborating
   pointing, cloud, obstruction, or tracking evidence.
 - Cross-frame background and flux comparisons must use physical ADU, not the
-  per-frame normalized storage values.
+  per-frame normalized storage values. A PixInsight XISF frame declaring
+  `bounds="0:1"` has no ADU of its own; `src/image_io.rs` puts it on a 16-bit
+  scale on the way in, so read every frame through there rather than reaching
+  for `seiza_xisf` or `seiza_stacking::FitsFrame::open` directly.
 - N.I.N.A. Fast supplies comparable star count and HFR values for imported
   catalogs. HocusFocus remains available for deeper analysis.
 
@@ -166,7 +169,10 @@ Current behavior: [satellites](docs/SATELLITES.md) and
 
 ### Imports, files, and calibration
 
-- Initial FITS import is header-first. Expensive star, photometry, spatial, and
+- A frame is a FITS or an XISF file. Detect one with `src/image_io.rs` and read
+  one through it; do not test extensions or call `seiza_fits` directly at a new
+  site. Both containers decode to the same `seiza_fits::FitsImage`.
+- Initial import is header-first. Expensive star, photometry, spatial, and
   astrometry work belongs to the background quality job.
 - Import creates Target Scheduler-compatible lights and PSF Guard-owned
   calibration records. Never put calibration frames in `acquiredimage`.

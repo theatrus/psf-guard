@@ -345,7 +345,7 @@ fn parse_meminfo_kb(rest: &str) -> Option<u64> {
 /// data, so a scan can size its worker pool to the sensor. `None` if the file
 /// or the axes can't be read.
 pub fn probe_frame_pixels(path: &Path) -> Option<usize> {
-    let headers = seiza_fits::read_header(path).ok()?;
+    let headers = crate::image_io::read_header(path).ok()?;
     let axis = |key: &str| -> Option<usize> {
         headers
             .iter()

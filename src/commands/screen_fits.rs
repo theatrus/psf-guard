@@ -137,7 +137,7 @@ struct ScreenResult {
 
 pub fn screen_fits(path: &str, options: &ScreenOptions) -> Result<()> {
     let dir = Path::new(path);
-    let files = collect_fits_files(dir)?;
+    let files = crate::commands::import::collect_fits_files(&[dir.to_path_buf()])?;
     if files.is_empty() {
         return Err(anyhow::anyhow!(
             "No FITS files found under: {}",
@@ -577,37 +577,6 @@ fn apply_regrade(results: &[ScreenResult], db_arg: &str, options: &ScreenOptions
     Ok(())
 }
 
-fn collect_fits_files(dir: &Path) -> Result<Vec<PathBuf>> {
-    if dir.is_file() {
-        return Ok(vec![dir.to_path_buf()]);
-    }
-    if !dir.is_dir() {
-        return Err(anyhow::anyhow!(
-            "Path does not exist or is not accessible: {}",
-            dir.display()
-        ));
-    }
-    let mut files = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        for entry in std::fs::read_dir(&d)? {
-            let entry = entry?;
-            let p = entry.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if p
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| e.eq_ignore_ascii_case("fits") || e.eq_ignore_ascii_case("fit"))
-            {
-                files.push(p);
-            }
-        }
-    }
-    files.sort();
-    Ok(files)
-}
-
 /// Analyze all frames, in parallel worker threads.
 fn analyze_frames(files: &[PathBuf], options: &ScreenOptions) -> Result<Vec<FrameRecord>> {
     // Default to all cores (bounded by available memory); `--threads`
@@ -785,7 +754,7 @@ pub(crate) struct FrameHeaders {
 /// Extract filter, exposure and observation time from the FITS header.
 pub(crate) fn extract_headers(path: &Path) -> FrameHeaders {
     let mut out = FrameHeaders::default();
-    let Ok(headers) = seiza_fits::read_header(path) else {
+    let Ok(headers) = crate::image_io::read_header(path) else {
         return out;
     };
 

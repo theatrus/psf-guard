@@ -69,6 +69,10 @@ pub async fn upload_image(
             .ok_or_else(|| AppError::BadRequest("image field has no filename".into()))?;
         validate_filename(&filename)?;
 
+        // The temporary lands in one of this database's scanned image roots,
+        // so it must not carry a frame extension: a folder scan running
+        // alongside the upload would pick up the half-written file as a
+        // frame. The header read below is told the declared name instead.
         let temporary = tempfile::NamedTempFile::new_in(&upload_dir).map_err(|error| {
             AppError::InternalError(format!(
                 "creating upload temporary file in {}: {error}",
@@ -123,15 +127,17 @@ pub async fn upload_image(
         AppError::BadRequest("multipart request must contain one image field".into())
     })?;
     let temporary_path = temporary.path().to_path_buf();
-    let frame =
-        tokio::task::spawn_blocking(move || import::headers::read_frame_meta(&temporary_path))
-            .await
-            .map_err(|error| {
-                AppError::InternalError(format!("FITS header validation task failed: {error}"))
-            })?;
+    let declared_name = PathBuf::from(&filename);
+    let frame = tokio::task::spawn_blocking(move || {
+        import::headers::read_frame_meta_named(&temporary_path, &declared_name)
+    })
+    .await
+    .map_err(|error| {
+        AppError::InternalError(format!("image header validation task failed: {error}"))
+    })?;
     if !frame.readable {
         return Err(AppError::BadRequest(
-            "uploaded image is not a readable FITS file".into(),
+            "uploaded image is not a readable FITS or XISF file".into(),
         ));
     }
     if !frame.is_light() {
@@ -422,15 +428,15 @@ fn validate_filename(filename: &str) -> Result<(), AppError> {
             "image filename is not filesystem-safe".into(),
         ));
     }
-    let extension = Path::new(filename)
-        .extension()
-        .and_then(|extension| extension.to_str());
-    if !extension.is_some_and(|extension| {
-        extension.eq_ignore_ascii_case("fit") || extension.eq_ignore_ascii_case("fits")
-    }) {
-        return Err(AppError::BadRequest(
-            "remote image upload currently accepts only .fit and .fits files".into(),
-        ));
+    if !crate::image_io::is_image_path(Path::new(filename)) {
+        return Err(AppError::BadRequest(format!(
+            "remote image upload accepts only {} files",
+            crate::image_io::IMAGE_EXTENSIONS
+                .iter()
+                .map(|extension| format!(".{extension}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
     }
     Ok(())
 }

@@ -1589,8 +1589,8 @@ fn detect_fits_stars(
     path: &Path,
     pass: DetectionPass,
 ) -> Result<(Vec<seiza::DetectedStar>, (u32, u32)), String> {
-    let fits = seiza_fits::FitsImage::open(path)
-        .map_err(|error| format!("failed to decode FITS pixels: {error}"))?;
+    let fits = crate::image_io::open(path)
+        .map_err(|error| format!("failed to decode image pixels: {error}"))?;
     let width = u32::try_from(fits.width)
         .map_err(|_| "FITS width exceeds supported dimensions".to_string())?;
     let height = u32::try_from(fits.height)

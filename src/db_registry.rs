@@ -34,7 +34,7 @@ pub struct DbEntry {
     /// `docs/design/reject-archive.md`). All fields optional; absent values fall
     /// back to the CLI flag, then the compiled-in defaults
     /// (`segment_name = "REJECT"`, `depth = 1`,
-    /// `sidecar_exts = [".xisf", ".json", ".txt"]`).
+    /// `sidecar_exts = [".json", ".txt"]`).
     ///
     /// The block itself is also optional; absent in older configs means
     /// "no per-DB overrides — use CLI flags or defaults entirely."
@@ -178,9 +178,9 @@ pub struct RejectArchiveOverrides {
     /// REJECT bucket.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depth: Option<u32>,
-    /// Extensions of sibling files that move alongside the primary FITS.
-    /// Defaults to `.xisf`, `.json`, `.txt` (set via the resolver in the
-    /// CLI command — this slot is only the override).
+    /// Extensions of sibling files that move alongside the primary frame.
+    /// Defaults to `.json`, `.txt` (set via the resolver in the CLI command —
+    /// this slot is only the override). A frame container is refused here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidecar_exts: Option<Vec<String>>,
 }
@@ -614,7 +614,7 @@ mod tests {
         reg.databases[0].reject_archive = Some(RejectArchiveOverrides {
             segment_name: Some("BAD".into()),
             depth: Some(2),
-            sidecar_exts: Some(vec![".xisf".into(), ".json".into()]),
+            sidecar_exts: Some(vec![".wcs".into(), ".json".into()]),
         });
         reg.save(&path).unwrap();
         let reloaded = DbRegistry::load_or_init(&path).unwrap();

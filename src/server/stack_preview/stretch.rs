@@ -20,7 +20,7 @@ use seiza_deconvolution::{
     deconvolve_masked, ChannelDiagnostics, DeconvolutionConfig, ALGORITHM_VERSION,
 };
 use seiza_fits::{HeaderValue, WriteHeaderCard};
-use seiza_stacking::{write_processed_image_fits_f32, FitsFrame, LinearImage};
+use seiza_stacking::{write_processed_image_fits_f32, LinearImage};
 use seiza_stretch::{
     ColorStrategy, RobustStatistics, StretchAnalysis, StretchConfig, StretchModel, StretchParams,
     StretchPlan,
@@ -473,7 +473,8 @@ fn render_fits_variant(
     deconvolution_request: Option<DeconvolutionConfig>,
     deconvolution_id: Option<&str>,
 ) -> Result<RenderedVariant, String> {
-    let frame = FitsFrame::open(source_path).map_err(|error| error.to_string())?;
+    let frame =
+        crate::image_io::open_linear_frame(source_path).map_err(|error| error.to_string())?;
     let samples = frame.image.data.len();
     let bytes_per_sample = if deconvolution_request.is_some() {
         DECONVOLUTION_BYTES_PER_SAMPLE
@@ -543,7 +544,8 @@ fn render_fits_variant(
                     && fits.is_file()
             });
         if let Some(cached) = cached {
-            cached_processed = Some(FitsFrame::open(&fits).map_err(|error| error.to_string())?);
+            cached_processed =
+                Some(crate::image_io::open_linear_frame(&fits).map_err(|error| error.to_string())?);
             Some(StackDeconvolutionResult {
                 config: cached.config,
                 channels: cached.channels,
