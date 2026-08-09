@@ -1,0 +1,94 @@
+# On-demand check that Windows code signing still works end to end.
+#
+# The real signing path only runs on a `v*` tag, so without this the first live
+# exercise of the credential chain would be a real release. This isolates the
+# parts most likely to break -- the OIDC subject match, the Certificate Profile
+# Signer role, and the endpoint/account/profile values -- and checks them
+# against a throwaway binary in a couple of minutes rather than a 36-minute
+# Tauri build.
+#
+# Worth keeping rather than deleting after the first run: re-run it after any
+# change to the Entra app, the federated credential, the certificate profile, or
+# the signing account, and find out immediately instead of at the next release.
+#
+# Does NOT cover the Tauri updater `.sig` ordering -- that needs a real bundle,
+# and release.yml asserts it inline.
+name: Signing smoke test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  smoke:
+    name: Azure Artifact Signing smoke test
+    runs-on: windows-latest
+    # Must match the Entra federated credential subject
+    # `repo:theatrus/psf-guard:environment:release`.
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show what we are about to use
+        shell: bash
+        run: |
+          echo "client id set : ${{ vars.AZURE_CLIENT_ID != '' }}"
+          echo "endpoint      : ${{ vars.SIGNING_ENDPOINT }}"
+          echo "account       : ${{ vars.SIGNING_ACCOUNT }}"
+          echo "profile       : ${{ vars.SIGNING_PROFILE }}"
+
+      # Failure here means the OIDC subject did not match the federated
+      # credential. That is the single most likely thing to be wrong.
+      - name: Authenticate to Azure (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Confirm the identity we ended up as
+        shell: bash
+        run: az account show --query "{sub:name,user:user.name,type:user.type}" -o json
+
+      - name: Install trusted-signing-cli
+        uses: taiki-e/install-action@v2
+        with:
+          tool: trusted-signing-cli
+
+      # A throwaway PE to sign. Rust is preinstalled on the runner, so this is
+      # far cheaper than building the real app just to test the credential path.
+      - name: Build a throwaway binary
+        shell: bash
+        run: |
+          cargo new --bin "$RUNNER_TEMP/sigtest" --vcs none
+          cd "$RUNNER_TEMP/sigtest"
+          cargo build --release
+          cp target/release/sigtest.exe "$RUNNER_TEMP/sigtest.exe"
+          ls -l "$RUNNER_TEMP/sigtest.exe"
+
+      # Exercises the Certificate Profile Signer role assignment and every one
+      # of the endpoint/account/profile values.
+      - name: Sign it
+        shell: bash
+        run: |
+          trusted-signing-cli \
+            -e "${{ vars.SIGNING_ENDPOINT }}" \
+            -a "${{ vars.SIGNING_ACCOUNT }}" \
+            -c "${{ vars.SIGNING_PROFILE }}" \
+            -d "PSF Guard signing smoke test" \
+            "$RUNNER_TEMP/sigtest.exe"
+
+      - name: Verify the signature and publisher
+        shell: bash
+        run: |
+          set -euo pipefail
+          signtool=$(find "/c/Program Files (x86)/Windows Kits/10/bin" \
+                       -name signtool.exe -path "*x64*" | sort | tail -1)
+          echo "using: $signtool"
+          "$signtool" verify //pa //v "$RUNNER_TEMP/sigtest.exe" | tee "$RUNNER_TEMP/verify.txt"
+          grep -q "StackFoundry LLC" "$RUNNER_TEMP/verify.txt" \
+            || { echo "FAIL: expected publisher StackFoundry LLC"; exit 1; }
+          echo "OK: signed and chains to a trusted root as StackFoundry LLC"

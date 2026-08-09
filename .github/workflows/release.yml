@@ -7,11 +7,21 @@ on:
 
 permissions:
   contents: write
+  # Required for the OIDC exchange with Entra that authenticates Windows
+  # Authenticode signing. No Azure secret is stored in this repo.
+  id-token: write
 
 jobs:
   build:
     name: Build release on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # The Entra federated credential is bound to the subject
+    # `repo:theatrus/psf-guard:environment:release`, so this job must run in the
+    # `release` environment or the OIDC token will not match and azure/login
+    # fails. Classic federated credentials require an exact subject match --
+    # `refs/tags/v*` cannot be expressed as a wildcard without the preview
+    # flexible-federation feature, hence binding to the environment instead.
+    environment: release
     strategy:
       fail-fast: false
       matrix:
@@ -147,6 +157,58 @@ jobs:
             "${{ runner.temp }}/psf-guard-updater.json"
         fi
 
+    # Authenticode signing for the Windows artifacts, via Azure Artifact Signing
+    # (the renamed Trusted Signing). The key lives in Microsoft's HSM; we only
+    # ever hold a short-lived OIDC-exchanged token, so there is no signing
+    # secret in this repo.
+    #
+    # Gated on the vars being present so a fork -- which has neither the
+    # variables nor access to the federated credential -- still builds, just
+    # unsigned, rather than failing the release job outright.
+    - name: Authenticate to Azure for code signing
+      if: matrix.os == 'windows-latest' && vars.AZURE_CLIENT_ID != ''
+      uses: azure/login@v2
+      with:
+        client-id: ${{ vars.AZURE_CLIENT_ID }}
+        tenant-id: ${{ vars.AZURE_TENANT_ID }}
+        subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    - name: Install trusted-signing-cli
+      if: matrix.os == 'windows-latest' && vars.AZURE_CLIENT_ID != ''
+      uses: taiki-e/install-action@v2
+      with:
+        tool: trusted-signing-cli
+
+    # Injected here rather than committed into tauri.bundle-windows.json on
+    # purpose: that file is used by local Windows builds too, and baking a
+    # signCommand into it would break every developer who has no Azure
+    # credentials. Patching the generated config keeps signing a CI concern.
+    #
+    # trusted-signing-cli authenticates through DefaultAzureCredential, which
+    # picks up the az CLI session established by azure/login above.
+    - name: Enable Authenticode signing in the build config
+      if: matrix.os == 'windows-latest' && vars.AZURE_CLIENT_ID != ''
+      shell: bash
+      run: |
+        node -e '
+          const fs = require("fs");
+          const p = process.argv[1];
+          const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
+          cfg.bundle ??= {};
+          cfg.bundle.windows ??= {};
+          cfg.bundle.windows.signCommand =
+            `trusted-signing-cli -e ${process.env.SIGNING_ENDPOINT}`
+            + ` -a ${process.env.SIGNING_ACCOUNT}`
+            + ` -c ${process.env.SIGNING_PROFILE}`
+            + ` -d "PSF Guard" %1`;
+          fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
+          console.log(cfg.bundle.windows.signCommand);
+        ' "${{ runner.temp }}/psf-guard-updater.json"
+      env:
+        SIGNING_ENDPOINT: ${{ vars.SIGNING_ENDPOINT }}
+        SIGNING_ACCOUNT: ${{ vars.SIGNING_ACCOUNT }}
+        SIGNING_PROFILE: ${{ vars.SIGNING_PROFILE }}
+
     - name: Build CLI binary
       # Dedicated console-subsystem CLI (no tauri) — the standalone release
       # asset. The installer's bundled copy comes from Tauri auto-bundling the
@@ -169,6 +231,42 @@ jobs:
         TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       run: cargo tauri build --verbose --config "${{ runner.temp }}/psf-guard-updater.json"
+
+    # Guards the failure mode that is otherwise invisible: the updater `.sig`
+    # must be computed over the *Authenticode-signed* installer. If Tauri ever
+    # reorders those two steps, CI stays green and the artifacts look fine --
+    # the only symptom is that every existing install fails signature
+    # verification and silently cannot auto-update. Cheap to assert, expensive
+    # to discover in the wild.
+    - name: Verify Windows signing and updater signature ordering
+      if: matrix.os == 'windows-latest' && vars.AZURE_CLIENT_ID != ''
+      shell: bash
+      run: |
+        set -euo pipefail
+        installer=$(find target/release/bundle/nsis -name "*-setup.exe" -print -quit)
+        test -n "$installer" || { echo "no NSIS installer found"; exit 1; }
+        echo "installer: $installer"
+
+        # 1. Authenticode present and chaining to a trusted root.
+        signtool=$(find "/c/Program Files (x86)/Windows Kits/10/bin" \
+                     -name signtool.exe -path "*x64*" | sort | tail -1)
+        "$signtool" verify //pa //v "$installer"
+
+        # 2. The publisher is who we expect, not a test profile.
+        "$signtool" verify //pa //v "$installer" | grep -q "StackFoundry LLC" \
+          || { echo "unexpected signing identity"; exit 1; }
+
+        # 3. Ordering: the .sig must not predate the signed installer. Tauri
+        #    signs during bundling and emits updater artifacts afterwards, so
+        #    the .sig should be at least as new. If this trips, the .sig was
+        #    taken over the pre-Authenticode bytes and updates would break.
+        test -f "$installer.sig" || { echo "no updater .sig beside installer"; exit 1; }
+        if [ "$installer" -nt "$installer.sig" ]; then
+          echo "FAIL: installer is newer than its .sig -- Authenticode ran after"
+          echo "      the updater signature, so the .sig covers unsigned bytes."
+          exit 1
+        fi
+        echo "OK: Authenticode present, publisher correct, .sig not stale"
 
     - name: Build Tauri desktop app (macOS)
       if: matrix.os == 'macos-latest'
