@@ -20,3 +20,11 @@
 - The Stack previews panel collapses from its title and stays collapsed
   across reloads, and its result cards follow the grid's thumbnail-size
   slider up to one full-width column.
+
+## Changed
+
+- The reject archive no longer treats `.xisf` as a companion file. A frame
+  carries its own grade, so archiving one alongside a rejected sibling would
+  move a file the catalog still calls accepted. The default companion list is
+  now `.json` and `.txt`, and a list naming any frame container — `.fits`,
+  `.fit`, `.fts`, `.xisf` — is refused with an error that says why.

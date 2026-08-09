@@ -47,6 +47,18 @@ impl From<seiza_xisf::XisfError> for ImageError {
     }
 }
 
+/// Whether this extension names a frame container, with or without its
+/// leading dot (`xisf` and `.xisf` both answer yes).
+///
+/// Config lists extensions dotted, so take both spellings rather than make
+/// every caller remember which one it holds.
+pub fn is_image_extension(extension: &str) -> bool {
+    let extension = extension.strip_prefix('.').unwrap_or(extension);
+    IMAGE_EXTENSIONS
+        .iter()
+        .any(|known| extension.eq_ignore_ascii_case(known))
+}
+
 /// Whether this filename carries an image extension.
 pub fn has_image_extension(filename: &str) -> bool {
     is_image_path(Path::new(filename))
@@ -59,11 +71,7 @@ pub fn has_image_extension(filename: &str) -> bool {
 pub fn is_image_path(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            IMAGE_EXTENSIONS
-                .iter()
-                .any(|known| extension.eq_ignore_ascii_case(known))
-        })
+        .is_some_and(is_image_extension)
 }
 
 /// The filename without its image extension, for naming derived output.
@@ -73,15 +81,28 @@ pub fn strip_image_extension(filename: &str) -> &str {
     if !has_image_extension(filename) {
         return filename;
     }
-    match filename.rfind('.') {
-        Some(dot) => &filename[..dot],
-        None => filename,
-    }
+    filename
+        .rsplit_once('.')
+        .map(|(base, _)| base)
+        .unwrap_or(filename)
 }
 
 /// Read the header cards without decoding pixels.
 pub fn read_header(path: &Path) -> Result<Vec<(String, HeaderValue)>, ImageError> {
-    if seiza_xisf::is_xisf_path(path) {
+    read_header_named(path, path)
+}
+
+/// [`read_header`] for a file whose own path does not name its container.
+///
+/// A remote upload streams into a temporary file inside a scanned image root.
+/// That file must not carry a frame extension — a scan would pick it up
+/// mid-write — so the decoder is chosen from the name the client declared
+/// while the bytes are read from `path`.
+pub fn read_header_named(
+    path: &Path,
+    declared: impl AsRef<Path>,
+) -> Result<Vec<(String, HeaderValue)>, ImageError> {
+    if seiza_xisf::is_xisf_path(declared.as_ref()) {
         Ok(seiza_xisf::read_header(path)?)
     } else {
         Ok(seiza_fits::read_header(path)?)
@@ -212,6 +233,36 @@ mod tests {
         );
         assert_eq!(headers.width.map(|value| value.value), Some(4));
         assert_eq!(headers.height.map(|value| value.value), Some(3));
+    }
+
+    /// A remote upload streams into an extensionless temporary inside a
+    /// scanned image root. The decoder has to come from the declared name, or
+    /// the temporary would need a frame extension and a concurrent scan would
+    /// pick it up mid-write.
+    #[test]
+    fn a_declared_name_picks_the_decoder_for_an_extensionless_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let written = write_sample_xisf(directory.path(), "light.xisf");
+        let bare = directory.path().join(".tmpAbC123");
+        std::fs::rename(&written, &bare).unwrap();
+
+        assert!(
+            !is_image_path(&bare),
+            "the temporary must stay invisible to scans"
+        );
+        assert!(
+            read_header(&bare).is_err(),
+            "without the declared name this is read as FITS"
+        );
+
+        let headers = read_header_named(&bare, "light.xisf").expect("declared name should decode");
+        assert_eq!(
+            headers
+                .iter()
+                .find(|(name, _)| name == "OBJECT")
+                .and_then(|(_, value)| value.as_str()),
+            Some("M31")
+        );
     }
 
     #[test]

@@ -69,23 +69,16 @@ pub async fn upload_image(
             .ok_or_else(|| AppError::BadRequest("image field has no filename".into()))?;
         validate_filename(&filename)?;
 
-        // Keep the uploaded extension on the temporary file: the header read
-        // below picks its decoder from it, so a `.xisf` body landing under a
-        // bare temporary name would be read as FITS and rejected.
-        let suffix = Path::new(&filename)
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| format!(".{extension}"))
-            .unwrap_or_default();
-        let temporary = tempfile::Builder::new()
-            .suffix(&suffix)
-            .tempfile_in(&upload_dir)
-            .map_err(|error| {
-                AppError::InternalError(format!(
-                    "creating upload temporary file in {}: {error}",
-                    upload_dir.display()
-                ))
-            })?;
+        // The temporary lands in one of this database's scanned image roots,
+        // so it must not carry a frame extension: a folder scan running
+        // alongside the upload would pick up the half-written file as a
+        // frame. The header read below is told the declared name instead.
+        let temporary = tempfile::NamedTempFile::new_in(&upload_dir).map_err(|error| {
+            AppError::InternalError(format!(
+                "creating upload temporary file in {}: {error}",
+                upload_dir.display()
+            ))
+        })?;
         let reopened = temporary.reopen().map_err(|error| {
             AppError::InternalError(format!("opening upload temporary file: {error}"))
         })?;
@@ -134,12 +127,14 @@ pub async fn upload_image(
         AppError::BadRequest("multipart request must contain one image field".into())
     })?;
     let temporary_path = temporary.path().to_path_buf();
-    let frame =
-        tokio::task::spawn_blocking(move || import::headers::read_frame_meta(&temporary_path))
-            .await
-            .map_err(|error| {
-                AppError::InternalError(format!("image header validation task failed: {error}"))
-            })?;
+    let declared_name = PathBuf::from(&filename);
+    let frame = tokio::task::spawn_blocking(move || {
+        import::headers::read_frame_meta_named(&temporary_path, &declared_name)
+    })
+    .await
+    .map_err(|error| {
+        AppError::InternalError(format!("image header validation task failed: {error}"))
+    })?;
     if !frame.readable {
         return Err(AppError::BadRequest(
             "uploaded image is not a readable FITS or XISF file".into(),

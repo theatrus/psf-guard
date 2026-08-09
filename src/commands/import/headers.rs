@@ -73,11 +73,18 @@ impl FrameMeta {
 /// Read one frame's headers. Unreadable files yield a `FrameMeta` with only
 /// `path` set (the caller decides whether to skip or report them).
 pub fn read_frame_meta(path: &Path) -> FrameMeta {
+    read_frame_meta_named(path, path)
+}
+
+/// [`read_frame_meta`] for a file whose own path does not name its container,
+/// such as the temporary a remote upload streams into. `declared` picks the
+/// decoder; `path` supplies the bytes.
+pub fn read_frame_meta_named(path: &Path, declared: &Path) -> FrameMeta {
     let mut meta = FrameMeta {
         path: path.to_path_buf(),
         ..Default::default()
     };
-    let Ok(headers) = crate::image_io::read_header(path) else {
+    let Ok(headers) = crate::image_io::read_header_named(path, declared) else {
         return meta;
     };
     meta.readable = true;

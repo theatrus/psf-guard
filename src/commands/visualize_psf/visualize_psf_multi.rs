@@ -54,8 +54,10 @@ pub fn visualize_psf_multi(
 
     // Generate output filename
     let output_path = output.unwrap_or_else(|| {
-        let base = fits_path.trim_end_matches(".fits").trim_end_matches(".fit");
-        format!("{}_psf_multi.png", base)
+        format!(
+            "{}_psf_multi.png",
+            crate::image_io::strip_image_extension(fits_path)
+        )
     });
 
     // Save the image with compression

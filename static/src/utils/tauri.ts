@@ -45,7 +45,7 @@ export const initializeApiBaseUrl = async (): Promise<string> => {
 // Per-DB overrides for the reject-archive feature (mirrors
 // `RejectArchiveOverrides` in src/db_registry.rs). All fields optional;
 // missing keys fall through to the CLI flag, then the compiled-in defaults
-// (`REJECT`, depth 1, `.xisf` / `.json` / `.txt`).
+// (`REJECT`, depth 1, `.json` / `.txt`).
 export interface RejectArchiveOverrides {
   segment_name?: string;
   depth?: number;

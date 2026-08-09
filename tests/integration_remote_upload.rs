@@ -398,6 +398,18 @@ async fn upload_accepts_an_xisf_frame_and_imports_it_like_a_fits_one() {
     assert_eq!(body["data"]["import"]["unreadable"], 0);
     assert!(fixture.images_a.join("m81-001.xisf").is_file());
     assert_eq!(image_count(&fixture.database_a), 1);
+
+    // The receive directory is one of this database's scanned image roots, so
+    // the upload must leave nothing behind that a folder scan would read as a
+    // frame.
+    let scannable =
+        psf_guard::commands::import::collect_fits_files(std::slice::from_ref(&fixture.images_a))
+            .expect("scanning the receive directory");
+    assert_eq!(
+        scannable,
+        vec![fixture.images_a.join("m81-001.xisf")],
+        "only the published frame should be scannable"
+    );
 }
 
 #[tokio::test]

@@ -137,7 +137,7 @@ struct ScreenResult {
 
 pub fn screen_fits(path: &str, options: &ScreenOptions) -> Result<()> {
     let dir = Path::new(path);
-    let files = collect_fits_files(dir)?;
+    let files = crate::commands::import::collect_fits_files(&[dir.to_path_buf()])?;
     if files.is_empty() {
         return Err(anyhow::anyhow!(
             "No FITS files found under: {}",
@@ -575,33 +575,6 @@ fn apply_regrade(results: &[ScreenResult], db_arg: &str, options: &ScreenOptions
     db.batch_update_grading_status(&updates)?;
     println!("Applied {} rejections.", updates.len());
     Ok(())
-}
-
-fn collect_fits_files(dir: &Path) -> Result<Vec<PathBuf>> {
-    if dir.is_file() {
-        return Ok(vec![dir.to_path_buf()]);
-    }
-    if !dir.is_dir() {
-        return Err(anyhow::anyhow!(
-            "Path does not exist or is not accessible: {}",
-            dir.display()
-        ));
-    }
-    let mut files = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        for entry in std::fs::read_dir(&d)? {
-            let entry = entry?;
-            let p = entry.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if crate::image_io::is_image_path(&p) {
-                files.push(p);
-            }
-        }
-    }
-    files.sort();
-    Ok(files)
 }
 
 /// Analyze all frames, in parallel worker threads.

@@ -236,7 +236,8 @@ pub enum Commands {
         reject_depth: Option<u32>,
 
         /// Override the sidecar extension list (comma-separated, e.g.
-        /// `.xisf,.json,.txt`).
+        /// `.json,.txt`). Frame containers are refused: they have their own
+        /// grade and never travel as another frame's companion.
         #[arg(long, value_delimiter = ',')]
         sidecar_exts: Option<Vec<String>>,
 
