@@ -463,6 +463,19 @@ jobs:
         echo "Release assets prepared:"
         ls -la release-assets/
 
+    # A dry run publishes nothing, so without this there would be no way to
+    # actually inspect what it produced -- and "CI said the verify step passed"
+    # is weaker evidence than holding the signed installer and checking it
+    # yourself. Retained briefly; these are throwaway build outputs.
+    - name: Upload dry-run artifacts for inspection
+      if: github.event_name == 'workflow_dispatch'
+      uses: actions/upload-artifact@v4
+      with:
+        name: dry-run-${{ matrix.os }}
+        path: release-assets/*
+        retention-days: 5
+        if-no-files-found: error
+
     - name: Upload release assets
       # Never publish from a dry run -- it would create a GitHub release for
       # whatever version happens to be in Cargo.toml.
