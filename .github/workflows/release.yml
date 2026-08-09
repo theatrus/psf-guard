@@ -384,7 +384,26 @@ jobs:
         for name in psf-guard.exe psf-guard-cli.exe; do
           inner=$(find "$extract" -name "$name" -print -quit)
           test -n "$inner" || { echo "FAIL: $name not found inside the installer"; exit 1; }
-          echo "--- (inside installer) $inner"
+
+          # Compare against the file we signed before bundling. This
+          # distinguishes the two ways the check below can fail, which
+          # otherwise look identical:
+          #   hashes equal    -> the bundler shipped our signed bytes, and any
+          #                      verify failure is an artefact of how 7z
+          #                      unpacks NSIS rather than a real problem;
+          #   hashes differ   -> the bundler shipped different bytes, so the
+          #                      signing happened too early to matter and the
+          #                      two-phase build does not do what it claims.
+          signed_hash=$(sha256sum "target/release/$name" | cut -d' ' -f1)
+          inner_hash=$(sha256sum "$inner" | cut -d' ' -f1)
+          echo "--- (inside installer) $name"
+          echo "    signed copy : $signed_hash"
+          echo "    inside      : $inner_hash"
+          if [ "$signed_hash" = "$inner_hash" ]; then
+            echo "    -> byte-identical to the signed file"
+          else
+            echo "    -> DIFFERS from the signed file"
+          fi
           verify "$inner"
         done
 
@@ -506,7 +525,10 @@ jobs:
     # is weaker evidence than holding the signed installer and checking it
     # yourself. Retained briefly; these are throwaway build outputs.
     - name: Upload dry-run artifacts for inspection
-      if: github.event_name == 'workflow_dispatch'
+      # always(), not success(): a failed verification is precisely when the
+      # artifacts need inspecting by hand, and skipping the upload then leaves
+      # nothing to look at.
+      if: always() && github.event_name == 'workflow_dispatch'
       uses: actions/upload-artifact@v4
       with:
         name: dry-run-${{ matrix.os }}
