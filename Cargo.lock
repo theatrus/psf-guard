@@ -2776,9 +2776,9 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lz4_flex"
-version = "0.11.6"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "373f5eceeeab7925e0c1098212f2fbc4d416adec9d35051a6ab251e824c1854a"
+checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
 dependencies = [
  "twox-hash",
 ]
@@ -3821,7 +3821,7 @@ checksum = "3af6b589e163c5a788fab00ce0c0366f6efbb9959c2f9874b224936af7fce7e1"
 dependencies = [
  "base64 0.22.1",
  "indexmap 2.14.0",
- "quick-xml",
+ "quick-xml 0.38.3",
  "serde",
  "time",
 ]
@@ -4100,6 +4100,15 @@ name = "quick-xml"
 version = "0.38.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42a232e7487fc2ef313d96dde7948e7a3c05101870d8985e4fd8d26aedd27b89"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.41.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
 dependencies = [
  "memchr",
 ]
@@ -4907,9 +4916,9 @@ dependencies = [
 
 [[package]]
 name = "seiza"
-version = "0.15.1"
+version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9eb8fe848b31588a4533a8195c0aa202a1c5398b4dd59bc614276621460282b"
+checksum = "c99cbbe8e89620716d4f0423c74221f933db2c00f867023cd25aa5664ed487b6"
 dependencies = [
  "directories",
  "image",
@@ -5022,9 +5031,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-stacking"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e71d0811c7ff22bc80f26bdee54a9832ddab11c1825bd708cdcfa5dee23c945"
+checksum = "56b4c3a2cd7f24f06f2d5ee51f08851687241ce390c85646dd3e62fa5116df67"
 dependencies = [
  "rayon",
  "seiza",
@@ -5061,13 +5070,13 @@ dependencies = [
 
 [[package]]
 name = "seiza-xisf"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99c58629034c4197cf415a86ad91fc044dbf9f1ea892ec5617d611e530af990c"
+checksum = "8d972a8c14605b1ddd171c964f07522350c30efbe0a917f21f0e357844c6099c"
 dependencies = [
  "flate2",
  "lz4_flex",
- "quick-xml",
+ "quick-xml 0.41.0",
  "seiza-fits",
  "sha1",
  "sha2 0.11.0",
@@ -5314,13 +5323,13 @@ dependencies = [
 
 [[package]]
 name = "sha1"
-version = "0.10.7"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+checksum = "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"
 dependencies = [
  "cfg-if",
- "cpufeatures 0.2.17",
- "digest 0.10.7",
+ "cpufeatures 0.3.0",
+ "digest 0.11.3",
 ]
 
 [[package]]

@@ -1742,8 +1742,12 @@ fn compose_color(
                 .linear_input_id
                 .as_deref()
                 .expect("cached inputs have an identity");
-            let frame = FitsFrame::open(color_input_fits_path(cache_root, input_id, source.role))
-                .map_err(|error| error.to_string())?;
+            let frame = crate::image_io::open_linear_frame(color_input_fits_path(
+                cache_root,
+                input_id,
+                source.role,
+            ))
+            .map_err(|error| error.to_string())?;
             validate_mono(&frame.image, source.role)?;
             frame
         } else {
@@ -2334,7 +2338,7 @@ fn compose_color(
 }
 
 fn load_source_frame(cache_root: &FsPath, source: &StackColorSource) -> Result<FitsFrame, String> {
-    let frame = FitsFrame::open(super::fits_path(
+    let frame = crate::image_io::open_linear_frame(super::fits_path(
         cache_root,
         &source.job_id,
         source.group_index,
@@ -2370,8 +2374,12 @@ fn load_cached_color_input_manifest(
     {
         return None;
     }
-    let reference =
-        FitsFrame::open(color_input_fits_path(cache_root, input_id, reference_role)).ok()?;
+    let reference = crate::image_io::open_linear_frame(color_input_fits_path(
+        cache_root,
+        input_id,
+        reference_role,
+    ))
+    .ok()?;
     validate_mono(&reference.image, reference_role).ok()?;
     Some((manifest, reference))
 }

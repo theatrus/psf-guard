@@ -14,6 +14,13 @@ so they group, grade, preview, and stack exactly like FITS frames. Everything
 else in the folder, including plate-solve `.json` and other sidecars, is left
 alone.
 
+PixInsight normalizes float images, writing samples between 0 and 1 where a
+camera writes thousands of ADU. A frame that says so — `bounds="0:1"` — is put
+on a 16-bit scale as PSF Guard reads it, so its background and star flux can be
+compared against camera frames in the same sequence. A frame declaring any
+other range is left exactly as stored, because writers disagree about what that
+range means.
+
 ## Create a catalog in the UI
 
 The desktop app always allows database management. For the web server, bind to

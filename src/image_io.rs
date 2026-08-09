@@ -109,13 +109,53 @@ pub fn read_header_named(
     }
 }
 
+/// The scale a normalized frame is placed on: full-well for 16-bit data.
+///
+/// PSF Guard compares background and flux across frames in physical ADU, and
+/// almost every frame it meets is 16-bit camera data. A PixInsight float
+/// frame that declares itself normalized has no ADU of its own, so the
+/// nearest honest thing is to put it on the same scale as its neighbours.
+const NORMALIZED_FULL_SCALE: f32 = 65535.0;
+
 /// Decode a frame's pixels and headers.
+///
+/// A float XISF frame that declares `bounds="0:1"` is placed on a 16-bit
+/// scale on the way through. PixInsight normalizes float images, so such a
+/// frame's samples run 0..1 where a camera frame's run in the thousands, and
+/// leaving them alone would make every cross-frame background and flux
+/// comparison meaningless — quality screening would read the normalized frame
+/// as a near-black outlier and its neighbours as blown. Only an exact `0:1`
+/// is converted; seiza declines any other declared range, because writers
+/// disagree about what it means.
 pub fn open(path: &Path) -> Result<FitsImage, ImageError> {
     if seiza_xisf::is_xisf_path(path) {
-        Ok(seiza_xisf::open(path)?)
+        let mut read = seiza_xisf::read_image(path)?;
+        read.rescale_normalized_to(NORMALIZED_FULL_SCALE);
+        Ok(read.image)
     } else {
         Ok(FitsImage::open(path)?)
     }
+}
+
+/// Open a frame as linear samples for calibration and stacking, with the same
+/// normalization [`open`] applies.
+///
+/// Stacking compares frames against a reference, so one normalized frame
+/// among camera frames skews normalization and rejection for the whole group.
+/// A no-op for FITS and for any XISF that does not declare itself normalized,
+/// which is why every stacking read goes through here rather than picking and
+/// choosing.
+pub fn open_linear_frame(
+    path: impl AsRef<Path>,
+) -> Result<seiza_stacking::FitsFrame, seiza_stacking::Error> {
+    let mut frame = seiza_stacking::FitsFrame::open(path)?;
+    if frame.bounds == Some((0.0, 1.0)) {
+        for sample in &mut frame.image.data {
+            *sample *= NORMALIZED_FULL_SCALE;
+        }
+        frame.bounds = Some((0.0, f64::from(NORMALIZED_FULL_SCALE)));
+    }
+    Ok(frame)
 }
 
 #[cfg(test)]
@@ -160,8 +200,18 @@ mod tests {
     /// A sample 4x3 mono XISF light frame, written by the same XISF writer a
     /// reader in the wild would meet. Generating it beats checking in a blob:
     /// the fixture cannot drift away from the format the crate speaks.
+    ///
+    /// The samples span 0..1, so the writer declares `bounds="0:1"` and the
+    /// frame reads back as a normalized one.
     fn write_sample_xisf(directory: &Path, name: &str) -> PathBuf {
-        let pixels: Vec<f32> = (0..12).map(|index| index as f32 / 11.0).collect();
+        write_xisf_spanning(directory, name, 0.0, 1.0)
+    }
+
+    /// The same frame with its samples spread evenly over `low..=high`.
+    fn write_xisf_spanning(directory: &Path, name: &str, low: f32, high: f32) -> PathBuf {
+        let pixels: Vec<f32> = (0..12)
+            .map(|index| low + (high - low) * index as f32 / 11.0)
+            .collect();
         let path = directory.join(name);
         seiza_xisf::write_f32_image(
             &path,
@@ -263,6 +313,69 @@ mod tests {
                 .and_then(|(_, value)| value.as_str()),
             Some("M31")
         );
+    }
+
+    /// The finding this exists for: PixInsight normalizes float images, so a
+    /// frame declaring `0:1` has samples four orders of magnitude below a
+    /// camera frame's, and every cross-frame ADU comparison built on it is
+    /// meaningless.
+    #[test]
+    fn a_normalized_xisf_frame_lands_on_a_sixteen_bit_scale() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = write_sample_xisf(directory.path(), "light.xisf");
+
+        let seiza_fits::Pixels::F32(samples) = open(&path).unwrap().pixels else {
+            panic!("expected float samples");
+        };
+        assert_eq!(samples.first().copied(), Some(0.0));
+        assert_eq!(samples.last().copied(), Some(65535.0));
+    }
+
+    /// Only an exact `0:1` is treated as normalized. Any other declared range
+    /// is ambiguous — this crate's own stack output declares the observed
+    /// minimum and maximum — so the samples must survive untouched.
+    #[test]
+    fn a_physical_xisf_frame_passes_through_untouched() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = write_xisf_spanning(directory.path(), "light.xisf", 100.0, 30000.0);
+
+        let seiza_fits::Pixels::F32(samples) = open(&path).unwrap().pixels else {
+            panic!("expected float samples");
+        };
+        assert_eq!(samples.first().copied(), Some(100.0));
+        assert_eq!(samples.last().copied(), Some(30000.0));
+    }
+
+    /// The measured value the grader actually compares across frames. Before
+    /// the conversion this read about 0.01 against a camera frame's thousands.
+    #[test]
+    fn a_normalized_frame_reports_adu_a_camera_frame_can_be_compared_with() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = write_sample_xisf(directory.path(), "light.xisf");
+
+        let frame = crate::image_analysis::FitsImage::from_file(&path).unwrap();
+        let statistics = frame.calculate_basic_statistics();
+        let median_adu = frame.stored_to_adu(statistics.median);
+        assert!(
+            (1000.0..65536.0).contains(&median_adu),
+            "median should read as 16-bit ADU, got {median_adu}"
+        );
+    }
+
+    /// Stacking normalizes every frame against a reference, so one normalized
+    /// frame among camera frames would skew the whole group.
+    #[test]
+    fn the_stacking_reader_applies_the_same_conversion() {
+        let directory = tempfile::tempdir().unwrap();
+        let normalized = write_sample_xisf(directory.path(), "normalized.xisf");
+        let frame = open_linear_frame(&normalized).unwrap();
+        assert_eq!(frame.image.data.first().copied(), Some(0.0));
+        assert_eq!(frame.image.data.last().copied(), Some(65535.0));
+
+        let physical = write_xisf_spanning(directory.path(), "physical.xisf", 100.0, 30000.0);
+        let frame = open_linear_frame(&physical).unwrap();
+        assert_eq!(frame.image.data.first().copied(), Some(100.0));
+        assert_eq!(frame.image.data.last().copied(), Some(30000.0));
     }
 
     #[test]

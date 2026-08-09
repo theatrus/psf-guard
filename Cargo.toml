@@ -33,16 +33,16 @@ uuid = { version = "1", features = ["v4"] }
 regex = "1.12"
 semver = "1"
 byteorder = "1.5"
-seiza = "0.15.1"
+seiza = "0.15.2"
 seiza-download = "0.6.0"
 seiza-imgproc = { version = "0.3.1", features = ["parallel"] }
 seiza-fits = "=0.2.1"
 seiza-satellites = { version = "0.4.5", features = ["serde"] }
-seiza-stacking = "0.3.0"
+seiza-stacking = "0.4.0"
 seiza-stretch = "0.2.0"
 # XISF reading. Already in the tree through seiza-stacking, which decodes both
 # containers into the same `seiza_fits::FitsImage`.
-seiza-xisf = "0.1.0"
+seiza-xisf = "0.2.0"
 seiza-background = "0.2.1"
 seiza-deconvolution = "0.1.0"
 sha2 = "0.11"
