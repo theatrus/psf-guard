@@ -574,6 +574,55 @@ struct PreparedFrame {
     path: PathBuf,
     source_fingerprint: String,
     expected_target: Option<(f64, f64)>,
+    /// Exposure length from the catalog, for weighting the orientation vote
+    /// and totalling a group's integration time.
+    ///
+    /// Taken from the record rather than the opened frame: the stacking
+    /// pipeline opens frames on its own threads and reports back only the
+    /// disposition, and PSF Guard already knows this from the import.
+    exposure_seconds: f64,
+}
+
+/// Exposure length in seconds from an acquired-image record, or zero when the
+/// record does not say.
+///
+/// N.I.N.A. and PSF Guard's own importer spell this differently, and a value
+/// can arrive as a number or as text, so take the first that reads as a finite
+/// positive number.
+fn exposure_seconds_from_metadata(metadata_json: &str) -> f64 {
+    let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata_json) else {
+        return 0.0;
+    };
+    ["ExposureDuration", "ExposureTime", "EXPTIME"]
+        .iter()
+        .find_map(|key| {
+            let value = &metadata[*key];
+            value
+                .as_f64()
+                .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+        })
+        .filter(|value: &f64| value.is_finite() && *value > 0.0)
+        .unwrap_or(0.0)
+}
+
+/// The decision recorded for a frame that did not reach the accumulator,
+/// whether the stack turned it away or it could not be read at all.
+fn rejected_decision(frame: &PreparedFrame, reason: String) -> StackFrameDecision {
+    StackFrameDecision {
+        image_id: frame.image_id,
+        disposition: "rejected".into(),
+        reason: Some(reason),
+        quality_score: frame.quality_score,
+        matched_stars: None,
+        registration_rms_pixels: None,
+        registration_drift_pixels: None,
+        registered_mapping: None,
+        normalization_mean_gain: None,
+        normalization_mean_offset: None,
+        source_fingerprint: Some(frame.source_fingerprint.clone()),
+        overlap_fraction: None,
+        integrated_fraction: None,
+    }
 }
 
 #[derive(Clone)]
@@ -1249,6 +1298,7 @@ fn prepare_job(
                 path,
                 source_fingerprint,
                 expected_target: expected_by_image.get(&image.id).copied().flatten(),
+                exposure_seconds: exposure_seconds_from_metadata(&image.metadata),
             });
         }
 
@@ -2005,27 +2055,32 @@ fn run_group(
             }
         };
 
-        for frame in group
+        let pending: Vec<&PreparedFrame> = group
             .frames
             .iter()
             .filter(|frame| !already_integrated.contains(&frame.image_id))
-        {
-            // Registering and integrating one frame is the unit of work here,
-            // so this is where a stop takes effect. The frames already pushed
-            // are checkpointed, so building again continues from them.
-            if cancel.load(Ordering::Relaxed) {
-                save_checkpoint(&stacker, &ledger);
-                return Ok(GroupOutcome::Cancelled);
-            }
-            let opened = crate::image_io::open_linear_frame(&frame.path);
-            let exposure = opened
-                .as_ref()
-                .ok()
-                .and_then(|value| value.exposure_seconds)
-                .unwrap_or(0.0);
-            let decision = match opened {
-                Ok(opened) => match stacker.push(opened).map_err(|error| error.to_string())? {
-                    FrameDisposition::Accepted(diagnostics) => {
+            .collect();
+        let paths: Vec<PathBuf> = pending.iter().map(|frame| frame.path.clone()).collect();
+        // Reads, calibration, registration and normalization overlap across
+        // frames while integration stays in this order, so the accumulator
+        // sees exactly the sequence a frame-at-a-time loop would. A frame
+        // declaring itself normalized is put on the same 16-bit scale the
+        // rest of the catalog uses as it is read.
+        let pipeline = seiza_stacking::PipelineOptions {
+            normalized_full_scale: Some(crate::image_io::NORMALIZED_FULL_SCALE),
+            ..seiza_stacking::PipelineOptions::default()
+        };
+        let mut cancelled = false;
+        let mut consumed = 0usize;
+        // Every frame's outcome is recorded in the callback above, so the
+        // summary adds nothing here.
+        let _report = stacker
+            .push_fits_pipelined(&paths, &pipeline, |_, outcome| {
+                let frame = pending[consumed];
+                consumed += 1;
+                let exposure = frame.exposure_seconds;
+                let decision = match outcome {
+                    Ok(FrameDisposition::Accepted(diagnostics)) => {
                         orientation_vote
                             .add(diagnostics.mapping.transform().rotation_radians, exposure);
                         StackFrameDecision {
@@ -2044,61 +2099,54 @@ fn run_group(
                             integrated_fraction: Some(diagnostics.integrated_fraction),
                         }
                     }
-                    FrameDisposition::Rejected(reason) => StackFrameDecision {
-                        image_id: frame.image_id,
-                        disposition: "rejected".into(),
-                        reason: Some(reason.to_string()),
-                        quality_score: frame.quality_score,
-                        matched_stars: None,
-                        registration_rms_pixels: None,
-                        registration_drift_pixels: None,
-                        registered_mapping: None,
-                        normalization_mean_gain: None,
-                        normalization_mean_offset: None,
-                        source_fingerprint: Some(frame.source_fingerprint.clone()),
-                        overlap_fraction: None,
-                        integrated_fraction: None,
+                    // A frame the stack turned away and one that could not be
+                    // read are both "not integrated" to a caller reading the
+                    // group's decisions; only the reason differs.
+                    Ok(FrameDisposition::Rejected(reason)) => {
+                        rejected_decision(frame, reason.to_string())
+                    }
+                    Err(error) => rejected_decision(frame, error.to_string()),
+                };
+                ledger.push(resume::ResumeFrame {
+                    decision: decision.clone(),
+                    exposure_seconds: exposure,
+                    rotation_radians: if decision.disposition == "accepted" {
+                        decision
+                            .registered_mapping
+                            .as_ref()
+                            .map(|mapping| mapping.transform().rotation_radians)
+                    } else {
+                        None
                     },
-                },
-                Err(error) => StackFrameDecision {
-                    image_id: frame.image_id,
-                    disposition: "rejected".into(),
-                    reason: Some(error.to_string()),
-                    quality_score: frame.quality_score,
-                    matched_stars: None,
-                    registration_rms_pixels: None,
-                    registration_drift_pixels: None,
-                    registered_mapping: None,
-                    normalization_mean_gain: None,
-                    normalization_mean_offset: None,
-                    source_fingerprint: Some(frame.source_fingerprint.clone()),
-                    overlap_fraction: None,
-                    integrated_fraction: None,
-                },
-            };
-            ledger.push(resume::ResumeFrame {
-                decision: decision.clone(),
-                exposure_seconds: exposure,
-                rotation_radians: if decision.disposition == "accepted" {
-                    decision
-                        .registered_mapping
-                        .as_ref()
-                        .map(|mapping| mapping.transform().rotation_radians)
+                });
+                state.stack_previews.update(job_id, |job| {
+                    let status = &mut job.groups[group.index];
+                    status.processed_frames += 1;
+                    if matches!(decision.disposition.as_str(), "accepted") {
+                        status.accepted_frames += 1;
+                        status.total_exposure_seconds += exposure;
+                    } else {
+                        status.rejected_frames += 1;
+                    }
+                    status.frames.push(decision);
+                });
+
+                // Integrating one frame is the unit of work, so this is where
+                // a stop takes effect. Frames already prepared are discarded.
+                if cancel.load(Ordering::Relaxed) {
+                    cancelled = true;
+                    seiza_stacking::Continue::No
                 } else {
-                    None
-                },
-            });
-            state.stack_previews.update(job_id, |job| {
-                let status = &mut job.groups[group.index];
-                status.processed_frames += 1;
-                if matches!(decision.disposition.as_str(), "accepted") {
-                    status.accepted_frames += 1;
-                    status.total_exposure_seconds += exposure;
-                } else {
-                    status.rejected_frames += 1;
+                    seiza_stacking::Continue::Yes
                 }
-                status.frames.push(decision);
-            });
+            })
+            .map_err(|error| error.to_string())?;
+
+        if cancelled {
+            // The frames that did land are checkpointed, so building again
+            // continues from them.
+            save_checkpoint(&stacker, &ledger);
+            return Ok(GroupOutcome::Cancelled);
         }
         // The accumulator is complete: checkpoint it before the snapshot
         // consumes the stacker, so an additive rebuild can pick it up here.
@@ -2424,6 +2472,46 @@ fn fits_path(cache_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+
+    /// The stacking pipeline opens frames on its own threads and reports only
+    /// the disposition, so the exposure has to come from the record. Both
+    /// N.I.N.A. and PSF Guard's importer write it, but they disagree on the
+    /// key and on whether it is a number or text.
+    #[test]
+    fn exposure_reads_every_spelling_a_catalog_uses() {
+        for metadata in [
+            r#"{"ExposureDuration": 300.0}"#,
+            r#"{"ExposureTime": 300}"#,
+            r#"{"EXPTIME": "300.0"}"#,
+            r#"{"ExposureDuration": "300"}"#,
+        ] {
+            assert_eq!(
+                super::exposure_seconds_from_metadata(metadata),
+                300.0,
+                "{metadata}"
+            );
+        }
+    }
+
+    /// A record that does not say falls back to zero, which the orientation
+    /// vote reads as one vote per frame rather than a zero-weight frame.
+    #[test]
+    fn a_record_without_an_exposure_reads_as_zero() {
+        for metadata in [
+            r#"{"FileName": "light.fits"}"#,
+            r#"{"ExposureDuration": null}"#,
+            r#"{"ExposureDuration": "not a number"}"#,
+            r#"{"ExposureDuration": 0}"#,
+            r#"{"ExposureDuration": -5}"#,
+            "not json at all",
+        ] {
+            assert_eq!(
+                super::exposure_seconds_from_metadata(metadata),
+                0.0,
+                "{metadata}"
+            );
+        }
+    }
     use super::*;
 
     fn sky_orientation() -> StackSkyOrientation {
