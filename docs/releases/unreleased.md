@@ -24,6 +24,14 @@
   across reloads, and its result cards follow the grid's thumbnail-size
   slider up to one full-width column.
 
+## Fixed
+
+- A stack whose reference frame sits on the thin side of a meridian flip is
+  turned the right way up again. The reference's exposure was weighed in
+  seconds while every other frame counted as one, so on a catalog that records
+  no exposure length the reference alone outvoted the whole night and the stack
+  published upside down.
+
 ## Changed
 
 - Stack previews build faster. Frames are now read, calibrated, registered and
