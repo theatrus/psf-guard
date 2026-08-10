@@ -115,7 +115,7 @@ pub fn read_header_named(
 /// almost every frame it meets is 16-bit camera data. A PixInsight float
 /// frame that declares itself normalized has no ADU of its own, so the
 /// nearest honest thing is to put it on the same scale as its neighbours.
-const NORMALIZED_FULL_SCALE: f32 = 65535.0;
+pub const NORMALIZED_FULL_SCALE: f32 = 65535.0;
 
 /// Decode a frame's pixels and headers.
 ///
@@ -149,12 +149,7 @@ pub fn open_linear_frame(
     path: impl AsRef<Path>,
 ) -> Result<seiza_stacking::FitsFrame, seiza_stacking::Error> {
     let mut frame = seiza_stacking::FitsFrame::open(path)?;
-    if frame.bounds == Some((0.0, 1.0)) {
-        for sample in &mut frame.image.data {
-            *sample *= NORMALIZED_FULL_SCALE;
-        }
-        frame.bounds = Some((0.0, f64::from(NORMALIZED_FULL_SCALE)));
-    }
+    frame.rescale_declared_unit_bounds(NORMALIZED_FULL_SCALE);
     Ok(frame)
 }
 
