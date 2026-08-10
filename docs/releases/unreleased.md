@@ -26,6 +26,11 @@
 
 ## Changed
 
+- Stacking and calibration now build against Seiza 0.15.4, which adds a
+  concurrent frame-preparation pipeline. PSF Guard keeps its own stacking loop
+  for now, because that loop needs each frame's exposure time and applies the
+  normalized-XISF rescale as it reads; adopting the new path would drop both.
+
 - The reject archive no longer treats `.xisf` as a companion file. A frame
   carries its own grade, so archiving one alongside a rejected sibling would
   move a file the catalog still calls accepted. The default companion list is
