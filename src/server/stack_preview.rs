@@ -1970,7 +1970,12 @@ fn run_group(
                 (stacker, ledger)
             }
             None => {
-                let reference_exposure = reference_frame.exposure_seconds.unwrap_or(0.0);
+                // From the record, like every other frame's. Reading this one
+                // from its opened header instead would weigh it in seconds
+                // against frames weighing 1.0 apiece whenever the catalog does
+                // not record an exposure, and the reference alone would then
+                // outvote the whole night.
+                let reference_exposure = group.frames[0].exposure_seconds;
                 // The reference frame defines zero rotation; it votes upright.
                 orientation_vote.add(0.0, reference_exposure);
                 let options = StackOptions {
@@ -2900,6 +2905,51 @@ mod tests {
             north_up: None,
             west_of_pier: Some(west_of_pier),
         }
+    }
+
+    /// Every frame's vote must be weighed in the same unit. Reading the
+    /// reference's exposure from its opened header while the rest come from
+    /// the catalog gave the reference hundreds of seconds against one vote
+    /// each for every other frame, so a whole night on the far side of a
+    /// meridian flip could not outvote it and the stack published upside
+    /// down.
+    #[test]
+    fn a_night_past_a_flip_outvotes_the_reference_frame() {
+        // What a catalog with no recorded exposure yields: zero, which the
+        // vote reads as one vote per frame.
+        let mut vote = OrientationVote::default();
+        vote.add(0.0, 0.0);
+        for _ in 0..8 {
+            vote.add(std::f64::consts::PI, 0.0);
+        }
+        assert!(
+            vote.prefers_half_turn(),
+            "eight flipped frames must outvote one reference"
+        );
+
+        // And the reference still wins when it really is the majority.
+        let mut vote = OrientationVote::default();
+        for _ in 0..8 {
+            vote.add(0.0, 300.0);
+        }
+        vote.add(std::f64::consts::PI, 300.0);
+        assert!(!vote.prefers_half_turn());
+    }
+
+    /// The mixed-unit failure itself, so nobody reintroduces it by sourcing
+    /// one weight differently from the others.
+    #[test]
+    fn a_reference_weighed_in_seconds_would_outvote_frames_weighed_by_count() {
+        let mut mixed = OrientationVote::default();
+        mixed.add(0.0, 300.0);
+        for _ in 0..8 {
+            mixed.add(std::f64::consts::PI, 0.0);
+        }
+        assert!(
+            !mixed.prefers_half_turn(),
+            "this is the behaviour the fix exists to prevent; if it ever \
+             changes, the guard above is what matters"
+        );
     }
 
     /// Whether a channel ends up turned, given the job it was built in.
