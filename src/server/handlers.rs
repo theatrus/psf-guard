@@ -1197,6 +1197,7 @@ pub async fn export_archive_route(
         )));
     }
 
+    let layout = query.layout;
     let filename = format!(
         "psf-guard-export-{}{}.zip",
         ctx.id,
@@ -1235,6 +1236,30 @@ pub async fn export_archive_route(
             if let Err(e) = zip.write_entry_whole(entry, &bytes).await {
                 tracing::warn!("📦 export db={}: zip write failed: {}", db_id, e);
                 return;
+            }
+        }
+        // The runner scripts ride along in the zip, so an export unpacked on
+        // the machine PixInsight runs on already knows how to hand itself to
+        // WBPP. A zip has no destination path, so nothing here can be
+        // inexpressible the way a comma in a local path can be.
+        if layout == crate::commands::export::ExportLayout::Wbpp {
+            use crate::commands::export::wbpp;
+            for (name, body) in [
+                (
+                    "run-wbpp.sh",
+                    wbpp::shell_script(&plan, wbpp::WbppRun::default()),
+                ),
+                (
+                    "run-wbpp.cmd",
+                    wbpp::batch_script(&plan, wbpp::WbppRun::default()),
+                ),
+            ] {
+                let entry =
+                    ZipEntryBuilder::new(name.into(), Compression::Stored).unix_permissions(0o755);
+                if let Err(e) = zip.write_entry_whole(entry, body.as_bytes()).await {
+                    tracing::warn!("📦 export db={}: zip write failed: {}", db_id, e);
+                    return;
+                }
             }
         }
         if let Err(e) = zip.close().await {
@@ -1295,12 +1320,18 @@ pub async fn export_local_route(
         )
         .map_err(|e| anyhow::anyhow!("opening {}: {e}", plan_ctx.database_path))?;
         let plan = plan_export(&conn, &plan_ctx.image_dirs, &options)?;
-        Ok::<_, anyhow::Error>(execute_plan(
-            &plan,
-            std::path::Path::new(&dest),
-            link,
-            dry_run,
-        ))
+        let summary = execute_plan(&plan, std::path::Path::new(&dest), link, dry_run);
+        if options.layout == crate::commands::export::ExportLayout::Wbpp && !dry_run {
+            use crate::commands::export::{wbpp, write_wbpp_scripts};
+            // The frames are already placed; a runner that cannot be written
+            // is worth logging but never worth failing the export over.
+            if let Err(error) =
+                write_wbpp_scripts(&plan, std::path::Path::new(&dest), wbpp::WbppRun::default())
+            {
+                tracing::warn!("No WBPP runner script: {error}");
+            }
+        }
+        Ok::<_, anyhow::Error>(summary)
     })
     .await
     .map_err(|e| AppError::InternalError(format!("export task: {e}")))?

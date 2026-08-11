@@ -22,6 +22,8 @@ use crate::directory_tree::DirectoryTree;
 use crate::models::GradingStatus;
 use anyhow::{Context, Result};
 use rusqlite::Connection;
+pub mod wbpp;
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -354,6 +356,37 @@ pub fn execute_plan(
         }
     }
     summary
+}
+
+/// Write the WBPP runner scripts beside a finished export.
+///
+/// Both platforms' scripts are written, because an export is often zipped and
+/// opened on the machine PixInsight runs on rather than the one that made it.
+pub fn write_wbpp_scripts(
+    plan: &ExportPlan,
+    dest_root: &Path,
+    run: wbpp::WbppRun,
+) -> Result<Vec<PathBuf>> {
+    if let Some(reason) = wbpp::unusable_destination(dest_root) {
+        anyhow::bail!(reason);
+    }
+    std::fs::create_dir_all(dest_root)
+        .with_context(|| format!("creating {}", dest_root.display()))?;
+    let mut written = Vec::new();
+    for (name, body) in [
+        ("run-wbpp.sh", wbpp::shell_script(plan, run)),
+        ("run-wbpp.cmd", wbpp::batch_script(plan, run)),
+    ] {
+        let path = dest_root.join(name);
+        std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
+        #[cfg(unix)]
+        if name.ends_with(".sh") {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+        }
+        written.push(path);
+    }
+    Ok(written)
 }
 
 #[cfg(test)]

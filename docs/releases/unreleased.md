@@ -9,8 +9,10 @@
 - Export can lay a session out for PixInsight's WeightedBatchPreprocessing.
   Pick **WBPP** as the export layout on the overview, or pass `--layout wbpp`,
   and each frame type gets its own folder with dark flats among the darks
-  where WBPP expects them. The existing target-grouped layout stays the
-  default. See [calibration
+  where WBPP expects them. The export carries `run-wbpp.sh` and `run-wbpp.cmd`
+  that hand it straight to PixInsight, stopping at WBPP's dialog so you can
+  check the groups before starting. The existing target-grouped layout stays
+  the default. See [calibration
   libraries](https://github.com/theatrus/psf-guard/blob/main/docs/CALIBRATION_LIBRARY.md#export).
 
 - XISF frames count as images everywhere FITS frames do. Folder scans,

@@ -191,7 +191,21 @@ pub fn main() -> Result<()> {
                 ..Default::default()
             };
             let plan = plan_export(&conn, &dirs, &options)?;
-            let summary = execute_plan(&plan, &PathBuf::from(&dest), link, dry_run);
+            let dest_root = PathBuf::from(&dest);
+            let summary = execute_plan(&plan, &dest_root, link, dry_run);
+            if options.layout == crate::commands::export::ExportLayout::Wbpp && !dry_run {
+                use crate::commands::export::{wbpp, write_wbpp_scripts};
+                match write_wbpp_scripts(&plan, &dest_root, wbpp::WbppRun::default()) {
+                    Ok(scripts) => {
+                        for script in scripts {
+                            println!("Wrote {}", script.display());
+                        }
+                    }
+                    // The frames are already placed; a missing runner is worth
+                    // reporting but not worth failing the export over.
+                    Err(error) => eprintln!("⚠️  No WBPP runner script: {error}"),
+                }
+            }
 
             println!(
                 "\nExport {}: planned={}, copied={}, linked={}, already_present={}, \

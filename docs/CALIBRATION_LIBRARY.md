@@ -133,6 +133,24 @@ Choose the layout with `--layout wbpp` on the CLI, the `layout` query parameter
 on the export download, or the **Export layout** control on the overview, which
 applies to every export on the page.
 
+A WBPP export also carries `run-wbpp.sh` and `run-wbpp.cmd`, which hand it to
+PixInsight. WBPP 3.x is driven from PixInsight's command line rather than
+through a script API, so these are the invocation itself: readable, editable,
+and re-runnable. They default to WBPP's `loadOnly`, which loads the frames and
+groups and then stops with the dialog open — its grouping and reference choices
+are worth a look before an hour of integration starts. Delete that one line to
+run the pipeline.
+
+PixInsight prints nothing to the terminal in this mode, because WBPP writes to
+its own console. A finished run and a failed one look alike from outside, so
+read `wbpp-out/logs/*.log` for what happened; the results land in
+`wbpp-out/master` and `wbpp-out/calibrated`. The scripts say so too.
+
+This was verified against WBPP 3.0.1 in PixInsight 1.9.4: the generated
+invocation classified every frame from its `IMAGETYP` header, grouped by
+binning, size, filter and exposure, built master bias, dark and flat, matched
+the dark and flat to the lights automatically, and calibrated them.
+
 Rejected lights remain excluded in either layout. Repeated calibration sources
 are deduplicated per destination. Name collisions receive a numbered suffix.
 
