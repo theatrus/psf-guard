@@ -1168,6 +1168,7 @@ pub async fn export_archive_route(
         project_id: query.project_id,
         target_id: query.target_id,
         filter_name: query.filter_name.clone(),
+        layout: query.layout,
         ..Default::default()
     };
 
@@ -1277,6 +1278,7 @@ pub async fn export_local_route(
         project_id: req.project_id,
         target_id: req.target_id,
         filter_name: req.filter_name.clone(),
+        layout: req.layout,
         ..Default::default()
     };
     let link = req.link.unwrap_or(true);

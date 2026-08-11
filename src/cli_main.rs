@@ -143,6 +143,7 @@ pub fn main() -> Result<()> {
             project,
             target,
             filter,
+            layout,
             link,
             dry_run,
             image_dirs,
@@ -186,6 +187,7 @@ pub fn main() -> Result<()> {
                 project_filter: project,
                 target_filter: target,
                 filter_name: filter,
+                layout: layout.into(),
                 ..Default::default()
             };
             let plan = plan_export(&conn, &dirs, &options)?;

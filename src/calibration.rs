@@ -1635,7 +1635,9 @@ pub fn export_destinations(
     light: &FrameMeta,
     target_name: &str,
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
+    layout: crate::commands::export::ExportLayout,
 ) -> Result<Vec<(CalibrationKind, CalibrationFrame, PathBuf)>> {
+    use crate::commands::export::ExportLayout;
     let mut selected = select_for_light(conn, light)?;
     remap_missing_sources(&mut selected, directory_tree);
     let target = crate::commands::export::sanitize_component(target_name);
@@ -1649,11 +1651,15 @@ pub fn export_destinations(
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
-        output.push((
-            CalibrationKind::Bias,
-            frame,
-            PathBuf::from("BIAS").join(name),
-        ));
+        let destination = match layout {
+            ExportLayout::Standard => PathBuf::from("BIAS").join(&name),
+            // Grouped by gain so WBPP does not integrate two sensors'
+            // settings into one master bias.
+            ExportLayout::Wbpp => PathBuf::from("bias")
+                .join(gain_group(frame.gain))
+                .join(&name),
+        };
+        output.push((CalibrationKind::Bias, frame, destination));
     }
     for frame in selected.dark {
         let name = frame
@@ -1670,11 +1676,11 @@ pub fn export_destinations(
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "unknown".into())
         );
-        output.push((
-            CalibrationKind::Dark,
-            frame,
-            PathBuf::from("DARK").join(group).join(name),
-        ));
+        let destination = match layout {
+            ExportLayout::Standard => PathBuf::from("DARK").join(&group).join(&name),
+            ExportLayout::Wbpp => PathBuf::from("darks").join(&group).join(&name),
+        };
+        output.push((CalibrationKind::Dark, frame, destination));
     }
     for frame in selected.dark_flat {
         let name = frame
@@ -1691,11 +1697,15 @@ pub fn export_destinations(
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "unknown".into())
         );
-        output.push((
-            CalibrationKind::DarkFlat,
-            frame,
-            PathBuf::from("DARKFLAT").join(group).join(name),
-        ));
+        let destination = match layout {
+            ExportLayout::Standard => PathBuf::from("DARKFLAT").join(&group).join(&name),
+            // WBPP has no dark-flat type: a dark flat is a dark that happens
+            // to match the flats' exposure, and WBPP pairs them by exposure.
+            // Keeping a separate folder would mean adding it to WBPP a second
+            // time, as darks.
+            ExportLayout::Wbpp => PathBuf::from("darks").join(&group).join(&name),
+        };
+        output.push((CalibrationKind::DarkFlat, frame, destination));
     }
     for frame in selected.flat {
         let name = frame
@@ -1704,14 +1714,33 @@ pub fn export_destinations(
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
-        output.push((
-            CalibrationKind::Flat,
-            frame,
-            PathBuf::from(&target).join("FLAT").join(&filter).join(name),
-        ));
+        let destination = match layout {
+            ExportLayout::Standard => PathBuf::from(&target)
+                .join("FLAT")
+                .join(&filter)
+                .join(&name),
+            // Kept under the target, because PSF Guard matched these flats to
+            // that target's lights. Two targets shot on different nights can
+            // need different flats for one filter, and merging them would have
+            // WBPP integrate both into a single master.
+            ExportLayout::Wbpp => PathBuf::from("flats")
+                .join(&target)
+                .join(&filter)
+                .join(&name),
+        };
+        output.push((CalibrationKind::Flat, frame, destination));
     }
     output.sort_by(|left, right| left.2.cmp(&right.2));
     Ok(output)
+}
+
+/// The folder a bias frame's gain puts it in. An unrecorded gain gets its own
+/// group rather than joining a numbered one.
+fn gain_group(gain: Option<i64>) -> String {
+    match gain {
+        Some(gain) => format!("G{gain}"),
+        None => "G-unknown".to_string(),
+    }
 }
 
 fn remap_missing_sources(

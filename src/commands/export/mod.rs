@@ -55,6 +55,46 @@ pub struct ExportPlan {
     pub unresolvable: usize,
 }
 
+/// How an export arranges its files under the destination root.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportLayout {
+    /// PSF Guard's own tree, grouped by target first:
+    /// `<target>/LIGHT/<filter>/`, `<target>/FLAT/<filter>/`, and `BIAS/`,
+    /// `DARK/`, `DARKFLAT/` at the root.
+    #[default]
+    Standard,
+    /// One root per frame type, which is what WeightedBatchPreprocessing
+    /// wants: `lights/`, `flats/`, `darks/`, `bias/`.
+    ///
+    /// Dark flats live under `darks/` beside the lights' darks, because WBPP
+    /// has no dark-flat type — it matches a dark to a flat by exposure like
+    /// any other. Keeping them apart, as the standard layout does, means
+    /// adding one folder to WBPP twice.
+    Wbpp,
+}
+
+impl ExportLayout {
+    /// Where one light frame lands.
+    fn light_destination(self, target: &str, filter: &str, basename: &str) -> PathBuf {
+        let (target, filter, basename) = (
+            sanitize_component(target),
+            sanitize_component(filter),
+            sanitize_component(basename),
+        );
+        match self {
+            Self::Standard => PathBuf::from(target)
+                .join("LIGHT")
+                .join(filter)
+                .join(basename),
+            Self::Wbpp => PathBuf::from("lights")
+                .join(target)
+                .join(filter)
+                .join(basename),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ExportOptions {
     pub include_pending: bool,
@@ -66,6 +106,8 @@ pub struct ExportOptions {
     pub target_id: Option<i32>,
     /// Restrict to one filter name (exact, case-insensitive).
     pub filter_name: Option<String>,
+    /// How the destination tree is arranged.
+    pub layout: ExportLayout,
 }
 
 #[derive(Debug, Default, serde::Serialize)]
@@ -164,6 +206,7 @@ pub fn plan_export(
                     &light_meta,
                     &target_name,
                     Some(&tree),
+                    options.layout,
                 )
                 .context("matching export calibration frames")?,
             );
@@ -172,10 +215,10 @@ pub fn plan_export(
         // The basename comes from the row's metadata JSON; sanitize it too so
         // a degenerate FileName (e.g. "..") can never shift the destination
         // or produce a traversal-shaped archive entry name.
-        let mut relative_dest = PathBuf::from(sanitize_component(&target_name))
-            .join("LIGHT")
-            .join(sanitize_component(&image.filter_name))
-            .join(sanitize_component(&basename));
+        let mut relative_dest =
+            options
+                .layout
+                .light_destination(&target_name, &image.filter_name, &basename);
         let clashes = used_dests.entry(relative_dest.clone()).or_insert(0);
         *clashes += 1;
         if *clashes > 1 {
@@ -405,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn layout_is_wbpp_style_with_sanitized_names() {
+    fn the_standard_layout_groups_by_target_and_sanitizes_names() {
         let dir = tempfile::tempdir().unwrap();
         let conn = seed(dir.path());
         let dirs = vec![dir.path().to_string_lossy().into_owned()];
@@ -415,6 +458,70 @@ mod tests {
             plan.items[0].relative_dest,
             PathBuf::from("M42_Trapezium/LIGHT/Ha/acc_Ha_0001.fits")
         );
+    }
+
+    /// WBPP wants one root per frame type, and has no dark-flat type at all
+    /// — a dark flat is a dark it pairs to a flat by exposure. Keeping them in
+    /// their own folder, as the standard layout does, means adding one folder
+    /// to WBPP twice.
+    #[test]
+    fn the_wbpp_layout_gives_each_frame_type_one_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = seed(dir.path());
+        let light_path = dir.path().join("acc_Ha_0001.fits");
+        write_test_fits(&light_path, "LIGHT");
+
+        let mut calibration = Vec::new();
+        for (name, kind) in [
+            ("bias-0.fits", "BIAS"),
+            ("dark-0.fits", "DARK"),
+            ("flat-0.fits", "FLAT"),
+        ] {
+            let path = dir.path().join(name);
+            write_test_fits(&path, kind);
+            calibration.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        {
+            let tx = conn.transaction().unwrap();
+            crate::calibration::import_calibration_frames(&tx, &calibration, Some("p")).unwrap();
+            tx.commit().unwrap();
+        }
+
+        let dirs = vec![dir.path().to_string_lossy().into_owned()];
+        let options = ExportOptions {
+            layout: ExportLayout::Wbpp,
+            ..ExportOptions::default()
+        };
+        let plan = plan_export(&conn, &dirs, &options).unwrap();
+        let destinations: Vec<String> = plan
+            .items
+            .iter()
+            .map(|item| item.relative_dest.to_string_lossy().replace('\\', "/"))
+            .collect();
+
+        assert!(
+            destinations
+                .iter()
+                .any(|path| path == "lights/M42_Trapezium/Ha/acc_Ha_0001.fits"),
+            "{destinations:?}"
+        );
+        assert!(
+            destinations.iter().any(|path| path.starts_with("bias/")),
+            "{destinations:?}"
+        );
+        // Nothing may land in the standard layout's roots.
+        for path in &destinations {
+            assert!(
+                !path.starts_with("DARKFLAT/") && !path.contains("/LIGHT/"),
+                "the standard tree leaked into a WBPP export: {path}"
+            );
+        }
+    }
+
+    /// The default is untouched, so an existing export folder keeps its shape.
+    #[test]
+    fn the_default_layout_is_still_the_standard_one() {
+        assert_eq!(ExportOptions::default().layout, ExportLayout::Standard);
     }
 
     #[test]

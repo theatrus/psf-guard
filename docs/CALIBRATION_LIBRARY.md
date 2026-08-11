@@ -99,7 +99,10 @@ reference light's set to every frame.
 
 ## Export
 
-Project and target exports add the raw frames matched to each selected light:
+Project and target exports add the raw frames matched to each selected light.
+Two layouts are available; the default is unchanged.
+
+**Grouped by target**, the default:
 
 ```text
 BIAS/
@@ -109,8 +112,29 @@ DARKFLAT/<exposure>_G<gain>/
 <target>/LIGHT/<filter>/
 ```
 
-Rejected lights remain excluded. Repeated calibration sources are deduplicated
-per destination. Name collisions receive a numbered suffix.
+**WBPP**, one root per frame type, for WeightedBatchPreprocessing:
+
+```text
+bias/G<gain>/
+darks/<exposure>s_G<gain>/
+flats/<target>/<filter>/
+lights/<target>/<filter>/
+```
+
+Dark flats land in `darks/` beside the lights' darks. WBPP has no dark-flat
+type: a dark flat is a dark it pairs to a flat by exposure, so a separate
+folder would only mean adding one to WBPP twice.
+
+Flats stay under their target because PSF Guard matched them to that target's
+lights. Two targets shot on different nights can need different flats for one
+filter, and merging them would have WBPP integrate both into a single master.
+
+Choose the layout with `--layout wbpp` on the CLI, the `layout` query parameter
+on the export download, or the **Export layout** control on the overview, which
+applies to every export on the page.
+
+Rejected lights remain excluded in either layout. Repeated calibration sources
+are deduplicated per destination. Name collisions receive a numbered suffix.
 
 ## Database transfer
 
