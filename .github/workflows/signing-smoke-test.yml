@@ -30,7 +30,7 @@ jobs:
     # `repo:theatrus/psf-guard:environment:release`.
     environment: release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Show what we are about to use
         shell: bash
@@ -43,7 +43,7 @@ jobs:
       # Failure here means the OIDC subject did not match the federated
       # credential. That is the single most likely thing to be wrong.
       - name: Authenticate to Azure (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -72,7 +72,7 @@ jobs:
       # hard-requires AZURE_CLIENT_SECRET with no OIDC path, which would have
       # meant storing a signing secret in the repo.
       - name: Sign it
-        uses: azure/trusted-signing-action@v0
+        uses: azure/trusted-signing-action@v2
         with:
           endpoint: ${{ vars.SIGNING_ENDPOINT }}
           trusted-signing-account-name: ${{ vars.SIGNING_ACCOUNT }}
