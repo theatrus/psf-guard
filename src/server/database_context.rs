@@ -43,7 +43,7 @@ const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
 /// The one way to open a scheduler DB connection in the server: flags above +
 /// busy timeout. Every open site (initial, both reopen paths, the refresh
 /// connection) must go through here so none silently loses the busy handler.
-fn open_scheduler_connection(path: &str) -> rusqlite::Result<Connection> {
+pub(crate) fn open_scheduler_connection(path: &str) -> rusqlite::Result<Connection> {
     let conn = Connection::open_with_flags(path, db_open_flags())?;
     conn.busy_timeout(DB_BUSY_TIMEOUT)?;
     Ok(conn)

@@ -8,7 +8,11 @@
 //! Import is header-only and fast: `gradingStatus` starts Pending and star /
 //! quality metrics are intentionally absent from the metadata JSON (readers
 //! treat missing keys as None). Database-wide quality analysis is a separate,
-//! on-demand background job; imports may queue it but never wait for it.
+//! on-demand background job; imports may queue it but never wait for it. Once
+//! that scan has measured a frame, it fills `DetectedStars` and `HFR` into
+//! the metadata (missing keys only — see `fill_missing_star_metadata` in the
+//! server handlers), so imported rows end up with the same star metadata a
+//! N.I.N.A. catalog carries.
 //!
 //! Idempotency: a frame whose basename already appears in any
 //! `acquiredimage.metadata` FileName is skipped, so re-running an import on a

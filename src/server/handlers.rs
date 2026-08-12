@@ -1534,6 +1534,7 @@ pub async fn create_database_route(
         req.image_dirs.clone(),
         options,
         req.backfill.unwrap_or(false),
+        req.fill_metadata.unwrap_or(true),
     );
 
     Ok(Json(ApiResponse::success(CreateDatabaseResponse {
@@ -1591,6 +1592,7 @@ pub async fn start_import_route(
         dirs,
         options,
         req.backfill.unwrap_or(false),
+        req.fill_metadata.unwrap_or(true),
     );
     Ok(Json(ApiResponse::success(ImportStatusResponse {
         started,
@@ -1653,6 +1655,7 @@ fn spawn_import_job(
     dirs: Vec<String>,
     options: crate::commands::import::ImportOptions,
     backfill: bool,
+    fill_metadata: bool,
 ) -> bool {
     use crate::server::import_job as job;
 
@@ -1720,7 +1723,7 @@ fn spawn_import_job(
         // Quality analysis is a general database maintenance job, not an
         // import stage. An opt-in import only queues the changed targets.
         if backfill && !target_ids.is_empty() {
-            spawn_quality_backfill(&state, ctx.clone(), target_ids, false);
+            spawn_quality_backfill(&state, ctx.clone(), target_ids, false, fill_metadata);
         }
     });
     true
@@ -1768,6 +1771,7 @@ async fn run_quality_scan_for_target(
     ctx: &Arc<DatabaseContext>,
     target_id: i32,
     force: bool,
+    fill_metadata: bool,
 ) {
     use crate::server::spatial_scan;
 
@@ -1783,6 +1787,7 @@ async fn run_quality_scan_for_target(
                 force_spatial: force,
                 force_astrometry: force,
                 force_satellites: false,
+                fill_metadata: Some(fill_metadata),
             }),
             crate::concurrency::Priority::Background,
             false,
@@ -1821,11 +1826,64 @@ async fn run_quality_scan_for_target(
     }
 }
 
+/// Write scan-measured star count and HFR into `acquiredimage.metadata` for
+/// frames that imported without them, so an imported catalog carries the same
+/// star metadata a N.I.N.A. catalog does. `pending` is `(image id, filename,
+/// metadata JSON as read)`. The patch fills only missing keys — a measured
+/// N.I.N.A. value is never overwritten — and a row that changed since it was
+/// read is left alone.
+fn fill_missing_star_metadata(ctx: &DatabaseContext, pending: &[(i32, String, String)]) -> usize {
+    use crate::server::spatial_scan as scan;
+
+    let patches: Vec<(i32, &String, String)> = pending
+        .iter()
+        .filter_map(|(image_id, filename, metadata)| {
+            let entry = scan::valid_quality_entry(&ctx.spatial_metrics, *image_id, filename)?;
+            scan::star_metrics_metadata_patch(metadata, entry.star_count, entry.avg_hfr)
+                .map(|updated| (*image_id, metadata, updated))
+        })
+        .collect();
+    if patches.is_empty() {
+        return 0;
+    }
+
+    // A dedicated connection: this runs on a blocking scan thread and must
+    // not tie up the shared request connection.
+    let conn = match crate::server::database_context::open_scheduler_connection(&ctx.database_path)
+    {
+        Ok(conn) => conn,
+        Err(e) => {
+            tracing::warn!("📐 Star-metadata fill skipped for db={}: {}", ctx.id, e);
+            return 0;
+        }
+    };
+    let db = Database::new(&conn);
+    let mut filled = 0usize;
+    for (image_id, expected, updated) in &patches {
+        match db.update_image_metadata_if_unchanged(*image_id, expected, updated) {
+            Ok(true) => filled += 1,
+            Ok(false) => {} // concurrent writer wins; skip quietly
+            Err(e) => {
+                tracing::warn!("📐 Star-metadata fill failed for image {}: {}", image_id, e)
+            }
+        }
+    }
+    if filled > 0 {
+        tracing::info!(
+            "📐 Filled measured star metrics into {} imported image(s) (db={})",
+            filled,
+            ctx.id
+        );
+    }
+    filled
+}
+
 fn spawn_quality_backfill(
     state: &Arc<AppState>,
     ctx: Arc<DatabaseContext>,
     target_ids: Vec<i32>,
     force: bool,
+    fill_metadata: bool,
 ) -> bool {
     use crate::server::quality_backfill as job;
 
@@ -1846,7 +1904,7 @@ fn spawn_quality_backfill(
         );
         for target_id in target_ids {
             job::begin_target(&ctx.quality_backfill, target_id);
-            run_quality_scan_for_target(&state, &ctx, target_id, force).await;
+            run_quality_scan_for_target(&state, &ctx, target_id, force, fill_metadata).await;
             job::finish_target(&ctx.quality_backfill);
         }
         job::finish(&ctx.quality_backfill);
@@ -1870,7 +1928,13 @@ pub async fn start_quality_backfill_route(
             .map(|target| target.target.id)
             .collect::<Vec<_>>()
     };
-    let started = spawn_quality_backfill(&state, ctx.0.clone(), target_ids, req.force);
+    let started = spawn_quality_backfill(
+        &state,
+        ctx.0.clone(),
+        target_ids,
+        req.force,
+        req.fill_metadata.unwrap_or(true),
+    );
     Ok(Json(ApiResponse::success(QualityBackfillStatusResponse {
         started,
         progress: crate::server::quality_backfill::snapshot(&ctx.quality_backfill),
@@ -4249,6 +4313,11 @@ async fn start_spatial_scan_with_priority(
     // Keep the union of spatial, astrometry, and satellite work. One side may
     // already be cached while another still needs computation.
     let mut work = Vec::new();
+    // Frames whose metadata never got star metrics (header-first imports):
+    // once the scan has measurements, they are written back to the DB —
+    // unless the caller opted out of metadata writes.
+    let fill_metadata = req.fill_metadata.unwrap_or(true);
+    let mut star_fill: Vec<(i32, String, String)> = Vec::new();
     let mut skipped_cached = 0usize;
     let force_spatial = req.force || req.force_spatial;
     let force_astrometry = req.force || req.force_astrometry;
@@ -4257,6 +4326,10 @@ async fn start_spatial_scan_with_priority(
         let Some(file_only) = filename_from_metadata(&img.metadata) else {
             continue;
         };
+        if fill_metadata && crate::server::spatial_scan::metadata_lacks_star_metrics(&img.metadata)
+        {
+            star_fill.push((img.id, file_only.clone(), img.metadata.clone()));
+        }
         let spatial_cached = !force_spatial
             && scan::valid_quality_entry(&ctx.spatial_metrics, img.id, &file_only).is_some();
         if spatial_cached {
@@ -4298,6 +4371,16 @@ async fn start_spatial_scan_with_priority(
     }
 
     if work.is_empty() {
+        // Nothing to compute, but cached measurements may still be missing
+        // from imported rows (e.g. a catalog scanned before write-back
+        // existed) — heal them without forcing a rescan.
+        if !star_fill.is_empty() {
+            let fill_ctx = ctx.0.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                fill_missing_star_metadata(&fill_ctx, &star_fill)
+            })
+            .await;
+        }
         let (progress, cached_count) = scan::progress_snapshot(&ctx.spatial_metrics);
         return Ok(Json(ApiResponse::success(SpatialScanStatusResponse {
             started: false,
@@ -4418,6 +4501,11 @@ async fn start_spatial_scan_with_priority(
                     &wait_for_turn,
                 );
             }
+
+            // The star-detection stage is done (fresh or cached), so imported
+            // rows without star metrics can take the measured values now,
+            // before the (much slower) astrometry stage.
+            fill_missing_star_metadata(&ctx_arc, &star_fill);
 
             let astrometry_items = items
                 .iter()

@@ -1200,6 +1200,9 @@ export interface ImportRequest {
   profile_id?: string;
   dry_run?: boolean;
   backfill?: boolean;
+  /** Let the queued quality job write star count/HFR into imported images'
+   *  metadata (missing keys only; default true). */
+  fill_metadata?: boolean;
   /** Attach to existing targets by name/coordinates (default true). */
   attach_existing?: boolean;
   match_radius_deg?: number;
@@ -1214,6 +1217,9 @@ export interface CreateDatabaseRequest {
   time_gap_days?: number;
   profile_id?: string;
   backfill?: boolean;
+  /** Let the queued quality job write star count/HFR into imported images'
+   *  metadata (missing keys only; default true). */
+  fill_metadata?: boolean;
 }
 
 export interface CreateDatabaseResponse {
@@ -1649,6 +1655,9 @@ export interface SpatialScanRequest {
   force_spatial?: boolean;
   force_astrometry?: boolean;
   force_satellites?: boolean;
+  /** Write measured star count/HFR into imported images' metadata
+   *  (missing keys only; default true). */
+  fill_metadata?: boolean;
 }
 
 export interface QualityBackfillProgress {
@@ -1668,6 +1677,9 @@ export interface QualityBackfillStatus {
 
 export interface QualityBackfillRequest {
   force?: boolean;
+  /** Write measured star count/HFR into imported images' metadata
+   *  (missing keys only; default true). */
+  fill_metadata?: boolean;
 }
 
 export interface SequenceSummary {
