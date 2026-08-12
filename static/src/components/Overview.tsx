@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { apiClient } from '../api/client';
 import type {
+  ExportLayout,
   ProjectOverview,
   ProjectRecentImage,
   TargetOverview,
@@ -94,6 +95,10 @@ export default function Overview() {
   // our own files would be silly. Browser mode keeps the zip download link.
   const isTauri = isTauriApp();
   const [exportBusy, setExportBusy] = useState(false);
+  // One choice for every export affordance on the page. Kept here rather than
+  // per row so a project and its targets cannot disagree about the tree they
+  // land in.
+  const [exportLayout, setExportLayout] = useState<ExportLayout>('standard');
   const handleLocalExport = async (
     dbId: string,
     scope: { project_id?: number; target_id?: number },
@@ -103,7 +108,7 @@ export default function Overview() {
       const dest = await tauriFileSystem.pickImageDirectory();
       if (!dest) return;
       setExportBusy(true);
-      const summary = await apiClient.exportLocal(dbId, { dest, ...scope });
+      const summary = await apiClient.exportLocal(dbId, { dest, layout: exportLayout, ...scope });
       const placed = summary.copied + summary.linked;
       alert(
         `Exported ${label}: ${placed} file(s) placed` +
@@ -438,6 +443,21 @@ export default function Overview() {
             <span>Catalog</span>
             <strong>{overallStats.total_images.toLocaleString()} images</strong>
           </div>
+          <label className="export-layout-choice">
+            <span>Export layout</span>
+            <select
+              value={exportLayout}
+              onChange={(event) => setExportLayout(event.target.value as ExportLayout)}
+              title={
+                exportLayout === 'wbpp'
+                  ? 'One folder per frame type, with dark flats among the darks, ready for WeightedBatchPreprocessing'
+                  : "Grouped by target: <target>/LIGHT/<filter>, with BIAS, DARK and DARKFLAT at the root"
+              }
+            >
+              <option value="standard">Grouped by target</option>
+              <option value="wbpp">WBPP</option>
+            </select>
+          </label>
           <dl className="summary-metrics">
             <div>
               <dt>Projects</dt>
@@ -910,8 +930,9 @@ export default function Overview() {
                           className="export-link"
                           href={apiClient.exportDownloadUrl(project.db_id, {
                             project_id: project.id,
+                            layout: exportLayout,
                           })}
-                          title="Download this project's accepted lights as a zip (WBPP-style layout, rejects excluded)"
+                          title={`Download this project's accepted lights as a zip (${exportLayout === 'wbpp' ? 'WBPP layout' : 'grouped by target'}, rejects excluded)`}
                           onClick={(e) => e.stopPropagation()}
                         >
                           ⬇ Export
@@ -1030,8 +1051,9 @@ export default function Overview() {
                                     className="target-settings-button"
                                     href={apiClient.exportDownloadUrl(target.db_id, {
                                       target_id: target.id,
+                                      layout: exportLayout,
                                     })}
-                                    title="Download this target's accepted lights as a zip"
+                                    title={`Download this target's accepted lights as a zip (${exportLayout === 'wbpp' ? 'WBPP layout' : 'grouped by target'})`}
                                   >
                                     ↓ Export
                                   </a>

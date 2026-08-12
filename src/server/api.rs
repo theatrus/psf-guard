@@ -522,6 +522,9 @@ pub struct ExportQuery {
     /// Restrict to one filter name (exact, case-insensitive).
     #[serde(default)]
     pub filter_name: Option<String>,
+    /// How the destination tree is arranged.
+    #[serde(default)]
+    pub layout: crate::commands::export::ExportLayout,
 }
 
 /// Body of `POST /api/db/{db_id}/export/local` — place the selected lights
@@ -540,6 +543,9 @@ pub struct LocalExportRequest {
     pub include_pending: bool,
     #[serde(default)]
     pub filter_name: Option<String>,
+    /// How the destination tree is arranged.
+    #[serde(default)]
+    pub layout: crate::commands::export::ExportLayout,
     /// Hardlink instead of copy (instant, no extra disk on the same
     /// filesystem; automatically falls back to copy). Default true.
     #[serde(default)]

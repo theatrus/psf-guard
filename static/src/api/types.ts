@@ -386,6 +386,15 @@ export interface StackInputImage {
  * `source_frame` stack keeps its reference frame's rotation, turned half a
  * turn where the reference sits on the far side of a meridian flip.
  */
+/**
+ * How an export arranges its files.
+ *
+ * `standard` groups by target, PSF Guard's own tree. `wbpp` gives each frame
+ * type its own root for WeightedBatchPreprocessing, and folds dark flats in
+ * with the darks because WBPP has no dark-flat type of its own.
+ */
+export type ExportLayout = 'standard' | 'wbpp';
+
 export interface StackSkyOrientation {
   convention: 'north_up_east_left' | 'source_frame';
   version: number;

@@ -14,6 +14,25 @@ pub struct Cli {
     pub command: Commands,
 }
 
+/// CLI spelling of [`crate::commands::export::ExportLayout`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum ExportLayoutArg {
+    /// Grouped by target, PSF Guard's own tree.
+    #[default]
+    Standard,
+    /// One root per frame type, for WeightedBatchPreprocessing.
+    Wbpp,
+}
+
+impl From<ExportLayoutArg> for crate::commands::export::ExportLayout {
+    fn from(value: ExportLayoutArg) -> Self {
+        match value {
+            ExportLayoutArg::Standard => Self::Standard,
+            ExportLayoutArg::Wbpp => Self::Wbpp,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub enum Commands {
     /// Dump grading results for all images
@@ -149,10 +168,10 @@ pub enum Commands {
     /// Export ("take out") graded lights into a stacking-friendly folder.
     ///
     /// Selects non-rejected images (accepted only by default), locates the
-    /// files under the database's image directories, and lays them out
-    /// WBPP-style: <dest>/<target>/LIGHT/<filter>/. Re-runs skip files that
-    /// already exist with the right size, so an export folder can be topped
-    /// up after each session. Rejects are never exported.
+    /// files under the database's image directories, and lays them out under
+    /// <dest>. Re-runs skip files that already exist with the right size, so
+    /// an export folder can be topped up after each session. Rejects are
+    /// never exported.
     Export {
         /// Registry slug or path of the database.
         db: String,
@@ -176,6 +195,12 @@ pub enum Commands {
         /// Restrict to one filter name (exact, case-insensitive).
         #[arg(long)]
         filter: Option<String>,
+
+        /// How to arrange the tree. `standard` groups by target;
+        /// `wbpp` gives each frame type its own root for
+        /// WeightedBatchPreprocessing and folds dark flats in with the darks.
+        #[arg(long, value_enum, default_value_t = ExportLayoutArg::Standard)]
+        layout: ExportLayoutArg,
 
         /// Hardlink instead of copy (instant + no extra disk when the
         /// destination is on the same filesystem; falls back to copy).

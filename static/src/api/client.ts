@@ -4,6 +4,7 @@ import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
 import type {
   ApiResponse,
+  ExportLayout,
   Project,
   Target,
   TargetNavigation,
@@ -529,12 +530,18 @@ export const apiClient = {
   /** Absolute URL for the streaming light and calibration export zip. */
   exportDownloadUrl: (
     dbId: string,
-    params: { project_id?: number; target_id?: number; include_pending?: boolean }
+    params: {
+      project_id?: number;
+      target_id?: number;
+      include_pending?: boolean;
+      layout?: ExportLayout;
+    }
   ): string => {
     const query = new URLSearchParams();
     if (params.project_id !== undefined) query.set('project_id', String(params.project_id));
     if (params.target_id !== undefined) query.set('target_id', String(params.target_id));
     if (params.include_pending) query.set('include_pending', 'true');
+    if (params.layout && params.layout !== 'standard') query.set('layout', params.layout);
     const qs = query.toString();
     return withServerUrl(`/api${dbPath(dbId, '/export')}${qs ? `?${qs}` : ''}`);
   },
@@ -552,6 +559,7 @@ export const apiClient = {
       target_id?: number;
       include_pending?: boolean;
       filter_name?: string;
+      layout?: ExportLayout;
       link?: boolean;
       dry_run?: boolean;
     }
