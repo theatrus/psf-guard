@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
+import { starMetadataFillEnabled } from './useStarMetadataFill';
 import type { QualityBackfillStatus } from '../api/types';
 
 export function useQualityBackfillStatus(dbId: string | null | undefined) {
@@ -36,7 +37,11 @@ export function useQualityBackfill(dbId: string | null | undefined) {
   const queryKey = ['db', dbId, 'quality-backfill'] as const;
 
   const startMutation = useMutation({
-    mutationFn: (force: boolean) => apiClient.startQualityBackfill(dbId!, { force }),
+    mutationFn: (force: boolean) =>
+      apiClient.startQualityBackfill(dbId!, {
+        force,
+        fill_metadata: starMetadataFillEnabled(),
+      }),
     onSuccess: (status) => queryClient.setQueryData(queryKey, status),
   });
 

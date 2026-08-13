@@ -463,6 +463,10 @@ pub struct CreateDatabaseRequest {
     /// Queue the separate database quality job after import (default false).
     #[serde(default)]
     pub backfill: Option<bool>,
+    /// Let the queued quality job write measured star count and HFR into
+    /// imported images' metadata (missing keys only; default true).
+    #[serde(default)]
+    pub fill_metadata: Option<bool>,
 }
 
 /// `POST /api/databases/create` response: the registered database plus the
@@ -491,6 +495,10 @@ pub struct ImportRequest {
     /// Queue the separate database quality job after import (default false).
     #[serde(default)]
     pub backfill: Option<bool>,
+    /// Let the queued quality job write measured star count and HFR into
+    /// imported images' metadata (missing keys only; default true).
+    #[serde(default)]
+    pub fill_metadata: Option<bool>,
     /// Attach frames to existing targets (name/coordinate match) instead of
     /// synthesizing new structure for them (default true).
     #[serde(default)]
@@ -751,6 +759,10 @@ pub struct SpatialScanRequest {
     pub force_astrometry: bool,
     #[serde(default)]
     pub force_satellites: bool,
+    /// Write measured star count and HFR into imported images' metadata
+    /// (missing keys only; default true).
+    #[serde(default)]
+    pub fill_metadata: Option<bool>,
 }
 
 /// Optional target/filter scope for the quality-scan status endpoint.
@@ -791,6 +803,10 @@ pub struct QualityBackfillRequest {
     /// Recompute cached star, background, photometry, and pointing evidence.
     #[serde(default)]
     pub force: bool,
+    /// Write measured star count and HFR into imported images' metadata
+    /// (missing keys only; default true).
+    #[serde(default)]
+    pub fill_metadata: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]

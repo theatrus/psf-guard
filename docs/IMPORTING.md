@@ -168,6 +168,21 @@ new values comparable with Target Scheduler data. It also stores the full-star
 flux data needed by photometry, spatial cloud and obstruction metrics, and
 fresh plate-solving evidence for off-target and tracking checks.
 
+Once a frame has been measured, the scan writes its star count and HFR into
+the image's database metadata, so imported frames show the same star fields in
+the grid, detail, and comparison views as a N.I.N.A.-graded catalog. Only
+missing values are filled; measurements N.I.N.A. recorded are never replaced.
+Catalogs scanned before this write-back existed pick the values up the next
+time **Analyze Missing Quality** runs — no rescan needed.
+
+The **Write star count and HFR into image metadata** checkbox next to the
+analyze buttons controls this. It is remembered as the default for every
+analyze action — target scans, database analysis, and import-time analysis —
+and stays on unless you turn it off. The write goes only to the catalog's
+database records; the FITS and XISF files themselves are never modified. API
+callers pass `fill_metadata: false` on the quality-scan, backfill, or import
+request to opt out per call.
+
 ## Review and correct the imported plan
 
 Open **Overview**, then choose **Plan & coordinates** on a project. You can see

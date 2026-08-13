@@ -12,6 +12,7 @@ import { useAccess } from '../auth/access';
 import type { SettingsIntent } from '../utils/settingsIntent';
 import type { DatabaseSummary } from '../api/types';
 import { describeImportProgress, useImportJob } from '../hooks/useImportJob';
+import { starMetadataFillEnabled } from '../hooks/useStarMetadataFill';
 import QualityBackfillControls from './QualityBackfillControls';
 import RemotePeerSync from './RemotePeerSync';
 import SchedulerSyncControls from './SchedulerSyncControls';
@@ -376,6 +377,7 @@ export default function TauriSettings({
           name,
           image_dirs: formImageDirs,
           backfill: createAnalyzeQuality,
+          fill_metadata: starMetadataFillEnabled(),
         });
         queryClient.invalidateQueries({ queryKey: ['databases'] });
         queryClient.invalidateQueries({ queryKey: ['db'] });
@@ -518,6 +520,7 @@ export default function TauriSettings({
       await apiClient.startImport(entry.id, {
         dry_run: false,
         backfill: importAnalyzeQuality,
+        fill_metadata: starMetadataFillEnabled(),
       });
       setStatusMessage(`Importing images into ${entry.name}…`);
     } catch (err) {

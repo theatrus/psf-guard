@@ -809,6 +809,23 @@ impl<'a> Database<'a> {
         Ok(())
     }
 
+    /// Replace an image's metadata JSON, but only while the row still holds
+    /// the metadata the caller read. A concurrent writer (grading sync, a
+    /// N.I.N.A. instance sharing the DB) wins and the fill is skipped.
+    /// Returns true when the row was updated.
+    pub fn update_image_metadata_if_unchanged(
+        &self,
+        image_id: i32,
+        expected_metadata: &str,
+        new_metadata: &str,
+    ) -> Result<bool> {
+        let changed = self.conn.execute(
+            "UPDATE acquiredimage SET metadata = ? WHERE Id = ? AND metadata = ?",
+            params![new_metadata, image_id, expected_metadata],
+        )?;
+        Ok(changed > 0)
+    }
+
     // ── Organize: correct imported project/target groupings ────────────────
 
     /// Rename a project. Returns false when no such project exists.

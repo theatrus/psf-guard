@@ -35,6 +35,19 @@
 
 ## Fixed
 
+- Imported frames now show star count and HFR after quality analysis runs.
+  Header-first imports carry no star metadata, and the quality scan kept its
+  measurements in a cache the grid, detail, and comparison views never read —
+  so a catalog built from image folders (FITS or XISF) looked unanalyzed no
+  matter what ran. The scan now writes its measured star count and HFR into
+  each imported image's metadata, filling only what is missing; values a
+  N.I.N.A. catalog already carries are never touched. Catalogs analyzed
+  before this fix pick the values up the next time **Analyze Missing
+  Quality** runs, straight from the cache. A checkbox beside the analyze
+  buttons turns the write-back off, and the choice is remembered as the
+  default for every analyze action. See
+  [importing](https://github.com/theatrus/psf-guard/blob/main/docs/IMPORTING.md).
+
 - A stack whose reference frame sits on the thin side of a meridian flip is
   turned the right way up again. The reference's exposure was weighed in
   seconds while every other frame counted as one, so on a catalog that records

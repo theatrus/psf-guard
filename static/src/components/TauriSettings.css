@@ -793,6 +793,27 @@
   font-size: 12px;
 }
 
+.tauri-settings .quality-backfill-option {
+  flex-basis: 100%;
+  font-size: 12px;
+}
+
+.tauri-settings .quality-backfill-option label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.tauri-settings .quality-backfill-option small {
+  display: block;
+  margin: 2px 0 0 22px;
+  color: var(--color-text-secondary);
+  opacity: 0.8;
+  line-height: 1.4;
+}
+
 .tauri-settings .quality-analysis-option small {
   margin-top: 4px;
   color: var(--color-text-secondary);

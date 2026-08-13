@@ -439,6 +439,51 @@ fn compute_one(
     })
 }
 
+/// Whether a metadata JSON is missing star metrics a quality scan can fill.
+///
+/// Header-first imports omit `DetectedStars` and `HFR` because no pixel
+/// evidence exists at import time. Unparsable metadata answers false: there
+/// is nothing safe to fill.
+pub fn metadata_lacks_star_metrics(metadata_json: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(metadata_json) else {
+        return false;
+    };
+    let Some(map) = value.as_object() else {
+        return false;
+    };
+    let missing = |key: &str| map.get(key).is_none_or(serde_json::Value::is_null);
+    missing("DetectedStars") || missing("HFR")
+}
+
+/// Fill scan-measured star metrics into a metadata JSON that lacks them.
+///
+/// The scan's detector is the scheduler-compatible one (`nina_fast`), so the
+/// filled values mean the same thing as a N.I.N.A. catalog's. Existing values
+/// are never overwritten, and a frame with no detected stars gets no HFR:
+/// zero would read as an impossibly sharp measurement rather than "none".
+/// Returns `None` when nothing was added.
+pub fn star_metrics_metadata_patch(
+    metadata_json: &str,
+    star_count: usize,
+    avg_hfr: f64,
+) -> Option<String> {
+    let mut value: serde_json::Value = serde_json::from_str(metadata_json).ok()?;
+    let map = value.as_object_mut()?;
+    let missing = |map: &serde_json::Map<String, serde_json::Value>, key: &str| {
+        map.get(key).is_none_or(serde_json::Value::is_null)
+    };
+    let mut changed = false;
+    if missing(map, "DetectedStars") {
+        map.insert("DetectedStars".to_string(), (star_count as u64).into());
+        changed = true;
+    }
+    if star_count > 0 && avg_hfr > 0.0 && missing(map, "HFR") {
+        map.insert("HFR".to_string(), avg_hfr.into());
+        changed = true;
+    }
+    changed.then(|| value.to_string())
+}
+
 /// Look up a cached entry that is still valid for the given filename.
 pub fn valid_entry(
     store: &RwLock<SpatialMetricsStore>,
@@ -579,6 +624,46 @@ mod tests {
         assert_eq!(progress.target_id, Some(5));
         assert_eq!(progress.total, 10);
         assert_eq!(progress.skipped_cached, 2);
+    }
+
+    #[test]
+    fn metadata_star_metrics_fill_only_missing_keys() {
+        // Header-first import: both keys absent → both filled.
+        let imported = r#"{"FileName":"a.xisf","SessionId":0}"#;
+        assert!(metadata_lacks_star_metrics(imported));
+        let patched = star_metrics_metadata_patch(imported, 120, 2.5).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&patched).unwrap();
+        assert_eq!(value["DetectedStars"], 120);
+        assert_eq!(value["HFR"], 2.5);
+        assert_eq!(value["FileName"], "a.xisf", "existing keys must survive");
+
+        // N.I.N.A. catalog: measurements present → untouched.
+        let nina = r#"{"DetectedStars":300,"HFR":1.8}"#;
+        assert!(!metadata_lacks_star_metrics(nina));
+        assert!(star_metrics_metadata_patch(nina, 120, 2.5).is_none());
+
+        // Null counts as missing (a writer may serialize unknowns as null).
+        let with_null = r#"{"DetectedStars":null,"HFR":1.8}"#;
+        assert!(metadata_lacks_star_metrics(with_null));
+        let patched = star_metrics_metadata_patch(with_null, 120, 2.5).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&patched).unwrap();
+        assert_eq!(value["DetectedStars"], 120);
+        assert_eq!(value["HFR"], 1.8, "measured HFR must not be overwritten");
+    }
+
+    #[test]
+    fn metadata_star_metrics_fill_handles_edge_inputs() {
+        // No detected stars: the count is a real measurement, HFR is not.
+        let patched = star_metrics_metadata_patch("{}", 0, 0.0).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&patched).unwrap();
+        assert_eq!(value["DetectedStars"], 0);
+        assert!(value.get("HFR").is_none(), "no stars → no HFR measurement");
+
+        // Unparsable or non-object metadata: nothing to check, nothing to fill.
+        assert!(!metadata_lacks_star_metrics("not json"));
+        assert!(star_metrics_metadata_patch("not json", 10, 2.0).is_none());
+        assert!(!metadata_lacks_star_metrics("[1,2]"));
+        assert!(star_metrics_metadata_patch("[1,2]", 10, 2.0).is_none());
     }
 
     #[test]

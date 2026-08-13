@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
+import { starMetadataFillEnabled } from './useStarMetadataFill';
 import type { SpatialScanStatus } from '../api/types';
 
 /** Monitor the database's quality scan from any view. */
@@ -24,6 +25,10 @@ export function useSpatialScanStatus(dbId: string | null | undefined) {
       queryClient.invalidateQueries({ queryKey: ['db', dbId, 'sequence-analysis'] });
       queryClient.invalidateQueries({ queryKey: ['db', dbId, 'image-quality'] });
       queryClient.invalidateQueries({ queryKey: ['db', dbId, 'quality-scan-scope'] });
+      // The scan writes measured star count/HFR into imported images'
+      // metadata, so cards and detail views need fresh image rows too.
+      queryClient.invalidateQueries({ queryKey: ['db', dbId, 'all-images'] });
+      queryClient.invalidateQueries({ queryKey: ['db', dbId, 'image'] });
     }
     wasRunning.current = isRunning;
   }, [isRunning, dbId, queryClient]);
@@ -58,6 +63,7 @@ export function useSpatialScan(
         target_id: targetId!,
         filter_name: filterName,
         force,
+        fill_metadata: starMetadataFillEnabled(),
       }),
     onSuccess: (status) => {
       // Seed the poll query so refetchInterval kicks in immediately.
