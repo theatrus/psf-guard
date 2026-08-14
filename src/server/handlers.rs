@@ -2674,10 +2674,10 @@ fn annotated_cache_key(
     size: &str,
     max_stars: usize,
 ) -> String {
-    // v2: annotation detection picks a telescope-class preset from the
-    // frame's headers, so v1 renders (fixed defaults) are stale.
+    // v3: stars now carry HFR labels (v2: telescope-class presets), so
+    // earlier renders are stale.
     format!(
-        "annotated_v2_{}_{}_{}_{}_{}_{}_{}",
+        "annotated_v3_{}_{}_{}_{}_{}_{}_{}",
         image.id,
         image.project_id,
         image.target_id,
