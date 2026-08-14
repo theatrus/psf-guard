@@ -326,7 +326,16 @@ pub fn generate_annotated(
     // or long-focal-length frame is annotated with knobs sized to its stars.
     let (params, _class) =
         crate::hocus_focus_star_detection::HocusFocusParams::for_frame_path(fits_path);
-    let rgb = create_annotated_image(&fits, &params, max_stars, 0.2, -2.8, Rgb([255, 255, 0]))?;
+    let label_scale = hfr_label_scale_for(fits.width as u32, size);
+    let rgb = create_annotated_image(
+        &fits,
+        &params,
+        max_stars,
+        0.2,
+        -2.8,
+        Rgb([255, 255, 0]),
+        Some(label_scale),
+    )?;
     let final_image = resize_rgb_for_size(rgb, fits.width, fits.height, size);
 
     let (w, h) = final_image.dimensions();
@@ -370,6 +379,20 @@ pub fn max_dimensions_for_size(size: &str) -> Option<(u32, u32)> {
         "large" => Some((2000, 2000)),
         "original" => None,
         _ => Some((1200, 1200)),
+    }
+}
+
+/// Bitmap-font scale for HFR labels drawn at native resolution, chosen so a
+/// label still reads ~11 px tall after the image is downscaled to `size`
+/// (glyphs are 7 px tall at scale 1). "original" is never downscaled, so a
+/// small fixed scale keeps labels crisp without dwarfing the stars.
+fn hfr_label_scale_for(native_width: u32, size: &str) -> u32 {
+    match max_dimensions_for_size(size) {
+        None => 2,
+        Some((target_width, _)) => {
+            let downscale = f64::from(native_width.max(1)) / f64::from(target_width);
+            ((downscale * 11.0 / 7.0).round() as u32).clamp(2, 16)
+        }
     }
 }
 
@@ -418,5 +441,19 @@ mod tests {
         assert_eq!(max_dimensions_for_size("screen"), Some((1200, 1200)));
         assert_eq!(max_dimensions_for_size("original"), None);
         assert_eq!(max_dimensions_for_size("weird"), Some((1200, 1200)));
+    }
+
+    #[test]
+    fn hfr_label_scale_tracks_the_downscale() {
+        // 26MP-class frame at screen size: 6248/1200 ≈ 5.2× downscale, so
+        // labels need scale 8 (56 px native → ~11 px on screen).
+        assert_eq!(hfr_label_scale_for(6248, "screen"), 8);
+        assert_eq!(hfr_label_scale_for(6248, "large"), 5);
+        // No downscale: a small fixed scale.
+        assert_eq!(hfr_label_scale_for(6248, "original"), 2);
+        // A frame already at target size never drops below readable.
+        assert_eq!(hfr_label_scale_for(1200, "screen"), 2);
+        // 61MP-class frame stays within the clamp.
+        assert_eq!(hfr_label_scale_for(9576, "screen"), 13);
     }
 }

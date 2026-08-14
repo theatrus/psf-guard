@@ -20,6 +20,14 @@
   with N.I.N.A.'s recorded values plus wall time, so future detector changes
   can be measured instead of argued.
 
+- The annotated star view labels each star with its measured HFR, drawn
+  beside the detection circle and sized so the text stays readable at
+  every preview size. Use the existing max-stars control to trade label
+  density for coverage. Existing annotated images are rebuilt on next
+  view.
+
+  ![Annotated stars with HFR labels](../annotated-hfr-labels.png)
+
 - Star detection now sizes itself to the telescope. Each frame's focal
   length and pixel size pick a detection preset: wide-field rigs
   (≥ 1.2"/px) use a smaller minimum star size so fine-scale stars are not

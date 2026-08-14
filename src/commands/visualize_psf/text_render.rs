@@ -138,8 +138,16 @@ fn get_char_pattern(c: char) -> Option<[u8; 7]> {
     }
 }
 
-/// Draw a single character at the given position
-pub fn draw_char(img: &mut image::RgbaImage, x: u32, y: u32, c: char, color: Rgba<u8>, scale: u32) {
+/// Draw a single character at the given position, on any pixel type (the
+/// PSF views use RGBA, the star annotator RGB).
+pub fn draw_char_on<I: image::GenericImage>(
+    img: &mut I,
+    x: u32,
+    y: u32,
+    c: char,
+    color: I::Pixel,
+    scale: u32,
+) {
     if let Some(pattern) = get_char_pattern(c) {
         for (row_idx, &row) in pattern.iter().enumerate() {
             for col in 0..5 {
@@ -160,6 +168,31 @@ pub fn draw_char(img: &mut image::RgbaImage, x: u32, y: u32, c: char, color: Rgb
     }
 }
 
+/// Draw a single character at the given position
+pub fn draw_char(img: &mut image::RgbaImage, x: u32, y: u32, c: char, color: Rgba<u8>, scale: u32) {
+    draw_char_on(img, x, y, c, color, scale);
+}
+
+/// Draw a string at the given position, on any pixel type.
+pub fn draw_text_on<I: image::GenericImage>(
+    img: &mut I,
+    x: u32,
+    y: u32,
+    text: &str,
+    color: I::Pixel,
+    scale: u32,
+) where
+    I::Pixel: Copy,
+{
+    let char_width = 6 * scale; // 5 pixels + 1 space
+    let mut current_x = x;
+
+    for c in text.chars() {
+        draw_char_on(img, current_x, y, c, color, scale);
+        current_x += char_width;
+    }
+}
+
 /// Draw a string at the given position
 pub fn draw_text(
     img: &mut image::RgbaImage,
@@ -169,13 +202,7 @@ pub fn draw_text(
     color: Rgba<u8>,
     scale: u32,
 ) {
-    let char_width = 6 * scale; // 5 pixels + 1 space
-    let mut current_x = x;
-
-    for c in text.chars() {
-        draw_char(img, current_x, y, c, color, scale);
-        current_x += char_width;
-    }
+    draw_text_on(img, x, y, text, color, scale);
 }
 
 /// Draw text with background for better visibility
