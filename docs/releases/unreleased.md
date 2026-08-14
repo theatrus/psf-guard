@@ -70,6 +70,14 @@
 
 ## Fixed
 
+- A frame with zero detected stars no longer scores perfectly. The quality
+  score is sequence-relative, so a trailed or clouded frame that was alone
+  in its target/filter group normalized against itself and showed a perfect
+  badge. A measured star count of zero now caps the score at 0.05 with a
+  **No Stars Detected** cause and an explanation, in every scoring view.
+  Frames whose stars simply have not been measured are untouched. See
+  [screening](https://github.com/theatrus/psf-guard/blob/main/docs/SCREENING.md).
+
 - Imported frames now show star count and HFR after quality analysis runs.
   Header-first imports carry no star metadata, and the quality scan kept its
   measurements in a cache the grid, detail, and comparison views never read —
