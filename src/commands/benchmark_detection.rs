@@ -8,7 +8,7 @@
 //! comparisons run the same code path users run.
 
 use crate::hocus_focus_star_detection::{
-    detect_stars_hocus_focus, HocusFocusParams, StructureRemovalMethod,
+    detect_stars_hocus_focus, HocusFocusParams, StructureRemovalMethod, TelescopeClass,
 };
 use crate::image_analysis::FitsImage;
 use anyhow::{Context, Result};
@@ -45,6 +45,7 @@ pub fn benchmark_detection(
     psf_type: &str,
     runs: usize,
     noise_reduction: Option<usize>,
+    preset: &str,
 ) -> Result<()> {
     let manifest_text = std::fs::read_to_string(manifest_path)
         .with_context(|| format!("reading manifest {manifest_path}"))?;
@@ -56,18 +57,49 @@ pub fn benchmark_detection(
         "atrous" => StructureRemovalMethod::Atrous,
         other => anyhow::bail!("unknown structure removal {other:?} (filtered|atrous)"),
     };
-    let mut params = HocusFocusParams {
-        structure_removal,
-        detection_binning: binning.max(1),
-        keep_saturated_stars: keep_saturated,
-        psf_type: psf_type
-            .parse()
-            .unwrap_or(crate::psf_fitting::PSFType::None),
-        ..Default::default()
-    };
-    if let Some(radius) = noise_reduction {
-        params.noise_reduction_radius = radius;
+    enum PresetMode {
+        Fixed,
+        Class(TelescopeClass),
+        Auto,
     }
+    let preset_mode = match preset {
+        "fixed" => PresetMode::Fixed,
+        "wide" => PresetMode::Class(TelescopeClass::WideField),
+        "standard" => PresetMode::Class(TelescopeClass::Standard),
+        "long" => PresetMode::Class(TelescopeClass::LongFocalLength),
+        "auto" => PresetMode::Auto,
+        other => anyhow::bail!("unknown preset {other:?} (fixed|auto|wide|standard|long)"),
+    };
+
+    // Preset base first, explicit flags on top, per frame.
+    let apply_flags = |mut params: HocusFocusParams| -> HocusFocusParams {
+        params.structure_removal = structure_removal;
+        params.detection_binning = binning.max(1);
+        params.keep_saturated_stars = keep_saturated;
+        params.psf_type = psf_type
+            .parse()
+            .unwrap_or(crate::psf_fitting::PSFType::None);
+        if let Some(radius) = noise_reduction {
+            params.noise_reduction_radius = radius;
+        }
+        params
+    };
+    let params_for_frame = |path: &Path| -> (HocusFocusParams, &'static str) {
+        let class = match &preset_mode {
+            PresetMode::Fixed => return (apply_flags(HocusFocusParams::default()), "fixed"),
+            PresetMode::Class(class) => *class,
+            PresetMode::Auto => HocusFocusParams::for_frame_path(path).1,
+        };
+        let label = match class {
+            TelescopeClass::WideField => "wide",
+            TelescopeClass::Standard => "standard",
+            TelescopeClass::LongFocalLength => "long",
+        };
+        (
+            apply_flags(HocusFocusParams::for_telescope_class(class)),
+            label,
+        )
+    };
 
     let mut output =
         std::fs::File::create(output_path).with_context(|| format!("creating {output_path}"))?;
@@ -75,7 +107,7 @@ pub fn benchmark_detection(
         output,
         "telescope,target,filter,grading_status,path,width,height,\
          nina_stars,nina_hfr,det_stars,det_saturated,det_hfr,det_hfr_std,\
-         load_ms,detect_ms,structure,binning,keep_saturated"
+         load_ms,detect_ms,structure,binning,keep_saturated,preset_class"
     )?;
 
     let mut detect_times = Vec::new();
@@ -93,6 +125,7 @@ pub fn benchmark_detection(
             }
         };
         let load_ms = load_start.elapsed().as_secs_f64() * 1000.0;
+        let (params, preset_class) = params_for_frame(path);
 
         // Median-of-N detect wall time; the result is identical across runs.
         let mut times = Vec::with_capacity(runs.max(1));
@@ -129,7 +162,7 @@ pub fn benchmark_detection(
 
         writeln!(
             output,
-            "{},{},{},{},{},{},{},{},{},{},{},{:.4},{:.4},{:.1},{:.1},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{:.4},{:.4},{:.1},{:.1},{},{},{},{}",
             entry.telescope.as_deref().unwrap_or(""),
             csv_escape(entry.target.as_deref().unwrap_or("")),
             entry.filter.as_deref().unwrap_or(""),
@@ -154,6 +187,7 @@ pub fn benchmark_detection(
             structure,
             params.detection_binning,
             keep_saturated,
+            preset_class,
         )?;
 
         detect_times.push(detect_ms);
@@ -187,8 +221,8 @@ pub fn benchmark_detection(
         detect_times.len()
     );
     println!(
-        "variant: structure={structure} binning={} keep_saturated={keep_saturated}",
-        params.detection_binning
+        "variant: structure={structure} binning={} keep_saturated={keep_saturated} preset={preset}",
+        binning.max(1)
     );
     if !detect_times.is_empty() {
         println!(

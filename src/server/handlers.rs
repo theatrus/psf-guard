@@ -2674,8 +2674,10 @@ fn annotated_cache_key(
     size: &str,
     max_stars: usize,
 ) -> String {
+    // v2: annotation detection picks a telescope-class preset from the
+    // frame's headers, so v1 renders (fixed defaults) are stale.
     format!(
-        "annotated_{}_{}_{}_{}_{}_{}_{}",
+        "annotated_v2_{}_{}_{}_{}_{}_{}_{}",
         image.id,
         image.project_id,
         image.target_id,
@@ -2947,9 +2949,11 @@ pub async fn get_image_stars(
         (image, file_only, target_name)
     };
 
-    // Create comprehensive cache key for star detection results
+    // Create comprehensive cache key for star detection results. v2: the
+    // detector picks a telescope-class preset from the frame's headers, so
+    // v1 entries (fixed defaults) are stale for wide/long rigs.
     let cache_key = format!(
-        "stars_{}_{}_{}_{}_{}",
+        "stars_v2_{}_{}_{}_{}_{}",
         image_id,
         image.project_id,
         image.target_id,
@@ -2985,11 +2989,11 @@ pub async fn get_image_stars(
             // Load FITS file
             let fits = FitsImage::from_file(std::path::Path::new(&fits_path_str))?;
 
-            // Run star detection
-            let params = HocusFocusParams {
-                psf_type: PSFType::Moffat4,
-                ..Default::default()
-            };
+            // Telescope-class preset from the frame's headers, with the
+            // endpoint's PSF fitting on top.
+            let (mut params, _class) =
+                HocusFocusParams::for_frame_path(std::path::Path::new(&fits_path_str));
+            params.psf_type = PSFType::Moffat4;
 
             let detection_result =
                 detect_stars_hocus_focus(&fits.data, fits.width, fits.height, &params);

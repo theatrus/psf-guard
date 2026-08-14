@@ -729,6 +729,7 @@ pub fn main() -> Result<()> {
             psf_type,
             runs,
             noise_reduction,
+            preset,
             verbose,
         } => {
             crate::debug::init_debug(verbose);
@@ -741,6 +742,7 @@ pub fn main() -> Result<()> {
                 &psf_type,
                 runs,
                 noise_reduction,
+                &preset,
             )?;
         }
         Commands::Sync { kind } => match kind {

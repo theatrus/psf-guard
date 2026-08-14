@@ -20,6 +20,19 @@
   with N.I.N.A.'s recorded values plus wall time, so future detector changes
   can be measured instead of argued.
 
+- Star detection now sizes itself to the telescope. Each frame's focal
+  length and pixel size pick a detection preset: wide-field rigs
+  (≥ 1.2"/px) use a smaller minimum star size so fine-scale stars are not
+  discarded, and long-focal-length rigs (≤ 0.6"/px) use a larger one, an
+  extra structure layer, and no noise-reduction blur — which was silently
+  suppressing three quarters of their stars. On the validation corpus this
+  took star-count agreement with N.I.N.A. from 0.25× to 1.03× on a
+  2350mm SCT and from 0.49× to 0.77× on a 61-megapixel wide-field rig,
+  with better frame-ranking correlation on both. The detail view's star
+  overlay and annotated images use the preset automatically; frames
+  without the headers keep today's behavior. Existing star-overlay caches
+  are rebuilt on next view.
+
 - Export can lay a session out for PixInsight's WeightedBatchPreprocessing.
   Pick **WBPP** as the export layout on the overview, or pass `--layout wbpp`,
   and each frame type gets its own folder with dark flats among the darks

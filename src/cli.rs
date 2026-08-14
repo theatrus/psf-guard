@@ -706,6 +706,11 @@ pub enum Commands {
         #[arg(long)]
         noise_reduction: Option<usize>,
 
+        /// Telescope-class preset: fixed (none), auto (classify each frame
+        /// from its FOCALLEN/XPIXSZ headers), wide, standard, long
+        #[arg(long, default_value = "fixed")]
+        preset: String,
+
         /// Enable detector debug output
         #[arg(long, short)]
         verbose: bool,

@@ -24,6 +24,51 @@ pub enum StructureRemovalMethod {
     Atrous,
 }
 
+/// Coarse rig class for detection presets, after HocusFocus's Simple-mode
+/// pixel-scale axis. Star apparent size in PIXELS is what the detector's
+/// pixel-space knobs care about, and it follows the pixel scale: wide
+/// fields render stars in few pixels, long focal lengths in many.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TelescopeClass {
+    /// ≥ ~1.2"/px: stars span few pixels, so the minimum box shrinks and
+    /// one structure layer goes — matching upstream's WideField preset.
+    WideField,
+    /// The regime the defaults were calibrated in.
+    Standard,
+    /// ≤ ~0.6"/px: stars span many pixels — one more structure layer, a
+    /// larger minimum box, and (measured on the corpus, diverging from
+    /// upstream's preset) no noise-reduction blur: radius 4 suppressed 75%
+    /// of long-focal-length stars while long-FL frames are oversampled
+    /// enough that detection does not need the blur.
+    LongFocalLength,
+}
+
+/// Classify a rig from its pixel scale in arcseconds per pixel.
+pub fn classify_pixel_scale(arcsec_per_px: f64) -> TelescopeClass {
+    if !arcsec_per_px.is_finite() || arcsec_per_px <= 0.0 {
+        return TelescopeClass::Standard;
+    }
+    if arcsec_per_px >= 1.2 {
+        TelescopeClass::WideField
+    } else if arcsec_per_px <= 0.6 {
+        TelescopeClass::LongFocalLength
+    } else {
+        TelescopeClass::Standard
+    }
+}
+
+/// Pixel scale in arcseconds per pixel from the FITS headers a capture
+/// writes: focal length in mm (FOCALLEN) and pixel size in µm (XPIXSZ).
+pub fn pixel_scale_arcsec(focal_length_mm: f64, pixel_size_um: f64) -> Option<f64> {
+    if !(focal_length_mm.is_finite() && pixel_size_um.is_finite())
+        || focal_length_mm <= 0.0
+        || pixel_size_um <= 0.0
+    {
+        return None;
+    }
+    Some(206.265 * pixel_size_um / focal_length_mm)
+}
+
 /// Star detection parameters for HocusFocus algorithm
 #[derive(Debug, Clone)]
 pub struct HocusFocusParams {
@@ -63,6 +108,63 @@ pub struct HocusFocusParams {
 
     // PSF fitting
     pub psf_type: PSFType, // PSF model type to fit (None, Gaussian, Moffat4)
+}
+
+impl HocusFocusParams {
+    /// Detection parameters adjusted for a rig class. `Standard` returns
+    /// the plain defaults; the other classes shift the pixel-space knobs
+    /// the way HocusFocus's Simple-mode presets do, with one corpus-driven
+    /// divergence documented on [`TelescopeClass::LongFocalLength`].
+    pub fn for_telescope_class(class: TelescopeClass) -> Self {
+        let mut params = Self::default();
+        match class {
+            TelescopeClass::WideField => {
+                params.structure_layers = 3;
+                params.min_star_size = 4;
+            }
+            TelescopeClass::Standard => {}
+            TelescopeClass::LongFocalLength => {
+                params.structure_layers = 5;
+                params.min_star_size = 6;
+                params.noise_reduction_radius = 0;
+            }
+        }
+        params
+    }
+
+    /// [`Self::for_telescope_class`] from whatever a frame's headers give:
+    /// classify from pixel scale when both FOCALLEN and XPIXSZ are present,
+    /// otherwise fall back to the standard defaults.
+    pub fn for_frame_headers(
+        focal_length_mm: Option<f64>,
+        pixel_size_um: Option<f64>,
+    ) -> (Self, TelescopeClass) {
+        let class = focal_length_mm
+            .zip(pixel_size_um)
+            .and_then(|(focal, pixel)| pixel_scale_arcsec(focal, pixel))
+            .map(classify_pixel_scale)
+            .unwrap_or(TelescopeClass::Standard);
+        (Self::for_telescope_class(class), class)
+    }
+
+    /// [`Self::for_frame_headers`] for a frame on disk: reads FOCALLEN and
+    /// XPIXSZ through the shared header reader. A missing or unreadable
+    /// header falls back to the standard defaults, never an error — preset
+    /// selection must not make a frame undetectable.
+    pub fn for_frame_path(path: &std::path::Path) -> (Self, TelescopeClass) {
+        let (focal, pixel) = crate::image_io::read_header(path)
+            .map(|headers| {
+                let value = |name: &str| {
+                    headers
+                        .iter()
+                        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                        .and_then(|(_, v)| v.as_f64())
+                };
+                (value("FOCALLEN"), value("XPIXSZ"))
+            })
+            .unwrap_or((None, None));
+        Self::for_frame_headers(focal, pixel)
+    }
 }
 
 impl Default for HocusFocusParams {
@@ -1512,6 +1614,47 @@ mod tests {
             kept.average_hfr,
             rejected.average_hfr
         );
+    }
+
+    #[test]
+    fn telescope_class_follows_pixel_scale() {
+        // Corpus rigs: C925 0.36"/px, Askar107PHQ ~1.0, Ultracat 1.5.
+        assert_eq!(classify_pixel_scale(0.36), TelescopeClass::LongFocalLength);
+        assert_eq!(classify_pixel_scale(1.03), TelescopeClass::Standard);
+        assert_eq!(classify_pixel_scale(1.5), TelescopeClass::WideField);
+        // Unusable input falls back to the calibrated defaults.
+        assert_eq!(classify_pixel_scale(f64::NAN), TelescopeClass::Standard);
+        assert_eq!(classify_pixel_scale(0.0), TelescopeClass::Standard);
+
+        // Header arithmetic: 3.76µm at 518mm ≈ 1.497"/px (Ultracat).
+        let scale = pixel_scale_arcsec(518.0, 3.76).unwrap();
+        assert!((scale - 1.497).abs() < 0.01, "got {scale}");
+        assert_eq!(pixel_scale_arcsec(0.0, 3.76), None);
+    }
+
+    #[test]
+    fn presets_adjust_only_their_pixel_space_knobs() {
+        let standard = HocusFocusParams::default();
+
+        let wide = HocusFocusParams::for_telescope_class(TelescopeClass::WideField);
+        assert_eq!(wide.structure_layers, 3);
+        assert_eq!(wide.min_star_size, 4);
+        assert_eq!(wide.noise_reduction_radius, standard.noise_reduction_radius);
+
+        let long = HocusFocusParams::for_telescope_class(TelescopeClass::LongFocalLength);
+        assert_eq!(long.structure_layers, 5);
+        assert_eq!(long.min_star_size, 6);
+        assert_eq!(long.noise_reduction_radius, 0);
+        assert_eq!(long.sensitivity, standard.sensitivity);
+
+        // Headers → preset: C925 (2.9µm, 1645mm → 0.36"/px).
+        let (params, class) = HocusFocusParams::for_frame_headers(Some(1645.0), Some(2.9));
+        assert_eq!(class, TelescopeClass::LongFocalLength);
+        assert_eq!(params.noise_reduction_radius, 0);
+        // Missing headers → standard defaults.
+        let (params, class) = HocusFocusParams::for_frame_headers(None, Some(3.76));
+        assert_eq!(class, TelescopeClass::Standard);
+        assert_eq!(params.min_star_size, standard.min_star_size);
     }
 
     #[test]
