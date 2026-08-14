@@ -985,6 +985,7 @@ fn measure_stars(
     noise_estimate: &KappaSigmaResult,
 ) -> Vec<HocusFocusStar> {
     let mut stars = Vec::new();
+    let mut rejected_by_gate = [0usize; GATE_NAMES.len()];
 
     for candidate in candidates {
         // Measure star properties
@@ -1005,11 +1006,15 @@ fn measure_stars(
         // from the average HFR below; without it the gate rejects it.
         let saturated = (background + peak) >= params.saturation_threshold;
         if saturated && !params.keep_saturated_stars {
+            rejected_by_gate[RejectReason::Saturated as usize] += 1;
             continue;
         }
 
         // Validate star based on multiple criteria
-        if !validate_star(&candidate, peak, median, hfr, snr, params, width, height) {
+        if let Some(reason) =
+            validate_star(&candidate, peak, median, hfr, snr, params, width, height)
+        {
+            rejected_by_gate[reason as usize] += 1;
             continue;
         }
 
@@ -1051,6 +1056,20 @@ fn measure_stars(
             saturated,
             psf_model,
         });
+    }
+
+    if crate::debug::is_debug_enabled() {
+        let census: Vec<String> = GATE_NAMES
+            .iter()
+            .zip(rejected_by_gate.iter())
+            .filter(|(_, count)| **count > 0)
+            .map(|(name, count)| format!("{name}={count}"))
+            .collect();
+        crate::debug_detection!(
+            "Debug gate census: accepted={} rejected: {}",
+            stars.len(),
+            census.join(" ")
+        );
     }
 
     stars
@@ -1147,7 +1166,32 @@ fn measure_star_properties(
     (hfr, fwhm, peak, star_median - background, background, flux)
 }
 
-/// Validate star based on HocusFocus criteria
+/// Why a measured candidate was not accepted as a star. Indexes
+/// [`GATE_NAMES`]; used for the debug rejection census.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RejectReason {
+    TooSmallBox = 0,
+    OnBorder = 1,
+    TooDistorted = 2,
+    LowSensitivity = 3,
+    OffCenter = 4,
+    TooFlat = 5,
+    HfrTooSmall = 6,
+    Saturated = 7,
+}
+
+const GATE_NAMES: [&str; 8] = [
+    "small_box",
+    "border",
+    "distorted",
+    "low_sensitivity",
+    "off_center",
+    "too_flat",
+    "hfr_too_small",
+    "saturated",
+];
+
+/// Validate star based on HocusFocus criteria. `None` = accepted.
 #[allow(clippy::too_many_arguments)]
 fn validate_star(
     candidate: &StarCandidate,
@@ -1158,24 +1202,24 @@ fn validate_star(
     params: &HocusFocusParams,
     src_width: usize,
     src_height: usize,
-) -> bool {
+) -> Option<RejectReason> {
     let (bx, by, bw, bh) = candidate.bounding_box;
 
     // Too small
     if bw < params.min_star_size || bh < params.min_star_size {
-        return false;
+        return Some(RejectReason::TooSmallBox);
     }
 
     // Touching the border
     if bx == 0 || by == 0 || bx + bw >= src_width || by + bh >= src_height {
-        return false;
+        return Some(RejectReason::OnBorder);
     }
 
     // Too distorted (pixel density check)
     let max_dim = bw.max(bh) as f64;
     let pixel_density = candidate.pixels.len() as f64 / (max_dim * max_dim);
     if pixel_density < params.max_distortion {
-        return false;
+        return Some(RejectReason::TooDistorted);
     }
 
     // Saturation is judged by the caller (measure_stars), where the
@@ -1183,7 +1227,7 @@ fn validate_star(
 
     // Not bright enough relative to noise (sensitivity check)
     if snr <= params.sensitivity {
-        return false;
+        return Some(RejectReason::LowSensitivity);
     }
 
     // Star center too far from bounding box center
@@ -1195,20 +1239,20 @@ fn validate_star(
     if (candidate.center.0 - box_center_x).abs() > center_threshold_x
         || (candidate.center.1 - box_center_y).abs() > center_threshold_y
     {
-        return false;
+        return Some(RejectReason::OffCenter);
     }
 
     // Too flat (median too close to peak)
     if median >= params.peak_response * peak {
-        return false;
+        return Some(RejectReason::TooFlat);
     }
 
     // HFR below minimum threshold
     if hfr <= params.min_hfr {
-        return false;
+        return Some(RejectReason::HfrTooSmall);
     }
 
-    true
+    None
 }
 
 #[cfg(test)]
