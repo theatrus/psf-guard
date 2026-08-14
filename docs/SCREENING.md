@@ -81,6 +81,13 @@ focus drift, tracking error, or off-target only when that detector has enough
 evidence. Reviewed rejection recommendations use those causes, not the score
 alone.
 
+One absolute exception: a frame whose star measurement found **zero stars**
+is capped at a condemned score with a **No Stars Detected** cause, even when
+it has no sequence peers — zero stars in a light frame is direct pixel
+evidence of clouds, trailing, or an obstructed aperture, not a normalization
+artifact. A frame with no star measurement at all is never capped; grading
+does not punish an image because an optional scan has not run.
+
 Capture sessions split at a Target Scheduler session change, a capture-profile
 change, or a 60-minute gap. CLI screening still reports **OK**, **WARN**, and
 **REJECT** verdicts for its file-screening workflow.

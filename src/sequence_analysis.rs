@@ -23,6 +23,11 @@ pub enum IssueCategory {
     /// candidate association.
     #[serde(rename = "satellite_trail_risk", alias = "satellite_trail_detected")]
     SatelliteTrailDetected,
+    /// A star measurement ran on this frame and found nothing. Zero stars
+    /// in a light frame is absolute pixel evidence of a ruined exposure
+    /// (clouds, trailing, an obstructed aperture), so the score is capped
+    /// even when the frame has no sequence peers to compare against.
+    NoStarsDetected,
     UnknownDegradation,
 }
 
@@ -1030,6 +1035,21 @@ impl SequenceAnalyzer {
                     .then(|| relative_score_explanation(result, ScoreScope::TargetFilter));
             }
         }
+        // The session-evidence overwrite above recomputes quality_score from
+        // the rollup's normalized metrics, which would silently undo the
+        // zero-star cap (category, flags, and details survive via the copied
+        // session evidence). Re-clamp by measurement.
+        let zero_star_images: std::collections::HashSet<i32> = images
+            .iter()
+            .filter(|image| image.star_count == Some(0.0))
+            .map(|image| image.image_id)
+            .collect();
+        for result in &mut rollup_images {
+            if zero_star_images.contains(&result.image_id) {
+                result.quality_score = result.quality_score.min(ZERO_STAR_SCORE_CAP);
+            }
+        }
+
         rollup_images.sort_by_key(|result| timestamps.get(&result.image_id).copied().unwrap_or(0));
 
         let session_start = images.iter().filter_map(|image| image.timestamp).min();
@@ -1199,6 +1219,7 @@ impl SequenceAnalyzer {
                 .collect();
             self.merge_pointing_issues(&mut results);
             self.merge_satellite_issues(&mut results, &images);
+            apply_zero_star_cap(&mut results, &images);
             let summary = self.build_summary(&results);
 
             return ScoredSequence {
@@ -1343,6 +1364,8 @@ impl SequenceAnalyzer {
                 }
             }
         }
+
+        apply_zero_star_cap(&mut results, &images);
 
         // Build reference values
         let reference_values = ReferenceValues {
@@ -2625,6 +2648,41 @@ impl RelativeMetricTolerance {
     }
 }
 
+/// Score ceiling for a frame whose star measurement found zero stars —
+/// low enough to read as condemned in every view, non-zero so temporal
+/// and pointing evidence can still rank multiple ruined frames.
+const ZERO_STAR_SCORE_CAP: f64 = 0.05;
+
+/// Cap frames whose star measurement found zero stars. Runs after issue
+/// classification so a more specific cause (a detected cloud event, say)
+/// keeps the category while the score still drops. A MEASURED zero is
+/// absolute pixel evidence of a ruined exposure, never a normalization
+/// artifact — without this, a lone zero-star frame self-normalizes to a
+/// perfect score. A missing measurement stays exempt: grading must not
+/// punish an image because an optional scan has not run.
+fn apply_zero_star_cap(results: &mut [ImageQualityResult], images: &[ImageMetrics]) {
+    for (result, image) in results.iter_mut().zip(images) {
+        if image.star_count != Some(0.0) {
+            continue;
+        }
+        result.quality_score = result.quality_score.min(ZERO_STAR_SCORE_CAP);
+        if !result.flags.contains(&IssueCategory::NoStarsDetected) {
+            result.flags.push(IssueCategory::NoStarsDetected);
+        }
+        result
+            .category
+            .get_or_insert(IssueCategory::NoStarsDetected);
+        let text = "No stars detected: this frame was measured and zero stars were found, \
+                    which is direct pixel evidence of a ruined exposure (clouds, trailing, \
+                    or an obstructed aperture). The score is capped regardless of sequence \
+                    context.";
+        result.details = Some(match result.details.take() {
+            Some(existing) => format!("{text} {existing}"),
+            None => text.to_string(),
+        });
+    }
+}
+
 const STAR_COUNT_TOLERANCE: RelativeMetricTolerance = RelativeMetricTolerance::new(0.10, 0.40);
 const HFR_TOLERANCE: RelativeMetricTolerance = RelativeMetricTolerance::new(0.05, 0.30);
 const ECCENTRICITY_TOLERANCE: RelativeMetricTolerance = RelativeMetricTolerance::new(0.10, 0.50);
@@ -3150,6 +3208,69 @@ mod tests {
         let regions = cataloged_extended_emission(&solution);
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0].name, "NGC 1499");
+    }
+
+    #[test]
+    fn zero_star_frame_is_capped_even_alone() {
+        // A lone frame otherwise self-normalizes to a perfect score; zero
+        // measured stars is absolute evidence and must cap it anyway.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut image = make_image(1, 0, 0.0, 0.0);
+        image.hfr = None; // no stars → no HFR measurement
+        let sequence = &analyzer.analyze(&[image], 1, "target", "L")[0];
+        let result = &sequence.images[0];
+        assert!(
+            result.quality_score <= ZERO_STAR_SCORE_CAP,
+            "score {} must be capped",
+            result.quality_score
+        );
+        assert_eq!(result.category, Some(IssueCategory::NoStarsDetected));
+        assert!(result.flags.contains(&IssueCategory::NoStarsDetected));
+        assert!(result
+            .details
+            .as_deref()
+            .is_some_and(|d| d.contains("No stars detected")));
+    }
+
+    #[test]
+    fn missing_star_measurement_is_not_capped() {
+        // No measurement at all is missing evidence, not zero stars: the
+        // scan may simply not have run. Grading must not punish that.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut image = make_image(1, 0, 0.0, 2.5);
+        image.star_count = None;
+        let sequence = &analyzer.analyze(&[image], 1, "target", "L")[0];
+        let result = &sequence.images[0];
+        assert!(result.quality_score > 0.9, "got {}", result.quality_score);
+        assert!(!result.flags.contains(&IssueCategory::NoStarsDetected));
+    }
+
+    #[test]
+    fn zero_star_frame_capped_among_good_frames_without_touching_them() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..6)
+            .map(|i| make_image(i, i as i64 * 300, 500.0, 2.5))
+            .collect();
+        images[3].star_count = Some(0.0);
+        images[3].hfr = None;
+
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        let ruined = &sequence.images[3];
+        assert!(ruined.quality_score <= ZERO_STAR_SCORE_CAP);
+        assert!(ruined.flags.contains(&IssueCategory::NoStarsDetected));
+        // A more specific classification (a detected cloud event, say) may
+        // own the category; the cap only fills it when nothing else did.
+        assert!(ruined.category.is_some());
+        for (index, result) in sequence.images.iter().enumerate() {
+            if index != 3 {
+                assert!(
+                    result.quality_score > 0.5,
+                    "good frame {index} dragged to {}",
+                    result.quality_score
+                );
+                assert!(!result.flags.contains(&IssueCategory::NoStarsDetected));
+            }
+        }
     }
 
     #[test]
