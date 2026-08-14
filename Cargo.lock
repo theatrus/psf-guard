@@ -5003,9 +5003,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-imgproc"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7838c64e51a8b068a684c25cea2d5333b38d5945c236f89d836408596dea6f1e"
+checksum = "43903045bca0b629b5bda14bfda11b26758bbb3fd51d24dedb253c0155020f1d"
 dependencies = [
  "rayon",
 ]

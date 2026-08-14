@@ -720,6 +720,31 @@ pub fn main() -> Result<()> {
         } => {
             benchmark_psf(&fits_path, runs, verbose)?;
         }
+        Commands::BenchmarkDetection {
+            manifest,
+            output,
+            structure,
+            binning,
+            keep_saturated,
+            psf_type,
+            runs,
+            noise_reduction,
+            preset,
+            verbose,
+        } => {
+            crate::debug::init_debug(verbose);
+            crate::commands::benchmark_detection::benchmark_detection(
+                &manifest,
+                &output,
+                &structure,
+                binning,
+                keep_saturated,
+                &psf_type,
+                runs,
+                noise_reduction,
+                &preset,
+            )?;
+        }
         Commands::Sync { kind } => match kind {
             crate::cli::SyncKind::Remote {
                 direction,

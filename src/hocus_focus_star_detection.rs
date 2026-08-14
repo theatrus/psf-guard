@@ -11,6 +11,64 @@ use crate::psf_fitting::{PSFModel, PSFType};
 use seiza_imgproc::morphology::{KernelShape, MorphBorder, StructuringElement};
 use seiza_imgproc::wavelets::StructureRemover;
 
+/// How large-scale structure (nebulosity, gradients) is removed before
+/// candidate detection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StructureRemovalMethod {
+    /// Gaussian + domain-transform layer subtraction — PSF Guard's
+    /// historical pipeline, kept as the compatibility default.
+    Filtered,
+    /// À trous B3-spline wavelet residual, matching HocusFocus
+    /// StarDetectorVersion 2: iterated sparse 5-tap smoothing, one
+    /// subtraction, reflect borders.
+    Atrous,
+}
+
+/// Coarse rig class for detection presets, after HocusFocus's Simple-mode
+/// pixel-scale axis. Star apparent size in PIXELS is what the detector's
+/// pixel-space knobs care about, and it follows the pixel scale: wide
+/// fields render stars in few pixels, long focal lengths in many.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TelescopeClass {
+    /// ≥ ~1.2"/px: stars span few pixels, so the minimum box shrinks and
+    /// one structure layer goes — matching upstream's WideField preset.
+    WideField,
+    /// The regime the defaults were calibrated in.
+    Standard,
+    /// ≤ ~0.6"/px: stars span many pixels — one more structure layer, a
+    /// larger minimum box, and (measured on the corpus, diverging from
+    /// upstream's preset) no noise-reduction blur: radius 4 suppressed 75%
+    /// of long-focal-length stars while long-FL frames are oversampled
+    /// enough that detection does not need the blur.
+    LongFocalLength,
+}
+
+/// Classify a rig from its pixel scale in arcseconds per pixel.
+pub fn classify_pixel_scale(arcsec_per_px: f64) -> TelescopeClass {
+    if !arcsec_per_px.is_finite() || arcsec_per_px <= 0.0 {
+        return TelescopeClass::Standard;
+    }
+    if arcsec_per_px >= 1.2 {
+        TelescopeClass::WideField
+    } else if arcsec_per_px <= 0.6 {
+        TelescopeClass::LongFocalLength
+    } else {
+        TelescopeClass::Standard
+    }
+}
+
+/// Pixel scale in arcseconds per pixel from the FITS headers a capture
+/// writes: focal length in mm (FOCALLEN) and pixel size in µm (XPIXSZ).
+pub fn pixel_scale_arcsec(focal_length_mm: f64, pixel_size_um: f64) -> Option<f64> {
+    if !(focal_length_mm.is_finite() && pixel_size_um.is_finite())
+        || focal_length_mm <= 0.0
+        || pixel_size_um <= 0.0
+    {
+        return None;
+    }
+    Some(206.265 * pixel_size_um / focal_length_mm)
+}
+
 /// Star detection parameters for HocusFocus algorithm
 #[derive(Debug, Clone)]
 pub struct HocusFocusParams {
@@ -19,9 +77,15 @@ pub struct HocusFocusParams {
     pub hotpixel_threshold: f64, // Percent of max ADU for hot pixel threshold
     pub noise_reduction_radius: usize, // Half-size of Gaussian kernel
 
+    /// Integer software-binning factor applied for detection only (1 = off).
+    /// Positions, HFR, and PSF sigma are reported in captured pixels
+    /// regardless. Hot-pixel filtering runs at native resolution first.
+    pub detection_binning: usize,
+
     // Image processing runs on seiza-imgproc (pure Rust, OpenCV-verified)
 
     // Structure detection
+    pub structure_removal: StructureRemovalMethod,
     pub structure_layers: usize, // Number of wavelet layers for large structure removal
     pub noise_clipping_multiplier: f64, // Sigma multiplier for noise threshold
     pub star_clipping_multiplier: f64, // Sigma multiplier for star pixel filtering
@@ -37,8 +101,70 @@ pub struct HocusFocusParams {
     pub saturation_threshold: f64, // ADU value for saturation
     pub min_hfr: f64,        // Minimum HFR threshold
 
+    /// Keep saturated stars detected (flagged) instead of rejecting them,
+    /// and exclude them from the average HFR/FWHM while at least three
+    /// unsaturated stars remain — HocusFocus's ExcludeSaturatedStarsFromHFR.
+    pub keep_saturated_stars: bool,
+
     // PSF fitting
     pub psf_type: PSFType, // PSF model type to fit (None, Gaussian, Moffat4)
+}
+
+impl HocusFocusParams {
+    /// Detection parameters adjusted for a rig class. `Standard` returns
+    /// the plain defaults; the other classes shift the pixel-space knobs
+    /// the way HocusFocus's Simple-mode presets do, with one corpus-driven
+    /// divergence documented on [`TelescopeClass::LongFocalLength`].
+    pub fn for_telescope_class(class: TelescopeClass) -> Self {
+        let mut params = Self::default();
+        match class {
+            TelescopeClass::WideField => {
+                params.structure_layers = 3;
+                params.min_star_size = 4;
+            }
+            TelescopeClass::Standard => {}
+            TelescopeClass::LongFocalLength => {
+                params.structure_layers = 5;
+                params.min_star_size = 6;
+                params.noise_reduction_radius = 0;
+            }
+        }
+        params
+    }
+
+    /// [`Self::for_telescope_class`] from whatever a frame's headers give:
+    /// classify from pixel scale when both FOCALLEN and XPIXSZ are present,
+    /// otherwise fall back to the standard defaults.
+    pub fn for_frame_headers(
+        focal_length_mm: Option<f64>,
+        pixel_size_um: Option<f64>,
+    ) -> (Self, TelescopeClass) {
+        let class = focal_length_mm
+            .zip(pixel_size_um)
+            .and_then(|(focal, pixel)| pixel_scale_arcsec(focal, pixel))
+            .map(classify_pixel_scale)
+            .unwrap_or(TelescopeClass::Standard);
+        (Self::for_telescope_class(class), class)
+    }
+
+    /// [`Self::for_frame_headers`] for a frame on disk: reads FOCALLEN and
+    /// XPIXSZ through the shared header reader. A missing or unreadable
+    /// header falls back to the standard defaults, never an error — preset
+    /// selection must not make a frame undetectable.
+    pub fn for_frame_path(path: &std::path::Path) -> (Self, TelescopeClass) {
+        let (focal, pixel) = crate::image_io::read_header(path)
+            .map(|headers| {
+                let value = |name: &str| {
+                    headers
+                        .iter()
+                        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                        .and_then(|(_, v)| v.as_f64())
+                };
+                (value("FOCALLEN"), value("XPIXSZ"))
+            })
+            .unwrap_or((None, None));
+        Self::for_frame_headers(focal, pixel)
+    }
 }
 
 impl Default for HocusFocusParams {
@@ -47,8 +173,10 @@ impl Default for HocusFocusParams {
             hotpixel_filtering: true,
             hotpixel_threshold: 0.001, // 0.1% of max ADU
             noise_reduction_radius: 4, // Actual default from user
+            detection_binning: 1,
 
             // seiza-imgproc structure removal and morphology
+            structure_removal: StructureRemovalMethod::Filtered,
             structure_layers: 4,
             noise_clipping_multiplier: 4.0,
             star_clipping_multiplier: 2.0,
@@ -61,7 +189,8 @@ impl Default for HocusFocusParams {
             star_center_tolerance: 0.3,           // 30% - actual default
             saturation_threshold: 65535.0 * 0.99, // 99% of max
             min_hfr: 1.5,                         // Actual default
-            psf_type: PSFType::None,              // No PSF fitting by default
+            keep_saturated_stars: false,
+            psf_type: PSFType::None, // No PSF fitting by default
         }
     }
 }
@@ -77,6 +206,10 @@ pub struct HocusFocusStar {
     pub snr: f64, // Signal-to-noise ratio
     pub flux: f64,
     pub pixel_count: usize,
+    /// Peak sits at the sensor's saturation level, so the measured HFR is
+    /// inflated by clipping. Only set when `keep_saturated_stars` is on;
+    /// with it off such candidates are rejected instead.
+    pub saturated: bool,
     pub psf_model: Option<PSFModel>, // PSF fitting results
 }
 
@@ -104,12 +237,120 @@ pub fn detect_stars_hocus_focus(
     height: usize,
     params: &HocusFocusParams,
 ) -> HocusFocusDetectionResult {
-    // Step 1: Apply hot pixel filtering if enabled
-    let mut working_data = if params.hotpixel_filtering {
+    // Step 1: Apply hot pixel filtering if enabled. Always at native
+    // resolution — a binned average would smear hot pixels into their
+    // neighbours instead of removing them.
+    let working_data = if params.hotpixel_filtering {
         apply_hotpixel_filter(data, width, height, params.hotpixel_threshold)
     } else {
         data.to_vec()
     };
+
+    // Step 1b: Software binning for detection only. Every pixel-space
+    // output is scaled back to captured pixels afterwards, so callers see
+    // native coordinates and HFR whatever the factor.
+    let bin = params.detection_binning.max(1);
+    if bin > 1 && width / bin >= 16 && height / bin >= 16 {
+        let binned_width = width / bin;
+        let binned_height = height / bin;
+        let binned = bin_average(&working_data, width, binned_width, binned_height, bin);
+        let mut result = detect_on_prepared(&binned, binned_width, binned_height, params);
+        rescale_result_to_native(&mut result, bin);
+        return result;
+    }
+
+    detect_on_prepared(&working_data, width, height, params)
+}
+
+/// Recommend a detection binning factor from a measured in-focus HFR in
+/// captured pixels, following HocusFocus's DetectionBinningResolver: the
+/// integer factor that brings the HFR closest to the detector's calibrated
+/// ~3 px target, clamped to 1..=4. Recommends from a measurement only —
+/// pixel-scale estimates span wider than the 1×-vs-2× decision margin.
+/// Frames already at or below the calibrated band recommend 1: binning only
+/// divides, so no factor can make a small star larger.
+pub fn recommend_detection_binning(measured_hfr_px: f64) -> usize {
+    const TARGET_HFR_PIXELS: f64 = 3.0;
+    if !measured_hfr_px.is_finite() || measured_hfr_px <= 0.0 {
+        return 1;
+    }
+    // f64::round rounds half away from zero, matching the reference.
+    ((measured_hfr_px / TARGET_HFR_PIXELS).round() as usize).clamp(1, 4)
+}
+
+/// Box-average `factor`×`factor` blocks of a native-resolution frame. Right
+/// and bottom remainders that do not fill a block are dropped, matching an
+/// integer resample.
+fn bin_average(
+    data: &[u16],
+    native_width: usize,
+    binned_width: usize,
+    binned_height: usize,
+    factor: usize,
+) -> Vec<u16> {
+    use rayon::prelude::*;
+    let mut binned = vec![0u16; binned_width * binned_height];
+    let samples = (factor * factor) as u32;
+    binned
+        .par_chunks_mut(binned_width)
+        .enumerate()
+        .for_each(|(by, out_row)| {
+            for (bx, out) in out_row.iter_mut().enumerate() {
+                let mut sum = 0u32;
+                for dy in 0..factor {
+                    let row = (by * factor + dy) * native_width + bx * factor;
+                    for dx in 0..factor {
+                        sum += data[row + dx] as u32;
+                    }
+                }
+                // Round-to-nearest keeps the binned background at the same
+                // ADU level as the native mean.
+                *out = ((sum + samples / 2) / samples) as u16;
+            }
+        });
+    binned
+}
+
+/// Scale a binned-detection result back to captured pixels: positions land
+/// on the centre of the block they were measured in, linear measures (HFR,
+/// FWHM, PSF sigma) scale by the factor, areas by its square. Flux scales by
+/// the block area because a binned pixel holds the block MEAN — the sum a
+/// native aperture would see is `factor²` larger. Peak brightness, SNR, and
+/// background stay as measured on the binned frame: averaging genuinely
+/// lowers a star's peak and raises its SNR, and no rescale can undo that.
+fn rescale_result_to_native(result: &mut HocusFocusDetectionResult, factor: usize) {
+    let f = factor as f64;
+    let center_offset = (factor - 1) as f64 / 2.0;
+    for star in &mut result.stars {
+        star.position = (
+            star.position.0 * f + center_offset,
+            star.position.1 * f + center_offset,
+        );
+        star.hfr *= f;
+        star.fwhm *= f;
+        star.pixel_count *= factor * factor;
+        star.flux *= f * f;
+        if let Some(psf) = &mut star.psf_model {
+            psf.sigma_x *= f;
+            psf.sigma_y *= f;
+            psf.fwhm *= f;
+            psf.x0 *= f;
+            psf.y0 *= f;
+        }
+    }
+    result.average_hfr *= f;
+    result.average_fwhm *= f;
+}
+
+/// The detection pipeline from noise reduction onward, on data whose hot
+/// pixels are already filtered and which may be software-binned.
+fn detect_on_prepared(
+    data: &[u16],
+    width: usize,
+    height: usize,
+    params: &HocusFocusParams,
+) -> HocusFocusDetectionResult {
+    let mut working_data = data.to_vec();
 
     // Step 2: Apply noise reduction if configured
     if params.noise_reduction_radius > 0 {
@@ -133,13 +374,26 @@ pub fn detect_stars_hocus_focus(
         }
     };
 
-    // Step 4: Estimate noise using Kappa-Sigma method
-    let noise_estimate = kappa_sigma_noise_estimate(
-        &structure_map,
-        width,
-        height,
-        params.noise_clipping_multiplier,
-    );
+    // Step 4: Estimate noise using Kappa-Sigma method.
+    //
+    // Filtered: measured on the structure map, the historical (validated)
+    // behavior — that map is close to the smoothed image, so its sigma is
+    // image-like. Atrous: the map is band-pass detail whose sigma is tiny
+    // and unrelated to camera noise; HocusFocus measures the noise on the
+    // noise-reduced IMAGE and thresholds the map with it, so do the same.
+    let noise_estimate = match params.structure_removal {
+        StructureRemovalMethod::Filtered => kappa_sigma_noise_estimate(
+            &structure_map,
+            width,
+            height,
+            params.noise_clipping_multiplier,
+        ),
+        StructureRemovalMethod::Atrous => {
+            use rayon::prelude::*;
+            let image_f64: Vec<f64> = working_data.par_iter().map(|&v| v as f64).collect();
+            kappa_sigma_noise_estimate(&image_f64, width, height, params.noise_clipping_multiplier)
+        }
+    };
 
     // Debug output
     crate::debug_detection!(
@@ -211,15 +465,25 @@ pub fn detect_stars_hocus_focus(
     );
     crate::debug_detection!("Debug HocusFocus: {} stars passed validation", stars.len());
 
-    // Calculate statistics
-    let average_hfr = if !stars.is_empty() {
-        stars.iter().map(|s| s.hfr).sum::<f64>() / stars.len() as f64
+    // Calculate statistics. A saturated star's HFR is inflated by peak
+    // clipping, so it is excluded from the averages while at least three
+    // unsaturated stars remain (HocusFocus ExcludeSaturatedStarsFromHFR);
+    // it still counts as a detected star.
+    let unsaturated: Vec<&HocusFocusStar> = stars.iter().filter(|s| !s.saturated).collect();
+    let hfr_pool: Vec<&HocusFocusStar> = if unsaturated.len() >= 3 {
+        unsaturated
+    } else {
+        stars.iter().collect()
+    };
+
+    let average_hfr = if !hfr_pool.is_empty() {
+        hfr_pool.iter().map(|s| s.hfr).sum::<f64>() / hfr_pool.len() as f64
     } else {
         0.0
     };
 
-    let average_fwhm = if !stars.is_empty() {
-        stars.iter().map(|s| s.fwhm).sum::<f64>() / stars.len() as f64
+    let average_fwhm = if !hfr_pool.is_empty() {
+        hfr_pool.iter().map(|s| s.fwhm).sum::<f64>() / hfr_pool.len() as f64
     } else {
         0.0
     };
@@ -393,27 +657,49 @@ fn create_structure_map(
     height: usize,
     params: &HocusFocusParams,
 ) -> Result<Vec<f64>, Box<dyn std::error::Error>> {
-    // Multi-scale structure removal (Gaussian + domain-transform layers,
-    // reproducing the former OpenCV filter pipeline bit-for-bit in intent).
-    // The pipeline is f32 internally and u16 camera values are exact in
-    // f32, so the f32 entry point skips two full-image f64 conversions
-    // while producing bit-identical residuals; the subtraction below is
-    // done in f64 exactly as before (each operand widens exactly).
     use rayon::prelude::*;
     let float_data: Vec<f32> = data.par_iter().map(|&v| v as f32).collect();
     let wavelet_remover = StructureRemover::new(params.structure_layers);
-    let residual = wavelet_remover.remove_structures_filtered_f32(&float_data, width, height);
 
-    // Subtract residual from original to remove large structures
     let mut structure_map = vec![0f64; data.len()];
-    structure_map
-        .par_chunks_mut(4096)
-        .zip(data.par_chunks(4096).zip(residual.par_chunks(4096)))
-        .for_each(|(out, (d, r))| {
-            for ((o, &dv), &rv) in out.iter_mut().zip(d.iter()).zip(r.iter()) {
-                *o = (dv as f64 - rv as f64).max(0.0);
-            }
-        });
+    match params.structure_removal {
+        StructureRemovalMethod::Filtered => {
+            // Multi-scale structure removal (Gaussian + domain-transform
+            // layers, reproducing the former OpenCV filter pipeline
+            // bit-for-bit in intent). The pipeline is f32 internally and u16
+            // camera values are exact in f32, so the f32 entry point skips
+            // two full-image f64 conversions while producing bit-identical
+            // residuals; the subtraction below is done in f64 exactly as
+            // before (each operand widens exactly).
+            let residual =
+                wavelet_remover.remove_structures_filtered_f32(&float_data, width, height);
+
+            // Subtract residual from original to remove large structures
+            structure_map
+                .par_chunks_mut(4096)
+                .zip(data.par_chunks(4096).zip(residual.par_chunks(4096)))
+                .for_each(|(out, (d, r))| {
+                    for ((o, &dv), &rv) in out.iter_mut().zip(d.iter()).zip(r.iter()) {
+                        *o = (dv as f64 - rv as f64).max(0.0);
+                    }
+                });
+        }
+        StructureRemovalMethod::Atrous => {
+            // HocusFocus StarDetectorVersion 2: the à trous B3-spline chain
+            // residual subtracted once, clamped at zero. Removes nebulosity
+            // and gradients as band-limited structure rather than relying on
+            // the binarize threshold to reject them.
+            let map = wavelet_remover.structure_map_atrous_chain(&float_data, width, height);
+            structure_map
+                .par_chunks_mut(4096)
+                .zip(map.par_chunks(4096))
+                .for_each(|(out, m)| {
+                    for (o, &mv) in out.iter_mut().zip(m.iter()) {
+                        *o = mv as f64;
+                    }
+                });
+        }
+    }
 
     // Debug statistics cost six full passes over the map — only compute
     // them when debug output is actually enabled.
@@ -801,6 +1087,7 @@ fn measure_stars(
     noise_estimate: &KappaSigmaResult,
 ) -> Vec<HocusFocusStar> {
     let mut stars = Vec::new();
+    let mut rejected_by_gate = [0usize; GATE_NAMES.len()];
 
     for candidate in candidates {
         // Measure star properties
@@ -816,10 +1103,20 @@ fn measure_stars(
         let signal = peak - background;
         let snr = signal / noise_estimate.sigma.max(0.001);
 
+        // A clipped peak means the measured HFR is unreliable. With
+        // keep_saturated_stars the star survives, flagged, and is excluded
+        // from the average HFR below; without it the gate rejects it.
+        let saturated = (background + peak) >= params.saturation_threshold;
+        if saturated && !params.keep_saturated_stars {
+            rejected_by_gate[RejectReason::Saturated as usize] += 1;
+            continue;
+        }
+
         // Validate star based on multiple criteria
-        if !validate_star(
-            &candidate, peak, median, background, hfr, snr, params, width, height,
-        ) {
+        if let Some(reason) =
+            validate_star(&candidate, peak, median, hfr, snr, params, width, height)
+        {
+            rejected_by_gate[reason as usize] += 1;
             continue;
         }
 
@@ -858,8 +1155,23 @@ fn measure_stars(
             snr,
             flux,
             pixel_count: candidate.pixels.len(),
+            saturated,
             psf_model,
         });
+    }
+
+    if crate::debug::is_debug_enabled() {
+        let census: Vec<String> = GATE_NAMES
+            .iter()
+            .zip(rejected_by_gate.iter())
+            .filter(|(_, count)| **count > 0)
+            .map(|(name, count)| format!("{name}={count}"))
+            .collect();
+        crate::debug_detection!(
+            "Debug gate census: accepted={} rejected: {}",
+            stars.len(),
+            census.join(" ")
+        );
     }
 
     stars
@@ -956,46 +1268,68 @@ fn measure_star_properties(
     (hfr, fwhm, peak, star_median - background, background, flux)
 }
 
-/// Validate star based on HocusFocus criteria
+/// Why a measured candidate was not accepted as a star. Indexes
+/// [`GATE_NAMES`]; used for the debug rejection census.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RejectReason {
+    TooSmallBox = 0,
+    OnBorder = 1,
+    TooDistorted = 2,
+    LowSensitivity = 3,
+    OffCenter = 4,
+    TooFlat = 5,
+    HfrTooSmall = 6,
+    Saturated = 7,
+}
+
+const GATE_NAMES: [&str; 8] = [
+    "small_box",
+    "border",
+    "distorted",
+    "low_sensitivity",
+    "off_center",
+    "too_flat",
+    "hfr_too_small",
+    "saturated",
+];
+
+/// Validate star based on HocusFocus criteria. `None` = accepted.
 #[allow(clippy::too_many_arguments)]
 fn validate_star(
     candidate: &StarCandidate,
     peak: f64,
     median: f64,
-    background: f64,
     hfr: f64,
     snr: f64,
     params: &HocusFocusParams,
     src_width: usize,
     src_height: usize,
-) -> bool {
+) -> Option<RejectReason> {
     let (bx, by, bw, bh) = candidate.bounding_box;
 
     // Too small
     if bw < params.min_star_size || bh < params.min_star_size {
-        return false;
+        return Some(RejectReason::TooSmallBox);
     }
 
     // Touching the border
     if bx == 0 || by == 0 || bx + bw >= src_width || by + bh >= src_height {
-        return false;
+        return Some(RejectReason::OnBorder);
     }
 
     // Too distorted (pixel density check)
     let max_dim = bw.max(bh) as f64;
     let pixel_density = candidate.pixels.len() as f64 / (max_dim * max_dim);
     if pixel_density < params.max_distortion {
-        return false;
+        return Some(RejectReason::TooDistorted);
     }
 
-    // Fully saturated
-    if (background + peak) >= params.saturation_threshold {
-        return false;
-    }
+    // Saturation is judged by the caller (measure_stars), where the
+    // keep-saturated policy decides between rejecting and flagging.
 
     // Not bright enough relative to noise (sensitivity check)
     if snr <= params.sensitivity {
-        return false;
+        return Some(RejectReason::LowSensitivity);
     }
 
     // Star center too far from bounding box center
@@ -1007,20 +1341,20 @@ fn validate_star(
     if (candidate.center.0 - box_center_x).abs() > center_threshold_x
         || (candidate.center.1 - box_center_y).abs() > center_threshold_y
     {
-        return false;
+        return Some(RejectReason::OffCenter);
     }
 
     // Too flat (median too close to peak)
     if median >= params.peak_response * peak {
-        return false;
+        return Some(RejectReason::TooFlat);
     }
 
     // HFR below minimum threshold
     if hfr <= params.min_hfr {
-        return false;
+        return Some(RejectReason::HfrTooSmall);
     }
 
-    true
+    None
 }
 
 #[cfg(test)]
@@ -1133,6 +1467,219 @@ mod tests {
                 "w={w} h={h} k={k}"
             );
         }
+    }
+
+    /// Synthetic star field: flat background with Gaussian stars at given
+    /// positions, plus optional saturated stars (clipped at 65535).
+    fn star_field(
+        width: usize,
+        height: usize,
+        stars: &[(f64, f64, f64, f64)], // (x, y, amplitude, sigma)
+    ) -> Vec<u16> {
+        let mut data = vec![1000u16; width * height];
+        for &(cx, cy, amplitude, sigma) in stars {
+            let radius = (sigma * 5.0).ceil() as isize;
+            for dy in -radius..=radius {
+                for dx in -radius..=radius {
+                    let x = cx as isize + dx;
+                    let y = cy as isize + dy;
+                    if x < 0 || y < 0 || x >= width as isize || y >= height as isize {
+                        continue;
+                    }
+                    let d2 = (x as f64 - cx).powi(2) + (y as f64 - cy).powi(2);
+                    let value = amplitude * (-d2 / (2.0 * sigma * sigma)).exp();
+                    let index = y as usize * width + x as usize;
+                    data[index] = (data[index] as f64 + value).min(65535.0) as u16;
+                }
+            }
+        }
+        data
+    }
+
+    #[test]
+    fn atrous_structure_removal_detects_synthetic_stars() {
+        let stars = [
+            (60.0, 60.0, 20000.0, 1.8),
+            (180.0, 90.0, 30000.0, 2.0),
+            (100.0, 200.0, 15000.0, 1.6),
+        ];
+        let data = star_field(256, 256, &stars);
+        let params = HocusFocusParams {
+            structure_removal: StructureRemovalMethod::Atrous,
+            noise_reduction_radius: 0,
+            ..Default::default()
+        };
+        let result = detect_stars_hocus_focus(&data, 256, 256, &params);
+        assert_eq!(result.stars.len(), 3, "all three stars detected");
+        for &(cx, cy, _, _) in &stars {
+            assert!(
+                result
+                    .stars
+                    .iter()
+                    .any(|s| (s.position.0 - cx).abs() < 1.0 && (s.position.1 - cy).abs() < 1.0),
+                "star near ({cx},{cy}) missing"
+            );
+        }
+    }
+
+    #[test]
+    fn binned_detection_reports_native_coordinates_and_hfr() {
+        let stars = [
+            (100.0, 100.0, 25000.0, 3.5),
+            (300.0, 150.0, 30000.0, 3.8),
+            (200.0, 320.0, 20000.0, 3.6),
+        ];
+        let data = star_field(400, 400, &stars);
+        let native = HocusFocusParams {
+            noise_reduction_radius: 0,
+            ..Default::default()
+        };
+        let binned = HocusFocusParams {
+            detection_binning: 2,
+            noise_reduction_radius: 0,
+            ..Default::default()
+        };
+        let native_result = detect_stars_hocus_focus(&data, 400, 400, &native);
+        let binned_result = detect_stars_hocus_focus(&data, 400, 400, &binned);
+        assert_eq!(native_result.stars.len(), 3);
+        assert_eq!(binned_result.stars.len(), 3, "binning must not lose stars");
+
+        for star in &binned_result.stars {
+            let nearest = native_result
+                .stars
+                .iter()
+                .min_by(|a, b| {
+                    let da = (a.position.0 - star.position.0).abs();
+                    let db = (b.position.0 - star.position.0).abs();
+                    da.total_cmp(&db)
+                })
+                .unwrap();
+            // Positions come back in captured pixels, within a pixel of the
+            // native measurement; HFR within 20%.
+            assert!(
+                (star.position.0 - nearest.position.0).abs() < 1.5
+                    && (star.position.1 - nearest.position.1).abs() < 1.5,
+                "binned position {:?} vs native {:?}",
+                star.position,
+                nearest.position
+            );
+            assert!(
+                (star.hfr - nearest.hfr).abs() / nearest.hfr < 0.2,
+                "binned HFR {} vs native {}",
+                star.hfr,
+                nearest.hfr
+            );
+        }
+    }
+
+    #[test]
+    fn saturated_stars_stay_counted_but_out_of_the_average() {
+        // Three sharp unsaturated stars and one hugely saturated one whose
+        // clipped plateau inflates its HFR.
+        let stars = [
+            (60.0, 60.0, 20000.0, 1.6),
+            (180.0, 60.0, 20000.0, 1.6),
+            (60.0, 180.0, 20000.0, 1.6),
+            (180.0, 180.0, 500000.0, 3.0),
+        ];
+        let data = star_field(256, 256, &stars);
+
+        let reject = HocusFocusParams {
+            noise_reduction_radius: 0,
+            ..Default::default()
+        };
+        let keep = HocusFocusParams {
+            keep_saturated_stars: true,
+            noise_reduction_radius: 0,
+            ..Default::default()
+        };
+
+        let rejected = detect_stars_hocus_focus(&data, 256, 256, &reject);
+        assert_eq!(
+            rejected.stars.len(),
+            3,
+            "saturated star rejected by default"
+        );
+
+        let kept = detect_stars_hocus_focus(&data, 256, 256, &keep);
+        assert_eq!(kept.stars.len(), 4, "saturated star stays counted");
+        let saturated: Vec<_> = kept.stars.iter().filter(|s| s.saturated).collect();
+        assert_eq!(saturated.len(), 1);
+        assert!(saturated[0].hfr > rejected.average_hfr * 1.5);
+        // The average excludes the saturated star, so it matches the
+        // reject-mode average of the same three clean stars.
+        assert!(
+            (kept.average_hfr - rejected.average_hfr).abs() < 1e-9,
+            "average must exclude the saturated star: {} vs {}",
+            kept.average_hfr,
+            rejected.average_hfr
+        );
+    }
+
+    #[test]
+    fn telescope_class_follows_pixel_scale() {
+        // Corpus rigs: C925 0.36"/px, Askar107PHQ ~1.0, Ultracat 1.5.
+        assert_eq!(classify_pixel_scale(0.36), TelescopeClass::LongFocalLength);
+        assert_eq!(classify_pixel_scale(1.03), TelescopeClass::Standard);
+        assert_eq!(classify_pixel_scale(1.5), TelescopeClass::WideField);
+        // Unusable input falls back to the calibrated defaults.
+        assert_eq!(classify_pixel_scale(f64::NAN), TelescopeClass::Standard);
+        assert_eq!(classify_pixel_scale(0.0), TelescopeClass::Standard);
+
+        // Header arithmetic: 3.76µm at 518mm ≈ 1.497"/px (Ultracat).
+        let scale = pixel_scale_arcsec(518.0, 3.76).unwrap();
+        assert!((scale - 1.497).abs() < 0.01, "got {scale}");
+        assert_eq!(pixel_scale_arcsec(0.0, 3.76), None);
+    }
+
+    #[test]
+    fn presets_adjust_only_their_pixel_space_knobs() {
+        let standard = HocusFocusParams::default();
+
+        let wide = HocusFocusParams::for_telescope_class(TelescopeClass::WideField);
+        assert_eq!(wide.structure_layers, 3);
+        assert_eq!(wide.min_star_size, 4);
+        assert_eq!(wide.noise_reduction_radius, standard.noise_reduction_radius);
+
+        let long = HocusFocusParams::for_telescope_class(TelescopeClass::LongFocalLength);
+        assert_eq!(long.structure_layers, 5);
+        assert_eq!(long.min_star_size, 6);
+        assert_eq!(long.noise_reduction_radius, 0);
+        assert_eq!(long.sensitivity, standard.sensitivity);
+
+        // Headers → preset: C925 (2.9µm, 1645mm → 0.36"/px).
+        let (params, class) = HocusFocusParams::for_frame_headers(Some(1645.0), Some(2.9));
+        assert_eq!(class, TelescopeClass::LongFocalLength);
+        assert_eq!(params.noise_reduction_radius, 0);
+        // Missing headers → standard defaults.
+        let (params, class) = HocusFocusParams::for_frame_headers(None, Some(3.76));
+        assert_eq!(class, TelescopeClass::Standard);
+        assert_eq!(params.min_star_size, standard.min_star_size);
+    }
+
+    #[test]
+    fn binning_recommendation_follows_the_reference_rule() {
+        // Below or inside the calibrated band: no factor helps.
+        assert_eq!(recommend_detection_binning(f64::NAN), 1);
+        assert_eq!(recommend_detection_binning(0.0), 1);
+        assert_eq!(recommend_detection_binning(1.8), 1);
+        assert_eq!(recommend_detection_binning(3.6), 1);
+        // 4.5 rounds away from zero: 4.5/3 = 1.5 -> 2.
+        assert_eq!(recommend_detection_binning(4.5), 2);
+        assert_eq!(recommend_detection_binning(6.5), 2);
+        assert_eq!(recommend_detection_binning(9.0), 3);
+        // Clamped at 4 however soft the star.
+        assert_eq!(recommend_detection_binning(30.0), 4);
+    }
+
+    #[test]
+    fn bin_average_averages_blocks_and_drops_remainders() {
+        // 5x3 image, factor 2: one 2x2 block per output pixel, remainders
+        // (last column, last row) dropped.
+        let data: Vec<u16> = (0..15).collect();
+        let binned = bin_average(&data, 5, 2, 1, 2);
+        // Block (0,0): 0,1,5,6 -> mean 3; block (1,0): 2,3,7,8 -> mean 5.
+        assert_eq!(binned, vec![3, 5]);
     }
 
     #[test]

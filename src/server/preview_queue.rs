@@ -322,7 +322,11 @@ pub fn generate_annotated(
     use image::{ColorType, Rgb};
 
     let fits = FitsImage::from_file(fits_path)?;
-    let rgb = create_annotated_image(&fits, max_stars, 0.2, -2.8, Rgb([255, 255, 0]))?;
+    // Telescope-class preset from the frame's own headers, so a wide-field
+    // or long-focal-length frame is annotated with knobs sized to its stars.
+    let (params, _class) =
+        crate::hocus_focus_star_detection::HocusFocusParams::for_frame_path(fits_path);
+    let rgb = create_annotated_image(&fits, &params, max_stars, 0.2, -2.8, Rgb([255, 255, 0]))?;
     let final_image = resize_rgb_for_size(rgb, fits.width, fits.height, size);
 
     let (w, h) = final_image.dimensions();

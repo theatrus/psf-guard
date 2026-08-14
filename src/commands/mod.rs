@@ -1,6 +1,7 @@
 pub mod analyze_fits;
 pub mod annotate_stars;
 pub mod annotate_stars_common;
+pub mod benchmark_detection;
 pub mod benchmark_psf;
 pub mod dump_grading;
 pub mod export;

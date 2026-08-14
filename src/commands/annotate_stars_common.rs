@@ -4,12 +4,15 @@ use imageproc::drawing::{draw_filled_circle_mut, draw_hollow_circle_mut};
 
 use crate::hocus_focus_star_detection::{detect_stars_hocus_focus, HocusFocusParams};
 use crate::image_analysis::FitsImage;
-use crate::psf_fitting::PSFType;
 use seiza_stretch::{stretch_u16_to_u16, StretchParams};
 
-/// Create an annotated RGB image from FITS data
+/// Create an annotated RGB image from FITS data. `params` selects the
+/// detection configuration — pass a telescope-class preset
+/// (`HocusFocusParams::for_frame_path`) when the frame's headers are
+/// available, or defaults otherwise.
 pub fn create_annotated_image(
     fits: &FitsImage,
+    params: &HocusFocusParams,
     max_stars: usize,
     midtone_factor: f64,
     shadow_clipping: f64,
@@ -29,13 +32,7 @@ pub fn create_annotated_image(
 
     let stretched = stretch_u16_to_u16(&fits.data, &stats.to_stretch_statistics(), &stretch_params);
 
-    // Detect stars using HocusFocus (default for server)
-    let params = HocusFocusParams {
-        psf_type: PSFType::None,
-        ..Default::default()
-    };
-
-    let detection_result = detect_stars_hocus_focus(&fits.data, width, height, &params);
+    let detection_result = detect_stars_hocus_focus(&fits.data, width, height, params);
 
     // Sort stars by HFR (smallest first - best focus) and take top N
     let mut stars: Vec<_> = detection_result
