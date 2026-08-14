@@ -6,6 +6,20 @@
 
 ## Added
 
+- The HocusFocus star detector learned three options from the current
+  upstream plugin (StarDetectorVersion 2): an à trous B3-spline structure
+  map that removes nebulosity the way the reference implementation does and
+  runs about 25% faster; detection binning, which resamples soft
+  long-focal-length frames into the detector's calibrated star-size range
+  and cuts detect time about 5× at 2×; and a saturated-star policy that
+  keeps clipped stars counted while excluding their inflated HFR from the
+  frame average. Defaults are unchanged — the options were validated against
+  26,000 N.I.N.A.-graded frames from three telescopes and each wins only in
+  the regime it was built for. A new `benchmark-detection` CLI command runs
+  any variant over a frame manifest and reports star-count and HFR agreement
+  with N.I.N.A.'s recorded values plus wall time, so future detector changes
+  can be measured instead of argued.
+
 - Export can lay a session out for PixInsight's WeightedBatchPreprocessing.
   Pick **WBPP** as the export layout on the overview, or pass `--layout wbpp`,
   and each frame type gets its own folder with dark flats among the darks

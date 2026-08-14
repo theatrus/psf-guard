@@ -669,6 +669,48 @@ pub enum Commands {
         verbose: bool,
     },
 
+    /// Benchmark HocusFocus star detection over a frame manifest, recording
+    /// star count, HFR, and wall time per frame — plus agreement with
+    /// N.I.N.A.'s recorded values when the manifest carries them. Used to
+    /// validate detector changes against real image corpora.
+    BenchmarkDetection {
+        /// JSON manifest: array of {path, telescope?, target?, filter?,
+        /// grading_status?, nina_stars?, nina_hfr?}
+        manifest: String,
+
+        /// CSV output path
+        #[arg(long, default_value = "benchmark-detection.csv")]
+        output: String,
+
+        /// Structure removal algorithm (filtered, atrous)
+        #[arg(long, default_value = "filtered")]
+        structure: String,
+
+        /// Detection binning factor (1 = off)
+        #[arg(long, default_value = "1")]
+        binning: usize,
+
+        /// Keep saturated stars detected and out of the HFR average
+        #[arg(long)]
+        keep_saturated: bool,
+
+        /// PSF fitting type (none, gaussian, moffat4)
+        #[arg(long, default_value = "none")]
+        psf_type: String,
+
+        /// Detection runs per frame; the median wall time is reported
+        #[arg(long, default_value = "1")]
+        runs: usize,
+
+        /// Noise reduction radius override (default: detector default)
+        #[arg(long)]
+        noise_reduction: Option<usize>,
+
+        /// Enable detector debug output
+        #[arg(long, short)]
+        verbose: bool,
+    },
+
     /// Sync state between two Target Scheduler databases, matched by stable
     /// `guid` fields (TS plugin schema v22+). Three one-way operations: `sync
     /// pull` mirrors structure + captured images from a telescope DB into your
