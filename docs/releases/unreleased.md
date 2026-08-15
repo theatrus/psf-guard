@@ -17,13 +17,18 @@
 
 ## Fixed
 
-- Stacking a target whose calibration library holds flats from several
-  sessions no longer fails with "building master flat". Flat selection now
-  keeps one coherent session — frames captured within a day of the
-  nearest-matched flat at a compatible sensor temperature — instead of
-  mixing, say, a fresh cooled set with an uncooled set from months earlier.
-  When a master still cannot be built, the stack proceeds without it and
-  the calibration warning names the master that was skipped and the exact
-  reason; calibration errors now carry their full cause instead of a bare
-  "building master flat". See [calibration
+- Stacking a target whose calibration library holds frames from several
+  sessions no longer fails with "building master flat". The frames feeding
+  each master now cluster by sensor temperature (the stacker's own 1 °C
+  gate) and, for flats, into one capture session, with the nearest viable
+  cluster building the master — instead of mixing, say, a fresh cooled set
+  with an uncooled set from months earlier. When a master still cannot be
+  built, the stack proceeds without it and the calibration warning names
+  the master that was skipped and the exact reason; a master whose own
+  input master failed is skipped rather than built wrong; a flat is no
+  longer divided into lights that keep their pedestal (a flats-only
+  library previously inverted the vignette into bright edges); and
+  calibration errors carry their full cause instead of a bare "building
+  master flat".
+  See [calibration
   libraries](https://github.com/theatrus/psf-guard/blob/main/docs/CALIBRATION_LIBRARY.md).

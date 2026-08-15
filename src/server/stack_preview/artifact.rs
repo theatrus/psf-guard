@@ -126,6 +126,12 @@ struct SearchSource {
 struct SearchGroup {
     label: String,
     expected_calibration_fingerprint: String,
+    /// The masters the stack actually applied. Selection fingerprints are
+    /// computed before builds, so with non-fatal builds two runs can share
+    /// a fingerprint yet calibrate differently; crops must not silently
+    /// compare against differently calibrated pixels. Empty for stacks
+    /// recorded before this field existed — those skip the check.
+    expected_masters_signature: String,
     sources: Vec<SearchSource>,
 }
 
@@ -573,6 +579,7 @@ fn prepare_search(
         groups.push(SearchGroup {
             label,
             expected_calibration_fingerprint: group.calibration.fingerprint,
+            expected_masters_signature: group.calibration.masters_signature,
             sources,
         });
     }
@@ -719,6 +726,14 @@ fn run_search_inner(
         if applied.fingerprint != group.expected_calibration_fingerprint {
             return Err(format!(
                 "The calibration selected for {} changed; rebuild the stack before searching",
+                group.label
+            ));
+        }
+        if !group.expected_masters_signature.is_empty()
+            && applied.masters_signature != group.expected_masters_signature
+        {
+            return Err(format!(
+                "The calibration masters for {} differ from the stack's (a master build                  failed or recovered since); rebuild the stack before searching",
                 group.label
             ));
         }
