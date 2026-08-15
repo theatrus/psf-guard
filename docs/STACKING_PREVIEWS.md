@@ -233,6 +233,13 @@ and a finished preview built under a different mode is marked out of date.
 Source-frame searches re-create the stack's own mode, whatever the control
 says now.
 
+Each channel card carries its own smaller select that can override the
+panel-wide choice for that target and filter alone — one channel with a bad
+flat can stack raw while the rest calibrate. "Project" follows the
+panel-wide control; the override is remembered per database, project, and
+channel, and staleness is judged against the mode the channel actually
+stacks under.
+
 ## Frame selection and admission
 
 PSF Guard owns project policy; Seiza owns image registration and integration.

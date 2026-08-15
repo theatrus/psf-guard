@@ -729,6 +729,12 @@ export const apiClient = {
       north_up?: boolean;
       /** How to calibrate the lights: auto (default), on (forced), or off. */
       calibration?: CalibrationMode;
+      /** Per-channel exceptions to `calibration`, by target and filter. */
+      calibration_overrides?: Array<{
+        target_id: number;
+        filter_name: string;
+        calibration: CalibrationMode;
+      }>;
     }
   ): Promise<StackPreviewJob> => {
     const apiInstance = await getApi();
