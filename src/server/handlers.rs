@@ -3726,9 +3726,7 @@ pub async fn analyze_sequence(
     let weight_background = params.weight_background;
     let weight_spatial = params.weight_spatial;
     let weight_pointing = params.weight_pointing;
-    let penalty_satellite = params.penalty_satellite;
-    let penalty_pointing = params.penalty_pointing;
-    let penalty_temporal = params.penalty_temporal;
+    let penalty_overrides = params.penalty_scales();
 
     // Fetch images from the requested target, project, or database. Wider
     // scopes still score each target/filter group independently and only read
@@ -3834,15 +3832,7 @@ pub async fn analyze_sequence(
         }
         // Penalty scaling: how hard event evidence (satellite trails,
         // pointing failures, temporal anomalies) hits the score.
-        if let Some(scale) = penalty_satellite {
-            config.penalty_scales.satellite = scale;
-        }
-        if let Some(scale) = penalty_pointing {
-            config.penalty_scales.pointing = scale;
-        }
-        if let Some(scale) = penalty_temporal {
-            config.penalty_scales.temporal = scale;
-        }
+        penalty_overrides.apply_to(&mut config.penalty_scales);
 
         let session_gap_minutes = config.session_gap_minutes;
         let analyzer = SequenceAnalyzer::new(config);
@@ -4004,15 +3994,7 @@ pub async fn get_image_quality(
 
     let result = tokio::task::spawn_blocking(move || {
         let mut config = SequenceAnalyzerConfig::default();
-        if let Some(scale) = penalties.penalty_satellite {
-            config.penalty_scales.satellite = scale;
-        }
-        if let Some(scale) = penalties.penalty_pointing {
-            config.penalty_scales.pointing = scale;
-        }
-        if let Some(scale) = penalties.penalty_temporal {
-            config.penalty_scales.temporal = scale;
-        }
+        penalties.apply_to(&mut config.penalty_scales);
         let session_gap_minutes = config.session_gap_minutes;
         let analyzer = SequenceAnalyzer::new(config);
 

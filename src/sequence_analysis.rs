@@ -674,21 +674,17 @@ enum ScoreScope {
 /// applied after it — a satellite trail, a pointing failure, a temporal
 /// anomaly. The zero-star cap is deliberately not scalable: a frame measured
 /// to have no stars is ruined whatever the operator's preferences.
+/// One `#[serde(default)]` at the struct level: missing fields come from
+/// the `Default` impl below, the single place the 1.0 calibration lives.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PenaltyScales {
     /// Pixel-confirmed satellite trail score caps.
-    #[serde(default = "default_penalty_scale")]
     pub satellite: f64,
     /// Off-target / pointing-jump / pointing-drift score caps.
-    #[serde(default = "default_penalty_scale")]
     pub pointing: f64,
     /// The temporal-anomaly multiplicative penalty.
-    #[serde(default = "default_penalty_scale")]
     pub temporal: f64,
-}
-
-fn default_penalty_scale() -> f64 {
-    1.0
 }
 
 impl Default for PenaltyScales {
@@ -702,15 +698,19 @@ impl Default for PenaltyScales {
 }
 
 impl PenaltyScales {
-    /// Blend `base` toward `penalized` by this scale: 0 → no effect,
-    /// 1 → the built-in penalty, up to 2 → double the hit, clamped to a
-    /// valid score.
-    fn blend(scale: f64, base: f64, penalized: f64) -> f64 {
-        let scale = if scale.is_finite() {
+    fn sanitize(scale: f64) -> f64 {
+        if scale.is_finite() {
             scale.clamp(0.0, 2.0)
         } else {
             1.0
-        };
+        }
+    }
+
+    /// Blend `base` toward `penalized` by this scale: 0 → no effect,
+    /// 1 → the built-in penalty, clamped to a valid score. Only sound for
+    /// scales up to 1 — extrapolating past `penalized` flips the ordering
+    /// of frames sharing a flag (see [`Self::scale_cap`]).
+    fn blend(scale: f64, base: f64, penalized: f64) -> f64 {
         if scale == 1.0 {
             // The default must reproduce the built-in penalty bit for bit:
             // recomputing it through the blend arithmetic drifts by an ulp
@@ -719,6 +719,27 @@ impl PenaltyScales {
             return penalized.clamp(0.0, 1.0);
         }
         (base - (base - penalized) * scale).clamp(0.0, 1.0)
+    }
+
+    /// Scale a cap-style penalty (`score.min(cap)`) while keeping the score
+    /// monotone in the underlying composite. Below 1 the score blends
+    /// toward the cap; above 1 the CAP itself deepens toward zero. A linear
+    /// blend above 1 would subtract more from better frames — an OffTarget
+    /// frame with composite 0.95 would land at 0.0 while a 0.25 frame kept
+    /// 0.15, inverting the ranking the threshold slider selects on.
+    fn scale_cap(scale: f64, score: f64, cap: f64) -> f64 {
+        let scale = Self::sanitize(scale);
+        if scale <= 1.0 {
+            return Self::blend(scale, score, score.min(cap));
+        }
+        score.min((cap * (2.0 - scale)).max(0.0))
+    }
+
+    /// Scale a multiplicative penalty factor (`1 − hit`), where the factor
+    /// multiplies the score and monotonicity is inherent.
+    fn scale_factor(scale: f64, hit: f64) -> f64 {
+        let scale = Self::sanitize(scale);
+        Self::blend(scale, 1.0, 1.0 - hit)
     }
 }
 
@@ -1398,14 +1419,11 @@ impl SequenceAnalyzer {
             let quality_score = self.composite_score(&normalized_metrics);
 
             // Apply temporal penalty, scaled by the operator's preference:
-            // blend(scale, 1, 1 - hit) = 1 - hit*scale, clamped to a valid
-            // multiplier.
+            // the factor 1 − hit·scale multiplies the score, so ordering is
+            // preserved at every scale.
             let temporal = temporal_scores[i];
-            let penalty = PenaltyScales::blend(
-                self.config.penalty_scales.temporal,
-                1.0,
-                1.0 - temporal.min(0.5),
-            );
+            let penalty =
+                PenaltyScales::scale_factor(self.config.penalty_scales.temporal, temporal.min(0.5));
             let final_score = apply_pointing_score(
                 (quality_score * penalty).clamp(0.0, 1.0),
                 pointing_quality[i].as_ref(),
@@ -1532,7 +1550,18 @@ impl SequenceAnalyzer {
                 Some(satellite),
                 self.config.penalty_scales.satellite,
             );
-            if satellite.reject_recommended && satellite.pixel_aligned_high_risk_count > 0 {
+            // A satellite scale of zero means "ignore this evidence": the
+            // score is untouched above, and the rejection recommendation
+            // must not survive either — the recommended-selection preset,
+            // stack exclusion, and CLI regrade all key off regrade_reason,
+            // and recommending rejection on ignored evidence would mass-
+            // reject frames the operator asked to stop penalizing. Flags
+            // and details stay: the trail remains a fact worth showing.
+            let evidence_ignored = self.config.penalty_scales.satellite == 0.0;
+            if satellite.reject_recommended
+                && satellite.pixel_aligned_high_risk_count > 0
+                && !evidence_ignored
+            {
                 let reason = format!(
                     "[Auto] Pixel-aligned bright satellite trail - {} high-risk candidate(s), risk {:.2}; verify overlay",
                     satellite.pixel_aligned_high_risk_count,
@@ -2070,7 +2099,13 @@ impl SequenceAnalyzer {
                     )
                 );
                 if corroborated {
-                    result.quality_score = result.quality_score.min(0.30);
+                    // Same pointing scale as the other pointing caps: this
+                    // is pointing evidence too, and 0% must stop it biting.
+                    result.quality_score = PenaltyScales::scale_cap(
+                        self.config.penalty_scales.pointing,
+                        result.quality_score,
+                        0.30,
+                    );
                 }
                 (
                     original_category.or(Some(IssueCategory::PlateSolveFailed)),
@@ -2107,7 +2142,16 @@ impl SequenceAnalyzer {
                 (original_category, None, None)
             };
             result.category = category;
-            result.regrade_reason = reason;
+            // A pointing scale of zero means "ignore this evidence": the
+            // caps above already leave the score alone, and the rejection
+            // recommendation must not survive either — the recommended
+            // preset, stack exclusion, and CLI regrade key off
+            // regrade_reason. Categories, flags, and details stay visible.
+            result.regrade_reason = if self.config.penalty_scales.pointing == 0.0 {
+                None
+            } else {
+                reason
+            };
             if let Some(astrometry_detail) = astrometry_detail {
                 result.details = Some(match result.details.take() {
                     Some(existing) => format!("{astrometry_detail} {existing}"),
@@ -2601,19 +2645,19 @@ fn apply_pointing_score(score: f64, pointing: Option<&PointingQuality>, scale: f
     let Some(pointing) = pointing else {
         return score;
     };
-    let penalized = if pointing.flags.contains(&IssueCategory::OffTarget) {
-        score.min(0.20)
+    let cap = if pointing.flags.contains(&IssueCategory::OffTarget) {
+        0.20
     } else if pointing.flags.iter().any(|flag| {
         matches!(
             flag,
             IssueCategory::PointingJump | IssueCategory::PointingDrift
         )
     }) {
-        score.min(0.30)
+        0.30
     } else {
-        score
+        return score;
     };
-    PenaltyScales::blend(scale, score, penalized)
+    PenaltyScales::scale_cap(scale, score, cap)
 }
 
 fn apply_satellite_score(score: f64, satellite: Option<&SatelliteFrameMetrics>, scale: f64) -> f64 {
@@ -2623,12 +2667,12 @@ fn apply_satellite_score(score: f64, satellite: Option<&SatelliteFrameMetrics>, 
     if satellite.pixel_aligned_count == 0 {
         return score;
     }
-    let penalized = if satellite.reject_recommended && satellite.pixel_aligned_high_risk_count > 0 {
-        score.min(0.35)
+    let cap = if satellite.reject_recommended && satellite.pixel_aligned_high_risk_count > 0 {
+        0.35
     } else {
-        score.min(0.75)
+        0.75
     };
-    PenaltyScales::blend(scale, score, penalized)
+    PenaltyScales::scale_cap(scale, score, cap)
 }
 
 /// Group solved centers by spatial connectivity. Single-link clustering is
@@ -3291,20 +3335,44 @@ mod tests {
     }
 
     #[test]
-    fn penalty_blend_scales_between_off_default_and_double() {
+    fn penalty_cap_scales_between_off_default_and_double() {
         // Off: the evidence leaves the score alone.
-        assert_eq!(PenaltyScales::blend(0.0, 0.9, 0.3), 0.9);
-        // Default: exactly the built-in penalty, no float drift.
-        assert_eq!(PenaltyScales::blend(1.0, 0.95, 0.30), 0.30);
-        // Half: midway between untouched and penalized.
-        assert!((PenaltyScales::blend(0.5, 0.9, 0.3) - 0.6).abs() < 1e-12);
-        // Double: twice the hit, clamped at zero.
-        assert!((PenaltyScales::blend(2.0, 0.9, 0.5) - 0.1).abs() < 1e-12);
-        assert_eq!(PenaltyScales::blend(2.0, 0.9, 0.3), 0.0);
-        // Nonsense scales fall back to the default behavior; out-of-range
-        // scales clamp to the doubled hit.
-        assert_eq!(PenaltyScales::blend(f64::NAN, 0.9, 0.3), 0.3);
-        assert!((PenaltyScales::blend(9.0, 0.9, 0.5) - 0.1).abs() < 1e-12);
+        assert_eq!(PenaltyScales::scale_cap(0.0, 0.9, 0.3), 0.9);
+        // Default: exactly the built-in cap, no float drift.
+        assert_eq!(PenaltyScales::scale_cap(1.0, 0.95, 0.30), 0.30);
+        // Half: midway between untouched and capped.
+        assert!((PenaltyScales::scale_cap(0.5, 0.9, 0.3) - 0.6).abs() < 1e-12);
+        // Above 1 the CAP deepens toward zero.
+        assert!((PenaltyScales::scale_cap(1.5, 0.9, 0.3) - 0.15).abs() < 1e-12);
+        assert_eq!(PenaltyScales::scale_cap(2.0, 0.9, 0.3), 0.0);
+        // Nonsense scales fall back to the default; out-of-range clamps.
+        assert_eq!(PenaltyScales::scale_cap(f64::NAN, 0.9, 0.3), 0.3);
+        assert_eq!(PenaltyScales::scale_cap(9.0, 0.9, 0.3), 0.0);
+        // A score already below the cap only ever goes down, never up.
+        assert_eq!(PenaltyScales::scale_cap(0.5, 0.2, 0.3), 0.2);
+    }
+
+    #[test]
+    fn penalty_cap_scaling_never_inverts_frame_ranking() {
+        // Among frames sharing a flag, a better composite must never come
+        // out below a worse one, at any scale. A linear blend above 1
+        // subtracted more from better frames: composite 0.95 landed on 0.0
+        // while 0.25 kept 0.15.
+        for cap in [0.20, 0.30, 0.35, 0.75] {
+            for scale in [0.0, 0.3, 0.7, 1.0, 1.3, 1.7, 2.0] {
+                let mut previous = -1.0;
+                for step in 0..=20 {
+                    let score = step as f64 / 20.0;
+                    let scaled = PenaltyScales::scale_cap(scale, score, cap);
+                    assert!(
+                        scaled + 1e-12 >= previous,
+                        "ranking inverted: cap {cap} scale {scale} score {score} \
+                         gave {scaled} below {previous}"
+                    );
+                    previous = scaled;
+                }
+            }
+        }
     }
 
     #[test]
@@ -3329,6 +3397,42 @@ mod tests {
             apply_satellite_score(0.95, Some(&prediction_only), 2.0),
             0.95
         );
+    }
+
+    #[test]
+    fn zero_satellite_scale_suppresses_the_reject_recommendation() {
+        let analyzer_for = |satellite_scale: f64| {
+            let mut config = SequenceAnalyzerConfig::default();
+            config.penalty_scales.satellite = satellite_scale;
+            SequenceAnalyzer::new(config)
+        };
+        let mut images: Vec<_> = (0..6)
+            .map(|i| make_image(i, i as i64 * 300, 500.0, 2.5))
+            .collect();
+        images[3].satellite = Some(SatelliteFrameMetrics {
+            pixel_aligned_count: 1,
+            pixel_aligned_high_risk_count: 1,
+            reject_recommended: true,
+            ..Default::default()
+        });
+
+        let default_run = &analyzer_for(1.0).analyze(&images, 1, "t", "L")[0].images[3];
+        assert!(
+            default_run.regrade_reason.is_some(),
+            "default scale keeps the recommendation"
+        );
+        assert!(default_run.quality_score <= 0.35);
+
+        let ignored = &analyzer_for(0.0).analyze(&images, 1, "t", "L")[0].images[3];
+        assert!(
+            ignored.regrade_reason.is_none(),
+            "scale 0 must not recommend rejecting on ignored evidence"
+        );
+        assert!(ignored.quality_score > 0.9, "score untouched at scale 0");
+        // The trail stays visible as information.
+        assert!(ignored
+            .flags
+            .contains(&IssueCategory::SatelliteTrailDetected));
     }
 
     #[test]

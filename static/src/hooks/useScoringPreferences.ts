@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
 import type { PenaltyScaleParams } from '../api/types';
 
 /**
@@ -19,7 +19,7 @@ export interface ScoringPreferences {
 const STORAGE_KEY = 'psf-guard.penalty-scales';
 const DEFAULTS: ScoringPreferences = { satellite: 1, pointing: 1, temporal: 1 };
 
-type Listener = (preferences: ScoringPreferences) => void;
+type Listener = () => void;
 
 const listeners = new Set<Listener>();
 
@@ -45,6 +45,16 @@ function readStored(): ScoringPreferences {
 
 let current = readStored();
 
+// A second tab writes the same localStorage key: adopt its value so two
+// windows cannot score the same frame differently.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key !== STORAGE_KEY) return;
+    current = readStored();
+    listeners.forEach((listener) => listener());
+  });
+}
+
 export function setScoringPreferences(next: ScoringPreferences): void {
   current = {
     satellite: sanitize(next.satellite),
@@ -56,32 +66,42 @@ export function setScoringPreferences(next: ScoringPreferences): void {
   } catch {
     // Keep the in-memory preference even when it cannot be persisted.
   }
-  listeners.forEach((listener) => listener(current));
+  listeners.forEach((listener) => listener());
 }
 
 export function scoringPreferences(): ScoringPreferences {
   return current;
 }
 
-/** The preference as request query params; defaults are omitted so the
- * server's calibrated behavior needs no parameters at all. */
-export function scoringPenaltyParams(): PenaltyScaleParams {
+/** A preference snapshot as request query params; defaults are omitted so
+ * the server's calibrated behavior needs no parameters at all. Pure — pass
+ * the same snapshot used for the query key so key and payload agree. */
+export function penaltyParamsOf(preferences: ScoringPreferences): PenaltyScaleParams {
   const params: PenaltyScaleParams = {};
-  if (current.satellite !== 1) params.penalty_satellite = current.satellite;
-  if (current.pointing !== 1) params.penalty_pointing = current.pointing;
-  if (current.temporal !== 1) params.penalty_temporal = current.temporal;
+  if (preferences.satellite !== 1) params.penalty_satellite = preferences.satellite;
+  if (preferences.pointing !== 1) params.penalty_pointing = preferences.pointing;
+  if (preferences.temporal !== 1) params.penalty_temporal = preferences.temporal;
   return params;
 }
 
-/** Subscribe to the shared preference. Returns its current value. */
+/** The same snapshot as react-query key segments. Every scoring query key
+ * spreads this, so a preference change refetches every surface. */
+export function penaltyKeyOf(preferences: ScoringPreferences): number[] {
+  return [preferences.satellite, preferences.pointing, preferences.temporal];
+}
+
+function subscribe(listener: Listener): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function snapshot(): ScoringPreferences {
+  return current;
+}
+
+/** Subscribe to the shared preference. Returns the current snapshot. */
 export function useScoringPreferences(): ScoringPreferences {
-  const [value, setValue] = useState(current);
-  useEffect(() => {
-    listeners.add(setValue);
-    setValue(current);
-    return () => {
-      listeners.delete(setValue);
-    };
-  }, []);
-  return value;
+  return useSyncExternalStore(subscribe, snapshot);
 }
