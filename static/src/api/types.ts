@@ -1470,7 +1470,17 @@ export interface CacheRefreshProgress {
 }
 
 // Sequence analysis types
-export interface SequenceAnalysisRequest {
+
+/** How hard event evidence hits the quality score: a multiplier on the
+ * built-in penalty. 0 ignores the evidence, 1 (default) keeps calibrated
+ * behavior, up to 2 deepens it. */
+export interface PenaltyScaleParams {
+  penalty_satellite?: number;
+  penalty_pointing?: number;
+  penalty_temporal?: number;
+}
+
+export interface SequenceAnalysisRequest extends PenaltyScaleParams {
   target_id: number;
   filter_name?: string;
   session_gap_minutes?: number;
@@ -1483,12 +1493,12 @@ export interface SequenceAnalysisRequest {
   weight_pointing?: number;
 }
 
-export interface ProjectSequenceAnalysisRequest {
+export interface ProjectSequenceAnalysisRequest extends PenaltyScaleParams {
   project_id: number;
   filter_name?: string;
 }
 
-export interface DatabaseSequenceAnalysisRequest {
+export interface DatabaseSequenceAnalysisRequest extends PenaltyScaleParams {
   all_projects: true;
   filter_name?: string;
 }

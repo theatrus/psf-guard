@@ -666,6 +666,62 @@ enum ScoreScope {
     TargetFilter,
 }
 
+/// How hard each kind of event evidence hits the quality score, as a
+/// multiplier on that evidence's built-in penalty. 1.0 keeps the calibrated
+/// behavior, 0.0 ignores the evidence entirely, and values up to 2.0 deepen
+/// the hit. Separate from [`QualityWeights`], which balances the *measured
+/// metrics* inside the composite: these scale the score *caps and penalties*
+/// applied after it — a satellite trail, a pointing failure, a temporal
+/// anomaly. The zero-star cap is deliberately not scalable: a frame measured
+/// to have no stars is ruined whatever the operator's preferences.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PenaltyScales {
+    /// Pixel-confirmed satellite trail score caps.
+    #[serde(default = "default_penalty_scale")]
+    pub satellite: f64,
+    /// Off-target / pointing-jump / pointing-drift score caps.
+    #[serde(default = "default_penalty_scale")]
+    pub pointing: f64,
+    /// The temporal-anomaly multiplicative penalty.
+    #[serde(default = "default_penalty_scale")]
+    pub temporal: f64,
+}
+
+fn default_penalty_scale() -> f64 {
+    1.0
+}
+
+impl Default for PenaltyScales {
+    fn default() -> Self {
+        Self {
+            satellite: 1.0,
+            pointing: 1.0,
+            temporal: 1.0,
+        }
+    }
+}
+
+impl PenaltyScales {
+    /// Blend `base` toward `penalized` by this scale: 0 → no effect,
+    /// 1 → the built-in penalty, up to 2 → double the hit, clamped to a
+    /// valid score.
+    fn blend(scale: f64, base: f64, penalized: f64) -> f64 {
+        let scale = if scale.is_finite() {
+            scale.clamp(0.0, 2.0)
+        } else {
+            1.0
+        };
+        if scale == 1.0 {
+            // The default must reproduce the built-in penalty bit for bit:
+            // recomputing it through the blend arithmetic drifts by an ulp
+            // (0.95 − 0.65 ≠ 0.30 exactly), which is enough to leak past
+            // `<=` comparisons calibrated on the exact cap values.
+            return penalized.clamp(0.0, 1.0);
+        }
+        (base - (base - penalized) * scale).clamp(0.0, 1.0)
+    }
+}
+
 /// Configurable weights for composite quality scoring.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QualityWeights {
@@ -784,6 +840,8 @@ pub struct SequenceAnalyzerConfig {
     pub min_sequence_length: usize,
     pub ewma_alpha: f64,
     pub quality_weights: QualityWeights,
+    #[serde(default)]
+    pub penalty_scales: PenaltyScales,
     pub temporal_weights: TemporalWeights,
     pub star_drop_threshold: f64,
     pub bg_rise_threshold: f64,
@@ -889,6 +947,7 @@ impl Default for SequenceAnalyzerConfig {
             min_sequence_length: 3,
             ewma_alpha: 0.3,
             quality_weights: QualityWeights::default(),
+            penalty_scales: PenaltyScales::default(),
             temporal_weights: TemporalWeights::default(),
             star_drop_threshold: 0.25,
             bg_rise_threshold: 0.10,
@@ -1018,13 +1077,17 @@ impl SequenceAnalyzer {
             result.quality_score = apply_pointing_score(
                 self.composite_score(&result.normalized_metrics),
                 result.pointing.as_ref(),
+                self.config.penalty_scales.pointing,
             );
             result.category = session.category.clone();
             result.flags = session.flags.clone();
             result.satellite = session.satellite.clone();
             result.regrade_reason = session.regrade_reason.clone();
-            result.quality_score =
-                apply_satellite_score(result.quality_score, result.satellite.as_ref());
+            result.quality_score = apply_satellite_score(
+                result.quality_score,
+                result.satellite.as_ref(),
+                self.config.penalty_scales.satellite,
+            );
             if session.category.is_some()
                 || !session.flags.is_empty()
                 || session.regrade_reason.is_some()
@@ -1188,7 +1251,11 @@ impl SequenceAnalyzer {
                 .enumerate()
                 .map(|(idx, img)| ImageQualityResult {
                     image_id: img.image_id,
-                    quality_score: apply_pointing_score(1.0, pointing_quality[idx].as_ref()),
+                    quality_score: apply_pointing_score(
+                        1.0,
+                        pointing_quality[idx].as_ref(),
+                        self.config.penalty_scales.pointing,
+                    ),
                     temporal_anomaly_score: 0.0,
                     category: None,
                     flags: Vec::new(),
@@ -1330,12 +1397,19 @@ impl SequenceAnalyzer {
             };
             let quality_score = self.composite_score(&normalized_metrics);
 
-            // Apply temporal penalty
+            // Apply temporal penalty, scaled by the operator's preference:
+            // blend(scale, 1, 1 - hit) = 1 - hit*scale, clamped to a valid
+            // multiplier.
             let temporal = temporal_scores[i];
-            let penalty = 1.0 - temporal.min(0.5);
+            let penalty = PenaltyScales::blend(
+                self.config.penalty_scales.temporal,
+                1.0,
+                1.0 - temporal.min(0.5),
+            );
             let final_score = apply_pointing_score(
                 (quality_score * penalty).clamp(0.0, 1.0),
                 pointing_quality[i].as_ref(),
+                self.config.penalty_scales.pointing,
             );
 
             results.push(ImageQualityResult {
@@ -1453,7 +1527,11 @@ impl SequenceAnalyzer {
                 None => detail,
             });
 
-            result.quality_score = apply_satellite_score(result.quality_score, Some(satellite));
+            result.quality_score = apply_satellite_score(
+                result.quality_score,
+                Some(satellite),
+                self.config.penalty_scales.satellite,
+            );
             if satellite.reject_recommended && satellite.pixel_aligned_high_risk_count > 0 {
                 let reason = format!(
                     "[Auto] Pixel-aligned bright satellite trail - {} high-risk candidate(s), risk {:.2}; verify overlay",
@@ -2519,11 +2597,11 @@ fn pointing_normalized(pointing: &PointingQuality) -> Option<f64> {
     }
 }
 
-fn apply_pointing_score(score: f64, pointing: Option<&PointingQuality>) -> f64 {
+fn apply_pointing_score(score: f64, pointing: Option<&PointingQuality>, scale: f64) -> f64 {
     let Some(pointing) = pointing else {
         return score;
     };
-    if pointing.flags.contains(&IssueCategory::OffTarget) {
+    let penalized = if pointing.flags.contains(&IssueCategory::OffTarget) {
         score.min(0.20)
     } else if pointing.flags.iter().any(|flag| {
         matches!(
@@ -2534,21 +2612,23 @@ fn apply_pointing_score(score: f64, pointing: Option<&PointingQuality>) -> f64 {
         score.min(0.30)
     } else {
         score
-    }
+    };
+    PenaltyScales::blend(scale, score, penalized)
 }
 
-fn apply_satellite_score(score: f64, satellite: Option<&SatelliteFrameMetrics>) -> f64 {
+fn apply_satellite_score(score: f64, satellite: Option<&SatelliteFrameMetrics>, scale: f64) -> f64 {
     let Some(satellite) = satellite else {
         return score;
     };
     if satellite.pixel_aligned_count == 0 {
         return score;
     }
-    if satellite.reject_recommended && satellite.pixel_aligned_high_risk_count > 0 {
+    let penalized = if satellite.reject_recommended && satellite.pixel_aligned_high_risk_count > 0 {
         score.min(0.35)
     } else {
         score.min(0.75)
-    }
+    };
+    PenaltyScales::blend(scale, score, penalized)
 }
 
 /// Group solved centers by spatial connectivity. Single-link clustering is
@@ -3208,6 +3288,70 @@ mod tests {
         let regions = cataloged_extended_emission(&solution);
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0].name, "NGC 1499");
+    }
+
+    #[test]
+    fn penalty_blend_scales_between_off_default_and_double() {
+        // Off: the evidence leaves the score alone.
+        assert_eq!(PenaltyScales::blend(0.0, 0.9, 0.3), 0.9);
+        // Default: exactly the built-in penalty, no float drift.
+        assert_eq!(PenaltyScales::blend(1.0, 0.95, 0.30), 0.30);
+        // Half: midway between untouched and penalized.
+        assert!((PenaltyScales::blend(0.5, 0.9, 0.3) - 0.6).abs() < 1e-12);
+        // Double: twice the hit, clamped at zero.
+        assert!((PenaltyScales::blend(2.0, 0.9, 0.5) - 0.1).abs() < 1e-12);
+        assert_eq!(PenaltyScales::blend(2.0, 0.9, 0.3), 0.0);
+        // Nonsense scales fall back to the default behavior; out-of-range
+        // scales clamp to the doubled hit.
+        assert_eq!(PenaltyScales::blend(f64::NAN, 0.9, 0.3), 0.3);
+        assert!((PenaltyScales::blend(9.0, 0.9, 0.5) - 0.1).abs() < 1e-12);
+    }
+
+    #[test]
+    fn satellite_penalty_scale_tunes_the_trail_hit() {
+        let satellite = SatelliteFrameMetrics {
+            pixel_aligned_count: 1,
+            pixel_aligned_high_risk_count: 1,
+            reject_recommended: true,
+            ..Default::default()
+        };
+        // Built-in cap is 0.35; scaling moves the hit around it.
+        assert_eq!(apply_satellite_score(0.95, Some(&satellite), 1.0), 0.35);
+        assert_eq!(apply_satellite_score(0.95, Some(&satellite), 0.0), 0.95);
+        let half = apply_satellite_score(0.95, Some(&satellite), 0.5);
+        assert!((half - 0.65).abs() < 1e-12, "got {half}");
+        // Prediction-only evidence is never penalized, whatever the scale.
+        let prediction_only = SatelliteFrameMetrics {
+            pixel_aligned_count: 0,
+            ..Default::default()
+        };
+        assert_eq!(
+            apply_satellite_score(0.95, Some(&prediction_only), 2.0),
+            0.95
+        );
+    }
+
+    #[test]
+    fn temporal_penalty_scale_tunes_the_anomaly_hit() {
+        // A mid-sequence outlier draws a temporal anomaly penalty; scaling
+        // it to zero removes exactly that component.
+        let mut config = SequenceAnalyzerConfig::default();
+        config.penalty_scales.temporal = 0.0;
+        let relaxed = SequenceAnalyzer::new(config);
+        let strict = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+
+        let mut images: Vec<_> = (0..8)
+            .map(|i| make_image(i, i as i64 * 300, 500.0, 2.5))
+            .collect();
+        // A sudden one-frame star-count dip mid-sequence.
+        images[4].star_count = Some(250.0);
+
+        let strict_score = strict.analyze(&images, 1, "t", "L")[0].images[4].quality_score;
+        let relaxed_score = relaxed.analyze(&images, 1, "t", "L")[0].images[4].quality_score;
+        assert!(
+            relaxed_score >= strict_score,
+            "relaxed {relaxed_score} vs strict {strict_score}"
+        );
     }
 
     #[test]
