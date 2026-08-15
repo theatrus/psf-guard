@@ -1836,7 +1836,15 @@ fn run_group(
         tracing::warn!("Stack group calibration failed: {error:#}");
         format!("{error:#}")
     })?;
-    let calibration_fingerprint = applied_calibration.fingerprint.clone();
+    // The resume checkpoint key carries the applied-master signature too:
+    // the selection fingerprint is computed before any build, so after a
+    // transient build failure a later run with the same selection could
+    // otherwise resume an accumulator whose earlier frames integrated
+    // under different masters — one stack mixing two calibrations.
+    let calibration_fingerprint = format!(
+        "{}|{}",
+        applied_calibration.fingerprint, applied_calibration.masters_signature
+    );
     state.stack_previews.update(job_id, |job| {
         let status = &mut job.groups[group.index];
         status.calibration = applied_calibration;

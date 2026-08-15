@@ -18,12 +18,17 @@ pub const MASTER_CACHE_VERSION: u32 = 1;
 const MIN_MASTER_FRAMES: usize = 2;
 const MAX_MASTER_FRAMES: usize = 64;
 const DARK_TEMPERATURE_TOLERANCE_C: f64 = 3.0;
-/// Flats selected for one master must come from one flat session: within
-/// this window of the nearest-matched flat. The library keeps every flat
-/// ever imported for a rig, and dust moves between sessions — a master
-/// must not mix a fresh cooled set with one shot months earlier (seiza
-/// also refuses mixed sensor temperatures frame-for-frame).
+/// Flats feeding one master must come from one flat session: within this
+/// window of the frame that anchors the chosen coherent subset. Dust moves
+/// between sessions, so a master must not mix a fresh set with one shot
+/// months earlier. Bias, dark, and dark-flat libraries are stable across
+/// months and get no time window — only temperature coherence.
 const FLAT_SESSION_WINDOW_SECONDS: u64 = 24 * 60 * 60;
+/// Sensor-temperature coherence for the frames feeding one master. Matches
+/// seiza-stacking's own frame-for-frame CCD-TEMP gate (±1 °C against the
+/// first frame): a looser window here would assemble sets seiza refuses,
+/// reintroducing the silent build failure this selection exists to avoid.
+const MASTER_TEMPERATURE_COHERENCE_C: f64 = 1.0;
 const EXPOSURE_TOLERANCE_SECONDS: f64 = 0.05;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -199,6 +204,12 @@ pub struct AppliedCalibration {
     pub flat_master: Option<String>,
     pub warning: Option<String>,
     pub fingerprint: String,
+    /// The masters that actually applied (labels or "none" per kind). The
+    /// selection `fingerprint` is computed before any build; this records
+    /// the build outcome, so calibration-sensitive consumers can detect a
+    /// degraded or recovered build behind an identical selection.
+    #[serde(default)]
+    pub masters_signature: String,
 }
 
 impl Default for AppliedCalibration {
@@ -215,6 +226,7 @@ impl Default for AppliedCalibration {
             flat_master: None,
             warning: None,
             fingerprint: "none".into(),
+            masters_signature: "bias=none;dark=none;dark_flat=none;flat=none".into(),
         }
     }
 }
@@ -864,7 +876,6 @@ pub fn select_for_light(conn: &Connection, light: &FrameMeta) -> Result<Calibrat
     sort_candidates(&mut selected.bias, light.timestamp);
     sort_candidates(&mut selected.dark, light.timestamp);
     sort_candidates(&mut selected.flat, light.timestamp);
-    trim_to_coherent_flat_session(&mut selected.flat);
     if let Some(flat) = selected.flat.first() {
         for candidate in query_kind(conn, CalibrationKind::DarkFlat)? {
             if frame_pair_matches(flat, &candidate)
@@ -951,14 +962,28 @@ pub fn resolve_or_build_masters(
     // A failed master build must not kill the stack: the frames can still
     // integrate without that master, degraded but useful. Each failure is
     // recorded on the applied-calibration warning so the UI says exactly
-    // what was skipped and why. Cancellation stays fatal via
-    // `stop_requested` between builds.
-    let mut build_failures: Vec<String> = Vec::new();
+    // what was skipped and why. A master whose declared DEPENDENCY failed
+    // is skipped rather than built without it — a flat built without its
+    // failed bias bakes the bias pedestal into the flat's normalization
+    // and actively miscorrects every light, which is worse than a missing
+    // master. Cancellation stays fatal via `stop_requested` between
+    // builds.
+    let mut build_failures: Vec<(CalibrationKind, String)> = Vec::new();
     let build_or_warn = |kind: CalibrationKind,
                          frames: &[CalibrationFrame],
                          inputs: MasterInputs<'_>,
-                         failures: &mut Vec<String>|
+                         skip_because: Option<&str>,
+                         failures: &mut Vec<(CalibrationKind, String)>|
      -> Option<BuiltMaster> {
+        if frames.is_empty() {
+            return None;
+        }
+        if let Some(failed_dependency) = skip_because {
+            let reason = format!("skipped because the {failed_dependency} master failed to build");
+            tracing::warn!("{} master {reason}", kind.as_str());
+            failures.push((kind, reason));
+            return None;
+        }
         match build_master(conn, &master_root, kind, frames, inputs) {
             Ok(master) => master,
             Err(error) => {
@@ -966,7 +991,7 @@ pub fn resolve_or_build_masters(
                     "{} master build failed; stacking without it: {error:#}",
                     kind.as_str()
                 );
-                failures.push(format!("{}: {error:#}", kind.as_str()));
+                failures.push((kind, format!("{error:#}")));
                 None
             }
         }
@@ -977,9 +1002,15 @@ pub fn resolve_or_build_masters(
         CalibrationKind::Bias,
         &selected.bias,
         MasterInputs::default(),
+        None,
         &mut build_failures,
     );
     applied.bias_master = bias.as_ref().map(|master| master.label());
+    let bias_failed = !selected.bias.is_empty()
+        && bias.is_none()
+        && build_failures
+            .iter()
+            .any(|(kind, _)| *kind == CalibrationKind::Bias);
 
     let bias_image = bias
         .as_ref()
@@ -995,8 +1026,14 @@ pub fn resolve_or_build_masters(
             bias_dependency: bias.as_ref(),
             ..Default::default()
         },
+        bias_failed.then_some("bias"),
         &mut build_failures,
     );
+    let dark_flat_failed = !selected.dark_flat.is_empty()
+        && dark_flat.is_none()
+        && build_failures
+            .iter()
+            .any(|(kind, _)| *kind == CalibrationKind::DarkFlat);
     applied.dark_flat_master = dark_flat.as_ref().map(|master| master.label());
     let flat_dark = dark_flat
         .as_ref()
@@ -1022,6 +1059,7 @@ pub fn resolve_or_build_masters(
             bias_dependency: bias.as_ref(),
             ..Default::default()
         },
+        bias_failed.then_some("bias"),
         &mut build_failures,
     );
     applied.dark_master = dark.as_ref().map(|master| master.label());
@@ -1035,8 +1073,32 @@ pub fn resolve_or_build_masters(
             bias_dependency: bias.as_ref(),
             dark_dependency: dark_flat.as_ref(),
         },
+        if bias_failed {
+            Some("bias")
+        } else if dark_flat_failed {
+            Some("dark-flat")
+        } else {
+            None
+        },
         &mut build_failures,
     );
+    // A flat can only be DIVIDED into a light whose pedestal has been
+    // removed. With neither a bias nor a dark master, the division
+    // amplifies the light's uncorrected pedestal by 1/vignette at the
+    // frame edges — the stack comes out with the vignette inverted
+    // (bright edges), which is worse than no flat at all. The flat master
+    // itself stays cached: once bias or dark frames are imported, the
+    // dependency-aware hash rebuilds and applies it properly.
+    let flat = if flat.is_some() && bias.is_none() && dark.is_none() {
+        let reason = "skipped: dividing a flat into a light with no bias or dark master \
+                      brightens vignetted edges (the light's pedestal is amplified by \
+                      the flat correction); import bias or dark frames for this camera";
+        tracing::warn!("flat master {reason}");
+        build_failures.push((CalibrationKind::Flat, reason.into()));
+        None
+    } else {
+        flat
+    };
     applied.flat_master = flat.as_ref().map(|master| master.label());
 
     let masters = seiza_stacking::CalibrationMasters::from_fits_paths(
@@ -1046,50 +1108,70 @@ pub fn resolve_or_build_masters(
         light.exposure_s,
     )
     .context("loading matched calibration masters")?;
-    if masters.is_empty() {
-        applied.state = "incomplete".into();
-        if build_failures.is_empty() {
-            applied.warning = Some(format!(
-                "Matched calibration frames, but each master needs at least {MIN_MASTER_FRAMES} inputs"
-            ));
-        }
+    applied.state = if masters.is_empty() {
+        "incomplete".into()
     } else {
-        applied.state = "applied".into();
-        // Kinds whose build FAILED carry their own message below; here only
-        // the quietly-skipped kinds (too few matching frames) are listed.
-        let failed_kind = |kind: &str| build_failures.iter().any(|entry| entry.starts_with(kind));
-        let mut missing = Vec::new();
-        if !selected.bias.is_empty() && bias.is_none() && !failed_kind("bias") {
-            missing.push("bias");
-        }
-        if !selected.dark.is_empty() && dark.is_none() && !failed_kind("dark") {
-            missing.push("dark");
-        }
-        if !selected.flat.is_empty() && flat.is_none() && !failed_kind("flat") {
-            missing.push("flat");
-        }
-        if !missing.is_empty() {
-            let partial = format!(
-                "Applied a partial calibration set; {} lacked enough matching frames",
-                missing.join(", ")
-            );
-            applied.warning = Some(match applied.warning.take() {
-                Some(previous) => format!("{previous}. {partial}"),
-                None => partial,
-            });
-        }
+        "applied".into()
+    };
+    // Kinds whose build FAILED (or were skipped on a failed dependency)
+    // carry their own message below; the quietly-skipped kinds — matched
+    // frames, but not enough coherent ones to build — are listed here,
+    // whatever else happened. Exact kind comparison: a "dark_flat" failure
+    // must not hide a quietly-skipped "dark".
+    let failed_kind =
+        |kind: CalibrationKind| build_failures.iter().any(|(failed, _)| *failed == kind);
+    let mut missing = Vec::new();
+    if !selected.bias.is_empty() && bias.is_none() && !failed_kind(CalibrationKind::Bias) {
+        missing.push("bias");
+    }
+    if !selected.dark.is_empty() && dark.is_none() && !failed_kind(CalibrationKind::Dark) {
+        missing.push("dark");
+    }
+    if !selected.flat.is_empty() && flat.is_none() && !failed_kind(CalibrationKind::Flat) {
+        missing.push("flat");
+    }
+    if !missing.is_empty() {
+        let partial = format!(
+            "{} lacked enough matching coherent frames (each master needs at least {MIN_MASTER_FRAMES})",
+            missing.join(", ")
+        );
+        applied.warning = Some(match applied.warning.take() {
+            Some(previous) => format!("{previous}. {partial}"),
+            None => partial,
+        });
     }
     if !build_failures.is_empty() {
         let failed = format!(
             "Stacked without masters that failed to build — {}",
-            build_failures.join("; ")
+            build_failures
+                .iter()
+                .map(|(kind, reason)| format!("{}: {reason}", kind.as_str()))
+                .collect::<Vec<_>>()
+                .join("; ")
         );
         applied.warning = Some(match applied.warning.take() {
             Some(previous) => format!("{previous}. {failed}"),
             None => failed,
         });
     }
+    applied.masters_signature = masters_signature(&applied);
     Ok((masters, applied))
+}
+
+/// The masters a resolution actually applied, as one comparable string.
+/// The selection fingerprint is computed before any build and cannot see a
+/// failed or skipped build, so consumers that must not mix calibrations —
+/// the stack resume checkpoint and the source-frame search — compare this
+/// too.
+fn masters_signature(applied: &AppliedCalibration) -> String {
+    let label = |master: &Option<String>| master.as_deref().unwrap_or("none").to_string();
+    format!(
+        "bias={};dark={};dark_flat={};flat={}",
+        label(&applied.bias_master),
+        label(&applied.dark_master),
+        label(&applied.dark_flat_master),
+        label(&applied.flat_master),
+    )
 }
 
 pub fn resolve_or_build_masters_for_group(
@@ -1160,6 +1242,11 @@ fn build_master(
     frames: &[CalibrationFrame],
     inputs: MasterInputs<'_>,
 ) -> Result<Option<BuiltMaster>> {
+    // Reduce to the frames that can actually combine (one temperature, one
+    // flat session). The master's content hash below covers exactly this
+    // subset, so a subset change re-keys the cache.
+    let frames = coherent_master_subset(kind, frames);
+    let frames = frames.as_slice();
     if frames.len() < MIN_MASTER_FRAMES {
         return Ok(None);
     }
@@ -1266,7 +1353,18 @@ fn record_master(
             cache_version, exposure_s, filter_name, camera_temp,
             bias_master_uuid, dark_master_uuid, statistics_json
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+        ON CONFLICT(master_uuid) DO UPDATE SET
+            cache_path=excluded.cache_path,
+            source_count=excluded.source_count,
+            source_frame_uuids=excluded.source_frame_uuids,
+            created_at=excluded.created_at,
+            seiza_version=excluded.seiza_version,
+            cache_version=excluded.cache_version,
+            bias_master_uuid=excluded.bias_master_uuid,
+            dark_master_uuid=excluded.dark_master_uuid,
+            statistics_json=excluded.statistics_json
         ON CONFLICT(cache_path) DO UPDATE SET
+            master_uuid=excluded.master_uuid,
             source_count=excluded.source_count,
             source_frame_uuids=excluded.source_frame_uuids,
             created_at=excluded.created_at,
@@ -1612,33 +1710,53 @@ fn option_near(
     }
 }
 
-/// Keep only the flats that belong with the nearest-matched one: captured
-/// within the same flat session and at a compatible sensor temperature.
-/// `flat_matches` alone selects every flat the rig ever shot with this
-/// filter, and a master built across sessions is wrong twice over — dust
-/// moves between sessions, and an uncooled summer set mixed with a cooled
-/// one fails seiza's frame-for-frame temperature validation outright.
-/// Frames without a capture time or temperature stay: an unknown cannot
-/// prove incoherence, and single-session libraries have nothing to trim.
-fn trim_to_coherent_flat_session(flats: &mut Vec<CalibrationFrame>) {
-    let Some(reference) = flats.first().cloned() else {
-        return;
-    };
-    flats.retain(|frame| {
-        let same_session = match (reference.captured_at, frame.captured_at) {
-            (Some(anchor), Some(captured)) => {
-                anchor.abs_diff(captured) <= FLAT_SESSION_WINDOW_SECONDS
+/// The coherent subset of verified, nearest-first candidates that can
+/// actually feed one master, chosen at BUILD time so it never touches the
+/// per-light selection fingerprint (per-light trimming split fingerprints
+/// across multi-night stack groups, which refuse mixed selections).
+///
+/// Each candidate in order anchors a cluster: frames within
+/// [`MASTER_TEMPERATURE_COHERENCE_C`] of the anchor (unknown temperatures
+/// cannot prove incoherence and join), and for flats also captured within
+/// [`FLAT_SESSION_WINDOW_SECONDS`] of it. The first cluster with enough
+/// frames to build wins, so a stray single flat shot near the lights does
+/// not orphan a complete session from a week earlier. With no viable
+/// cluster the first cluster is returned and the build skips quietly.
+fn coherent_master_subset(
+    kind: CalibrationKind,
+    frames: &[CalibrationFrame],
+) -> Vec<CalibrationFrame> {
+    let coherent = |anchor: &CalibrationFrame, frame: &CalibrationFrame| -> bool {
+        let temperature_ok = match (anchor.camera_temp, frame.camera_temp) {
+            (Some(a), Some(b)) => (a - b).abs() <= MASTER_TEMPERATURE_COHERENCE_C,
+            _ => true,
+        };
+        let session_ok = if kind == CalibrationKind::Flat {
+            match (anchor.captured_at, frame.captured_at) {
+                (Some(a), Some(b)) => a.abs_diff(b) <= FLAT_SESSION_WINDOW_SECONDS,
+                _ => true,
             }
-            _ => true,
+        } else {
+            true
         };
-        // Symmetric leniency, unlike the light-matching rules: an unknown
-        // temperature on either side cannot prove the sets are incoherent.
-        let temperature_coherent = match (reference.camera_temp, frame.camera_temp) {
-            (Some(anchor), Some(temp)) => (anchor - temp).abs() <= DARK_TEMPERATURE_TOLERANCE_C,
-            _ => true,
-        };
-        same_session && temperature_coherent
-    });
+        temperature_ok && session_ok
+    };
+
+    let mut first_cluster: Option<Vec<CalibrationFrame>> = None;
+    for anchor in frames {
+        let cluster: Vec<CalibrationFrame> = frames
+            .iter()
+            .filter(|frame| coherent(anchor, frame))
+            .cloned()
+            .collect();
+        if cluster.len() >= MIN_MASTER_FRAMES {
+            return cluster;
+        }
+        if first_cluster.is_none() {
+            first_cluster = Some(cluster);
+        }
+    }
+    first_cluster.unwrap_or_default()
 }
 
 fn sort_candidates(frames: &mut [CalibrationFrame], reference_at: Option<i64>) {
@@ -2132,7 +2250,7 @@ mod tests {
     }
 
     #[test]
-    fn flat_selection_keeps_one_coherent_session() {
+    fn master_subset_keeps_one_coherent_session() {
         let flat = |id: i64, captured_at: Option<i64>, temp: Option<f64>| CalibrationFrame {
             id,
             frame_uuid: format!("f{id}"),
@@ -2160,47 +2278,275 @@ mod tests {
         };
         let day = 24 * 60 * 60;
         let now = 1_000_000_000_i64;
+        let ids = |frames: &[CalibrationFrame]| -> Vec<i64> {
+            frames.iter().map(|frame| frame.id).collect()
+        };
 
         // Fresh cooled session first (nearest to the light), then an
-        // uncooled set from months earlier: the old set must go.
-        let mut flats = vec![
+        // uncooled set from months earlier: the old set must not join.
+        let mixed = vec![
             flat(1, Some(now), Some(-10.2)),
             flat(2, Some(now - 600), Some(-10.0)),
             flat(3, Some(now - 80 * day), Some(39.5)),
             flat(4, Some(now - 80 * day + 60), Some(39.4)),
         ];
-        trim_to_coherent_flat_session(&mut flats);
         assert_eq!(
-            flats.iter().map(|frame| frame.id).collect::<Vec<_>>(),
-            vec![1_i64, 2],
-            "the old uncooled session must be trimmed"
+            ids(&coherent_master_subset(CalibrationKind::Flat, &mixed)),
+            vec![1, 2],
+            "the old uncooled session must not feed the master"
         );
 
-        // Same session, same temperature: nothing to trim.
-        let mut same = vec![
+        // A stray single flat near the lights must not orphan the complete
+        // session from a week earlier: the stray's cluster has one frame,
+        // so the next anchor's full session wins.
+        let stray = vec![
             flat(1, Some(now), Some(-10.0)),
-            flat(2, Some(now - 300), Some(-10.3)),
+            flat(2, Some(now - 7 * day), Some(-10.1)),
+            flat(3, Some(now - 7 * day + 120), Some(-10.0)),
+            flat(4, Some(now - 7 * day + 240), Some(-10.2)),
         ];
-        trim_to_coherent_flat_session(&mut same);
-        assert_eq!(same.len(), 2);
+        let subset = coherent_master_subset(CalibrationKind::Flat, &stray);
+        assert_eq!(ids(&subset), vec![2, 3, 4], "the full session wins");
+
+        // Temperature coherence matches seiza's ±1 °C gate, not the ±3 °C
+        // light-matching tolerance: a cooler settling 2 °C splits the set.
+        let settling = vec![
+            flat(1, Some(now), Some(-10.0)),
+            flat(2, Some(now - 60), Some(-12.5)),
+            flat(3, Some(now - 120), Some(-10.4)),
+        ];
+        assert_eq!(
+            ids(&coherent_master_subset(CalibrationKind::Flat, &settling)),
+            vec![1, 3],
+            "frames beyond seiza's 1 °C gate must not feed the master"
+        );
 
         // Unknown capture time or temperature cannot prove incoherence.
-        let mut unknown = vec![flat(1, Some(now), Some(-10.0)), flat(2, None, None)];
-        trim_to_coherent_flat_session(&mut unknown);
-        assert_eq!(unknown.len(), 2);
+        let unknown = vec![flat(1, Some(now), Some(-10.0)), flat(2, None, None)];
+        assert_eq!(
+            coherent_master_subset(CalibrationKind::Flat, &unknown).len(),
+            2
+        );
 
-        // A same-session temperature outlier still goes (dew heater died,
-        // cooler off): seiza would refuse the mix frame-for-frame.
-        let mut outlier = vec![
+        // Bias/darks get temperature coherence but no session window: a
+        // months-old same-temperature dark library still combines.
+        let mut dark_library = vec![
             flat(1, Some(now), Some(-10.0)),
-            flat(2, Some(now - 60), Some(20.0)),
+            flat(2, Some(now - 90 * day), Some(-10.3)),
         ];
-        trim_to_coherent_flat_session(&mut outlier);
-        assert_eq!(outlier.len(), 1);
+        for frame in &mut dark_library {
+            frame.kind = CalibrationKind::Dark;
+        }
+        assert_eq!(
+            coherent_master_subset(CalibrationKind::Dark, &dark_library).len(),
+            2,
+            "dark libraries span months"
+        );
 
-        let mut empty: Vec<CalibrationFrame> = Vec::new();
-        trim_to_coherent_flat_session(&mut empty);
-        assert!(empty.is_empty());
+        // No viable cluster: the nearest cluster comes back and the build
+        // skips quietly below MIN_MASTER_FRAMES.
+        let lone = vec![flat(1, Some(now), Some(-10.0))];
+        assert_eq!(
+            coherent_master_subset(CalibrationKind::Flat, &lone).len(),
+            1
+        );
+        assert!(coherent_master_subset(CalibrationKind::Flat, &[]).is_empty());
+    }
+
+    #[test]
+    fn multi_night_group_keeps_identical_selections_and_builds_one_flat_master() {
+        // Two nights of lights with per-night flats more than a day apart:
+        // selection must stay identical across the group (the group path
+        // refuses mixed selections outright), and the master must build
+        // from one coherent session rather than failing on the mix.
+        let temp = tempfile::tempdir().unwrap();
+        let day = 24 * 60 * 60;
+        let mut calibration_meta = Vec::new();
+        for (night, offset) in [(1, 0i64), (2, 3 * day)] {
+            for index in 0..2 {
+                let path = temp.path().join(format!("flat-n{night}-{index}.fits"));
+                write_test_fits(&path, "FLAT", 1_000 + index);
+                let mut meta = crate::commands::import::headers::read_frame_meta(&path);
+                meta.timestamp = Some(1_000_000_000 + offset + index as i64 * 60);
+                calibration_meta.push(meta);
+            }
+        }
+        for index in 0..2 {
+            let path = temp.path().join(format!("bias-{index}.fits"));
+            write_test_fits(&path, "BIAS", 100 + index);
+            calibration_meta.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        let light_a = temp.path().join("light-a.fits");
+        let light_b = temp.path().join("light-b.fits");
+        write_test_fits(&light_a, "LIGHT", 1_100);
+        write_test_fits(&light_b, "LIGHT", 1_100);
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &calibration_meta, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        let cache = temp.path().join("cache");
+        let (masters, applied) =
+            resolve_or_build_masters_for_group(&conn, &cache, &[light_a, light_b], None, None)
+                .unwrap();
+        assert!(
+            applied.flat_master.is_some(),
+            "one coherent session must build: {:?}",
+            applied.warning
+        );
+        assert!(!masters.is_empty());
+        assert!(!applied.masters_signature.is_empty());
+    }
+
+    #[test]
+    fn moving_the_cache_directory_re_records_masters_instead_of_erroring() {
+        // The master row is keyed by master_uuid; a new cache directory
+        // rebuilds the same master at a new path. That upsert used to hit
+        // the UNIQUE(master_uuid) constraint and fail the build.
+        let temp = tempfile::tempdir().unwrap();
+        let mut calibration_meta = Vec::new();
+        for (kind, stem, value) in [("BIAS", "bias", 100), ("FLAT", "flat", 1_000)] {
+            for index in 0..2 {
+                let path = temp.path().join(format!("{stem}-{index}.fits"));
+                write_test_fits(&path, kind, value + index);
+                calibration_meta.push(crate::commands::import::headers::read_frame_meta(&path));
+            }
+        }
+        let light_path = temp.path().join("light.fits");
+        write_test_fits(&light_path, "LIGHT", 1_100);
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &calibration_meta, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        let (_, first) =
+            resolve_or_build_masters(&conn, &temp.path().join("cache-a"), &light_path, None, None)
+                .unwrap();
+        assert!(first.flat_master.is_some());
+
+        let (_, second) =
+            resolve_or_build_masters(&conn, &temp.path().join("cache-b"), &light_path, None, None)
+                .unwrap();
+        assert!(
+            second.flat_master.is_some(),
+            "same masters in a new cache dir must re-record cleanly: {:?}",
+            second.warning
+        );
+        assert!(second.warning.is_none(), "no failure: {:?}", second.warning);
+    }
+
+    #[test]
+    fn flat_only_library_stacks_without_the_flat_and_says_why() {
+        // Dividing a flat into a light that keeps its pedestal amplifies
+        // that pedestal by 1/vignette at the edges: the stack comes out
+        // with the vignette inverted (bright edges). A library holding
+        // only flats must therefore stack without the flat, and the
+        // warning must say what to import.
+        let temp = tempfile::tempdir().unwrap();
+        let mut calibration_meta = Vec::new();
+        for index in 0..2 {
+            let path = temp.path().join(format!("flat-{index}.fits"));
+            write_test_fits(&path, "FLAT", 1_000 + index);
+            calibration_meta.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        let light_path = temp.path().join("light.fits");
+        write_test_fits(&light_path, "LIGHT", 1_100);
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &calibration_meta, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        let cache = temp.path().join("cache");
+        let (masters, applied) =
+            resolve_or_build_masters(&conn, &cache, &light_path, None, None).unwrap();
+
+        assert!(
+            applied.flat_master.is_none(),
+            "a flat must not divide an unsubtracted light"
+        );
+        assert!(masters.is_empty());
+        let warning = applied.warning.as_deref().unwrap_or_default();
+        assert!(
+            warning.contains("brightens vignetted edges")
+                && warning.contains("import bias or dark frames"),
+            "warning must explain the inversion and the remedy: {warning}"
+        );
+    }
+
+    #[test]
+    fn failed_bias_skips_dependent_masters_instead_of_building_without_them() {
+        // A flat built without its failed bias bakes the bias pedestal into
+        // the flat's normalization — actively miscorrecting every light.
+        // The dependents must be skipped, with the reason recorded.
+        let temp = tempfile::tempdir().unwrap();
+        let mut calibration_meta = Vec::new();
+        for (kind, stem, value) in [("BIAS", "bias", 100), ("FLAT", "flat", 1_000)] {
+            for index in 0..2 {
+                let path = temp.path().join(format!("{stem}-{index}.fits"));
+                write_test_fits(&path, kind, value + index);
+                calibration_meta.push(crate::commands::import::headers::read_frame_meta(&path));
+            }
+        }
+        let light_path = temp.path().join("light.fits");
+        write_test_fits(&light_path, "LIGHT", 1_100);
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &calibration_meta, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+
+        // Rewrite one bias with an incompatible sensor temperature so the
+        // bias master build fails after verification passes.
+        let mut hot = Vec::new();
+        fits_card(&mut hot, "SIMPLE  =                    T");
+        fits_card(&mut hot, "BITPIX  =                   16");
+        fits_card(&mut hot, "NAXIS   =                    2");
+        fits_card(&mut hot, "NAXIS1  =                    4");
+        fits_card(&mut hot, "NAXIS2  =                    4");
+        fits_card(&mut hot, "IMAGETYP= 'BIAS'");
+        fits_card(&mut hot, "FILTER  = 'Ha'");
+        fits_card(&mut hot, "EXPTIME =                300.0");
+        fits_card(&mut hot, "GAIN    =                  100");
+        fits_card(&mut hot, "OFFSET  =                   20");
+        fits_card(&mut hot, "XBINNING=                    1");
+        fits_card(&mut hot, "YBINNING=                    1");
+        fits_card(&mut hot, "CCD-TEMP=                 39.5");
+        fits_card(&mut hot, "TELESCOP= 'Scope'");
+        fits_card(&mut hot, "INSTRUME= 'Camera'");
+        fits_card(&mut hot, "END");
+        hot.resize(hot.len().div_ceil(2880) * 2880, b' ');
+        let mut payload = Vec::new();
+        for _ in 0..16 {
+            payload.extend(101_i16.to_be_bytes());
+        }
+        payload.resize(2880, 0);
+        hot.extend(payload);
+        std::fs::write(temp.path().join("bias-1.fits"), hot).unwrap();
+
+        let cache = temp.path().join("cache");
+        let (masters, applied) =
+            resolve_or_build_masters(&conn, &cache, &light_path, None, None).unwrap();
+
+        assert!(applied.bias_master.is_none(), "bias build fails");
+        assert!(
+            applied.flat_master.is_none(),
+            "the flat must not build without its failed bias"
+        );
+        assert!(masters.is_empty());
+        let warning = applied.warning.as_deref().unwrap_or_default();
+        assert!(
+            warning.contains("skipped because the bias master failed"),
+            "warning must say why the flat was skipped: {warning}"
+        );
+        assert_eq!(applied.state, "incomplete");
     }
 
     #[test]
