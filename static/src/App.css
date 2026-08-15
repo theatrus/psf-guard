@@ -3404,6 +3404,13 @@
   font-size: 0.82rem;
 }
 
+.stack-preview-channel-calibration select {
+  padding: 0.18rem 0.3rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
 .stack-preview-build,
 .stack-preview-rebuild,
 .stack-preview-stop {

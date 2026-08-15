@@ -72,6 +72,35 @@ pub struct StackPreviewRequest {
     /// auto refuses, and `off` stacks the raw frames.
     #[serde(default)]
     pub calibration: crate::calibration::CalibrationMode,
+    /// Per-channel exceptions to `calibration`. A channel is one target and
+    /// filter group; a channel without an entry uses `calibration`.
+    #[serde(default)]
+    pub calibration_overrides: Vec<CalibrationOverride>,
+}
+
+/// One channel's calibration mode, overriding the request-wide choice.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CalibrationOverride {
+    pub target_id: i32,
+    #[serde(default)]
+    pub filter_name: String,
+    pub calibration: crate::calibration::CalibrationMode,
+}
+
+impl StackPreviewRequest {
+    /// The mode one channel stacks under: its override, or the request-wide
+    /// mode.
+    fn calibration_for(
+        &self,
+        target_id: i32,
+        filter_name: &str,
+    ) -> crate::calibration::CalibrationMode {
+        self.calibration_overrides
+            .iter()
+            .find(|entry| entry.target_id == target_id && entry.filter_name == filter_name)
+            .map(|entry| entry.calibration)
+            .unwrap_or(self.calibration)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -633,6 +662,9 @@ fn rejected_decision(frame: &PreparedFrame, reason: String) -> StackFrameDecisio
 #[derive(Clone)]
 struct PreparedGroup {
     index: usize,
+    /// The mode this channel calibrates under: its request override, or the
+    /// request-wide mode.
+    calibration: crate::calibration::CalibrationMode,
     frames: Vec<PreparedFrame>,
 }
 
@@ -641,7 +673,6 @@ struct PreparedJob {
     groups: Vec<PreparedGroup>,
     cache_root: PathBuf,
     north_up: bool,
-    calibration: crate::calibration::CalibrationMode,
 }
 
 /// Weighs how much integrated exposure faces the same way as the reference
@@ -1231,7 +1262,6 @@ fn prepare_job(
     hasher.update(project_id.to_le_bytes());
     hasher.update([request.accepted_only as u8]);
     hasher.update([request.north_up as u8]);
-    hasher.update(request.calibration.as_str().as_bytes());
     hasher.update(STACK_PREVIEW_CACHE_VERSION.to_le_bytes());
     hasher.update(SEIZA_STACKING_VERSION.as_bytes());
     hasher.update(seiza_stacking::SKY_ORIENTATION_VERSION.to_le_bytes());
@@ -1242,9 +1272,14 @@ fn prepare_job(
     for (index, ((target_id, target_name, filter_name), mut entries)) in
         grouped.into_iter().enumerate()
     {
+        // Hash the mode each channel actually stacks under, so the same
+        // effective configuration lands on the same job whether it came from
+        // the request-wide mode or an override.
+        let group_calibration = request.calibration_for(target_id, &filter_name);
         hasher.update(target_id.to_le_bytes());
         hasher.update(target_name.as_bytes());
         hasher.update(filter_name.as_bytes());
+        hasher.update(group_calibration.as_str().as_bytes());
         entries.sort_by_key(|(image, _)| (image.acquired_date.unwrap_or(0), image.id));
         let total_candidates = entries.len();
         let input_images = entries
@@ -1371,7 +1406,11 @@ fn prepare_job(
             input_images,
             frames: decisions,
         });
-        prepared_groups.push(PreparedGroup { index, frames });
+        prepared_groups.push(PreparedGroup {
+            index,
+            calibration: group_calibration,
+            frames,
+        });
     }
 
     let digest = hasher.finalize();
@@ -1410,7 +1449,6 @@ fn prepare_job(
         groups: prepared_groups,
         cache_root: ctx.cache_dir_path.clone(),
         north_up: request.north_up,
-        calibration: request.calibration,
     })
 }
 
@@ -1689,7 +1727,6 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
         groups,
         cache_root,
         north_up,
-        calibration,
     } = prepared;
     state.stack_previews.update(&job_id, |job| {
         job.state = StackJobState::Running;
@@ -1705,7 +1742,6 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
         job_id: &job_id,
         cache_root: &cache_root,
         north_up,
-        calibration,
         accepted_only,
         worker_policy: &worker_policy,
         cancel,
@@ -1789,7 +1825,6 @@ struct GroupJob<'a> {
     job_id: &'a str,
     cache_root: &'a FsPath,
     north_up: bool,
-    calibration: crate::calibration::CalibrationMode,
     accepted_only: bool,
     worker_policy: &'a crate::concurrency::WorkerPolicy,
     cancel: &'a Arc<AtomicBool>,
@@ -1808,7 +1843,6 @@ fn run_group(
         job_id,
         cache_root,
         north_up,
-        calibration,
         accepted_only,
         worker_policy,
         cancel,
@@ -1837,7 +1871,7 @@ fn run_group(
         &light_paths,
         Some(&directory_tree),
         Some(cancel.as_ref()),
-        calibration,
+        group.calibration,
     );
     if cancel.load(Ordering::Relaxed) {
         return Ok(GroupOutcome::Cancelled);
@@ -2755,6 +2789,7 @@ mod tests {
             force: false,
             north_up: false,
             calibration: crate::calibration::CalibrationMode::Auto,
+            calibration_overrides: Vec::new(),
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
@@ -2763,6 +2798,7 @@ mod tests {
             force: false,
             north_up: false,
             calibration: crate::calibration::CalibrationMode::Auto,
+            calibration_overrides: Vec::new(),
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
@@ -2771,8 +2807,29 @@ mod tests {
             force: false,
             north_up: false,
             calibration: crate::calibration::CalibrationMode::Auto,
+            calibration_overrides: Vec::new(),
         })
         .is_ok());
+    }
+
+    #[test]
+    fn a_channel_override_wins_over_the_request_mode() {
+        use crate::calibration::CalibrationMode;
+        let request = StackPreviewRequest {
+            image_ids: vec![1, 2],
+            accepted_only: false,
+            force: false,
+            north_up: false,
+            calibration: CalibrationMode::Auto,
+            calibration_overrides: vec![CalibrationOverride {
+                target_id: 7,
+                filter_name: "Ha".into(),
+                calibration: CalibrationMode::Off,
+            }],
+        };
+        assert_eq!(request.calibration_for(7, "Ha"), CalibrationMode::Off);
+        assert_eq!(request.calibration_for(7, "OIII"), CalibrationMode::Auto);
+        assert_eq!(request.calibration_for(8, "Ha"), CalibrationMode::Auto);
     }
 
     #[test]

@@ -78,6 +78,34 @@ function builtCalibrationMode(group: StackGroupStatus): CalibrationMode {
   return group.calibration?.mode ?? 'auto';
 }
 
+/**
+ * Per-channel exceptions to the project-wide calibration mode, remembered
+ * like the mode itself. Keys carry the database and project, so target ids
+ * from different catalogs cannot collide.
+ */
+const CALIBRATION_OVERRIDES_KEY = 'psf-guard.stack-calibration-overrides';
+
+function overrideStorageKey(dbId: string, projectId: number, channel: string) {
+  return `${dbId}:${projectId}:${channel}`;
+}
+
+function readCalibrationOverrides(): Record<string, CalibrationMode> {
+  try {
+    const raw = window.localStorage.getItem(CALIBRATION_OVERRIDES_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const overrides: Record<string, CalibrationMode> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (value === 'auto' || value === 'on' || value === 'off') {
+        overrides[key] = value;
+      }
+    }
+    return overrides;
+  } catch {
+    return {};
+  }
+}
+
 const terminalStates = new Set(['completed', 'failed', 'cancelled']);
 
 function stackJobQueryKey(dbId: string, projectId: number, jobId: string | null) {
@@ -140,6 +168,8 @@ function staleReason(
   }
   return null;
 }
+// `calibrationMode` above is the channel's EFFECTIVE mode — its override
+// when one is set, else the project-wide choice.
 
 function artifactFromLatest(latest: LatestStackPreviewGroup | undefined): StackArtifact | undefined {
   if (!latest) return undefined;
@@ -197,6 +227,31 @@ export default function StackPreviewPanel({
       // Keep the in-memory preference even when it cannot be persisted.
     }
   };
+  const [overrides, setOverrides] = useState<Record<string, CalibrationMode>>(
+    readCalibrationOverrides
+  );
+  // '' clears the channel back to the project-wide mode.
+  const chooseChannelCalibration = (channel: string, mode: CalibrationMode | '') => {
+    setOverrides((current) => {
+      const next = { ...current };
+      const key = overrideStorageKey(dbId, projectId, channel);
+      if (mode === '') {
+        delete next[key];
+      } else {
+        next[key] = mode;
+      }
+      try {
+        window.localStorage.setItem(CALIBRATION_OVERRIDES_KEY, JSON.stringify(next));
+      } catch {
+        // Keep the in-memory preference even when it cannot be persisted.
+      }
+      return next;
+    });
+  };
+  const channelOverride = (channel: string): CalibrationMode | undefined =>
+    overrides[overrideStorageKey(dbId, projectId, channel)];
+  const effectiveCalibration = (channel: string): CalibrationMode =>
+    channelOverride(channel) ?? calibrationMode;
   const [watchedJobIds, setWatchedJobIds] = useState<string[]>([]);
   const [inspector, setInspector] = useState<StackArtifact | null>(null);
   const [stretches, setStretches] = useState<Record<string, StackStretchPreview>>({});
@@ -251,6 +306,13 @@ export default function StackPreviewPanel({
         accepted_only: acceptedOnly,
         force: variables.force,
         calibration: calibrationMode,
+        calibration_overrides: [...currentChannels.values()]
+          .filter((channel) => channelOverride(channel.key) !== undefined)
+          .map((channel) => ({
+            target_id: channel.targetId,
+            filter_name: channel.filterName,
+            calibration: channelOverride(channel.key)!,
+          })),
       }),
     onSuccess: (job) => {
       queryClient.setQueryData(stackJobQueryKey(dbId, projectId, job.job_id), job);
@@ -423,7 +485,7 @@ export default function StackPreviewPanel({
           artifact.acceptedOnly,
           acceptedOnly,
           builtCalibrationMode(artifact.group),
-          calibrationMode
+          effectiveCalibration(key)
         ) !== null
       : false;
   }).length;
@@ -438,14 +500,15 @@ export default function StackPreviewPanel({
           entry.accepted_only,
           acceptedOnly,
           builtCalibrationMode(entry.group),
-          calibrationMode
+          effectiveCalibration(key)
         )
       ) {
         targetIds.add(entry.group.target_id);
       }
     }
     return targetIds;
-  }, [acceptedOnly, calibrationMode, currentChannels, latest.data]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- effectiveCalibration reads calibrationMode and overrides, listed below.
+  }, [acceptedOnly, calibrationMode, overrides, currentChannels, latest.data]);
   const colorSourceRevision = useMemo(
     () => (latest.data?.groups ?? [])
       .map((entry) => `${entry.job_id}:${entry.group.index}:${entry.artifact_revision}`)
@@ -636,7 +699,7 @@ export default function StackPreviewPanel({
                       artifact.acceptedOnly,
                       acceptedOnly,
                       builtCalibrationMode(artifact.group),
-                      calibrationMode
+                      effectiveCalibration(key)
                     )
                   : null;
                 const groupBusy =
@@ -700,6 +763,30 @@ export default function StackPreviewPanel({
                         <span className={`stack-group-state ${activeGroup?.state ?? group?.state ?? 'not-built'}`}>
                           {activeGroup?.state ?? group?.state ?? 'not built'}
                         </span>
+                        <label
+                          className="stack-preview-channel-calibration"
+                          title={
+                            'Calibration for this channel only. "Project" follows the ' +
+                            'panel-wide Calibration choice; the other options override it ' +
+                            'for this target and filter, and are remembered.'
+                          }
+                        >
+                          <select
+                            value={channelOverride(key) ?? ''}
+                            disabled={running}
+                            onChange={(event) =>
+                              chooseChannelCalibration(
+                                key,
+                                event.target.value as CalibrationMode | ''
+                              )
+                            }
+                          >
+                            <option value="">Project ({calibrationMode})</option>
+                            <option value="auto">Auto</option>
+                            <option value="on">Force on</option>
+                            <option value="off">Off</option>
+                          </select>
+                        </label>
                         {artifact && (
                           <button
                             className="stack-preview-card-action"

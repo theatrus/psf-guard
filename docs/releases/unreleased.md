@@ -20,6 +20,10 @@
   back — and **Off** stacks the raw frames. The choice is remembered, and a
   preview built under a different mode is marked out of date. See [stack
   previews](https://github.com/theatrus/psf-guard/blob/main/docs/STACKING_PREVIEWS.md).
+- The stack **Calibration** control can now be overridden per channel: each
+  target-and-filter card has its own select, so one channel with a bad flat
+  can stack raw while the rest calibrate. Overrides are remembered and the
+  card's out-of-date marker follows the mode the channel actually uses.
 - A flats-only calibration library now flat-corrects instead of stacking
   uncorrected. PSF Guard fits the bias pedestal from the lights themselves
   (background against flat response), corroborates it against the camera's
