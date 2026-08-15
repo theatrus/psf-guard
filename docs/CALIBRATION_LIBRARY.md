@@ -83,7 +83,10 @@ flat into a light that still carries its pedestal amplifies that pedestal at
 the vignetted edges, inverting the vignette into bright edges. A flats-only
 library therefore stacks without the flat and the warning says to import
 bias or dark frames; the built flat master stays cached and applies as soon
-as they arrive.
+as they arrive. The stack panel's **Calibration** control can override this:
+**Force on** applies every master that can be built, including a lone flat —
+the warning then says what to expect — and **Off** stacks the raw frames
+with no matching at all.
 
 A master that fails to build does not fail the stack. The frames integrate
 without that master, and the stack card's calibration warning names the

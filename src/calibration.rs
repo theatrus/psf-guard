@@ -191,8 +191,37 @@ pub struct CalibrationSyncOutcome {
     pub frames: CalibrationSyncCounts,
 }
 
+/// How a stack asks for calibration. `Auto` applies every master that can be
+/// built and refuses combinations that would damage the result (a flat with
+/// no bias or dark master). `On` applies whatever can be built, including the
+/// combinations `Auto` refuses. `Off` stacks the raw lights.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CalibrationMode {
+    #[default]
+    Auto,
+    On,
+    Off,
+}
+
+impl CalibrationMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::On => "on",
+            Self::Off => "off",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct AppliedCalibration {
+    /// The mode the resolution ran under. Recorded so consumers that must
+    /// reproduce a build — the source-frame search — resolve the same way,
+    /// and so the UI can mark a stack stale when the preference changes.
+    /// Artifacts recorded before this field existed were built in `Auto`.
+    #[serde(default)]
+    pub mode: CalibrationMode,
     pub state: String,
     pub bias_frames: usize,
     pub dark_frames: usize,
@@ -215,6 +244,7 @@ pub struct AppliedCalibration {
 impl Default for AppliedCalibration {
     fn default() -> Self {
         Self {
+            mode: CalibrationMode::Auto,
             state: "none".into(),
             bias_frames: 0,
             dark_frames: 0,
@@ -917,18 +947,37 @@ fn stop_requested(cancel: Option<&AtomicBool>) -> Result<()> {
     }
 }
 
+/// The resolution returned when calibration is switched off: no matching, no
+/// masters, and a fingerprint that cannot collide with a real selection.
+fn calibration_off() -> (seiza_stacking::CalibrationMasters, AppliedCalibration) {
+    (
+        seiza_stacking::CalibrationMasters::default(),
+        AppliedCalibration {
+            mode: CalibrationMode::Off,
+            state: "off".into(),
+            fingerprint: "off".into(),
+            ..Default::default()
+        },
+    )
+}
+
 pub fn resolve_or_build_masters(
     conn: &Connection,
     cache_root: &Path,
     light_path: &Path,
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
     cancel: Option<&AtomicBool>,
+    mode: CalibrationMode,
 ) -> Result<(seiza_stacking::CalibrationMasters, AppliedCalibration)> {
+    if mode == CalibrationMode::Off {
+        return Ok(calibration_off());
+    }
     let light = crate::commands::import::headers::read_frame_meta(light_path);
     let mut selected = select_for_light(conn, &light)?;
     let missing_sources = remap_missing_sources(&mut selected, directory_tree);
     let fingerprint = selection_hash(&selected);
     let mut applied = AppliedCalibration {
+        mode,
         state: "matching".into(),
         bias_frames: selected.bias.len(),
         dark_frames: selected.dark.len(),
@@ -1089,13 +1138,27 @@ pub fn resolve_or_build_masters(
     // (bright edges), which is worse than no flat at all. The flat master
     // itself stays cached: once bias or dark frames are imported, the
     // dependency-aware hash rebuilds and applies it properly.
+    let mut forced_flat_note = None;
     let flat = if flat.is_some() && bias.is_none() && dark.is_none() {
-        let reason = "skipped: dividing a flat into a light with no bias or dark master \
+        if mode == CalibrationMode::On {
+            // The caller forced calibration on, accepting the damage Auto
+            // refuses. Say what to expect so a bright-edged result is not
+            // mistaken for a broken flat.
+            forced_flat_note = Some(
+                "Flat applied without a bias or dark master because calibration is forced on; \
+                 vignetted edges may brighten (the light's pedestal is amplified by the flat \
+                 correction)",
+            );
+            flat
+        } else {
+            let reason = "skipped: dividing a flat into a light with no bias or dark master \
                       brightens vignetted edges (the light's pedestal is amplified by \
-                      the flat correction); import bias or dark frames for this camera";
-        tracing::warn!("flat master {reason}");
-        build_failures.push((CalibrationKind::Flat, reason.into()));
-        None
+                      the flat correction); import bias or dark frames for this camera, \
+                      or force calibration on for this stack";
+            tracing::warn!("flat master {reason}");
+            build_failures.push((CalibrationKind::Flat, reason.into()));
+            None
+        }
     } else {
         flat
     };
@@ -1154,6 +1217,12 @@ pub fn resolve_or_build_masters(
             None => failed,
         });
     }
+    if let Some(note) = forced_flat_note {
+        applied.warning = Some(match applied.warning.take() {
+            Some(previous) => format!("{previous}. {note}"),
+            None => note.into(),
+        });
+    }
     applied.masters_signature = masters_signature(&applied);
     Ok((masters, applied))
 }
@@ -1180,7 +1249,11 @@ pub fn resolve_or_build_masters_for_group(
     light_paths: &[PathBuf],
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
     cancel: Option<&AtomicBool>,
+    mode: CalibrationMode,
 ) -> Result<(seiza_stacking::CalibrationMasters, AppliedCalibration)> {
+    if mode == CalibrationMode::Off {
+        return Ok(calibration_off());
+    }
     let Some(reference) = light_paths.first() else {
         return Ok((
             seiza_stacking::CalibrationMasters::default(),
@@ -1199,6 +1272,7 @@ pub fn resolve_or_build_masters_for_group(
         return Ok((
             seiza_stacking::CalibrationMasters::default(),
             AppliedCalibration {
+                mode,
                 state: "incomplete".into(),
                 warning: Some(
                     "Stack inputs need different calibration sets; this preview was left uncalibrated"
@@ -1209,7 +1283,7 @@ pub fn resolve_or_build_masters_for_group(
             },
         ));
     }
-    resolve_or_build_masters(conn, cache_root, reference, directory_tree, cancel)
+    resolve_or_build_masters(conn, cache_root, reference, directory_tree, cancel, mode)
 }
 
 struct BuiltMaster {
@@ -2388,9 +2462,15 @@ mod tests {
             tx.commit().unwrap();
         }
         let cache = temp.path().join("cache");
-        let (masters, applied) =
-            resolve_or_build_masters_for_group(&conn, &cache, &[light_a, light_b], None, None)
-                .unwrap();
+        let (masters, applied) = resolve_or_build_masters_for_group(
+            &conn,
+            &cache,
+            &[light_a, light_b],
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
         assert!(
             applied.flat_master.is_some(),
             "one coherent session must build: {:?}",
@@ -2423,14 +2503,26 @@ mod tests {
             import_calibration_frames(&tx, &calibration_meta, Some("profile")).unwrap();
             tx.commit().unwrap();
         }
-        let (_, first) =
-            resolve_or_build_masters(&conn, &temp.path().join("cache-a"), &light_path, None, None)
-                .unwrap();
+        let (_, first) = resolve_or_build_masters(
+            &conn,
+            &temp.path().join("cache-a"),
+            &light_path,
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
         assert!(first.flat_master.is_some());
 
-        let (_, second) =
-            resolve_or_build_masters(&conn, &temp.path().join("cache-b"), &light_path, None, None)
-                .unwrap();
+        let (_, second) = resolve_or_build_masters(
+            &conn,
+            &temp.path().join("cache-b"),
+            &light_path,
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
         assert!(
             second.flat_master.is_some(),
             "same masters in a new cache dir must re-record cleanly: {:?}",
@@ -2463,8 +2555,15 @@ mod tests {
             tx.commit().unwrap();
         }
         let cache = temp.path().join("cache");
-        let (masters, applied) =
-            resolve_or_build_masters(&conn, &cache, &light_path, None, None).unwrap();
+        let (masters, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            &light_path,
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
 
         assert!(
             applied.flat_master.is_none(),
@@ -2477,6 +2576,100 @@ mod tests {
                 && warning.contains("import bias or dark frames"),
             "warning must explain the inversion and the remedy: {warning}"
         );
+    }
+
+    #[test]
+    fn forced_calibration_applies_a_flat_only_library_and_says_what_to_expect() {
+        // `On` overrides the flat-only refusal: the caller accepts the
+        // pedestal amplification. The flat must apply, and the warning must
+        // still say what the result may look like.
+        let temp = tempfile::tempdir().unwrap();
+        let mut calibration_meta = Vec::new();
+        for index in 0..2 {
+            let path = temp.path().join(format!("flat-{index}.fits"));
+            write_test_fits(&path, "FLAT", 1_000 + index);
+            calibration_meta.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        let light_path = temp.path().join("light.fits");
+        write_test_fits(&light_path, "LIGHT", 1_100);
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &calibration_meta, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        let cache = temp.path().join("cache");
+        let (masters, applied) =
+            resolve_or_build_masters(&conn, &cache, &light_path, None, None, CalibrationMode::On)
+                .unwrap();
+
+        assert!(
+            applied.flat_master.is_some(),
+            "forced-on must apply the flat"
+        );
+        assert!(!masters.is_empty());
+        assert_eq!(applied.mode, CalibrationMode::On);
+        assert_eq!(applied.state, "applied");
+        assert!(
+            applied.masters_signature.contains(";flat=flat-"),
+            "signature must record the forced flat: {}",
+            applied.masters_signature
+        );
+        let warning = applied.warning.as_deref().unwrap_or_default();
+        assert!(
+            warning.contains("forced on") && warning.contains("vignetted edges may brighten"),
+            "warning must say what forcing the flat can do: {warning}"
+        );
+    }
+
+    #[test]
+    fn calibration_off_skips_matching_and_cannot_collide_with_a_real_selection() {
+        // `Off` must not read the library at all, and its fingerprint must
+        // differ from both a real selection and the empty-selection "none"
+        // state, so resume checkpoints and searches never mix the two.
+        let temp = tempfile::tempdir().unwrap();
+        let mut calibration_meta = Vec::new();
+        for index in 0..2 {
+            let path = temp.path().join(format!("flat-{index}.fits"));
+            write_test_fits(&path, "FLAT", 1_000 + index);
+            calibration_meta.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        let light_path = temp.path().join("light.fits");
+        write_test_fits(&light_path, "LIGHT", 1_100);
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &calibration_meta, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        let cache = temp.path().join("cache");
+        let (masters, applied) = resolve_or_build_masters_for_group(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Off,
+        )
+        .unwrap();
+
+        assert!(masters.is_empty());
+        assert_eq!(applied.mode, CalibrationMode::Off);
+        assert_eq!(applied.state, "off");
+        assert_eq!(applied.fingerprint, "off");
+        assert!(applied.warning.is_none());
+        let (_, auto_applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            &light_path,
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        assert_ne!(applied.fingerprint, auto_applied.fingerprint);
     }
 
     #[test]
@@ -2532,8 +2725,15 @@ mod tests {
         std::fs::write(temp.path().join("bias-1.fits"), hot).unwrap();
 
         let cache = temp.path().join("cache");
-        let (masters, applied) =
-            resolve_or_build_masters(&conn, &cache, &light_path, None, None).unwrap();
+        let (masters, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            &light_path,
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
 
         assert!(applied.bias_master.is_none(), "bias build fails");
         assert!(
@@ -2604,8 +2804,15 @@ mod tests {
         std::fs::write(temp.path().join("flat-1.fits"), hot_flat).unwrap();
 
         let cache = temp.path().join("cache");
-        let (masters, applied) =
-            resolve_or_build_masters(&conn, &cache, &light_path, None, None).unwrap();
+        let (masters, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            &light_path,
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
 
         assert!(applied.bias_master.is_some(), "bias still builds");
         assert!(applied.flat_master.is_none(), "flat cannot build");
@@ -2644,8 +2851,15 @@ mod tests {
             tx.commit().unwrap();
         }
         let cache = temp.path().join("cache");
-        let (masters, applied) =
-            resolve_or_build_masters(&conn, &cache, &light_path, None, None).unwrap();
+        let (masters, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            &light_path,
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
         assert!(!masters.is_empty());
         assert_eq!(applied.state, "applied");
         assert!(applied
@@ -2685,7 +2899,15 @@ mod tests {
         assert!(flat_dependencies.0.is_some());
         assert!(flat_dependencies.1.is_some());
 
-        let (_, reused) = resolve_or_build_masters(&conn, &cache, &light_path, None, None).unwrap();
+        let (_, reused) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            &light_path,
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
         assert_eq!(reused.fingerprint, applied.fingerprint);
         assert_eq!(library_summary(&conn).unwrap().master_count, 4);
 
@@ -2731,6 +2953,7 @@ mod tests {
             &[first, second],
             None,
             None,
+            CalibrationMode::Auto,
         )
         .unwrap();
         assert!(masters.is_empty());

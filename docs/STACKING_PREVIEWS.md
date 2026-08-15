@@ -218,6 +218,19 @@ If no safe set exists, the card says that calibration is absent or incomplete.
 PSF Guard never labels an uncalibrated preview as calibrated. See
 [Calibration libraries](CALIBRATION_LIBRARY.md) for the full rules.
 
+The panel's **Calibration** control chooses how the next build calibrates:
+
+- **Auto** (the default) applies the safe masters and holds back combinations
+  that damage the result, such as a flat with no bias or dark master.
+- **Force on** applies every master that can be built, including the ones
+  Auto refuses. The calibration warning still says what to expect.
+- **Off** stacks the raw frames without touching the library.
+
+The choice is remembered across reloads, becomes part of the stack job key,
+and a finished preview built under a different mode is marked out of date.
+Source-frame searches re-create the stack's own mode, whatever the control
+says now.
+
 ## Frame selection and admission
 
 PSF Guard owns project policy; Seiza owns image registration and integration.

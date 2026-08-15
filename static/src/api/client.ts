@@ -55,6 +55,7 @@ import type {
   SatelliteAnalysis,
   SatelliteAnalysisStatus,
   StackPreviewJob,
+  CalibrationMode,
   ArtifactSearchJob,
   ReferenceRegion,
   LatestStackPreviews,
@@ -726,6 +727,8 @@ export const apiClient = {
       force?: boolean;
       /** Reproject onto the shared north-up, east-left grid. Off by default. */
       north_up?: boolean;
+      /** How to calibrate the lights: auto (default), on (forced), or off. */
+      calibration?: CalibrationMode;
     }
   ): Promise<StackPreviewJob> => {
     const apiInstance = await getApi();
