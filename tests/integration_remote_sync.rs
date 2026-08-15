@@ -80,6 +80,10 @@ fn app(state: Arc<AppState>) -> Router {
             "/api/sync/v1/exports/{export_id}",
             get(remote_sync::get_export),
         )
+        .route(
+            "/api/sync/v1/jobs/{job_id}",
+            get(remote_sync::get_preview_job),
+        )
         .with_state(state)
 }
 
@@ -111,6 +115,35 @@ async fn call(
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     (status, value)
+}
+
+async fn create_async_preview(app: Router, operation: &str, bundle: Value) -> (StatusCode, Value) {
+    let idempotency_key = bundle["bundle_id"].as_str().unwrap().to_string();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sync/v1/previews")
+                .header("authorization", format!("Bearer {DESTINATION_TOKEN}"))
+                .header("content-type", "application/json")
+                .header("prefer", "respond-async")
+                .header("idempotency-key", idempotency_key)
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "protocol_version": 1,
+                        "catalog_id": "destination",
+                        "operation": operation,
+                        "bundle": bundle
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap())
 }
 
 /// Two token-scoped catalogs wired to one router, the shape every remote sync
@@ -357,6 +390,78 @@ async fn token_scoped_export_previews_and_applies_to_the_selected_database() {
         .query_row("SELECT description FROM project", [], |row| row.get(0))
         .unwrap();
     assert_eq!(description, "remote settings");
+}
+
+#[tokio::test]
+async fn capabilities_only_advertise_image_upload_when_its_gate_is_enabled() {
+    let harness = Harness::new("", "");
+    let (status, response) = call(
+        harness.router,
+        "GET",
+        "/api/sync/v1/capabilities",
+        Some(DESTINATION_TOKEN),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response:#}");
+    let capabilities = response["data"]["capabilities"].as_array().unwrap();
+    assert!(capabilities
+        .iter()
+        .any(|value| value == "async_preview_jobs"));
+    assert!(!capabilities.iter().any(|value| value == "image_upload"));
+}
+
+#[tokio::test]
+async fn async_preview_jobs_return_before_building_and_remain_token_scoped() {
+    let harness = Harness::new(
+        "INSERT INTO project VALUES (1,'p','M42','remote settings',2,8,'project-guid');
+         INSERT INTO target VALUES (1,'M42',1,5.5,-5.4,0,1,'target-guid');
+         INSERT INTO exposuretemplate VALUES (1,'p','Ha 300','Ha',120,'template-guid');
+         INSERT INTO exposureplan VALUES (1,'p',300,40,18,16,1,1,1,'plan-guid');",
+        "",
+    );
+    let bundle = harness.export("push_planning").await;
+    let (status, started) =
+        create_async_preview(harness.router.clone(), "push_planning", bundle.clone()).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{started:#}");
+    assert_eq!(started["data"]["state"], "running");
+    let job_id = started["data"]["job_id"].as_str().unwrap();
+
+    let (status, retried) =
+        create_async_preview(harness.router.clone(), "push_planning", bundle).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{retried:#}");
+    assert_eq!(retried["data"]["job_id"], job_id);
+
+    let (status, _) = call(
+        harness.router.clone(),
+        "GET",
+        &format!("/api/sync/v1/jobs/{job_id}"),
+        Some(SOURCE_TOKEN),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let ready = loop {
+        let (status, job) = call(
+            harness.router.clone(),
+            "GET",
+            &format!("/api/sync/v1/jobs/{job_id}"),
+            Some(DESTINATION_TOKEN),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{job:#}");
+        if job["data"]["state"] == "ready" {
+            break job;
+        }
+        assert_eq!(job["data"]["state"], "running", "{job:#}");
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    };
+    let preview_id = ready["data"]["preview"]["preview_id"].as_str().unwrap();
+    let (status, applied) = harness.apply(preview_id).await;
+    assert_eq!(status, StatusCode::OK, "{applied:#}");
+    assert_eq!(count(&harness.destination(), "project"), 1);
 }
 
 /// Rows for a source catalog that has actually observed something.

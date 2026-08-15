@@ -14,7 +14,8 @@
 
 use axum::{
     extract::{Path, State},
-    http::{header::AUTHORIZATION, HeaderMap},
+    http::{header::AUTHORIZATION, HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
 use base64::Engine as _;
@@ -35,8 +36,8 @@ use uuid::Uuid;
 
 use crate::server::{
     api::{
-        ApiResponse, SchedulerSyncKind, SchedulerSyncRequest, SchedulerSyncResponse,
-        SchedulerSyncTableCounts,
+        ApiRefreshStatus, ApiResponse, SchedulerSyncKind, SchedulerSyncRequest,
+        SchedulerSyncResponse, SchedulerSyncTableCounts,
     },
     database_context::DatabaseContext,
     handlers::{execute_scheduler_sync_paths, AppError, SyncGuardMode},
@@ -50,6 +51,7 @@ const PROTOCOL_VERSION: u32 = 1;
 /// How long a built export stays fetchable, matching the preview lifetime.
 const EXPORT_LIFETIME_SECS: i64 = 30 * 60;
 const MAX_RETAINED_EXPORTS: usize = 16;
+const MAX_RETAINED_PREVIEW_JOBS: usize = 32;
 /// Stands in for the catalog in an audit entry written before the token
 /// identified one — a bad token names no database.
 const UNKNOWN_CATALOG: &str = "-";
@@ -184,6 +186,121 @@ pub struct SyncPreview {
     pub summary: BTreeMap<String, i64>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PreviewJob {
+    pub job_id: String,
+    pub state: &'static str,
+    pub preview: Option<SyncPreview>,
+    pub error: Option<String>,
+}
+
+struct StoredPreviewJob {
+    catalog_id: String,
+    created_at: i64,
+    sequence: u64,
+    job: PreviewJob,
+}
+
+#[derive(Default)]
+pub struct PreviewJobStore {
+    entries: Mutex<HashMap<String, StoredPreviewJob>>,
+    next_sequence: std::sync::atomic::AtomicU64,
+}
+
+impl PreviewJobStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn start(
+        &self,
+        catalog_id: String,
+        requested_id: Option<String>,
+    ) -> Result<(PreviewJob, bool), AppError> {
+        let now = unix_seconds();
+        let sequence = self
+            .next_sequence
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut entries = self.lock()?;
+        entries.retain(|_, stored| stored.created_at + EXPORT_LIFETIME_SECS > now);
+        if let Some(existing) = requested_id.as_ref().and_then(|id| entries.get(id))
+            && existing.catalog_id == catalog_id
+        {
+            return Ok((existing.job.clone(), false));
+        }
+        while entries.len() >= MAX_RETAINED_PREVIEW_JOBS {
+            let Some(oldest) = entries
+                .iter()
+                .min_by_key(|(_, stored)| stored.sequence)
+                .map(|(id, _)| id.clone())
+            else {
+                break;
+            };
+            entries.remove(&oldest);
+        }
+        let job = PreviewJob {
+            job_id: requested_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+            state: "running",
+            preview: None,
+            error: None,
+        };
+        entries.insert(
+            job.job_id.clone(),
+            StoredPreviewJob {
+                catalog_id,
+                created_at: now,
+                sequence,
+                job: job.clone(),
+            },
+        );
+        Ok((job, true))
+    }
+
+    fn finish(&self, job_id: &str, result: Result<SyncPreview, AppError>) {
+        let Ok(mut entries) = self.entries.lock() else {
+            tracing::error!("remote preview job lock poisoned while finishing {job_id}");
+            return;
+        };
+        let Some(stored) = entries.get_mut(job_id) else {
+            return;
+        };
+        match result {
+            Ok(preview) => {
+                stored.job.state = "ready";
+                stored.job.preview = Some(preview);
+            }
+            Err(error) => {
+                stored.job.state = "failed";
+                stored.job.error = Some(detail_of(&error));
+            }
+        }
+    }
+
+    fn get(&self, id: &str, catalog_id: &str) -> Result<Option<PreviewJob>, AppError> {
+        let now = unix_seconds();
+        let mut entries = self.lock()?;
+        let Some(stored) = entries.get(id) else {
+            return Ok(None);
+        };
+        if stored.created_at + EXPORT_LIFETIME_SECS <= now {
+            entries.remove(id);
+            return Ok(None);
+        }
+        if stored.catalog_id != catalog_id {
+            return Ok(None);
+        }
+        Ok(Some(stored.job.clone()))
+    }
+
+    fn lock(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, HashMap<String, StoredPreviewJob>>, AppError> {
+        self.entries.lock().map_err(|error| {
+            AppError::InternalError(format!("remote preview job lock poisoned: {error}"))
+        })
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct SyncApplyResult {
     pub state: &'static str,
@@ -279,19 +396,28 @@ pub async fn capabilities(
     headers: HeaderMap,
 ) -> Result<Json<ApiResponse<SyncCapabilities>>, AppError> {
     let catalog = authenticated_catalog(&state, &headers, AuditAction::Capabilities)?;
+    let mut capabilities = vec![
+        "merge",
+        "push_planning",
+        "push_grades",
+        "preview_apply",
+        "preview_refresh",
+        "async_preview_jobs",
+        "exports",
+    ];
+    if catalog
+        .remote_image_upload
+        .as_ref()
+        .is_some_and(|config| config.enabled)
+        && catalog.remote_image_upload_dir.is_some()
+    {
+        capabilities.push("image_upload");
+    }
     Ok(Json(ApiResponse::success(SyncCapabilities {
         protocol_version: PROTOCOL_VERSION,
         product: "PSF Guard",
         product_version: env!("CARGO_PKG_VERSION"),
-        capabilities: vec![
-            "merge",
-            "push_planning",
-            "push_grades",
-            "preview_apply",
-            "preview_refresh",
-            "exports",
-            "image_upload",
-        ],
+        capabilities,
         catalogs: vec![SyncCatalogCapability {
             id: catalog.id.clone(),
             name: catalog.name.clone(),
@@ -305,8 +431,62 @@ pub async fn create_preview(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(request): Json<CreatePreviewRequest>,
-) -> Result<Json<ApiResponse<SyncPreview>>, AppError> {
+) -> Result<Response, AppError> {
     let catalog = authenticated_catalog(&state, &headers, AuditAction::Preview)?;
+    let respond_async = headers
+        .get("prefer")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|preference| preference.trim().eq_ignore_ascii_case("respond-async"))
+        });
+    if respond_async {
+        let idempotency_key = headers
+            .get("idempotency-key")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| digest_hex(format!("{}:{value}", catalog.id).as_bytes()));
+        let (job, started) = state
+            .remote_preview_jobs
+            .start(catalog.id.clone(), idempotency_key)?;
+        if !started {
+            return Ok((
+                StatusCode::ACCEPTED,
+                Json(ApiResponse::success_with_status(
+                    job,
+                    ApiRefreshStatus::Loading,
+                )),
+            )
+                .into_response());
+        }
+        let job_id = job.job_id.clone();
+        let background_state = Arc::clone(&state);
+        tokio::spawn(async move {
+            let result =
+                create_preview_inner(Arc::clone(&background_state), catalog, request).await;
+            background_state.remote_preview_jobs.finish(&job_id, result);
+        });
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(ApiResponse::success_with_status(
+                job,
+                ApiRefreshStatus::Loading,
+            )),
+        )
+            .into_response());
+    }
+
+    let preview = create_preview_inner(state, catalog, request).await?;
+    Ok(Json(ApiResponse::success(preview)).into_response())
+}
+
+async fn create_preview_inner(
+    state: Arc<AppState>,
+    catalog: Arc<DatabaseContext>,
+    request: CreatePreviewRequest,
+) -> Result<SyncPreview, AppError> {
     let operation = request.operation;
     // Copy the identifiers the audit log needs before the bundle moves, so
     // auditing never forces the whole payload to be cloned.
@@ -410,12 +590,25 @@ pub async fn create_preview(
         })?;
     let summary = result_summary(&result);
     audit(AuditOutcome::Ok, None, Some(&record.id), summary.clone());
-    Ok(Json(ApiResponse::success(SyncPreview {
+    Ok(SyncPreview {
         preview_id: record.id,
         state: "ready",
         expires_at: unix_timestamp(record.expires_at),
         summary,
-    })))
+    })
+}
+
+pub async fn get_preview_job(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(job_id): Path<String>,
+) -> Result<Json<ApiResponse<PreviewJob>>, AppError> {
+    let catalog = authenticated_catalog(&state, &headers, AuditAction::Preview)?;
+    let job = state
+        .remote_preview_jobs
+        .get(&job_id, &catalog.id)?
+        .ok_or(AppError::NotFound)?;
+    Ok(Json(ApiResponse::success(job)))
 }
 
 pub async fn get_preview(
