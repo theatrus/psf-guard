@@ -3389,6 +3389,21 @@
   white-space: nowrap;
 }
 
+.stack-preview-calibration-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.stack-preview-calibration-mode select {
+  padding: 0.28rem 0.4rem;
+  border-radius: 5px;
+  font-size: 0.82rem;
+}
+
 .stack-preview-build,
 .stack-preview-rebuild,
 .stack-preview-stop {

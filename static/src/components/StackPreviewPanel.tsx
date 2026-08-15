@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type {
+  CalibrationMode,
   Image,
   LatestStackPreviewGroup,
   StackFrameDecision,
@@ -56,6 +57,27 @@ interface StackArtifact {
   group: StackGroupStatus;
 }
 
+/**
+ * Remembered like the accepted-only choice is per session, but across
+ * reloads: how a stack calibrates is a lasting decision about someone's
+ * calibration library, not about one build.
+ */
+const CALIBRATION_MODE_KEY = 'psf-guard.stack-calibration-mode';
+
+function readCalibrationMode(): CalibrationMode {
+  try {
+    const stored = window.localStorage.getItem(CALIBRATION_MODE_KEY);
+    return stored === 'on' || stored === 'off' ? stored : 'auto';
+  } catch {
+    return 'auto';
+  }
+}
+
+/** The mode a finished artifact was built under; older artifacts ran auto. */
+function builtCalibrationMode(group: StackGroupStatus): CalibrationMode {
+  return group.calibration?.mode ?? 'auto';
+}
+
 const terminalStates = new Set(['completed', 'failed', 'cancelled']);
 
 function stackJobQueryKey(dbId: string, projectId: number, jobId: string | null) {
@@ -92,7 +114,9 @@ function staleReason(
   current: ChannelInput | undefined,
   inputImages: StackInputImage[],
   builtAcceptedOnly: boolean,
-  acceptedOnly: boolean
+  acceptedOnly: boolean,
+  builtCalibration: CalibrationMode,
+  calibrationMode: CalibrationMode
 ): string | null {
   if (!current) return 'Out of date — this channel is not in the current input';
   if (inputImages.length === 0) return 'Out of date — rebuild required';
@@ -110,6 +134,9 @@ function staleReason(
   }
   if (builtAcceptedOnly !== acceptedOnly) {
     return 'Out of date — Accepted only changed';
+  }
+  if (builtCalibration !== calibrationMode) {
+    return 'Out of date — calibration mode changed';
   }
   return null;
 }
@@ -161,6 +188,15 @@ export default function StackPreviewPanel({
     return next;
   });
   const [acceptedOnly, setAcceptedOnly] = useState(false);
+  const [calibrationMode, setCalibrationMode] = useState<CalibrationMode>(readCalibrationMode);
+  const chooseCalibrationMode = (mode: CalibrationMode) => {
+    setCalibrationMode(mode);
+    try {
+      window.localStorage.setItem(CALIBRATION_MODE_KEY, mode);
+    } catch {
+      // Keep the in-memory preference even when it cannot be persisted.
+    }
+  };
   const [watchedJobIds, setWatchedJobIds] = useState<string[]>([]);
   const [inspector, setInspector] = useState<StackArtifact | null>(null);
   const [stretches, setStretches] = useState<Record<string, StackStretchPreview>>({});
@@ -214,6 +250,7 @@ export default function StackPreviewPanel({
         image_ids: variables.imageIds,
         accepted_only: acceptedOnly,
         force: variables.force,
+        calibration: calibrationMode,
       }),
     onSuccess: (job) => {
       queryClient.setQueryData(stackJobQueryKey(dbId, projectId, job.job_id), job);
@@ -384,7 +421,9 @@ export default function StackPreviewPanel({
           currentChannels.get(key),
           artifact.group.input_images,
           artifact.acceptedOnly,
-          acceptedOnly
+          acceptedOnly,
+          builtCalibrationMode(artifact.group),
+          calibrationMode
         ) !== null
       : false;
   }).length;
@@ -397,14 +436,16 @@ export default function StackPreviewPanel({
           currentChannels.get(key),
           entry.group.input_images,
           entry.accepted_only,
-          acceptedOnly
+          acceptedOnly,
+          builtCalibrationMode(entry.group),
+          calibrationMode
         )
       ) {
         targetIds.add(entry.group.target_id);
       }
     }
     return targetIds;
-  }, [acceptedOnly, currentChannels, latest.data]);
+  }, [acceptedOnly, calibrationMode, currentChannels, latest.data]);
   const colorSourceRevision = useMemo(
     () => (latest.data?.groups ?? [])
       .map((entry) => `${entry.job_id}:${entry.group.index}:${entry.artifact_revision}`)
@@ -466,6 +507,26 @@ export default function StackPreviewPanel({
                 onChange={(event) => setAcceptedOnly(event.target.checked)}
               />
               Accepted only
+            </label>
+            <label
+              className="stack-preview-calibration-mode"
+              title={
+                'How the next build calibrates its lights. Auto applies the safe masters and ' +
+                'holds back combinations that damage the result, such as a flat with no bias ' +
+                'or dark master. Force on applies every master that can be built anyway. ' +
+                'Off stacks the raw frames.'
+              }
+            >
+              Calibration
+              <select
+                value={calibrationMode}
+                disabled={running}
+                onChange={(event) => chooseCalibrationMode(event.target.value as CalibrationMode)}
+              >
+                <option value="auto">Auto</option>
+                <option value="on">Force on</option>
+                <option value="off">Off</option>
+              </select>
             </label>
             <button
               className="stack-preview-build"
@@ -573,7 +634,9 @@ export default function StackPreviewPanel({
                       current,
                       artifact.group.input_images,
                       artifact.acceptedOnly,
-                      acceptedOnly
+                      acceptedOnly,
+                      builtCalibrationMode(artifact.group),
+                      calibrationMode
                     )
                   : null;
                 const groupBusy =
@@ -782,15 +845,21 @@ export default function StackPreviewPanel({
                       <div className="stack-preview-calibration">
                         <strong>
                           {calibration.state === 'applied'
-                            ? 'Calibration applied'
-                            : calibration.state === 'incomplete'
-                              ? 'Calibration set incomplete'
-                              : 'Matching calibration'}
+                            ? calibration.mode === 'on'
+                              ? 'Calibration applied (forced on)'
+                              : 'Calibration applied'
+                            : calibration.state === 'off'
+                              ? 'Calibration off'
+                              : calibration.state === 'incomplete'
+                                ? 'Calibration set incomplete'
+                                : 'Matching calibration'}
                         </strong>
-                        <span>
-                          {calibration.bias_frames} bias · {calibration.dark_frames} dark ·{' '}
-                          {calibration.dark_flat_frames} dark-flat · {calibration.flat_frames} flat
-                        </span>
+                        {calibration.state !== 'off' && (
+                          <span>
+                            {calibration.bias_frames} bias · {calibration.dark_frames} dark ·{' '}
+                            {calibration.dark_flat_frames} dark-flat · {calibration.flat_frames} flat
+                          </span>
+                        )}
                         {calibration.warning && <span>{calibration.warning}</span>}
                       </div>
                     )}

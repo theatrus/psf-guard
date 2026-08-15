@@ -67,6 +67,11 @@ pub struct StackPreviewRequest {
     /// stacks must share one sky frame, such as a mosaic.
     #[serde(default)]
     pub north_up: bool,
+    /// How this build calibrates its lights: `auto` (default) applies the
+    /// safe masters, `on` forces every buildable master including the ones
+    /// auto refuses, and `off` stacks the raw frames.
+    #[serde(default)]
+    pub calibration: crate::calibration::CalibrationMode,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -636,6 +641,7 @@ struct PreparedJob {
     groups: Vec<PreparedGroup>,
     cache_root: PathBuf,
     north_up: bool,
+    calibration: crate::calibration::CalibrationMode,
 }
 
 /// Weighs how much integrated exposure faces the same way as the reference
@@ -1225,6 +1231,7 @@ fn prepare_job(
     hasher.update(project_id.to_le_bytes());
     hasher.update([request.accepted_only as u8]);
     hasher.update([request.north_up as u8]);
+    hasher.update(request.calibration.as_str().as_bytes());
     hasher.update(STACK_PREVIEW_CACHE_VERSION.to_le_bytes());
     hasher.update(SEIZA_STACKING_VERSION.as_bytes());
     hasher.update(seiza_stacking::SKY_ORIENTATION_VERSION.to_le_bytes());
@@ -1403,6 +1410,7 @@ fn prepare_job(
         groups: prepared_groups,
         cache_root: ctx.cache_dir_path.clone(),
         north_up: request.north_up,
+        calibration: request.calibration,
     })
 }
 
@@ -1681,6 +1689,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
         groups,
         cache_root,
         north_up,
+        calibration,
     } = prepared;
     state.stack_previews.update(&job_id, |job| {
         job.state = StackJobState::Running;
@@ -1696,6 +1705,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
         job_id: &job_id,
         cache_root: &cache_root,
         north_up,
+        calibration,
         accepted_only,
         worker_policy: &worker_policy,
         cancel,
@@ -1779,6 +1789,7 @@ struct GroupJob<'a> {
     job_id: &'a str,
     cache_root: &'a FsPath,
     north_up: bool,
+    calibration: crate::calibration::CalibrationMode,
     accepted_only: bool,
     worker_policy: &'a crate::concurrency::WorkerPolicy,
     cancel: &'a Arc<AtomicBool>,
@@ -1797,6 +1808,7 @@ fn run_group(
         job_id,
         cache_root,
         north_up,
+        calibration,
         accepted_only,
         worker_policy,
         cancel,
@@ -1825,6 +1837,7 @@ fn run_group(
         &light_paths,
         Some(&directory_tree),
         Some(cancel.as_ref()),
+        calibration,
     );
     if cancel.load(Ordering::Relaxed) {
         return Ok(GroupOutcome::Cancelled);
@@ -2741,6 +2754,7 @@ mod tests {
             accepted_only: false,
             force: false,
             north_up: false,
+            calibration: crate::calibration::CalibrationMode::Auto,
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
@@ -2748,6 +2762,7 @@ mod tests {
             accepted_only: false,
             force: false,
             north_up: false,
+            calibration: crate::calibration::CalibrationMode::Auto,
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
@@ -2755,6 +2770,7 @@ mod tests {
             accepted_only: false,
             force: false,
             north_up: false,
+            calibration: crate::calibration::CalibrationMode::Auto,
         })
         .is_ok());
     }

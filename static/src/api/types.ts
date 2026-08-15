@@ -447,8 +447,18 @@ export interface StackGroupStatus {
   frames: StackFrameDecision[];
 }
 
+/**
+ * How a stack build calibrates its lights. `auto` applies the safe masters
+ * and refuses combinations that damage the result; `on` forces every
+ * buildable master, including the refused combinations; `off` stacks raw
+ * frames.
+ */
+export type CalibrationMode = 'auto' | 'on' | 'off';
+
 export interface AppliedCalibration {
-  state: 'none' | 'matching' | 'incomplete' | 'applied';
+  /** Absent on artifacts recorded before the mode existed; those ran `auto`. */
+  mode?: CalibrationMode;
+  state: 'none' | 'matching' | 'incomplete' | 'applied' | 'off';
   bias_frames: number;
   dark_frames: number;
   dark_flat_frames: number;

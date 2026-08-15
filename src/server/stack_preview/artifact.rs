@@ -132,6 +132,9 @@ struct SearchGroup {
     /// compare against differently calibrated pixels. Empty for stacks
     /// recorded before this field existed — those skip the check.
     expected_masters_signature: String,
+    /// The mode the stack calibrated under, so the search resolves the same
+    /// way. Stacks recorded before the field existed were built in `Auto`.
+    calibration_mode: crate::calibration::CalibrationMode,
     sources: Vec<SearchSource>,
 }
 
@@ -580,6 +583,7 @@ fn prepare_search(
             label,
             expected_calibration_fingerprint: group.calibration.fingerprint,
             expected_masters_signature: group.calibration.masters_signature,
+            calibration_mode: group.calibration.mode,
             sources,
         });
     }
@@ -719,6 +723,7 @@ fn run_search_inner(
             &paths,
             Some(&directory_tree),
             None,
+            group.calibration_mode,
         )
         // `{:#}` keeps the anyhow cause chain; `to_string()` would report
         // only "building master <kind>" with no reason.

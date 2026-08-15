@@ -14,6 +14,12 @@
   Sequence view, and the detail panel always agree. The zero-star cap does
   not scale. See
   [screening](https://github.com/theatrus/psf-guard/blob/main/docs/SCREENING.md).
+- Stack previews gained a **Calibration** control: **Auto** (the default)
+  applies the safe masters, **Force on** applies every master that can be
+  built — including a flat with no bias or dark master, which Auto holds
+  back — and **Off** stacks the raw frames. The choice is remembered, and a
+  preview built under a different mode is marked out of date. See [stack
+  previews](https://github.com/theatrus/psf-guard/blob/main/docs/STACKING_PREVIEWS.md).
 
 ## Fixed
 
