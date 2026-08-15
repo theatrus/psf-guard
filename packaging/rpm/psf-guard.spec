@@ -7,7 +7,7 @@
 %global debug_package %{nil}
 
 Name:           psf-guard
-Version:        0.7.1
+Version:        0.8.0
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -90,6 +90,15 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Fri Aug 14 2026 Yann Ramin <github@theatr.us> - 0.8.0-1
+- Read XISF frames everywhere FITS frames are read
+- Export a WBPP-ready tree with a PixInsight launch script
+- Star detector presets sized to the telescope, plus upstream detector options
+- Label annotated stars with their measured HFR
+- Fill measured star count and HFR into imported images after analysis
+- Cap the quality score of frames measured to have zero stars
+- Named processing setups; faster stack previews
+
 * Sun Aug 02 2026 Yann Ramin <github@theatr.us> - 0.7.0-1
 - Queue stack builds and resume them as a night grows
 - Require a login on a server that listens beyond loopback
