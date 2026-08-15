@@ -713,7 +713,9 @@ fn run_search_inner(
             Some(&directory_tree),
             None,
         )
-        .map_err(|error| error.to_string())?;
+        // `{:#}` keeps the anyhow cause chain; `to_string()` would report
+        // only "building master <kind>" with no reason.
+        .map_err(|error| format!("{error:#}"))?;
         if applied.fingerprint != group.expected_calibration_fingerprint {
             return Err(format!(
                 "The calibration selected for {} changed; rebuild the stack before searching",

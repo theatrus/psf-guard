@@ -14,3 +14,16 @@
   Sequence view, and the detail panel always agree. The zero-star cap does
   not scale. See
   [screening](https://github.com/theatrus/psf-guard/blob/main/docs/SCREENING.md).
+
+## Fixed
+
+- Stacking a target whose calibration library holds flats from several
+  sessions no longer fails with "building master flat". Flat selection now
+  keeps one coherent session — frames captured within a day of the
+  nearest-matched flat at a compatible sensor temperature — instead of
+  mixing, say, a fresh cooled set with an uncooled set from months earlier.
+  When a master still cannot be built, the stack proceeds without it and
+  the calibration warning names the master that was skipped and the exact
+  reason; calibration errors now carry their full cause instead of a bare
+  "building master flat". See [calibration
+  libraries](https://github.com/theatrus/psf-guard/blob/main/docs/CALIBRATION_LIBRARY.md).
