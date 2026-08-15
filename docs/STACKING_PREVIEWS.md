@@ -220,8 +220,10 @@ PSF Guard never labels an uncalibrated preview as calibrated. See
 
 The panel's **Calibration** control chooses how the next build calibrates:
 
-- **Auto** (the default) applies the safe masters and holds back combinations
-  that damage the result, such as a flat with no bias or dark master.
+- **Auto** (the default) applies the safe masters. A flat with no bias or
+  dark master is applied only when the light's pedestal can be fitted from
+  the lights themselves; otherwise it is held back, because dividing an
+  unsubtracted light brightens the vignetted edges.
 - **Force on** applies every master that can be built, including the ones
   Auto refuses. The calibration warning still says what to expect.
 - **Off** stacks the raw frames without touching the library.
