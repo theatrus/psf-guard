@@ -14,7 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::UNIX_EPOCH;
 
 pub const CALIBRATION_SCHEMA_VERSION: i64 = 1;
-pub const MASTER_CACHE_VERSION: u32 = 1;
+// 2: flat masters suppress defective pixels spatially after integration.
+pub const MASTER_CACHE_VERSION: u32 = 2;
 const MIN_MASTER_FRAMES: usize = 2;
 const MAX_MASTER_FRAMES: usize = 64;
 const DARK_TEMPERATURE_TOLERANCE_C: f64 = 3.0;
@@ -1878,6 +1879,13 @@ fn build_master(
         exposure_seconds: frames.first().and_then(|frame| frame.exposure_s),
         bias,
         dark,
+        // A defective sensor pixel repeats in every flat, so across-frame
+        // clipping keeps it and it would divide every light forever. The
+        // flat's true response is smooth at pixel scale, so a spatial pass
+        // is safe there. Darks and dark-flats must KEEP their hot pixels —
+        // they are what subtracts them from the frames they calibrate.
+        defect_suppression: (kind == CalibrationKind::Flat)
+            .then(seiza_stacking::ImpulseFilterOptions::default),
         ..Default::default()
     };
     let paths = frames
@@ -1886,6 +1894,13 @@ fn build_master(
         .collect::<Vec<_>>();
     let frame = seiza_stacking::build_master_from_fits(&paths, seiza_kind, &options)
         .with_context(|| format!("building master {}", kind.as_str()))?;
+    if frame.defect_pixels_replaced > 0 {
+        tracing::info!(
+            "master {} suppressed {} defective pixel(s)",
+            kind.as_str(),
+            frame.defect_pixels_replaced
+        );
+    }
     if !path.exists() {
         let temporary = path.with_extension(format!("fits.tmp-{}", std::process::id()));
         seiza_stacking::write_master_fits_f32(&temporary, &frame)
@@ -3167,6 +3182,67 @@ mod tests {
             tx.commit().unwrap();
         }
         (conn, temp.path().join("cache"), light_paths)
+    }
+
+    #[test]
+    fn flat_masters_suppress_a_defective_pixel_the_flats_share() {
+        // A hot pixel repeats identically in every flat, survives the
+        // across-frame clipping, and would divide every light forever. The
+        // spatial pass in the master build must take it out.
+        const SIZE: usize = 64;
+        let temp = tempfile::tempdir().unwrap();
+        let hot = 31 * SIZE + 17;
+        let vignette = |x: usize| 0.7 + 0.6 * x as f64 / (SIZE - 1) as f64;
+        let mut calibration_meta = Vec::new();
+        for index in 0..2 {
+            let path = temp.path().join(format!("bias-{index}.fits"));
+            write_gradient_fits(&path, "BIAS", SIZE, SIZE, "Camera", 30, |x, y| {
+                100.0 + ((x * 31 + y * 17 + index) % 13) as f64 / 13.0
+            });
+            calibration_meta.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        for index in 0..2 {
+            let path = temp.path().join(format!("flat-{index}.fits"));
+            write_gradient_fits(&path, "FLAT", SIZE, SIZE, "Camera", 30, move |x, y| {
+                if y * SIZE + x == hot {
+                    30_000.0
+                } else {
+                    100.0 + 20_000.0 * vignette(x) + ((x * 7 + y * 3 + index) % 11) as f64
+                }
+            });
+            calibration_meta.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        let light_path = temp.path().join("light.fits");
+        write_gradient_fits(&light_path, "LIGHT", SIZE, SIZE, "Camera", 30, |x, _| {
+            400.0 + 100.0 * vignette(x)
+        });
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &calibration_meta, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        let cache = temp.path().join("cache");
+        let (_, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        let label = applied.flat_master.expect("a flat master");
+        let master =
+            crate::image_io::open_linear_frame(cache.join("calibration-masters").join(label))
+                .unwrap();
+        let value = master.image.data[hot];
+        let neighbor = master.image.data[hot + 2];
+        assert!(
+            (value - neighbor).abs() < 0.05,
+            "the defect must sit on the smooth response: {value} vs neighbor {neighbor}"
+        );
     }
 
     #[test]

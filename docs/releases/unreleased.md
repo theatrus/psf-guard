@@ -20,6 +20,15 @@
   back — and **Off** stacks the raw frames. The choice is remembered, and a
   preview built under a different mode is marked out of date. See [stack
   previews](https://github.com/theatrus/psf-guard/blob/main/docs/STACKING_PREVIEWS.md).
+- Hot pixels are suppressed where they actually do damage. Flat masters get
+  a spatial defect pass after integration — a defective pixel repeats in
+  every flat, survives statistical rejection, and used to divide a
+  fixed-pattern artifact into every light (a 26-megapixel test flat carried
+  nearly ten thousand of them). Stacks with no dark master run the same
+  impulse filter over each calibrated light. Dark masters keep their hot
+  pixels, which subtract the lights' own. Existing flat masters rebuild
+  once. See [calibration
+  libraries](https://github.com/theatrus/psf-guard/blob/main/docs/CALIBRATION_LIBRARY.md).
 - Multi-night stacks now calibrate each night with its own masters. A stack
   group whose lights match different calibration sets — per-night flats
   above all — used to stack uncalibrated with a warning; it now partitions
