@@ -88,6 +88,16 @@ evidence of clouds, trailing, or an obstructed aperture, not a normalization
 artifact. A frame with no star measurement at all is never capped; grading
 does not punish an image because an optional scan has not run.
 
+How hard event evidence hits the score is adjustable. The **Penalties**
+control in the Sequence view scales the score hit from satellite trails,
+pointing failures, and temporal anomalies between 0% (ignore that evidence),
+100% (the calibrated default), and 200% (double the hit). The preference is
+remembered and applies to every scoring surface — Sequence view, grid
+badges, and the detail panel — so one frame cannot wear two different
+scores. The zero-star cap does not scale: a frame measured to have no stars
+is ruined whatever the preference. API callers pass `penalty_satellite`,
+`penalty_pointing`, or `penalty_temporal` on the analysis endpoints.
+
 Capture sessions split at a Target Scheduler session change, a capture-profile
 change, or a 60-minute gap. CLI screening still reports **OK**, **WARN**, and
 **REJECT** verdicts for its file-screening workflow.

@@ -737,6 +737,12 @@ pub struct SequenceAnalysisQuery {
     pub weight_background: Option<f64>,
     pub weight_spatial: Option<f64>,
     pub weight_pointing: Option<f64>,
+    /// How hard event evidence hits the score, as a multiplier on the
+    /// built-in penalty: 0 ignores it, 1 (default) keeps the calibrated
+    /// behavior, up to 2 deepens it.
+    pub penalty_satellite: Option<f64>,
+    pub penalty_pointing: Option<f64>,
+    pub penalty_temporal: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -763,6 +769,16 @@ pub struct SpatialScanRequest {
     /// (missing keys only; default true).
     #[serde(default)]
     pub fill_metadata: Option<bool>,
+}
+
+/// Penalty-scale overrides for endpoints that score without the full
+/// sequence query (the per-image quality context). Same semantics as the
+/// `penalty_*` fields on [`SequenceAnalysisQuery`].
+#[derive(Debug, Deserialize, Default)]
+pub struct PenaltyScaleQuery {
+    pub penalty_satellite: Option<f64>,
+    pub penalty_pointing: Option<f64>,
+    pub penalty_temporal: Option<f64>,
 }
 
 /// Optional target/filter scope for the quality-scan status endpoint.

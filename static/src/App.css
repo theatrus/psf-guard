@@ -6440,3 +6440,64 @@
 .access-badge.read-write {
   color: var(--color-success);
 }
+
+.scoring-penalty-control {
+  position: relative;
+}
+
+.scoring-penalty-control summary {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  user-select: none;
+}
+
+.scoring-penalty-control[open] summary {
+  color: var(--color-text);
+}
+
+.scoring-penalty-panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 230px;
+  padding: 0.7rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.penalty-slider {
+  display: grid;
+  grid-template-columns: 1fr 90px 38px;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.penalty-slider input[type="range"] {
+  width: 90px;
+}
+
+.penalty-value {
+  text-align: right;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.penalty-reset {
+  align-self: flex-end;
+  font-size: 0.75rem;
+  padding: 0.2rem 0.5rem;
+}

@@ -3726,6 +3726,9 @@ pub async fn analyze_sequence(
     let weight_background = params.weight_background;
     let weight_spatial = params.weight_spatial;
     let weight_pointing = params.weight_pointing;
+    let penalty_satellite = params.penalty_satellite;
+    let penalty_pointing = params.penalty_pointing;
+    let penalty_temporal = params.penalty_temporal;
 
     // Fetch images from the requested target, project, or database. Wider
     // scopes still score each target/filter group independently and only read
@@ -3829,6 +3832,17 @@ pub async fn analyze_sequence(
                 pointing: weight_pointing.unwrap_or(config.quality_weights.pointing),
             };
         }
+        // Penalty scaling: how hard event evidence (satellite trails,
+        // pointing failures, temporal anomalies) hits the score.
+        if let Some(scale) = penalty_satellite {
+            config.penalty_scales.satellite = scale;
+        }
+        if let Some(scale) = penalty_pointing {
+            config.penalty_scales.pointing = scale;
+        }
+        if let Some(scale) = penalty_temporal {
+            config.penalty_scales.temporal = scale;
+        }
 
         let session_gap_minutes = config.session_gap_minutes;
         let analyzer = SequenceAnalyzer::new(config);
@@ -3917,6 +3931,7 @@ pub async fn analyze_sequence(
 pub async fn get_image_quality(
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,
+    Query(penalties): Query<crate::server::api::PenaltyScaleQuery>,
 ) -> Result<Json<ApiResponse<crate::server::api::ImageQualityContextResponse>>, AppError> {
     use crate::sequence_analysis::{
         extract_metrics_from_metadata, SequenceAnalyzer, SequenceAnalyzerConfig,
@@ -3988,7 +4003,16 @@ pub async fn get_image_quality(
     let astrometry_evidence = ctx.astrometry_evidence.clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        let config = SequenceAnalyzerConfig::default();
+        let mut config = SequenceAnalyzerConfig::default();
+        if let Some(scale) = penalties.penalty_satellite {
+            config.penalty_scales.satellite = scale;
+        }
+        if let Some(scale) = penalties.penalty_pointing {
+            config.penalty_scales.pointing = scale;
+        }
+        if let Some(scale) = penalties.penalty_temporal {
+            config.penalty_scales.temporal = scale;
+        }
         let session_gap_minutes = config.session_gap_minutes;
         let analyzer = SequenceAnalyzer::new(config);
 

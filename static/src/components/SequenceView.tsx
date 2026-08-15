@@ -14,6 +14,7 @@ import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../api/client';
 import { useSequenceAnalysis } from '../hooks/useSequenceAnalysis';
 import { useSpatialScan } from '../hooks/useSpatialScan';
+import ScoringPenaltyControl from './ScoringPenaltyControl';
 import { useGrading } from '../hooks/useGrading';
 import { useDbProjectTarget, useGridState } from '../hooks/useUrlState';
 import UndoRedoToolbar from './UndoRedoToolbar';
@@ -747,6 +748,7 @@ export default function SequenceView() {
             />
             <span className="threshold-value">{threshold.toFixed(2)}</span>
           </div>
+          <ScoringPenaltyControl />
           <div className="selection-preset-control">
             <label htmlFor="sequence-select-preset">Select:</label>
             <select
