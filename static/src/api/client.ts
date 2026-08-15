@@ -311,6 +311,8 @@ export const apiClient = {
         token?: string;
         sync_enabled?: boolean;
       };
+      /** New export directory; empty string clears it. */
+      export_dir?: string;
     }
   ): Promise<DatabaseSummary> => {
     const apiInstance = await getApi();
@@ -587,6 +589,41 @@ export const apiClient = {
       }>
     >(dbPath(dbId, '/export/local'), req);
     if (!data.data) throw new Error(data.error || 'Failed to export');
+    return data.data;
+  },
+
+  /**
+   * Start the background export into the server's configured export
+   * directory. Reflinks where the filesystem supports it, copies elsewhere.
+   * Only offered when the database reports an `export_directory`.
+   */
+  startServerExport: async (
+    dbId: string,
+    req: {
+      project_id?: number;
+      target_id?: number;
+      include_pending?: boolean;
+      filter_name?: string;
+      layout?: ExportLayout;
+      subdirectory?: string;
+      scope_label?: string;
+    }
+  ): Promise<import('./types').ExportStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<import('./types').ExportStatus>>(
+      dbPath(dbId, '/export/server'),
+      req
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to start the export');
+    return data.data;
+  },
+
+  getServerExportStatus: async (dbId: string): Promise<import('./types').ExportStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<import('./types').ExportStatus>>(
+      dbPath(dbId, '/export/server')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read export progress');
     return data.data;
   },
 

@@ -269,6 +269,10 @@ pub struct DatabaseSummary {
     pub database_path: String,
     pub image_directories: Vec<String>,
     pub remote_image_upload: RemoteImageUploadSummary,
+    /// Operator-configured server-side export destination. When present the
+    /// UI offers a server export that runs without database management.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub export_directory: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -562,6 +566,41 @@ pub struct LocalExportRequest {
     pub dry_run: bool,
 }
 
+/// Body of `POST /api/db/{db_id}/export/server` — run the export into the
+/// operator-configured export directory as a background job. There is no
+/// destination field: consent to write was given when the directory was
+/// configured, which is what lets this route skip the management grant.
+#[derive(Debug, Deserialize)]
+pub struct ServerExportRequest {
+    #[serde(default)]
+    pub project_id: Option<i32>,
+    #[serde(default)]
+    pub target_id: Option<i32>,
+    #[serde(default)]
+    pub include_pending: bool,
+    #[serde(default)]
+    pub filter_name: Option<String>,
+    #[serde(default)]
+    pub layout: crate::commands::export::ExportLayout,
+    /// Folder created below the configured directory, so repeated exports
+    /// of different scopes do not interleave. Sanitized to one path
+    /// component; empty or absent exports into the directory itself.
+    #[serde(default)]
+    pub subdirectory: Option<String>,
+    /// Display label for the progress line ("project Bubble").
+    #[serde(default)]
+    pub scope_label: Option<String>,
+}
+
+/// Response of both methods on `/api/db/{db_id}/export/server`. On POST,
+/// `started` says whether THIS request began the job; on GET it mirrors
+/// `progress.running`.
+#[derive(Debug, Serialize)]
+pub struct ExportStatusResponse {
+    pub started: bool,
+    pub progress: crate::server::export_job::ExportJobProgress,
+}
+
 /// Body of `PUT /api/db/{db_id}/projects/{project_id}`.
 #[derive(Debug, Deserialize, Default)]
 pub struct UpdateProjectRequest {
@@ -644,6 +683,9 @@ pub struct UpdateDatabaseRequest {
     pub image_dirs: Option<Vec<String>>,
     #[serde(default)]
     pub remote_image_upload: Option<RemoteImageUploadUpdate>,
+    /// New export directory. `Some("")` clears it; absent leaves it alone.
+    #[serde(default)]
+    pub export_dir: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

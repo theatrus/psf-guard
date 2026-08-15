@@ -60,6 +60,7 @@ impl Fixture {
                 image_dirs: vec![images_a.to_string_lossy().into_owned()],
                 reject_archive: None,
                 remote_image_upload: Some(config_a),
+                export_dir: None,
             },
             DbEntry {
                 id: "catalog-b".into(),
@@ -68,6 +69,7 @@ impl Fixture {
                 image_dirs: vec![images_b.to_string_lossy().into_owned()],
                 reject_archive: None,
                 remote_image_upload: Some(config_b),
+                export_dir: None,
             },
         ];
         let state = Arc::new(

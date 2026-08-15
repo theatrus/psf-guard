@@ -84,6 +84,7 @@ export default function TauriSettings({
   const [formRemoteUploadEnabled, setFormRemoteUploadEnabled] = useState(false);
   const [formRemoteSyncEnabled, setFormRemoteSyncEnabled] = useState(false);
   const [formRemoteUploadDir, setFormRemoteUploadDir] = useState('');
+  const [formExportDir, setFormExportDir] = useState('');
   const [formRemoteUploadToken, setFormRemoteUploadToken] = useState('');
   const [formRemoteUploadTokenConfigured, setFormRemoteUploadTokenConfigured] =
     useState(false);
@@ -130,6 +131,7 @@ export default function TauriSettings({
                 name: summary.name,
                 db_path: summary.database_path,
                 image_dirs: summary.image_directories,
+                export_dir: summary.export_directory,
                 remote_image_upload: {
                   enabled: summary.remote_image_upload?.enabled ?? false,
                   image_dir: summary.remote_image_upload?.image_directory,
@@ -151,6 +153,7 @@ export default function TauriSettings({
             name: s.name,
             db_path: s.database_path,
             image_dirs: s.image_directories,
+            export_dir: s.export_directory,
             remote_image_upload: {
               enabled: s.remote_image_upload?.enabled ?? false,
               image_dir: s.remote_image_upload?.image_directory,
@@ -223,6 +226,7 @@ export default function TauriSettings({
     setFormName(entry.name);
     setFormDbPath(entry.db_path);
     setFormImageDirs(entry.image_dirs);
+    setFormExportDir(entry.export_dir ?? '');
     setFormRemoteUploadEnabled(entry.remote_image_upload?.enabled ?? false);
     setFormRemoteSyncEnabled(entry.remote_image_upload?.sync_enabled ?? false);
     setFormRemoteUploadDir(
@@ -448,6 +452,7 @@ export default function TauriSettings({
           name: inferredName,
           db_path: formDbPath.trim(),
           image_dirs: formImageDirs,
+          export_dir: formExportDir.trim(),
           remote_image_upload: {
             enabled: formRemoteUploadEnabled,
             image_directory: formRemoteUploadDir || undefined,
@@ -1079,6 +1084,18 @@ export default function TauriSettings({
                       <strong>Accept remote image uploads</strong>
                     </span>
                   </label>
+                  <label htmlFor="server-export-directory">
+                    Server export directory:
+                  </label>
+                  <input
+                    id="server-export-directory"
+                    type="text"
+                    className="file-path-input"
+                    placeholder="Absolute server path; empty disables server export"
+                    title="Exports triggered from the Overview land here (reflinked where the filesystem supports it). Leave empty to offer the archive download instead."
+                    value={formExportDir}
+                    onChange={(event) => setFormExportDir(event.target.value)}
+                  />
                   {formRemoteUploadEnabled && (
                     <>
                       <label htmlFor="remote-upload-directory">Receive directory:</label>

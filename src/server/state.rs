@@ -382,6 +382,7 @@ impl AppState {
                 entry.db_path,
                 entry.image_dirs,
                 entry.remote_image_upload,
+                entry.export_dir,
                 cache_dir.clone(),
             )?);
             map.insert(entry.id, ctx);
@@ -526,6 +527,7 @@ impl AppState {
                 image_dirs,
                 reject_archive: None,
                 remote_image_upload: None,
+                export_dir: None,
             }],
             cache_dir,
             pregeneration_config,

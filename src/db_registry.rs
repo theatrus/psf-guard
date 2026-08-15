@@ -45,6 +45,13 @@ pub struct DbEntry {
     /// SHA-256 digest; plaintext exists only in the management request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_image_upload: Option<RemoteImageUploadConfig>,
+    /// Server-side destination for UI-triggered exports. Because the
+    /// operator names this directory here (or in Settings), the export
+    /// action itself needs no database-management grant — the UI only ever
+    /// asks to export into this pre-consented location. Absent means server
+    /// export is off and the UI offers the archive download instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub export_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -312,6 +319,7 @@ impl DbRegistry {
                 image_dirs: v1.image_directories,
                 reject_archive: None,
                 remote_image_upload: None,
+                export_dir: None,
             });
         }
         reg.save(path)?;
@@ -379,6 +387,7 @@ impl DbRegistry {
             image_dirs,
             reject_archive: None,
             remote_image_upload: None,
+            export_dir: None,
         });
         Ok(self.databases.last().unwrap())
     }

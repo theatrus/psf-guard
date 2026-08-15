@@ -1005,6 +1005,7 @@ directory = "./cache"
             image_dirs: vec![],
             reject_archive: None,
             remote_image_upload: None,
+            export_dir: None,
         }
     }
 

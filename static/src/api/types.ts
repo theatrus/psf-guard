@@ -1023,6 +1023,43 @@ export interface DatabaseSummary {
   database_path: string;
   image_directories: string[];
   remote_image_upload: RemoteImageUploadSummary;
+  /**
+   * Operator-configured server-side export destination. When present the
+   * UI offers a server export that runs without database management.
+   */
+  export_directory?: string;
+}
+
+/** What one export placed, and how. */
+export interface ExportSummary {
+  planned: number;
+  copied: number;
+  linked: number;
+  /** Copy-on-write clones: free like a hardlink, independent like a copy. */
+  reflinked?: number;
+  skipped_existing: number;
+  missing: number;
+  errors: number;
+  bytes: number;
+}
+
+/** Progress of the singleton per-DB server export job. */
+export interface ExportJobProgress {
+  running: boolean;
+  stage: string;
+  destination: string;
+  scope: string;
+  total_files: number;
+  placed_files: number;
+  outcome?: ExportSummary | null;
+  started_at?: number | null;
+  finished_at?: number | null;
+  error?: string | null;
+}
+
+export interface ExportStatus {
+  started: boolean;
+  progress: ExportJobProgress;
 }
 
 export interface RemoteImageUploadSummary {

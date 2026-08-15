@@ -533,6 +533,7 @@ mod tests {
                 image_dirs: vec![root.display().to_string()],
                 reject_archive: None,
                 remote_image_upload: None,
+                export_dir: None,
             }],
             active_db_id: None,
             astrometry: None,

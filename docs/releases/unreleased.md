@@ -48,6 +48,14 @@
   [calibration
   libraries](https://github.com/theatrus/psf-guard/blob/main/docs/CALIBRATION_LIBRARY.md).
 
+- A remote server can now export onto its own drive. Configure a **server
+  export directory** per database (Settings, or `export_dir` in the
+  registry); the Overview's Export action then runs as a background job with
+  progress, placing lights, matching calibration frames, and the WBPP runner
+  into a per-scope folder there — cloning files (reflink) where the
+  filesystem supports it, copying where it does not. No database-management
+  grant needed: consent was given when the directory was configured.
+
 ## Fixed
 
 - Remote scheduler previews can now run as background jobs, so large Target
