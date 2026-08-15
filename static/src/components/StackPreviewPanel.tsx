@@ -940,6 +940,8 @@ export default function StackPreviewPanel({
                               : calibration.state === 'incomplete'
                                 ? 'Calibration set incomplete'
                                 : 'Matching calibration'}
+                          {(calibration.sessions ?? 0) > 1 &&
+                            ` · ${calibration.sessions} sessions`}
                         </strong>
                         {calibration.state !== 'off' && (
                           <span>

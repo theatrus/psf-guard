@@ -20,6 +20,12 @@
   back — and **Off** stacks the raw frames. The choice is remembered, and a
   preview built under a different mode is marked out of date. See [stack
   previews](https://github.com/theatrus/psf-guard/blob/main/docs/STACKING_PREVIEWS.md).
+- Multi-night stacks now calibrate each night with its own masters. A stack
+  group whose lights match different calibration sets — per-night flats
+  above all — used to stack uncalibrated with a warning; it now partitions
+  into sessions, builds each session's masters, and swaps them in as it
+  integrates. The stack card shows the session count. See [calibration
+  libraries](https://github.com/theatrus/psf-guard/blob/main/docs/CALIBRATION_LIBRARY.md).
 - The stack **Calibration** control can now be overridden per channel: each
   target-and-filter card has its own select, so one channel with a bad flat
   can stack raw while the rest calibrate. Overrides are remembered and the

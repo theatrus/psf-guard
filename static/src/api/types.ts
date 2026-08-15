@@ -475,6 +475,12 @@ export interface AppliedCalibration {
    * calibrated with measured masters.
    */
   estimated_pedestal_adu?: number | null;
+  /**
+   * How many calibration sessions the group's lights partitioned into. A
+   * multi-night stack calibrates each session with its own masters. Absent
+   * or zero on artifacts recorded before sessions existed.
+   */
+  sessions?: number;
 }
 
 export interface StackPreviewJob {
