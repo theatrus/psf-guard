@@ -78,6 +78,15 @@ session (within a day of each other — dust moves between sessions). The
 nearest cluster with enough frames builds the master, so a stray single flat
 near the lights cannot orphan a complete session from a week earlier.
 
+A stack group whose lights need different master sets — a multi-night
+target with per-night flats, or a library large enough that the selection
+horizon moves — partitions into calibration sessions. Each light calibrates
+with its own session's masters; the stack swaps masters between sessions as
+it integrates. The stack card reports the session count, the resume
+checkpoint and source-frame search compare the composed per-session
+identity, and the search reuses each session's recorded fitted pedestal
+rather than fitting its own from the searched subset.
+
 A flat needs the light's pedestal removed before division: dividing a flat
 into a light that still carries its pedestal amplifies that pedestal at the
 vignetted edges, inverting the vignette into bright edges. With a bias or

@@ -1864,14 +1864,17 @@ fn run_group(
         .map(|frame| frame.path.clone())
         .collect::<Vec<_>>();
     // Building a night of masters is minutes of work, so the stop flag reaches
-    // between them too.
-    let masters = crate::calibration::resolve_or_build_masters_for_group(
+    // between them too. The plan partitions a multi-night group into
+    // sessions, each with its own masters; a single-night group gets one
+    // session and stacks exactly as before.
+    let plan = crate::calibration::resolve_or_build_master_plan(
         &calibration_conn,
         cache_root,
         &light_paths,
         Some(&directory_tree),
         Some(cancel.as_ref()),
         group.calibration,
+        &[],
     );
     if cancel.load(Ordering::Relaxed) {
         return Ok(GroupOutcome::Cancelled);
@@ -1879,10 +1882,11 @@ fn run_group(
     // `{:#}` keeps the whole anyhow chain: "building master flat: <why>".
     // `to_string()` printed only the outermost context, which reported a
     // failed master build with no cause at all.
-    let (calibration_masters, applied_calibration) = masters.map_err(|error| {
+    let plan = plan.map_err(|error| {
         tracing::warn!("Stack group calibration failed: {error:#}");
         format!("{error:#}")
     })?;
+    let applied_calibration = plan.applied.clone();
     // The resume checkpoint key carries the applied-master signature too:
     // the selection fingerprint is computed before any build, so after a
     // transient build failure a later run with the same selection could
@@ -2043,7 +2047,10 @@ fn run_group(
                     normalization: NormalizationMode::Global,
                     ..StackOptions::default()
                 };
-                let stacker = LiveStacker::new(reference_frame, calibration_masters, options)
+                // The reference calibrates with its own session's masters;
+                // later sessions swap theirs in per batch.
+                let reference_masters = plan.sessions[plan.assignments[0]].masters.clone();
+                let stacker = LiveStacker::new(reference_frame, reference_masters, options)
                     .map_err(|error| error.to_string())?;
                 let reference_mapping = stacker.reference_mapping();
                 let reference_decision = StackFrameDecision {
@@ -2121,12 +2128,14 @@ fn run_group(
             }
         };
 
-        let pending: Vec<&PreparedFrame> = group
+        // Pending frames keep their index into `group.frames`, which is what
+        // the calibration plan's session assignments are aligned with.
+        let pending: Vec<(usize, &PreparedFrame)> = group
             .frames
             .iter()
-            .filter(|frame| !already_integrated.contains(&frame.image_id))
+            .enumerate()
+            .filter(|(_, frame)| !already_integrated.contains(&frame.image_id))
             .collect();
-        let paths: Vec<PathBuf> = pending.iter().map(|frame| frame.path.clone()).collect();
         // Reads, calibration, registration and normalization overlap across
         // frames while integration stays in this order, so the accumulator
         // sees exactly the sequence a frame-at-a-time loop would. A frame
@@ -2137,76 +2146,101 @@ fn run_group(
             ..seiza_stacking::PipelineOptions::default()
         };
         let mut cancelled = false;
-        let mut consumed = 0usize;
-        // Every frame's outcome is recorded in the callback above, so the
-        // summary adds nothing here.
-        let _report = stacker
-            .push_fits_pipelined(&paths, &pipeline, |_, outcome| {
-                let frame = pending[consumed];
-                consumed += 1;
-                let exposure = frame.exposure_seconds;
-                let decision = match outcome {
-                    Ok(FrameDisposition::Accepted(diagnostics)) => {
-                        orientation_vote
-                            .add(diagnostics.mapping.transform().rotation_radians, exposure);
-                        StackFrameDecision {
-                            image_id: frame.image_id,
-                            disposition: "accepted".into(),
-                            reason: None,
-                            quality_score: frame.quality_score,
-                            matched_stars: Some(diagnostics.matched_stars),
-                            registration_rms_pixels: Some(diagnostics.registration_rms_pixels),
-                            registration_drift_pixels: Some(diagnostics.registration_drift_pixels),
-                            registered_mapping: Some(*diagnostics.mapping),
-                            normalization_mean_gain: Some(diagnostics.normalization_mean_gain),
-                            normalization_mean_offset: Some(diagnostics.normalization_mean_offset),
-                            source_fingerprint: Some(frame.source_fingerprint.clone()),
-                            overlap_fraction: Some(diagnostics.overlap_fraction),
-                            integrated_fraction: Some(diagnostics.integrated_fraction),
+        // Consecutive frames of one calibration session push as one
+        // pipelined batch, with the session's masters swapped in first. The
+        // frames after the reference are chronological, so a night is one
+        // batch and a single-session group is exactly one call. On a
+        // resumed stack this also replaces whatever masters the checkpoint
+        // stored with the ones this batch needs.
+        let mut batch_start = 0usize;
+        while batch_start < pending.len() && !cancelled {
+            let session = plan.assignments[pending[batch_start].0];
+            let batch_end = pending[batch_start..]
+                .iter()
+                .position(|(index, _)| plan.assignments[*index] != session)
+                .map(|offset| batch_start + offset)
+                .unwrap_or(pending.len());
+            let batch = &pending[batch_start..batch_end];
+            let paths: Vec<PathBuf> = batch.iter().map(|(_, frame)| frame.path.clone()).collect();
+            stacker
+                .set_calibration(plan.sessions[session].masters.clone())
+                .map_err(|error| error.to_string())?;
+            let mut consumed = 0usize;
+            // Every frame's outcome is recorded in the callback above, so the
+            // summary adds nothing here.
+            let _report = stacker
+                .push_fits_pipelined(&paths, &pipeline, |_, outcome| {
+                    let (_, frame) = batch[consumed];
+                    consumed += 1;
+                    let exposure = frame.exposure_seconds;
+                    let decision = match outcome {
+                        Ok(FrameDisposition::Accepted(diagnostics)) => {
+                            orientation_vote
+                                .add(diagnostics.mapping.transform().rotation_radians, exposure);
+                            StackFrameDecision {
+                                image_id: frame.image_id,
+                                disposition: "accepted".into(),
+                                reason: None,
+                                quality_score: frame.quality_score,
+                                matched_stars: Some(diagnostics.matched_stars),
+                                registration_rms_pixels: Some(diagnostics.registration_rms_pixels),
+                                registration_drift_pixels: Some(
+                                    diagnostics.registration_drift_pixels,
+                                ),
+                                registered_mapping: Some(*diagnostics.mapping),
+                                normalization_mean_gain: Some(diagnostics.normalization_mean_gain),
+                                normalization_mean_offset: Some(
+                                    diagnostics.normalization_mean_offset,
+                                ),
+                                source_fingerprint: Some(frame.source_fingerprint.clone()),
+                                overlap_fraction: Some(diagnostics.overlap_fraction),
+                                integrated_fraction: Some(diagnostics.integrated_fraction),
+                            }
                         }
-                    }
-                    // A frame the stack turned away and one that could not be
-                    // read are both "not integrated" to a caller reading the
-                    // group's decisions; only the reason differs.
-                    Ok(FrameDisposition::Rejected(reason)) => {
-                        rejected_decision(frame, reason.to_string())
-                    }
-                    Err(error) => rejected_decision(frame, error.to_string()),
-                };
-                ledger.push(resume::ResumeFrame {
-                    decision: decision.clone(),
-                    exposure_seconds: exposure,
-                    rotation_radians: if decision.disposition == "accepted" {
-                        decision
-                            .registered_mapping
-                            .as_ref()
-                            .map(|mapping| mapping.transform().rotation_radians)
-                    } else {
-                        None
-                    },
-                });
-                state.stack_previews.update(job_id, |job| {
-                    let status = &mut job.groups[group.index];
-                    status.processed_frames += 1;
-                    if matches!(decision.disposition.as_str(), "accepted") {
-                        status.accepted_frames += 1;
-                        status.total_exposure_seconds += exposure;
-                    } else {
-                        status.rejected_frames += 1;
-                    }
-                    status.frames.push(decision);
-                });
+                        // A frame the stack turned away and one that could not be
+                        // read are both "not integrated" to a caller reading the
+                        // group's decisions; only the reason differs.
+                        Ok(FrameDisposition::Rejected(reason)) => {
+                            rejected_decision(frame, reason.to_string())
+                        }
+                        Err(error) => rejected_decision(frame, error.to_string()),
+                    };
+                    ledger.push(resume::ResumeFrame {
+                        decision: decision.clone(),
+                        exposure_seconds: exposure,
+                        rotation_radians: if decision.disposition == "accepted" {
+                            decision
+                                .registered_mapping
+                                .as_ref()
+                                .map(|mapping| mapping.transform().rotation_radians)
+                        } else {
+                            None
+                        },
+                    });
+                    state.stack_previews.update(job_id, |job| {
+                        let status = &mut job.groups[group.index];
+                        status.processed_frames += 1;
+                        if matches!(decision.disposition.as_str(), "accepted") {
+                            status.accepted_frames += 1;
+                            status.total_exposure_seconds += exposure;
+                        } else {
+                            status.rejected_frames += 1;
+                        }
+                        status.frames.push(decision);
+                    });
 
-                // Integrating one frame is the unit of work, so this is where
-                // a stop takes effect. Frames already prepared are discarded.
-                if cancel.load(Ordering::Relaxed) {
-                    cancelled = true;
-                    seiza_stacking::Continue::No
-                } else {
-                    seiza_stacking::Continue::Yes
-                }
-            })
-            .map_err(|error| error.to_string())?;
+                    // Integrating one frame is the unit of work, so this is where
+                    // a stop takes effect. Frames already prepared are discarded.
+                    if cancel.load(Ordering::Relaxed) {
+                        cancelled = true;
+                        seiza_stacking::Continue::No
+                    } else {
+                        seiza_stacking::Continue::Yes
+                    }
+                })
+                .map_err(|error| error.to_string())?;
+            batch_start = batch_end;
+        }
 
         if cancelled {
             // The frames that did land are checkpointed, so building again

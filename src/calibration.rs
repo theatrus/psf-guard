@@ -244,6 +244,30 @@ pub struct AppliedCalibration {
     /// when calibration used measured masters (or none at all).
     #[serde(default)]
     pub estimated_pedestal_adu: Option<f32>,
+    /// How many calibration sessions the group's lights partitioned into.
+    /// Multi-night stacks calibrate each session with its own masters. Zero
+    /// on records written before sessions existed (single-session builds).
+    #[serde(default)]
+    pub sessions: usize,
+    /// Per-session identity, in a stable order. The source-frame search
+    /// pins each session's fitted pedestal from here instead of re-fitting
+    /// it from a different sample of lights.
+    #[serde(default)]
+    pub session_details: Vec<CalibrationSessionDetail>,
+}
+
+/// One calibration session of a stack group, as recorded on the artifact.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct CalibrationSessionDetail {
+    /// The session's selection fingerprint.
+    pub fingerprint: String,
+    /// The masters the session actually applied.
+    pub masters_signature: String,
+    /// The fitted pedestal the session's flat divided under, when one was.
+    #[serde(default)]
+    pub estimated_pedestal_adu: Option<f32>,
+    /// How many of the group's lights calibrate in this session.
+    pub lights: usize,
 }
 
 impl Default for AppliedCalibration {
@@ -263,6 +287,8 @@ impl Default for AppliedCalibration {
             fingerprint: "none".into(),
             masters_signature: "bias=none;dark=none;dark_flat=none;flat=none".into(),
             estimated_pedestal_adu: None,
+            sessions: 0,
+            session_details: Vec::new(),
         }
     }
 }
@@ -1165,6 +1191,31 @@ pub fn resolve_or_build_masters(
     cancel: Option<&AtomicBool>,
     mode: CalibrationMode,
 ) -> Result<(seiza_stacking::CalibrationMasters, AppliedCalibration)> {
+    resolve_or_build_masters_pinned(
+        conn,
+        cache_root,
+        light_paths,
+        directory_tree,
+        cancel,
+        mode,
+        None,
+    )
+}
+
+/// [`resolve_or_build_masters`] with a previously fitted pedestal carried
+/// in. The source-frame search reproduces a stack's calibration from a
+/// possibly smaller set of lights (rejected frames are not searched), so it
+/// must reuse the pedestal the build recorded rather than fit its own from
+/// a different sample.
+fn resolve_or_build_masters_pinned(
+    conn: &Connection,
+    cache_root: &Path,
+    light_paths: &[PathBuf],
+    directory_tree: Option<&crate::directory_tree::DirectoryTree>,
+    cancel: Option<&AtomicBool>,
+    mode: CalibrationMode,
+    pinned_pedestal: Option<f32>,
+) -> Result<(seiza_stacking::CalibrationMasters, AppliedCalibration)> {
     if mode == CalibrationMode::Off {
         return Ok(calibration_off());
     }
@@ -1354,9 +1405,13 @@ pub fn resolve_or_build_masters(
         } else {
             // The pedestal the division needs removed can be fitted from
             // the lights themselves: background = sky * flat response +
-            // pedestal, so the intercept of that line is the pedestal.
-            estimated_pedestal = flat.as_ref().and_then(|master| {
-                estimate_flat_pedestal(&master.path, light_paths, header_pedestal_hint(&light))
+            // pedestal, so the intercept of that line is the pedestal. A
+            // pinned value from the stack being reproduced wins over a
+            // fresh fit.
+            estimated_pedestal = pinned_pedestal.or_else(|| {
+                flat.as_ref().and_then(|master| {
+                    estimate_flat_pedestal(&master.path, light_paths, header_pedestal_hint(&light))
+                })
             });
             if estimated_pedestal.is_some() {
                 flat
@@ -1470,6 +1525,13 @@ pub fn resolve_or_build_masters(
         });
     }
     applied.masters_signature = masters_signature(&applied);
+    applied.sessions = 1;
+    applied.session_details = vec![CalibrationSessionDetail {
+        fingerprint: applied.fingerprint.clone(),
+        masters_signature: applied.masters_signature.clone(),
+        estimated_pedestal_adu: applied.estimated_pedestal_adu,
+        lights: light_paths.len(),
+    }];
     Ok((masters, applied))
 }
 
@@ -1495,6 +1557,221 @@ fn masters_signature(applied: &AppliedCalibration) -> String {
     signature
 }
 
+/// One calibration session of a stack group: the masters its lights
+/// calibrate with and how they resolved.
+pub struct CalibrationSession {
+    pub masters: seiza_stacking::CalibrationMasters,
+    pub applied: AppliedCalibration,
+}
+
+/// How a stack group's lights calibrate: each light is assigned to a
+/// session, and each session carries its own masters. A single-night group
+/// has one session and behaves exactly like the old single-resolution path.
+pub struct CalibrationPlan {
+    /// Session index for each input light, in caller order.
+    pub assignments: Vec<usize>,
+    pub sessions: Vec<CalibrationSession>,
+    /// The group-level summary carried on the stack card, folded into the
+    /// resume checkpoint key, and compared by the source-frame search. For
+    /// one session it is that session's summary verbatim; for several it
+    /// composes their identities order-independently.
+    pub applied: AppliedCalibration,
+}
+
+impl CalibrationPlan {
+    fn single(
+        masters: seiza_stacking::CalibrationMasters,
+        applied: AppliedCalibration,
+        lights: usize,
+    ) -> Self {
+        Self {
+            assignments: vec![0; lights],
+            sessions: vec![CalibrationSession {
+                masters,
+                applied: applied.clone(),
+            }],
+            applied,
+        }
+    }
+}
+
+/// The master set a light's selection would build, as a comparable key.
+/// Two lights with equal keys calibrate identically — same coherent frame
+/// subsets per kind, therefore the same content-addressed masters. Keys
+/// differ across capture sessions (per-night flats), across a changed
+/// library, and across the selection horizon of very large libraries.
+fn session_key(selected: &CalibrationSelection) -> String {
+    let mut parts = Vec::new();
+    for (kind, frames) in [
+        (CalibrationKind::Bias, &selected.bias),
+        (CalibrationKind::Dark, &selected.dark),
+        (CalibrationKind::DarkFlat, &selected.dark_flat),
+        (CalibrationKind::Flat, &selected.flat),
+    ] {
+        let subset = coherent_master_subset(kind, frames);
+        let mut values = subset
+            .iter()
+            .map(|frame| format!("{}:{}", frame.frame_uuid, frame.source_fingerprint))
+            .collect::<Vec<_>>();
+        values.sort();
+        parts.push(format!("{}={}", kind.as_str(), values.join(",")));
+    }
+    hex_digest(&parts.join("\u{1e}"))
+}
+
+/// Resolve every session a group of lights needs, building masters once per
+/// session. `pinned` carries per-session details recorded on an existing
+/// stack, so a reproduction (the source-frame search) reuses each session's
+/// fitted pedestal instead of fitting its own.
+pub fn resolve_or_build_master_plan(
+    conn: &Connection,
+    cache_root: &Path,
+    light_paths: &[PathBuf],
+    directory_tree: Option<&crate::directory_tree::DirectoryTree>,
+    cancel: Option<&AtomicBool>,
+    mode: CalibrationMode,
+    pinned: &[CalibrationSessionDetail],
+) -> Result<CalibrationPlan> {
+    if mode == CalibrationMode::Off {
+        let (masters, applied) = calibration_off();
+        return Ok(CalibrationPlan::single(masters, applied, light_paths.len()));
+    }
+    if light_paths.is_empty() {
+        return Ok(CalibrationPlan::single(
+            seiza_stacking::CalibrationMasters::default(),
+            AppliedCalibration::default(),
+            0,
+        ));
+    }
+
+    // Partition by the masters each light would build. The key derivation
+    // mirrors the build (selection, remap, coherent subset), so every light
+    // in a partition resolves to the identical master set whichever of them
+    // acts as the reference.
+    let mut assignments = Vec::with_capacity(light_paths.len());
+    let mut session_lights: Vec<Vec<PathBuf>> = Vec::new();
+    let mut keys: Vec<String> = Vec::new();
+    for path in light_paths {
+        let light = crate::commands::import::headers::read_frame_meta(path);
+        let mut selected = select_for_light(conn, &light)?;
+        remap_missing_sources(&mut selected, directory_tree);
+        let key = session_key(&selected);
+        let index = match keys.iter().position(|existing| existing == &key) {
+            Some(index) => index,
+            None => {
+                keys.push(key);
+                session_lights.push(Vec::new());
+                keys.len() - 1
+            }
+        };
+        assignments.push(index);
+        session_lights[index].push(path.clone());
+    }
+
+    let mut sessions = Vec::with_capacity(session_lights.len());
+    for lights in &session_lights {
+        stop_requested(cancel)?;
+        // A session's pin is looked up by its selection fingerprint, which
+        // the resolution below recomputes identically from the same lights.
+        let fingerprint = selection_fingerprint(conn, &lights[0], directory_tree)?;
+        let pinned_pedestal = pinned
+            .iter()
+            .find(|detail| detail.fingerprint == fingerprint)
+            .and_then(|detail| detail.estimated_pedestal_adu);
+        let (masters, applied) = resolve_or_build_masters_pinned(
+            conn,
+            cache_root,
+            lights,
+            directory_tree,
+            cancel,
+            mode,
+            pinned_pedestal,
+        )?;
+        sessions.push(CalibrationSession { masters, applied });
+    }
+
+    let applied = if sessions.len() == 1 {
+        sessions[0].applied.clone()
+    } else {
+        compose_group_summary(&sessions, mode)
+    };
+    Ok(CalibrationPlan {
+        assignments,
+        sessions,
+        applied,
+    })
+}
+
+/// The group-level summary for a multi-session plan. Identities compose
+/// order-independently so a reordering of the group's lights cannot force a
+/// restack.
+fn compose_group_summary(
+    sessions: &[CalibrationSession],
+    mode: CalibrationMode,
+) -> AppliedCalibration {
+    let mut details = sessions
+        .iter()
+        .map(|session| CalibrationSessionDetail {
+            fingerprint: session.applied.fingerprint.clone(),
+            masters_signature: session.applied.masters_signature.clone(),
+            estimated_pedestal_adu: session.applied.estimated_pedestal_adu,
+            lights: session
+                .applied
+                .session_details
+                .first()
+                .map(|detail| detail.lights)
+                .unwrap_or(0),
+        })
+        .collect::<Vec<_>>();
+    details.sort_by(|left, right| left.fingerprint.cmp(&right.fingerprint));
+
+    let fingerprint = hex_digest(
+        &details
+            .iter()
+            .map(|detail| detail.fingerprint.as_str())
+            .collect::<Vec<_>>()
+            .join("\u{1e}"),
+    );
+    let masters_signature = details
+        .iter()
+        .map(|detail| detail.masters_signature.as_str())
+        .collect::<Vec<_>>()
+        .join("||");
+
+    let mut warning: Option<String> = None;
+    for (index, session) in sessions.iter().enumerate() {
+        if let Some(session_warning) = &session.applied.warning {
+            let line = format!("Session {}: {session_warning}", index + 1);
+            warning = Some(match warning.take() {
+                Some(previous) => format!("{previous}. {line}"),
+                None => line,
+            });
+        }
+    }
+
+    let any_applied = sessions
+        .iter()
+        .any(|session| session.applied.state == "applied");
+    AppliedCalibration {
+        mode,
+        state: if any_applied { "applied" } else { "incomplete" }.into(),
+        bias_frames: sessions.iter().map(|s| s.applied.bias_frames).sum(),
+        dark_frames: sessions.iter().map(|s| s.applied.dark_frames).sum(),
+        dark_flat_frames: sessions.iter().map(|s| s.applied.dark_flat_frames).sum(),
+        flat_frames: sessions.iter().map(|s| s.applied.flat_frames).sum(),
+        bias_master: None,
+        dark_master: None,
+        dark_flat_master: None,
+        flat_master: None,
+        warning,
+        fingerprint,
+        masters_signature,
+        estimated_pedestal_adu: None,
+        sessions: sessions.len(),
+        session_details: details,
+    }
+}
+
 pub fn resolve_or_build_masters_for_group(
     conn: &Connection,
     cache_root: &Path,
@@ -1503,39 +1780,23 @@ pub fn resolve_or_build_masters_for_group(
     cancel: Option<&AtomicBool>,
     mode: CalibrationMode,
 ) -> Result<(seiza_stacking::CalibrationMasters, AppliedCalibration)> {
-    if mode == CalibrationMode::Off {
-        return Ok(calibration_off());
-    }
-    if light_paths.is_empty() {
-        return Ok((
-            seiza_stacking::CalibrationMasters::default(),
-            AppliedCalibration::default(),
-        ));
-    }
-    let fingerprints = light_paths
-        .iter()
-        .map(|path| selection_fingerprint(conn, path, directory_tree))
-        .collect::<Result<Vec<_>>>()?;
-    if fingerprints
-        .iter()
-        .skip(1)
-        .any(|fingerprint| fingerprint != &fingerprints[0])
-    {
-        return Ok((
-            seiza_stacking::CalibrationMasters::default(),
-            AppliedCalibration {
-                mode,
-                state: "incomplete".into(),
-                warning: Some(
-                    "Stack inputs need different calibration sets; this preview was left uncalibrated"
-                        .into(),
-                ),
-                fingerprint: hex_digest(&fingerprints.join("\u{1e}")),
-                ..Default::default()
-            },
-        ));
-    }
-    resolve_or_build_masters(conn, cache_root, light_paths, directory_tree, cancel, mode)
+    let mut plan = resolve_or_build_master_plan(
+        conn,
+        cache_root,
+        light_paths,
+        directory_tree,
+        cancel,
+        mode,
+        &[],
+    )?;
+    let masters = if plan.sessions.len() == 1 {
+        plan.sessions.remove(0).masters
+    } else {
+        // Callers of this single-masters convenience cannot calibrate per
+        // session; the plan API is the one that can.
+        seiza_stacking::CalibrationMasters::default()
+    };
+    Ok((masters, plan.applied))
 }
 
 struct BuiltMaster {
@@ -3338,7 +3599,11 @@ mod tests {
     }
 
     #[test]
-    fn group_with_different_calibration_sets_stays_uncalibrated() {
+    fn group_with_different_calibration_sets_partitions_into_sessions() {
+        // Two lights whose selections differ (different gains here; per-night
+        // flats in the field) used to force the whole group to stack
+        // uncalibrated. They now partition: each light calibrates in its own
+        // session with its own masters, and the group summary composes both.
         let temp = tempfile::tempdir().unwrap();
         let mut calibration_meta = Vec::new();
         for gain in [100, 200] {
@@ -3359,21 +3624,93 @@ mod tests {
             import_calibration_frames(&tx, &calibration_meta, Some("profile")).unwrap();
             tx.commit().unwrap();
         }
-        let (masters, applied) = resolve_or_build_masters_for_group(
+        let plan = resolve_or_build_master_plan(
             &conn,
             &temp.path().join("cache"),
-            &[first, second],
+            &[first.clone(), second.clone()],
             None,
             None,
             CalibrationMode::Auto,
+            &[],
         )
         .unwrap();
-        assert!(masters.is_empty());
-        assert_eq!(applied.state, "incomplete");
-        assert!(applied
-            .warning
-            .as_deref()
-            .is_some_and(|warning| warning.contains("different calibration sets")));
+        assert_eq!(plan.sessions.len(), 2);
+        assert_eq!(plan.assignments, vec![0, 1]);
+        for session in &plan.sessions {
+            assert_eq!(session.applied.state, "applied");
+            assert!(session.applied.bias_master.is_some());
+            assert!(!session.masters.is_empty());
+        }
+        assert_ne!(
+            plan.sessions[0].applied.fingerprint,
+            plan.sessions[1].applied.fingerprint
+        );
+        assert_eq!(plan.applied.sessions, 2);
+        assert_eq!(plan.applied.state, "applied");
+        assert_eq!(plan.applied.session_details.len(), 2);
+        assert!(plan.applied.masters_signature.contains("||"));
+
+        // The composite identity must not depend on the caller's light
+        // order, or a reorder would force a restack.
+        let reversed = resolve_or_build_master_plan(
+            &conn,
+            &temp.path().join("cache"),
+            &[second, first],
+            None,
+            None,
+            CalibrationMode::Auto,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(reversed.applied.fingerprint, plan.applied.fingerprint);
+        assert_eq!(
+            reversed.applied.masters_signature,
+            plan.applied.masters_signature
+        );
+        assert_eq!(reversed.assignments, vec![0, 1]);
+    }
+
+    #[test]
+    fn a_pinned_session_pedestal_is_reused_instead_of_refitted() {
+        // The source-frame search reproduces a stack's calibration from the
+        // accepted frames only. With a flats-only library the pedestal was
+        // fitted from the build's lights; the search must reuse the recorded
+        // value, not fit its own from a different sample.
+        let temp = tempfile::tempdir().unwrap();
+        let (conn, cache, lights) =
+            vignetted_flat_only_library(&temp, "ZWO ASI2600MM Pro", 30, 300.0);
+        let plan = resolve_or_build_master_plan(
+            &conn,
+            &cache,
+            &lights,
+            None,
+            None,
+            CalibrationMode::Auto,
+            &[],
+        )
+        .unwrap();
+        let fitted = plan
+            .applied
+            .estimated_pedestal_adu
+            .expect("a fitted pedestal");
+        assert_eq!(plan.applied.sessions, 1);
+
+        // Reproduce from a subset with an artificial pin: the pinned value
+        // must land verbatim, so the signature matches the stack's.
+        let mut pinned = plan.applied.session_details.clone();
+        pinned[0].estimated_pedestal_adu = Some(123.0);
+        let reproduced = resolve_or_build_master_plan(
+            &conn,
+            &cache,
+            std::slice::from_ref(&lights[0]),
+            None,
+            None,
+            CalibrationMode::Auto,
+            &pinned,
+        )
+        .unwrap();
+        assert_eq!(reproduced.applied.estimated_pedestal_adu, Some(123.0));
+        assert!((fitted - 300.0).abs() < 15.0);
     }
 
     #[test]

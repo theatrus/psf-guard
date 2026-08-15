@@ -135,6 +135,11 @@ struct SearchGroup {
     /// The mode the stack calibrated under, so the search resolves the same
     /// way. Stacks recorded before the field existed were built in `Auto`.
     calibration_mode: crate::calibration::CalibrationMode,
+    /// Per-session identity from the stack, when it recorded one. Lets the
+    /// search validate session by session — a night whose every frame was
+    /// rejected is absent here without invalidating the rest — and pins
+    /// each session's fitted pedestal.
+    expected_sessions: Vec<crate::calibration::CalibrationSessionDetail>,
     sources: Vec<SearchSource>,
 }
 
@@ -584,6 +589,7 @@ fn prepare_search(
             expected_calibration_fingerprint: group.calibration.fingerprint,
             expected_masters_signature: group.calibration.masters_signature,
             calibration_mode: group.calibration.mode,
+            expected_sessions: group.calibration.session_details,
             sources,
         });
     }
@@ -717,42 +723,70 @@ fn run_search_inner(
             .iter()
             .map(|source| source.path.clone())
             .collect::<Vec<_>>();
-        let (masters, applied) = crate::calibration::resolve_or_build_masters_for_group(
+        let plan = crate::calibration::resolve_or_build_master_plan(
             &calibration_conn,
             &prepared.cache_root,
             &paths,
             Some(&directory_tree),
             None,
             group.calibration_mode,
+            &group.expected_sessions,
         )
         // `{:#}` keeps the anyhow cause chain; `to_string()` would report
         // only "building master <kind>" with no reason.
         .map_err(|error| format!("{error:#}"))?;
-        if applied.fingerprint != group.expected_calibration_fingerprint {
-            return Err(format!(
-                "The calibration selected for {} changed; rebuild the stack before searching",
-                group.label
-            ));
-        }
-        if !group.expected_masters_signature.is_empty()
-            && applied.masters_signature != group.expected_masters_signature
-        {
-            return Err(format!(
-                "The calibration masters for {} differ from the stack's (a master build                  failed or recovered since); rebuild the stack before searching",
-                group.label
-            ));
+        if group.expected_sessions.is_empty() {
+            // A stack recorded before per-session details: compare the
+            // group-level identity exactly as it was recorded.
+            if plan.applied.fingerprint != group.expected_calibration_fingerprint {
+                return Err(format!(
+                    "The calibration selected for {} changed; rebuild the stack before searching",
+                    group.label
+                ));
+            }
+            if !group.expected_masters_signature.is_empty()
+                && plan.applied.masters_signature != group.expected_masters_signature
+            {
+                return Err(format!(
+                    "The calibration masters for {} differ from the stack's (a master build failed or recovered since); rebuild the stack before searching",
+                    group.label
+                ));
+            }
+        } else {
+            // Session-by-session: the searched sources may omit a whole
+            // session (every frame rejected), but every session they DO
+            // calibrate under must match what the stack recorded.
+            for session in &plan.sessions {
+                let expected = group
+                    .expected_sessions
+                    .iter()
+                    .find(|detail| detail.fingerprint == session.applied.fingerprint);
+                let Some(expected) = expected else {
+                    return Err(format!(
+                        "The calibration selected for {} changed; rebuild the stack before searching",
+                        group.label
+                    ));
+                };
+                if session.applied.masters_signature != expected.masters_signature {
+                    return Err(format!(
+                        "The calibration masters for {} differ from the stack's (a master build failed or recovered since); rebuild the stack before searching",
+                        group.label
+                    ));
+                }
+            }
         }
         let max_samples_per_frame =
             (MAX_TOTAL_ANALYSIS_SAMPLES / group.sources.len()).clamp(1, MAX_ANALYSIS_SAMPLES);
         let mut crops = Vec::with_capacity(group.sources.len());
-        for source in &group.sources {
+        for (source_index, source) in group.sources.iter().enumerate() {
             if source_fingerprint(&source.path) != source.fingerprint {
                 return Err(format!(
                     "Image {} changed while the source-frame search was waiting; rebuild the stack before searching",
                     source.image_id
                 ));
             }
-            let crop = extract_source_crop(source, &masters, prepared)?;
+            let masters = &plan.sessions[plan.assignments[source_index]].masters;
+            let crop = extract_source_crop(source, masters, prepared)?;
             let analysis = sampled_luminance(&crop, max_samples_per_frame);
             crops.push(LoadedCrop {
                 source: source.clone(),
@@ -811,7 +845,13 @@ fn run_search_inner(
                     .iter()
                     .find(|source| source.image_id == result.image_id)
                     .ok_or_else(|| format!("Image {} left the source set", result.image_id))?;
-                let crop = extract_source_crop(source, &masters, prepared)?;
+                let source_index = group
+                    .sources
+                    .iter()
+                    .position(|candidate| candidate.image_id == source.image_id)
+                    .expect("ranked results come from group.sources");
+                let masters = &plan.sessions[plan.assignments[source_index]].masters;
+                let crop = extract_source_crop(source, masters, prepared)?;
                 let original_path = artifact_crop_path(
                     &prepared.cache_root,
                     &prepared.public.search_id,

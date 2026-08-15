@@ -1161,7 +1161,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2967,7 +2967,7 @@ dependencies = [
  "png 0.18.0",
  "serde",
  "thiserror 2.0.16",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4166,7 +4166,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4705,7 +4705,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4762,7 +4762,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4916,9 +4916,9 @@ dependencies = [
 
 [[package]]
 name = "seiza"
-version = "0.15.5"
+version = "0.15.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8d9305616a23ef7679465f24dda0d64c7c03ab12c4445c7cf202c5f353999e4"
+checksum = "3ecfed57d3d0cc5325959f06cb8e00b50f56cf25ba9fadc4f853e4284ad0e6fb"
 dependencies = [
  "directories",
  "image",
@@ -5031,9 +5031,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-stacking"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a80c65960c26997729cdc36900664bf73eef363f72f47885ac6515b253c8234"
+checksum = "a05feb8be6657e9e1310cf9e5604985c215ac63f271167a882037a2e30eb6f4a"
 dependencies = [
  "rayon",
  "seiza",
@@ -6058,7 +6058,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6555,7 +6555,7 @@ dependencies = [
  "png 0.18.0",
  "serde",
  "thiserror 2.0.16",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
