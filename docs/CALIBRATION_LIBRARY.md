@@ -70,15 +70,29 @@ field as a gate. A match still needs a positive camera-name or sensor-size
 identity; wholly unknown sensors never match. It sorts safe candidates by
 distance from the light's capture time and uses at most 64 frames per master.
 
-Flats additionally come from one flat session: after sorting, only frames
-captured within a day of the nearest-matched flat and at a compatible sensor
-temperature stay in the set. The library keeps every flat a rig ever shot with
-a filter, and one master must not mix sessions — dust moves between them, and
-a fresh cooled set cannot combine with an uncooled set from months earlier.
+The frames feeding one master must also cohere with each other, which the
+build enforces after selection so per-light selections stay identical across
+a stack group: candidates cluster by sensor temperature (within 1 °C, the
+same gate the stacker itself enforces), and flats also cluster into one
+session (within a day of each other — dust moves between sessions). The
+nearest cluster with enough frames builds the master, so a stray single flat
+near the lights cannot orphan a complete session from a week earlier.
+
+A flat is only applied when a bias or dark master also exists: dividing a
+flat into a light that still carries its pedestal amplifies that pedestal at
+the vignetted edges, inverting the vignette into bright edges. A flats-only
+library therefore stacks without the flat and the warning says to import
+bias or dark frames; the built flat master stays cached and applies as soon
+as they arrive.
 
 A master that fails to build does not fail the stack. The frames integrate
-without that master, and the stack card's calibration warning names the master
-that was skipped and the reason.
+without that master, and the stack card's calibration warning names the
+master that was skipped and the reason. A master whose input master failed —
+a flat whose bias did not build — is skipped rather than built without it,
+because a flat normalized with the bias pedestal still in it would miscorrect
+every light. Resume checkpoints and source-frame searches compare the masters
+actually applied, not just the selection, so a build that fails or recovers
+between runs forces a clean rebuild instead of mixing calibrations.
 
 ## Stack previews
 
