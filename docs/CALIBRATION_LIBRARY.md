@@ -114,7 +114,14 @@ artifact into every light. Samples far outside their same-plane
 neighborhood are replaced with the neighborhood median; the flat's true
 response is smooth at pixel scale, so dust shadows and vignette structure
 are untouched. Dark and dark-flat masters keep their hot pixels — they are
-what subtracts them from the frames they calibrate. When no dark master
+what subtracts them from the frames they calibrate.
+
+The defect pass removes pixel-scale impulses, not star images. Stars in
+sky flats are handled by the across-frame clipping instead, and only when
+they move between exposures — let the sky drift or dither between sky
+flats. Sky flats taken with tracking on hold each star on the same pixels
+in every frame, and a star that survives into the master is wider than
+the defect pass can remove. When no dark master
 exists anywhere in a stack's plan, the stack instead runs the same impulse
 filter over each calibrated light, and the card says so.
 
