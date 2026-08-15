@@ -109,7 +109,7 @@ function seedSyntheticColorStacks(databaseId: string, projectId: number): void {
       // Must track STACK_PREVIEW_CACHE_VERSION in src/server/stack_preview.rs.
       // The server hides remembered stacks from an older build, so a stale
       // number here leaves the color panel with no channels to combine.
-      cache_version: 11,
+      cache_version: 12,
       group: {
         index: 0,
         target_id: 2,

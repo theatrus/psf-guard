@@ -45,10 +45,10 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-pub const SEIZA_STACKING_VERSION: &str = "0.2.1";
+pub const SEIZA_STACKING_VERSION: &str = "0.2.2";
 /// Bump whenever stack admission, rendering, or persisted artifact semantics
 /// change. This deliberately versions PSF Guard policy separately from Seiza.
-pub(super) const STACK_PREVIEW_CACHE_VERSION: u32 = 11;
+pub(super) const STACK_PREVIEW_CACHE_VERSION: u32 = 12;
 const MAX_REQUEST_IMAGES: usize = 10_000;
 const MAX_REMEMBERED_JOBS: usize = 64;
 const PREVIEW_MAX_DIMENSION: u32 = 2400;
@@ -1886,7 +1886,21 @@ fn run_group(
         tracing::warn!("Stack group calibration failed: {error:#}");
         format!("{error:#}")
     })?;
-    let applied_calibration = plan.applied.clone();
+    let mut applied_calibration = plan.applied.clone();
+    // With no dark master anywhere in the plan, the lights keep their hot
+    // pixels and the stack runs the spatial impulse filter over each frame.
+    // Say so on the card; display only, after the identity is computed.
+    let no_dark_master = plan
+        .sessions
+        .iter()
+        .all(|session| session.applied.dark_master.is_none());
+    if no_dark_master && group.calibration != crate::calibration::CalibrationMode::Off {
+        let note = "Hot pixels suppressed in each light (no dark master to subtract them)";
+        applied_calibration.warning = Some(match applied_calibration.warning.take() {
+            Some(previous) => format!("{previous}. {note}"),
+            None => note.into(),
+        });
+    }
     // The resume checkpoint key carries the applied-master signature too:
     // the selection fingerprint is computed before any build, so after a
     // transient build failure a later run with the same selection could
@@ -2043,8 +2057,16 @@ fn run_group(
                 let reference_exposure = group.frames[0].exposure_seconds;
                 // The reference frame defines zero rotation; it votes upright.
                 orientation_vote.add(0.0, reference_exposure);
+                // With no dark master anywhere in the plan, nothing
+                // subtracts the lights' hot pixels, and a handful of frames
+                // cannot reject them statistically. The spatial impulse
+                // filter is the remaining defense; when any session has a
+                // dark, the dark does the job with real measurements.
                 let options = StackOptions {
                     normalization: NormalizationMode::Global,
+                    cosmetic: (no_dark_master
+                        && group.calibration != crate::calibration::CalibrationMode::Off)
+                        .then(seiza_stacking::ImpulseFilterOptions::default),
                     ..StackOptions::default()
                 };
                 // The reference calibrates with its own session's masters;

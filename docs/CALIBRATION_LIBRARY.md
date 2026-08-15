@@ -107,6 +107,17 @@ built, including a lone flat with no pedestal estimate — the warning then
 says what to expect — and **Off** stacks the raw frames with no matching at
 all.
 
+A flat master also gets a spatial defect pass after integration: a hot or
+dead sensor pixel repeats identically in every flat, so the across-frame
+clipping keeps it by construction, and it would divide a fixed-pattern
+artifact into every light. Samples far outside their same-plane
+neighborhood are replaced with the neighborhood median; the flat's true
+response is smooth at pixel scale, so dust shadows and vignette structure
+are untouched. Dark and dark-flat masters keep their hot pixels — they are
+what subtracts them from the frames they calibrate. When no dark master
+exists anywhere in a stack's plan, the stack instead runs the same impulse
+filter over each calibrated light, and the card says so.
+
 A master that fails to build does not fail the stack. The frames integrate
 without that master, and the stack card's calibration warning names the
 master that was skipped and the reason. A master whose input master failed —
