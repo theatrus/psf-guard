@@ -160,16 +160,24 @@ codesign --verify --deep --strict --verbose=2 /path/to/PSF\ Guard.app
 Keep the downloaded files until the release record and update feeds have both
 been checked.
 
-## 7. Publish and check the website feeds
+## 7. Check the website feeds
 
-The PSF Guard repository does not write to `updates.psf-guard.com`. Run the
-separate website sync after the GitHub assets pass verification. Copy
-`updater.json` and `notice.json` without changing their contents.
+`updates.psf-guard.com` picks up `updater.json` and `notice.json` from the
+published GitHub release through a webhook; nothing is copied by hand. After
+the assets pass verification, confirm both public URLs serve the new version:
 
-Check both public URLs, then start or refresh a PSF Guard server. The server
-checks the notice feed at startup and caches it for 24 hours. A desktop app on
-the previous version should offer the signed update. A browser should show the
-notice but must not offer an install action.
+```bash
+curl -s https://updates.psf-guard.com/notice.json
+curl -s https://updates.psf-guard.com/updater.json
+```
+
+If the feeds still serve the previous version, check the webhook delivery on
+the release event before touching anything by hand.
+
+Then start or refresh a PSF Guard server. The server checks the notice feed
+at startup and caches it for 24 hours. A desktop app on the previous version
+should offer the signed update. A browser should show the notice but must not
+offer an install action.
 
 Record the tag SHA, workflow run, release URL, downloaded checks, and website
 feed checks in the release issue or operator notes.
