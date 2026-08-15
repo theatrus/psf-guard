@@ -50,6 +50,12 @@
 
 ## Fixed
 
+- Remote scheduler previews can now run as background jobs, so large Target
+  Scheduler catalogs no longer fail merely because preview planning takes
+  longer than an HTTP reverse proxy timeout. Updated clients request this mode
+  and poll the token-scoped job until the preview is ready. Capabilities also
+  advertise image upload only when that database has enabled its separate
+  upload gate.
 - Stacking a target whose calibration library holds frames from several
   sessions no longer fails with "building master flat". The frames feeding
   each master now cluster by sensor temperature (the stacker's own 1 °C

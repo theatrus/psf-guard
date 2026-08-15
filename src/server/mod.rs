@@ -605,6 +605,7 @@ async fn run_server_internal(
         )
         .route("/sync/v1/exports", post(remote_sync::create_export))
         .route("/sync/v1/exports/{export_id}", get(remote_sync::get_export))
+        .route("/sync/v1/jobs/{job_id}", get(remote_sync::get_preview_job))
         .nest("/db/{db_id}", db_routes)
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state),

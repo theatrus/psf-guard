@@ -261,6 +261,13 @@ POST /api/sync/v1/previews/{preview_id}/refresh
 GET  /api/sync/v1/jobs/{job_id}
 ```
 
+Clients send `Prefer: respond-async` when a preview may outlive an HTTP proxy
+timeout. The server returns `202 Accepted` with a job ID, builds the preview in
+the background, and exposes the eventual preview or failure through the job
+route. Omitting the preference keeps the original synchronous response for
+older clients. Retrying the same `Idempotency-Key` returns the existing job
+instead of building a second preview.
+
 For a pull, the coordinator requests a bundle from the remote source and plans
 and applies it locally. For a push, it creates a local bundle and sends it to
 the remote destination, which owns preview and Apply.
