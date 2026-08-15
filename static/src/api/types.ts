@@ -469,6 +469,12 @@ export interface AppliedCalibration {
   flat_master: string | null;
   warning: string | null;
   fingerprint: string;
+  /**
+   * The pedestal subtracted before flat division when the library holds no
+   * bias or dark master, fitted from the lights. Absent for stacks that
+   * calibrated with measured masters.
+   */
+  estimated_pedestal_adu?: number | null;
 }
 
 export interface StackPreviewJob {

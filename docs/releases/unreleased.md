@@ -20,6 +20,14 @@
   back — and **Off** stacks the raw frames. The choice is remembered, and a
   preview built under a different mode is marked out of date. See [stack
   previews](https://github.com/theatrus/psf-guard/blob/main/docs/STACKING_PREVIEWS.md).
+- A flats-only calibration library now flat-corrects instead of stacking
+  uncorrected. PSF Guard fits the bias pedestal from the lights themselves
+  (background against flat response), corroborates it against the camera's
+  recorded offset when the mapping is known, subtracts it, and applies the
+  flat — the stack card states the fitted value. When the fit cannot be
+  trusted, the stack still proceeds without the flat as before. See
+  [calibration
+  libraries](https://github.com/theatrus/psf-guard/blob/main/docs/CALIBRATION_LIBRARY.md).
 
 ## Fixed
 

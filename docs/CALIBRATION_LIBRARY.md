@@ -78,15 +78,25 @@ session (within a day of each other — dust moves between sessions). The
 nearest cluster with enough frames builds the master, so a stray single flat
 near the lights cannot orphan a complete session from a week earlier.
 
-A flat is only applied when a bias or dark master also exists: dividing a
-flat into a light that still carries its pedestal amplifies that pedestal at
-the vignetted edges, inverting the vignette into bright edges. A flats-only
-library therefore stacks without the flat and the warning says to import
-bias or dark frames; the built flat master stays cached and applies as soon
-as they arrive. The stack panel's **Calibration** control can override this:
-**Force on** applies every master that can be built, including a lone flat —
-the warning then says what to expect — and **Off** stacks the raw frames
-with no matching at all.
+A flat needs the light's pedestal removed before division: dividing a flat
+into a light that still carries its pedestal amplifies that pedestal at the
+vignetted edges, inverting the vignette into bright edges. With a bias or
+dark master present, that master removes the pedestal. With a flats-only
+library, PSF Guard fits the pedestal from the lights themselves: the
+background is `sky × flat response + pedestal`, so a robust per-tile line
+fit against the normalized flat recovers the pedestal as the intercept.
+When the fit passes its guardrails — mono frames, enough vignette to give
+the fit a lever arm, agreement across sampled lights, and consistency with
+the camera's recorded offset for known camera families (ZWO records its
+offset in 10 ADU steps) — the stack subtracts the estimate and applies the
+flat, the warning states the fitted value, and the masters signature records
+it. When any guardrail fails, the stack proceeds without the flat and the
+warning says to import bias or dark frames; the built flat master stays
+cached and applies as soon as they arrive. The stack panel's **Calibration**
+control can override this: **Force on** applies every master that can be
+built, including a lone flat with no pedestal estimate — the warning then
+says what to expect — and **Off** stacks the raw frames with no matching at
+all.
 
 A master that fails to build does not fail the stack. The frames integrate
 without that master, and the stack card's calibration warning names the

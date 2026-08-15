@@ -239,6 +239,11 @@ pub struct AppliedCalibration {
     /// degraded or recovered build behind an identical selection.
     #[serde(default)]
     pub masters_signature: String,
+    /// The pedestal subtracted before flat division when the library holds
+    /// no bias or dark master, fitted from the lights themselves. `None`
+    /// when calibration used measured masters (or none at all).
+    #[serde(default)]
+    pub estimated_pedestal_adu: Option<f32>,
 }
 
 impl Default for AppliedCalibration {
@@ -257,6 +262,7 @@ impl Default for AppliedCalibration {
             warning: None,
             fingerprint: "none".into(),
             masters_signature: "bias=none;dark=none;dark_flat=none;flat=none".into(),
+            estimated_pedestal_adu: None,
         }
     }
 }
@@ -961,10 +967,200 @@ fn calibration_off() -> (seiza_stacking::CalibrationMasters, AppliedCalibration)
     )
 }
 
+/// Fit the bias pedestal of a flats-only calibration set from the lights.
+///
+/// The light's background is `sky * V(x) + pedestal`, with `V` the
+/// median-normalized flat response, so a robust line fit of per-tile
+/// background against per-tile flat response recovers the pedestal as the
+/// intercept. Every guardrail failure returns `None` and the caller falls
+/// back to withholding the flat.
+fn estimate_flat_pedestal(
+    flat_path: &Path,
+    light_paths: &[PathBuf],
+    hint: Option<f64>,
+) -> Option<f32> {
+    const MAX_SAMPLE_LIGHTS: usize = 3;
+    const MAX_PEDESTAL_ADU: f32 = 13_107.0; // 20% of the 16-bit scale
+
+    let flat = crate::image_io::open_linear_frame(flat_path).ok()?;
+    // CFA data interleaves photosite responses that differ per channel;
+    // the single-line model only holds for mono frames.
+    if flat.bayer.is_some() || flat.image.channels != 1 {
+        tracing::debug!("pedestal fit skipped: the flat is not a mono frame");
+        return None;
+    }
+
+    // Sample lights by sorted path so the estimate does not depend on the
+    // caller's frame order — the source-frame search must re-derive the
+    // same pedestal the stack build found.
+    let mut sorted = light_paths.to_vec();
+    sorted.sort();
+    sorted.dedup();
+    let sample_indices: Vec<usize> = match sorted.len() {
+        0 => return None,
+        1 => vec![0],
+        2 => vec![0, 1],
+        len => vec![0, len / 2, len - 1],
+    };
+
+    let mut estimates = Vec::new();
+    for index in sample_indices {
+        let Ok(light) = crate::image_io::open_linear_frame(&sorted[index]) else {
+            continue;
+        };
+        if light.bayer.is_some()
+            || light.image.channels != 1
+            || light.image.width != flat.image.width
+            || light.image.height != flat.image.height
+        {
+            continue;
+        }
+        if let Some(pedestal) = fit_pedestal_against_flat(&light.image, &flat.image) {
+            estimates.push(pedestal);
+        }
+        if estimates.len() >= MAX_SAMPLE_LIGHTS {
+            break;
+        }
+    }
+    if estimates.is_empty() {
+        tracing::debug!("pedestal fit skipped: no light produced a usable fit");
+        return None;
+    }
+    estimates.sort_by(f32::total_cmp);
+    let pedestal = estimates[estimates.len() / 2];
+    let spread = estimates[estimates.len() - 1] - estimates[0];
+    if spread > (pedestal * 0.25).max(64.0) {
+        tracing::debug!("pedestal fit skipped: per-light estimates disagree ({estimates:?} ADU)");
+        return None;
+    }
+    if !(0.0..=MAX_PEDESTAL_ADU).contains(&pedestal) {
+        tracing::debug!("pedestal fit skipped: {pedestal:.1} ADU is outside the sane range");
+        return None;
+    }
+    // A camera whose driver records its offset gives an independent
+    // prediction; a fit that contradicts it by more than 3x either way is
+    // more likely a sky-gradient artifact than a pedestal.
+    if let Some(hint) = hint {
+        let hint = hint as f32;
+        if pedestal < hint / 3.0 || pedestal > hint * 3.0 {
+            tracing::debug!(
+                "pedestal fit skipped: {pedestal:.1} ADU contradicts the camera's \
+                 recorded offset (~{hint:.0} ADU)"
+            );
+            return None;
+        }
+    }
+    Some(pedestal)
+}
+
+/// One light against the normalized flat: per-tile low-percentile
+/// background versus per-tile median response, then a sigma-clipped least
+/// squares line. Returns the intercept — the pedestal — when the fit has
+/// enough lever arm to be trusted.
+fn fit_pedestal_against_flat(
+    light: &seiza_stacking::LinearImage,
+    flat: &seiza_stacking::LinearImage,
+) -> Option<f32> {
+    const MIN_TILES: usize = 32;
+    const MIN_RESPONSE_SPAN: f32 = 0.02;
+    const BACKGROUND_PERCENTILE: f64 = 0.2;
+    const CLIP_SIGMA: f32 = 2.5;
+    const CLIP_ROUNDS: usize = 3;
+
+    let width = light.width;
+    let height = light.height;
+    let tile = (width.min(height) / 32).clamp(8, 128);
+    let mut pairs = Vec::new();
+    let mut light_tile = Vec::with_capacity(tile * tile);
+    let mut flat_tile = Vec::with_capacity(tile * tile);
+    for tile_y in (0..height.saturating_sub(tile - 1)).step_by(tile) {
+        for tile_x in (0..width.saturating_sub(tile - 1)).step_by(tile) {
+            light_tile.clear();
+            flat_tile.clear();
+            for y in tile_y..tile_y + tile {
+                let row = y * width + tile_x;
+                light_tile.extend(light.data[row..row + tile].iter().filter(|v| v.is_finite()));
+                flat_tile.extend(flat.data[row..row + tile].iter().filter(|v| v.is_finite()));
+            }
+            if light_tile.is_empty() || flat_tile.is_empty() {
+                continue;
+            }
+            let background_rank = ((light_tile.len() as f64 * BACKGROUND_PERCENTILE) as usize)
+                .min(light_tile.len() - 1);
+            let (_, background, _) =
+                light_tile.select_nth_unstable_by(background_rank, f32::total_cmp);
+            let background = *background;
+            let median_rank = flat_tile.len() / 2;
+            let (_, response, _) = flat_tile.select_nth_unstable_by(median_rank, f32::total_cmp);
+            pairs.push((*response, background));
+        }
+    }
+    if pairs.len() < MIN_TILES {
+        return None;
+    }
+    let span = pairs.iter().map(|(v, _)| *v).fold(f32::MIN, f32::max)
+        - pairs.iter().map(|(v, _)| *v).fold(f32::MAX, f32::min);
+    if span < MIN_RESPONSE_SPAN {
+        return None;
+    }
+
+    let mut kept = pairs;
+    let mut slope = 0.0f64;
+    let mut intercept = 0.0f64;
+    for _ in 0..CLIP_ROUNDS {
+        let n = kept.len() as f64;
+        let sum_v: f64 = kept.iter().map(|(v, _)| *v as f64).sum();
+        let sum_b: f64 = kept.iter().map(|(_, b)| *b as f64).sum();
+        let sum_vv: f64 = kept.iter().map(|(v, _)| (*v as f64) * (*v as f64)).sum();
+        let sum_vb: f64 = kept.iter().map(|(v, b)| (*v as f64) * (*b as f64)).sum();
+        let denominator = n * sum_vv - sum_v * sum_v;
+        if denominator.abs() < f64::EPSILON {
+            return None;
+        }
+        slope = (n * sum_vb - sum_v * sum_b) / denominator;
+        intercept = (sum_b - slope * sum_v) / n;
+        let residual_sigma = (kept
+            .iter()
+            .map(|(v, b)| {
+                let residual = *b as f64 - (slope * *v as f64 + intercept);
+                residual * residual
+            })
+            .sum::<f64>()
+            / n)
+            .sqrt();
+        if residual_sigma == 0.0 {
+            break;
+        }
+        let limit = residual_sigma * CLIP_SIGMA as f64;
+        kept.retain(|(v, b)| (*b as f64 - (slope * *v as f64 + intercept)).abs() <= limit);
+        if kept.len() < MIN_TILES {
+            return None;
+        }
+    }
+    // The sky term cannot be negative: an anti-correlation between
+    // background and flat response means the model does not describe this
+    // field (a gradient aligned against the vignette).
+    if slope < 0.0 || !intercept.is_finite() {
+        return None;
+    }
+    Some(intercept as f32)
+}
+
+/// The camera's recorded offset as a pedestal in 16-bit ADU, for camera
+/// families whose driver mapping is known. ZWO ASI drivers apply the offset
+/// setting in 10-ADU steps at the 16-bit scale. Header metadata is a
+/// prediction, not pixel evidence, so this only corroborates a fitted
+/// pedestal — it is never applied on its own.
+fn header_pedestal_hint(light: &FrameMeta) -> Option<f64> {
+    let offset = light.offset.filter(|value| *value > 0)?;
+    let camera = light.camera.as_deref()?.to_ascii_uppercase();
+    (camera.contains("ZWO") || camera.contains("ASI")).then_some(offset as f64 * 10.0)
+}
+
 pub fn resolve_or_build_masters(
     conn: &Connection,
     cache_root: &Path,
-    light_path: &Path,
+    light_paths: &[PathBuf],
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
     cancel: Option<&AtomicBool>,
     mode: CalibrationMode,
@@ -972,6 +1168,9 @@ pub fn resolve_or_build_masters(
     if mode == CalibrationMode::Off {
         return Ok(calibration_off());
     }
+    let Some(light_path) = light_paths.first() else {
+        anyhow::bail!("calibration needs at least one light frame");
+    };
     let light = crate::commands::import::headers::read_frame_meta(light_path);
     let mut selected = select_for_light(conn, &light)?;
     let missing_sources = remap_missing_sources(&mut selected, directory_tree);
@@ -1138,39 +1337,86 @@ pub fn resolve_or_build_masters(
     // (bright edges), which is worse than no flat at all. The flat master
     // itself stays cached: once bias or dark frames are imported, the
     // dependency-aware hash rebuilds and applies it properly.
-    let mut forced_flat_note = None;
+    let mut flat_note = None;
+    let mut estimated_pedestal = None;
     let flat = if flat.is_some() && bias.is_none() && dark.is_none() {
         if mode == CalibrationMode::On {
             // The caller forced calibration on, accepting the damage Auto
             // refuses. Say what to expect so a bright-edged result is not
             // mistaken for a broken flat.
-            forced_flat_note = Some(
+            flat_note = Some(
                 "Flat applied without a bias or dark master because calibration is forced on; \
                  vignetted edges may brighten (the light's pedestal is amplified by the flat \
-                 correction)",
+                 correction)"
+                    .to_string(),
             );
             flat
         } else {
-            let reason = "skipped: dividing a flat into a light with no bias or dark master \
+            // The pedestal the division needs removed can be fitted from
+            // the lights themselves: background = sky * flat response +
+            // pedestal, so the intercept of that line is the pedestal.
+            estimated_pedestal = flat.as_ref().and_then(|master| {
+                estimate_flat_pedestal(&master.path, light_paths, header_pedestal_hint(&light))
+            });
+            if estimated_pedestal.is_some() {
+                flat
+            } else {
+                let reason = "skipped: dividing a flat into a light with no bias or dark master \
                       brightens vignetted edges (the light's pedestal is amplified by \
-                      the flat correction); import bias or dark frames for this camera, \
+                      the flat correction), and no reliable pedestal could be fitted from \
+                      these lights; import bias or dark frames for this camera, \
                       or force calibration on for this stack";
-            tracing::warn!("flat master {reason}");
-            build_failures.push((CalibrationKind::Flat, reason.into()));
-            None
+                tracing::warn!("flat master {reason}");
+                build_failures.push((CalibrationKind::Flat, reason.into()));
+                None
+            }
         }
     } else {
         flat
     };
     applied.flat_master = flat.as_ref().map(|master| master.label());
 
-    let masters = seiza_stacking::CalibrationMasters::from_fits_paths(
-        bias.as_ref().map(|value| value.path.as_path()),
-        dark.as_ref().map(|value| value.path.as_path()),
-        flat.as_ref().map(|value| value.path.as_path()),
-        light.exposure_s,
-    )
-    .context("loading matched calibration masters")?;
+    let masters = if let (Some(pedestal), Some(flat_master)) = (estimated_pedestal, flat.as_ref()) {
+        // Hand seiza a synthesized constant bias so the existing
+        // light-minus-bias-then-divide path removes the fitted pedestal.
+        // The cached flat master is already normalized, so seiza leaves
+        // its values alone.
+        let flat_frame = crate::image_io::open_linear_frame(&flat_master.path)
+            .context("loading the cached master flat")?;
+        let bias_image = seiza_stacking::LinearImage::new(
+            flat_frame.image.width,
+            flat_frame.image.height,
+            flat_frame.image.channels,
+            vec![pedestal; flat_frame.image.data.len()],
+        )
+        .context("synthesizing the estimated-pedestal bias")?;
+        let flat_frame = seiza_stacking::MasterFlat::from_fits_frame(flat_frame)
+            .context("preparing the master flat")?;
+        seiza_stacking::CalibrationMasters::new(Some(bias_image), None, Some(flat_frame))
+            .context("preparing estimated-pedestal calibration")?
+    } else {
+        seiza_stacking::CalibrationMasters::from_fits_paths(
+            bias.as_ref().map(|value| value.path.as_path()),
+            dark.as_ref().map(|value| value.path.as_path()),
+            flat.as_ref().map(|value| value.path.as_path()),
+            light.exposure_s,
+        )
+        .context("loading matched calibration masters")?
+    };
+    applied.estimated_pedestal_adu = estimated_pedestal;
+    if let Some(pedestal) = estimated_pedestal {
+        let hint_note = match header_pedestal_hint(&light) {
+            Some(hint) => {
+                format!(", consistent with the camera's recorded offset (~{hint:.0} ADU)")
+            }
+            None => String::new(),
+        };
+        flat_note = Some(format!(
+            "No bias or dark master; applied the flat after subtracting a {pedestal:.0} ADU \
+             pedestal fitted from the lights{hint_note}. Import bias or dark frames for \
+             measured calibration"
+        ));
+    }
     applied.state = if masters.is_empty() {
         "incomplete".into()
     } else {
@@ -1217,10 +1463,10 @@ pub fn resolve_or_build_masters(
             None => failed,
         });
     }
-    if let Some(note) = forced_flat_note {
+    if let Some(note) = flat_note {
         applied.warning = Some(match applied.warning.take() {
             Some(previous) => format!("{previous}. {note}"),
-            None => note.into(),
+            None => note,
         });
     }
     applied.masters_signature = masters_signature(&applied);
@@ -1234,13 +1480,19 @@ pub fn resolve_or_build_masters(
 /// too.
 fn masters_signature(applied: &AppliedCalibration) -> String {
     let label = |master: &Option<String>| master.as_deref().unwrap_or("none").to_string();
-    format!(
+    let mut signature = format!(
         "bias={};dark={};dark_flat={};flat={}",
         label(&applied.bias_master),
         label(&applied.dark_master),
         label(&applied.dark_flat_master),
         label(&applied.flat_master),
-    )
+    );
+    // Only estimated-pedestal stacks carry the suffix, so signatures stored
+    // before it existed still compare equal.
+    if let Some(pedestal) = applied.estimated_pedestal_adu {
+        signature.push_str(&format!(";pedestal=estimated-{pedestal:.1}"));
+    }
+    signature
 }
 
 pub fn resolve_or_build_masters_for_group(
@@ -1254,12 +1506,12 @@ pub fn resolve_or_build_masters_for_group(
     if mode == CalibrationMode::Off {
         return Ok(calibration_off());
     }
-    let Some(reference) = light_paths.first() else {
+    if light_paths.is_empty() {
         return Ok((
             seiza_stacking::CalibrationMasters::default(),
             AppliedCalibration::default(),
         ));
-    };
+    }
     let fingerprints = light_paths
         .iter()
         .map(|path| selection_fingerprint(conn, path, directory_tree))
@@ -1283,7 +1535,7 @@ pub fn resolve_or_build_masters_for_group(
             },
         ));
     }
-    resolve_or_build_masters(conn, cache_root, reference, directory_tree, cancel, mode)
+    resolve_or_build_masters(conn, cache_root, light_paths, directory_tree, cancel, mode)
 }
 
 struct BuiltMaster {
@@ -2506,7 +2758,7 @@ mod tests {
         let (_, first) = resolve_or_build_masters(
             &conn,
             &temp.path().join("cache-a"),
-            &light_path,
+            std::slice::from_ref(&light_path),
             None,
             None,
             CalibrationMode::Auto,
@@ -2517,7 +2769,7 @@ mod tests {
         let (_, second) = resolve_or_build_masters(
             &conn,
             &temp.path().join("cache-b"),
-            &light_path,
+            std::slice::from_ref(&light_path),
             None,
             None,
             CalibrationMode::Auto,
@@ -2558,7 +2810,7 @@ mod tests {
         let (masters, applied) = resolve_or_build_masters(
             &conn,
             &cache,
-            &light_path,
+            std::slice::from_ref(&light_path),
             None,
             None,
             CalibrationMode::Auto,
@@ -2575,6 +2827,160 @@ mod tests {
             warning.contains("brightens vignetted edges")
                 && warning.contains("import bias or dark frames"),
             "warning must explain the inversion and the remedy: {warning}"
+        );
+    }
+
+    /// A frame with real dimensions and per-pixel values, for tests that
+    /// exercise the pedestal fit. BITPIX 16, so values must stay below
+    /// `i16::MAX`.
+    fn write_gradient_fits(
+        path: &Path,
+        kind: &str,
+        width: usize,
+        height: usize,
+        camera: &str,
+        offset: i64,
+        pixel: impl Fn(usize, usize) -> f64,
+    ) {
+        let mut header = Vec::new();
+        fits_card(&mut header, "SIMPLE  =                    T");
+        fits_card(&mut header, "BITPIX  =                   16");
+        fits_card(&mut header, "NAXIS   =                    2");
+        fits_card(&mut header, &format!("NAXIS1  = {width:20}"));
+        fits_card(&mut header, &format!("NAXIS2  = {height:20}"));
+        fits_card(&mut header, &format!("IMAGETYP= '{kind}'"));
+        fits_card(&mut header, "FILTER  = 'Ha'");
+        fits_card(&mut header, "EXPTIME =                300.0");
+        fits_card(&mut header, "GAIN    =                  100");
+        fits_card(&mut header, &format!("OFFSET  = {offset:20}"));
+        fits_card(&mut header, "XBINNING=                    1");
+        fits_card(&mut header, "YBINNING=                    1");
+        fits_card(&mut header, "CCD-TEMP=                -10.0");
+        fits_card(&mut header, "TELESCOP= 'Scope'");
+        fits_card(&mut header, &format!("INSTRUME= '{camera}'"));
+        fits_card(&mut header, "END");
+        header.resize(header.len().div_ceil(2880) * 2880, b' ');
+        let mut payload = Vec::new();
+        for y in 0..height {
+            for x in 0..width {
+                payload.extend((pixel(x, y) as i16).to_be_bytes());
+            }
+        }
+        payload.resize(payload.len().div_ceil(2880) * 2880, 0);
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(&header).unwrap();
+        file.write_all(&payload).unwrap();
+    }
+
+    /// A flats-only library with a strong vignette and lights whose
+    /// background is `sky * vignette + pedestal`. Returns the connection,
+    /// cache directory, and light paths, ready for `resolve_or_build_masters`.
+    fn vignetted_flat_only_library(
+        temp: &tempfile::TempDir,
+        camera: &str,
+        offset: i64,
+        pedestal: f64,
+    ) -> (Connection, PathBuf, Vec<PathBuf>) {
+        const SIZE: usize = 256;
+        let vignette = |x: usize| 0.7 + 0.6 * x as f64 / (SIZE - 1) as f64;
+        let mut calibration_meta = Vec::new();
+        for index in 0..2 {
+            let path = temp.path().join(format!("flat-{index}.fits"));
+            write_gradient_fits(&path, "FLAT", SIZE, SIZE, camera, offset, |x, _| {
+                20_000.0 * vignette(x) + index as f64
+            });
+            calibration_meta.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        let mut light_paths = Vec::new();
+        for index in 0..2 {
+            let path = temp.path().join(format!("light-{index}.fits"));
+            write_gradient_fits(&path, "LIGHT", SIZE, SIZE, camera, offset, |x, _| {
+                pedestal + 100.0 * vignette(x) + index as f64
+            });
+            light_paths.push(path);
+        }
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &calibration_meta, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        (conn, temp.path().join("cache"), light_paths)
+    }
+
+    #[test]
+    fn auto_flat_only_fits_the_pedestal_and_applies_the_flat() {
+        // The lights carry a 300 ADU pedestal over a vignetted sky. The fit
+        // must recover it, the flat must apply through a synthesized bias,
+        // and the signature must record the estimate. The ZWO offset header
+        // (30 -> ~300 ADU) corroborates.
+        let temp = tempfile::tempdir().unwrap();
+        let (conn, cache, lights) =
+            vignetted_flat_only_library(&temp, "ZWO ASI2600MM Pro", 30, 300.0);
+        let (masters, applied) =
+            resolve_or_build_masters(&conn, &cache, &lights, None, None, CalibrationMode::Auto)
+                .unwrap();
+
+        assert!(applied.flat_master.is_some(), "{:?}", applied.warning);
+        assert!(!masters.is_empty());
+        assert_eq!(applied.state, "applied");
+        let pedestal = applied.estimated_pedestal_adu.expect("a fitted pedestal");
+        assert!(
+            (pedestal - 300.0).abs() < 15.0,
+            "fitted {pedestal} ADU, expected ~300"
+        );
+        assert!(
+            applied.masters_signature.contains(";pedestal=estimated-"),
+            "signature must record the estimate: {}",
+            applied.masters_signature
+        );
+        let warning = applied.warning.as_deref().unwrap_or_default();
+        assert!(
+            warning.contains("fitted from the lights")
+                && warning.contains("consistent with the camera's recorded offset"),
+            "warning must explain the estimate: {warning}"
+        );
+    }
+
+    #[test]
+    fn pedestal_fit_that_contradicts_the_camera_offset_withholds_the_flat() {
+        // Same pixels, but the header claims an offset near 20000 ADU. A fit
+        // of ~300 contradicting the driver's own record by this much is more
+        // likely a gradient artifact, so the flat must stay withheld.
+        let temp = tempfile::tempdir().unwrap();
+        let (conn, cache, lights) =
+            vignetted_flat_only_library(&temp, "ZWO ASI2600MM Pro", 2_000, 300.0);
+        let (masters, applied) =
+            resolve_or_build_masters(&conn, &cache, &lights, None, None, CalibrationMode::Auto)
+                .unwrap();
+
+        assert!(applied.flat_master.is_none());
+        assert!(masters.is_empty());
+        assert!(applied.estimated_pedestal_adu.is_none());
+        let warning = applied.warning.as_deref().unwrap_or_default();
+        assert!(
+            warning.contains("no reliable pedestal could be fitted"),
+            "warning must say why the flat stayed withheld: {warning}"
+        );
+    }
+
+    #[test]
+    fn pedestal_fit_works_without_a_camera_offset_mapping() {
+        // An unknown camera family has no header hint; the fit stands on
+        // its own and the warning does not claim corroboration.
+        let temp = tempfile::tempdir().unwrap();
+        let (conn, cache, lights) = vignetted_flat_only_library(&temp, "Camera", 30, 300.0);
+        let (_, applied) =
+            resolve_or_build_masters(&conn, &cache, &lights, None, None, CalibrationMode::Auto)
+                .unwrap();
+
+        assert!(applied.flat_master.is_some(), "{:?}", applied.warning);
+        let pedestal = applied.estimated_pedestal_adu.expect("a fitted pedestal");
+        assert!((pedestal - 300.0).abs() < 15.0);
+        let warning = applied.warning.as_deref().unwrap_or_default();
+        assert!(
+            !warning.contains("consistent with the camera's recorded offset"),
+            "no hint exists, so the warning must not claim one: {warning}"
         );
     }
 
@@ -2600,9 +3006,15 @@ mod tests {
             tx.commit().unwrap();
         }
         let cache = temp.path().join("cache");
-        let (masters, applied) =
-            resolve_or_build_masters(&conn, &cache, &light_path, None, None, CalibrationMode::On)
-                .unwrap();
+        let (masters, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::On,
+        )
+        .unwrap();
 
         assert!(
             applied.flat_master.is_some(),
@@ -2663,7 +3075,7 @@ mod tests {
         let (_, auto_applied) = resolve_or_build_masters(
             &conn,
             &cache,
-            &light_path,
+            std::slice::from_ref(&light_path),
             None,
             None,
             CalibrationMode::Auto,
@@ -2728,7 +3140,7 @@ mod tests {
         let (masters, applied) = resolve_or_build_masters(
             &conn,
             &cache,
-            &light_path,
+            std::slice::from_ref(&light_path),
             None,
             None,
             CalibrationMode::Auto,
@@ -2807,7 +3219,7 @@ mod tests {
         let (masters, applied) = resolve_or_build_masters(
             &conn,
             &cache,
-            &light_path,
+            std::slice::from_ref(&light_path),
             None,
             None,
             CalibrationMode::Auto,
@@ -2854,7 +3266,7 @@ mod tests {
         let (masters, applied) = resolve_or_build_masters(
             &conn,
             &cache,
-            &light_path,
+            std::slice::from_ref(&light_path),
             None,
             None,
             CalibrationMode::Auto,
@@ -2902,7 +3314,7 @@ mod tests {
         let (_, reused) = resolve_or_build_masters(
             &conn,
             &cache,
-            &light_path,
+            std::slice::from_ref(&light_path),
             None,
             None,
             CalibrationMode::Auto,
