@@ -773,12 +773,42 @@ pub struct SpatialScanRequest {
 
 /// Penalty-scale overrides for endpoints that score without the full
 /// sequence query (the per-image quality context). Same semantics as the
-/// `penalty_*` fields on [`SequenceAnalysisQuery`].
+/// `penalty_*` fields on [`SequenceAnalysisQuery`], which converts into
+/// this via [`SequenceAnalysisQuery::penalty_scales`] so both endpoints
+/// apply overrides through one method.
 #[derive(Debug, Deserialize, Default)]
 pub struct PenaltyScaleQuery {
     pub penalty_satellite: Option<f64>,
     pub penalty_pointing: Option<f64>,
     pub penalty_temporal: Option<f64>,
+}
+
+impl PenaltyScaleQuery {
+    /// Apply the supplied overrides onto a config's scales; absent fields
+    /// keep the calibrated defaults.
+    pub fn apply_to(&self, scales: &mut crate::sequence_analysis::PenaltyScales) {
+        if let Some(scale) = self.penalty_satellite {
+            scales.satellite = scale;
+        }
+        if let Some(scale) = self.penalty_pointing {
+            scales.pointing = scale;
+        }
+        if let Some(scale) = self.penalty_temporal {
+            scales.temporal = scale;
+        }
+    }
+}
+
+impl SequenceAnalysisQuery {
+    /// The query's penalty overrides as the shared application type, so a
+    /// field added to one struct without the other fails to compile here.
+    pub fn penalty_scales(&self) -> PenaltyScaleQuery {
+        PenaltyScaleQuery {
+            penalty_satellite: self.penalty_satellite,
+            penalty_pointing: self.penalty_pointing,
+            penalty_temporal: self.penalty_temporal,
+        }
+    }
 }
 
 /// Optional target/filter scope for the quality-scan status endpoint.

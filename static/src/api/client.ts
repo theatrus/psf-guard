@@ -43,6 +43,7 @@ import type {
   DatabaseSequenceAnalysisRequest,
   SequenceAnalysisResponse,
   ImageQualityResponse,
+  PenaltyScaleParams,
   SpatialScanRequest,
   SpatialScanStatus,
   SpatialScanStatusRequest,
@@ -1209,10 +1210,15 @@ export const apiClient = {
     return data.data;
   },
 
-  getImageQuality: async (dbId: string, imageId: number): Promise<ImageQualityResponse> => {
+  getImageQuality: async (
+    dbId: string,
+    imageId: number,
+    penalties?: PenaltyScaleParams
+  ): Promise<ImageQualityResponse> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<ImageQualityResponse>>(
-      dbPath(dbId, `/analysis/image/${imageId}`)
+      dbPath(dbId, `/analysis/image/${imageId}`),
+      { params: penalties }
     );
     if (!data.data) throw new Error('Image quality data not found');
     return data.data;

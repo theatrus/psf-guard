@@ -7,19 +7,42 @@ import type {
   SequenceAnalysisRequest,
 } from '../api/types';
 import { useState, useCallback } from 'react';
-import { scoringPenaltyParams, useScoringPreferences } from './useScoringPreferences';
+import {
+  penaltyKeyOf,
+  penaltyParamsOf,
+  useScoringPreferences,
+} from './useScoringPreferences';
+import type { ScoringPreferences } from './useScoringPreferences';
+
+/**
+ * Query key for a target-scoped analysis. One builder shared by
+ * useSequenceAnalysis and useScopedQuality: the Sequence view and the grid
+ * badges cache-share only while their keys stay byte-identical, and the
+ * penalty scales must be in the key so a preference change refetches.
+ */
+function targetAnalysisKey(
+  dbId: string | null | undefined,
+  targetId: number | undefined | null,
+  filterName: string | undefined,
+  penalties: ScoringPreferences,
+) {
+  return [
+    'db', dbId, 'sequence-analysis', targetId, filterName,
+    ...penaltyKeyOf(penalties),
+  ];
+}
 
 export function useSequenceAnalysis(dbId: string | null | undefined) {
   const [request, setRequest] = useState<SequenceAnalysisRequest | null>(null);
+  // Key and payload derive from the same snapshot: reading the store again
+  // at fetch time could cache a response computed with new scales under a
+  // key naming the old ones.
   const penalties = useScoringPreferences();
 
   const query = useQuery({
-    queryKey: [
-      'db', dbId, 'sequence-analysis', request?.target_id, request?.filter_name,
-      penalties.satellite, penalties.pointing, penalties.temporal,
-    ],
+    queryKey: targetAnalysisKey(dbId, request?.target_id, request?.filter_name, penalties),
     queryFn: () =>
-      apiClient.analyzeSequence(dbId!, { ...request!, ...scoringPenaltyParams() }),
+      apiClient.analyzeSequence(dbId!, { ...request!, ...penaltyParamsOf(penalties) }),
     enabled: !!dbId && !!request?.target_id,
     staleTime: 60000,
   });
@@ -38,9 +61,10 @@ export function useSequenceAnalysis(dbId: string | null | undefined) {
 }
 
 export function useImageQuality(dbId: string | null | undefined, imageId: number | undefined) {
+  const penalties = useScoringPreferences();
   return useQuery({
-    queryKey: ['db', dbId, 'image-quality', imageId],
-    queryFn: () => apiClient.getImageQuality(dbId!, imageId!),
+    queryKey: ['db', dbId, 'image-quality', imageId, ...penaltyKeyOf(penalties)],
+    queryFn: () => apiClient.getImageQuality(dbId!, imageId!, penaltyParamsOf(penalties)),
     enabled: !!dbId && !!imageId,
     staleTime: 60000,
   });
@@ -58,7 +82,7 @@ export function useScopedQuality(
   filterName?: string,
 ) {
   const penalties = useScoringPreferences();
-  const penaltyParams = scoringPenaltyParams();
+  const penaltyParams = penaltyParamsOf(penalties);
   const request:
     | SequenceAnalysisRequest
     | ProjectSequenceAnalysisRequest
@@ -67,12 +91,11 @@ export function useScopedQuality(
       : projectId != null
         ? { project_id: projectId, filter_name: filterName, ...penaltyParams }
         : { all_projects: true, filter_name: filterName, ...penaltyParams };
-  const penaltyKey = [penalties.satellite, penalties.pointing, penalties.temporal];
   const queryKey = targetId != null
-    ? ['db', dbId, 'sequence-analysis', targetId, filterName, ...penaltyKey]
+    ? targetAnalysisKey(dbId, targetId, filterName, penalties)
     : projectId != null
-      ? ['db', dbId, 'sequence-analysis', 'project', projectId, filterName, ...penaltyKey]
-      : ['db', dbId, 'sequence-analysis', 'all-projects', filterName, ...penaltyKey];
+      ? ['db', dbId, 'sequence-analysis', 'project', projectId, filterName, ...penaltyKeyOf(penalties)]
+      : ['db', dbId, 'sequence-analysis', 'all-projects', filterName, ...penaltyKeyOf(penalties)];
   const query = useQuery({
     queryKey,
     queryFn: () => apiClient.analyzeSequence(dbId!, request),
