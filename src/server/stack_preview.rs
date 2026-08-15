@@ -1829,7 +1829,13 @@ fn run_group(
     if cancel.load(Ordering::Relaxed) {
         return Ok(GroupOutcome::Cancelled);
     }
-    let (calibration_masters, applied_calibration) = masters.map_err(|error| error.to_string())?;
+    // `{:#}` keeps the whole anyhow chain: "building master flat: <why>".
+    // `to_string()` printed only the outermost context, which reported a
+    // failed master build with no cause at all.
+    let (calibration_masters, applied_calibration) = masters.map_err(|error| {
+        tracing::warn!("Stack group calibration failed: {error:#}");
+        format!("{error:#}")
+    })?;
     let calibration_fingerprint = applied_calibration.fingerprint.clone();
     state.stack_previews.update(job_id, |job| {
         let status = &mut job.groups[group.index];

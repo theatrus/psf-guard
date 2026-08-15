@@ -70,6 +70,16 @@ field as a gate. A match still needs a positive camera-name or sensor-size
 identity; wholly unknown sensors never match. It sorts safe candidates by
 distance from the light's capture time and uses at most 64 frames per master.
 
+Flats additionally come from one flat session: after sorting, only frames
+captured within a day of the nearest-matched flat and at a compatible sensor
+temperature stay in the set. The library keeps every flat a rig ever shot with
+a filter, and one master must not mix sessions — dust moves between them, and
+a fresh cooled set cannot combine with an uncooled set from months earlier.
+
+A master that fails to build does not fail the stack. The frames integrate
+without that master, and the stack card's calibration warning names the master
+that was skipped and the reason.
+
 ## Stack previews
 
 Stack previews build masters on demand with `seiza-stacking`. Each master needs
