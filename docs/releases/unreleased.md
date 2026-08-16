@@ -52,6 +52,12 @@
   [calibration
   libraries](https://github.com/theatrus/psf-guard/blob/main/docs/CALIBRATION_LIBRARY.md).
 
+- Every project gained a **Calibration** report: per kind, the matching
+  frames and their capture sessions; per imaging night and filter, the flat
+  session a stack would use, its age, and whether the night has its own
+  flats — with warnings for missing kinds, nights without same-night flats,
+  and stale flats. See [calibration
+  libraries](https://github.com/theatrus/psf-guard/blob/main/docs/CALIBRATION_LIBRARY.md).
 - Imports can be scoped. The import preview gained an **Import** selector
   (lights and calibration, lights only, or calibration only), per-folder
   checkboxes over the configured roots and two levels of subfolders, and an

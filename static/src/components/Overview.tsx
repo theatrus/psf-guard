@@ -40,6 +40,7 @@ import {
   type ProjectSort,
 } from '../utils/projectNavigation';
 import ProjectSchedulerDialog from './ProjectSchedulerDialog';
+import CalibrationReportDialog from './CalibrationReportDialog';
 import PreviewImage from './PreviewImage';
 import { useColorPreview } from '../hooks/useColorPreview';
 import './Overview.css';
@@ -70,6 +71,11 @@ export default function Overview() {
   const [seenProjects, setSeenProjects] = useState(loadProjectSeenState);
   const [relativeNow, setRelativeNow] = useState(Date.now);
   const [schedulerProject, setSchedulerProject] = useState<{
+    dbId: string;
+    id: number;
+    name: string;
+  } | null>(null);
+  const [calibrationReportProject, setCalibrationReportProject] = useState<{
     dbId: string;
     id: number;
     name: string;
@@ -712,6 +718,22 @@ export default function Overview() {
                         <span aria-hidden="true">⚙</span>
                         Plan &amp; coordinates
                       </button>
+                      <button
+                        type="button"
+                        className="project-settings-button"
+                        title="How the calibration library covers this project: matches, ages, and same-night flats"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCalibrationReportProject({
+                            dbId: project.db_id,
+                            id: project.id,
+                            name: project.display_name,
+                          });
+                        }}
+                      >
+                        <span aria-hidden="true">🧪</span>
+                        Calibration
+                      </button>
                       {organizeAllowed && (
                         <button
                           type="button"
@@ -1265,6 +1287,16 @@ export default function Overview() {
           projectName={schedulerProject.name}
           canEdit={organizeAllowed}
           onClose={() => setSchedulerProject(null)}
+        />
+      )}
+
+      {calibrationReportProject && (
+        <CalibrationReportDialog
+          open
+          dbId={calibrationReportProject.dbId}
+          projectId={calibrationReportProject.id}
+          projectName={calibrationReportProject.name}
+          onClose={() => setCalibrationReportProject(null)}
         />
       )}
 
