@@ -427,8 +427,10 @@ whose user never installed Target Scheduler.
 
 Identical retries are idempotent. The response returns the resolved database,
 frame kind, and either the project, target, and image IDs for a light or the
-calibration frame and rig UUIDs. A basename already registered elsewhere or
-an existing receive file with different content returns `409 Conflict`.
+calibration frame and rig UUIDs. If scheduler sync registered a unique light
+row first, the upload attaches the file to that row without importing a
+duplicate. An ambiguous registered basename or an existing receive file with
+different content returns `409 Conflict`.
 
 ## Security
 

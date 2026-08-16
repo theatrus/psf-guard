@@ -208,7 +208,7 @@ fn publish_and_import(
     .map_err(AppError::db)?;
 
     let existing_resolution = find_resolution(&connection, &filename)?;
-    if existing_resolution.is_some() && (calibration_kind.is_some() || !destination.is_file()) {
+    if existing_resolution.is_some() && calibration_kind.is_some() {
         return Err(AppError::Conflict(format!(
             "{filename} is already registered as a light in this database"
         )));

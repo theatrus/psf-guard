@@ -62,6 +62,9 @@
 
 ## Fixed
 
+- Remote image upload can now attach image bytes after scheduler sync has
+  already registered the same light, instead of rejecting that normal order
+  of operations as a duplicate.
 - Remote scheduler previews can now run as background jobs, so large Target
   Scheduler catalogs no longer fail merely because preview planning takes
   longer than an HTTP reverse proxy timeout. Updated clients request this mode

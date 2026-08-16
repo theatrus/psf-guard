@@ -240,6 +240,37 @@ fn calibration_count(path: &std::path::Path) -> i64 {
         .unwrap_or(0)
 }
 
+fn insert_synced_light(path: &std::path::Path, filename: &str) {
+    let connection = rusqlite::Connection::open(path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO project (Id, profileId, name, isMosaic, flatsHandling, guid)
+             VALUES (1, 'profile', 'M 31', 0, 0, 'project-guid')",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO target (Id, name, active, ra, dec, epochcode, projectId, guid)
+             VALUES (1, 'M 31', 1, 0.71, 41.27, 0, 1, 'target-guid')",
+            [],
+        )
+        .unwrap();
+    let metadata = serde_json::json!({
+        "FileName": format!(r"C:\remote-capture\{filename}"),
+    })
+    .to_string();
+    connection
+        .execute(
+            "INSERT INTO acquiredimage
+                (Id, projectId, targetId, acquireddate, filtername, gradingStatus,
+                 metadata, profileId, guid)
+             VALUES (1, 1, 1, 1784869200, 'Ha', 1, ?1, 'profile', 'image-guid')",
+            [&metadata],
+        )
+        .unwrap();
+}
+
 #[tokio::test]
 async fn upload_is_scoped_to_the_selected_database_and_attaches_followup_frames() {
     let fixture = Fixture::new();
@@ -281,6 +312,52 @@ async fn upload_is_scoped_to_the_selected_database_and_attaches_followup_frames(
     assert_eq!(body["data"]["import"]["attached"], 1);
     assert_eq!(body["data"]["import"]["targets_created"], 0);
     assert_eq!(image_count(&fixture.database_a), 2);
+}
+
+#[tokio::test]
+async fn upload_attaches_bytes_to_a_light_created_by_scheduler_sync() {
+    let fixture = Fixture::new();
+    let filename = "m31-synced.fits";
+    insert_synced_light(&fixture.database_a, filename);
+    let image = fits_bytes("M 31", "2026-07-24T05:00:00");
+    let checksum = sha256(&image);
+
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        filename,
+        &image,
+        &checksum,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["already_present"], false);
+    assert_eq!(body["data"]["resolution"]["image_id"], 1);
+    assert_eq!(body["data"]["resolution"]["project_name"], "M 31");
+    assert_eq!(body["data"]["import"]["imported"], 0);
+    assert_eq!(body["data"]["import"]["skipped_existing"], 1);
+    assert_eq!(image_count(&fixture.database_a), 1);
+    assert_eq!(
+        sha256(&std::fs::read(fixture.images_a.join(filename)).unwrap()),
+        checksum
+    );
+
+    let (status, body) = upload(
+        fixture.state,
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        filename,
+        &image,
+        &checksum,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["already_present"], true);
+    assert_eq!(image_count(&fixture.database_a), 1);
 }
 
 #[tokio::test]
