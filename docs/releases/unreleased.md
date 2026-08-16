@@ -48,6 +48,15 @@
   [calibration
   libraries](https://github.com/theatrus/psf-guard/blob/main/docs/CALIBRATION_LIBRARY.md).
 
+- Imports can be scoped. The import preview gained an **Import** selector
+  (lights and calibration, lights only, or calibration only), per-folder
+  checkboxes over the configured roots and two levels of subfolders, and an
+  opt-in **skip processing artifacts** toggle that recognizes integration
+  masters and PixInsight calibrated/registered intermediates by their own
+  signatures. A folder inside a configured root no longer needs the
+  database-management grant. The CLI grows matching `--lights-only`,
+  `--calibration-only`, and `--skip-processed` flags. See
+  [importing](https://github.com/theatrus/psf-guard/blob/main/docs/IMPORTING.md).
 - A remote server can now export onto its own drive. Configure a **server
   export directory** per database (Settings, or `export_dir` in the
   registry); the Overview's Export action then runs as a background job with

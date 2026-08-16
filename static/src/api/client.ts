@@ -483,6 +483,16 @@ export const apiClient = {
     return data.data;
   },
 
+  /** The configured image roots and two levels of their subdirectories. */
+  getImportFolders: async (dbId: string): Promise<import('./types').ImportFolder[]> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<import('./types').ImportFolder[]>>(
+      dbPath(dbId, '/import/folders')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to list import folders');
+    return data.data;
+  },
+
   /** Import job progress (poll ~1s while running). */
   getImportStatus: async (dbId: string): Promise<ImportStatus> => {
     const apiInstance = await getApi();

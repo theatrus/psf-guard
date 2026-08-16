@@ -138,6 +138,21 @@ pub enum Commands {
         #[arg(long, default_value_t = crate::commands::import::DEFAULT_MATCH_RADIUS_DEG)]
         match_radius_deg: f64,
 
+        /// Import only light frames; calibration files are counted and
+        /// left alone.
+        #[arg(long, conflicts_with = "calibration_only")]
+        lights_only: bool,
+
+        /// Import only calibration frames; lights are counted and left
+        /// alone.
+        #[arg(long)]
+        calibration_only: bool,
+
+        /// Leave processing artifacts (integration masters, PixInsight
+        /// calibrated/registered intermediates) out of the catalog.
+        #[arg(long)]
+        skip_processed: bool,
+
         /// Path to the database registry JSON file (defaults to the platform
         /// config directory).
         #[arg(long)]

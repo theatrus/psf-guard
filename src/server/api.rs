@@ -507,6 +507,14 @@ pub struct ImportRequest {
     /// synthesizing new structure for them (default true).
     #[serde(default)]
     pub attach_existing: Option<bool>,
+    /// Which frame kinds to import: `all` (default), `lights`, or
+    /// `calibration`.
+    #[serde(default)]
+    pub scope: Option<crate::commands::import::ImportScope>,
+    /// Leave processing artifacts (integration masters, PixInsight
+    /// intermediates) out of the catalog (default false).
+    #[serde(default)]
+    pub skip_processed: Option<bool>,
     /// Coordinate-match radius in degrees (default 0.5).
     #[serde(default)]
     pub match_radius_deg: Option<f64>,

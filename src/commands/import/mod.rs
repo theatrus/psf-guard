@@ -31,6 +31,19 @@ use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+/// Which frames an import run touches.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportScope {
+    /// Lights and calibration frames alike.
+    #[default]
+    All,
+    /// Only light frames; calibration files are counted and left alone.
+    Lights,
+    /// Only calibration frames; lights are counted and left alone.
+    Calibration,
+}
+
 #[derive(Debug, Clone)]
 pub struct ImportOptions {
     /// Gap between consecutive frames (same rig) that starts a new project.
@@ -49,6 +62,14 @@ pub struct ImportOptions {
     /// Coordinate-match radius for attaching to an existing target, in
     /// degrees of angular separation.
     pub match_radius_deg: f64,
+    /// Which frame kinds this run imports.
+    pub scope: ImportScope,
+    /// Leave processing artifacts (integration masters, PixInsight
+    /// intermediates) out of the catalog. Off by default — masters are
+    /// worth cataloging for a finished project's display — but a sweep
+    /// over a processing tree can opt in to skip the derived files, which
+    /// repeat exposures the catalog already has under new basenames.
+    pub skip_processed: bool,
 }
 
 pub const DEFAULT_MATCH_RADIUS_DEG: f64 = 0.5;
@@ -61,6 +82,8 @@ impl Default for ImportOptions {
             dry_run: false,
             attach_existing: true,
             match_radius_deg: DEFAULT_MATCH_RADIUS_DEG,
+            scope: ImportScope::default(),
+            skip_processed: false,
         }
     }
 }
@@ -88,6 +111,14 @@ pub struct ImportOutcome {
     pub scanned: usize,
     pub unreadable: usize,
     pub non_light: usize,
+    /// Processing artifacts (masters, calibrated/registered intermediates)
+    /// left out of the catalog.
+    #[serde(default)]
+    pub skipped_processed: usize,
+    /// Frames outside the run's scope (lights during a calibration-only
+    /// run, and the reverse).
+    #[serde(default)]
+    pub skipped_out_of_scope: usize,
     /// Calibration frames stored in PSF Guard's sibling tables.
     pub calibration: crate::calibration::CalibrationImportOutcome,
     pub skipped_existing: usize,
@@ -193,11 +224,19 @@ pub fn import_frames(
     for frame in frames {
         if !frame.readable {
             outcome.unreadable += 1;
+        } else if frame.processed && options.skip_processed {
+            outcome.skipped_processed += 1;
         } else if !frame.is_light() {
-            outcome.non_light += 1;
-            if crate::calibration::kind_from_meta(&frame).is_some() {
-                calibrations.push(frame);
+            if options.scope == ImportScope::Lights {
+                outcome.skipped_out_of_scope += 1;
+            } else {
+                outcome.non_light += 1;
+                if crate::calibration::kind_from_meta(&frame).is_some() {
+                    calibrations.push(frame);
+                }
             }
+        } else if options.scope == ImportScope::Calibration {
+            outcome.skipped_out_of_scope += 1;
         } else if existing.contains(&frame.basename().to_lowercase()) {
             outcome.skipped_existing += 1;
         } else {
@@ -1020,6 +1059,16 @@ pub fn print_outcome(outcome: &ImportOutcome) {
     if outcome.non_light > 0 {
         println!("  Non-light frames: {}", outcome.non_light);
     }
+    if outcome.skipped_processed > 0 {
+        println!(
+            "  Processing artifacts skipped: {} (masters and calibrated/registered \
+             intermediates)",
+            outcome.skipped_processed
+        );
+    }
+    if outcome.skipped_out_of_scope > 0 {
+        println!("  Out of scope:     {}", outcome.skipped_out_of_scope);
+    }
     if outcome.calibration.imported > 0
         || outcome.calibration.updated > 0
         || outcome.calibration.skipped_existing > 0
@@ -1100,6 +1149,67 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         ts_schema::apply_schema(&conn).unwrap();
         conn
+    }
+
+    fn flat(filter: &str, ts: i64) -> FrameMeta {
+        FrameMeta {
+            image_type: Some("FLAT".into()),
+            object: None,
+            ..light("panel", filter, ts)
+        }
+    }
+
+    #[test]
+    fn lights_scope_leaves_calibration_frames_alone() {
+        let mut conn = fresh_conn();
+        let frames = vec![light("M31", "Ha", 1_000), flat("Ha", 1_100)];
+        let options = ImportOptions {
+            scope: ImportScope::Lights,
+            ..Default::default()
+        };
+        let outcome = import_frames(&mut conn, frames, &options).unwrap();
+        assert_eq!(outcome.imported, 1);
+        assert_eq!(outcome.skipped_out_of_scope, 1);
+        assert_eq!(outcome.calibration.flat, 0, "no calibration rows");
+    }
+
+    #[test]
+    fn calibration_scope_leaves_lights_alone() {
+        let mut conn = fresh_conn();
+        let frames = vec![light("M31", "Ha", 1_000), flat("Ha", 1_100)];
+        let options = ImportOptions {
+            scope: ImportScope::Calibration,
+            ..Default::default()
+        };
+        let outcome = import_frames(&mut conn, frames, &options).unwrap();
+        assert_eq!(outcome.imported, 0);
+        assert_eq!(outcome.skipped_out_of_scope, 1);
+        assert_eq!(outcome.projects_created, 0);
+        assert_eq!(outcome.non_light, 1);
+    }
+
+    #[test]
+    fn skipping_processing_artifacts_is_opt_in() {
+        // A WBPP-calibrated light keeps IMAGETYP=LIGHT and its original
+        // DATE-OBS under a new basename. By default it imports like any
+        // frame — masters are worth cataloging for a finished project —
+        // and a sweep over a processing tree can opt in to skip them.
+        let mut conn = fresh_conn();
+        let artifact = FrameMeta {
+            processed: true,
+            ..light("M31", "Ha", 1_000)
+        };
+        let options = ImportOptions {
+            skip_processed: true,
+            ..Default::default()
+        };
+        let outcome = import_frames(&mut conn, vec![artifact.clone()], &options).unwrap();
+        assert_eq!(outcome.imported, 0);
+        assert_eq!(outcome.skipped_processed, 1);
+
+        let outcome = import_frames(&mut conn, vec![artifact], &ImportOptions::default()).unwrap();
+        assert_eq!(outcome.imported, 1);
+        assert_eq!(outcome.skipped_processed, 0);
     }
 
     #[test]

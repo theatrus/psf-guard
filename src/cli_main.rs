@@ -317,6 +317,9 @@ pub fn main() -> Result<()> {
             dry_run,
             no_attach,
             match_radius_deg,
+            lights_only,
+            calibration_only,
+            skip_processed,
             registry,
         } => {
             use crate::commands::import::{
@@ -356,6 +359,14 @@ pub fn main() -> Result<()> {
                 dry_run,
                 attach_existing: !no_attach,
                 match_radius_deg,
+                scope: if lights_only {
+                    crate::commands::import::ImportScope::Lights
+                } else if calibration_only {
+                    crate::commands::import::ImportScope::Calibration
+                } else {
+                    crate::commands::import::ImportScope::All
+                },
+                skip_processed,
             };
             let outcome = import_frames(&mut conn, frames, &options)?;
             print_outcome(&outcome);

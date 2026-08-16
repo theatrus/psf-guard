@@ -132,15 +132,38 @@ The same scan catalogs calibration frames and deduplicates them by canonical
 path and file fingerprint. A dry run reports those changes but rolls back the
 PSF Guard tables with the scheduler changes.
 
+The preview also carries the run's scope controls:
+
+- **Import**: lights and calibration (the default), lights only, or
+  calibration only. Frames outside the scope are counted and left alone —
+  a calibration-only run after a database reset rebuilds the library
+  without touching the scheduler rows.
+- **Folders**: the configured image roots and two levels of their
+  subdirectories, each with a checkbox. Unchecking a root and checking one
+  night's folder imports exactly that folder. A folder inside a configured
+  root needs no extra grant; only a path outside every configured root
+  requires database management.
+- **Skip processing artifacts** (opt-in): leaves out integration masters
+  and PixInsight calibrated/registered intermediates, which repeat
+  exposures the catalog already has under new basenames. Off by default —
+  masters are worth cataloging, and later releases will surface a finished
+  project's master lights in its display.
+
+Change any of them and choose **Update preview** to re-run the dry preview
+before confirming.
+
 The CLI exposes the same path:
 
 ```bash
 psf-guard import archive ./new-lights --dry-run
 psf-guard import archive ./new-lights
+psf-guard import archive ./new-flats --calibration-only
+psf-guard import archive ./processing-tree --skip-processed
 ```
 
 Use `--no-attach` when every new frame should create imported structure instead
-of attaching to an existing name or coordinate match. `remove-imported` can
+of attaching to an existing name or coordinate match. `--lights-only` and
+`--calibration-only` scope the run to one frame kind. `remove-imported` can
 remove projects created by an import; always preview it first.
 
 ## Fill or refresh quality data
