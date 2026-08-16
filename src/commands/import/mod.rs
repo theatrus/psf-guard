@@ -658,6 +658,22 @@ fn resolve_profile(conn: &Connection, options: &ImportOptions) -> Result<String>
         return Ok(profile_id.clone());
     }
 
+    // The profile that owns the existing projects wins: new work lands in
+    // the catalog the user is looking at. A telescope snapshot often
+    // carries a `profilepreference` row for the CURRENT N.I.N.A. profile
+    // while every project belongs to an older one — defaulting to the
+    // preference row filed new projects under a second profile, which
+    // split the catalog and made the UI disambiguate every project with a
+    // raw profile GUID.
+    let mut stmt = conn.prepare(
+        "SELECT profileid FROM project GROUP BY profileid          ORDER BY COUNT(*) DESC, profileid LIMIT 1",
+    )?;
+    let dominant: Option<String> = stmt.query_map([], |row| row.get(0))?.next().transpose()?;
+    if let Some(profile_id) = dominant {
+        ensure_profile_preference(conn, &profile_id)?;
+        return Ok(profile_id);
+    }
+
     let mut stmt = conn.prepare("SELECT DISTINCT profileId FROM profilepreference")?;
     let profiles: Vec<String> = stmt
         .query_map([], |row| row.get(0))?
@@ -1157,6 +1173,40 @@ mod tests {
             object: None,
             ..light("panel", filter, ts)
         }
+    }
+
+    #[test]
+    fn new_projects_join_the_profile_that_owns_the_existing_ones() {
+        // A telescope snapshot often carries a profilepreference row for
+        // the CURRENT N.I.N.A. profile while every project belongs to an
+        // older one. New projects must join the projects' profile, or the
+        // catalog splits and the UI disambiguates everything with GUIDs.
+        let mut conn = fresh_conn();
+        let outcome = import_frames(
+            &mut conn,
+            vec![light("M31", "Ha", 1_000)],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        let project_profile = outcome.profile_id.clone();
+
+        // The telescope's "current" profile appears with no projects.
+        super::ensure_profile_preference(&conn, "telescope-current-profile").unwrap();
+
+        let mut far_away = light("NGC 7000", "Ha", 9_000_000);
+        far_away.ra_deg = Some(315.7);
+        far_away.dec_deg = Some(44.5);
+        let outcome = import_frames(&mut conn, vec![far_away], &ImportOptions::default()).unwrap();
+        assert_eq!(
+            outcome.profile_id, project_profile,
+            "the new project must join the existing projects' profile"
+        );
+        let distinct: i64 = conn
+            .query_row("SELECT COUNT(DISTINCT profileid) FROM project", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(distinct, 1);
     }
 
     #[test]

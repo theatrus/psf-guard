@@ -77,6 +77,14 @@
 
 ## Fixed
 
+- Projects are no longer "renamed" to profile GUIDs. When a catalog's
+  projects spanned two profiles — which an import could cause by filing new
+  projects under the telescope's current-but-empty profile instead of the
+  one owning the existing projects — every project name gained a raw GUID
+  prefix. Imports now join the profile that owns the existing projects, and
+  the display adds a short profile tag only when the same project name
+  truly exists under more than one profile.
+
 - Remote image upload can now attach image bytes after scheduler sync has
   already registered the same light, instead of rejecting that normal order
   of operations as a duplicate.

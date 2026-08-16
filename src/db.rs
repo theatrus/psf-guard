@@ -173,6 +173,18 @@ impl<'a> Database<'a> {
     ///
     /// This stays on the small `project` table. The file cache supplies latest
     /// capture dates after its existing background image walk.
+    /// Project names that appear under more than one profile — the only
+    /// case where a profile tag on the display name disambiguates anything.
+    pub fn ambiguous_project_names(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name FROM project GROUP BY name HAVING COUNT(DISTINCT profileid) > 1",
+        )?;
+        let names = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(names)
+    }
+
     pub fn get_projects_for_navigation(&self) -> Result<Vec<(ProjectWithProfile, i32)>> {
         let guid = if self.schema.has_project_guid {
             ", guid"
