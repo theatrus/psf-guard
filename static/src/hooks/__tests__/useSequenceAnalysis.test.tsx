@@ -149,6 +149,58 @@ describe('useImageQuality', () => {
 });
 
 describe('useScopedQuality', () => {
+  it('prefers the all-sessions rollup score over the per-session score', async () => {
+    // A small session can normalize against itself and score 1.0 while the
+    // target/filter rollup — the basis the Sequence view shows by default —
+    // scores the same frame far lower. The grid must show the same basis.
+    const base = normalFixture.data.sequences[0].images[0];
+    const fixture = {
+      success: true,
+      data: {
+        sequences: [
+          {
+            ...normalFixture.data.sequences[0],
+            images: [{ ...base, image_id: 1, quality_score: 1.0 }],
+          },
+          {
+            ...normalFixture.data.sequences[0],
+            images: [{ ...base, image_id: 2, quality_score: 0.9 }],
+          },
+        ],
+        target_filter_rollups: [
+          {
+            target_id: normalFixture.data.sequences[0].target_id,
+            target_name: 'T',
+            filter_name: normalFixture.data.sequences[0].filter_name,
+            image_count: 1,
+            unavailable_image_count: 1,
+            summary: null,
+            session_start: null,
+            session_end: null,
+            images: [{ ...base, image_id: 1, quality_score: 0.83 }],
+          },
+        ],
+      },
+      error: null,
+    };
+    server.use(
+      http.get('/api/db/:dbId/analysis/sequence', () => HttpResponse.json(fixture)),
+    );
+
+    const { result } = renderHook(() => useScopedQuality('test', 7, undefined), {
+      wrapper: createWrapper(),
+    });
+    await waitFor(() => {
+      expect(result.current.qualityByImage.size).toBe(2);
+    });
+
+    expect(result.current.qualityByImage.get(1)?.quality_score).toBe(0.83);
+    expect(result.current.scopeByImage.get(1)).toBe('target_filter');
+    // A frame the rollup could not include keeps its per-session score.
+    expect(result.current.qualityByImage.get(2)?.quality_score).toBe(0.9);
+    expect(result.current.scopeByImage.get(2)).toBe('capture_sequence');
+  });
+
   it('loads one project analysis and indexes results by image', async () => {
     let requests = 0;
     let projectId: string | null = null;

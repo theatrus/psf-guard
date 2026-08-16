@@ -7,6 +7,7 @@ import type {
   SequenceAnalysisRequest,
 } from '../api/types';
 import { useState, useCallback } from 'react';
+import type { QualityScoreScope } from '../utils/qualityScore';
 import {
   penaltyKeyOf,
   penaltyParamsOf,
@@ -103,15 +104,44 @@ export function useScopedQuality(
     staleTime: 60000,
   });
 
+  // Show the same score basis the Sequence view shows by default: the
+  // all-sessions (target/filter) rollup for filters with several sessions,
+  // the per-session score otherwise. Building the map from sessions alone
+  // made the grid badge disagree with the Sequence view for any frame
+  // whose small session normalized against itself. The rollup entry
+  // carries only the score fields, so it overlays a copy of the session
+  // entry — category, pointing, and overlays stay intact.
   const qualityByImage = new Map<number, ImageQualityResult>();
+  const scopeByImage = new Map<number, QualityScoreScope>();
+  const sessionsPerFilter = new Map<string, number>();
   for (const sequence of query.data?.sequences ?? []) {
+    const key = `${sequence.target_id}:${sequence.filter_name}`;
+    sessionsPerFilter.set(key, (sessionsPerFilter.get(key) ?? 0) + 1);
     for (const quality of sequence.images) {
       qualityByImage.set(quality.image_id, quality);
+      scopeByImage.set(quality.image_id, 'capture_sequence');
+    }
+  }
+  for (const rollup of query.data?.target_filter_rollups ?? []) {
+    if ((sessionsPerFilter.get(`${rollup.target_id}:${rollup.filter_name}`) ?? 0) <= 1) {
+      continue;
+    }
+    for (const score of rollup.images) {
+      const session = qualityByImage.get(score.image_id);
+      if (!session) continue;
+      qualityByImage.set(score.image_id, {
+        ...session,
+        quality_score: score.quality_score,
+        normalized_metrics: score.normalized_metrics,
+        details: score.details,
+      });
+      scopeByImage.set(score.image_id, 'target_filter');
     }
   }
 
   return {
     qualityByImage,
+    scopeByImage,
     isLoading: query.isLoading,
     error: query.error,
   };

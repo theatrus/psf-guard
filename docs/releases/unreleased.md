@@ -77,6 +77,13 @@
 
 ## Fixed
 
+- The grid and the Sequence view now show the same quality score for the
+  same image. The Sequence view defaults to the all-sessions score, but the
+  grid badge was built from per-session scores — a frame in a small session
+  could score 1.0 against itself while scoring far lower against the whole
+  filter. The grid (and the detail panel) now use the same basis the
+  Sequence view displays, and the badge tooltip names it.
+
 - Filter names that differ only by case or whitespace ("Ha" beside "HA")
   no longer split one physical filter into separate quality-comparison
   groups, and filter selections match all variants. Display keeps the name

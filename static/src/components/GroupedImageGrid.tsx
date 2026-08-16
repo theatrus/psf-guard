@@ -947,6 +947,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                             dbId={dbId!}
                             image={image}
                             quality={quality.qualityByImage.get(image.id)}
+                            qualityScoreScope={quality.scopeByImage.get(image.id)}
                             qualityPresentation="compact"
                             isSelected={
                               selectedImages.has(image.id) ||
