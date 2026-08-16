@@ -617,6 +617,7 @@ async fn run_server_internal(
         .route("/sync/v1/exports/{export_id}", get(remote_sync::get_export))
         .route("/sync/v1/jobs/{job_id}", get(remote_sync::get_preview_job))
         .nest("/db/{db_id}", db_routes)
+        .layer(axum::middleware::from_fn(json_no_store))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::authorize_api,
@@ -1160,6 +1161,74 @@ async fn pregenerate_annotated(
 
     tracing::trace!("✅ Generated annotated image for image {}", image_id);
     Ok(true) // Successfully generated
+}
+
+/// Default JSON API responses to `Cache-Control: no-store` when the handler
+/// set no policy of its own.
+///
+/// Analysis endpoints return sequence-relative scores that change whenever a
+/// quality scan lands new evidence. Without a cache policy, an embedding
+/// webview (the desktop app) may serve its own cached copy of one view's
+/// request while another view fetches fresh — the same image then shows two
+/// different scores depending on the page. Binary responses (previews,
+/// thumbnails) keep their own explicit policies and are not touched.
+async fn json_no_store(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut response = next.run(request).await;
+    apply_json_no_store(&mut response);
+    response
+}
+
+/// The policy itself, separated so it can be tested without a router.
+fn apply_json_no_store(response: &mut axum::response::Response) {
+    use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+    let is_json = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .is_some_and(|value| value.as_bytes().starts_with(b"application/json"));
+    if is_json && !response.headers().contains_key(CACHE_CONTROL) {
+        response.headers_mut().insert(
+            CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        );
+    }
+}
+
+#[cfg(test)]
+mod cache_policy_tests {
+    use super::apply_json_no_store;
+    use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+
+    fn response(content_type: &str) -> axum::response::Response {
+        axum::response::Response::builder()
+            .header(CONTENT_TYPE, content_type)
+            .body(axum::body::Body::empty())
+            .unwrap()
+    }
+
+    #[test]
+    fn json_without_a_policy_becomes_no_store() {
+        let mut r = response("application/json");
+        apply_json_no_store(&mut r);
+        assert_eq!(r.headers()[CACHE_CONTROL], "no-store");
+    }
+
+    #[test]
+    fn explicit_policies_and_binary_responses_are_untouched() {
+        let mut r = axum::response::Response::builder()
+            .header(CONTENT_TYPE, "application/json")
+            .header(CACHE_CONTROL, "max-age=5")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        apply_json_no_store(&mut r);
+        assert_eq!(r.headers()[CACHE_CONTROL], "max-age=5");
+
+        let mut image = response("image/png");
+        apply_json_no_store(&mut image);
+        assert!(!image.headers().contains_key(CACHE_CONTROL));
+    }
 }
 
 #[cfg(test)]

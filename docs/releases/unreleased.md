@@ -77,6 +77,13 @@
 
 ## Fixed
 
+- The same image can no longer show different quality scores in different
+  views inside the desktop app. Analysis responses carried no cache policy,
+  so the embedding webview could serve one view's request from its own HTTP
+  cache while another view fetched fresh scores. JSON API responses now
+  default to `Cache-Control: no-store`; previews and static assets keep
+  their existing caching.
+
 - Projects are no longer "renamed" to profile GUIDs. When a catalog's
   projects spanned two profiles — which an import could cause by filing new
   projects under the telescope's current-but-empty profile instead of the
