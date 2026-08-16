@@ -66,6 +66,8 @@ export interface DbEntry {
     token_configured?: boolean;
     sync_enabled?: boolean;
   };
+  /** Server-side destination for UI-triggered exports. */
+  export_dir?: string;
 }
 
 // Process-global Seiza catalog paths. data_dir configures a complete bundle;

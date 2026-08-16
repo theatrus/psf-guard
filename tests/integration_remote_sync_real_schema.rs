@@ -82,6 +82,7 @@ impl Harness {
                         image_dirs: image_dirs.clone(),
                         reject_archive: None,
                         remote_image_upload: Some(config(SOURCE_TOKEN)),
+                        export_dir: None,
                     },
                     DbEntry {
                         id: "destination".into(),
@@ -90,6 +91,7 @@ impl Harness {
                         image_dirs,
                         reject_archive: None,
                         remote_image_upload: Some(config(DESTINATION_TOKEN)),
+                        export_dir: None,
                     },
                 ],
                 directory

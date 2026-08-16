@@ -4,6 +4,7 @@ pub mod cache;
 pub mod catalog_install;
 pub mod database_context;
 pub mod embedded_static;
+pub mod export_job;
 pub mod extract;
 pub mod handlers;
 pub mod import_job;
@@ -502,7 +503,11 @@ async fn run_server_internal(
             post(handlers::start_import_route).get(handlers::get_import_progress),
         )
         .route("/export", get(handlers::export_archive_route))
-        .route("/export/local", post(handlers::export_local_route));
+        .route("/export/local", post(handlers::export_local_route))
+        .route(
+            "/export/server",
+            post(handlers::start_server_export_route).get(handlers::get_server_export_progress),
+        );
 
     // Top-level API: global endpoints + nested per-DB routes.
     let api_routes = Router::new()

@@ -640,6 +640,15 @@ includes raw `BIAS`, `DARK`, `DARKFLAT`, and target/filter `FLAT` folders.
 
 ![Overview project card with the Export action](docs/export-overview.png)
 
+A remote server can export onto its own drive instead of streaming a ZIP.
+Set a **server export directory** for the database (Settings, or `export_dir`
+in the registry JSON). The Export action then runs as a background job with
+progress: it places the same tree — lights, matching calibration frames, and
+the WBPP runner scripts — into a per-scope folder below that directory,
+cloning files (reflink) where the filesystem supports it and copying where it
+does not. Because the operator named the directory up front, the action needs
+no database-management grant.
+
 You can export a whole project or one target. The action appears when PSF Guard
 has found at least one accepted source file. The CLI offers the same filters
 and a dry run:

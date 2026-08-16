@@ -112,11 +112,16 @@ pub struct ExportOptions {
     pub layout: ExportLayout,
 }
 
-#[derive(Debug, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct ExportSummary {
     pub planned: usize,
     pub copied: usize,
     pub linked: usize,
+    /// Placed as copy-on-write clones (reflink). A clone is an independent
+    /// copy that shares extents until either side is written, so it costs
+    /// no time or space on a supporting filesystem yet stays safe to edit.
+    #[serde(default)]
+    pub reflinked: usize,
     pub skipped_existing: usize,
     pub missing: usize,
     pub errors: usize,
@@ -295,6 +300,19 @@ pub fn plan_export(
     Ok(plan)
 }
 
+/// How planned files land at the destination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placement {
+    Copy,
+    /// Hardlink, falling back to copy across filesystems. The export then
+    /// shares inodes with the originals — editing one edits both.
+    Hardlink,
+    /// Copy-on-write clone (reflink), falling back to copy when the
+    /// filesystem cannot clone. Free like a hardlink, independent like a
+    /// copy — the right default for a tree another program will consume.
+    Reflink,
+}
+
 /// Place the planned files under `dest_root`. `link` uses hardlinks (falling
 /// back to copy when the link fails, e.g. across filesystems).
 pub fn execute_plan(
@@ -303,28 +321,50 @@ pub fn execute_plan(
     link: bool,
     dry_run: bool,
 ) -> ExportSummary {
+    let placement = if link {
+        Placement::Hardlink
+    } else {
+        Placement::Copy
+    };
+    execute_plan_with(plan, dest_root, placement, dry_run, &mut |_, _| {})
+}
+
+/// [`execute_plan`] with an explicit placement mode and a progress callback
+/// receiving `(placed, total)` after every item.
+pub fn execute_plan_with(
+    plan: &ExportPlan,
+    dest_root: &Path,
+    placement: Placement,
+    dry_run: bool,
+    progress: &mut dyn FnMut(usize, usize),
+) -> ExportSummary {
     let mut summary = ExportSummary {
         planned: plan.items.len(),
         missing: plan.missing.len(),
         ..Default::default()
     };
 
-    for item in &plan.items {
+    let total = plan.items.len();
+    for (index, item) in plan.items.iter().enumerate() {
         let dest = dest_root.join(&item.relative_dest);
         if let Ok(meta) = std::fs::metadata(&dest)
             && meta.len() == item.size_bytes
         {
             summary.skipped_existing += 1;
+            progress(index + 1, total);
             continue;
         }
         if dry_run {
-            // Count what a live run would do; hardlinks report as links.
-            if link {
-                summary.linked += 1;
-            } else {
-                summary.copied += 1;
+            // Count what a live run would do, by intent; a live run can
+            // still fall back to copy where the filesystem cannot link or
+            // clone.
+            match placement {
+                Placement::Copy => summary.copied += 1,
+                Placement::Hardlink => summary.linked += 1,
+                Placement::Reflink => summary.reflinked += 1,
             }
             summary.bytes += item.size_bytes;
+            progress(index + 1, total);
             continue;
         }
         if let Some(parent) = dest.parent()
@@ -332,16 +372,29 @@ pub fn execute_plan(
         {
             eprintln!("⚠️  {}: {}", parent.display(), e);
             summary.errors += 1;
+            progress(index + 1, total);
             continue;
         }
-        if link {
+        if placement == Placement::Hardlink {
             match std::fs::hard_link(&item.source, &dest) {
                 Ok(()) => {
                     summary.linked += 1;
                     summary.bytes += item.size_bytes;
+                    progress(index + 1, total);
                     continue;
                 }
                 Err(_) => { /* cross-device or unsupported — fall through to copy */ }
+            }
+        }
+        if placement == Placement::Reflink {
+            match reflink_copy::reflink(&item.source, &dest) {
+                Ok(()) => {
+                    summary.reflinked += 1;
+                    summary.bytes += item.size_bytes;
+                    progress(index + 1, total);
+                    continue;
+                }
+                Err(_) => { /* filesystem cannot clone — fall through to copy */ }
             }
         }
         match std::fs::copy(&item.source, &dest) {
@@ -354,6 +407,7 @@ pub fn execute_plan(
                 summary.errors += 1;
             }
         }
+        progress(index + 1, total);
     }
     summary
 }
@@ -586,6 +640,34 @@ mod tests {
         let plan = plan_export(&conn, &dirs, &ExportOptions::default()).unwrap();
         let s = execute_plan(&plan, &dest, true, false);
         assert_eq!((s.linked, s.copied, s.errors), (1, 0, 0));
+    }
+
+    #[test]
+    fn reflink_mode_places_every_file_and_reports_progress() {
+        // Whether the filesystem clones or the fallback copies, every
+        // planned file must land and the summary must account for each.
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("out"); // same fs, so a clone is possible
+        let conn = seed(dir.path());
+        let dirs = vec![dir.path().to_string_lossy().into_owned()];
+        let plan = plan_export(&conn, &dirs, &ExportOptions::default()).unwrap();
+
+        let mut updates = Vec::new();
+        let summary = execute_plan_with(
+            &plan,
+            &dest,
+            Placement::Reflink,
+            false,
+            &mut |placed, total| {
+                updates.push((placed, total));
+            },
+        );
+        assert_eq!(summary.errors, 0);
+        assert_eq!(summary.reflinked + summary.copied, 1);
+        assert!(dest
+            .join("M42_Trapezium/LIGHT/Ha/acc_Ha_0001.fits")
+            .is_file());
+        assert_eq!(updates.last(), Some(&(1, 1)));
     }
 
     #[test]

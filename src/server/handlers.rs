@@ -419,13 +419,7 @@ pub async fn list_databases(
     let mut summaries: Vec<DatabaseSummary> = state
         .all_databases()
         .iter()
-        .map(|ctx| DatabaseSummary {
-            id: ctx.id.clone(),
-            name: ctx.name.clone(),
-            database_path: ctx.database_path.clone(),
-            image_directories: ctx.image_dirs.clone(),
-            remote_image_upload: remote_image_upload_summary(ctx),
-        })
+        .map(|ctx| summary_of(ctx))
         .collect();
     summaries.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(Json(ApiResponse::success(summaries)))
@@ -468,6 +462,10 @@ fn summary_of(ctx: &crate::server::database_context::DatabaseContext) -> Databas
         database_path: ctx.database_path.clone(),
         image_directories: ctx.image_dirs.clone(),
         remote_image_upload: remote_image_upload_summary(ctx),
+        export_directory: ctx
+            .export_dir
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
     }
 }
 
@@ -972,6 +970,7 @@ pub async fn add_database_route(
             entry.db_path.clone(),
             entry.image_dirs.clone(),
             entry.remote_image_upload.clone(),
+            entry.export_dir.clone(),
             state.cache_dir_root.clone(),
         )
         .map_err(|e| AppError::BadRequest(format!("opening database: {}", e)))?,
@@ -1034,6 +1033,26 @@ pub async fn update_database_route(
             ))?;
         apply_remote_image_upload_update(entry, update)?;
     }
+    if let Some(export_dir) = req.export_dir.as_ref() {
+        let entry = reg
+            .databases
+            .iter_mut()
+            .find(|entry| entry.id == new_id)
+            .ok_or(AppError::InternalError(
+                "registry update lost the entry".into(),
+            ))?;
+        let trimmed = export_dir.trim();
+        entry.export_dir = if trimmed.is_empty() {
+            None
+        } else {
+            if std::path::Path::new(trimmed).is_relative() {
+                return Err(AppError::BadRequest(
+                    "Export directory must be an absolute path".into(),
+                ));
+            }
+            Some(trimmed.to_string())
+        };
+    }
     let entry = reg
         .find(&new_id)
         .ok_or(AppError::InternalError(
@@ -1072,6 +1091,7 @@ pub async fn update_database_route(
             entry.db_path.clone(),
             entry.image_dirs.clone(),
             entry.remote_image_upload.clone(),
+            entry.export_dir.clone(),
             state.cache_dir_root.clone(),
         )
         .map_err(|e| AppError::BadRequest(format!("opening database: {}", e)))?,
@@ -1351,6 +1371,131 @@ pub async fn export_local_route(
     Ok(Json(ApiResponse::success(summary)))
 }
 
+/// `POST /api/db/{db_id}/export/server` — run the export into the
+/// operator-configured export directory as a background job. Unlike
+/// `/export/local`, the caller never names a path: the operator consented
+/// to writes here when configuring the directory, so no management grant
+/// is needed. Reflinks where the filesystem supports it, copies elsewhere.
+pub async fn start_server_export_route(
+    ctx: DbContext,
+    Json(req): Json<crate::server::api::ServerExportRequest>,
+) -> Result<Json<ApiResponse<crate::server::api::ExportStatusResponse>>, AppError> {
+    use crate::commands::export::{
+        execute_plan_with, plan_export, sanitize_component, ExportOptions, Placement,
+    };
+    use crate::server::export_job;
+
+    let Some(export_root) = ctx.0.export_dir.clone() else {
+        return Err(AppError::BadRequest(
+            "No export directory is configured for this database. Set one in Settings, \
+             or edit the registry's export_dir."
+                .into(),
+        ));
+    };
+    let dest = match req.subdirectory.as_deref().map(str::trim) {
+        Some(subdirectory) if !subdirectory.is_empty() => {
+            export_root.join(sanitize_component(subdirectory))
+        }
+        _ => export_root,
+    };
+    let scope = req
+        .scope_label
+        .clone()
+        .filter(|label| !label.trim().is_empty())
+        .unwrap_or_else(|| "selection".into());
+
+    let options = ExportOptions {
+        include_pending: req.include_pending,
+        project_id: req.project_id,
+        target_id: req.target_id,
+        filter_name: req.filter_name.clone(),
+        layout: req.layout,
+        ..Default::default()
+    };
+
+    let store = ctx.0.export_job.clone();
+    if !export_job::try_begin(&store, dest.display().to_string(), scope) {
+        return Ok(Json(ApiResponse::success(
+            crate::server::api::ExportStatusResponse {
+                started: false,
+                progress: export_job::progress_snapshot(&store),
+            },
+        )));
+    }
+
+    let job_ctx = ctx.0.clone();
+    let job_store = store.clone();
+    tokio::task::spawn_blocking(move || {
+        let run = || -> anyhow::Result<()> {
+            let conn = rusqlite::Connection::open_with_flags(
+                &job_ctx.database_path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+            )
+            .map_err(|e| anyhow::anyhow!("opening {}: {e}", job_ctx.database_path))?;
+            let plan = plan_export(&conn, &job_ctx.image_dirs, &options)?;
+            std::fs::create_dir_all(&dest)
+                .map_err(|e| anyhow::anyhow!("creating {}: {e}", dest.display()))?;
+            export_job::set_stage(&job_store, "placing");
+            export_job::set_placement_totals(&job_store, plan.items.len(), 0);
+            let summary = execute_plan_with(
+                &plan,
+                &dest,
+                Placement::Reflink,
+                false,
+                &mut |placed, total| {
+                    export_job::set_placement_totals(&job_store, total, placed);
+                },
+            );
+            if options.layout == crate::commands::export::ExportLayout::Wbpp {
+                use crate::commands::export::{wbpp, write_wbpp_scripts};
+                export_job::set_stage(&job_store, "scripts");
+                // The frames are already placed; a runner that cannot be
+                // written is worth logging but never worth failing over.
+                if let Err(error) = write_wbpp_scripts(&plan, &dest, wbpp::WbppRun::default()) {
+                    tracing::warn!("No WBPP runner script: {error}");
+                }
+            }
+            tracing::info!(
+                "📤 Server export db={}: planned={} reflinked={} copied={} skipped={} missing={} errors={} -> {}",
+                job_ctx.id,
+                summary.planned,
+                summary.reflinked,
+                summary.copied,
+                summary.skipped_existing,
+                summary.missing,
+                summary.errors,
+                dest.display(),
+            );
+            export_job::complete_export(&job_store, summary);
+            Ok(())
+        };
+        if let Err(error) = run() {
+            tracing::warn!("Server export failed: {error:#}");
+            export_job::finish(&job_store, Some(format!("{error:#}")));
+        }
+    });
+
+    Ok(Json(ApiResponse::success(
+        crate::server::api::ExportStatusResponse {
+            started: true,
+            progress: export_job::progress_snapshot(&store),
+        },
+    )))
+}
+
+/// `GET /api/db/{db_id}/export/server` — progress of the export job.
+pub async fn get_server_export_progress(
+    ctx: DbContext,
+) -> Result<Json<ApiResponse<crate::server::api::ExportStatusResponse>>, AppError> {
+    let progress = crate::server::export_job::progress_snapshot(&ctx.0.export_job);
+    Ok(Json(ApiResponse::success(
+        crate::server::api::ExportStatusResponse {
+            started: progress.running,
+            progress,
+        },
+    )))
+}
+
 /// `PUT /api/db/{db_id}/projects/{project_id}` — update scheduler fields.
 pub async fn update_project_route(
     State(_state): State<Arc<AppState>>,
@@ -1506,6 +1651,7 @@ pub async fn create_database_route(
             entry.db_path.clone(),
             entry.image_dirs.clone(),
             entry.remote_image_upload.clone(),
+            entry.export_dir.clone(),
             state.cache_dir_root.clone(),
         )
         .map_err(|e| AppError::InternalError(format!("opening new database: {}", e)))?,

@@ -3404,6 +3404,16 @@
   font-size: 0.82rem;
 }
 
+.server-export-status {
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+  max-width: 42rem;
+}
+
+.server-export-status.error {
+  color: var(--color-error, #c0392b);
+}
+
 .stack-preview-channel-calibration select {
   padding: 0.18rem 0.3rem;
   border-radius: 4px;

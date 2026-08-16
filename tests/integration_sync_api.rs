@@ -96,6 +96,7 @@ async fn planning_and_grade_pushes_preview_before_writing() {
             image_dirs: vec![image_dir.to_string_lossy().into_owned()],
             reject_archive: None,
             remote_image_upload: None,
+            export_dir: None,
         },
         DbEntry {
             id: "scope".into(),
@@ -104,6 +105,7 @@ async fn planning_and_grade_pushes_preview_before_writing() {
             image_dirs: vec![image_dir.to_string_lossy().into_owned()],
             reject_archive: None,
             remote_image_upload: None,
+            export_dir: None,
         },
     ];
     let state = Arc::new(
@@ -394,6 +396,7 @@ async fn a_pull_brings_structure_and_captures_down_and_keeps_local_grades() {
                     image_dirs: image_dirs.clone(),
                     reject_archive: None,
                     remote_image_upload: None,
+                    export_dir: None,
                 },
                 DbEntry {
                     id: "scope".into(),
@@ -402,6 +405,7 @@ async fn a_pull_brings_structure_and_captures_down_and_keeps_local_grades() {
                     image_dirs,
                     reject_archive: None,
                     remote_image_upload: None,
+                    export_dir: None,
                 },
             ],
             dir.path().join("cache").to_string_lossy().into_owned(),

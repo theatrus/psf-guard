@@ -17,6 +17,7 @@ import {
   type WithDb,
 } from '../hooks/useDatabases';
 import { isTauriApp, tauriFileSystem } from '../utils/tauri';
+import { describeExportProgress, useExportJob } from '../hooks/useExportJob';
 import { openSettings } from '../utils/settingsIntent';
 import {
   loadProjectSeenState,
@@ -95,6 +96,9 @@ export default function Overview() {
   // our own files would be silly. Browser mode keeps the zip download link.
   const isTauri = isTauriApp();
   const [exportBusy, setExportBusy] = useState(false);
+  // The database whose server export this page last started (or found
+  // running); drives the progress line under the catalog summary.
+  const [exportJobDb, setExportJobDb] = useState<string | null>(null);
   // One choice for every export affordance on the page. Kept here rather than
   // per row so a project and its targets cannot disagree about the tree they
   // land in.
@@ -123,6 +127,35 @@ export default function Overview() {
       setExportBusy(false);
     }
   };
+  // Which databases have an operator-configured export directory: those get
+  // a server export instead of the zip download.
+  const serverExportDir = (dbId: string) =>
+    databases?.find((db) => db.id === dbId)?.export_directory;
+  const handleServerExport = async (
+    dbId: string,
+    scope: { project_id?: number; target_id?: number },
+    label: string
+  ) => {
+    try {
+      setExportBusy(true);
+      const status = await apiClient.startServerExport(dbId, {
+        ...scope,
+        layout: exportLayout,
+        subdirectory: label,
+        scope_label: label,
+      });
+      setExportJobDb(dbId);
+      if (!status.started) {
+        alert('An export is already running for this database; watch its progress below.');
+      }
+    } catch (err) {
+      alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setExportBusy(false);
+    }
+  };
+  const exportJob = useExportJob(exportJobDb);
+  const exportJobLine = describeExportProgress(exportJob.progress);
 
   // Persist an organize edit (rename / move / merge), then refresh this DB's
   // overview queries so the new grouping shows up.
@@ -458,6 +491,15 @@ export default function Overview() {
               <option value="wbpp">WBPP</option>
             </select>
           </label>
+          {exportJobLine && (
+            <div
+              className={`server-export-status${
+                exportJob.progress?.stage === 'error' ? ' error' : ''
+              }`}
+            >
+              {exportJobLine}
+            </div>
+          )}
           <dl className="summary-metrics">
             <div>
               <dt>Projects</dt>
@@ -925,6 +967,23 @@ export default function Overview() {
                         >
                           ⬇ Export
                         </span>
+                      ) : serverExportDir(project.db_id) ? (
+                        <span
+                          className="export-link"
+                          title={`Export this project's accepted lights to the server's export directory (${serverExportDir(project.db_id)}), reflinking where the filesystem supports it`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!exportBusy) {
+                              handleServerExport(
+                                project.db_id,
+                                { project_id: project.id },
+                                project.display_name
+                              );
+                            }
+                          }}
+                        >
+                          ⬇ Export
+                        </span>
                       ) : (
                         <a
                           className="export-link"
@@ -1037,6 +1096,23 @@ export default function Overview() {
                                     onClick={() => {
                                       if (!exportBusy) {
                                         handleLocalExport(
+                                          target.db_id,
+                                          { target_id: target.id },
+                                          target.name
+                                        );
+                                      }
+                                    }}
+                                  >
+                                    ↓ Export
+                                  </button>
+                                ) : serverExportDir(target.db_id) ? (
+                                  <button
+                                    type="button"
+                                    className="target-settings-button"
+                                    title={`Export this target's accepted lights to the server's export directory (${serverExportDir(target.db_id)})`}
+                                    onClick={() => {
+                                      if (!exportBusy) {
+                                        handleServerExport(
                                           target.db_id,
                                           { target_id: target.id },
                                           target.name
