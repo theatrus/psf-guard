@@ -192,7 +192,7 @@ pub fn plan_export(
             continue;
         }
         if let Some(wanted) = &options.filter_name
-            && !image.filter_name.eq_ignore_ascii_case(wanted)
+            && !crate::utils::filter_names_match(&image.filter_name, wanted)
         {
             continue;
         }

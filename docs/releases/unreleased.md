@@ -77,6 +77,11 @@
 
 ## Fixed
 
+- Filter names that differ only by case or whitespace ("Ha" beside "HA")
+  no longer split one physical filter into separate quality-comparison
+  groups, and filter selections match all variants. Display keeps the name
+  as the camera wrote it.
+
 - The same image can no longer show different quality scores in different
   views inside the desktop app. Analysis responses carried no cache policy,
   so the embedding webview could serve one view's request from its own HTTP
