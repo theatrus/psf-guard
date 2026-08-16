@@ -18,6 +18,10 @@ pub struct FrameMeta {
     pub readable: bool,
     /// IMAGETYP, uppercased ("LIGHT", "DARK", "FLAT", "BIAS", ...).
     pub image_type: Option<String>,
+    /// The output of processing (an integration master or a PixInsight
+    /// calibrated/registered intermediate) rather than an acquisition.
+    /// Skipped by import unless explicitly included.
+    pub processed: bool,
     pub object: Option<String>,
     pub filter: Option<String>,
     /// DATE-OBS as epoch seconds (UTC).
@@ -88,6 +92,7 @@ pub fn read_frame_meta_named(path: &Path, declared: &Path) -> FrameMeta {
         return meta;
     };
     meta.readable = true;
+    meta.processed = crate::image_io::is_processing_artifact(path, declared, &headers);
 
     let find = |names: &[&str]| -> Option<&HeaderValue> {
         names.iter().find_map(|wanted| {

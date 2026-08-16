@@ -109,6 +109,52 @@ pub fn read_header_named(
     }
 }
 
+/// Whether a frame is the OUTPUT of processing — an integration master or a
+/// calibrated/registered intermediate — rather than an acquisition.
+///
+/// Processing tools preserve the acquisition keywords (a WBPP-calibrated
+/// frame still says `IMAGETYP = LIGHT` with the original `DATE-OBS`), so an
+/// importer that trusts those alone catalogs every artifact as a new light.
+/// The reliable marks are the ones the tools ADD: `NCOMBINE` and
+/// master-type `IMAGETYP` values on integrations, `SEIZAMST` on Seiza
+/// masters, and PixInsight's processing-history and signature properties on
+/// everything its pipeline writes.
+pub fn is_processing_artifact(
+    path: &Path,
+    declared: impl AsRef<Path>,
+    headers: &[(String, HeaderValue)],
+) -> bool {
+    let has_card = |wanted: &str| {
+        headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case(wanted))
+    };
+    if has_card("NCOMBINE") || has_card("SEIZAMST") {
+        return true;
+    }
+    let image_type_is_master = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("IMAGETYP"))
+        .and_then(|(_, value)| match value {
+            HeaderValue::String(text) | HeaderValue::Raw(text) => Some(text),
+            _ => None,
+        })
+        .is_some_and(|text| text.to_ascii_uppercase().contains("MASTER"));
+    if image_type_is_master {
+        return true;
+    }
+    if seiza_xisf::is_xisf_path(declared.as_ref())
+        && let Ok(info) = seiza_xisf::inspect(path)
+        && let Some(image) = info.images.first()
+    {
+        return image.properties.iter().any(|property| {
+            property.id.starts_with("PixInsight:ProcessingHistory")
+                || property.id.starts_with("PCL:Signature:")
+        });
+    }
+    false
+}
+
 /// The scale a normalized frame is placed on: full-well for 16-bit data.
 ///
 /// PSF Guard compares background and flux across frames in physical ADU, and

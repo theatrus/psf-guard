@@ -502,6 +502,7 @@ async fn run_server_internal(
             "/import",
             post(handlers::start_import_route).get(handlers::get_import_progress),
         )
+        .route("/import/folders", get(handlers::get_import_folders))
         .route("/export", get(handlers::export_archive_route))
         .route("/export/local", post(handlers::export_local_route))
         .route(

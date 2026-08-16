@@ -6,6 +6,7 @@ import {
 } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
+import type { ImportFolder, ImportScope } from '../api/types';
 import type { DbEntry, DbRegistry } from '../utils/tauri';
 import { apiClient } from '../api/client';
 import { useAccess } from '../auth/access';
@@ -107,6 +108,12 @@ export default function TauriSettings({
   // A running preview survives closing or reloading this page. Keep the
   // destination so its completed dry-run can still show the confirm step.
   const [confirmImport, setConfirmImport] = useState<DbEntry | null>(null);
+  const [importScope, setImportScope] = useState<ImportScope>('all');
+  const [importSkipProcessed, setImportSkipProcessed] = useState(false);
+  const [importFolders, setImportFolders] = useState<ImportFolder[]>([]);
+  // Checked folder paths. Exactly the configured roots means "everything",
+  // and the request then omits image_dirs entirely.
+  const [importSelectedDirs, setImportSelectedDirs] = useState<string[]>([]);
 
   const reload = useCallback(async () => {
     setIsLoading(true);
@@ -488,6 +495,36 @@ export default function TauriSettings({
   // Import is two-step: a dry-run PREVIEW first (rolled back server-side),
   // then an explicit confirmation. Nothing touches the database until the
   // user has seen exactly what would be attached vs newly created.
+  // Scope, folder, and artifact choices as request fields. Selection equal
+  // to the configured roots means "everything" and sends no image_dirs, so
+  // the default run needs no folder consent beyond what is configured.
+  const importOptionsOf = (entry: DbEntry) => {
+    const roots = [...entry.image_dirs].sort();
+    const selection = [...importSelectedDirs].sort();
+    const isDefaultSelection =
+      selection.length === roots.length && selection.every((dir, i) => dir === roots[i]);
+    return {
+      scope: importScope === 'all' ? undefined : importScope,
+      skip_processed: importSkipProcessed || undefined,
+      image_dirs: isDefaultSelection || selection.length === 0 ? undefined : selection,
+    };
+  };
+
+  const previewImport = async (entry: DbEntry, options: ReturnType<typeof importOptionsOf>) => {
+    const status = await apiClient.startImport(entry.id, {
+      dry_run: true,
+      backfill: false,
+      ...options,
+    });
+    setImportDbId(entry.id);
+    setConfirmImport(entry);
+    setStatusMessage(
+      status.started
+        ? `Previewing import into ${entry.name}… nothing is written until you confirm.`
+        : 'An import is already running for this database.'
+    );
+  };
+
   const handleImport = async (entry: DbEntry) => {
     if (entry.image_dirs.length === 0) {
       setStatusMessage(
@@ -498,17 +535,35 @@ export default function TauriSettings({
     setIsApplying(true);
     setStatusMessage('');
     setImportAnalyzeQuality(false);
+    setImportScope('all');
+    setImportSkipProcessed(false);
+    setImportSelectedDirs([...entry.image_dirs]);
+    setImportFolders([]);
+    apiClient
+      .getImportFolders(entry.id)
+      .then(setImportFolders)
+      .catch(() => setImportFolders([]));
     try {
-      const status = await apiClient.startImport(entry.id, { dry_run: true, backfill: false });
-      setImportDbId(entry.id);
-      setConfirmImport(entry);
-      setStatusMessage(
-        status.started
-          ? `Previewing import into ${entry.name}… nothing is written until you confirm.`
-          : 'An import is already running for this database.'
-      );
+      await previewImport(entry, {
+        scope: undefined,
+        skip_processed: undefined,
+        image_dirs: undefined,
+      });
     } catch (err) {
       console.error('import preview failed to start:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      setStatusMessage(`Failed to preview import: ${msg}`);
+    } finally {
+      setIsApplying(false);
+    }
+  };
+
+  const handleRepreviewImport = async () => {
+    if (!confirmImport) return;
+    setIsApplying(true);
+    try {
+      await previewImport(confirmImport, importOptionsOf(confirmImport));
+    } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setStatusMessage(`Failed to preview import: ${msg}`);
     } finally {
@@ -526,6 +581,7 @@ export default function TauriSettings({
         dry_run: false,
         backfill: importAnalyzeQuality,
         fill_metadata: starMetadataFillEnabled(),
+        ...importOptionsOf(entry),
       });
       setStatusMessage(`Importing images into ${entry.name}…`);
     } catch (err) {
@@ -813,12 +869,138 @@ export default function TauriSettings({
 
             {importDbId && importProgress && importProgress.stage !== '' && (
               <div className="import-progress-panel">
+                {confirmImport && importDbId === confirmImport.id && (
+                  <div className="import-scope-controls">
+                    <label className="import-scope-choice">
+                      Import
+                      <select
+                        value={importScope}
+                        onChange={(event) => setImportScope(event.target.value as ImportScope)}
+                        disabled={importRunning || isApplying}
+                      >
+                        <option value="all">Lights and calibration</option>
+                        <option value="lights">Lights only</option>
+                        <option value="calibration">Calibration only</option>
+                      </select>
+                    </label>
+                    {importFolders.length > 0 && (
+                      <div className="import-folder-tree">
+                        {importFolders.map((root) => (
+                          <details key={root.path} className="import-folder-root">
+                            <summary>
+                              <label onClick={(event) => event.stopPropagation()}>
+                                <input
+                                  type="checkbox"
+                                  checked={importSelectedDirs.includes(root.path)}
+                                  onChange={() =>
+                                    setImportSelectedDirs((current) =>
+                                      current.includes(root.path)
+                                        ? current.filter((d) => d !== root.path)
+                                        : [...current, root.path]
+                                    )
+                                  }
+                                />
+                                {root.path}
+                              </label>
+                            </summary>
+                            {root.children.map((child) => (
+                              <div key={child.path} className="import-folder-child">
+                                <label>
+                                  <input
+                                    type="checkbox"
+                                    checked={
+                                      importSelectedDirs.includes(child.path) ||
+                                      importSelectedDirs.includes(root.path)
+                                    }
+                                    disabled={importSelectedDirs.includes(root.path)}
+                                    onChange={() =>
+                                      setImportSelectedDirs((current) =>
+                                        current.includes(child.path)
+                                          ? current.filter((d) => d !== child.path)
+                                          : [...current, child.path]
+                                      )
+                                    }
+                                  />
+                                  {child.name}
+                                </label>
+                                {child.children.length > 0 && (
+                                  <div className="import-folder-grandchildren">
+                                    {child.children.map((grandchild) => (
+                                      <label key={grandchild.path}>
+                                        <input
+                                          type="checkbox"
+                                          checked={
+                                            importSelectedDirs.includes(grandchild.path) ||
+                                            importSelectedDirs.includes(child.path) ||
+                                            importSelectedDirs.includes(root.path)
+                                          }
+                                          disabled={
+                                            importSelectedDirs.includes(child.path) ||
+                                            importSelectedDirs.includes(root.path)
+                                          }
+                                          onChange={() =>
+                                            setImportSelectedDirs((current) =>
+                                              current.includes(grandchild.path)
+                                                ? current.filter((d) => d !== grandchild.path)
+                                                : [...current, grandchild.path]
+                                            )
+                                          }
+                                        />
+                                        {grandchild.name}
+                                      </label>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </details>
+                        ))}
+                      </div>
+                    )}
+                    <label className="quality-analysis-option import-skip-processed">
+                      <input
+                        type="checkbox"
+                        checked={importSkipProcessed}
+                        onChange={(event) => setImportSkipProcessed(event.target.checked)}
+                        disabled={importRunning || isApplying}
+                      />
+                      <span>
+                        <small>
+                          Skip processing artifacts (integration masters and
+                          calibrated/registered intermediates). Useful when a scanned
+                          folder contains a processing tree whose derived files repeat
+                          exposures already cataloged.
+                        </small>
+                      </span>
+                    </label>
+                    <button
+                      className="browse-button"
+                      onClick={handleRepreviewImport}
+                      disabled={importRunning || isApplying}
+                      title="Re-run the preview with the selection above; nothing is written."
+                    >
+                      Update preview
+                    </button>
+                  </div>
+                )}
                 <div className="import-progress-line">
                   {importRunning && <span className="import-spinner">⏳ </span>}
                   {describeImportProgress(importProgress)}
                 </div>
                 {importProgress.stage === 'complete' && importProgress.outcome && (
                   <>
+                    {(importProgress.outcome.skipped_processed ?? 0) > 0 && (
+                      <div className="muted">
+                        {importProgress.outcome.skipped_processed} processing artifact(s)
+                        (masters, calibrated/registered intermediates) skipped.
+                      </div>
+                    )}
+                    {(importProgress.outcome.skipped_out_of_scope ?? 0) > 0 && (
+                      <div className="muted">
+                        {importProgress.outcome.skipped_out_of_scope} frame(s) outside the
+                        selected scope.
+                      </div>
+                    )}
                     {importProgress.outcome.attach_summaries.length > 0 && (
                       <ul className="import-project-list">
                         {importProgress.outcome.attach_summaries.map((a) => (

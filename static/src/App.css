@@ -3404,6 +3404,49 @@
   font-size: 0.82rem;
 }
 
+.import-scope-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--color-border, #444);
+  margin-bottom: 0.6rem;
+}
+
+.import-scope-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.import-folder-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.82rem;
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.import-folder-root > summary {
+  cursor: pointer;
+}
+
+.import-folder-child {
+  margin-left: 1.4rem;
+}
+
+.import-folder-grandchildren {
+  margin-left: 1.4rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.import-scope-controls .browse-button {
+  align-self: flex-start;
+}
+
 .server-export-status {
   font-size: 0.82rem;
   color: var(--color-text-muted);

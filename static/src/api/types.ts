@@ -1150,6 +1150,10 @@ export interface ImportOutcome {
   scanned: number;
   unreadable: number;
   non_light: number;
+  /** Masters and calibrated/registered intermediates left out. */
+  skipped_processed?: number;
+  /** Frames outside the run's scope. */
+  skipped_out_of_scope?: number;
   calibration: CalibrationImportOutcome;
   skipped_existing: number;
   imported: number;
@@ -1265,6 +1269,20 @@ export interface ImportRequest {
   /** Attach to existing targets by name/coordinates (default true). */
   attach_existing?: boolean;
   match_radius_deg?: number;
+  /** Which frame kinds to import (default all). */
+  scope?: ImportScope;
+  /** Leave processing artifacts out of the catalog (default false). */
+  skip_processed?: boolean;
+}
+
+/** Which frames an import run touches. */
+export type ImportScope = 'all' | 'lights' | 'calibration';
+
+/** One directory in the import folder listing (two levels deep). */
+export interface ImportFolder {
+  path: string;
+  name: string;
+  children: ImportFolder[];
 }
 
 /** Body of `POST /api/databases/create`. */

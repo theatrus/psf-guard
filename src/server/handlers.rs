@@ -1689,6 +1689,85 @@ pub async fn create_database_route(
     })))
 }
 
+/// Whether every requested directory sits at or below one of the
+/// database's configured image roots, after resolving symlinks on both
+/// sides. Paths that fail to resolve are NOT within the roots.
+fn dirs_within_roots(requested: &[String], roots: &[String]) -> bool {
+    let resolved_roots: Vec<std::path::PathBuf> = roots
+        .iter()
+        .filter_map(|root| dunce::canonicalize(root).ok())
+        .collect();
+    if resolved_roots.is_empty() {
+        return false;
+    }
+    requested.iter().all(|dir| {
+        dunce::canonicalize(dir)
+            .is_ok_and(|resolved| resolved_roots.iter().any(|root| resolved.starts_with(root)))
+    })
+}
+
+/// One directory in the import folder listing.
+#[derive(Debug, serde::Serialize)]
+pub struct ImportFolder {
+    pub path: String,
+    pub name: String,
+    pub children: Vec<ImportFolder>,
+}
+
+fn list_subfolders(dir: &std::path::Path, depth: usize) -> Vec<ImportFolder> {
+    if depth == 0 {
+        return Vec::new();
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut folders: Vec<ImportFolder> = entries
+        .flatten()
+        .filter(|entry| entry.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                return None;
+            }
+            let path = entry.path();
+            Some(ImportFolder {
+                name,
+                children: list_subfolders(&path, depth - 1),
+                path: path.to_string_lossy().into_owned(),
+            })
+        })
+        .collect();
+    folders.sort_by(|a, b| a.name.cmp(&b.name));
+    folders
+}
+
+/// `GET /api/db/{db_id}/import/folders` — the configured image roots and
+/// two levels of their subdirectories, for choosing what an import scans.
+pub async fn get_import_folders(
+    ctx: DbContext,
+) -> Result<Json<ApiResponse<Vec<ImportFolder>>>, AppError> {
+    let roots = ctx.image_dirs.clone();
+    let listing = tokio::task::spawn_blocking(move || {
+        roots
+            .iter()
+            .map(|root| {
+                let path = std::path::Path::new(root);
+                ImportFolder {
+                    name: path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| root.clone()),
+                    path: root.clone(),
+                    children: list_subfolders(path, 2),
+                }
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .map_err(|e| AppError::InternalError(format!("folder listing: {e}")))?;
+    Ok(Json(ApiResponse::success(listing)))
+}
+
 /// `POST /api/db/{db_id}/import` — start a background FITS import into an
 /// existing database. One import runs per database at a time.
 pub async fn start_import_route(
@@ -1702,7 +1781,12 @@ pub async fn start_import_route(
     // only from directories the operator already configured.
     let dirs = match req.image_dirs {
         Some(dirs) if !dirs.is_empty() => {
-            require_database_management_allowed(&state)?;
+            // A folder inside an already-configured root was consented to
+            // when the root was; only a NEW server path needs the
+            // management grant.
+            if !dirs_within_roots(&dirs, &ctx.image_dirs) {
+                require_database_management_allowed(&state)?;
+            }
             dirs
         }
         _ => ctx.image_dirs.clone(),
@@ -1731,6 +1815,8 @@ pub async fn start_import_route(
         match_radius_deg: req
             .match_radius_deg
             .unwrap_or(crate::commands::import::DEFAULT_MATCH_RADIUS_DEG),
+        scope: req.scope.unwrap_or_default(),
+        skip_processed: req.skip_processed.unwrap_or(false),
     };
     let started = spawn_import_job(
         &state,
