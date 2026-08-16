@@ -947,6 +947,15 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                             dbId={dbId!}
                             image={image}
                             quality={quality.qualityByImage.get(image.id)}
+                            qualityScoreScope={quality.scopeByImage.get(image.id)}
+                            secondaryScore={
+                              quality.sessionScoreByImage.has(image.id)
+                                ? {
+                                    score: quality.sessionScoreByImage.get(image.id)!,
+                                    scope: 'capture_sequence',
+                                  }
+                                : undefined
+                            }
                             qualityPresentation="compact"
                             isSelected={
                               selectedImages.has(image.id) ||

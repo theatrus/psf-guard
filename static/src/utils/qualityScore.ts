@@ -27,3 +27,11 @@ export function qualityScoreDescription(
     : 'It uses catalog metrics only and is not proof of image damage.';
   return `${basis}: ${score}. Compared with ${comparison}. ${evidence}`;
 }
+
+/** Tooltip for the smaller second badge showing the other comparison basis. */
+export function secondaryScoreDescription(score: number, scope: QualityScoreScope): string {
+  const value = `${Math.round(score * 100)}%`;
+  return scope === 'capture_sequence'
+    ? `Within its own capture session: ${value}. A small session can flatter a frame; the main badge compares across every session of this filter.`
+    : `Across all target/filter stack candidates: ${value}. The main badge compares within the selected capture session.`;
+}
