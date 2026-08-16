@@ -290,6 +290,7 @@ async fn calibration_uploads_are_cataloged_without_scheduler_images() {
         ("BIAS", "bias", "bias-001.fits"),
         ("DARK", "dark", "dark-001.fits"),
         ("DARK FLAT", "dark_flat", "dark-flat-001.fits"),
+        ("FLAT DARK", "dark_flat", "flat-dark-001.fits"),
         ("FLAT", "flat", "flat-001.fits"),
     ];
 
@@ -322,10 +323,10 @@ async fn calibration_uploads_are_cataloged_without_scheduler_images() {
     }
 
     assert_eq!(image_count(&fixture.database_a), 0);
-    assert_eq!(calibration_count(&fixture.database_a), 4);
+    assert_eq!(calibration_count(&fixture.database_a), 5);
     assert_eq!(calibration_count(&fixture.database_b), 0);
 
-    let retry = fits_bytes_with_type("FLAT", "Calibration", "2026-07-24T08:03:00");
+    let retry = fits_bytes_with_type("FLAT", "Calibration", "2026-07-24T08:04:00");
     let (status, body) = upload(
         fixture.state.clone(),
         "catalog-a",
@@ -340,7 +341,7 @@ async fn calibration_uploads_are_cataloged_without_scheduler_images() {
     assert_eq!(body["data"]["already_present"], true);
     assert_eq!(body["data"]["import"]["calibration"]["skipped_existing"], 1);
     assert_eq!(image_count(&fixture.database_a), 0);
-    assert_eq!(calibration_count(&fixture.database_a), 4);
+    assert_eq!(calibration_count(&fixture.database_a), 5);
 }
 
 #[tokio::test]
