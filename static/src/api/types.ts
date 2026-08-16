@@ -1275,6 +1275,43 @@ export interface ImportRequest {
   skip_processed?: boolean;
 }
 
+/** How the calibration library covers one project (mirrors Rust
+ *  `ProjectCalibrationReport`). */
+export interface ProjectCalibrationReport {
+  nights: CalibrationNightReport[];
+  kinds: CalibrationKindSummary[];
+  warnings: string[];
+  lights_missing_files: number;
+}
+
+export interface CalibrationKindSummary {
+  kind: string;
+  matching_frames: number;
+  sessions: string[];
+  newest_at?: number | null;
+  oldest_at?: number | null;
+}
+
+export interface CalibrationNightReport {
+  night: string;
+  lights: number;
+  filters: CalibrationNightFilter[];
+}
+
+export interface CalibrationNightFilter {
+  filter: string;
+  lights: number;
+  bias_frames: number;
+  dark_frames: number;
+  dark_age_days?: number | null;
+  dark_flat_frames: number;
+  flat_frames: number;
+  flat_session?: string | null;
+  flat_age_days?: number | null;
+  nightly_flats: boolean;
+  missing: string[];
+}
+
 /** Which frames an import run touches. */
 export type ImportScope = 'all' | 'lights' | 'calibration';
 

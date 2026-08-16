@@ -372,6 +372,10 @@ async fn run_server_internal(
         .route("/targets/overview", get(handlers::get_targets_overview))
         .route("/stats/overall", get(handlers::get_overall_stats))
         .route(
+            "/projects/{project_id}/calibration-report",
+            get(handlers::get_project_calibration_report),
+        )
+        .route(
             "/projects/{project_id}/targets",
             get(handlers::list_targets),
         )

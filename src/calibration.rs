@@ -9,6 +9,7 @@ use rusqlite::types::Value;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::UNIX_EPOCH;
@@ -32,7 +33,7 @@ const FLAT_SESSION_WINDOW_SECONDS: u64 = 24 * 60 * 60;
 const MASTER_TEMPERATURE_COHERENCE_C: f64 = 1.0;
 const EXPOSURE_TOLERANCE_SECONDS: f64 = 0.05;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CalibrationKind {
     Bias,
@@ -966,6 +967,285 @@ pub fn selection_fingerprint(
     let mut selected = select_for_light(conn, &light)?;
     remap_missing_sources(&mut selected, directory_tree);
     Ok(selection_hash(&selected))
+}
+
+// ---------- Project calibration report ----------
+
+/// How one project's lights are covered by the calibration library: what
+/// matches, how old it is, and whether each night has its own flats.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectCalibrationReport {
+    /// One entry per night of lights, newest first.
+    pub nights: Vec<CalibrationNightReport>,
+    /// Library-wide matching summary per kind, across every light
+    /// configuration the project uses.
+    pub kinds: Vec<CalibrationKindSummary>,
+    pub warnings: Vec<String>,
+    /// Lights whose file was not found in the image directories; the
+    /// report is built from the lights that resolve.
+    pub lights_missing_files: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CalibrationKindSummary {
+    /// `bias`, `dark`, `dark_flat`, or `flat`.
+    pub kind: String,
+    /// Distinct matching frames across the whole project.
+    pub matching_frames: usize,
+    /// Distinct capture days those frames span (night-of, newest first).
+    pub sessions: Vec<String>,
+    pub newest_at: Option<i64>,
+    pub oldest_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CalibrationNightReport {
+    /// The imaging night (the date twelve hours before the exposures, so a
+    /// session spanning midnight stays one night).
+    pub night: String,
+    pub lights: usize,
+    pub filters: Vec<CalibrationNightFilter>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CalibrationNightFilter {
+    pub filter: String,
+    pub lights: usize,
+    pub bias_frames: usize,
+    pub dark_frames: usize,
+    /// Nearest matching dark's distance from this night, in days.
+    pub dark_age_days: Option<f64>,
+    pub dark_flat_frames: usize,
+    pub flat_frames: usize,
+    /// The capture day of the flat session a master would build from.
+    pub flat_session: Option<String>,
+    /// That session's distance from this night, in days.
+    pub flat_age_days: Option<f64>,
+    /// Whether flats were shot within a day of this night's lights.
+    pub nightly_flats: bool,
+    /// Kinds with no matching frames at all for this configuration.
+    pub missing: Vec<String>,
+}
+
+/// The imaging night a timestamp belongs to: subtract twelve hours, take
+/// the date, so 01:30 belongs to the evening before.
+fn night_of(timestamp: i64) -> String {
+    chrono::DateTime::from_timestamp(timestamp - 12 * 3600, 0)
+        .map(|when| when.date_naive().to_string())
+        .unwrap_or_else(|| "unknown".into())
+}
+
+fn day_of(timestamp: i64) -> String {
+    night_of(timestamp)
+}
+
+/// Build the calibration coverage report for one project's lights.
+///
+/// One representative light per night and filter is read from disk (header
+/// only) and matched against the library exactly as a stack build would,
+/// so the report describes what calibration WOULD apply — not just what
+/// files exist.
+pub fn project_calibration_report(
+    conn: &Connection,
+    project_id: i32,
+    directory_tree: &crate::directory_tree::DirectoryTree,
+) -> Result<ProjectCalibrationReport> {
+    let db = crate::db::Database::new(conn);
+    let rows = db
+        .query_images_scoped(None, Some(project_id), None, None, 0)
+        .context("querying project lights")?;
+
+    // Bucket lights by (night, filter) and pick the median exposure of each
+    // bucket as its representative.
+    let mut buckets: HashMap<(String, String), Vec<(i64, String)>> = HashMap::new();
+    for (image, _project, _target) in &rows {
+        let Some(acquired) = image.acquired_date else {
+            continue;
+        };
+        let Some(basename) = crate::utils::extract_filename(&image.metadata) else {
+            continue;
+        };
+        buckets
+            .entry((night_of(acquired), image.filter_name.clone()))
+            .or_default()
+            .push((acquired, basename));
+    }
+
+    let mut lights_missing_files = 0usize;
+    let mut nights: HashMap<String, CalibrationNightReport> = HashMap::new();
+    // Distinct matching frames per kind, across every representative.
+    let mut kind_frames: HashMap<CalibrationKind, HashMap<String, Option<i64>>> = HashMap::new();
+    let mut nights_without_nightly_flats: Vec<String> = Vec::new();
+    let mut worst_flat_age: Option<(String, String, f64)> = None;
+
+    let mut keys: Vec<(String, String)> = buckets.keys().cloned().collect();
+    keys.sort();
+    for key in keys {
+        let mut lights = buckets.remove(&key).unwrap_or_default();
+        let (night, filter) = key;
+        lights.sort();
+        // The median light stands for the bucket; walk outward if its file
+        // is missing so one lost file does not blank a night.
+        let mut representative = None;
+        let middle = lights.len() / 2;
+        let mut order: Vec<usize> = (0..lights.len()).collect();
+        order.sort_by_key(|index| index.abs_diff(middle));
+        for index in order {
+            let (acquired, basename) = &lights[index];
+            if let Some(path) = directory_tree.find_file_first(basename) {
+                representative = Some((*acquired, path.clone()));
+                break;
+            }
+        }
+        let Some((light_at, light_path)) = representative else {
+            lights_missing_files += lights.len();
+            continue;
+        };
+
+        let meta = crate::commands::import::headers::read_frame_meta(&light_path);
+        let selected = select_for_light(conn, &meta)?;
+
+        let day_seconds = 86_400i64;
+        let age_days = |captured: Option<i64>| {
+            captured.map(|at| (at.abs_diff(light_at)) as f64 / day_seconds as f64)
+        };
+        let nearest_age = |frames: &[CalibrationFrame]| {
+            frames
+                .iter()
+                .filter_map(|frame| age_days(frame.captured_at))
+                .min_by(f64::total_cmp)
+        };
+
+        for (kind, frames) in [
+            (CalibrationKind::Bias, &selected.bias),
+            (CalibrationKind::Dark, &selected.dark),
+            (CalibrationKind::DarkFlat, &selected.dark_flat),
+            (CalibrationKind::Flat, &selected.flat),
+        ] {
+            let entry = kind_frames.entry(kind).or_default();
+            for frame in frames {
+                entry.insert(frame.frame_uuid.clone(), frame.captured_at);
+            }
+        }
+
+        let flat_subset = coherent_master_subset(CalibrationKind::Flat, &selected.flat);
+        let flat_session_at = if flat_subset.is_empty() {
+            None
+        } else {
+            let mut times: Vec<i64> = flat_subset.iter().filter_map(|f| f.captured_at).collect();
+            times.sort();
+            times.get(times.len() / 2).copied()
+        };
+        let nightly_flats = selected.flat.iter().any(|frame| {
+            frame
+                .captured_at
+                .is_some_and(|at| at.abs_diff(light_at) <= day_seconds as u64)
+        });
+        if !selected.flat.is_empty() && !nightly_flats {
+            nights_without_nightly_flats.push(night.clone());
+        }
+        if let Some(age) = age_days(flat_session_at)
+            && worst_flat_age
+                .as_ref()
+                .is_none_or(|(_, _, worst)| age > *worst)
+        {
+            worst_flat_age = Some((night.clone(), filter.clone(), age));
+        }
+
+        let mut missing = Vec::new();
+        if selected.bias.is_empty() {
+            missing.push("bias".to_string());
+        }
+        if selected.dark.is_empty() {
+            missing.push("dark".to_string());
+        }
+        if selected.flat.is_empty() {
+            missing.push("flat".to_string());
+        }
+
+        let filter_report = CalibrationNightFilter {
+            filter,
+            lights: lights.len(),
+            bias_frames: selected.bias.len(),
+            dark_frames: selected.dark.len(),
+            dark_age_days: nearest_age(&selected.dark),
+            dark_flat_frames: selected.dark_flat.len(),
+            flat_frames: selected.flat.len(),
+            flat_session: flat_session_at.map(day_of),
+            flat_age_days: age_days(flat_session_at),
+            nightly_flats,
+            missing,
+        };
+        let entry = nights
+            .entry(night.clone())
+            .or_insert(CalibrationNightReport {
+                night,
+                lights: 0,
+                filters: Vec::new(),
+            });
+        entry.lights += filter_report.lights;
+        entry.filters.push(filter_report);
+    }
+
+    let mut nights: Vec<CalibrationNightReport> = nights.into_values().collect();
+    nights.sort_by(|left, right| right.night.cmp(&left.night));
+
+    let mut kinds = Vec::new();
+    for kind in [
+        CalibrationKind::Bias,
+        CalibrationKind::Dark,
+        CalibrationKind::DarkFlat,
+        CalibrationKind::Flat,
+    ] {
+        let frames = kind_frames.remove(&kind).unwrap_or_default();
+        let mut sessions: Vec<String> = frames
+            .values()
+            .filter_map(|at| at.map(day_of))
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        sessions.sort_by(|left, right| right.cmp(left));
+        kinds.push(CalibrationKindSummary {
+            kind: kind.as_str().to_string(),
+            matching_frames: frames.len(),
+            newest_at: frames.values().filter_map(|at| *at).max(),
+            oldest_at: frames.values().filter_map(|at| *at).min(),
+            sessions,
+        });
+    }
+
+    let mut warnings = Vec::new();
+    for summary in &kinds {
+        if summary.matching_frames == 0 && summary.kind != "dark_flat" {
+            warnings.push(format!(
+                "No {} frames match any of this project's lights",
+                summary.kind
+            ));
+        }
+    }
+    if !nights_without_nightly_flats.is_empty() {
+        nights_without_nightly_flats.sort();
+        nights_without_nightly_flats.dedup();
+        warnings.push(format!(
+            "{} of {} nights have no same-night flats",
+            nights_without_nightly_flats.len(),
+            nights.len()
+        ));
+    }
+    if let Some((night, filter, age)) = worst_flat_age
+        && age > 30.0
+    {
+        warnings.push(format!(
+            "The {filter} flats nearest the {night} lights are {age:.0} days away — dust moves; consider fresh flats"
+        ));
+    }
+
+    Ok(ProjectCalibrationReport {
+        nights,
+        kinds,
+        warnings,
+        lights_missing_files,
+    })
 }
 
 /// Match a light against the calibration library and build whatever masters
@@ -3159,6 +3439,90 @@ mod tests {
     /// A flats-only library with a strong vignette and lights whose
     /// background is `sky * vignette + pedestal`. Returns the connection,
     /// cache directory, and light paths, ready for `resolve_or_build_masters`.
+    #[test]
+    fn project_report_says_which_nights_have_their_own_flats() {
+        // Two nights of lights; flats exist only for the first. The report
+        // must mark the first night as covered by same-night flats, the
+        // second as using flats from days away, and warn about the missing
+        // kinds and the uncovered night.
+        let temp = tempfile::tempdir().unwrap();
+        let night_one = 1_750_000_000i64; // an evening
+        let night_two = night_one + 5 * 86_400;
+
+        let mut calibration_meta = Vec::new();
+        for index in 0..2 {
+            let path = temp.path().join(format!("flat-{index}.fits"));
+            write_test_fits(&path, "FLAT", 1_000 + index);
+            let mut meta = crate::commands::import::headers::read_frame_meta(&path);
+            meta.timestamp = Some(night_one + 3_600 + index as i64);
+            calibration_meta.push(meta);
+        }
+
+        let mut lights = Vec::new();
+        for (index, timestamp) in [(0, night_one), (1, night_two)] {
+            let path = temp.path().join(format!("light-{index}.fits"));
+            write_test_fits(&path, "LIGHT", 1_100);
+            let mut meta = crate::commands::import::headers::read_frame_meta(&path);
+            meta.timestamp = Some(timestamp);
+            meta.object = Some("M 31".into());
+            meta.ra_deg = Some(10.68);
+            meta.dec_deg = Some(41.27);
+            lights.push(meta);
+        }
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &calibration_meta, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        let outcome = crate::commands::import::import_frames(
+            &mut conn,
+            lights,
+            &crate::commands::import::ImportOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(outcome.imported, 2);
+
+        let project_id: i32 = conn
+            .query_row("SELECT id FROM project LIMIT 1", [], |row| row.get(0))
+            .unwrap();
+        let tree = crate::directory_tree::DirectoryTree::build_multiple(&[temp.path()]).unwrap();
+        let report = project_calibration_report(&conn, project_id, &tree).unwrap();
+
+        assert_eq!(report.nights.len(), 2);
+        // Newest night first; it has no same-night flats.
+        let newest = &report.nights[0];
+        let oldest = &report.nights[1];
+        assert!(newest.night > oldest.night);
+        let newest_filter = &newest.filters[0];
+        assert!(!newest_filter.nightly_flats);
+        assert_eq!(newest_filter.flat_frames, 2);
+        assert!(newest_filter.flat_age_days.is_some_and(|age| age > 4.0));
+        let oldest_filter = &oldest.filters[0];
+        assert!(oldest_filter.nightly_flats);
+        assert!(oldest_filter.flat_age_days.is_some_and(|age| age < 1.0));
+        assert!(oldest_filter.missing.contains(&"bias".to_string()));
+
+        let flat_summary = report
+            .kinds
+            .iter()
+            .find(|summary| summary.kind == "flat")
+            .unwrap();
+        assert_eq!(flat_summary.matching_frames, 2);
+        assert_eq!(flat_summary.sessions.len(), 1);
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("No bias frames")));
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("1 of 2 nights have no same-night flats")));
+        assert_eq!(report.lights_missing_files, 0);
+    }
+
     fn vignetted_flat_only_library(
         temp: &tempfile::TempDir,
         camera: &str,

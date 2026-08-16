@@ -1496,6 +1496,31 @@ pub async fn get_server_export_progress(
     )))
 }
 
+/// `GET /api/db/{db_id}/projects/{project_id}/calibration-report` — how the
+/// calibration library covers one project's lights: what matches, how old
+/// it is, and whether each night has its own flats.
+pub async fn get_project_calibration_report(
+    ctx: DbContext,
+    Path((_db_id, project_id)): Path<(String, i32)>,
+) -> Result<Json<ApiResponse<crate::calibration::ProjectCalibrationReport>>, AppError> {
+    let directory_tree = ctx
+        .get_directory_tree()
+        .map_err(|error| AppError::InternalError(format!("indexing image folders: {error}")))?;
+    let database_path = ctx.database_path.clone();
+    let report = tokio::task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open_with_flags(
+            &database_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .map_err(|error| anyhow::anyhow!("opening {database_path}: {error}"))?;
+        crate::calibration::project_calibration_report(&conn, project_id, &directory_tree)
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("report task: {error}")))?
+    .map_err(|error| AppError::InternalError(format!("calibration report: {error:#}")))?;
+    Ok(Json(ApiResponse::success(report)))
+}
+
 /// `PUT /api/db/{db_id}/projects/{project_id}` — update scheduler fields.
 pub async fn update_project_route(
     State(_state): State<Arc<AppState>>,

@@ -483,6 +483,19 @@ export const apiClient = {
     return data.data;
   },
 
+  /** Calibration coverage for one project's lights. */
+  getProjectCalibrationReport: async (
+    dbId: string,
+    projectId: number
+  ): Promise<import('./types').ProjectCalibrationReport> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<
+      ApiResponse<import('./types').ProjectCalibrationReport>
+    >(dbPath(dbId, `/projects/${projectId}/calibration-report`));
+    if (!data.data) throw new Error(data.error || 'Failed to build the calibration report');
+    return data.data;
+  },
+
   /** The configured image roots and two levels of their subdirectories. */
   getImportFolders: async (dbId: string): Promise<import('./types').ImportFolder[]> => {
     const apiInstance = await getApi();

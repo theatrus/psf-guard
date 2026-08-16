@@ -134,6 +134,18 @@ every light. Resume checkpoints and source-frame searches compare the masters
 actually applied, not just the selection, so a build that fails or recovers
 between runs forces a clean rebuild instead of mixing calibrations.
 
+## Project coverage report
+
+Each project card on the Overview has a **Calibration** action that reports
+how the library covers that project's lights: per kind, how many frames
+match and which capture sessions they span; and per imaging night and
+filter, the flat session a master would build from, its distance from the
+lights, and whether the night has its own flats. One representative light
+per night and filter is matched exactly as a stack build would match it, so
+the report describes what WOULD apply, not just what files exist. Warnings
+call out kinds with no matches, nights without same-night flats, and flats
+more than a month from their lights.
+
 ## Stack previews
 
 Stack previews build masters on demand with `seiza-stacking`. Each master needs
