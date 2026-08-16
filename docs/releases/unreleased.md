@@ -6,6 +6,10 @@
 
 ## Added
 
+- Remote image intake now accepts bias, dark, dark-flat, and flat frames as
+  well as lights. Calibration uploads enter PSF Guard's calibration library
+  without creating Target Scheduler image rows, and identical retries remain
+  idempotent.
 - How hard each kind of evidence lowers a quality score is now adjustable.
   The **Penalties** control in the Sequence view scales the score hit from
   satellite trails, pointing failures, and temporal anomalies between 0%

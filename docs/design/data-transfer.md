@@ -397,7 +397,8 @@ real use.
 ### Remote image ingest
 
 Image transfer is independent of Target Scheduler catalog sync. A capture
-client can post a light frame directly to one opted-in PSF Guard database:
+client can post a light or calibration frame directly to one opted-in PSF
+Guard database:
 
 ```http
 POST /api/db/{db_id}/images/upload
@@ -416,15 +417,18 @@ at most 512 MiB to a sibling temporary file, verifies SHA-256 and the frame
 headers, and publishes without overwriting an existing basename. The filename
 must carry a frame extension: `.fits`, `.fit`, `.fts`, or `.xisf`.
 
-The normal one-frame importer then resolves an existing target by object name
-or coordinates and reuses its exposure plan. If no target matches, it builds
-the project, target, template, and plan from FITS headers. This path therefore
-works with an existing Target Scheduler catalog and with a fresh PSF Guard
-catalog whose user never installed Target Scheduler.
+For a light, the normal one-frame importer resolves an existing target by
+object name or coordinates and reuses its exposure plan. If no target matches,
+it builds the project, target, template, and plan from FITS headers. A bias,
+dark, dark-flat, or flat instead enters PSF Guard's calibration library and
+never creates a Target Scheduler `acquiredimage` row. This path therefore works
+with an existing Target Scheduler catalog and with a fresh PSF Guard catalog
+whose user never installed Target Scheduler.
 
 Identical retries are idempotent. The response returns the resolved database,
-project, target, and image IDs. A basename already registered elsewhere or an
-existing receive file with different content returns `409 Conflict`.
+frame kind, and either the project, target, and image IDs for a light or the
+calibration frame and rig UUIDs. A basename already registered elsewhere or
+an existing receive file with different content returns `409 Conflict`.
 
 ## Security
 
