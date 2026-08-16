@@ -310,13 +310,24 @@ pub struct RemoteImageResolution {
 }
 
 #[derive(Debug, Serialize)]
+pub struct RemoteCalibrationResolution {
+    pub frame_uuid: String,
+    pub rig_uuid: String,
+    pub kind: crate::calibration::CalibrationKind,
+}
+
+#[derive(Debug, Serialize)]
 pub struct RemoteImageUploadResponse {
     pub database_id: String,
     pub filename: String,
     pub bytes: u64,
     pub sha256: String,
     pub already_present: bool,
-    pub resolution: RemoteImageResolution,
+    pub frame_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<RemoteImageResolution>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calibration: Option<RemoteCalibrationResolution>,
     pub import: crate::commands::import::ImportOutcome,
 }
 

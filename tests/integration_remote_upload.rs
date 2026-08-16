@@ -107,6 +107,10 @@ fn build_app(state: Arc<AppState>) -> Router {
 }
 
 fn fits_bytes(object: &str, date_obs: &str) -> Vec<u8> {
+    fits_bytes_with_type("LIGHT", object, date_obs)
+}
+
+fn fits_bytes_with_type(image_type: &str, object: &str, date_obs: &str) -> Vec<u8> {
     fn card(output: &mut Vec<u8>, text: &str) {
         let mut bytes = text.as_bytes().to_vec();
         assert!(bytes.len() <= 80);
@@ -120,7 +124,7 @@ fn fits_bytes(object: &str, date_obs: &str) -> Vec<u8> {
     card(&mut bytes, "NAXIS   =                    2");
     card(&mut bytes, "NAXIS1  =                   10");
     card(&mut bytes, "NAXIS2  =                   10");
-    card(&mut bytes, "IMAGETYP= 'LIGHT   '");
+    card(&mut bytes, &format!("IMAGETYP= '{image_type}'"));
     card(&mut bytes, &format!("OBJECT  = '{object}'"));
     card(&mut bytes, "FILTER  = 'Ha      '");
     card(&mut bytes, &format!("DATE-OBS= '{date_obs}'"));
@@ -225,6 +229,48 @@ fn image_count(path: &std::path::Path) -> i64 {
         .unwrap()
 }
 
+fn calibration_count(path: &std::path::Path) -> i64 {
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM psf_guard_calibration_frame",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0)
+}
+
+fn insert_synced_light(path: &std::path::Path, filename: &str) {
+    let connection = rusqlite::Connection::open(path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO project (Id, profileId, name, isMosaic, flatsHandling, guid)
+             VALUES (1, 'profile', 'M 31', 0, 0, 'project-guid')",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO target (Id, name, active, ra, dec, epochcode, projectId, guid)
+             VALUES (1, 'M 31', 1, 0.71, 41.27, 0, 1, 'target-guid')",
+            [],
+        )
+        .unwrap();
+    let metadata = serde_json::json!({
+        "FileName": format!(r"C:\remote-capture\{filename}"),
+    })
+    .to_string();
+    connection
+        .execute(
+            "INSERT INTO acquiredimage
+                (Id, projectId, targetId, acquireddate, filtername, gradingStatus,
+                 metadata, profileId, guid)
+             VALUES (1, 1, 1, 1784869200, 'Ha', 1, ?1, 'profile', 'image-guid')",
+            [&metadata],
+        )
+        .unwrap();
+}
+
 #[tokio::test]
 async fn upload_is_scoped_to_the_selected_database_and_attaches_followup_frames() {
     let fixture = Fixture::new();
@@ -241,6 +287,7 @@ async fn upload_is_scoped_to_the_selected_database_and_attaches_followup_frames(
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["data"]["database_id"], "catalog-a");
+    assert_eq!(body["data"]["frame_kind"], "light");
     assert_eq!(body["data"]["resolution"]["target_name"], "M 31");
     assert_eq!(body["data"]["import"]["targets_created"], 1);
     let target_id = body["data"]["resolution"]["target_id"].as_i64().unwrap();
@@ -265,6 +312,134 @@ async fn upload_is_scoped_to_the_selected_database_and_attaches_followup_frames(
     assert_eq!(body["data"]["import"]["attached"], 1);
     assert_eq!(body["data"]["import"]["targets_created"], 0);
     assert_eq!(image_count(&fixture.database_a), 2);
+}
+
+#[tokio::test]
+async fn upload_attaches_bytes_to_a_light_created_by_scheduler_sync() {
+    let fixture = Fixture::new();
+    let filename = "m31-synced.fits";
+    insert_synced_light(&fixture.database_a, filename);
+    let image = fits_bytes("M 31", "2026-07-24T05:00:00");
+    let checksum = sha256(&image);
+
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        filename,
+        &image,
+        &checksum,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["already_present"], false);
+    assert_eq!(body["data"]["resolution"]["image_id"], 1);
+    assert_eq!(body["data"]["resolution"]["project_name"], "M 31");
+    assert_eq!(body["data"]["import"]["imported"], 0);
+    assert_eq!(body["data"]["import"]["skipped_existing"], 1);
+    assert_eq!(image_count(&fixture.database_a), 1);
+    assert_eq!(
+        sha256(&std::fs::read(fixture.images_a.join(filename)).unwrap()),
+        checksum
+    );
+
+    let (status, body) = upload(
+        fixture.state,
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        filename,
+        &image,
+        &checksum,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["already_present"], true);
+    assert_eq!(image_count(&fixture.database_a), 1);
+}
+
+#[tokio::test]
+async fn calibration_uploads_are_cataloged_without_scheduler_images() {
+    let fixture = Fixture::new();
+    let cases = [
+        ("BIAS", "bias", "bias-001.fits"),
+        ("DARK", "dark", "dark-001.fits"),
+        ("DARK FLAT", "dark_flat", "dark-flat-001.fits"),
+        ("FLAT DARK", "dark_flat", "flat-dark-001.fits"),
+        ("FLAT", "flat", "flat-001.fits"),
+    ];
+
+    for (index, (image_type, kind, filename)) in cases.iter().enumerate() {
+        let image = fits_bytes_with_type(
+            image_type,
+            "Calibration",
+            &format!("2026-07-24T08:{index:02}:00"),
+        );
+        let (status, body) = upload(
+            fixture.state.clone(),
+            "catalog-a",
+            "catalog-a",
+            TOKEN_A,
+            filename,
+            &image,
+            &sha256(&image),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["data"]["frame_kind"], *kind);
+        assert!(body["data"].get("resolution").is_none());
+        assert_eq!(body["data"]["calibration"]["kind"], *kind);
+        assert!(body["data"]["calibration"]["frame_uuid"].is_string());
+        assert!(body["data"]["calibration"]["rig_uuid"].is_string());
+        assert_eq!(body["data"]["import"]["calibration"][*kind], 1);
+        assert!(fixture.images_a.join(filename).is_file());
+        assert!(!fixture.images_b.join(filename).exists());
+    }
+
+    assert_eq!(image_count(&fixture.database_a), 0);
+    assert_eq!(calibration_count(&fixture.database_a), 5);
+    assert_eq!(calibration_count(&fixture.database_b), 0);
+
+    let retry = fits_bytes_with_type("FLAT", "Calibration", "2026-07-24T08:04:00");
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "flat-001.fits",
+        &retry,
+        &sha256(&retry),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["already_present"], true);
+    assert_eq!(body["data"]["import"]["calibration"]["skipped_existing"], 1);
+    assert_eq!(image_count(&fixture.database_a), 0);
+    assert_eq!(calibration_count(&fixture.database_a), 5);
+}
+
+#[tokio::test]
+async fn unsupported_non_light_frame_is_rejected_without_publishing() {
+    let fixture = Fixture::new();
+    let image = fits_bytes_with_type("SNAPSHOT", "Preview", "2026-07-24T09:00:00");
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "snapshot-001.fits",
+        &image,
+        &sha256(&image),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(!fixture.images_a.join("snapshot-001.fits").exists());
+    assert_eq!(image_count(&fixture.database_a), 0);
+    assert_eq!(calibration_count(&fixture.database_a), 0);
 }
 
 #[tokio::test]

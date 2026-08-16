@@ -3,7 +3,9 @@
 //! The URL database, echoed database header, selected receive root, and
 //! bearer-token hash all come from the same `DatabaseContext`. Uploads are
 //! streamed to a temporary sibling, verified, published without clobbering,
-//! and passed through the normal one-frame FITS importer.
+//! and passed through the normal one-frame image importer. Light frames land
+//! in Target Scheduler-compatible tables; calibration frames land only in
+//! PSF Guard's sibling calibration tables.
 
 use axum::{
     extract::Multipart,
@@ -16,8 +18,11 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use tokio::io::AsyncWriteExt;
 
+use crate::calibration::{self, CalibrationKind};
 use crate::commands::import::{self, ImportOptions, ImportOutcome};
-use crate::server::api::{ApiResponse, RemoteImageResolution, RemoteImageUploadResponse};
+use crate::server::api::{
+    ApiResponse, RemoteCalibrationResolution, RemoteImageResolution, RemoteImageUploadResponse,
+};
 use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 
@@ -140,9 +145,10 @@ pub async fn upload_image(
             "uploaded image is not a readable FITS or XISF file".into(),
         ));
     }
-    if !frame.is_light() {
+    let calibration_kind = calibration::kind_from_meta(&frame);
+    if !frame.is_light() && calibration_kind.is_none() {
         return Err(AppError::BadRequest(
-            "only light frames can be imported into an image database".into(),
+            "uploaded image must be a light, bias, dark, dark-flat, or flat frame".into(),
         ));
     }
 
@@ -164,6 +170,7 @@ pub async fn upload_image(
             filename,
             bytes,
             sha256,
+            calibration_kind,
         )
     })
     .await
@@ -192,6 +199,7 @@ fn publish_and_import(
     filename: String,
     bytes: u64,
     sha256: String,
+    calibration_kind: Option<CalibrationKind>,
 ) -> Result<RemoteImageUploadResponse, AppError> {
     let mut connection = rusqlite::Connection::open_with_flags(
         database_path,
@@ -200,9 +208,9 @@ fn publish_and_import(
     .map_err(AppError::db)?;
 
     let existing_resolution = find_resolution(&connection, &filename)?;
-    if existing_resolution.is_some() && !destination.is_file() {
+    if existing_resolution.is_some() && calibration_kind.is_some() {
         return Err(AppError::Conflict(format!(
-            "{filename} is already registered in this database at another location"
+            "{filename} is already registered as a light in this database"
         )));
     }
 
@@ -236,7 +244,7 @@ fn publish_and_import(
         }
     };
 
-    let outcome = if existing_resolution.is_some() {
+    let outcome = if calibration_kind.is_none() && existing_resolution.is_some() {
         ImportOutcome {
             scanned: 1,
             skipped_existing: 1,
@@ -245,14 +253,28 @@ fn publish_and_import(
     } else {
         frame.path = destination.clone();
         match import::import_frames(&mut connection, vec![frame], &ImportOptions::default()) {
-            Ok(outcome) if outcome.imported == 1 => outcome,
+            Ok(outcome)
+                if (calibration_kind.is_none() && outcome.imported == 1)
+                    || (calibration_kind.is_some()
+                        && outcome.calibration.imported
+                            + outcome.calibration.updated
+                            + outcome.calibration.skipped_existing
+                            == 1) =>
+            {
+                outcome
+            }
             Ok(outcome) => {
                 if !already_present {
                     let _ = std::fs::remove_file(&destination);
                 }
                 return Err(AppError::BadRequest(format!(
-                    "uploaded image was not imported (unreadable={}, non_light={}, duplicate={})",
-                    outcome.unreadable, outcome.non_light, outcome.skipped_existing
+                    "uploaded image was not imported (unreadable={}, non_light={}, duplicate={}, calibration_imported={}, calibration_updated={}, calibration_duplicate={})",
+                    outcome.unreadable,
+                    outcome.non_light,
+                    outcome.skipped_existing,
+                    outcome.calibration.imported,
+                    outcome.calibration.updated,
+                    outcome.calibration.skipped_existing,
                 )));
             }
             Err(error) => {
@@ -266,18 +288,63 @@ fn publish_and_import(
         }
     };
 
-    let resolution = find_resolution(&connection, &filename)?.ok_or_else(|| {
-        AppError::InternalError("uploaded image was imported but cannot be resolved".into())
-    })?;
+    let (frame_kind, resolution, calibration) = match calibration_kind {
+        None => {
+            let resolution = find_resolution(&connection, &filename)?.ok_or_else(|| {
+                AppError::InternalError("uploaded light was imported but cannot be resolved".into())
+            })?;
+            ("light".to_string(), Some(resolution), None)
+        }
+        Some(kind) => {
+            let calibration = find_calibration_resolution(&connection, &destination, kind)?
+                .ok_or_else(|| {
+                    AppError::InternalError(
+                        "uploaded calibration frame was imported but cannot be resolved".into(),
+                    )
+                })?;
+            (kind.as_str().to_string(), None, Some(calibration))
+        }
+    };
     Ok(RemoteImageUploadResponse {
         database_id: database_id.to_string(),
         filename,
         bytes,
         sha256,
         already_present,
+        frame_kind,
         resolution,
+        calibration,
         import: outcome,
     })
+}
+
+fn find_calibration_resolution(
+    connection: &rusqlite::Connection,
+    source_path: &Path,
+    kind: CalibrationKind,
+) -> Result<Option<RemoteCalibrationResolution>, AppError> {
+    use rusqlite::OptionalExtension as _;
+
+    let source_path = std::fs::canonicalize(source_path)
+        .unwrap_or_else(|_| source_path.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
+    connection
+        .query_row(
+            "SELECT frame_uuid, rig_uuid
+             FROM psf_guard_calibration_frame
+             WHERE source_path = ?1",
+            [&source_path],
+            |row| {
+                Ok(RemoteCalibrationResolution {
+                    frame_uuid: row.get(0)?,
+                    rig_uuid: row.get(1)?,
+                    kind,
+                })
+            },
+        )
+        .optional()
+        .map_err(AppError::db)
 }
 
 fn find_resolution(

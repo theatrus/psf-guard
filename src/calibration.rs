@@ -296,7 +296,11 @@ impl Default for AppliedCalibration {
 
 pub fn kind_from_meta(meta: &FrameMeta) -> Option<CalibrationKind> {
     let value = meta.image_type.as_deref()?.trim().to_ascii_uppercase();
-    if value.contains("DARKFLAT") || value.contains("DARK FLAT") || value.contains("FLATDARK") {
+    if value.contains("DARKFLAT")
+        || value.contains("DARK FLAT")
+        || value.contains("FLATDARK")
+        || value.contains("FLAT DARK")
+    {
         Some(CalibrationKind::DarkFlat)
     } else if value.contains("BIAS") || value.contains("OFFSET") {
         Some(CalibrationKind::Bias)
@@ -2716,6 +2720,10 @@ mod tests {
         );
         assert_eq!(
             kind_from_meta(&frame("/dark-flat.fits", "DARK FLAT")),
+            Some(CalibrationKind::DarkFlat)
+        );
+        assert_eq!(
+            kind_from_meta(&frame("/flat-dark.fits", "FLAT DARK")),
             Some(CalibrationKind::DarkFlat)
         );
         assert_eq!(
