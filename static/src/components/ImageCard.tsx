@@ -10,6 +10,7 @@ import {
   qualityScoreBasis,
   qualityScoreDescription,
   type QualityScoreScope,
+  secondaryScoreDescription,
 } from '../utils/qualityScore';
 import QualityReasonPopover from './QualityReasonPopover';
 
@@ -21,6 +22,10 @@ export interface ImageCardProps {
   onDoubleClick: () => void;
   quality?: ImageQualityResult;
   qualityScoreScope?: QualityScoreScope;
+  /** The same frame's score under the OTHER comparison basis, when it
+   * exists — session-relative when the badge is all-sessions, and the
+   * reverse. Rendered as a smaller chip when the rounded values differ. */
+  secondaryScore?: { score: number; scope: QualityScoreScope };
   qualityPresentation?: 'full' | 'compact';
   lazyPreview?: boolean;
   selectionEffects?: boolean;
@@ -35,6 +40,7 @@ export default function ImageCard({
   onDoubleClick,
   quality,
   qualityScoreScope = 'capture_sequence',
+  secondaryScore,
   qualityPresentation = 'full',
   lazyPreview = false,
   selectionEffects = true,
@@ -136,6 +142,17 @@ export default function ImageCard({
             {(quality.quality_score * 100).toFixed(0)}
           </div>
         )}
+        {quality &&
+          secondaryScore &&
+          Math.round(secondaryScore.score * 100) !==
+            Math.round(quality.quality_score * 100) && (
+            <div
+              className="quality-badge quality-badge-secondary"
+              title={secondaryScoreDescription(secondaryScore.score, secondaryScore.scope)}
+            >
+              {(secondaryScore.score * 100).toFixed(0)}
+            </div>
+          )}
         {quality?.category && (
           <div className="category-label">
             {formatCategory(quality.category)}

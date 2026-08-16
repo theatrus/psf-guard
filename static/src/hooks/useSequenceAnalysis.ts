@@ -113,6 +113,9 @@ export function useScopedQuality(
   // entry — category, pointing, and overlays stay intact.
   const qualityByImage = new Map<number, ImageQualityResult>();
   const scopeByImage = new Map<number, QualityScoreScope>();
+  // Where the badge shows the all-sessions score, the frame's own
+  // session-relative score is kept here for the secondary chip.
+  const sessionScoreByImage = new Map<number, number>();
   const sessionsPerFilter = new Map<string, number>();
   for (const sequence of query.data?.sequences ?? []) {
     const key = `${sequence.target_id}:${sequence.filter_name}`;
@@ -129,6 +132,7 @@ export function useScopedQuality(
     for (const score of rollup.images) {
       const session = qualityByImage.get(score.image_id);
       if (!session) continue;
+      sessionScoreByImage.set(score.image_id, session.quality_score);
       qualityByImage.set(score.image_id, {
         ...session,
         quality_score: score.quality_score,
@@ -142,6 +146,7 @@ export function useScopedQuality(
   return {
     qualityByImage,
     scopeByImage,
+    sessionScoreByImage,
     isLoading: query.isLoading,
     error: query.error,
   };
