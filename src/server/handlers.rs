@@ -4031,9 +4031,9 @@ pub async fn analyze_sequence(
             target_ids
                 .as_ref()
                 .is_none_or(|target_ids| target_ids.contains(&image.target_id))
-                && filter_name
-                    .as_ref()
-                    .is_none_or(|filter| image.filter_name == *filter)
+                && filter_name.as_ref().is_none_or(|filter| {
+                    crate::utils::filter_names_match(&image.filter_name, filter)
+                })
         }) {
             expected_by_image.insert(
                 image.0.id,
@@ -4100,6 +4100,8 @@ pub async fn analyze_sequence(
             std::collections::HashMap::new();
         let mut entries_by_group: std::collections::HashMap<(i32, String, String), Vec<_>> =
             std::collections::HashMap::new();
+        let mut display_filter_names: std::collections::HashMap<(i32, String, String), String> =
+            std::collections::HashMap::new();
         for (img, _project_name, target_name) in &images_data {
             let mut metrics =
                 extract_metrics_from_metadata(img.id, &img.metadata, img.acquired_date);
@@ -4111,7 +4113,17 @@ pub async fn analyze_sequence(
                 &astrometry_evidence,
                 expected_by_image.get(&img.id).copied().flatten(),
             );
-            let group = (img.target_id, target_name.clone(), img.filter_name.clone());
+            // Key on the normalized filter so case or whitespace variants of
+            // one physical filter form ONE comparison cohort; the raw name
+            // of the group's first frame stays as the display name.
+            let group = (
+                img.target_id,
+                target_name.clone(),
+                crate::utils::normalized_filter_name(&img.filter_name),
+            );
+            display_filter_names
+                .entry(group.clone())
+                .or_insert_with(|| img.filter_name.clone());
             entries_by_group
                 .entry(group.clone())
                 .or_default()
@@ -4122,16 +4134,19 @@ pub async fn analyze_sequence(
         let mut all_sequences = Vec::new();
         let mut target_filter_rollups = Vec::new();
         for ((target_id, target_name, filter), mut metrics) in by_group {
-            if let Some(entries) =
-                entries_by_group.get(&(target_id, target_name.clone(), filter.clone()))
-            {
+            let key = (target_id, target_name.clone(), filter.clone());
+            if let Some(entries) = entries_by_group.get(&key) {
                 merge_photometric_signals(&mut metrics, entries, session_gap_minutes);
             }
+            let display_filter = display_filter_names
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| filter.clone());
             let (scored, rollup) = analyzer.analyze_with_target_filter_rollup(
                 &metrics,
                 target_id,
                 &target_name,
-                &filter,
+                &display_filter,
             );
             all_sequences.extend(scored);
             if let Some(rollup) = rollup {
@@ -4209,7 +4224,7 @@ pub async fn get_image_quality(
             .into_iter()
             .filter(|(img, _, _)| {
                 img.target_id == target_image.target_id
-                    && img.filter_name == target_image.filter_name
+                    && crate::utils::filter_names_match(&img.filter_name, &target_image.filter_name)
             })
             .collect();
         let mut resolver =
@@ -4567,7 +4582,7 @@ async fn start_spatial_scan_with_priority(
                 && req
                     .filter_name
                     .as_ref()
-                    .is_none_or(|f| img.filter_name == *f)
+                    .is_none_or(|f| crate::utils::filter_names_match(&img.filter_name, f))
         }) {
             let expected = resolver
                 .expected_for_grading(&conn, &img)
@@ -4931,7 +4946,7 @@ pub async fn get_spatial_scan_progress(
             query
                 .filter_name
                 .as_ref()
-                .is_none_or(|filter| image.filter_name == *filter)
+                .is_none_or(|filter| crate::utils::filter_names_match(&image.filter_name, filter))
         }) {
             let Some(filename) = filename_from_metadata(&image.metadata) else {
                 continue;

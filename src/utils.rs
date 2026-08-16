@@ -6,6 +6,20 @@ pub fn truncate_string(s: &str, max_len: usize) -> String {
     }
 }
 
+/// Filter names as written by N.I.N.A. are free text; profile edits leave
+/// catalogs with "Ha" beside "HA" beside "HA ". Grouping or matching on the
+/// raw string silently splits one physical filter into several comparison
+/// cohorts, so every filter comparison and grouping key goes through here.
+/// Display keeps the raw name; only identity is normalized.
+pub fn normalized_filter_name(name: &str) -> String {
+    name.trim().to_ascii_uppercase()
+}
+
+/// Whether two filter names refer to the same physical filter.
+pub fn filter_names_match(left: &str, right: &str) -> bool {
+    normalized_filter_name(left) == normalized_filter_name(right)
+}
+
 pub fn extract_filename(metadata: &str) -> Option<String> {
     let json: serde_json::Value = serde_json::from_str(metadata).ok()?;
     json.get("FileName").and_then(|f| f.as_str()).map(|path| {
@@ -15,6 +29,19 @@ pub fn extract_filename(metadata: &str) -> Option<String> {
             .unwrap_or(path)
             .to_string()
     })
+}
+
+#[cfg(test)]
+mod filter_name_tests {
+    use super::*;
+
+    #[test]
+    fn variants_of_one_filter_match() {
+        assert!(filter_names_match("Ha", "HA"));
+        assert!(filter_names_match(" HA ", "ha"));
+        assert!(!filter_names_match("HA", "OIII"));
+        assert_eq!(normalized_filter_name(" Ha "), "HA");
+    }
 }
 
 #[cfg(test)]
