@@ -455,6 +455,24 @@ pub(super) fn require_database_management_allowed(state: &AppState) -> Result<()
     }
 }
 
+/// A project's name for display. The old behavior prefixed EVERY project
+/// with its profile id whenever two profiles existed — and scheduler
+/// databases carry no friendly profile names, so users saw their projects
+/// "renamed" to raw GUIDs. A short tag now appears only when the same
+/// project name exists under more than one profile.
+fn display_project_name(
+    name: &str,
+    profile_id: &str,
+    ambiguous: &std::collections::HashSet<String>,
+) -> String {
+    if ambiguous.contains(name) {
+        let tag: String = profile_id.chars().take(8).collect();
+        format!("{name} \u{00b7} {tag}")
+    } else {
+        name.to_string()
+    }
+}
+
 fn summary_of(ctx: &crate::server::database_context::DatabaseContext) -> DatabaseSummary {
     DatabaseSummary {
         id: ctx.id.clone(),
@@ -2445,11 +2463,14 @@ pub async fn list_projects(
 
     // Keep this request on the small project table. The background file scan
     // already walks the images and supplies the latest capture date above.
-    let projects = {
+    let (projects, ambiguous_names) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
-        db.get_projects_for_navigation().map_err(AppError::db)?
+        (
+            db.get_projects_for_navigation().map_err(AppError::db)?,
+            db.ambiguous_project_names().map_err(AppError::db)?,
+        )
     };
     // `projects_with_files` has one entry for every project that owns an
     // acquisition, even when no source file was found. Keep the picker's old
@@ -2459,22 +2480,12 @@ pub async fn list_projects(
         .filter(|(project, _)| file_existence_map.contains_key(&project.project.id))
         .collect::<Vec<_>>();
 
-    let show_profile = projects
-        .iter()
-        .map(|(project, _)| project.project.profile_id.as_str())
-        .collect::<std::collections::HashSet<_>>()
-        .len()
-        > 1;
-
     let response: Vec<ProjectResponse> = projects
         .into_iter()
         .map(|(project_with_profile, state)| {
             let project = &project_with_profile.project;
-            let display_name = if show_profile {
-                format!("{} → {}", project_with_profile.profile_name, project.name)
-            } else {
-                project.name.clone()
-            };
+            let display_name =
+                display_project_name(&project.name, &project.profile_id, &ambiguous_names);
 
             ProjectResponse {
                 id: project.id,
@@ -2626,9 +2637,7 @@ pub async fn get_images(
     let conn = conn.lock().map_err(AppError::db)?;
     let db = Database::new(&conn);
 
-    // Get profile count to determine display format
-    let profile_count = db.get_profile_count().map_err(AppError::db)?;
-    let show_profile = profile_count > 1;
+    let ambiguous_names = db.ambiguous_project_names().map_err(AppError::db)?;
 
     // Convert status string to GradingStatus enum
     let status_filter = params.status.as_ref().and_then(|s| match s.as_str() {
@@ -2656,10 +2665,9 @@ pub async fn get_images(
             let metadata: serde_json::Value = serde_json::from_str(&img.metadata)
                 .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
-            // Create display name - we need the profile_id to do this properly
             let project_display_name = match img.profile_id.as_ref() {
-                Some(profile_id) if show_profile => format!("{} → {}", profile_id, proj_name),
-                _ => proj_name.clone(),
+                Some(profile_id) => display_project_name(&proj_name, profile_id, &ambiguous_names),
+                None => proj_name.clone(),
             };
 
             ImageResponse {
@@ -2690,14 +2698,12 @@ pub async fn get_image(
     use crate::image_analysis::FitsImage;
 
     // Get image data from database first (before any async operations)
-    let (image, proj_name, target_name, mut metadata, show_profile) = {
+    let (image, proj_name, target_name, mut metadata, ambiguous_names) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
 
-        // Get profile count to determine display format
-        let profile_count = db.get_profile_count().map_err(AppError::db)?;
-        let show_profile = profile_count > 1;
+        let ambiguous_names = db.ambiguous_project_names().map_err(AppError::db)?;
 
         let images = db.get_images_by_ids(&[image_id]).map_err(AppError::db)?;
 
@@ -2716,7 +2722,7 @@ pub async fn get_image(
         let metadata: serde_json::Value = serde_json::from_str(&image.metadata)
             .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
-        (image, proj_name, target_name, metadata, show_profile)
+        (image, proj_name, target_name, metadata, ambiguous_names)
     }; // Database connection is dropped here
 
     // Now we can do async operations
@@ -2804,10 +2810,9 @@ pub async fn get_image(
         }
     }
 
-    // Create display name
     let project_display_name = match image.profile_id.as_ref() {
-        Some(profile_id) if show_profile => format!("{} → {}", profile_id, proj_name),
-        _ => proj_name.clone(),
+        Some(profile_id) => display_project_name(&proj_name, profile_id, &ambiguous_names),
+        None => proj_name.clone(),
     };
 
     let response = ImageResponse {
@@ -3691,8 +3696,7 @@ pub async fn get_projects_overview(
         .map_err(AppError::db)?;
     let navigation_metadata = db.get_project_navigation_metadata().map_err(AppError::db)?;
 
-    // Get profile count to determine display format
-    let profile_count = db.get_profile_count().map_err(AppError::db)?;
+    let ambiguous_names = db.ambiguous_project_names().map_err(AppError::db)?;
 
     // Get file existence map
     let file_existence_map: std::collections::HashMap<i32, bool> = {
@@ -3712,7 +3716,6 @@ pub async fn get_projects_overview(
     }
 
     let mut response = Vec::new();
-    let show_profile = profile_count > 1;
 
     for project_with_profile in projects {
         let project = &project_with_profile.project;
@@ -3756,11 +3759,8 @@ pub async fn get_projects_overview(
             _ => None,
         };
 
-        let display_name = if show_profile {
-            format!("{} → {}", project_with_profile.profile_name, project.name)
-        } else {
-            project.name.clone()
-        };
+        let display_name =
+            display_project_name(&project.name, &project.profile_id, &ambiguous_names);
 
         response.push(ProjectOverviewResponse {
             id: project.id,
