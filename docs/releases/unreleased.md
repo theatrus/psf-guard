@@ -84,7 +84,9 @@
   filter. The grid (and the detail panel) now use the same basis the
   Sequence view displays, and the badge tooltip names it. When both bases
   disagree, a second smaller chip shows the other one, labeled "night" or
-  "all" so each number says what it is relative to.
+  "all" so each number says what it is relative to. A "2nd score" toggle in
+  the grid and Sequence toolbars turns the chip off; the choice is shared
+  across both views and remembered.
 
 - Filter names that differ only by case or whitespace ("Ha" beside "HA")
   no longer split one physical filter into separate quality-comparison
