@@ -82,7 +82,9 @@
   grid badge was built from per-session scores — a frame in a small session
   could score 1.0 against itself while scoring far lower against the whole
   filter. The grid (and the detail panel) now use the same basis the
-  Sequence view displays, and the badge tooltip names it.
+  Sequence view displays, and the badge tooltip names it. When both bases
+  disagree, a second smaller chip shows the other one, labeled "night" or
+  "all" so each number says what it is relative to.
 
 - Filter names that differ only by case or whitespace ("Ha" beside "HA")
   no longer split one physical filter into separate quality-comparison

@@ -3447,8 +3447,8 @@
   align-self: flex-start;
 }
 
-.quality-badge-secondary {
-  top: 2.2rem;
+.quality-badge.quality-badge-secondary {
+  top: 2.35rem;
   font-size: 0.68rem;
   opacity: 0.85;
   background-color: var(--color-bg-secondary, #333) !important;
