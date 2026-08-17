@@ -5,6 +5,7 @@ import { GradingStatus } from '../api/types';
 import { apiClient } from '../api/client';
 import PreviewImage from './PreviewImage';
 import { useColorPreview } from '../hooks/useColorPreview';
+import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import { ensurePreviewReady } from '../hooks/previewPoll';
 import {
   qualityScoreBasis,
@@ -47,6 +48,7 @@ export default function ImageCard({
   className = '',
 }: ImageCardProps) {
   const color = useColorPreview();
+  const { showNightChip, showAllChip } = useDisplayPreferences();
   const shouldDeferPreview = lazyPreview && typeof IntersectionObserver !== 'undefined';
   const { ref: inViewRef, inView } = useInView({
     threshold: 0,
@@ -144,6 +146,9 @@ export default function ImageCard({
         )}
         {quality &&
           secondaryScore &&
+          (secondaryScore.scope === 'capture_sequence'
+            ? showNightChip
+            : showAllChip) &&
           Math.round(secondaryScore.score * 100) !==
             Math.round(quality.quality_score * 100) && (
             <div

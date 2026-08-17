@@ -40,6 +40,7 @@ import {
 } from '../utils/gridNavigation';
 import { thumbnailGridColumns } from '../utils/thumbnailSizing';
 import { useScopedQuality } from '../hooks/useSequenceAnalysis';
+import SecondaryScoreToggle from './SecondaryScoreToggle';
 
 interface GroupedImageGridProps {
   useLazyImages?: boolean;
@@ -819,6 +820,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                 canWrite={grading.canWrite}
                 className="toolbar-button compact quality-scan-button"
               />
+              <SecondaryScoreToggle className="compact" />
             </div>
             
             <div className="stats-section">

@@ -33,6 +33,7 @@ import {
   type GridNavigationDirection,
 } from '../utils/gridNavigation';
 import { thumbnailGridColumns } from '../utils/thumbnailSizing';
+import SecondaryScoreToggle from './SecondaryScoreToggle';
 import {
   qualityScoreDescription,
   type QualityScoreScope,
@@ -773,6 +774,7 @@ export default function SequenceView() {
             <span className="threshold-value">{threshold.toFixed(2)}</span>
           </div>
           <ScoringPenaltyControl />
+          <SecondaryScoreToggle />
           <div className="selection-preset-control">
             <label htmlFor="sequence-select-preset">Select:</label>
             <select

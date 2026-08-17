@@ -3456,6 +3456,28 @@
   border: 1px solid var(--color-border, #555);
 }
 
+.secondary-score-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.secondary-score-toggle label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+}
+
+.secondary-score-toggle input {
+  cursor: pointer;
+  margin: 0;
+}
+
 .server-export-status {
   font-size: 0.82rem;
   color: var(--color-text-muted);
