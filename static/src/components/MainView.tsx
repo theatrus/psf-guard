@@ -5,6 +5,7 @@ import ImageDetailView from './ImageDetailView';
 import ImageComparisonView from './ImageComparisonView';
 import { useImageNavigation } from '../hooks/useImageNavigation';
 import { useGrading } from '../hooks/useGrading';
+import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import { imageDetailReturnView } from '../utils/imageDetailRoutes';
 
 export default function MainView() {
@@ -32,14 +33,19 @@ export default function MainView() {
   // Navigation and grading hooks for overlays
   const navigation = useImageNavigation(imageId || rightImageId);
   const grading = useGrading(dbId!);
+  const { advanceOnGrade } = useDisplayPreferences();
 
-  const handleGrade = async (status: 'accepted' | 'rejected' | 'pending') => {
+  const handleGrade = async (
+    status: 'accepted' | 'rejected' | 'pending',
+    shiftHeld = false,
+  ) => {
     if (!imageId || !grading.canWrite) return;
-    
+
     try {
       await grading.gradeImage(imageId, status);
-      // Auto-advance to next image after grading
-      if (navigation.canGoNext) {
+      // Advance per preference; Shift does the opposite for this grade.
+      const advance = shiftHeld ? !advanceOnGrade : advanceOnGrade;
+      if (advance && navigation.canGoNext) {
         setTimeout(() => navigation.goToNext(), 100);
       }
     } catch (error) {

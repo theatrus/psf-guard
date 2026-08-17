@@ -75,6 +75,16 @@
   filesystem supports it, copying where it does not. No database-management
   grant needed: consent was given when the directory was configured.
 
+- Review ergonomics: a **Review** tab in Settings holds browser-local
+  preferences, starting with whether grading moves to the next image
+  (holding Shift while grading does the opposite for that one grade) and
+  the two score-chip toggles. Shift+arrow extends the grid selection from
+  the keyboard like Shift+click does with the mouse. A selected card now
+  keeps its accepted/rejected border color, with selection shown as an
+  outer ring and checkmark. Selecting many images no longer queues a
+  full-size preview generation per selected frame — only the keyboard
+  cursor's image preloads.
+
 ## Fixed
 
 - Editing a configured database now opens its settings directly beneath that

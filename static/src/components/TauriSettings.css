@@ -1529,3 +1529,50 @@
     flex-direction: column;
   }
 }
+
+.review-preferences {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  max-width: 34rem;
+}
+
+.review-preferences h3 {
+  margin: 0.4rem 0 0;
+  font-size: 0.95rem;
+}
+
+.review-preference {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.review-preference input {
+  margin-top: 0.2rem;
+  cursor: pointer;
+}
+
+.review-preference span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.review-preference small {
+  color: var(--color-text-muted);
+}
+
+.review-preference .score-chip-icon {
+  width: 0.85rem;
+  height: 0.85rem;
+  vertical-align: middle;
+  margin-right: 0.25rem;
+}
+
+.review-preferences-note {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  margin: 0.4rem 0 0;
+}

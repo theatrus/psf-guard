@@ -11,6 +11,7 @@ import type { DbEntry, DbRegistry } from '../utils/tauri';
 import { apiClient } from '../api/client';
 import { useAccess } from '../auth/access';
 import type { SettingsIntent } from '../utils/settingsIntent';
+import ReviewPreferences from './ReviewPreferences';
 import type { DatabaseSummary } from '../api/types';
 import { describeImportProgress, useImportJob } from '../hooks/useImportJob';
 import { starMetadataFillEnabled } from '../hooks/useStarMetadataFill';
@@ -26,7 +27,7 @@ import './TauriSettings.css';
 /**
  * Settings groups unrelated jobs into named tabs so each stays easy to find.
  */
-type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'users';
+type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'review' | 'users';
 
 interface TauriSettingsProps {
   isOpen: boolean;
@@ -661,6 +662,8 @@ export default function TauriSettings({
     // Setups are global display parameters, not filesystem paths, so the tab
     // is not management-gated.
     { id: 'setups', label: 'Setups' },
+    // Review preferences are stored in this browser, so no gate either.
+    { id: 'review', label: 'Review' },
     ...(!isTauri && access.status.authentication_required
       ? ([{ id: 'users', label: 'Users' }] as const)
       : []),
@@ -987,6 +990,7 @@ export default function TauriSettings({
           id={`settings-panel-${currentTab}`}
           aria-labelledby={`settings-tab-${currentTab}`}
         >
+          {currentTab === 'review' && <ReviewPreferences />}
           {currentTab === 'databases' && (
           <>
           {!hasDatabases && managementAllowed && (

@@ -3288,9 +3288,11 @@
   position: relative;
 }
 
+/* Selection shows as an outer ring, checkmark, and inset — the border
+ * itself keeps the accept/reject status color, so a selected card still
+ * reads as accepted or rejected at a glance. */
 .image-card-wrapper.multi-selected .image-card {
-  border-color: var(--color-warning);
-  box-shadow: 0 0 0 2px var(--color-warning-alpha-40);
+  box-shadow: 0 0 0 2px var(--color-warning);
   transform: scale(0.98);
 }
 
