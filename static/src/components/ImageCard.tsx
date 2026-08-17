@@ -63,8 +63,10 @@ export default function ImageCard({
     inViewRef(node);
   }, [inViewRef]);
 
-  // Preload full size image when selected (for quick detail view opening).
-  // Warms the interactive queue so the 'large' preview is generated if needed.
+  // Preload the full-size image for quick detail-view opening. Callers must
+  // enable this only for the keyboard-cursor card: preloading every card in
+  // a multi-selection would enqueue a large-preview generation per selected
+  // image (select-all on a big grid meant thousands of queued jobs).
   useEffect(() => {
     if (selectionEffects && isSelected && image.id) {
       void ensurePreviewReady(

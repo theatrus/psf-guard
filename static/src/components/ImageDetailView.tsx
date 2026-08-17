@@ -33,7 +33,7 @@ interface ImageDetailViewProps {
   onClose: () => void;
   onNext: () => void;
   onPrevious: () => void;
-  onGrade: (status: 'accepted' | 'rejected' | 'pending') => void;
+  onGrade: (status: 'accepted' | 'rejected' | 'pending', shiftHeld?: boolean) => void;
   adjacentImageIds?: { next: number[]; previous: number[] };
   // Optional grading system for undo/redo (passed from parent)
   grading?: {
@@ -265,9 +265,9 @@ export default function ImageDetailView({
   useHotkeys('j,left', () => {
     onPrevious(); // J/Left goes to older image (lower index in oldest-first sort)
   }, { enableOnFormTags: true }, [onPrevious]);
-  useHotkeys('a', () => onGrade('accepted'), [onGrade]);
-  useHotkeys('x', () => onGrade('rejected'), [onGrade]);
-  useHotkeys('u', () => onGrade('pending'), [onGrade]);
+  useHotkeys('a,shift+a', (event) => onGrade('accepted', event.shiftKey), [onGrade]);
+  useHotkeys('x,shift+x', (event) => onGrade('rejected', event.shiftKey), [onGrade]);
+  useHotkeys('u,shift+u', (event) => onGrade('pending', event.shiftKey), [onGrade]);
   useHotkeys('s', () => {
     setShowStars(s => !s);
     setShowPsf(false); // Turn off PSF when showing stars
@@ -841,21 +841,21 @@ export default function ImageDetailView({
             <div className="detail-actions">
               <button 
                 className="action-button accept" 
-                onClick={() => onGrade('accepted')}
+                onClick={(event) => onGrade('accepted', event.shiftKey)}
                 disabled={grading ? !grading.canWrite : false}
               >
                 Accept (A)
               </button>
               <button 
                 className="action-button reject" 
-                onClick={() => onGrade('rejected')}
+                onClick={(event) => onGrade('rejected', event.shiftKey)}
                 disabled={grading ? !grading.canWrite : false}
               >
                 Reject (X)
               </button>
               <button 
                 className="action-button pending" 
-                onClick={() => onGrade('pending')}
+                onClick={(event) => onGrade('pending', event.shiftKey)}
                 disabled={grading ? !grading.canWrite : false}
               >
                 Unmark (U)

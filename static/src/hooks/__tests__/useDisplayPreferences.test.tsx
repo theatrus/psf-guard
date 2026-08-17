@@ -8,17 +8,21 @@ import {
 describe('display preferences', () => {
   beforeEach(() => {
     window.localStorage.removeItem('psf-guard.display-preferences');
-    setDisplayPreferences({ showNightChip: true, showAllChip: true });
+    setDisplayPreferences({ showNightChip: true, showAllChip: true, advanceOnGrade: true });
   });
 
-  it('defaults to showing both chip types', () => {
+  it('defaults to showing both chip types and advancing after a grade', () => {
     const { result } = renderHook(() => useDisplayPreferences());
-    expect(result.current).toEqual({ showNightChip: true, showAllChip: true });
+    expect(result.current).toEqual({
+      showNightChip: true,
+      showAllChip: true,
+      advanceOnGrade: true,
+    });
   });
 
   it('toggles each chip type independently', () => {
     act(() => {
-      setDisplayPreferences({ showNightChip: false, showAllChip: true });
+      setDisplayPreferences({ showNightChip: false, showAllChip: true, advanceOnGrade: true });
     });
     const { result } = renderHook(() => useDisplayPreferences());
     expect(result.current.showNightChip).toBe(false);
@@ -31,7 +35,7 @@ describe('display preferences', () => {
     const grid = renderHook(() => useDisplayPreferences());
     const sequence = renderHook(() => useDisplayPreferences());
     act(() => {
-      setDisplayPreferences({ showNightChip: true, showAllChip: false });
+      setDisplayPreferences({ showNightChip: true, showAllChip: false, advanceOnGrade: true });
     });
     expect(grid.result.current.showAllChip).toBe(false);
     expect(sequence.result.current.showAllChip).toBe(false);
@@ -39,17 +43,18 @@ describe('display preferences', () => {
 
   it('persists the choice to localStorage', () => {
     act(() => {
-      setDisplayPreferences({ showNightChip: false, showAllChip: false });
+      setDisplayPreferences({ showNightChip: false, showAllChip: false, advanceOnGrade: false });
     });
     expect(
       JSON.parse(window.localStorage.getItem('psf-guard.display-preferences')!),
-    ).toEqual({ showNightChip: false, showAllChip: false });
+    ).toEqual({ showNightChip: false, showAllChip: false, advanceOnGrade: false });
   });
 
   it('falls back to the default on malformed stored values', () => {
     setDisplayPreferences({
       showNightChip: 'yes' as unknown as boolean,
       showAllChip: true,
+      advanceOnGrade: true,
     });
     const { result } = renderHook(() => useDisplayPreferences());
     expect(result.current.showNightChip).toBe(true);
@@ -66,6 +71,7 @@ describe('display preferences', () => {
       new StorageEvent('storage', { key: 'psf-guard.display-preferences' }),
     );
     const { result } = renderHook(() => useDisplayPreferences());
-    expect(result.current).toEqual({ showNightChip: false, showAllChip: false });
+    expect(result.current.showNightChip).toBe(false);
+    expect(result.current.showAllChip).toBe(false);
   });
 });

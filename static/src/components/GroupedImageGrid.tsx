@@ -40,6 +40,7 @@ import {
 } from '../utils/gridNavigation';
 import { thumbnailGridColumns } from '../utils/thumbnailSizing';
 import { useScopedQuality } from '../hooks/useSequenceAnalysis';
+import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import SecondaryScoreToggle from './SecondaryScoreToggle';
 
 interface GroupedImageGridProps {
@@ -81,6 +82,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
 
   // Initialize grading system with undo/redo
   const grading = useGrading(dbId!);
+  const { advanceOnGrade } = useDisplayPreferences();
   const [lastSelectedImageId, setLastSelectedImageId] = useState<number | null>(null);
   const selectionAnchorIdRef = useRef<number | null>(null);
   const selectionBaseIdsRef = useRef<Set<number>>(new Set());
@@ -392,6 +394,50 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     setCurrentImageId,
   ]);
 
+  // Shift+arrow: move the cursor and select everything between the anchor
+  // and the new cursor, exactly like shift+click on the destination card.
+  const extendSelection = useCallback((direction: GridNavigationDirection) => {
+    const currentImageId = activeImageIdRef.current;
+    const currentIndex = currentImageId == null
+      ? -1
+      : flatImages.findIndex(image => image.id === currentImageId);
+    if (currentIndex === -1) return;
+
+    const newIndex = findGridNavigationIndex(
+      flatImages,
+      currentIndex,
+      direction,
+      image => containerRef.current
+        ?.querySelector<HTMLElement>(`[data-image-id="${image.id}"]`)
+        ?.getBoundingClientRect() ?? null,
+    );
+    if (newIndex === currentIndex) return;
+
+    const storedAnchorId = selectionAnchorIdRef.current;
+    const anchorId = storedAnchorId !== null && flatImages.some(
+      image => image.id === storedAnchorId,
+    ) ? storedAnchorId : currentImageId;
+    selectionAnchorIdRef.current = anchorId;
+    const anchorIndex = flatImages.findIndex(image => image.id === anchorId);
+    const [minIndex, maxIndex] = [
+      Math.min(anchorIndex, newIndex),
+      Math.max(anchorIndex, newIndex),
+    ];
+    const next = new Set(selectionBaseIdsRef.current);
+    for (let i = minIndex; i <= maxIndex; i++) {
+      next.add(flatImages[i].id);
+    }
+    setSelectedImages(next);
+
+    const newImage = flatImages[newIndex];
+    activeImageIdRef.current = newImage.id;
+    setCurrentImageId(newImage.id);
+    requestAnimationFrame(() => {
+      containerRef.current?.querySelector(`[data-image-id="${newImage.id}"]`)
+        ?.scrollIntoView({ block: 'nearest' });
+    });
+  }, [flatImages, setCurrentImageId, setSelectedImages]);
+
   const toggleCurrentImageSelection = useCallback(() => {
     const currentImageId = activeImageIdRef.current;
     if (currentImageId === null) return;
@@ -410,18 +456,22 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     });
   }, [setSelectedImages]);
 
-  const gradeImage = useCallback(async (status: 'accepted' | 'rejected' | 'pending') => {
+  const gradeImage = useCallback(async (
+    status: 'accepted' | 'rejected' | 'pending',
+    shiftHeld = false,
+  ) => {
     const currentImageId = activeImageIdRef.current;
     if (!currentImageId || !grading.canWrite) return;
 
     try {
       await grading.gradeImage(currentImageId, status);
-      // Auto-advance to next image
-      setTimeout(() => navigateImages('next'), 100);
+      // Advance per preference; Shift does the opposite for this grade.
+      const advance = shiftHeld ? !advanceOnGrade : advanceOnGrade;
+      if (advance) setTimeout(() => navigateImages('next'), 100);
     } catch (error) {
       console.error('Failed to grade image:', error);
     }
-  }, [grading, navigateImages]);
+  }, [grading, navigateImages, advanceOnGrade]);
 
   const toggleGroup = useCallback((filterName: string) => {
     setExpandedGroups(() => {
@@ -627,33 +677,57 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     [navigateImages, onLiveGridRoute],
   );
   useHotkeys(
+    'shift+right',
+    () => onLiveGridRoute(() => extendSelection('next')),
+    gridArrowHotkeyOptions,
+    [extendSelection, onLiveGridRoute],
+  );
+  useHotkeys(
+    'shift+left',
+    () => onLiveGridRoute(() => extendSelection('prev')),
+    gridArrowHotkeyOptions,
+    [extendSelection, onLiveGridRoute],
+  );
+  useHotkeys(
+    'shift+down',
+    () => onLiveGridRoute(() => extendSelection('down')),
+    gridArrowHotkeyOptions,
+    [extendSelection, onLiveGridRoute],
+  );
+  useHotkeys(
+    'shift+up',
+    () => onLiveGridRoute(() => extendSelection('up')),
+    gridArrowHotkeyOptions,
+    [extendSelection, onLiveGridRoute],
+  );
+  useHotkeys(
     'space',
     () => onLiveGridRoute(toggleCurrentImageSelection),
     gridArrowHotkeyOptions,
     [toggleCurrentImageSelection, onLiveGridRoute],
   );
-  useHotkeys('a', () => {
+  useHotkeys('a,shift+a', (event) => {
     if (!isLiveGridRoute()) return;
     if (selectedImages.size > 1) {
       gradeBatch('accepted');
     } else {
-      gradeImage('accepted');
+      gradeImage('accepted', event.shiftKey);
     }
   }, gridHotkeyOptions, [gradeImage, gradeBatch, selectedImages.size, isLiveGridRoute]);
-  useHotkeys('x', () => {
+  useHotkeys('x,shift+x', (event) => {
     if (!isLiveGridRoute()) return;
     if (selectedImages.size > 1) {
       gradeBatch('rejected');
     } else {
-      gradeImage('rejected');
+      gradeImage('rejected', event.shiftKey);
     }
   }, gridHotkeyOptions, [gradeImage, gradeBatch, selectedImages.size, isLiveGridRoute]);
-  useHotkeys('u', () => {
+  useHotkeys('u,shift+u', (event) => {
     if (!isLiveGridRoute()) return;
     if (selectedImages.size > 1) {
       gradeBatch('pending');
     } else {
-      gradeImage('pending');
+      gradeImage('pending', event.shiftKey);
     }
   }, gridHotkeyOptions, [gradeImage, gradeBatch, selectedImages.size, isLiveGridRoute]);
   useHotkeys('enter', () => {
@@ -957,6 +1031,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                               selectedImages.has(image.id) ||
                               image.id === activeImageId
                             }
+                            selectionEffects={image.id === activeImageId}
                             onClick={(event) => handleImageSelection(image.id, event)}
                             onDoubleClick={() => navigateToDetail(image.id)}
                           />
