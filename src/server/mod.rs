@@ -484,6 +484,7 @@ async fn run_server_internal(
             "/images/{image_id}/grade",
             put(handlers::update_image_grade),
         )
+        .route("/images/grade", post(handlers::batch_update_image_grades))
         .route("/analysis/sequence", get(handlers::analyze_sequence))
         .route(
             "/analysis/image/{image_id}",

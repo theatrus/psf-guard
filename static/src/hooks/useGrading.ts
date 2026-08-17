@@ -16,48 +16,10 @@ export function useGrading(dbId: string, options: UseGradingOptions = {}) {
   const undoRedo = useUndoRedo(dbId);
   const { canWrite } = useAccess();
 
-  // Single image grading mutation
-  const singleGradeMutation = useMutation({
-    mutationFn: async ({ imageId, request, recordHistory = true }: {
-      imageId: number;
-      request: UpdateGradeRequest;
-      recordHistory?: boolean;
-    }) => {
-      if (!canWrite) throw new Error('This account has read-only access');
-      // Record action before applying if history tracking is enabled
-      let actionId: string | null = null;
-      if (recordHistory) {
-        actionId = await undoRedo.recordAction(
-          [imageId],
-          request.status,
-          request.reason,
-          `${request.status} image`
-        );
-      }
-
-      // Apply the grading change
-      await apiClient.updateImageGrade(dbId, imageId, request);
-
-      return { imageId, actionId };
-    },
-    onSuccess: (_, variables) => {
-      // Invalidate queries
-      queryClient.invalidateQueries({ queryKey: ['db', dbId, 'image', variables.imageId] });
-      queryClient.invalidateQueries({ queryKey: ['db', dbId, 'all-images'] });
-
-      if (onSuccess) {
-        onSuccess([variables.imageId], variables.request.status);
-      }
-    },
-    onError: (error: Error, variables) => {
-      console.error('Single grade failed:', error);
-      if (onError) {
-        onError(error, [variables.imageId]);
-      }
-    },
-  });
-
-  // Batch grading mutation
+  // One mutation serves any selection size: a single request and a single
+  // server transaction. The response carries the grades it replaced, so
+  // undo state costs no extra requests either — grading 2000 images was
+  // previously ~4000 HTTP round trips (a state fetch and a write each).
   const batchGradeMutation = useMutation({
     mutationFn: async ({ imageIds, request, recordHistory = true }: {
       imageIds: number[];
@@ -65,31 +27,35 @@ export function useGrading(dbId: string, options: UseGradingOptions = {}) {
       recordHistory?: boolean;
     }) => {
       if (!canWrite) throw new Error('This account has read-only access');
-      // Record action before applying if history tracking is enabled
-      let actionId: string | null = null;
-      if (recordHistory) {
-        actionId = await undoRedo.recordAction(
-          imageIds,
-          request.status,
-          request.reason,
-          `${request.status} ${imageIds.length} images`
-        );
-      }
-
-      // Apply the grading changes
-      const promises = imageIds.map((imageId) =>
-        apiClient.updateImageGrade(dbId, imageId, request)
+      const response = await apiClient.batchUpdateImageGrades(
+        dbId,
+        imageIds.map((imageId) => ({
+          image_id: imageId,
+          status: request.status,
+          reason: request.reason,
+        }))
       );
 
-      await Promise.all(promises);
+      let actionId: string | null = null;
+      if (recordHistory) {
+        actionId = undoRedo.pushAction(
+          imageIds,
+          response.previous.map((entry) => ({
+            imageId: entry.image_id,
+            previousStatus: entry.status,
+            previousReason: entry.reason ?? undefined,
+          })),
+          request.status,
+          request.reason,
+          `${request.status} ${imageIds.length === 1 ? 'image' : `${imageIds.length} images`}`
+        );
+      }
 
       return { imageIds, actionId };
     },
     onSuccess: (_, variables) => {
-      // Invalidate queries for all affected images
-      variables.imageIds.forEach((imageId) => {
-        queryClient.invalidateQueries({ queryKey: ['db', dbId, 'image', imageId] });
-      });
+      // One prefix invalidation covers every per-image detail query.
+      queryClient.invalidateQueries({ queryKey: ['db', dbId, 'image'] });
       queryClient.invalidateQueries({ queryKey: ['db', dbId, 'all-images'] });
 
       if (onSuccess) {
@@ -106,17 +72,17 @@ export function useGrading(dbId: string, options: UseGradingOptions = {}) {
 
   // Convenience functions
   const gradeImage = useCallback((
-    imageId: number, 
+    imageId: number,
     status: 'accepted' | 'rejected' | 'pending',
     reason?: string,
     recordHistory: boolean = true
   ) => {
-    return singleGradeMutation.mutateAsync({
-      imageId,
+    return batchGradeMutation.mutateAsync({
+      imageIds: [imageId],
       request: { status, reason },
       recordHistory,
     });
-  }, [singleGradeMutation]);
+  }, [batchGradeMutation]);
 
   const gradeBatch = useCallback((
     imageIds: number[], 
@@ -145,7 +111,7 @@ export function useGrading(dbId: string, options: UseGradingOptions = {}) {
     }
   }, [gradeImage, gradeBatch]);
 
-  const isLoading = singleGradeMutation.isPending || batchGradeMutation.isPending || undoRedo.isProcessing;
+  const isLoading = batchGradeMutation.isPending || undoRedo.isProcessing;
   const undo = useCallback(
     () => canWrite ? undoRedo.undo() : Promise.resolve(false),
     [canWrite, undoRedo],
@@ -178,8 +144,7 @@ export function useGrading(dbId: string, options: UseGradingOptions = {}) {
     getLastAction: undoRedo.getLastAction,
     getNextRedoAction: undoRedo.getNextRedoAction,
     
-    // Raw mutations (for advanced usage)
-    singleGradeMutation,
+    // Raw mutation (for advanced usage)
     batchGradeMutation,
     
     // History (for debugging)

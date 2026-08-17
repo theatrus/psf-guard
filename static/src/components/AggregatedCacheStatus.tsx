@@ -40,8 +40,11 @@ export default function AggregatedCacheStatus({
     queries: databases.map((db) => ({
       queryKey: ['db', db.id, 'cache-progress'] as const,
       queryFn: () => apiClient.getCacheProgress(db.id),
-      refetchInterval: 1000,
-      refetchIntervalInBackground: true,
+      // Fast only while a refresh runs; a quiet server needs a slow
+      // heartbeat, not a request per second per database.
+      refetchInterval: (query: { state: { data?: CacheRefreshProgress } }) =>
+        query.state.data?.is_refreshing ? 1000 : 10_000,
+      refetchIntervalInBackground: false,
     })),
   });
   const qualityScanQueries = useQueries({
@@ -50,7 +53,7 @@ export default function AggregatedCacheStatus({
       queryFn: () => apiClient.getSpatialScanStatus(db.id),
       refetchInterval: (query: { state: { data?: SpatialScanStatus } }) =>
         query.state.data?.progress.running ? 1000 : false,
-      refetchIntervalInBackground: true,
+      refetchIntervalInBackground: false,
     })),
   });
   const qualityBackfillQueries = useQueries({
@@ -59,7 +62,7 @@ export default function AggregatedCacheStatus({
       queryFn: () => apiClient.getQualityBackfillStatus(db.id),
       refetchInterval: (query: { state: { data?: QualityBackfillStatus } }) =>
         query.state.data?.progress.running ? 1000 : false,
-      refetchIntervalInBackground: true,
+      refetchIntervalInBackground: false,
     })),
   });
 

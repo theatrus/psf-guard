@@ -10,6 +10,8 @@ import type {
   TargetNavigation,
   Image,
   ImageQuery,
+  BatchGradeEntry,
+  BatchGradeResponse,
   UpdateGradeRequest,
   StarDetectionResponse,
   PreviewOptions,
@@ -1096,6 +1098,21 @@ export const apiClient = {
   ): Promise<void> => {
     const apiInstance = await getApi();
     await apiInstance.put(dbPath(dbId, `/images/${imageId}/grade`), request);
+  },
+
+  /** Grade many images in one request and one server transaction. Returns
+   * the grades it replaced so callers can record undo state without a
+   * request per image. */
+  batchUpdateImageGrades: async (
+    dbId: string,
+    updates: BatchGradeEntry[]
+  ): Promise<BatchGradeResponse> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<BatchGradeResponse>>(
+      dbPath(dbId, '/images/grade'),
+      { updates }
+    );
+    return data.data!;
   },
 
   getStarDetection: async (dbId: string, imageId: number): Promise<StarDetectionResponse> => {

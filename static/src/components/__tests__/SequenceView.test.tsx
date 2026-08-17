@@ -124,6 +124,22 @@ function setupDefaultHandlers() {
         status: 'ready',
       });
     }),
+    http.post('/api/db/:dbId/images/grade', async ({ request }) => {
+      const body = await request.json() as { updates: Array<{ image_id: number }> };
+      return HttpResponse.json({
+        success: true,
+        data: {
+          updated: body.updates.length,
+          previous: body.updates.map((u) => ({
+            image_id: u.image_id,
+            status: 'pending',
+            reason: null,
+          })),
+        },
+        error: null,
+        status: 'ready',
+      });
+    }),
   );
 }
 
@@ -893,11 +909,19 @@ describe('SequenceView: multi-session', () => {
     setupMultiSessionHandlers();
     const gradedImageIds: string[] = [];
     server.use(
-      http.put('/api/db/:dbId/images/:imageId/grade', ({ params }) => {
-        gradedImageIds.push(params.imageId as string);
+      http.post('/api/db/:dbId/images/grade', async ({ request }) => {
+        const body = await request.json() as { updates: Array<{ image_id: number }> };
+        body.updates.forEach((u) => gradedImageIds.push(String(u.image_id)));
         return HttpResponse.json({
           success: true,
-          data: null,
+          data: {
+            updated: body.updates.length,
+            previous: body.updates.map((u) => ({
+              image_id: u.image_id,
+              status: 'pending',
+              reason: null,
+            })),
+          },
           error: null,
           status: 'ready',
         });
@@ -1037,14 +1061,21 @@ describe('SequenceView: batch operations', () => {
       }),
     );
 
-    const gradeRequests: Array<{ imageId: string; body: unknown }> = [];
+    const gradeRequests: Array<{ updates: Array<{ image_id: number; status: string }> }> = [];
     server.use(
-      http.put('/api/db/:dbId/images/:imageId/grade', async ({ params, request }) => {
-        const body = await request.json();
-        gradeRequests.push({ imageId: params.imageId as string, body });
+      http.post('/api/db/:dbId/images/grade', async ({ request }) => {
+        const body = await request.json() as { updates: Array<{ image_id: number; status: string }> };
+        gradeRequests.push(body);
         return HttpResponse.json({
           success: true,
-          data: null,
+          data: {
+            updated: body.updates.length,
+            previous: body.updates.map((u) => ({
+              image_id: u.image_id,
+              status: 'pending',
+              reason: null,
+            })),
+          },
           error: null,
           status: 'ready',
         });
@@ -1072,14 +1103,13 @@ describe('SequenceView: batch operations', () => {
     expect(gradeRequests).toHaveLength(0);
     await user.click(screen.getByText(/Reject selected \(2\)/));
 
-    // Wait for the grade API calls to be made
+    // One batch request carries both frames.
     await waitFor(() => {
-      expect(gradeRequests.length).toBe(2);
+      expect(gradeRequests.length).toBe(1);
     });
-
-    // Verify the grade requests were for rejection
-    gradeRequests.forEach(req => {
-      expect((req.body as Record<string, unknown>).status).toBe('rejected');
+    expect(gradeRequests[0].updates).toHaveLength(2);
+    gradeRequests[0].updates.forEach(update => {
+      expect(update.status).toBe('rejected');
     });
   });
 

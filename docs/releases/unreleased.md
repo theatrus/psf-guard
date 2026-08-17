@@ -82,6 +82,17 @@
   editor stay visually connected, so paths, remote access, and export settings
   have a clear database context.
 
+- Rejecting or accepting a large grid selection is now one request and one
+  database transaction instead of two HTTP round trips per image, so
+  grading thousands of frames finishes in about a second instead of
+  minutes of "Processing". Undo and redo restore the whole selection in
+  one request the same way.
+
+- An idle grid no longer polls the server every second. The cache and
+  quality status widgets ask fast only while a refresh, scan, or backfill
+  is running, drop to a slow heartbeat otherwise, and stop entirely while
+  the window is in the background.
+
 - Remote sync export responses now carry an `X-Content-SHA256` header with
   the SHA-256 of the exact response body, so the N.I.N.A. plugin can verify
   a pulled bundle without re-serializing it. The in-bundle `payload_sha256`
