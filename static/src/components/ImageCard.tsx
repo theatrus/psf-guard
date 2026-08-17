@@ -150,6 +150,7 @@ export default function ImageCard({
               className="quality-badge quality-badge-secondary"
               title={secondaryScoreDescription(secondaryScore.score, secondaryScore.scope)}
             >
+              {secondaryScore.scope === 'capture_sequence' ? 'night' : 'all'}{' '}
               {(secondaryScore.score * 100).toFixed(0)}
             </div>
           )}
