@@ -387,10 +387,13 @@ impl LevenbergMarquardt {
                 break;
             }
 
-            // LM update
+            // LM update. The Jacobian here is d(residual)/d(param), so the
+            // descent step solves (JᵀJ + λI)·δ = −Jᵀr; solving for +Jᵀr
+            // walks uphill, every step gets rejected, and the "fit" returns
+            // the initial guess untouched.
             let jt = jacobian.transpose();
             let jtj = &jt * &jacobian;
-            let jtr = &jt * &residuals;
+            let jtr = -(&jt * &residuals);
 
             loop {
                 // Add lambda to diagonal (LM modification)

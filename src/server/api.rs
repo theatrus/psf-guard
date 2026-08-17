@@ -242,6 +242,12 @@ pub struct StarDetectionResponse {
     pub detected_stars: usize,
     pub average_hfr: f64,
     pub average_fwhm: f64,
+    /// Frame dimensions in pixels, so a client can place stars into
+    /// regions (tilt and aberration inspection) without a second lookup.
+    #[serde(default)]
+    pub width: Option<usize>,
+    #[serde(default)]
+    pub height: Option<usize>,
     pub stars: Vec<StarInfo>,
 }
 
@@ -253,6 +259,11 @@ pub struct StarInfo {
     pub fwhm: f64,
     pub brightness: f64,
     pub eccentricity: f64,
+    /// PSF orientation in radians (elongation direction), when a PSF model
+    /// was fitted. The tilt inspector uses the per-region mean direction to
+    /// tell tilt from curvature and astigmatism.
+    #[serde(default)]
+    pub theta: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]

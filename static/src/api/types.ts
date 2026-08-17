@@ -54,12 +54,17 @@ export interface StarInfo {
   fwhm: number;
   brightness: number;
   eccentricity: number;
+  /** PSF orientation in radians (elongation direction), when fitted. */
+  theta?: number | null;
 }
 
 export interface StarDetectionResponse {
   detected_stars: number;
   average_hfr: number;
   average_fwhm: number;
+  /** Frame dimensions in pixels; absent from pre-v3 cached results. */
+  width?: number | null;
+  height?: number | null;
   stars: StarInfo[];
 }
 

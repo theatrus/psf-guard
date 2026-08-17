@@ -1,0 +1,75 @@
+.tilt-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  max-width: 40rem;
+}
+
+.tilt-mosaic {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 4px;
+  justify-content: center;
+}
+
+.tilt-pane {
+  position: relative;
+  border: 2px solid var(--color-border, #555);
+  border-radius: 4px;
+  background-color: var(--color-bg-primary, #111);
+  background-repeat: no-repeat;
+  overflow: hidden;
+}
+
+.tilt-direction {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  color: var(--color-primary, #4da3ff);
+  pointer-events: none;
+}
+
+.tilt-pane-stats {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  gap: 0.6rem;
+  justify-content: center;
+  padding: 2px 4px;
+  font-size: 0.7rem;
+  background: rgb(0 0 0 / 55%);
+  color: white;
+}
+
+.tilt-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 2rem;
+}
+
+.tilt-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.tilt-summary strong {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+
+.tilt-inspector-muted {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.tilt-inspector-error {
+  color: var(--color-error, #c0392b);
+  margin: 0;
+}
