@@ -774,7 +774,7 @@ export default function SequenceView() {
             <span className="threshold-value">{threshold.toFixed(2)}</span>
           </div>
           <ScoringPenaltyControl />
-          <SecondaryScoreToggle />
+          <SecondaryScoreToggle chipScope={otherBasisScope} />
           <div className="selection-preset-control">
             <label htmlFor="sequence-select-preset">Select:</label>
             <select

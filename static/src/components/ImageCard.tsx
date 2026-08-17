@@ -153,9 +153,11 @@ export default function ImageCard({
             Math.round(quality.quality_score * 100) && (
             <div
               className="quality-badge quality-badge-secondary"
+              style={{
+                backgroundColor: qualityColor(secondaryScore.score),
+              }}
               title={secondaryScoreDescription(secondaryScore.score, secondaryScore.scope)}
             >
-              {secondaryScore.scope === 'capture_sequence' ? 'night' : 'all'}{' '}
               {(secondaryScore.score * 100).toFixed(0)}
             </div>
           )}

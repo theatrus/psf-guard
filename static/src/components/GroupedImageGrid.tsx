@@ -752,6 +752,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                   }
                 </select>
               </div>
+
+              <SecondaryScoreToggle chipScope="capture_sequence" className="compact" />
             </div>
             
             {/* Undo/Redo Toolbar */}
@@ -820,7 +822,6 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                 canWrite={grading.canWrite}
                 className="toolbar-button compact quality-scan-button"
               />
-              <SecondaryScoreToggle className="compact" />
             </div>
             
             <div className="stats-section">
