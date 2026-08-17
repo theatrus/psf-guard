@@ -804,11 +804,33 @@ pub async fn refresh_preview(
     })))
 }
 
+/// Response header carrying the SHA-256 of the exact response body bytes.
+///
+/// The in-bundle `payload_sha256` is a courtesy field a client can only
+/// re-check by reproducing this server's serialization byte for byte, which
+/// no other JSON writer does. A client that wants integrity should hash the
+/// raw body it received and compare it against this header — the same
+/// contract the upload path already uses for `X-Content-SHA256` requests.
+const CONTENT_SHA256_HEADER: &str = "x-content-sha256";
+
+/// Serialize an export envelope once and stamp the digest of those exact
+/// bytes on the response, so a client can verify without re-serializing.
+fn export_response(export: SyncExport) -> Result<Response, AppError> {
+    let body = serde_json::to_vec(&ApiResponse::success(export))
+        .map_err(|error| AppError::InternalError(format!("serializing export: {error}")))?;
+    let digest = digest_hex(&body);
+    Response::builder()
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .header(CONTENT_SHA256_HEADER, digest)
+        .body(axum::body::Body::from(body))
+        .map_err(|error| AppError::InternalError(format!("building export response: {error}")))
+}
+
 pub async fn create_export(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(request): Json<CreateExportRequest>,
-) -> Result<Json<ApiResponse<SyncExport>>, AppError> {
+) -> Result<Response, AppError> {
     let catalog = authenticated_catalog(&state, &headers, AuditAction::Export)?;
     require_protocol(request.protocol_version)?;
     require_catalog(&catalog, &request.catalog_id)?;
@@ -857,14 +879,14 @@ pub async fn create_export(
         .remote_exports
         .insert(catalog.id.clone(), export.clone())?;
     audit(AuditOutcome::Ok, Some(&export.export_id), summary);
-    Ok(Json(ApiResponse::success(export)))
+    export_response(export)
 }
 
 pub async fn get_export(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(export_id): Path<String>,
-) -> Result<Json<ApiResponse<SyncExport>>, AppError> {
+) -> Result<Response, AppError> {
     let catalog = authenticated_catalog(&state, &headers, AuditAction::Export)?;
     let export = state
         .remote_exports
@@ -876,7 +898,7 @@ pub async fn get_export(
                     .into(),
             )
         })?;
-    Ok(Json(ApiResponse::success(export)))
+    export_response(export)
 }
 
 fn authenticated_catalog(
@@ -1466,6 +1488,31 @@ fn internal(error: impl std::fmt::Display) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn export_response_header_matches_the_body_bytes() {
+        // The client hashes the raw body it received and compares it to the
+        // header — the only digest check that survives two JSON writers.
+        let export = SyncExport {
+            export_id: "export-1".into(),
+            state: "ready",
+            bundle: Some(grades_bundle(&grade_tables(), "")),
+            error: None,
+        };
+        let response = export_response(export).unwrap();
+        let header = response
+            .headers()
+            .get(CONTENT_SHA256_HEADER)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(header, digest_hex(&body));
+        assert_eq!(header.len(), 64);
+    }
 
     fn grades_bundle(tables: &str, digest: &str) -> CatalogBundle {
         let json = format!(
