@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { HttpResponse, http } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import { AccessContext } from '../../auth/access';
 import type { AuthUserSummary } from '../../api/types';
@@ -318,7 +318,7 @@ describe('TauriSettings import state', () => {
     });
 
     expect(await screen.findByText('Remote receive: /images/remote')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Remote catalog' }));
     expect(
       screen.getByRole('checkbox', { name: 'Accept remote image uploads' })
     ).toBeChecked();
@@ -336,6 +336,107 @@ describe('TauriSettings import state', () => {
       screen.getByText('Copy this key now. It will not be shown again after saving.')
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Copy' })).toBeEnabled();
+  });
+
+  it('keeps the editor with the selected database in a multi-database list', async () => {
+    server.use(
+      http.get('/api/info', () =>
+        HttpResponse.json({
+          success: true,
+          data: {
+            version: 'test',
+            cache_directory: '/tmp/cache',
+            allow_database_management: true,
+          },
+          error: null,
+          status: 'ready',
+        })
+      ),
+      http.get('/api/databases', () =>
+        HttpResponse.json({
+          success: true,
+          data: [
+            {
+              id: 'c925',
+              name: 'C925',
+              database_path: '/tmp/c925.sqlite',
+              image_directories: ['/images/c925'],
+            },
+            {
+              id: 'ultracat',
+              name: 'Ultra Cat',
+              database_path: '/tmp/ultracat.sqlite',
+              image_directories: ['/images/ultracat'],
+            },
+          ],
+          error: null,
+          status: 'ready',
+        })
+      ),
+      http.get('/api/db/:dbId/import', () =>
+        HttpResponse.json({
+          success: true,
+          data: {
+            started: false,
+            progress: {
+              running: false,
+              stage: '',
+              image_dirs: [],
+              total_files: 0,
+              scanned_files: 0,
+              outcome: null,
+              started_at: null,
+              finished_at: null,
+              error: null,
+            },
+          },
+          error: null,
+          status: 'ready',
+        })
+      ),
+      http.delete('/api/databases/:dbId', () =>
+        HttpResponse.json({
+          success: true,
+          data: { removed: true },
+          error: null,
+          status: 'ready',
+        })
+      )
+    );
+
+    render(<TauriSettings isOpen onClose={() => undefined} />, {
+      wrapper: createWrapper(),
+    });
+
+    const c925 = await screen.findByRole('region', { name: 'C925' });
+    const ultraCat = screen.getByRole('region', { name: 'Ultra Cat' });
+
+    fireEvent.click(within(c925).getByRole('button', { name: 'Edit C925' }));
+
+    expect(within(c925).getByText('Editing database')).toBeInTheDocument();
+    expect(within(c925).getByRole('heading', { name: 'C925 c925' })).toBeInTheDocument();
+    expect(within(c925).getByRole('button', { name: 'Edit C925' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    );
+    expect(within(ultraCat).queryByText('Editing database')).not.toBeInTheDocument();
+
+    fireEvent.click(
+      within(ultraCat).getByRole('button', { name: 'Edit Ultra Cat' })
+    );
+
+    expect(within(c925).queryByText('Editing database')).not.toBeInTheDocument();
+    expect(within(ultraCat).getByText('Editing database')).toBeInTheDocument();
+    expect(
+      within(ultraCat).getByRole('heading', { name: 'Ultra Cat ultracat' })
+    ).toBeInTheDocument();
+
+    const confirmRemove = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    fireEvent.click(within(ultraCat).getByRole('button', { name: 'Remove' }));
+    confirmRemove.mockRestore();
+
+    expect(await screen.findByRole('button', { name: '+ Add Database' })).toBeEnabled();
+    expect(screen.queryByText('Editing database')).not.toBeInTheDocument();
   });
 });
 

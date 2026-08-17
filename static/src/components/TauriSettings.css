@@ -444,16 +444,25 @@
   background-color: var(--color-success-hover);
 }
 /* B5/F3: multi-DB list rows */
+.tauri-settings .db-entry {
+  margin-bottom: 8px;
+  overflow: hidden;
+  border: 1px solid var(--color-border, #444);
+  border-radius: 4px;
+  background-color: var(--color-bg-input, rgba(255, 255, 255, 0.02));
+}
+
+.tauri-settings .db-entry.editing {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary-alpha-30);
+}
+
 .tauri-settings .db-row {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
   padding: 10px 12px;
-  border: 1px solid var(--color-border, #444);
-  border-radius: 4px;
-  margin-bottom: 8px;
-  background-color: var(--color-bg-input, rgba(255, 255, 255, 0.02));
 }
 
 .tauri-settings .db-row-main {
@@ -486,6 +495,41 @@
 .tauri-settings .db-row-actions .remove-button {
   width: auto;
   padding: 4px 10px;
+}
+
+.tauri-settings .db-row-editor {
+  padding: 20px;
+  border-top: 1px solid var(--color-primary-alpha-30);
+  background-color: var(--color-bg-secondary);
+}
+
+.tauri-settings .db-editor-heading {
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--color-border-secondary);
+}
+
+.tauri-settings .db-editor-context {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--color-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tauri-settings .db-editor-heading h3 {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.tauri-settings .db-row-editor .database-config {
+  margin-bottom: 18px;
+}
+
+.tauri-settings .db-row-editor .modal-buttons {
+  margin-top: 20px;
 }
 
 .tauri-settings .muted {
@@ -763,6 +807,18 @@
 }
 
 @media (max-width: 760px) {
+  .tauri-settings .db-row {
+    flex-direction: column;
+  }
+
+  .tauri-settings .db-row-actions {
+    justify-content: flex-start;
+  }
+
+  .tauri-settings .db-row-editor {
+    padding: 16px 12px;
+  }
+
   .tauri-settings .scheduler-sync-operation,
   .tauri-settings .scheduler-sync-endpoints {
     grid-template-columns: 1fr;

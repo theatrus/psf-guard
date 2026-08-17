@@ -601,6 +601,7 @@ export default function TauriSettings({
         queryClient.invalidateQueries({ queryKey: ['databases'] });
         queryClient.invalidateQueries({ queryKey: ['db', entry.id] });
         await reload();
+        if (editingId === entry.id) resetForm();
         setStatusMessage(`Removed ${entry.name}.`);
       } else {
         setStatusMessage('Remove failed.');
@@ -679,6 +680,274 @@ export default function TauriSettings({
     const next = visibleTabs[(index + step + visibleTabs.length) % visibleTabs.length];
     setActiveTab(next.id);
     document.getElementById(`settings-tab-${next.id}`)?.focus();
+  };
+
+  const renderDatabaseForm = (entry: DbEntry | null) => {
+    const editorHeadingId = entry ? `database-editor-heading-${entry.id}` : undefined;
+
+    return (
+      <section
+        className={entry ? 'db-row-editor' : 'settings-section'}
+        aria-labelledby={editorHeadingId}
+      >
+        {entry ? (
+          <div className="db-editor-heading">
+            <span className="db-editor-context">Editing database</span>
+            <h3 id={editorHeadingId}>
+              {entry.name} <code className="db-row-slug">{entry.id}</code>
+            </h3>
+          </div>
+        ) : (
+          <h3>{createMode ? 'New Database from Images' : 'Add Database'}</h3>
+        )}
+
+        {createMode && (
+          <p className="muted">
+            Creates a brand-new Target Scheduler database and imports the
+            selected folders. Each target gets its own project. Nearby,
+            similarly dated panels with matching panel names share a
+            mosaic project. You can rename or reorganize them afterwards.
+            The import reads headers only; pixel-based quality work is a
+            separate option below.
+          </p>
+        )}
+
+        <div className="database-config">
+          <label>Display name (optional):</label>
+          <input
+            type="text"
+            value={formName}
+            onChange={(e) => setFormName(e.target.value)}
+            placeholder={
+              createMode
+                ? 'e.g. 2026 Archive (defaults to "Imported Images")'
+                : 'e.g. Imaging Rig (defaults to filename)'
+            }
+            className="file-path-input"
+          />
+        </div>
+
+        {!createMode && (
+          <div className="database-config">
+            <label>N.I.N.A. Database File:</label>
+            <div className="file-input-group">
+              <input
+                type="text"
+                value={formDbPath}
+                onChange={(e) => setFormDbPath(e.target.value)}
+                placeholder="Select or enter database path"
+                className="file-path-input"
+              />
+              <button onClick={handlePickDbPath} className="browse-button">
+                Browse…
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="database-config">
+          <label>Image Directories:</label>
+          {isTauri ? (
+            <button onClick={handleAddImageDir} className="add-directory-button">
+              + Add Image Directory
+            </button>
+          ) : (
+            <div className="file-input-group">
+              <input
+                type="text"
+                value={pendingImageDir}
+                onChange={(e) => setPendingImageDir(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleAddManualImageDir();
+                  }
+                }}
+                placeholder="Type an absolute path and press Add"
+                className="file-path-input"
+              />
+              <button
+                onClick={handleAddManualImageDir}
+                className="browse-button"
+                disabled={!pendingImageDir.trim()}
+              >
+                Add
+              </button>
+            </div>
+          )}
+          {formImageDirs.length > 0 && (
+            <div className="image-directories">
+              {formImageDirs.map((dir, index) => (
+                <div key={dir} className="image-directory-item">
+                  <span>📂 {dir}</span>
+                  <button
+                    onClick={() => handleRemoveImageDir(index)}
+                    className="remove-button"
+                    title="Remove directory"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {editingId && (
+          <div className="database-config">
+            <label htmlFor="remote-upload-token">Remote API key:</label>
+            <div className="remote-upload-token-row">
+              <input
+                id="remote-upload-token"
+                type={formRemoteUploadTokenRevealed ? 'text' : 'password'}
+                value={formRemoteUploadToken}
+                onChange={(event) => {
+                  setFormRemoteUploadToken(event.target.value);
+                  setFormRemoteUploadTokenCopyState('idle');
+                }}
+                placeholder={
+                  formRemoteUploadTokenConfigured
+                    ? 'Unchanged'
+                    : 'At least 24 characters'
+                }
+                className="file-path-input"
+                autoComplete="new-password"
+              />
+              <button
+                type="button"
+                onClick={handleGenerateRemoteUploadToken}
+                className="browse-button"
+              >
+                Generate
+              </button>
+              {formRemoteUploadTokenRevealed &&
+                formRemoteUploadToken.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleCopyRemoteUploadToken}
+                    className="browse-button"
+                  >
+                    {formRemoteUploadTokenCopyState === 'copied'
+                      ? 'Copied'
+                      : 'Copy'}
+                  </button>
+                )}
+            </div>
+            {formRemoteUploadTokenRevealed && (
+              <small
+                className={`remote-upload-token-notice ${
+                  formRemoteUploadTokenCopyState === 'failed' ? 'error' : ''
+                }`}
+                role="status"
+              >
+                {formRemoteUploadTokenCopyState === 'failed'
+                  ? 'Copy failed. Select and copy the key manually.'
+                  : 'Copy this key now. It will not be shown again after saving.'}
+              </small>
+            )}
+            <label className="quality-analysis-option">
+              <input
+                type="checkbox"
+                checked={formRemoteSyncEnabled}
+                onChange={(event) =>
+                  setFormRemoteSyncEnabled(event.target.checked)
+                }
+              />
+              <span>
+                <strong>Accept remote scheduler sync</strong>
+                <small>
+                  Lets a holder of this key merge projects, targets,
+                  plans, and grades into this database.
+                </small>
+              </span>
+            </label>
+            <label className="quality-analysis-option">
+              <input
+                type="checkbox"
+                checked={formRemoteUploadEnabled}
+                onChange={(event) =>
+                  setFormRemoteUploadEnabled(event.target.checked)
+                }
+              />
+              <span>
+                <strong>Accept remote image uploads</strong>
+              </span>
+            </label>
+            <label htmlFor="server-export-directory">
+              Server export directory:
+            </label>
+            <input
+              id="server-export-directory"
+              type="text"
+              className="file-path-input"
+              placeholder="Absolute server path; empty disables server export"
+              title="Exports triggered from the Overview land here (reflinked where the filesystem supports it). Leave empty to offer the archive download instead."
+              value={formExportDir}
+              onChange={(event) => setFormExportDir(event.target.value)}
+            />
+            {formRemoteUploadEnabled && (
+              <>
+                <label htmlFor="remote-upload-directory">Receive directory:</label>
+                <select
+                  id="remote-upload-directory"
+                  value={formRemoteUploadDir}
+                  onChange={(event) => setFormRemoteUploadDir(event.target.value)}
+                  className="file-path-input"
+                >
+                  <option value="">Select an image directory</option>
+                  {formImageDirs.map((directory) => (
+                    <option key={directory} value={directory}>
+                      {directory}
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
+          </div>
+        )}
+
+        {createMode && (
+          <label className="quality-analysis-option">
+            <input
+              type="checkbox"
+              checked={createAnalyzeQuality}
+              onChange={(event) => setCreateAnalyzeQuality(event.target.checked)}
+            />
+            <span>
+              <strong>Queue background quality analysis</strong>
+              <small>
+                Reads every image to measure stars, background, clouds, obstructions,
+                and pointing. This can take a long time, especially in a debug build.
+                You can run it later from this database&apos;s settings.
+              </small>
+            </span>
+          </label>
+        )}
+
+        <div className="modal-buttons">
+          <button
+            onClick={resetForm}
+            className="cancel-button"
+            disabled={isApplying}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSaveForm}
+            className="save-button"
+            disabled={
+              (createMode ? formImageDirs.length === 0 : !formDbPath.trim()) || isApplying
+            }
+          >
+            {createMode
+              ? 'Create & Import'
+              : editingId
+                ? 'Save Changes'
+                : 'Add Database'}
+          </button>
+        </div>
+      </section>
+    );
   };
 
   return (
@@ -789,61 +1058,76 @@ export default function TauriSettings({
               </div>
             )}
 
-            {databases.map((entry) => (
-              <div key={entry.id} className="db-row">
-                <div className="db-row-main">
-                  <div className="db-row-title">
-                    <strong>{entry.name}</strong>{' '}
-                    <code className="db-row-slug">{entry.id}</code>
-                  </div>
-                  <div className="path-info">{entry.db_path}</div>
-                  {entry.image_dirs.length > 0 && (
-                    <div className="path-info muted">
-                      {entry.image_dirs.join(', ')}
+            {databases.map((entry) => {
+              const isEditing = showAddForm && editingId === entry.id;
+              const editorId = `database-editor-${entry.id}`;
+
+              return (
+                <section
+                  key={entry.id}
+                  className={`db-entry${isEditing ? ' editing' : ''}`}
+                  aria-labelledby={`database-heading-${entry.id}`}
+                >
+                  <div className="db-row">
+                    <div className="db-row-main">
+                      <div className="db-row-title">
+                        <strong id={`database-heading-${entry.id}`}>{entry.name}</strong>{' '}
+                        <code className="db-row-slug">{entry.id}</code>
+                      </div>
+                      <div className="path-info">{entry.db_path}</div>
+                      {entry.image_dirs.length > 0 && (
+                        <div className="path-info muted">
+                          {entry.image_dirs.join(', ')}
+                        </div>
+                      )}
+                      {entry.remote_image_upload?.enabled && (
+                        <div className="path-info muted">
+                          Remote receive: {entry.remote_image_upload.image_dir}
+                        </div>
+                      )}
+                      <CalibrationLibrarySummary
+                        dbId={entry.id}
+                        dbName={entry.name}
+                        canManage={managementAllowed}
+                        onImport={() => handleImport(entry)}
+                      />
+                      <QualityBackfillControls dbId={entry.id} />
                     </div>
-                  )}
-                  {entry.remote_image_upload?.enabled && (
-                    <div className="path-info muted">
-                      Remote receive: {entry.remote_image_upload.image_dir}
-                    </div>
-                  )}
-                  <CalibrationLibrarySummary
-                    dbId={entry.id}
-                    dbName={entry.name}
-                    canManage={managementAllowed}
-                    onImport={() => handleImport(entry)}
-                  />
-                  <QualityBackfillControls dbId={entry.id} />
-                </div>
-                {managementAllowed && (
-                  <div className="db-row-actions">
-                    <button
-                      className="browse-button"
-                      onClick={() => handleImport(entry)}
-                      disabled={isApplying || (importRunning && importDbId === entry.id)}
-                      title="Scan this database's image directories and import new frames"
-                    >
-                      {importRunning && importDbId === entry.id ? 'Importing…' : 'Import'}
-                    </button>
-                    <button
-                      className="browse-button"
-                      onClick={() => startEdit(entry)}
-                      disabled={isApplying}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      className="remove-button"
-                      onClick={() => handleRemove(entry)}
-                      disabled={isApplying}
-                      title="Remove this database"
-                    >
-                      Remove
-                    </button>
+                    {managementAllowed && (
+                      <div className="db-row-actions">
+                        <button
+                          className="browse-button"
+                          onClick={() => handleImport(entry)}
+                          disabled={isApplying || (importRunning && importDbId === entry.id)}
+                          title="Scan this database's image directories and import new frames"
+                        >
+                          {importRunning && importDbId === entry.id ? 'Importing…' : 'Import'}
+                        </button>
+                        <button
+                          className="browse-button"
+                          onClick={() => startEdit(entry)}
+                          disabled={isApplying}
+                          aria-label={`Edit ${entry.name}`}
+                          aria-expanded={isEditing}
+                          aria-controls={isEditing ? editorId : undefined}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="remove-button"
+                          onClick={() => handleRemove(entry)}
+                          disabled={isApplying}
+                          title="Remove this database"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            ))}
+                  {isEditing && <div id={editorId}>{renderDatabaseForm(entry)}</div>}
+                </section>
+              );
+            })}
 
             {/* With no databases yet the welcome banner carries these same two
                 actions, so rendering them here too would just duplicate them. */}
@@ -1084,263 +1368,7 @@ export default function TauriSettings({
             )}
           </div>
 
-          {managementAllowed && showAddForm && (
-            <div className="settings-section">
-              <h3>
-                {createMode
-                  ? 'New Database from Images'
-                  : editingId
-                    ? 'Edit Database'
-                    : 'Add Database'}
-              </h3>
-
-              {createMode && (
-                <p className="muted">
-                  Creates a brand-new Target Scheduler database and imports the
-                  selected folders. Each target gets its own project. Nearby,
-                  similarly dated panels with matching panel names share a
-                  mosaic project. You can rename or reorganize them afterwards.
-                  The import reads headers only; pixel-based quality work is a
-                  separate option below.
-                </p>
-              )}
-
-              <div className="database-config">
-                <label>Display name (optional):</label>
-                <input
-                  type="text"
-                  value={formName}
-                  onChange={(e) => setFormName(e.target.value)}
-                  placeholder={
-                    createMode
-                      ? 'e.g. 2026 Archive (defaults to "Imported Images")'
-                      : 'e.g. Imaging Rig (defaults to filename)'
-                  }
-                  className="file-path-input"
-                />
-              </div>
-
-              {!createMode && (
-                <div className="database-config">
-                  <label>N.I.N.A. Database File:</label>
-                  <div className="file-input-group">
-                    <input
-                      type="text"
-                      value={formDbPath}
-                      onChange={(e) => setFormDbPath(e.target.value)}
-                      placeholder="Select or enter database path"
-                      className="file-path-input"
-                    />
-                    <button onClick={handlePickDbPath} className="browse-button">
-                      Browse…
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <div className="database-config">
-                <label>Image Directories:</label>
-                {isTauri ? (
-                  <button onClick={handleAddImageDir} className="add-directory-button">
-                    + Add Image Directory
-                  </button>
-                ) : (
-                  <div className="file-input-group">
-                    <input
-                      type="text"
-                      value={pendingImageDir}
-                      onChange={(e) => setPendingImageDir(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          handleAddManualImageDir();
-                        }
-                      }}
-                      placeholder="Type an absolute path and press Add"
-                      className="file-path-input"
-                    />
-                    <button
-                      onClick={handleAddManualImageDir}
-                      className="browse-button"
-                      disabled={!pendingImageDir.trim()}
-                    >
-                      Add
-                    </button>
-                  </div>
-                )}
-                {formImageDirs.length > 0 && (
-                  <div className="image-directories">
-                    {formImageDirs.map((dir, index) => (
-                      <div key={dir} className="image-directory-item">
-                        <span>📂 {dir}</span>
-                        <button
-                          onClick={() => handleRemoveImageDir(index)}
-                          className="remove-button"
-                          title="Remove directory"
-                        >
-                          ×
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {editingId && (
-                <div className="database-config">
-                  <label htmlFor="remote-upload-token">Remote API key:</label>
-                  <div className="remote-upload-token-row">
-                    <input
-                      id="remote-upload-token"
-                      type={formRemoteUploadTokenRevealed ? 'text' : 'password'}
-                      value={formRemoteUploadToken}
-                      onChange={(event) => {
-                        setFormRemoteUploadToken(event.target.value);
-                        setFormRemoteUploadTokenCopyState('idle');
-                      }}
-                      placeholder={
-                        formRemoteUploadTokenConfigured
-                          ? 'Unchanged'
-                          : 'At least 24 characters'
-                      }
-                      className="file-path-input"
-                      autoComplete="new-password"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleGenerateRemoteUploadToken}
-                      className="browse-button"
-                    >
-                      Generate
-                    </button>
-                    {formRemoteUploadTokenRevealed &&
-                      formRemoteUploadToken.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={handleCopyRemoteUploadToken}
-                          className="browse-button"
-                        >
-                          {formRemoteUploadTokenCopyState === 'copied'
-                            ? 'Copied'
-                            : 'Copy'}
-                        </button>
-                      )}
-                  </div>
-                  {formRemoteUploadTokenRevealed && (
-                    <small
-                      className={`remote-upload-token-notice ${
-                        formRemoteUploadTokenCopyState === 'failed' ? 'error' : ''
-                      }`}
-                      role="status"
-                    >
-                      {formRemoteUploadTokenCopyState === 'failed'
-                        ? 'Copy failed. Select and copy the key manually.'
-                        : 'Copy this key now. It will not be shown again after saving.'}
-                    </small>
-                  )}
-                  <label className="quality-analysis-option">
-                    <input
-                      type="checkbox"
-                      checked={formRemoteSyncEnabled}
-                      onChange={(event) =>
-                        setFormRemoteSyncEnabled(event.target.checked)
-                      }
-                    />
-                    <span>
-                      <strong>Accept remote scheduler sync</strong>
-                      <small>
-                        Lets a holder of this key merge projects, targets,
-                        plans, and grades into this database.
-                      </small>
-                    </span>
-                  </label>
-                  <label className="quality-analysis-option">
-                    <input
-                      type="checkbox"
-                      checked={formRemoteUploadEnabled}
-                      onChange={(event) =>
-                        setFormRemoteUploadEnabled(event.target.checked)
-                      }
-                    />
-                    <span>
-                      <strong>Accept remote image uploads</strong>
-                    </span>
-                  </label>
-                  <label htmlFor="server-export-directory">
-                    Server export directory:
-                  </label>
-                  <input
-                    id="server-export-directory"
-                    type="text"
-                    className="file-path-input"
-                    placeholder="Absolute server path; empty disables server export"
-                    title="Exports triggered from the Overview land here (reflinked where the filesystem supports it). Leave empty to offer the archive download instead."
-                    value={formExportDir}
-                    onChange={(event) => setFormExportDir(event.target.value)}
-                  />
-                  {formRemoteUploadEnabled && (
-                    <>
-                      <label htmlFor="remote-upload-directory">Receive directory:</label>
-                      <select
-                        id="remote-upload-directory"
-                        value={formRemoteUploadDir}
-                        onChange={(event) => setFormRemoteUploadDir(event.target.value)}
-                        className="file-path-input"
-                      >
-                        <option value="">Select an image directory</option>
-                        {formImageDirs.map((directory) => (
-                          <option key={directory} value={directory}>
-                            {directory}
-                          </option>
-                        ))}
-                      </select>
-                    </>
-                  )}
-                </div>
-              )}
-
-              {createMode && (
-                <label className="quality-analysis-option">
-                  <input
-                    type="checkbox"
-                    checked={createAnalyzeQuality}
-                    onChange={(event) => setCreateAnalyzeQuality(event.target.checked)}
-                  />
-                  <span>
-                    <strong>Queue background quality analysis</strong>
-                    <small>
-                      Reads every image to measure stars, background, clouds, obstructions,
-                      and pointing. This can take a long time, especially in a debug build.
-                      You can run it later from this database&apos;s settings.
-                    </small>
-                  </span>
-                </label>
-              )}
-
-              <div className="modal-buttons">
-                <button
-                  onClick={resetForm}
-                  className="cancel-button"
-                  disabled={isApplying}
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSaveForm}
-                  className="save-button"
-                  disabled={
-                    (createMode ? formImageDirs.length === 0 : !formDbPath.trim()) || isApplying
-                  }
-                >
-                  {createMode
-                    ? 'Create & Import'
-                    : editingId
-                      ? 'Save Changes'
-                      : 'Add Database'}
-                </button>
-              </div>
-            </div>
-          )}
+          {managementAllowed && showAddForm && !editingId && renderDatabaseForm(null)}
           </>
           )}
 
