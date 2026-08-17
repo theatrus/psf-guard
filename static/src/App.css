@@ -3459,12 +3459,18 @@
 .secondary-score-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
+  gap: 0.55rem;
   font-size: 0.82rem;
   color: var(--color-text-muted);
   white-space: nowrap;
-  cursor: pointer;
   user-select: none;
+}
+
+.secondary-score-toggle label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
 }
 
 .secondary-score-toggle input {

@@ -8,12 +8,21 @@ import {
 describe('display preferences', () => {
   beforeEach(() => {
     window.localStorage.removeItem('psf-guard.display-preferences');
-    setDisplayPreferences({ showSecondaryScore: true });
+    setDisplayPreferences({ showNightChip: true, showAllChip: true });
   });
 
-  it('defaults to showing the secondary score chip', () => {
+  it('defaults to showing both chip types', () => {
     const { result } = renderHook(() => useDisplayPreferences());
-    expect(result.current.showSecondaryScore).toBe(true);
+    expect(result.current).toEqual({ showNightChip: true, showAllChip: true });
+  });
+
+  it('toggles each chip type independently', () => {
+    act(() => {
+      setDisplayPreferences({ showNightChip: false, showAllChip: true });
+    });
+    const { result } = renderHook(() => useDisplayPreferences());
+    expect(result.current.showNightChip).toBe(false);
+    expect(result.current.showAllChip).toBe(true);
   });
 
   it('updates every subscriber when one toggle flips', () => {
@@ -22,26 +31,41 @@ describe('display preferences', () => {
     const grid = renderHook(() => useDisplayPreferences());
     const sequence = renderHook(() => useDisplayPreferences());
     act(() => {
-      setDisplayPreferences({ showSecondaryScore: false });
+      setDisplayPreferences({ showNightChip: true, showAllChip: false });
     });
-    expect(grid.result.current.showSecondaryScore).toBe(false);
-    expect(sequence.result.current.showSecondaryScore).toBe(false);
+    expect(grid.result.current.showAllChip).toBe(false);
+    expect(sequence.result.current.showAllChip).toBe(false);
   });
 
   it('persists the choice to localStorage', () => {
     act(() => {
-      setDisplayPreferences({ showSecondaryScore: false });
+      setDisplayPreferences({ showNightChip: false, showAllChip: false });
     });
     expect(
       JSON.parse(window.localStorage.getItem('psf-guard.display-preferences')!),
-    ).toEqual({ showSecondaryScore: false });
+    ).toEqual({ showNightChip: false, showAllChip: false });
   });
 
   it('falls back to the default on malformed stored values', () => {
     setDisplayPreferences({
-      showSecondaryScore: 'yes' as unknown as boolean,
+      showNightChip: 'yes' as unknown as boolean,
+      showAllChip: true,
     });
     const { result } = renderHook(() => useDisplayPreferences());
-    expect(result.current.showSecondaryScore).toBe(true);
+    expect(result.current.showNightChip).toBe(true);
+  });
+
+  it('honors the earlier single-switch stored form', () => {
+    // A browser that stored the one-switch build's "off" keeps both chips
+    // off after upgrading rather than silently turning them back on.
+    window.localStorage.setItem(
+      'psf-guard.display-preferences',
+      JSON.stringify({ showSecondaryScore: false }),
+    );
+    window.dispatchEvent(
+      new StorageEvent('storage', { key: 'psf-guard.display-preferences' }),
+    );
+    const { result } = renderHook(() => useDisplayPreferences());
+    expect(result.current).toEqual({ showNightChip: false, showAllChip: false });
   });
 });

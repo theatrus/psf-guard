@@ -6,24 +6,40 @@ import { useSyncExternalStore } from 'react';
  * never disagree about what a card shows.
  */
 export interface DisplayPreferences {
-  /** Show the smaller labeled chip with the other score basis ("night" or
-   * "all") when it disagrees with the main badge. */
-  showSecondaryScore: boolean;
+  /** Show the smaller "night <score>" chip — the per-session basis shown
+   * when the main badge is the all-sessions score. */
+  showNightChip: boolean;
+  /** Show the smaller "all <score>" chip — the all-sessions basis shown
+   * when the main badge is a single session's score. */
+  showAllChip: boolean;
 }
 
 const STORAGE_KEY = 'psf-guard.display-preferences';
-const DEFAULTS: DisplayPreferences = { showSecondaryScore: true };
+const DEFAULTS: DisplayPreferences = { showNightChip: true, showAllChip: true };
 
 type Listener = () => void;
 
 const listeners = new Set<Listener>();
 
-function sanitize(parsed: Partial<DisplayPreferences>): DisplayPreferences {
+interface StoredPreferences extends Partial<DisplayPreferences> {
+  /** Earlier builds stored one switch for both chip types. */
+  showSecondaryScore?: boolean;
+}
+
+function sanitize(parsed: StoredPreferences): DisplayPreferences {
+  const legacy =
+    typeof parsed.showSecondaryScore === 'boolean'
+      ? parsed.showSecondaryScore
+      : undefined;
   return {
-    showSecondaryScore:
-      typeof parsed.showSecondaryScore === 'boolean'
-        ? parsed.showSecondaryScore
-        : DEFAULTS.showSecondaryScore,
+    showNightChip:
+      typeof parsed.showNightChip === 'boolean'
+        ? parsed.showNightChip
+        : legacy ?? DEFAULTS.showNightChip,
+    showAllChip:
+      typeof parsed.showAllChip === 'boolean'
+        ? parsed.showAllChip
+        : legacy ?? DEFAULTS.showAllChip,
   };
 }
 
@@ -31,7 +47,7 @@ function readStored(): DisplayPreferences {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULTS };
-    return sanitize(JSON.parse(raw) as Partial<DisplayPreferences>);
+    return sanitize(JSON.parse(raw) as StoredPreferences);
   } catch {
     return { ...DEFAULTS };
   }
