@@ -293,6 +293,15 @@ already covers truncation. The receiver therefore accepts a bundle whose
 digest is absent or stale. Enforcing it would pin one canonical JSON encoding,
 and reordering a single field would then reject every plugin already shipped.
 
+A client that wants an integrity check on a pulled export must not
+re-serialize the bundle and compare against `payload_sha256` — that check
+only passes when the client reproduces the server's JSON writer byte for
+byte, so it fails between implementations by construction. Instead, the
+export endpoints stamp `X-Content-SHA256` on the response: the SHA-256 of
+the exact body bytes sent. Hash the raw body before parsing and compare.
+This mirrors the upload path, where the client sends the same header over
+the raw image bytes.
+
 A bundle must carry the tables its operation acts on — `project`, `target`,
 and `acquiredimage` for grades, `project`/`target`/`exposureplan` for planning,
 and both sets for a merge. Other tables in the operation's set may be omitted;

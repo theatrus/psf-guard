@@ -77,6 +77,13 @@
 
 ## Fixed
 
+- Remote sync export responses now carry an `X-Content-SHA256` header with
+  the SHA-256 of the exact response body, so the N.I.N.A. plugin can verify
+  a pulled bundle without re-serializing it. The in-bundle `payload_sha256`
+  stays advisory: checking it requires reproducing the server's JSON writer
+  byte for byte, which is why plugin pulls failed with "bundle digest
+  missing or invalid".
+
 - The grid and the Sequence view now show the same quality score for the
   same image. The Sequence view defaults to the all-sessions score, but the
   grid badge was built from per-session scores — a frame in a small session
