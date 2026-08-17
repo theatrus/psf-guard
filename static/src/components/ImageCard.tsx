@@ -8,12 +8,14 @@ import { useColorPreview } from '../hooks/useColorPreview';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import { ensurePreviewReady } from '../hooks/previewPoll';
 import {
+  type BasisScores,
+  basisChipDescription,
   qualityScoreBasis,
   qualityScoreDescription,
   type QualityScoreScope,
-  secondaryScoreDescription,
 } from '../utils/qualityScore';
 import QualityReasonPopover from './QualityReasonPopover';
+import { LayersIcon, MoonIcon } from './ScoreChipIcons';
 
 export interface ImageCardProps {
   dbId: string;
@@ -23,10 +25,10 @@ export interface ImageCardProps {
   onDoubleClick: () => void;
   quality?: ImageQualityResult;
   qualityScoreScope?: QualityScoreScope;
-  /** The same frame's score under the OTHER comparison basis, when it
-   * exists — session-relative when the badge is all-sessions, and the
-   * reverse. Rendered as a smaller chip when the rounded values differ. */
-  secondaryScore?: { score: number; scope: QualityScoreScope };
+  /** Every basis score the frame has. Both chips render whenever their
+   * score exists and their toggle is on — never hidden for matching the
+   * badge, so the same frame keeps the same chips in every view. */
+  basisScores?: BasisScores;
   qualityPresentation?: 'full' | 'compact';
   lazyPreview?: boolean;
   selectionEffects?: boolean;
@@ -41,7 +43,7 @@ export default function ImageCard({
   onDoubleClick,
   quality,
   qualityScoreScope = 'capture_sequence',
-  secondaryScore,
+  basisScores,
   qualityPresentation = 'full',
   lazyPreview = false,
   selectionEffects = true,
@@ -144,21 +146,34 @@ export default function ImageCard({
             {(quality.quality_score * 100).toFixed(0)}
           </div>
         )}
-        {quality &&
-          secondaryScore &&
-          (secondaryScore.scope === 'capture_sequence'
-            ? showNightChip
-            : showAllChip) &&
-          Math.round(secondaryScore.score * 100) !==
-            Math.round(quality.quality_score * 100) && (
-            <div
-              className="quality-badge quality-badge-secondary"
-              title={secondaryScoreDescription(secondaryScore.score, secondaryScore.scope)}
-            >
-              {secondaryScore.scope === 'capture_sequence' ? 'night' : 'all'}{' '}
-              {(secondaryScore.score * 100).toFixed(0)}
-            </div>
-          )}
+        {quality && basisScores && (showNightChip || showAllChip) && (
+          <div className="score-chip-stack">
+            {showNightChip && (
+              <div
+                className="score-chip"
+                style={{
+                  backgroundColor: qualityColor(basisScores.night),
+                }}
+                title={basisChipDescription(basisScores.night, 'capture_sequence')}
+              >
+                <MoonIcon />
+                {(basisScores.night * 100).toFixed(0)}
+              </div>
+            )}
+            {showAllChip && basisScores.all != null && (
+              <div
+                className="score-chip"
+                style={{
+                  backgroundColor: qualityColor(basisScores.all),
+                }}
+                title={basisChipDescription(basisScores.all, 'target_filter')}
+              >
+                <LayersIcon />
+                {(basisScores.all * 100).toFixed(0)}
+              </div>
+            )}
+          </div>
+        )}
         {quality?.category && (
           <div className="category-label">
             {formatCategory(quality.category)}

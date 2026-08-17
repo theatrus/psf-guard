@@ -83,10 +83,11 @@
   could score 1.0 against itself while scoring far lower against the whole
   filter. The grid (and the detail panel) now use the same basis the
   Sequence view displays, and the badge tooltip names it. When both bases
-  disagree, a second smaller chip shows the other one, labeled "night" or
-  "all" so each number says what it is relative to. Chip toggles in the
-  grid and Sequence toolbars turn each chip type off separately; the
-  choice is shared across both views and remembered.
+  smaller chips below the badge always carry both bases: a crescent marks
+  the night-session score, stacked layers mark the all-sessions score,
+  both colored on the badge's scale. The chips never appear or vanish
+  between views; two icon checkboxes in the grid and Sequence toolbars
+  turn each one off, remembered and shared across views.
 
 - Filter names that differ only by case or whitespace ("Ha" beside "HA")
   no longer split one physical filter into separate quality-comparison

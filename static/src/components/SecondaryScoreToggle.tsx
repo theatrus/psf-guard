@@ -2,18 +2,18 @@ import {
   setDisplayPreferences,
   useDisplayPreferences,
 } from '../hooks/useDisplayPreferences';
+import { LayersIcon, MoonIcon } from './ScoreChipIcons';
 
 /**
- * Quick toggles for the second score chip on cards, one per chip type.
- * One shared preference: flipping a box here changes the grid, the
- * Sequence view, and the detail panel together.
+ * Quick toggles for the two score chips on cards, labeled with the same
+ * icons the chips carry. One shared preference: flipping a box changes
+ * the grid, the Sequence view, and the detail panel together.
  */
 export default function SecondaryScoreToggle({ className }: { className?: string }) {
   const preferences = useDisplayPreferences();
   return (
     <div className={`secondary-score-toggle${className ? ` ${className}` : ''}`}>
-      <span className="secondary-score-toggle-label">Chips:</span>
-      <label title='Show the "night <score>" chip — how the frame ranks within its own session — when the main badge is the all-sessions score'>
+      <label title="Show the night-session score chip: the frame compared within its own capture session">
         <input
           type="checkbox"
           checked={preferences.showNightChip}
@@ -24,9 +24,9 @@ export default function SecondaryScoreToggle({ className }: { className?: string
             })
           }
         />
-        night
+        <MoonIcon />
       </label>
-      <label title='Show the "all <score>" chip — how the frame ranks against every stack candidate for its filter — when the main badge is a single session score'>
+      <label title="Show the all-sessions score chip: the frame compared across every stack candidate for its filter">
         <input
           type="checkbox"
           checked={preferences.showAllChip}
@@ -37,7 +37,7 @@ export default function SecondaryScoreToggle({ className }: { className?: string
             })
           }
         />
-        all
+        <LayersIcon />
       </label>
     </div>
   );

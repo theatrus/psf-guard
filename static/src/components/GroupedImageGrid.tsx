@@ -752,6 +752,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                   }
                 </select>
               </div>
+
+              <SecondaryScoreToggle className="compact" />
             </div>
             
             {/* Undo/Redo Toolbar */}
@@ -820,7 +822,6 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                 canWrite={grading.canWrite}
                 className="toolbar-button compact quality-scan-button"
               />
-              <SecondaryScoreToggle className="compact" />
             </div>
             
             <div className="stats-section">
@@ -950,14 +951,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                             image={image}
                             quality={quality.qualityByImage.get(image.id)}
                             qualityScoreScope={quality.scopeByImage.get(image.id)}
-                            secondaryScore={
-                              quality.sessionScoreByImage.has(image.id)
-                                ? {
-                                    score: quality.sessionScoreByImage.get(image.id)!,
-                                    scope: 'capture_sequence',
-                                  }
-                                : undefined
-                            }
+                            basisScores={quality.basisScoresByImage.get(image.id)}
                             qualityPresentation="compact"
                             isSelected={
                               selectedImages.has(image.id) ||

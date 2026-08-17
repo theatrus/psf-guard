@@ -7,7 +7,7 @@ import type {
   SequenceAnalysisRequest,
 } from '../api/types';
 import { useState, useCallback } from 'react';
-import type { QualityScoreScope } from '../utils/qualityScore';
+import type { BasisScores, QualityScoreScope } from '../utils/qualityScore';
 import {
   penaltyKeyOf,
   penaltyParamsOf,
@@ -113,9 +113,10 @@ export function useScopedQuality(
   // entry — category, pointing, and overlays stay intact.
   const qualityByImage = new Map<number, ImageQualityResult>();
   const scopeByImage = new Map<number, QualityScoreScope>();
-  // Where the badge shows the all-sessions score, the frame's own
-  // session-relative score is kept here for the secondary chip.
-  const sessionScoreByImage = new Map<number, number>();
+  // Every basis score the frame has, for the always-on chips: the
+  // session-relative score, and the all-sessions score for filters with
+  // several sessions.
+  const basisScoresByImage = new Map<number, BasisScores>();
   const sessionsPerFilter = new Map<string, number>();
   for (const sequence of query.data?.sequences ?? []) {
     const key = `${sequence.target_id}:${sequence.filter_name}`;
@@ -123,6 +124,7 @@ export function useScopedQuality(
     for (const quality of sequence.images) {
       qualityByImage.set(quality.image_id, quality);
       scopeByImage.set(quality.image_id, 'capture_sequence');
+      basisScoresByImage.set(quality.image_id, { night: quality.quality_score });
     }
   }
   for (const rollup of query.data?.target_filter_rollups ?? []) {
@@ -132,7 +134,10 @@ export function useScopedQuality(
     for (const score of rollup.images) {
       const session = qualityByImage.get(score.image_id);
       if (!session) continue;
-      sessionScoreByImage.set(score.image_id, session.quality_score);
+      basisScoresByImage.set(score.image_id, {
+        night: session.quality_score,
+        all: score.quality_score,
+      });
       qualityByImage.set(score.image_id, {
         ...session,
         quality_score: score.quality_score,
@@ -146,7 +151,7 @@ export function useScopedQuality(
   return {
     qualityByImage,
     scopeByImage,
-    sessionScoreByImage,
+    basisScoresByImage,
     isLoading: query.isLoading,
     error: query.error,
   };
