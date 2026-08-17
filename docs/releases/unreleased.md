@@ -85,7 +85,22 @@
   full-size preview generation per selected frame — only the keyboard
   cursor's image preloads.
 
+- The image detail view gained a **sensor tilt and aberration inspector**
+  (press **I**): a 3x3 mosaic of 1:1 crops from each sensor region with
+  per-region median HFR, eccentricity, star count, and mean star-elongation
+  direction, plus ASTAP-style corner numbers — tilt (softest corner against
+  sharpest) and field curvature (corners against center). Solved frames also
+  show their **field rotation** (and a mirrored flag) in the Sky context
+  panel.
+
 ## Fixed
+
+- Star PSF fitting now actually fits. A sign error in the optimizer made
+  every iteration step uphill, so every fitted PSF kept its initial guess —
+  reported eccentricity was really the star's bounding-box aspect ratio and
+  orientation was always zero. Star detail overlays and the tilt inspector
+  now see converged models; quality scoring is unaffected (it uses
+  N.I.N.A.'s own capture-time values).
 
 - Editing a configured database now opens its settings directly beneath that
   database instead of below the full database list. The selected row and named

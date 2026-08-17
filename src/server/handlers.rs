@@ -3285,7 +3285,7 @@ pub async fn get_image_stars(
     // detector picks a telescope-class preset from the frame's headers, so
     // v1 entries (fixed defaults) are stale for wide/long rigs.
     let cache_key = format!(
-        "stars_v2_{}_{}_{}_{}_{}",
+        "stars_v3_{}_{}_{}_{}_{}",
         image_id,
         image.project_id,
         image.target_id,
@@ -3316,7 +3316,7 @@ pub async fn get_image_stars(
 
     // Move expensive operations to spawn_blocking
     let fits_path_str = fits_path.to_string_lossy().to_string();
-    let (stars, detected_count, average_hfr, average_fwhm) =
+    let (stars, detected_count, average_hfr, average_fwhm, frame_width, frame_height) =
         tokio::task::spawn_blocking(move || {
             // Load FITS file
             let fits = FitsImage::from_file(std::path::Path::new(&fits_path_str))?;
@@ -3335,10 +3335,20 @@ pub async fn get_image_stars(
                 .stars
                 .iter()
                 .map(|star| {
-                    let eccentricity = if let Some(psf) = &star.psf_model {
-                        psf.eccentricity
+                    let (eccentricity, theta) = if let Some(psf) = &star.psf_model {
+                        // Report the MAJOR-axis direction in [0, π): the fit
+                        // may express the same ellipse as either sigma being
+                        // larger, and clients averaging directions must not
+                        // see the two forms 90° apart.
+                        let raw = if psf.sigma_x >= psf.sigma_y {
+                            psf.theta
+                        } else {
+                            psf.theta + std::f64::consts::FRAC_PI_2
+                        };
+                        let major = raw.rem_euclid(std::f64::consts::PI);
+                        (psf.eccentricity, Some(major))
                     } else {
-                        0.0
+                        (0.0, None)
                     };
 
                     StarInfo {
@@ -3348,15 +3358,18 @@ pub async fn get_image_stars(
                         fwhm: star.fwhm,
                         brightness: star.brightness,
                         eccentricity,
+                        theta,
                     }
                 })
                 .collect();
 
-            Ok::<(Vec<StarInfo>, usize, f64, f64), anyhow::Error>((
+            Ok::<(Vec<StarInfo>, usize, f64, f64, usize, usize), anyhow::Error>((
                 stars,
                 detection_result.stars.len(),
                 detection_result.average_hfr,
                 detection_result.average_fwhm,
+                fits.width,
+                fits.height,
             ))
         })
         .await
@@ -3367,6 +3380,8 @@ pub async fn get_image_stars(
         detected_stars: detected_count,
         average_hfr,
         average_fwhm,
+        width: Some(frame_width),
+        height: Some(frame_height),
         stars,
     };
 

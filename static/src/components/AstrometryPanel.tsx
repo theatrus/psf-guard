@@ -1,4 +1,5 @@
 import type { AstrometryAnalysis, CatalogHit } from '../api/types';
+import { fieldRotation } from '../utils/fieldRotation';
 
 interface AstrometryPanelProps {
   analysis?: AstrometryAnalysis;
@@ -76,6 +77,7 @@ export default function AstrometryPanel({
   }
 
   const solution = analysis.solution;
+  const rotation = solution?.wcs ? fieldRotation(solution.wcs) : null;
   const badge = solution
     ? analysis.mode === 'hinted'
       ? 'Hinted solve'
@@ -141,6 +143,14 @@ export default function AstrometryPanel({
             <>
               <dt>Scale</dt>
               <dd>{solution.pixel_scale_arcsec_per_pixel.toFixed(3)}″/px</dd>
+            </>
+          )}
+          {rotation && (
+            <>
+              <dt>Rotation</dt>
+              <dd title="Direction of celestial north from image up, positive toward image right">
+                {rotation.degrees.toFixed(1)}°{rotation.mirrored ? ' · mirrored' : ''}
+              </dd>
             </>
           )}
           {analysis.pointing && (

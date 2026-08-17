@@ -14,6 +14,7 @@ import AstrometryOverlay from './AstrometryOverlay';
 import SatellitePanel from './SatellitePanel';
 import SatelliteTrackOverlay from './SatelliteTrackOverlay';
 import ImageFileLocation from './ImageFileLocation';
+import TiltInspector from './TiltInspector';
 import { useScopedQuality } from '../hooks/useSequenceAnalysis';
 import QualityAnalysisSummary from './QualityAnalysisSummary';
 import QualityRegionOverlay from './QualityRegionOverlay';
@@ -66,6 +67,7 @@ export default function ImageDetailView({
   const queryClient = useQueryClient();
   const { canCompute } = useAccess();
   const [showStars, setShowStars] = useState(false);
+  const [showTilt, setShowTilt] = useState(false);
   // Shared with the grid and the overview, so a frame does not change
   // appearance on the way into the detail view. On by default; off gives the
   // luminance rendition the grader measures, and a mono frame looks the same
@@ -268,6 +270,7 @@ export default function ImageDetailView({
   useHotkeys('a,shift+a', (event) => onGrade('accepted', event.shiftKey), [onGrade]);
   useHotkeys('x,shift+x', (event) => onGrade('rejected', event.shiftKey), [onGrade]);
   useHotkeys('u,shift+u', (event) => onGrade('pending', event.shiftKey), [onGrade]);
+  useHotkeys('i', () => setShowTilt(current => !current), []);
   useHotkeys('s', () => {
     setShowStars(s => !s);
     setShowPsf(false); // Turn off PSF when showing stars
@@ -886,6 +889,7 @@ export default function ImageDetailView({
                 <span>X Reject</span>
                 <span>U Pending</span>
                 <span>S Stars {showStars ? '✓' : ''}</span>
+                <span>I Tilt {showTilt ? '✓' : ''}</span>
                 <span>P PSF {showPsf ? '✓' : ''}</span>
                 <span>O Sky {showAstrometry && astrometry?.solution ? '✓' : ''}</span>
                 <span>Z Size</span>
@@ -946,6 +950,12 @@ export default function ImageDetailView({
           </div>
         </div>
       </div>
+      <TiltInspector
+        open={showTilt}
+        dbId={dbId}
+        imageId={imageId}
+        onClose={() => setShowTilt(false)}
+      />
     </div>
   );
 }
