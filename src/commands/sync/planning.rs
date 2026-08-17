@@ -86,7 +86,7 @@ pub(crate) fn sync_planning_in_transaction(
         src,
         tx,
         opts.project_filter.as_deref(),
-        true,
+        &["acquired", "accepted"],
         &mut summary.changes,
     )?;
 

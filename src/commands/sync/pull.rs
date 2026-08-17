@@ -701,15 +701,21 @@ pub(super) struct StructureSync {
     pub selected_project_ids: Option<HashSet<i64>>,
 }
 
-/// Sync scheduler planning structure in FK order. When `preserve_plan_counts`
 /// is true, existing destination `acquired`/`accepted` counts stay unchanged
-/// and new plans start at zero. This is the safe policy for a local-to-
-/// telescope planning push; a full telescope pull keeps the source counts.
+/// Sync scheduler planning structure in FK order.
+///
+/// `excluded_plan_counts` names exposureplan progress columns the source must
+/// not overwrite. A planning push excludes both `acquired` and `accepted`
+/// (the telescope owns its progress; new plans start at zero). A telescope
+/// pull keeps `acquired` (capture counts are the telescope's) but excludes
+/// `accepted`: local grading decisions win in the merge, so the counter is
+/// recomputed from the merged grades afterwards — copying the telescope's
+/// value would fight that reconciliation on every re-pull.
 pub(super) fn sync_structure(
     src: &Connection,
     tx: &Transaction,
     project_filter: Option<&str>,
-    preserve_plan_counts: bool,
+    excluded_plan_counts: &[&str],
     changes: &mut Vec<String>,
 ) -> Result<StructureSync> {
     let included_projects: Option<HashSet<i64>> = match project_filter {
@@ -761,18 +767,13 @@ pub(super) fn sync_structure(
     )?;
     let tgt_map = tgt.id_map;
 
-    let plan_runtime_counts: &[&str] = if preserve_plan_counts {
-        &["acquired", "accepted"]
-    } else {
-        &[]
-    };
     let plan = upsert_guid_table(
         src,
         tx,
         "exposureplan",
         &[("targetid", &tgt_map), ("exposureTemplateId", &tmpl_map)],
         included_plans.as_ref(),
-        plan_runtime_counts,
+        excluded_plan_counts,
         changes,
     )?;
 
@@ -819,7 +820,7 @@ pub(crate) fn sync_pull_in_transaction(
         src,
         tx,
         opts.project_filter.as_deref(),
-        false,
+        &["accepted"],
         &mut summary.changes,
     )?;
     summary.exposuretemplate = structure.exposuretemplate;
@@ -871,6 +872,12 @@ pub(crate) fn sync_pull_in_transaction(
         unchanged: calibration.frames.unchanged,
         skipped: 0,
     };
+
+    // Pulled rows carry grades; the destination's plans must count them.
+    // Runs inside the transaction so the server's remote-sync apply path
+    // (which manages its own transaction) reconciles too.
+    crate::db::reconcile_accepted_counts(tx)
+        .context("reconciling exposure plan accepted counts")?;
 
     Ok(summary)
 }
@@ -1037,6 +1044,26 @@ mod tests {
         );
         assert_eq!(s.grade_preserved, 1);
         assert_eq!(s.grade_filled, 1);
+    }
+
+    #[test]
+    fn pull_derives_accepted_counts_from_merged_grades() {
+        // The telescope's counter says 8, but only one of its images is
+        // actually Accepted. The pull must not copy the stale counter — the
+        // destination's plans count the grades the merge actually produced.
+        let src = telescope();
+        let dest = empty_local();
+        sync_pull(&src, &dest, &opts()).unwrap();
+
+        let (acquired, accepted): (i64, i64) = dest
+            .query_row(
+                "SELECT acquired, accepted FROM exposureplan WHERE guid='lg'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(acquired, 10, "capture counts stay the telescope's");
+        assert_eq!(accepted, 1, "accepted derives from the merged grades");
     }
 
     #[test]

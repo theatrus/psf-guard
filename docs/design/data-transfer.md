@@ -87,7 +87,10 @@ Destination: any writable catalog endpoint.
 
 Copies projects, targets, exposure templates, exposure plans, rule weights,
 captures, and optional stored thumbnails. Matching uses stable GUIDs.
-Destination reviewed grades win. New captures retain the source grade.
+Destination reviewed grades win. New captures retain the source grade. Plan
+`acquired` counts copy from the source; `accepted` counts are recomputed
+from the merged grades, because local decisions can differ from the
+source's counter.
 
 ### Send planning
 
@@ -96,7 +99,10 @@ Source planning fields win. The destination keeps capture history, plan
 
 ### Send grades
 
-Only `gradingStatus` and `rejectreason` change. Images match by stable GUID.
+Only `gradingStatus` and `rejectreason` change on images, and the
+destination's `exposureplan.accepted` counters are recomputed from the
+resulting grades so the scheduler plans against them. Images match by
+stable GUID.
 The source wins. The UI defaults to reviewed grades only, so a Pending source
 row cannot erase a telescope decision by accident. Project, target, and grade
 filters remain available.

@@ -42,6 +42,38 @@ impl SchemaCapabilities {
     }
 }
 
+/// Recompute `exposureplan.accepted` from the images each plan actually has.
+///
+/// Target Scheduler plans a filter by `desired` vs `accepted`, and it
+/// maintains that counter itself only when its own grader runs. Every place
+/// PSF Guard changes `gradingStatus` — grading endpoints, undo, grade sync,
+/// catalog pulls — must call this afterwards, or the scheduler keeps
+/// planning against counts that no longer match the grades.
+///
+/// Images link to their plan through `acquiredimage.exposureId` (TS schema
+/// v17+). Rows with `exposureId` 0 predate the link and are left out — the
+/// same rows the plugin's own grader cannot attribute. A schema without the
+/// link (or without plans at all) is a no-op. Returns the number of plans
+/// whose counter changed.
+pub fn reconcile_accepted_counts(conn: &Connection) -> Result<usize> {
+    let has_column = |table: &str, column: &str| -> bool {
+        SchemaCapabilities::table_has_column(conn, table, column)
+    };
+    if !has_column("acquiredimage", "exposureId") || !has_column("exposureplan", "accepted") {
+        return Ok(0);
+    }
+    let changed = conn.execute(
+        "UPDATE exposureplan SET accepted = (
+             SELECT COUNT(*) FROM acquiredimage ai
+             WHERE ai.exposureId = exposureplan.Id AND ai.gradingStatus = 1)
+         WHERE IFNULL(accepted, -1) <> (
+             SELECT COUNT(*) FROM acquiredimage ai
+             WHERE ai.exposureId = exposureplan.Id AND ai.gradingStatus = 1)",
+        [],
+    )?;
+    Ok(changed)
+}
+
 /// Database access layer for PSF Guard
 pub struct Database<'a> {
     conn: &'a Connection,
@@ -793,12 +825,15 @@ impl<'a> Database<'a> {
         status: GradingStatus,
         reject_reason: Option<&str>,
     ) -> Result<()> {
-        self.conn.execute(
-            "UPDATE acquiredimage 
-             SET gradingStatus = ?, rejectreason = ? 
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE acquiredimage
+             SET gradingStatus = ?, rejectreason = ?
              WHERE Id = ?",
             params![status as i32, reject_reason, image_id],
         )?;
+        reconcile_accepted_counts(&tx)?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -810,13 +845,14 @@ impl<'a> Database<'a> {
 
         for (id, status, reason) in updates {
             tx.execute(
-                "UPDATE acquiredimage 
-                 SET gradingStatus = ?, rejectreason = ? 
+                "UPDATE acquiredimage
+                 SET gradingStatus = ?, rejectreason = ?
                  WHERE Id = ?",
                 params![*status as i32, reason.as_deref(), id],
             )?;
         }
 
+        reconcile_accepted_counts(&tx)?;
         tx.commit()?;
         Ok(())
     }
@@ -1028,6 +1064,7 @@ impl<'a> Database<'a> {
 
         let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let count = self.conn.execute(&query, param_refs.as_slice())?;
+        reconcile_accepted_counts(self.conn)?;
 
         Ok(count)
     }
@@ -1506,12 +1543,19 @@ mod tests {
                 Id INTEGER PRIMARY KEY, projectId INTEGER NOT NULL,
                 targetId INTEGER NOT NULL, acquireddate INTEGER,
                 filtername TEXT NOT NULL, gradingStatus INTEGER NOT NULL,
-                metadata TEXT NOT NULL, rejectreason TEXT, profileId TEXT
+                metadata TEXT NOT NULL, rejectreason TEXT, profileId TEXT,
+                exposureId INTEGER DEFAULT 0
              );
+             CREATE TABLE exposureplan (
+                Id INTEGER PRIMARY KEY, profileId TEXT, exposure REAL,
+                desired INTEGER, acquired INTEGER, accepted INTEGER,
+                targetid INTEGER, exposureTemplateId INTEGER
+             );
+             INSERT INTO exposureplan VALUES (7, 'p', 300, 20, 3, 1, 10, 1);
              INSERT INTO acquiredimage VALUES
-                (1, 1, 10, 100, 'R', 0, '{}', NULL, 'p'),
-                (2, 1, 10, 200, 'G', 1, '{}', NULL, 'p'),
-                (3, 1, 10, 300, 'B', 2, '{}', 'Clouds', 'p');",
+                (1, 1, 10, 100, 'R', 0, '{}', NULL, 'p', 7),
+                (2, 1, 10, 200, 'G', 1, '{}', NULL, 'p', 7),
+                (3, 1, 10, 300, 'B', 2, '{}', 'Clouds', 'p', 7);",
         )
         .unwrap();
 
@@ -1536,6 +1580,71 @@ mod tests {
         assert_eq!(by_id[&2].grading_status, 2);
         assert_eq!(by_id[&3].grading_status, 1);
         assert_eq!(by_id[&3].reject_reason, None);
+
+        // Target Scheduler plans against exposureplan.accepted, so grading
+        // must reconcile it: exactly one image (id 3) is now accepted.
+        let accepted: i64 = conn
+            .query_row("SELECT accepted FROM exposureplan WHERE Id = 7", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(accepted, 1);
+
+        // Single-image grading reconciles too.
+        db.update_grading_status(2, GradingStatus::Accepted, None)
+            .unwrap();
+        let accepted: i64 = conn
+            .query_row("SELECT accepted FROM exposureplan WHERE Id = 7", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(accepted, 2);
+    }
+
+    #[test]
+    fn reconciling_accepted_counts_skips_schemas_without_the_link() {
+        // Pre-v17 schema: no exposureId column, nothing to maintain.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE acquiredimage (
+                Id INTEGER PRIMARY KEY, gradingStatus INTEGER NOT NULL
+             );
+             CREATE TABLE exposureplan (Id INTEGER PRIMARY KEY, accepted INTEGER);",
+        )
+        .unwrap();
+        assert_eq!(reconcile_accepted_counts(&conn).unwrap(), 0);
+    }
+
+    #[test]
+    fn reconciling_accepted_counts_leaves_unlinked_legacy_rows_out() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE acquiredimage (
+                Id INTEGER PRIMARY KEY, gradingStatus INTEGER NOT NULL,
+                exposureId INTEGER DEFAULT 0
+             );
+             CREATE TABLE exposureplan (Id INTEGER PRIMARY KEY, accepted INTEGER);
+             INSERT INTO exposureplan VALUES (1, 99), (2, NULL);
+             INSERT INTO acquiredimage VALUES
+                (1, 1, 1), (2, 1, 1), (3, 2, 1),
+                (4, 1, 0),  -- legacy row: accepted but linked to no plan
+                (5, 1, 2);",
+        )
+        .unwrap();
+        let changed = reconcile_accepted_counts(&conn).unwrap();
+        assert_eq!(changed, 2);
+        let plan1: i64 = conn
+            .query_row("SELECT accepted FROM exposureplan WHERE Id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let plan2: i64 = conn
+            .query_row("SELECT accepted FROM exposureplan WHERE Id = 2", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(plan1, 2);
+        assert_eq!(plan2, 1);
     }
 
     #[test]
