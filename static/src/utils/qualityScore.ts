@@ -28,10 +28,18 @@ export function qualityScoreDescription(
   return `${basis}: ${score}. Compared with ${comparison}. ${evidence}`;
 }
 
-/** Tooltip for the smaller second badge showing the other comparison basis. */
-export function secondaryScoreDescription(score: number, scope: QualityScoreScope): string {
+/** Every comparison basis a frame is scored under. `all` exists only when
+ * the target/filter has more than one session to compare across. */
+export interface BasisScores {
+  night: number;
+  all?: number;
+}
+
+/** Tooltip for a basis chip. The chips render on every card so the same
+ * frame never gains or loses one between views. */
+export function basisChipDescription(score: number, scope: QualityScoreScope): string {
   const value = `${Math.round(score * 100)}%`;
   return scope === 'capture_sequence'
-    ? `Within its own capture session: ${value}. A small session can flatter a frame; the main badge compares across every session of this filter.`
-    : `Across all target/filter stack candidates: ${value}. The main badge compares within the selected capture session.`;
+    ? `Night session score: ${value}, compared within the frame's own capture session. A small session can flatter a frame.`
+    : `All-sessions score: ${value}, compared across every stack candidate for this filter.`;
 }

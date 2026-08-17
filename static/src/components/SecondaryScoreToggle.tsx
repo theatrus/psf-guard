@@ -2,48 +2,43 @@ import {
   setDisplayPreferences,
   useDisplayPreferences,
 } from '../hooks/useDisplayPreferences';
-import type { QualityScoreScope } from '../utils/qualityScore';
+import { LayersIcon, MoonIcon } from './ScoreChipIcons';
 
 /**
- * Quick toggle for the second score chip. Each view shows one chip type —
- * the basis its main badge is NOT using — so the box binds to that type
- * and flipping it always changes the cards in front of the user. The
- * per-type choice persists, shared by every view that shows that type.
+ * Quick toggles for the two score chips on cards, labeled with the same
+ * icons the chips carry. One shared preference: flipping a box changes
+ * the grid, the Sequence view, and the detail panel together.
  */
-export default function SecondaryScoreToggle({
-  chipScope,
-  className,
-}: {
-  /** The comparison basis the chips in this view carry. */
-  chipScope: QualityScoreScope;
-  className?: string;
-}) {
+export default function SecondaryScoreToggle({ className }: { className?: string }) {
   const preferences = useDisplayPreferences();
-  const checked =
-    chipScope === 'capture_sequence'
-      ? preferences.showNightChip
-      : preferences.showAllChip;
-  const title =
-    chipScope === 'capture_sequence'
-      ? 'Show a second smaller chip with the score relative to the frame’s own session'
-      : 'Show a second smaller chip with the score relative to every stack candidate for the filter';
   return (
-    <label
-      className={`secondary-score-toggle${className ? ` ${className}` : ''}`}
-      title={title}
-    >
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(event) =>
-          setDisplayPreferences(
-            chipScope === 'capture_sequence'
-              ? { ...preferences, showNightChip: event.target.checked }
-              : { ...preferences, showAllChip: event.target.checked },
-          )
-        }
-      />
-      2nd score
-    </label>
+    <div className={`secondary-score-toggle${className ? ` ${className}` : ''}`}>
+      <label title="Show the night-session score chip: the frame compared within its own capture session">
+        <input
+          type="checkbox"
+          checked={preferences.showNightChip}
+          onChange={(event) =>
+            setDisplayPreferences({
+              ...preferences,
+              showNightChip: event.target.checked,
+            })
+          }
+        />
+        <MoonIcon />
+      </label>
+      <label title="Show the all-sessions score chip: the frame compared across every stack candidate for its filter">
+        <input
+          type="checkbox"
+          checked={preferences.showAllChip}
+          onChange={(event) =>
+            setDisplayPreferences({
+              ...preferences,
+              showAllChip: event.target.checked,
+            })
+          }
+        />
+        <LayersIcon />
+      </label>
+    </div>
   );
 }

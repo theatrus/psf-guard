@@ -35,6 +35,7 @@ import {
 import { thumbnailGridColumns } from '../utils/thumbnailSizing';
 import SecondaryScoreToggle from './SecondaryScoreToggle';
 import {
+  type BasisScores,
   qualityScoreDescription,
   type QualityScoreScope,
 } from '../utils/qualityScore';
@@ -293,30 +294,31 @@ export default function SequenceView() {
   }, [requestedScoreScope, sequenceChoices, urlCurrentImageId]);
   const activeSequence = activeChoice?.sequence;
   const activeScoreScope: QualityScoreScope = activeChoice?.scoreScope ?? 'capture_sequence';
-  // The same frame's score under the OTHER basis, for the secondary badge:
-  // session score while viewing All sessions, rollup score while viewing a
-  // single session. Only filters with several sessions have two bases.
-  const otherBasisScoreByImage = useMemo(() => {
-    const map = new Map<number, number>();
-    if (!activeChoice) return map;
-    const filter = activeChoice.sequence.filter_name;
-    const sessionCount = sequences.filter(
-      sequence => sequence.filter_name === filter,
-    ).length;
-    if (sessionCount <= 1) return map;
-    if (activeScoreScope === 'target_filter') {
-      for (const sequence of sequences) {
-        if (sequence.filter_name !== filter) continue;
-        for (const image of sequence.images) map.set(image.image_id, image.quality_score);
+  // Every basis score per frame, for the always-on chips: the session
+  // score, and the all-sessions score for filters with several sessions.
+  // Built for every filter in view so the chips never depend on which
+  // session strip is selected.
+  const basisScoresByImage = useMemo(() => {
+    const map = new Map<number, BasisScores>();
+    const sessionsPerFilter = new Map<string, number>();
+    for (const sequence of sequences) {
+      sessionsPerFilter.set(
+        sequence.filter_name,
+        (sessionsPerFilter.get(sequence.filter_name) ?? 0) + 1,
+      );
+      for (const image of sequence.images) {
+        map.set(image.image_id, { night: image.quality_score });
       }
-    } else {
-      const rollup = rollups.find(entry => entry.filter_name === filter);
-      for (const score of rollup?.images ?? []) map.set(score.image_id, score.quality_score);
+    }
+    for (const rollup of rollups) {
+      if ((sessionsPerFilter.get(rollup.filter_name) ?? 0) <= 1) continue;
+      for (const score of rollup.images) {
+        const entry = map.get(score.image_id);
+        if (entry) entry.all = score.quality_score;
+      }
     }
     return map;
-  }, [activeChoice, activeScoreScope, rollups, sequences]);
-  const otherBasisScope: QualityScoreScope =
-    activeScoreScope === 'target_filter' ? 'capture_sequence' : 'target_filter';
+  }, [rollups, sequences]);
   const unavailableImageCount = activeChoice?.unavailableImageCount ?? 0;
   const activeImageId = useMemo(() => {
     if (!activeSequence || activeSequence.images.length === 0) return null;
@@ -774,7 +776,7 @@ export default function SequenceView() {
             <span className="threshold-value">{threshold.toFixed(2)}</span>
           </div>
           <ScoringPenaltyControl />
-          <SecondaryScoreToggle chipScope={otherBasisScope} />
+          <SecondaryScoreToggle />
           <div className="selection-preset-control">
             <label htmlFor="sequence-select-preset">Select:</label>
             <select
@@ -916,8 +918,7 @@ export default function SequenceView() {
                 dbId={dbId!}
                 images={activeSequence.images}
                 scoreScope={activeScoreScope}
-                otherBasisScoreByImage={otherBasisScoreByImage}
-                otherBasisScope={otherBasisScope}
+                basisScoresByImage={basisScoresByImage}
                 imageMap={imageMap}
                 projectId={projectId!}
                 targetId={activeSequence.target_id}
@@ -1145,8 +1146,7 @@ const SequenceStrip = memo(function SequenceStrip({
   dbId,
   images,
   scoreScope,
-  otherBasisScoreByImage,
-  otherBasisScope,
+  basisScoresByImage,
   imageMap,
   projectId,
   targetId,
@@ -1163,8 +1163,7 @@ const SequenceStrip = memo(function SequenceStrip({
   dbId: string;
   images: ImageQualityResult[];
   scoreScope: QualityScoreScope;
-  otherBasisScoreByImage: ReadonlyMap<number, number>;
-  otherBasisScope: QualityScoreScope;
+  basisScoresByImage: ReadonlyMap<number, BasisScores>;
   imageMap: ReadonlyMap<number, Image>;
   projectId: number;
   targetId: number;
@@ -1230,14 +1229,7 @@ const SequenceStrip = memo(function SequenceStrip({
             image={image}
             quality={quality}
             qualityScoreScope={scoreScope}
-            secondaryScore={
-              otherBasisScoreByImage.has(quality.image_id)
-                ? {
-                    score: otherBasisScoreByImage.get(quality.image_id)!,
-                    scope: otherBasisScope,
-                  }
-                : undefined
-            }
+            basisScores={basisScoresByImage.get(quality.image_id)}
             isSelected={selectedImages.has(quality.image_id)}
             onClick={(event) => onSelect(quality.image_id, event)}
             onDoubleClick={() => onOpen(quality.image_id)}

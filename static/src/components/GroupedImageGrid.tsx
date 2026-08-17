@@ -753,7 +753,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                 </select>
               </div>
 
-              <SecondaryScoreToggle chipScope="capture_sequence" className="compact" />
+              <SecondaryScoreToggle className="compact" />
             </div>
             
             {/* Undo/Redo Toolbar */}
@@ -951,14 +951,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                             image={image}
                             quality={quality.qualityByImage.get(image.id)}
                             qualityScoreScope={quality.scopeByImage.get(image.id)}
-                            secondaryScore={
-                              quality.sessionScoreByImage.has(image.id)
-                                ? {
-                                    score: quality.sessionScoreByImage.get(image.id)!,
-                                    scope: 'capture_sequence',
-                                  }
-                                : undefined
-                            }
+                            basisScores={quality.basisScoresByImage.get(image.id)}
                             qualityPresentation="compact"
                             isSelected={
                               selectedImages.has(image.id) ||

@@ -225,7 +225,7 @@ describe('SequenceView: rendering states', () => {
     await waitFor(() => {
       expect(new URLSearchParams(search).get('target')).toBe('1');
     });
-    expect(await screen.findByText('82')).toBeInTheDocument();
+    expect((await screen.findAllByText('82')).length).toBeGreaterThan(0);
   });
 
   it('uses the current Grid image to choose a target', async () => {
@@ -428,8 +428,11 @@ describe('SequenceView: quality display', () => {
 
     await waitFor(() => {
       // Quality badges show percentage (e.g., "82" for 0.82)
-      expect(screen.getByText('82')).toBeInTheDocument();
+      expect(screen.getAllByText('82').length).toBeGreaterThan(0);
     });
+    // The night chip renders beside the badge even when both show the
+    // same value: chips never appear or vanish between views.
+    expect(document.querySelectorAll('.score-chip').length).toBeGreaterThan(0);
   });
 
   it('renders timeline text without non-uniform SVG scaling', async () => {
@@ -514,7 +517,7 @@ describe('SequenceView: interactions', () => {
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
-      expect(screen.getByText('82')).toBeInTheDocument();
+      expect(screen.getAllByText('82').length).toBeGreaterThan(0);
     });
 
     // Find image cards and click one
@@ -547,7 +550,7 @@ describe('SequenceView: interactions', () => {
       </Wrapper>
     );
 
-    await screen.findByText('82');
+    await screen.findAllByText('82');
     const size = screen.getByLabelText('Size:');
     expect(size).toHaveValue('150');
 
