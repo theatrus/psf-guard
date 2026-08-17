@@ -215,6 +215,28 @@ pub struct UpdateGradeRequest {
     pub reason: Option<String>,
 }
 
+/// One grade assignment inside a batch. Entries may carry different
+/// statuses so an undo can restore a mixed selection in one request.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchGradeEntry {
+    pub image_id: i32,
+    pub status: String, // "accepted", "rejected", "pending"
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchGradeRequest {
+    pub updates: Vec<BatchGradeEntry>,
+}
+
+/// The grades the batch replaced, so a client can record undo state
+/// without fetching every image first.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchGradeResponse {
+    pub updated: usize,
+    pub previous: Vec<BatchGradeEntry>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StarDetectionResponse {
     pub detected_stars: usize,

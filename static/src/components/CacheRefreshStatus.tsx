@@ -32,8 +32,11 @@ export default function CacheRefreshStatus({ className = '' }: CacheRefreshStatu
     queryKey: ['db', dbId, 'cache-progress'],
     queryFn: () => apiClient.getCacheProgress(dbId!),
     enabled: !!dbId,
-    refetchInterval: 1000, // Poll every second
-    refetchIntervalInBackground: true,
+    // Fast only while a refresh runs; otherwise a slow heartbeat is enough
+    // to notice a server-initiated refresh starting.
+    refetchInterval: (query) =>
+      query.state.data?.is_refreshing ? 1000 : 10_000,
+    refetchIntervalInBackground: false,
   });
 
   // Track recent directories for smart truncation

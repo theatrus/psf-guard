@@ -1499,6 +1499,46 @@ mod tests {
     }
 
     #[test]
+    fn batch_grading_updates_mixed_statuses_in_one_transaction() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE acquiredimage (
+                Id INTEGER PRIMARY KEY, projectId INTEGER NOT NULL,
+                targetId INTEGER NOT NULL, acquireddate INTEGER,
+                filtername TEXT NOT NULL, gradingStatus INTEGER NOT NULL,
+                metadata TEXT NOT NULL, rejectreason TEXT, profileId TEXT
+             );
+             INSERT INTO acquiredimage VALUES
+                (1, 1, 10, 100, 'R', 0, '{}', NULL, 'p'),
+                (2, 1, 10, 200, 'G', 1, '{}', NULL, 'p'),
+                (3, 1, 10, 300, 'B', 2, '{}', 'Clouds', 'p');",
+        )
+        .unwrap();
+
+        let db = Database::new(&conn);
+        // The previous grades a batch handler returns for undo state.
+        let before = db.get_images_by_ids(&[1, 2, 3]).unwrap();
+        assert_eq!(before.len(), 3);
+
+        // Mixed statuses in one call — the shape an undo restore sends.
+        db.batch_update_grading_status(&[
+            (1, GradingStatus::Rejected, Some("Poor stars".to_string())),
+            (2, GradingStatus::Rejected, Some("Poor stars".to_string())),
+            (3, GradingStatus::Accepted, None),
+        ])
+        .unwrap();
+
+        let after = db.get_images_by_ids(&[1, 2, 3]).unwrap();
+        let by_id: std::collections::HashMap<i32, _> =
+            after.into_iter().map(|image| (image.id, image)).collect();
+        assert_eq!(by_id[&1].grading_status, 2);
+        assert_eq!(by_id[&1].reject_reason.as_deref(), Some("Poor stars"));
+        assert_eq!(by_id[&2].grading_status, 2);
+        assert_eq!(by_id[&3].grading_status, 1);
+        assert_eq!(by_id[&3].reject_reason, None);
+    }
+
+    #[test]
     fn recent_images_are_limited_and_sorted_per_project() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(

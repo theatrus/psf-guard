@@ -12,8 +12,11 @@ export function useStackActivity() {
   const query = useQuery<StackActivity>({
     queryKey: STACK_ACTIVITY_QUERY_KEY,
     queryFn: () => apiClient.getStackActivity(),
-    refetchInterval: (query) => (query.state.data?.active.length ? 1000 : 3000),
-    refetchIntervalInBackground: true,
+    // Fast only while a build runs. Starting one here invalidates this
+    // query, so the idle poll exists to notice jobs another client began —
+    // a few seconds' lag is fine, and the endpoint is an in-memory list.
+    refetchInterval: (query) => (query.state.data?.active.length ? 1000 : 5_000),
+    refetchIntervalInBackground: false,
   });
   return {
     active: query.data?.active ?? [],

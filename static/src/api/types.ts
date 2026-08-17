@@ -261,6 +261,20 @@ export interface UpdateGradeRequest {
   reason?: string;
 }
 
+/** One grade assignment inside a batch; entries may carry different
+ * statuses so an undo can restore a mixed selection in one request. */
+export interface BatchGradeEntry {
+  image_id: number;
+  status: 'pending' | 'accepted' | 'rejected';
+  reason?: string | null;
+}
+
+export interface BatchGradeResponse {
+  updated: number;
+  /** The grades the batch replaced, for undo state. */
+  previous: BatchGradeEntry[];
+}
+
 export interface PreviewOptions {
   size?: 'screen' | 'large' | 'original';
   stretch?: boolean;

@@ -17,7 +17,7 @@ import {
 } from './stackColorProcessing';
 import { isColorStackSkyOriented } from './stackOrientation';
 import { cropLabels, cropOrder, describeCrop, offCenterChannels } from './stackColorCrop';
-import { useStackActivity } from '../hooks/useStackActivity';
+import { STACK_ACTIVITY_QUERY_KEY, useStackActivity } from '../hooks/useStackActivity';
 
 interface StackColorPreviewPanelProps {
   dbId: string;
@@ -401,6 +401,7 @@ export default function StackColorPreviewPanel({
       setWatchedJobIds((current) =>
         current.includes(job.job_id) ? current : [...current, job.job_id]
       );
+      queryClient.invalidateQueries({ queryKey: STACK_ACTIVITY_QUERY_KEY });
       if (terminalStates.has(job.state)) {
         queryClient.invalidateQueries({
           queryKey: catalogQueryKey(dbId, projectId, sourceRevision),

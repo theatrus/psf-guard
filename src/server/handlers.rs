@@ -2855,6 +2855,76 @@ pub async fn update_image_grade(
     Ok(Json(ApiResponse::success(())))
 }
 
+fn parse_grading_status(status: &str) -> Result<GradingStatus, AppError> {
+    match status {
+        "pending" => Ok(GradingStatus::Pending),
+        "accepted" => Ok(GradingStatus::Accepted),
+        "rejected" => Ok(GradingStatus::Rejected),
+        _ => Err(AppError::BadRequest(format!("Invalid status: {status}"))),
+    }
+}
+
+fn grading_status_label(status: i32) -> &'static str {
+    match status {
+        1 => "accepted",
+        2 => "rejected",
+        _ => "pending",
+    }
+}
+
+/// Grade many images in one request and one database transaction. A grid
+/// selection of thousands of frames was previously one HTTP round trip and
+/// one SQLite write transaction per image. Returns the grades it replaced
+/// so the client records undo state without fetching every image first.
+pub async fn batch_update_image_grades(
+    ctx: DbContext,
+    Json(request): Json<BatchGradeRequest>,
+) -> Result<Json<ApiResponse<BatchGradeResponse>>, AppError> {
+    const MAX_BATCH: usize = 20_000;
+    if request.updates.is_empty() {
+        return Err(AppError::BadRequest("No updates in batch".to_string()));
+    }
+    if request.updates.len() > MAX_BATCH {
+        return Err(AppError::BadRequest(format!(
+            "Batch exceeds {MAX_BATCH} images; split the request"
+        )));
+    }
+    let mut updates = Vec::with_capacity(request.updates.len());
+    for entry in &request.updates {
+        updates.push((
+            entry.image_id,
+            parse_grading_status(&entry.status)?,
+            entry.reason.clone(),
+        ));
+    }
+
+    let conn = ctx.db();
+    let conn = conn.lock().map_err(AppError::db)?;
+    let db = Database::new(&conn);
+
+    // Record what the batch replaces before writing. Chunk the reads to
+    // stay far below SQLite's bound-variable limit.
+    let ids: Vec<i32> = updates.iter().map(|(id, _, _)| *id).collect();
+    let mut previous = Vec::with_capacity(ids.len());
+    for chunk in ids.chunks(500) {
+        for image in db.get_images_by_ids(chunk).map_err(AppError::db)? {
+            previous.push(BatchGradeEntry {
+                image_id: image.id,
+                status: grading_status_label(image.grading_status).to_string(),
+                reason: image.reject_reason.clone(),
+            });
+        }
+    }
+
+    db.batch_update_grading_status(&updates)
+        .map_err(AppError::db)?;
+
+    Ok(Json(ApiResponse::success(BatchGradeResponse {
+        updated: updates.len(),
+        previous,
+    })))
+}
+
 /// Shared DB lookup for the image handlers: the acquired-image row, the FITS
 /// basename (from `metadata.FileName`), and the target name.
 fn resolve_image_meta(

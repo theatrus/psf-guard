@@ -16,7 +16,7 @@ import StackColorPreviewPanel from './StackColorPreviewPanel';
 import StackStretchControls from './StackStretchControls';
 import { isSkyOriented } from './stackOrientation';
 import { useAccess } from '../auth/access';
-import { useStackActivity } from '../hooks/useStackActivity';
+import { STACK_ACTIVITY_QUERY_KEY, useStackActivity } from '../hooks/useStackActivity';
 
 type StackCandidateImage = Pick<
   Image,
@@ -319,6 +319,7 @@ export default function StackPreviewPanel({
       setWatchedJobIds((current) =>
         current.includes(job.job_id) ? current : [...current, job.job_id]
       );
+      queryClient.invalidateQueries({ queryKey: STACK_ACTIVITY_QUERY_KEY });
       if (terminalStates.has(job.state)) {
         queryClient.invalidateQueries({ queryKey: latestStackQueryKey(dbId, projectId) });
       }
