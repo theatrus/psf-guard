@@ -77,6 +77,11 @@
 
 ## Fixed
 
+- Editing a configured database now opens its settings directly beneath that
+  database instead of below the full database list. The selected row and named
+  editor stay visually connected, so paths, remote access, and export settings
+  have a clear database context.
+
 - Remote sync export responses now carry an `X-Content-SHA256` header with
   the SHA-256 of the exact response body, so the N.I.N.A. plugin can verify
   a pulled bundle without re-serializing it. The in-bundle `payload_sha256`
