@@ -242,6 +242,9 @@ pub(crate) fn sync_grades_in_transaction(
             )
             .context("applying grade update to destination")?;
         }
+        // The destination's Target Scheduler plans against these counters.
+        crate::db::reconcile_accepted_counts(tx)
+            .context("reconciling exposure plan accepted counts")?;
     }
 
     Ok(summary)
@@ -310,6 +313,50 @@ mod tests {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn push_reconciles_destination_exposure_plan_accepted_counts() {
+        let src = setup_db(
+            &[
+                (1, 1, Some("g1"), None), // Accepted
+                (2, 2, Some("g2"), Some("clouds")),
+            ],
+            true,
+        );
+        let dest = setup_db(
+            &[
+                (100, 0, Some("g1"), None),
+                (200, 1, Some("g2"), None), // Accepted locally; push rejects it
+            ],
+            true,
+        );
+        // The destination is a live Target Scheduler catalog: images link to
+        // exposure plans whose accepted counter the scheduler plans against.
+        dest.execute_batch(
+            "ALTER TABLE acquiredimage ADD COLUMN exposureId INTEGER DEFAULT 0;
+             CREATE TABLE exposureplan (
+                Id INTEGER PRIMARY KEY, profileId TEXT, exposure REAL,
+                desired INTEGER, acquired INTEGER, accepted INTEGER,
+                targetid INTEGER, exposureTemplateId INTEGER
+             );
+             INSERT INTO exposureplan VALUES (5, 'p', 300, 20, 2, 1, 1, 1);
+             UPDATE acquiredimage SET exposureId = 5;",
+        )
+        .unwrap();
+
+        sync_grades(&src, &dest, &opts()).unwrap();
+
+        // g1 became Accepted and g2 became Rejected: still one accepted image,
+        // but the counter is now derived from the grades, not left stale.
+        let accepted: i64 = dest
+            .query_row("SELECT accepted FROM exposureplan WHERE Id = 5", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(accepted, 1);
+        assert_eq!(grade_of(&dest, "g1"), (1, None));
+        assert_eq!(grade_of(&dest, "g2"), (2, Some("clouds".to_string())));
     }
 
     #[test]

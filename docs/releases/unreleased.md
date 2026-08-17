@@ -95,6 +95,16 @@
 
 ## Fixed
 
+- Grading now keeps Target Scheduler's exposure plans honest. Every path
+  that changes a grade — the grid and detail views, undo and redo, the
+  CLI regrade and screening commands, grade pushes, and catalog pulls —
+  recomputes `exposureplan.accepted` from the images each plan actually
+  has (linked by `exposureId`, schema v17+). Before, rejecting frames in
+  PSF Guard left the telescope's counters where its own grader put them,
+  so the scheduler under- or over-scheduled that filter. Catalog pulls
+  now also keep the counter derived from the merged grades instead of
+  copying the telescope's value.
+
 - Star PSF fitting now actually fits. A sign error in the optimizer made
   every iteration step uphill, so every fitted PSF kept its initial guess —
   reported eccentricity was really the star's bounding-box aspect ratio and
