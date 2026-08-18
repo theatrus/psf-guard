@@ -198,6 +198,7 @@ pub async fn pair_route(
     };
 
     let registry_path = require_registry_path(&state)?;
+    let _registry_guard = state.registry_write.lock().await;
     let mut registry = DbRegistry::load_or_init(&registry_path)
         .map_err(|error| AppError::InternalError(format!("loading registry: {error}")))?;
     let Some(entry) = registry
@@ -272,6 +273,7 @@ pub async fn revoke_client_route(
 
     require_database_management_allowed(&state)?;
     let registry_path = require_registry_path(&state)?;
+    let _registry_guard = state.registry_write.lock().await;
     let mut registry = DbRegistry::load_or_init(&registry_path)
         .map_err(|error| AppError::InternalError(format!("loading registry: {error}")))?;
     let Some(entry) = registry

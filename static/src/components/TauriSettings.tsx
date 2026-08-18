@@ -234,6 +234,10 @@ export default function TauriSettings({
 
   const startEdit = (entry: DbEntry) => {
     setEditingId(entry.id);
+    // A pairing code is scoped to one database; never show it under another.
+    setPairingCode(null);
+    setPairingExpiresAt(null);
+    setPairingCopyState('idle');
     setFormName(entry.name);
     setFormDbPath(entry.db_path);
     setFormImageDirs(entry.image_dirs);
@@ -375,6 +379,10 @@ export default function TauriSettings({
     if (!editingId) return;
     try {
       await apiClient.revokePairedClient(editingId, clientUuid);
+      // The databases list is component state fed by reload(), not a
+      // react-query cache — invalidation alone would leave the revoked
+      // client on screen.
+      await reload();
       queryClient.invalidateQueries({ queryKey: ['databases'] });
       setStatusMessage('Client revoked');
     } catch (error) {

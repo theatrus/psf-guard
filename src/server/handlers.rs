@@ -1095,6 +1095,7 @@ pub async fn add_database_route(
 
     require_database_management_allowed(&state)?;
     let registry_path = require_registry_path(&state)?;
+    let _registry_guard = state.registry_write.lock().await;
     let mut reg = DbRegistry::load_or_init(&registry_path)
         .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
 
@@ -1146,6 +1147,7 @@ pub async fn update_database_route(
 
     require_database_management_allowed(&state)?;
     let registry_path = require_registry_path(&state)?;
+    let _registry_guard = state.registry_write.lock().await;
     let mut reg = DbRegistry::load_or_init(&registry_path)
         .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
 
@@ -1296,6 +1298,7 @@ pub async fn remove_database_route(
 
     require_database_management_allowed(&state)?;
     let registry_path = require_registry_path(&state)?;
+    let _registry_guard = state.registry_write.lock().await;
     let mut reg = DbRegistry::load_or_init(&registry_path)
         .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
     let removed_from_registry = reg
@@ -1776,6 +1779,7 @@ pub async fn create_database_route(
         }
     }
 
+    let _registry_guard = state.registry_write.lock().await;
     let mut reg = DbRegistry::load_or_init(&registry_path)
         .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
 

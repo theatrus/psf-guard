@@ -575,6 +575,44 @@ mod tests {
     }
 
     #[test]
+    fn paired_clients_and_the_legacy_key_authenticate_independently() {
+        let mut config = RemoteImageUploadConfig::default();
+        config.set_token("legacy-manual-key-0123456789").unwrap();
+        let laptop = config
+            .add_client("Laptop", "psfrc_laptop_credential_0123456789")
+            .unwrap();
+        let observatory = config
+            .add_client("Observatory", "psfrc_observatory_credential_0123456789")
+            .unwrap();
+
+        assert!(config.token_is_configured());
+        assert!(config.token_matches("legacy-manual-key-0123456789"));
+        assert!(config.token_matches("psfrc_laptop_credential_0123456789"));
+        assert!(config.token_matches("psfrc_observatory_credential_0123456789"));
+        assert!(!config.token_matches("psfrc_never_issued_0123456789"));
+
+        // Revoking one client leaves the other and the legacy key alone.
+        assert!(config.revoke_client(&laptop));
+        assert!(!config.revoke_client(&laptop));
+        assert!(!config.token_matches("psfrc_laptop_credential_0123456789"));
+        assert!(config.token_matches("psfrc_observatory_credential_0123456789"));
+        assert!(config.token_matches("legacy-manual-key-0123456789"));
+        let _ = observatory;
+    }
+
+    #[test]
+    fn clients_alone_configure_the_token_check() {
+        // A catalog that was only ever paired (no manual key) still counts
+        // as configured, or capabilities would hide it from its own client.
+        let mut config = RemoteImageUploadConfig::default();
+        config
+            .add_client("Only client", "psfrc_only_credential_0123456789")
+            .unwrap();
+        assert!(config.token_is_configured());
+        assert!(config.token_matches("psfrc_only_credential_0123456789"));
+    }
+
+    #[test]
     fn loads_empty_when_file_missing() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.json");
