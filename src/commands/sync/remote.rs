@@ -157,6 +157,7 @@ async fn push_to(
         &options.local_id,
         operation,
         options.reviewed_only,
+        options.with_image_data,
     )
     .context("building a bundle from the local database")?;
     let rows: usize = bundle.tables.values().map(|table| table.rows.len()).sum();

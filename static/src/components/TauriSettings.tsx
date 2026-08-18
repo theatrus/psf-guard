@@ -18,6 +18,7 @@ import { starMetadataFillEnabled } from '../hooks/useStarMetadataFill';
 import QualityBackfillControls from './QualityBackfillControls';
 import RemotePeerSync from './RemotePeerSync';
 import SchedulerSyncControls from './SchedulerSyncControls';
+import RemoteSyncPreviews from './RemoteSyncPreviews';
 import SeizaCatalogControls from './SeizaCatalogControls';
 import ProcessingSetupsManager from './ProcessingSetupsManager';
 import CalibrationLibrarySummary from './CalibrationLibrarySummary';
@@ -1381,6 +1382,7 @@ export default function TauriSettings({
           {currentTab === 'sync' && (
             <>
               <SchedulerSyncControls databases={databases} disabled={isApplying} />
+              <RemoteSyncPreviews databases={databases} disabled={isApplying} />
               <RemotePeerSync databases={databases} disabled={isApplying} />
             </>
           )}

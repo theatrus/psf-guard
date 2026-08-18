@@ -166,6 +166,41 @@ impl SyncPreviewManager {
         Ok(Some(record))
     }
 
+    /// Every unexpired preview staged for one catalog, newest first —
+    /// including previews a remote client created, which the UI could not
+    /// otherwise discover. Expired records and records whose snapshot file
+    /// vanished are dropped on the way, like `get` does.
+    pub fn list(&self, local_db_id: &str) -> Result<Vec<SyncPreviewRecord>> {
+        let mut records = self
+            .records
+            .lock()
+            .map_err(|error| anyhow::anyhow!("sync preview lock poisoned: {error}"))?;
+        let now = unix_seconds();
+        let mut dead = Vec::new();
+        let mut alive = Vec::new();
+        for (id, record) in records.iter() {
+            if record.local_db_id != local_db_id {
+                continue;
+            }
+            let snapshot_exists = self
+                .source_snapshot_path(record)
+                .map(|path| path.is_file())
+                .unwrap_or(false);
+            if record.expires_at <= now || !snapshot_exists {
+                dead.push((id.clone(), record.source_snapshot_file.clone()));
+            } else {
+                alive.push(record.clone());
+            }
+        }
+        for (id, snapshot) in dead {
+            records.remove(&id);
+            let _ = fs::remove_file(record_path(&self.directory, &id));
+            self.remove_source_snapshot(&snapshot);
+        }
+        alive.sort_by_key(|record| std::cmp::Reverse(record.created_at));
+        Ok(alive)
+    }
+
     /// Atomically take a preview for one Apply attempt. A stale or failed
     /// Apply must be previewed again; two callers can never apply the same ID.
     pub fn claim(&self, id: &str, local_db_id: &str) -> Result<Option<SyncPreviewRecord>> {

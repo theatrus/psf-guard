@@ -92,6 +92,13 @@
   sharpest) and field curvature (corners against center). Solved frames also
   show their **field rotation** (and a mirrored flag) in the Sky context
   panel.
+- Data Transfer in Settings now lists every **staged preview** parked on
+  the server — including pushes a remote N.I.N.A. client created and never
+  applied — with its source, operation, change counts, and expiry, plus
+  Apply, Refresh, and Discard actions. Previously only the browser session
+  that created a preview could see it, so a plugin's staged push sat
+  invisible until it expired. Remote preview jobs also report a phase
+  (materializing, then comparing) while they run.
 
 ## Fixed
 
@@ -99,6 +106,15 @@
   handling** setting (off, every 1-7 sessions, target completion, or
   immediate), read and written with the same schema tolerance as the
   other project fields.
+
+- Staging a pushed bundle no longer commits once per row. A large grades
+  push materialized each row in its own SQLite transaction — thousands of
+  journal round-trips, minutes of "preview" — and a failure mid-bundle
+  left a partial snapshot behind. The whole bundle now lands in one
+  transaction on a scratch connection with no fsync cost, and a failure
+  rolls back to an empty snapshot. Merge exports also stopped carrying
+  thumbnail blobs by default: `include_thumbnails` opts in, so a season of
+  previews no longer rides along with every catalog round trip.
 
 - Grading now keeps Target Scheduler's exposure plans honest. Every path
   that changes a grade — the grid and detail views, undo and redo, the

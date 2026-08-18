@@ -135,7 +135,10 @@ impl Harness {
                 "protocol_version": 1,
                 "catalog_id": "source",
                 "operation": operation,
-                "reviewed_only": false
+                "reviewed_only": false,
+                // The round trip asserts thumbnail blobs survive the wire,
+                // and thumbnails are opt-in on merge exports.
+                "include_thumbnails": true
             })),
         )
         .await;

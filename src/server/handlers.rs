@@ -912,6 +912,75 @@ pub async fn delete_sync_database_preview_route(
     Ok(Json(ApiResponse::success(deleted)))
 }
 
+/// Every unexpired staged transfer for this catalog, wherever it was
+/// created. The UI's own previews live in its session, but a remote
+/// client's push also parks a preview here, and without this listing the
+/// operator has no way to see or act on it.
+pub async fn list_sync_database_previews_route(
+    State(state): State<Arc<AppState>>,
+    Path(db_id): Path<String>,
+) -> Result<Json<ApiResponse<Vec<SchedulerSyncPreviewListEntry>>>, AppError> {
+    let records = state
+        .sync_previews
+        .list(&db_id)
+        .map_err(|error| AppError::InternalError(format!("listing sync previews: {error}")))?;
+    let entries = records
+        .into_iter()
+        .map(|record| SchedulerSyncPreviewListEntry {
+            preview_id: record.id,
+            kind: crate::server::remote_sync::kind_label(record.request.kind).to_string(),
+            source: record.request.peer_db_id,
+            created_at: record.created_at,
+            expires_at: record.expires_at,
+            result: record.result,
+        })
+        .collect();
+    Ok(Json(ApiResponse::success(entries)))
+}
+
+/// Re-run one preview's dry run against the catalog as it stands now, so a
+/// preview gone stale (the fingerprint moved) becomes applicable again
+/// without the remote client re-uploading its bundle.
+pub async fn refresh_sync_database_preview_route(
+    State(state): State<Arc<AppState>>,
+    Path((db_id, preview_id)): Path<(String, String)>,
+) -> Result<Json<ApiResponse<SchedulerSyncPreviewResponse>>, AppError> {
+    // Refresh rewrites a record an apply may be claiming: same lock as apply.
+    let _apply_guard = state.sync_apply_lock.lock().await;
+    let record = state
+        .sync_previews
+        .get(&preview_id)
+        .map_err(|error| AppError::InternalError(format!("loading sync preview: {error}")))?
+        .filter(|record| record.local_db_id == db_id)
+        .ok_or(AppError::NotFound)?;
+    let source_snapshot = state
+        .sync_previews
+        .source_snapshot_path(&record)
+        .map_err(|error| AppError::InternalError(format!("{error:#}")))?;
+    let mut request = record.request.clone();
+    request.dry_run = true;
+    let (result, fingerprint) = execute_scheduler_sync_guarded(
+        &state,
+        &db_id,
+        request,
+        Some(source_snapshot),
+        SyncGuardMode::Preview,
+    )
+    .await?;
+    let fingerprint = fingerprint
+        .ok_or_else(|| AppError::InternalError("preview refresh returned no fingerprint".into()))?;
+    let refreshed = state
+        .sync_previews
+        .refresh(&record, fingerprint, result)
+        .map_err(|error| AppError::InternalError(format!("storing refreshed preview: {error}")))?;
+    Ok(Json(ApiResponse::success(SchedulerSyncPreviewResponse {
+        preview_id: refreshed.id,
+        created_at: refreshed.created_at,
+        expires_at: refreshed.expires_at,
+        result: refreshed.result,
+    })))
+}
+
 /// Apply one unexpired preview after proving that neither catalog changed.
 pub async fn apply_sync_database_preview_route(
     State(state): State<Arc<AppState>>,

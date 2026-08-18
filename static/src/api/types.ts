@@ -1148,6 +1148,17 @@ export interface SchedulerSyncPreviewResponse {
   result: SchedulerSyncResponse;
 }
 
+/** One staged transfer for a catalog, wherever it was created — the UI's
+ * own preview flow or a remote client's push. */
+export interface SchedulerSyncPreviewListEntry {
+  preview_id: string;
+  kind: string;
+  source: string;
+  created_at: number;
+  expires_at: number;
+  result: SchedulerSyncResponse;
+}
+
 /** Per-project line of an import outcome report. */
 export interface ImportProjectSummary {
   name: string;
