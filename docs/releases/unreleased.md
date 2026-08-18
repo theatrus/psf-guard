@@ -95,6 +95,11 @@
 
 ## Fixed
 
+- The project scheduler editor now exposes Target Scheduler's **flats
+  handling** setting (off, every 1-7 sessions, target completion, or
+  immediate), read and written with the same schema tolerance as the
+  other project fields.
+
 - Grading now keeps Target Scheduler's exposure plans honest. Every path
   that changes a grade — the grid and detail views, undo and redo, the
   CLI regrade and screening commands, grade pushes, and catalog pulls —

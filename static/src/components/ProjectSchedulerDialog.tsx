@@ -118,6 +118,7 @@ function ProjectForm({
         dither_every: form.dither_every,
         enable_grader: form.enable_grader,
         is_mosaic: form.is_mosaic,
+        flats_handling: form.flats_handling,
       });
       await reload();
       setStatus('Saved');
@@ -176,6 +177,16 @@ function ProjectForm({
           <label><input type="checkbox" checked={form.use_custom_horizon} disabled={!canEdit} onChange={(e) => setForm({ ...form, use_custom_horizon: e.target.checked })} /> Use custom horizon</label>
           <label><input type="checkbox" checked={form.enable_grader} disabled={!canEdit} onChange={(e) => setForm({ ...form, enable_grader: e.target.checked })} /> Enable grader</label>
           <label><input type="checkbox" checked={form.is_mosaic} disabled={!canEdit} onChange={(e) => setForm({ ...form, is_mosaic: e.target.checked })} /> Mosaic project</label>
+          <label>Flats handling
+            <select value={form.flats_handling} disabled={!canEdit} onChange={(e) => setForm({ ...form, flats_handling: Number(e.target.value) })}>
+              <option value={0}>Off</option>
+              {[1, 2, 3, 4, 5, 6, 7].map((n) => (
+                <option key={n} value={n}>Every {n} session{n === 1 ? '' : 's'}</option>
+              ))}
+              <option value={100}>Target completion</option>
+              <option value={200}>Immediate</option>
+            </select>
+          </label>
         </div>
       </details>
       {canEdit && <div className="scheduler-actions"><span role="status">{status}</span><button type="submit">Save project</button></div>}
