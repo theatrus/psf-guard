@@ -87,6 +87,8 @@ pub struct CalibrationFrame {
     pub camera_temp: Option<f64>,
     pub filter: Option<String>,
     pub focal_length_mm: Option<f64>,
+    /// Rotator angle in degrees at capture, when the rig recorded one.
+    pub rotation: Option<f64>,
     /// Set after the current file (or a basename-remapped file) has been
     /// checked against this catalog row's hard settings.
     pub source_verified: bool,
@@ -366,6 +368,7 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
             camera_temp        REAL,
             filter_name        TEXT,
             focal_length_mm    REAL,
+            rotation           REAL,
             file_size          INTEGER,
             file_mtime_ns      TEXT,
             added_at           INTEGER NOT NULL,
@@ -418,6 +421,16 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
             "PSF Guard calibration schema version {version} is not supported by this build \
              (expected {CALIBRATION_SCHEMA_VERSION})"
         );
+    }
+    // Catalogs created before the rotation column: add it in place. NULL
+    // means "not recorded", which the matcher treats as compatible.
+    let has_rotation = conn
+        .prepare("PRAGMA table_info('psf_guard_calibration_frame')")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|name| name.ok())
+        .any(|name| name.eq_ignore_ascii_case("rotation"));
+    if !has_rotation {
+        conn.execute_batch("ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;")?;
     }
     Ok(())
 }
@@ -482,11 +495,11 @@ pub fn import_calibration_frames(
                 channels, binning_x, binning_y, gain, offset, readout_mode,
                 bayer_pattern, bayer_x_offset, bayer_y_offset, exposure_s,
                 camera_temp, filter_name, focal_length_mm, file_size,
-                file_mtime_ns, added_at, updated_at
+                file_mtime_ns, added_at, updated_at, rotation
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
                 ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24,
-                ?25, ?26, ?27, ?27
+                ?25, ?26, ?27, ?27, ?28
             )
             ON CONFLICT(source_path) DO UPDATE SET
                 rig_uuid=excluded.rig_uuid, kind=excluded.kind,
@@ -502,7 +515,7 @@ pub fn import_calibration_frames(
                 exposure_s=excluded.exposure_s, camera_temp=excluded.camera_temp,
                 filter_name=excluded.filter_name, focal_length_mm=excluded.focal_length_mm,
                 file_size=excluded.file_size, file_mtime_ns=excluded.file_mtime_ns,
-                updated_at=excluded.updated_at
+                updated_at=excluded.updated_at, rotation=excluded.rotation
             "#,
             params![
                 frame_uuid,
@@ -532,6 +545,7 @@ pub fn import_calibration_frames(
                 file_size,
                 file_mtime_ns,
                 now,
+                frame.rotator_position,
             ],
         )?;
         if existing.is_some() {
@@ -909,7 +923,7 @@ pub fn select_for_light(conn: &Connection, light: &FrameMeta) -> Result<Calibrat
         SELECT id, frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
                captured_at, telescope, camera, width, height, channels,
                binning_x, binning_y, gain, offset, readout_mode, bayer_pattern,
-               exposure_s, camera_temp, filter_name, focal_length_mm
+               exposure_s, camera_temp, filter_name, focal_length_mm, rotation
         FROM psf_guard_calibration_frame
         ORDER BY captured_at DESC, id DESC
         "#,
@@ -2514,6 +2528,26 @@ fn flat_matches(light: &FrameMeta, candidate: &CalibrationFrame) -> bool {
             candidate.focal_length_mm,
             |left, right| (left - right).abs() <= 1.0,
         )
+        && rotation_matches(light.rotator_position, candidate.rotation)
+}
+
+/// Rotator tolerance when pairing a flat with a light or another flat.
+const ROTATION_TOLERANCE_DEG: f64 = 1.0;
+
+/// The rotator sits between the telescope and the camera, so vignetting
+/// from the optics ahead of it rotates relative to the sensor as the
+/// rotator moves — a flat only corrects lights shot at (nearly) the same
+/// angle. Unknown on either side matches: NULL means the rig recorded no
+/// rotator, or the frame predates the column, and punishing either would
+/// strip flats from every catalog imported before rotation was stored.
+fn rotation_matches(left: Option<f64>, right: Option<f64>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            let diff = (left - right).rem_euclid(360.0);
+            diff.min(360.0 - diff) <= ROTATION_TOLERANCE_DEG
+        }
+        _ => true,
+    }
 }
 
 fn frame_pair_matches(left: &CalibrationFrame, right: &CalibrationFrame) -> bool {
@@ -2625,7 +2659,12 @@ fn coherent_master_subset(
         } else {
             true
         };
-        temperature_ok && session_ok
+        let rotation_ok = if kind == CalibrationKind::Flat {
+            rotation_matches(anchor.rotation, frame.rotation)
+        } else {
+            true
+        };
+        temperature_ok && session_ok && rotation_ok
     };
 
     let mut first_cluster: Option<Vec<CalibrationFrame>> = None;
@@ -2659,7 +2698,7 @@ fn query_kind(conn: &Connection, kind: CalibrationKind) -> Result<Vec<Calibratio
         SELECT id, frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
                captured_at, telescope, camera, width, height, channels,
                binning_x, binning_y, gain, offset, readout_mode, bayer_pattern,
-               exposure_s, camera_temp, filter_name, focal_length_mm
+               exposure_s, camera_temp, filter_name, focal_length_mm, rotation
         FROM psf_guard_calibration_frame WHERE kind = ?1
         ORDER BY captured_at DESC, id DESC
         "#,
@@ -2701,6 +2740,7 @@ fn row_to_frame(row: &rusqlite::Row<'_>) -> rusqlite::Result<CalibrationFrame> {
         camera_temp: row.get(19)?,
         filter: row.get(20)?,
         focal_length_mm: row.get(21)?,
+        rotation: row.get(22)?,
         source_verified: false,
     })
 }
@@ -3021,6 +3061,61 @@ mod tests {
     }
 
     #[test]
+    fn flats_match_rotation_within_tolerance_and_across_the_wrap() {
+        // Same axis expressed on either side of 0°/360° still matches;
+        // a quarter turn does not.
+        assert!(rotation_matches(Some(120.0), Some(120.6)));
+        assert!(rotation_matches(Some(359.8), Some(0.4)));
+        assert!(!rotation_matches(Some(120.0), Some(122.0)));
+        assert!(!rotation_matches(Some(0.0), Some(90.0)));
+        // Unknown on either side is compatible: rigs without rotators, and
+        // flats catalogued before the column existed, keep matching.
+        assert!(rotation_matches(None, Some(45.0)));
+        assert!(rotation_matches(Some(45.0), None));
+        assert!(rotation_matches(None, None));
+    }
+
+    #[test]
+    fn flat_master_never_mixes_rotator_angles() {
+        let flat = |id: i64, rotation: Option<f64>| CalibrationFrame {
+            id,
+            frame_uuid: format!("f{id}"),
+            rig_uuid: "r".into(),
+            kind: CalibrationKind::Flat,
+            source_path: format!("/flat-{id}.fits").into(),
+            source_fingerprint: "x".into(),
+            captured_at: Some(1_000_000_000),
+            telescope: None,
+            camera: None,
+            width: Some(3000),
+            height: Some(2000),
+            channels: Some(1),
+            binning_x: Some(1),
+            binning_y: Some(1),
+            gain: Some(100),
+            offset: Some(20),
+            readout_mode: None,
+            bayer_pattern: None,
+            exposure_s: Some(3.0),
+            camera_temp: Some(-10.0),
+            filter: Some("Ha".into()),
+            focal_length_mm: None,
+            rotation,
+            source_verified: false,
+        };
+        // Five flats at 30° and two strays at 120°: the master takes only
+        // the coherent angle, because integrating both would average two
+        // different vignette orientations into one wrong correction.
+        let frames: Vec<CalibrationFrame> = (0..5)
+            .map(|id| flat(id, Some(30.0 + 0.1 * id as f64)))
+            .chain((5..7).map(|id| flat(id, Some(120.0))))
+            .collect();
+        let subset = coherent_master_subset(CalibrationKind::Flat, &frames);
+        assert_eq!(subset.len(), 5);
+        assert!(subset.iter().all(|frame| frame.rotation.unwrap() < 40.0));
+    }
+
+    #[test]
     fn rejects_wrong_sensor_or_dark_temperature() {
         let light = frame("/light.fits", "LIGHT");
         let candidate = CalibrationFrame {
@@ -3046,6 +3141,7 @@ mod tests {
             camera_temp: Some(0.0),
             filter: None,
             focal_length_mm: None,
+            rotation: None,
             source_verified: false,
         };
         assert!(!sensor_matches(&light, &candidate));
@@ -3164,6 +3260,7 @@ mod tests {
             camera_temp: temp,
             filter: Some("Ha".into()),
             focal_length_mm: None,
+            rotation: None,
             source_verified: false,
         };
         let day = 24 * 60 * 60;
