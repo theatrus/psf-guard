@@ -610,57 +610,75 @@ fn copy_imagedata(
     bytes: &mut u64,
     dry_run: bool,
 ) -> Result<()> {
-    let mut existing_stmt = tx.prepare("SELECT tag FROM imagedata WHERE acquiredimageid = ?1")?;
-    let mut sel_len_stmt =
-        src.prepare("SELECT tag, LENGTH(imagedata) FROM imagedata WHERE acquiredimageid = ?1")?;
-    let mut sel_full_stmt = src.prepare(
-        "SELECT tag, imagedata, width, height FROM imagedata WHERE acquiredimageid = ?1",
-    )?;
+    // One pass over each side instead of two point queries per image. The
+    // Target Scheduler schema has no index on imagedata.acquiredimageid, so
+    // the per-image lookups were each a full scan of the destination's blob
+    // table — quadratic, measured at 162 s of "comparing" for a 6.5k-row
+    // merge preview whose bundle carried no thumbnails at all.
+    let source_rows: i64 = src.query_row("SELECT COUNT(*) FROM imagedata", [], |r| r.get(0))?;
+    if source_rows == 0 {
+        return Ok(());
+    }
+
+    // Tags already present at the destination, keyed by image, one scan.
+    let mut existing: HashMap<i64, HashSet<Option<String>>> = HashMap::new();
+    {
+        let mut stmt = tx.prepare("SELECT acquiredimageid, tag FROM imagedata")?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            if let Some(image_id) = r.get::<_, Option<i64>>(0)? {
+                existing.entry(image_id).or_default().insert(r.get(1)?);
+            }
+        }
+    }
+    let tag_exists = |dest_img: i64, tag: &Option<String>| {
+        existing
+            .get(&dest_img)
+            .is_some_and(|tags| tags.contains(tag))
+    };
+
+    if dry_run {
+        let mut stmt =
+            src.prepare("SELECT acquiredimageid, tag, LENGTH(imagedata) FROM imagedata")?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            let source_image: Option<i64> = r.get(0)?;
+            let Some(&dest_img) = source_image.and_then(|id| img_map.get(&id)) else {
+                continue;
+            };
+            let tag: Option<String> = r.get(1)?;
+            if tag_exists(dest_img, &tag) {
+                counts.unchanged += 1;
+            } else {
+                counts.inserted += 1;
+                *bytes += r.get::<_, i64>(2).unwrap_or(0).max(0) as u64;
+            }
+        }
+        return Ok(());
+    }
+
     let mut ins_stmt = tx.prepare(
         "INSERT INTO imagedata (tag, imagedata, acquiredimageid, width, height) VALUES (?1,?2,?3,?4,?5)",
     )?;
-    for (src_img, dest_img) in img_map {
-        // Tags already present at the destination for this image.
-        let mut existing: HashSet<Option<String>> = HashSet::new();
-        {
-            let mut rows = existing_stmt.query(params![dest_img])?;
-            while let Some(r) = rows.next()? {
-                existing.insert(r.get::<_, Option<String>>(0)?);
-            }
-        }
-        if dry_run {
-            let mut rows = sel_len_stmt.query(params![src_img])?;
-            while let Some(r) = rows.next()? {
-                let tag: Option<String> = r.get(0)?;
-                if existing.contains(&tag) {
-                    counts.unchanged += 1;
-                } else {
-                    counts.inserted += 1;
-                    *bytes += r.get::<_, i64>(1).unwrap_or(0).max(0) as u64;
-                }
-            }
+    let mut stmt =
+        src.prepare("SELECT acquiredimageid, tag, imagedata, width, height FROM imagedata")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let source_image: Option<i64> = r.get(0)?;
+        let Some(&dest_img) = source_image.and_then(|id| img_map.get(&id)) else {
+            continue;
+        };
+        let tag: Option<String> = r.get(1)?;
+        if tag_exists(dest_img, &tag) {
+            counts.unchanged += 1;
             continue;
         }
-        #[allow(clippy::type_complexity)]
-        let blobs: Vec<(Option<String>, Option<Vec<u8>>, i64, i64)> = sel_full_stmt
-            .query_map(params![src_img], |r| {
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    r.get::<_, i64>(2).unwrap_or(0),
-                    r.get::<_, i64>(3).unwrap_or(0),
-                ))
-            })?
-            .collect::<rusqlite::Result<_>>()?;
-        for (tag, blob, w, h) in blobs {
-            if existing.contains(&tag) {
-                counts.unchanged += 1;
-                continue;
-            }
-            *bytes += blob.as_ref().map(|b| b.len() as u64).unwrap_or(0);
-            ins_stmt.execute(params![tag, blob, dest_img, w, h])?;
-            counts.inserted += 1;
-        }
+        let blob: Option<Vec<u8>> = r.get(2)?;
+        let width = r.get::<_, i64>(3).unwrap_or(0);
+        let height = r.get::<_, i64>(4).unwrap_or(0);
+        *bytes += blob.as_ref().map(|b| b.len() as u64).unwrap_or(0);
+        ins_stmt.execute(params![tag, blob, dest_img, width, height])?;
+        counts.inserted += 1;
     }
     Ok(())
 }

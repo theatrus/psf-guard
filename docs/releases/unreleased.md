@@ -107,6 +107,14 @@
   immediate), read and written with the same schema tolerance as the
   other project fields.
 
+- The "comparing" phase of a pushed bundle no longer scans the thumbnail
+  table once per image. The Target Scheduler schema has no index on
+  `imagedata.acquiredimageid`, so a merge preview against a season-sized
+  catalog ran thousands of full scans over the blob table — measured at
+  163 seconds for a 6.5k-row push whose bundle carried no thumbnails at
+  all. The comparison now makes one pass over each side and skips the
+  thumbnail step entirely when the bundle has none.
+
 - Staging a pushed bundle no longer commits once per row. A large grades
   push materialized each row in its own SQLite transaction — thousands of
   journal round-trips, minutes of "preview" — and a failure mid-bundle
