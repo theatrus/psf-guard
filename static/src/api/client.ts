@@ -22,6 +22,7 @@ import type {
   UpdateAuthUserRequest,
   UpdateNoticeStatus,
   SchedulerSyncRequest,
+  SchedulerSyncPreviewListEntry,
   SchedulerSyncPreviewResponse,
   SchedulerSyncResponse,
   DatabaseSummary,
@@ -435,6 +436,31 @@ export const apiClient = {
       `/databases/${encodeURIComponent(dbId)}/sync/previews/${encodeURIComponent(previewId)}`
     );
     if (!data.data) throw new Error(data.error || 'Database sync preview not found');
+    return data.data;
+  },
+
+  /** Every unexpired staged preview for one catalog, including previews a
+   * remote client (the N.I.N.A. plugin) parked and never applied. */
+  listDatabaseSyncPreviews: async (
+    dbId: string
+  ): Promise<SchedulerSyncPreviewListEntry[]> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<SchedulerSyncPreviewListEntry[]>>(
+      `/databases/${encodeURIComponent(dbId)}/sync/previews`
+    );
+    return data.data ?? [];
+  },
+
+  /** Re-run one preview's dry run against the catalog as it stands now. */
+  refreshDatabaseSyncPreview: async (
+    dbId: string,
+    previewId: string
+  ): Promise<SchedulerSyncPreviewResponse> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<SchedulerSyncPreviewResponse>>(
+      `/databases/${encodeURIComponent(dbId)}/sync/previews/${encodeURIComponent(previewId)}/refresh`
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to refresh database sync preview');
     return data.data;
   },
 

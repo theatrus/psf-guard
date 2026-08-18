@@ -155,6 +155,12 @@ pub struct CreateExportRequest {
     pub operation: SyncOperation,
     #[serde(default = "default_true")]
     pub reviewed_only: bool,
+    /// Merge exports only: include the `imagedata` thumbnail BLOBs. Off by
+    /// default — thumbnails dominate a catalog's size (a hundred-plus
+    /// megabytes on a season of captures), and a client that wants them
+    /// must ask.
+    #[serde(default)]
+    pub include_thumbnails: bool,
 }
 
 fn default_true() -> bool {
@@ -190,6 +196,11 @@ pub struct SyncPreview {
 pub struct PreviewJob {
     pub job_id: String,
     pub state: &'static str,
+    /// Where a running job currently is: "materializing" (writing the
+    /// bundle snapshot), then "comparing" (dry-run against the catalog).
+    /// Ready and failed jobs carry no phase.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<&'static str>,
     pub preview: Option<SyncPreview>,
     pub error: Option<String>,
 }
@@ -241,6 +252,7 @@ impl PreviewJobStore {
         let job = PreviewJob {
             job_id: requested_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
             state: "running",
+            phase: Some("materializing"),
             preview: None,
             error: None,
         };
@@ -264,6 +276,7 @@ impl PreviewJobStore {
         let Some(stored) = entries.get_mut(job_id) else {
             return;
         };
+        stored.job.phase = None;
         match result {
             Ok(preview) => {
                 stored.job.state = "ready";
@@ -273,6 +286,18 @@ impl PreviewJobStore {
                 stored.job.state = "failed";
                 stored.job.error = Some(detail_of(&error));
             }
+        }
+    }
+
+    /// Record where a running job is. Missing or finished jobs are ignored.
+    fn set_phase(&self, job_id: &str, phase: &'static str) {
+        let Ok(mut entries) = self.entries.lock() else {
+            return;
+        };
+        if let Some(stored) = entries.get_mut(job_id)
+            && stored.job.state == "running"
+        {
+            stored.job.phase = Some(phase);
         }
     }
 
@@ -464,8 +489,13 @@ pub async fn create_preview(
         let job_id = job.job_id.clone();
         let background_state = Arc::clone(&state);
         tokio::spawn(async move {
-            let result =
-                create_preview_inner(Arc::clone(&background_state), catalog, request).await;
+            let result = create_preview_inner(
+                Arc::clone(&background_state),
+                catalog,
+                request,
+                Some(job_id.clone()),
+            )
+            .await;
             background_state.remote_preview_jobs.finish(&job_id, result);
         });
         return Ok((
@@ -478,7 +508,7 @@ pub async fn create_preview(
             .into_response());
     }
 
-    let preview = create_preview_inner(state, catalog, request).await?;
+    let preview = create_preview_inner(state, catalog, request, None).await?;
     Ok(Json(ApiResponse::success(preview)).into_response())
 }
 
@@ -486,8 +516,16 @@ async fn create_preview_inner(
     state: Arc<AppState>,
     catalog: Arc<DatabaseContext>,
     request: CreatePreviewRequest,
+    job_id: Option<String>,
 ) -> Result<SyncPreview, AppError> {
+    let started = std::time::Instant::now();
     let operation = request.operation;
+    let row_count: usize = request
+        .bundle
+        .tables
+        .values()
+        .map(|table| table.rows.len())
+        .sum();
     // Copy the identifiers the audit log needs before the bundle moves, so
     // auditing never forces the whole payload to be cloned.
     let bundle_id = request.bundle.bundle_id.clone();
@@ -549,6 +587,15 @@ async fn create_preview_inner(
         state.sync_previews.remove_source_snapshot(&snapshot_file);
         return Err(refuse(format!("invalid catalog bundle: {error:#}")));
     }
+    let materialize_duration = started.elapsed();
+    tracing::info!(
+        "remote sync preview materialized catalog={} bundle={bundle_id}          operation={} rows={row_count} in {materialize_duration:.2?}",
+        catalog.id,
+        operation_label(operation),
+    );
+    if let Some(job_id) = job_id.as_deref() {
+        state.remote_preview_jobs.set_phase(job_id, "comparing");
+    }
 
     let sync_request = scheduler_request(operation, source_id.clone(), true);
     let execution = execute_scheduler_sync_paths(
@@ -590,6 +637,14 @@ async fn create_preview_inner(
         })?;
     let summary = result_summary(&result);
     audit(AuditOutcome::Ok, None, Some(&record.id), summary.clone());
+    tracing::info!(
+        "remote sync preview ready catalog={} bundle={bundle_id} operation={}          rows={row_count} compare={:.2?} total={:.2?} preview={}",
+        catalog.id,
+        operation_label(operation),
+        started.elapsed().saturating_sub(materialize_duration),
+        started.elapsed(),
+        record.id,
+    );
     Ok(SyncPreview {
         preview_id: record.id,
         state: "ready",
@@ -838,6 +893,7 @@ pub async fn create_export(
     let catalog_id = catalog.id.clone();
     let operation = request.operation;
     let reviewed_only = request.reviewed_only;
+    let include_thumbnails = request.include_thumbnails;
     let audit = |outcome, detail: Option<&str>, summary| {
         state.remote_audit.record(
             &catalog.id,
@@ -852,7 +908,13 @@ pub async fn create_export(
         );
     };
     let bundle = match tokio::task::spawn_blocking(move || {
-        export_bundle(&database_path, &catalog_id, operation, reviewed_only)
+        export_bundle(
+            &database_path,
+            &catalog_id,
+            operation,
+            reviewed_only,
+            include_thumbnails,
+        )
     })
     .await
     .map_err(|error| AppError::InternalError(format!("export task failed: {error}")))?
@@ -1045,13 +1107,23 @@ pub(crate) fn materialize_bundle(
     template_path: &FsPath,
     bundle: &CatalogBundle,
 ) -> anyhow::Result<()> {
-    let connection = Connection::open(path)?;
-    connection.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA foreign_keys=OFF;")?;
+    let mut connection = Connection::open(path)?;
+    // The snapshot is scratch state: on a crash it is discarded and the
+    // client re-uploads, so buying durability with fsyncs is pure waste.
+    connection.execute_batch(
+        "PRAGMA journal_mode=DELETE; PRAGMA foreign_keys=OFF; PRAGMA synchronous=OFF;",
+    )?;
+    // One transaction for the whole snapshot. Row inserts outside a
+    // transaction each autocommit — a large grades bundle meant thousands
+    // of journal round-trips — and a failure mid-bundle left a partial
+    // snapshot file behind. Now it is one commit, and an error rolls the
+    // whole materialization back to an empty database.
+    let transaction = connection.transaction()?;
     let mut template = None;
     for table_name in allowed_tables(bundle.operation) {
         if let Some(table) = bundle.tables.get(*table_name) {
-            create_bundle_table(&connection, table_name, table)?;
-            insert_bundle_rows(&connection, table_name, table)?;
+            create_bundle_table(&transaction, table_name, table)?;
+            insert_bundle_rows(&transaction, table_name, table)?;
         } else {
             // An omitted optional table still has to exist for the sync
             // engine to read, so borrow the destination's own DDL. One
@@ -1063,10 +1135,11 @@ pub(crate) fn materialize_bundle(
                 )?);
             }
             let template = template.as_ref().expect("template connection is open");
-            create_empty_table_from_template(&connection, template, table_name)?;
+            create_empty_table_from_template(&transaction, template, table_name)?;
         }
     }
-    connection.pragma_update(None, "user_version", bundle.source.schema_version)?;
+    transaction.pragma_update(None, "user_version", bundle.source.schema_version)?;
+    transaction.commit()?;
     Ok(())
 }
 
@@ -1180,6 +1253,7 @@ pub(crate) fn export_bundle(
     catalog_id: &str,
     operation: SyncOperation,
     reviewed_only: bool,
+    include_thumbnails: bool,
 ) -> anyhow::Result<CatalogBundle> {
     let connection = Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let schema_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -1190,6 +1264,12 @@ pub(crate) fn export_bundle(
     let mut tables = BTreeMap::new();
     let mut row_count = 0usize;
     for name in allowed_tables(operation) {
+        // Thumbnails are optional payload, not identity: the receiver's
+        // materializer creates an empty imagedata table and the merge is
+        // additive, so omitting them only skips copying blobs.
+        if *name == "imagedata" && !include_thumbnails {
+            continue;
+        }
         // Only acquiredimage narrows: reviewed_only means "the rows I have
         // actually graded". project and target ride along whole because the
         // grade read joins against them.
@@ -1368,7 +1448,7 @@ pub(crate) fn operation_label(operation: SyncOperation) -> &'static str {
 
 /// The stored preview keeps the engine's own `SchedulerSyncKind`, so map back
 /// to the protocol name the client used.
-fn kind_label(kind: SchedulerSyncKind) -> &'static str {
+pub(crate) fn kind_label(kind: SchedulerSyncKind) -> &'static str {
     match kind {
         SchedulerSyncKind::Pull => "merge",
         SchedulerSyncKind::PushPlanning => "push_planning",
@@ -1488,6 +1568,201 @@ fn internal(error: impl std::fmt::Display) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn wire_int(value: i64) -> WireValue {
+        WireValue {
+            kind: WireValueKind::Integer,
+            value: Some(value.to_string()),
+        }
+    }
+
+    fn wire_text(value: &str) -> WireValue {
+        WireValue {
+            kind: WireValueKind::Text,
+            value: Some(value.to_string()),
+        }
+    }
+
+    fn column(name: &str, declared: &str, primary_key: bool) -> BundleColumn {
+        BundleColumn {
+            name: name.to_string(),
+            declared_type: declared.to_string(),
+            not_null: false,
+            primary_key,
+        }
+    }
+
+    /// A grades bundle with `rows` acquiredimage rows, ids taken from `ids`.
+    fn big_grades_bundle(ids: impl Iterator<Item = i64>) -> CatalogBundle {
+        let guid_table = BundleTable {
+            columns: vec![column("guid", "TEXT", false)],
+            rows: vec![BundleRow {
+                values: vec![wire_text("a-guid")],
+            }],
+        };
+        let image_table = BundleTable {
+            columns: vec![
+                column("Id", "INTEGER", true),
+                column("guid", "TEXT", false),
+                column("gradingStatus", "INTEGER", false),
+            ],
+            rows: ids
+                .map(|id| BundleRow {
+                    values: vec![wire_int(id), wire_text(&format!("guid-{id}")), wire_int(1)],
+                })
+                .collect(),
+        };
+        let mut tables = BTreeMap::new();
+        tables.insert("project".to_string(), guid_table.clone());
+        tables.insert("target".to_string(), guid_table);
+        tables.insert("acquiredimage".to_string(), image_table);
+        CatalogBundle {
+            protocol_version: PROTOCOL_VERSION,
+            bundle_id: "bundle-1".to_string(),
+            created_at_utc: "2026-08-18T00:00:00Z".to_string(),
+            operation: SyncOperation::PushGrades,
+            source: CatalogIdentity {
+                id: "source".to_string(),
+                product: "test".to_string(),
+                product_version: "1".to_string(),
+                schema_version: 23,
+            },
+            tables,
+            payload_sha256: None,
+        }
+    }
+
+    fn temp_snapshot(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join("psf-guard-materialize-tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{name}-{}.sqlite", Uuid::new_v4()));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    #[test]
+    fn materializes_thousands_of_rows_in_one_transaction() {
+        let bundle = big_grades_bundle(0..5_000);
+        let path = temp_snapshot("bulk");
+        let template = temp_snapshot("template");
+        Connection::open(&template).unwrap();
+
+        let started = std::time::Instant::now();
+        materialize_bundle(&path, &template, &bundle).unwrap();
+        let elapsed = started.elapsed();
+
+        let connection = Connection::open(&path).unwrap();
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM acquiredimage", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 5_000);
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 23);
+        // One transaction, not one commit per row: even a slow disk finishes
+        // 5000 rows in well under a second. The per-row autocommit this
+        // replaces took minutes at this size on rotational storage.
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "materialization took {elapsed:?}"
+        );
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&template);
+    }
+
+    #[test]
+    fn failed_materialization_rolls_back_to_an_empty_snapshot() {
+        // Two rows share a primary key, so the second insert fails midway
+        // through the bundle. The transaction must leave nothing behind —
+        // a partial snapshot would let a later step read half a bundle.
+        let bundle = big_grades_bundle([1, 2, 3, 3, 4].into_iter());
+        let path = temp_snapshot("rollback");
+        let template = temp_snapshot("rollback-template");
+        Connection::open(&template).unwrap();
+
+        let error = materialize_bundle(&path, &template, &bundle).unwrap_err();
+        assert!(
+            error.to_string().to_lowercase().contains("unique"),
+            "unexpected error: {error:#}"
+        );
+
+        let connection = Connection::open(&path).unwrap();
+        let tables: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0, "rollback left tables in the snapshot");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&template);
+    }
+
+    #[test]
+    fn merge_exports_skip_thumbnails_unless_asked() {
+        let path = temp_snapshot("export-src");
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "PRAGMA user_version = 23;
+                 CREATE TABLE project (Id INTEGER PRIMARY KEY, guid TEXT);
+                 CREATE TABLE target (Id INTEGER PRIMARY KEY, guid TEXT);
+                 CREATE TABLE exposuretemplate (Id INTEGER PRIMARY KEY, guid TEXT);
+                 CREATE TABLE exposureplan (Id INTEGER PRIMARY KEY, guid TEXT);
+                 CREATE TABLE ruleweight (Id INTEGER PRIMARY KEY, name TEXT);
+                 CREATE TABLE acquiredimage (Id INTEGER PRIMARY KEY, gradingStatus INTEGER, guid TEXT);
+                 CREATE TABLE imagedata (Id INTEGER PRIMARY KEY, imagedata BLOB, acquiredimageid INTEGER);
+                 INSERT INTO project VALUES (1, 'pg');
+                 INSERT INTO target VALUES (1, 'tg');
+                 INSERT INTO acquiredimage VALUES (1, 1, 'ig');
+                 INSERT INTO imagedata VALUES (1, X'0102030405', 1);",
+            )
+            .unwrap();
+        drop(connection);
+
+        // Thumbnails dominate bundle size; a merge export leaves them out
+        // unless the client opts in.
+        let lean = export_bundle(&path, "cat", SyncOperation::Merge, false, false).unwrap();
+        assert!(!lean.tables.contains_key("imagedata"));
+        assert_eq!(lean.tables["acquiredimage"].rows.len(), 1);
+
+        let full = export_bundle(&path, "cat", SyncOperation::Merge, false, true).unwrap();
+        assert_eq!(full.tables["imagedata"].rows.len(), 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn preview_jobs_report_phases_until_finished() {
+        let store = PreviewJobStore::new();
+        let (job, started) = store.start("catalog".to_string(), None).unwrap();
+        assert!(started);
+        assert_eq!(job.state, "running");
+        assert_eq!(job.phase, Some("materializing"));
+
+        store.set_phase(&job.job_id, "comparing");
+        let running = store.get(&job.job_id, "catalog").unwrap().unwrap();
+        assert_eq!(running.phase, Some("comparing"));
+
+        store.finish(
+            &job.job_id,
+            Ok(SyncPreview {
+                preview_id: "preview-1".to_string(),
+                state: "ready",
+                expires_at: "2026-08-18T00:30:00Z".to_string(),
+                summary: BTreeMap::new(),
+            }),
+        );
+        let finished = store.get(&job.job_id, "catalog").unwrap().unwrap();
+        assert_eq!(finished.state, "ready");
+        assert_eq!(finished.phase, None);
+
+        // A phase set after completion must not resurrect a running look.
+        store.set_phase(&job.job_id, "comparing");
+        let still = store.get(&job.job_id, "catalog").unwrap().unwrap();
+        assert_eq!(still.phase, None);
+    }
 
     #[tokio::test]
     async fn export_response_header_matches_the_body_bytes() {

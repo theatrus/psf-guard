@@ -86,7 +86,9 @@ Source: any catalog endpoint.
 Destination: any writable catalog endpoint.
 
 Copies projects, targets, exposure templates, exposure plans, rule weights,
-captures, and optional stored thumbnails. Matching uses stable GUIDs.
+captures, and optional stored thumbnails. Thumbnails are opt-in on a merge
+export (`include_thumbnails`); they dominate a catalog's size and most
+round trips do not need them. Matching uses stable GUIDs.
 Destination reviewed grades win. New captures retain the source grade. Plan
 `acquired` counts copy from the source; `accepted` counts are recomputed
 from the merged grades, because local decisions can differ from the

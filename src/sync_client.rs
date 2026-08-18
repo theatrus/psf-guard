@@ -263,8 +263,15 @@ pub fn local_bundle(
     catalog_id: &str,
     operation: SyncOperation,
     reviewed_only: bool,
+    include_thumbnails: bool,
 ) -> Result<CatalogBundle> {
-    crate::server::remote_sync::export_bundle(database_path, catalog_id, operation, reviewed_only)
+    crate::server::remote_sync::export_bundle(
+        database_path,
+        catalog_id,
+        operation,
+        reviewed_only,
+        include_thumbnails,
+    )
 }
 
 /// Write a bundle received from a peer into a throwaway SQLite source the

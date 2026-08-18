@@ -216,6 +216,10 @@ impl Harness {
 
     /// Build a bundle on the source catalog, exactly as a remote client would.
     async fn export(&self, operation: &str) -> Value {
+        self.export_with_thumbnails(operation, false).await
+    }
+
+    async fn export_with_thumbnails(&self, operation: &str, include_thumbnails: bool) -> Value {
         let (status, exported) = call(
             self.router.clone(),
             "POST",
@@ -225,7 +229,8 @@ impl Harness {
                 "protocol_version": 1,
                 "catalog_id": "source",
                 "operation": operation,
-                "reviewed_only": false
+                "reviewed_only": false,
+                "include_thumbnails": include_thumbnails
             })),
         )
         .await;
@@ -479,7 +484,16 @@ const OBSERVED: &str = "INSERT INTO project VALUES (1,'p','M42','remote settings
 async fn merge_brings_a_remote_catalogs_projects_targets_and_captures_across() {
     let harness = Harness::new(OBSERVED, "");
 
-    let bundle = harness.export("merge").await;
+    // Thumbnails are opt-in payload: the default merge export leaves the
+    // imagedata table out entirely so a season of blobs never rides along
+    // uninvited.
+    let lean = harness.export("merge").await;
+    assert!(
+        lean["tables"].get("imagedata").is_none(),
+        "default merge export carried thumbnails: {lean:#}"
+    );
+
+    let bundle = harness.export_with_thumbnails("merge", true).await;
     // A merge has to carry the capture tables, not only the planning ones.
     for table in ["project", "target", "acquiredimage", "imagedata"] {
         assert!(
@@ -712,7 +726,7 @@ async fn merge_carries_image_data_blobs_across() {
         "",
     );
 
-    let bundle = harness.export("merge").await;
+    let bundle = harness.export_with_thumbnails("merge", true).await;
     let preview_id = harness.preview("merge", bundle).await;
     let (status, applied) = harness.apply(&preview_id).await;
     assert_eq!(status, StatusCode::OK, "{applied:#}");

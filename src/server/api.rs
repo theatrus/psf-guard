@@ -476,6 +476,22 @@ pub struct SchedulerSyncPreviewResponse {
     pub result: SchedulerSyncResponse,
 }
 
+/// One entry of `GET /api/databases/{db_id}/sync/previews`: every unexpired
+/// staged transfer for that catalog, wherever it was created — the UI's own
+/// preview flow or a remote client's push.
+#[derive(Debug, Serialize)]
+pub struct SchedulerSyncPreviewListEntry {
+    pub preview_id: String,
+    /// Operation kind label: "pull", "push_planning", or "push_grades".
+    pub kind: String,
+    /// The peer that produced the staged rows — a configured peer database
+    /// id for UI transfers, or the remote catalog id a plugin sent.
+    pub source: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub result: SchedulerSyncResponse,
+}
+
 /// Body of `POST /api/databases`.
 #[derive(Debug, Deserialize)]
 pub struct AddDatabaseRequest {
