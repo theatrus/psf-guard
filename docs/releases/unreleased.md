@@ -96,7 +96,8 @@
   the server — including pushes a remote N.I.N.A. client created and never
   applied — with its source, operation, change counts, and expiry, plus
   Apply, Refresh, and Discard actions, and a "What would change" list
-  naming each staged change — every grade transition with its reason, and
+  naming each staged change by its own name with exact field-level moves
+  ("update project \"Caldwell 49\": state: 1 → 3") — every grade transition with its reason, and
   each project, target, plan, or image the transfer would insert or
   update (capped at 400 lines). Previously only the browser session
   that created a preview could see it, so a plugin's staged push sat
@@ -104,6 +105,14 @@
   (materializing, then comparing) while they run.
 
 ## Fixed
+
+- Flat matching now respects the rotator. A flat only corrects lights
+  shot at (nearly) the same rotator angle — vignetting from the optics
+  ahead of the rotator turns relative to the sensor — so flats now match
+  lights within 1° (wrap-aware), and a flat master never integrates
+  frames from different angles. Frames without a recorded angle keep
+  matching everything: rigs without rotators and flats catalogued before
+  this change lose nothing. Re-import flats to record their angles.
 
 - The project scheduler editor now exposes Target Scheduler's **flats
   handling** setting (off, every 1-7 sessions, target completion, or
