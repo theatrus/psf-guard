@@ -1635,3 +1635,20 @@
   font-family: monospace;
   white-space: normal;
 }
+
+.paired-clients ul {
+  list-style: none;
+  margin: 0.3rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.paired-clients li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  font-size: 0.88rem;
+}

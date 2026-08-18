@@ -33,6 +33,7 @@ pub enum AuditAction {
     Preview,
     PreviewRefresh,
     Apply,
+    Pair,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

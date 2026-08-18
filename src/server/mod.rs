@@ -8,6 +8,7 @@ pub mod export_job;
 pub mod extract;
 pub mod handlers;
 pub mod import_job;
+pub mod pairing;
 pub mod peers;
 pub mod preview_queue;
 pub mod processing_setups;
@@ -578,6 +579,14 @@ async fn run_server_internal(
             get(handlers::list_sync_database_previews_route),
         )
         .route(
+            "/databases/{db_id}/pairing-token",
+            post(pairing::issue_pairing_token_route),
+        )
+        .route(
+            "/databases/{db_id}/clients/{client_uuid}",
+            delete(pairing::revoke_client_route),
+        )
+        .route(
             "/databases/{db_id}/sync/previews/{preview_id}/apply",
             post(handlers::apply_sync_database_preview_route),
         )
@@ -605,6 +614,7 @@ async fn run_server_internal(
             post(peers::sync_with_peer),
         )
         .route("/sync/v1/capabilities", get(remote_sync::capabilities))
+        .route("/sync/v1/pair", post(pairing::pair_route))
         .route(
             "/sync/v1/previews",
             post(remote_sync::create_preview)

@@ -54,6 +54,19 @@ pub struct DbEntry {
     pub export_dir: Option<String>,
 }
 
+/// One paired client credential. Each pairing mints its own, so revoking a
+/// laptop does not sign out the observatory machine. Only the salted hash
+/// is stored; the plaintext existed once, in the pairing response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RemoteClient {
+    pub client_uuid: String,
+    /// Operator-facing label, from the client's pairing request.
+    pub name: String,
+    pub token_salt: String,
+    pub token_sha256: String,
+    pub paired_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct RemoteImageUploadConfig {
     #[serde(default)]
@@ -64,6 +77,10 @@ pub struct RemoteImageUploadConfig {
     pub token_salt: String,
     #[serde(default)]
     pub token_sha256: String,
+    /// Per-client credentials from pairing. The legacy single token above
+    /// keeps working for installs configured before pairing existed.
+    #[serde(default)]
+    pub clients: Vec<RemoteClient>,
     /// Opt this database into the remote scheduler sync protocol
     /// (`/api/sync/v1`). Independent of `enabled`, which covers image upload
     /// only. Defaults to false, so a token configured for uploads before the
@@ -93,18 +110,67 @@ impl RemoteImageUploadConfig {
     }
 
     pub fn token_is_configured(&self) -> bool {
-        self.token_salt.len() == 32
+        let legacy = self.token_salt.len() == 32
             && self.token_salt.bytes().all(|byte| byte.is_ascii_hexdigit())
             && self.token_sha256.len() == 64
             && self
                 .token_sha256
                 .bytes()
-                .all(|byte| byte.is_ascii_hexdigit())
+                .all(|byte| byte.is_ascii_hexdigit());
+        legacy || !self.clients.is_empty()
     }
 
     pub fn token_matches(&self, token: &str) -> bool {
-        let candidate = salted_token_sha256(&self.token_salt, token);
-        constant_time_eq(self.token_sha256.as_bytes(), candidate.as_bytes())
+        // Legacy single token, then every paired client. All comparisons run
+        // (no early exit on the legacy match shape) with constant-time
+        // equality per candidate.
+        let legacy = {
+            let candidate = salted_token_sha256(&self.token_salt, token);
+            constant_time_eq(self.token_sha256.as_bytes(), candidate.as_bytes())
+        };
+        let client = self
+            .clients
+            .iter()
+            .filter(|client| client.token_salt.len() == 32 && client.token_sha256.len() == 64)
+            .fold(false, |matched, client| {
+                let candidate = salted_token_sha256(&client.token_salt, token);
+                matched | constant_time_eq(client.token_sha256.as_bytes(), candidate.as_bytes())
+            });
+        legacy | client
+    }
+
+    /// Add a paired client credential, returning its id. Validates the token
+    /// the same way `set_token` does; the legacy single token is untouched.
+    pub fn add_client(&mut self, name: &str, token: &str) -> Result<String> {
+        if token.len() < Self::MIN_TOKEN_LENGTH || token.len() > Self::MAX_TOKEN_LENGTH {
+            anyhow::bail!(
+                "client token must be {}-{} characters",
+                Self::MIN_TOKEN_LENGTH,
+                Self::MAX_TOKEN_LENGTH
+            );
+        }
+        let client_uuid = uuid::Uuid::new_v4().to_string();
+        let token_salt = uuid::Uuid::new_v4().simple().to_string();
+        let token_sha256 = salted_token_sha256(&token_salt, token);
+        self.clients.push(RemoteClient {
+            client_uuid: client_uuid.clone(),
+            name: name.trim().to_string(),
+            token_salt,
+            token_sha256,
+            paired_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_secs() as i64)
+                .unwrap_or(0),
+        });
+        Ok(client_uuid)
+    }
+
+    /// Revoke one paired client. Returns whether anything was removed.
+    pub fn revoke_client(&mut self, client_uuid: &str) -> bool {
+        let before = self.clients.len();
+        self.clients
+            .retain(|client| client.client_uuid != client_uuid);
+        self.clients.len() != before
     }
 
     /// Resolve the selected receive directory and prove that it is exactly

@@ -498,6 +498,19 @@ fn remote_image_upload_summary(
             .filter(|directory| !directory.is_empty()),
         token_configured: config.is_some_and(|config| config.token_is_configured()),
         sync_enabled: config.is_some_and(|config| config.sync_enabled),
+        clients: config
+            .map(|config| {
+                config
+                    .clients
+                    .iter()
+                    .map(|client| RemoteClientSummary {
+                        client_uuid: client.client_uuid.clone(),
+                        name: client.name.clone(),
+                        paired_at: client.paired_at,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     }
 }
 

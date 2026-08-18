@@ -1081,12 +1081,20 @@ export interface ExportStatus {
   progress: ExportJobProgress;
 }
 
+export interface RemoteClientSummary {
+  client_uuid: string;
+  name: string;
+  paired_at: number;
+}
+
 export interface RemoteImageUploadSummary {
   enabled: boolean;
   image_directory?: string;
   token_configured: boolean;
   /** Remote scheduler sync is a separate grant from image upload. */
   sync_enabled: boolean;
+  /** Paired clients; each holds its own revocable credential. */
+  clients?: RemoteClientSummary[];
 }
 
 export type SchedulerSyncKind = 'pull' | 'push_planning' | 'push_grades';

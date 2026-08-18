@@ -65,6 +65,8 @@ export interface DbEntry {
     token_sha256?: string;
     token_configured?: boolean;
     sync_enabled?: boolean;
+    /** Paired clients; each holds its own revocable credential. */
+    clients?: { client_uuid: string; name: string; paired_at: number }[];
   };
   /** Server-side destination for UI-triggered exports. */
   export_dir?: string;
