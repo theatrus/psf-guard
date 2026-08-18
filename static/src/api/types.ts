@@ -1139,6 +1139,8 @@ export interface SchedulerSyncResponse {
   imagedata_bytes: number;
   total_inserted: number;
   total_updated: number;
+  /** Per-entity change lines, capped server-side; absent on old previews. */
+  changes?: string[];
 }
 
 export interface SchedulerSyncPreviewResponse {

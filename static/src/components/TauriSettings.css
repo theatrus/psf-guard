@@ -1616,3 +1616,22 @@
   margin: 0.5rem 0 0;
   font-size: 0.85rem;
 }
+
+.remote-sync-preview-changes {
+  margin-top: 0.25rem;
+  font-size: 0.8rem;
+}
+
+.remote-sync-preview-changes summary {
+  cursor: pointer;
+  color: var(--color-primary, #4da3ff);
+}
+
+.remote-sync-preview-changes ul {
+  margin: 0.3rem 0 0;
+  padding-left: 1.1rem;
+  max-height: 14rem;
+  overflow-y: auto;
+  font-family: monospace;
+  white-space: normal;
+}

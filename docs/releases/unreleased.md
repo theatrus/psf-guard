@@ -95,7 +95,10 @@
 - Data Transfer in Settings now lists every **staged preview** parked on
   the server — including pushes a remote N.I.N.A. client created and never
   applied — with its source, operation, change counts, and expiry, plus
-  Apply, Refresh, and Discard actions. Previously only the browser session
+  Apply, Refresh, and Discard actions, and a "What would change" list
+  naming each staged change — every grade transition with its reason, and
+  each project, target, plan, or image the transfer would insert or
+  update (capped at 400 lines). Previously only the browser session
   that created a preview could see it, so a plugin's staged push sat
   invisible until it expired. Remote preview jobs also report a phase
   (materializing, then comparing) while they run.

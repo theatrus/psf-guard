@@ -583,6 +583,25 @@ async fn execute_scheduler_sync_guarded(
     .await
 }
 
+/// Cap a change-line list for transport; the tail line names the overflow.
+fn capped_change_lines(mut lines: Vec<String>) -> Vec<String> {
+    const MAX_CHANGE_LINES: usize = 400;
+    if lines.len() > MAX_CHANGE_LINES {
+        let more = lines.len() - MAX_CHANGE_LINES;
+        lines.truncate(MAX_CHANGE_LINES);
+        lines.push(format!("… and {more} more"));
+    }
+    lines
+}
+
+fn grade_label(status: i32) -> &'static str {
+    match status {
+        1 => "Accepted",
+        2 => "Rejected",
+        _ => "Pending",
+    }
+}
+
 pub(crate) async fn execute_scheduler_sync_paths(
     state: &Arc<AppState>,
     source_path: PathBuf,
@@ -668,6 +687,7 @@ pub(crate) async fn execute_scheduler_sync_paths(
                                 imagedata_bytes: summary.imagedata_bytes,
                                 total_inserted: summary.total_inserted(),
                                 total_updated: summary.total_updated(),
+                                changes: capped_change_lines(summary.changes),
                             }
                         }
                         SchedulerSyncKind::PushPlanning => {
@@ -699,6 +719,7 @@ pub(crate) async fn execute_scheduler_sync_paths(
                                 imagedata_bytes: 0,
                                 total_inserted: summary.total_inserted(),
                                 total_updated: summary.total_updated(),
+                                changes: capped_change_lines(summary.changes),
                             }
                         }
                         SchedulerSyncKind::PushGrades => {
@@ -743,6 +764,26 @@ pub(crate) async fn execute_scheduler_sync_paths(
                                 imagedata_bytes: 0,
                                 total_inserted: 0,
                                 total_updated: summary.changed,
+                                changes: capped_change_lines(
+                                    summary
+                                        .changes
+                                        .iter()
+                                        .map(|change| {
+                                            let reason = change
+                                                .reason
+                                                .as_deref()
+                                                .map(|reason| format!(" ({reason})"))
+                                                .unwrap_or_default();
+                                            format!(
+                                                "grade {}: {} → {}{}",
+                                                change.guid,
+                                                grade_label(change.from),
+                                                grade_label(change.to),
+                                                reason,
+                                            )
+                                        })
+                                        .collect(),
+                                ),
                             }
                         }
                     };

@@ -504,6 +504,7 @@ mod tests {
             imagedata_bytes: 0,
             total_inserted: 0,
             total_updated: 0,
+            changes: Vec::new(),
         }
     }
 

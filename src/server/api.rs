@@ -466,6 +466,11 @@ pub struct SchedulerSyncResponse {
     pub imagedata_bytes: u64,
     pub total_inserted: usize,
     pub total_updated: usize,
+    /// Human-readable per-entity change lines ("update target <guid>",
+    /// "grade <guid>: Pending → Rejected"), capped — the tail line says how
+    /// many more there are. Empty on responses stored before this field.
+    #[serde(default)]
+    pub changes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
