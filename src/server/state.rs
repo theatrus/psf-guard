@@ -97,6 +97,13 @@ pub struct AppState {
     /// Append-only record of remote sync actions, so an operator can tell
     /// afterwards which token-holder changed the scheduler database and when.
     pub remote_audit: crate::server::remote_audit::RemoteAuditLog,
+    /// Outstanding one-time pairing codes (see `server::pairing`).
+    pub pairing: crate::server::pairing::PairingStore,
+    /// Serializes registry load-modify-save cycles. Every writer must hold
+    /// it: the management CRUD routes and the pairing/revoke exchange all
+    /// read the file, mutate, and save — two interleaved writers silently
+    /// drop one write.
+    pub registry_write: tokio::sync::Mutex<()>,
     /// Process-global Seiza catalogs and capability diagnostics. Catalogs are
     /// shared across databases and opened lazily on first use.
     pub astrometry: Arc<crate::astrometry::AstrometryContext>,
@@ -411,6 +418,8 @@ impl AppState {
             remote_exports: crate::server::remote_sync::ExportStore::new(),
             remote_preview_jobs: crate::server::remote_sync::PreviewJobStore::new(),
             remote_audit: crate::server::remote_audit::RemoteAuditLog::new(&cache_dir),
+            pairing: crate::server::pairing::PairingStore::new(),
+            registry_write: tokio::sync::Mutex::new(()),
             astrometry: Arc::new(crate::astrometry::AstrometryContext::new(astrometry_config)),
             satellites: Arc::new(satellites),
         })
@@ -581,6 +590,8 @@ impl AppState {
             remote_exports: crate::server::remote_sync::ExportStore::new(),
             remote_preview_jobs: crate::server::remote_sync::PreviewJobStore::new(),
             remote_audit: crate::server::remote_audit::RemoteAuditLog::new("/tmp/psf-guard-test"),
+            pairing: crate::server::pairing::PairingStore::new(),
+            registry_write: tokio::sync::Mutex::new(()),
             astrometry: Arc::new(crate::astrometry::AstrometryContext::default()),
             satellites: Arc::new(
                 crate::satellites::SatelliteContext::new(

@@ -315,6 +315,16 @@ pub struct RemoteImageUploadSummary {
     pub image_directory: Option<String>,
     pub token_configured: bool,
     pub sync_enabled: bool,
+    /// Paired clients, for the Settings list and per-client revocation.
+    #[serde(default)]
+    pub clients: Vec<RemoteClientSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RemoteClientSummary {
+    pub client_uuid: String,
+    pub name: String,
+    pub paired_at: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

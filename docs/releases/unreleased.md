@@ -104,6 +104,14 @@
   invisible until it expired. Remote preview jobs also report a phase
   (materializing, then comparing) while they run.
 
+- Remote clients now pair with a **one-time code** instead of a
+  hand-copied API key. Settings gains "Pair a client" per database: a
+  single-use code, good for an hour, that the N.I.N.A. plugin exchanges
+  for its own credential and the catalog id in one step. Every pairing
+  mints a separate credential, and the new **Paired clients** list revokes
+  any one install without signing out the rest. Manually configured keys
+  keep working.
+
 ## Fixed
 
 - Flat matching now respects the rotator. A flat only corrects lights

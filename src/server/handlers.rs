@@ -498,6 +498,19 @@ fn remote_image_upload_summary(
             .filter(|directory| !directory.is_empty()),
         token_configured: config.is_some_and(|config| config.token_is_configured()),
         sync_enabled: config.is_some_and(|config| config.sync_enabled),
+        clients: config
+            .map(|config| {
+                config
+                    .clients
+                    .iter()
+                    .map(|client| RemoteClientSummary {
+                        client_uuid: client.client_uuid.clone(),
+                        name: client.name.clone(),
+                        paired_at: client.paired_at,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     }
 }
 
@@ -1082,6 +1095,7 @@ pub async fn add_database_route(
 
     require_database_management_allowed(&state)?;
     let registry_path = require_registry_path(&state)?;
+    let _registry_guard = state.registry_write.lock().await;
     let mut reg = DbRegistry::load_or_init(&registry_path)
         .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
 
@@ -1133,6 +1147,7 @@ pub async fn update_database_route(
 
     require_database_management_allowed(&state)?;
     let registry_path = require_registry_path(&state)?;
+    let _registry_guard = state.registry_write.lock().await;
     let mut reg = DbRegistry::load_or_init(&registry_path)
         .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
 
@@ -1283,6 +1298,7 @@ pub async fn remove_database_route(
 
     require_database_management_allowed(&state)?;
     let registry_path = require_registry_path(&state)?;
+    let _registry_guard = state.registry_write.lock().await;
     let mut reg = DbRegistry::load_or_init(&registry_path)
         .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
     let removed_from_registry = reg
@@ -1763,6 +1779,7 @@ pub async fn create_database_route(
         }
     }
 
+    let _registry_guard = state.registry_write.lock().await;
     let mut reg = DbRegistry::load_or_init(&registry_path)
         .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
 

@@ -148,6 +148,7 @@ export default function TauriSettings({
                     summary.remote_image_upload?.token_configured ?? false,
                   sync_enabled:
                     summary.remote_image_upload?.sync_enabled ?? false,
+                  clients: summary.remote_image_upload?.clients ?? [],
                 },
               };
             }),
@@ -168,6 +169,7 @@ export default function TauriSettings({
               image_dir: s.remote_image_upload?.image_directory,
               token_configured: s.remote_image_upload?.token_configured ?? false,
               sync_enabled: s.remote_image_upload?.sync_enabled ?? false,
+              clients: s.remote_image_upload?.clients ?? [],
             },
           })),
         };
@@ -232,6 +234,10 @@ export default function TauriSettings({
 
   const startEdit = (entry: DbEntry) => {
     setEditingId(entry.id);
+    // A pairing code is scoped to one database; never show it under another.
+    setPairingCode(null);
+    setPairingExpiresAt(null);
+    setPairingCopyState('idle');
     setFormName(entry.name);
     setFormDbPath(entry.db_path);
     setFormImageDirs(entry.image_dirs);
@@ -350,6 +356,47 @@ export default function TauriSettings({
     setFormImageDirs(remaining);
     if (formRemoteUploadDir === removed) {
       setFormRemoteUploadDir(remaining[0] ?? '');
+    }
+  };
+
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [pairingExpiresAt, setPairingExpiresAt] = useState<number | null>(null);
+  const [pairingCopyState, setPairingCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+
+  const handleIssuePairingCode = async () => {
+    if (!editingId) return;
+    try {
+      const issued = await apiClient.issuePairingCode(editingId);
+      setPairingCode(issued.pairing_token);
+      setPairingExpiresAt(issued.expires_at);
+      setPairingCopyState('idle');
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const handleRevokeClient = async (clientUuid: string) => {
+    if (!editingId) return;
+    try {
+      await apiClient.revokePairedClient(editingId, clientUuid);
+      // The databases list is component state fed by reload(), not a
+      // react-query cache — invalidation alone would leave the revoked
+      // client on screen.
+      await reload();
+      queryClient.invalidateQueries({ queryKey: ['databases'] });
+      setStatusMessage('Client revoked');
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const handleCopyPairingCode = async () => {
+    if (!pairingCode) return;
+    try {
+      await navigator.clipboard.writeText(pairingCode);
+      setPairingCopyState('copied');
+    } catch {
+      setPairingCopyState('failed');
     }
   };
 
@@ -799,6 +846,70 @@ export default function TauriSettings({
 
         {editingId && (
           <div className="database-config">
+            <label>Pair a client:</label>
+            <div className="remote-upload-token-row">
+              <button
+                type="button"
+                onClick={handleIssuePairingCode}
+                className="browse-button"
+              >
+                Generate pairing code
+              </button>
+              {pairingCode && (
+                <>
+                  <input
+                    type="text"
+                    readOnly
+                    value={pairingCode}
+                    className="file-path-input"
+                    onFocus={(event) => event.target.select()}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCopyPairingCode}
+                    className="browse-button"
+                  >
+                    {pairingCopyState === 'copied' ? 'Copied' : 'Copy'}
+                  </button>
+                </>
+              )}
+            </div>
+            {pairingCode && (
+              <small className="remote-upload-token-notice" role="status">
+                {pairingCopyState === 'failed'
+                  ? 'Copy failed. Select and copy the code manually.'
+                  : `Paste this code into the client. One use, expires ${
+                      pairingExpiresAt
+                        ? new Date(pairingExpiresAt * 1000).toLocaleTimeString()
+                        : 'in an hour'
+                    }. Each pairing adds its own revocable credential.`}
+              </small>
+            )}
+            {(databases.find((db) => db.id === editingId)?.remote_image_upload
+              ?.clients?.length ?? 0) > 0 && (
+              <div className="paired-clients">
+                <label>Paired clients:</label>
+                <ul>
+                  {databases
+                    .find((db) => db.id === editingId)!
+                    .remote_image_upload!.clients!.map((client) => (
+                      <li key={client.client_uuid}>
+                        <span>
+                          {client.name} ·{' '}
+                          {new Date(client.paired_at * 1000).toLocaleDateString()}
+                        </span>
+                        <button
+                          type="button"
+                          className="browse-button"
+                          onClick={() => handleRevokeClient(client.client_uuid)}
+                        >
+                          Revoke
+                        </button>
+                      </li>
+                    ))}
+                </ul>
+              </div>
+            )}
             <label htmlFor="remote-upload-token">Remote API key:</label>
             <div className="remote-upload-token-row">
               <input

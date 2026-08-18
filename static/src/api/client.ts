@@ -439,6 +439,27 @@ export const apiClient = {
     return data.data;
   },
 
+  /** Mint a one-time pairing code for a catalog. The client exchanges it
+   * once at /api/sync/v1/pair for the durable bearer token. */
+  issuePairingCode: async (
+    dbId: string
+  ): Promise<{ pairing_token: string; expires_at: number }> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<
+      ApiResponse<{ pairing_token: string; expires_at: number }>
+    >(`/databases/${encodeURIComponent(dbId)}/pairing-token`);
+    if (!data.data) throw new Error(data.error || 'Failed to issue pairing code');
+    return data.data;
+  },
+
+  /** Revoke one paired client's credential. Other clients keep working. */
+  revokePairedClient: async (dbId: string, clientUuid: string): Promise<void> => {
+    const apiInstance = await getApi();
+    await apiInstance.delete(
+      `/databases/${encodeURIComponent(dbId)}/clients/${encodeURIComponent(clientUuid)}`
+    );
+  },
+
   /** Every unexpired staged preview for one catalog, including previews a
    * remote client (the N.I.N.A. plugin) parked and never applied. */
   listDatabaseSyncPreviews: async (
