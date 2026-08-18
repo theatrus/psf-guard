@@ -362,13 +362,19 @@ fn upsert_guid_table(
                 if values_equal(&write_values, cur_vals) {
                     counts.unchanged += 1;
                 } else {
+                    let diffs = column_diffs(&write_cols, &write_values, cur_vals);
                     let mut p: Vec<&dyn ToSql> =
                         write_values.iter().map(|v| v as &dyn ToSql).collect();
                     let did = *dest_id;
                     p.push(&did);
                     upd_stmt.execute(p.as_slice())?;
                     counts.updated += 1;
-                    changes.push(format!("update {} {}", table, guid));
+                    changes.push(format!(
+                        "update {} {}: {}",
+                        table,
+                        row_label(&write_cols, &write_values, &guid),
+                        diffs.join(", "),
+                    ));
                 }
             }
             None => {
@@ -384,12 +390,67 @@ fn upsert_guid_table(
                 let dest_id = tx.last_insert_rowid();
                 id_map.insert(src_id, dest_id);
                 counts.inserted += 1;
-                changes.push(format!("insert {} {}", table, guid));
+                changes.push(format!(
+                    "insert {} {}",
+                    table,
+                    row_label(&write_cols, &write_values, &guid),
+                ));
             }
         }
     }
 
     Ok(GuidUpsert { id_map, counts })
+}
+
+/// Compact, human-readable form of one SQLite value for a change line.
+/// Long text (metadata JSON above all) truncates so one row cannot flood
+/// the preview; blobs show their size only.
+fn display_value(value: &Value) -> String {
+    const MAX_TEXT: usize = 48;
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Integer(n) => n.to_string(),
+        Value::Real(r) => format!("{r}"),
+        Value::Text(t) => {
+            if t.chars().count() > MAX_TEXT {
+                let head: String = t.chars().take(MAX_TEXT).collect();
+                format!("\"{head}…\"")
+            } else {
+                format!("\"{t}\"")
+            }
+        }
+        Value::Blob(b) => format!("<blob {} bytes>", b.len()),
+    }
+}
+
+/// The row's own name for a change line — its `name` column when the table
+/// has one, else the guid. "update project <guid>" tells an operator
+/// nothing; "update project \"Caldwell 49\"" does.
+fn row_label(write_cols: &[&str], values: &[Value], guid: &str) -> String {
+    let name = write_cols
+        .iter()
+        .position(|column| column.eq_ignore_ascii_case("name"))
+        .and_then(|position| match &values[position] {
+            Value::Text(name) if !name.is_empty() => Some(name.clone()),
+            _ => None,
+        });
+    match name {
+        Some(name) => format!("\"{name}\""),
+        None => guid.to_string(),
+    }
+}
+
+/// Exact per-column differences between the incoming row and the current
+/// destination row, as "column: old → new" fragments.
+fn column_diffs(write_cols: &[&str], new_values: &[Value], old_values: &[Value]) -> Vec<String> {
+    write_cols
+        .iter()
+        .zip(new_values.iter().zip(old_values.iter()))
+        .filter(|(_, (new, old))| !value_eq(new, old))
+        .map(|(column, (new, old))| {
+            format!("{column}: {} → {}", display_value(old), display_value(new))
+        })
+        .collect()
 }
 
 fn cols_str(cols: &[String]) -> Vec<&str> {
@@ -1111,6 +1172,17 @@ mod tests {
         let s = sync_pull(&src, &dest, &opts()).unwrap();
         assert_eq!(s.project.updated, 1);
         assert_eq!(s.exposureplan.updated, 1);
+        // The change line names the project and states the exact field
+        // moves — an operator cannot review "update project <guid>".
+        let line = s
+            .changes
+            .iter()
+            .find(|line| line.starts_with("update project"))
+            .expect("project change line");
+        assert!(line.contains("\"Caldwell\""), "{line}");
+        assert!(line.contains("state: 1 → 3"), "{line}");
+        assert!(line.contains("priority: 5 → 9"), "{line}");
+        assert!(!line.contains("project-guid"), "{line}");
         assert_eq!(
             one::<i64>(&dest, "SELECT state FROM project WHERE guid='pg'"),
             3
