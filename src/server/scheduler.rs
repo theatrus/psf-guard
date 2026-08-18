@@ -36,6 +36,10 @@ pub struct ProjectSchedulerResponse {
     pub dither_every: i32,
     pub enable_grader: bool,
     pub is_mosaic: bool,
+    /// Target Scheduler flats automation for this project: 0 = off,
+    /// 1..N = after every N target sessions, 100 = on target completion,
+    /// 200 = immediately after the session.
+    pub flats_handling: i32,
     /// All shared exposure templates for this project's Target Scheduler
     /// profile, plus any legacy template already linked to this project.
     pub exposure_templates: Vec<ExposureTemplateResponse>,
@@ -155,6 +159,11 @@ fn project_details(
     } else {
         "0"
     };
+    let flats_handling = if has_column(conn, "project", "flatsHandling") {
+        "COALESCE(flatsHandling, 0)"
+    } else {
+        "0"
+    };
     let sql = format!(
         "SELECT Id, profileId, name, description, COALESCE(state, 0),
                 COALESCE(priority, 1), createdate, activedate, inactivedate,
@@ -162,7 +171,7 @@ fn project_details(
                 {maximum_altitude}, COALESCE(usecustomhorizon, 0),
                 COALESCE(horizonoffset, 0), COALESCE(meridianwindow, 0),
                 COALESCE(filterswitchfrequency, 0), COALESCE(ditherevery, 0),
-                COALESCE(enablegrader, 1), {is_mosaic}
+                COALESCE(enablegrader, 1), {is_mosaic}, {flats_handling}
          FROM project WHERE Id = ?"
     );
     conn.query_row(&sql, [project_id], |row| {
@@ -186,6 +195,7 @@ fn project_details(
             dither_every: row.get(16)?,
             enable_grader: row.get::<_, i32>(17)? != 0,
             is_mosaic: row.get::<_, i32>(18)? != 0,
+            flats_handling: row.get(19)?,
             exposure_templates: Vec::new(),
             targets: Vec::new(),
         })
@@ -437,6 +447,20 @@ pub fn update_project(
             "mosaic projects require a newer Target Scheduler schema".into(),
         ));
     }
+    if let Some(flats_handling) = req.flats_handling {
+        if !has_column(&conn, "project", "flatsHandling") {
+            return Err(AppError::BadRequest(
+                "flats handling requires a newer Target Scheduler schema".into(),
+            ));
+        }
+        // Valid values per Target Scheduler: 0 = off, 1..=7 = session
+        // cadence, 100 = target completion, 200 = immediate.
+        if !((0..=7).contains(&flats_handling) || flats_handling == 100 || flats_handling == 200) {
+            return Err(AppError::BadRequest(
+                "flats handling must be 0-7, 100 (target completion), or 200 (immediate)".into(),
+            ));
+        }
+    }
     let tx = conn.transaction().map_err(AppError::db)?;
     let exists = tx
         .query_row("SELECT 1 FROM project WHERE Id = ?", [project_id], |_| {
@@ -491,6 +515,13 @@ pub fn update_project(
         tx.execute(
             "UPDATE project SET isMosaic = ? WHERE Id = ?",
             params![i32::from(is_mosaic), project_id],
+        )
+        .map_err(AppError::db)?;
+    }
+    if let Some(flats_handling) = req.flats_handling {
+        tx.execute(
+            "UPDATE project SET flatsHandling = ? WHERE Id = ?",
+            params![flats_handling, project_id],
         )
         .map_err(AppError::db)?;
     }
@@ -723,4 +754,52 @@ fn validate_plan_values(exposure: f64, desired: i32) -> Result<(), AppError> {
         return Err(AppError::BadRequest("desired must not be negative".into()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_details_reads_flats_handling_and_tolerates_old_schemas() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE project (
+                Id INTEGER PRIMARY KEY, profileId TEXT, name TEXT,
+                description TEXT, state INTEGER, priority INTEGER,
+                createdate INTEGER, activedate INTEGER, inactivedate INTEGER,
+                minimumtime INTEGER, minimumaltitude REAL,
+                usecustomhorizon INTEGER, horizonoffset REAL,
+                meridianwindow INTEGER, filterswitchfrequency INTEGER,
+                ditherevery INTEGER, enablegrader INTEGER,
+                flatsHandling INTEGER
+             );
+             INSERT INTO project VALUES
+                (1, 'p', 'M 31', NULL, 1, 5, NULL, NULL, NULL,
+                 30, 0, 0, 0, 0, 0, 0, 1, 100);",
+        )
+        .unwrap();
+        let details = project_details(&conn, 1).unwrap().unwrap();
+        assert_eq!(details.flats_handling, 100);
+
+        // A pre-v11 schema has no flatsHandling column: read as Off.
+        let old = Connection::open_in_memory().unwrap();
+        old.execute_batch(
+            "CREATE TABLE project (
+                Id INTEGER PRIMARY KEY, profileId TEXT, name TEXT,
+                description TEXT, state INTEGER, priority INTEGER,
+                createdate INTEGER, activedate INTEGER, inactivedate INTEGER,
+                minimumtime INTEGER, minimumaltitude REAL,
+                usecustomhorizon INTEGER, horizonoffset REAL,
+                meridianwindow INTEGER, filterswitchfrequency INTEGER,
+                ditherevery INTEGER, enablegrader INTEGER
+             );
+             INSERT INTO project VALUES
+                (1, 'p', 'M 31', NULL, 1, 5, NULL, NULL, NULL,
+                 30, 0, 0, 0, 0, 0, 0, 1);",
+        )
+        .unwrap();
+        let details = project_details(&old, 1).unwrap().unwrap();
+        assert_eq!(details.flats_handling, 0);
+    }
 }

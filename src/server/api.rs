@@ -684,6 +684,10 @@ pub struct UpdateProjectRequest {
     pub enable_grader: Option<bool>,
     #[serde(default)]
     pub is_mosaic: Option<bool>,
+    /// Target Scheduler flats automation: 0 = off, 1..=7 = after every N
+    /// target sessions, 100 = on target completion, 200 = immediate.
+    #[serde(default)]
+    pub flats_handling: Option<i32>,
 }
 
 /// Body of `PUT /api/db/{db_id}/targets/{target_id}` — rename and/or move a

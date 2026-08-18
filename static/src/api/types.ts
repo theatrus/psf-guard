@@ -1516,6 +1516,9 @@ export interface ProjectSchedulerDetails {
   dither_every: number;
   enable_grader: boolean;
   is_mosaic: boolean;
+  /** Target Scheduler flats automation: 0 off, 1-7 every N sessions,
+   * 100 target completion, 200 immediate. */
+  flats_handling: number;
   exposure_templates: ExposureTemplateDetails[];
   targets: SchedulerTargetDetails[];
 }
@@ -1535,6 +1538,7 @@ export interface ProjectSchedulerUpdate {
   dither_every?: number;
   enable_grader?: boolean;
   is_mosaic?: boolean;
+  flats_handling?: number;
 }
 
 export interface TargetSchedulerUpdate {
