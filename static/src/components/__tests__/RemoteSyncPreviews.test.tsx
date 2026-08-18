@@ -41,6 +41,10 @@ function previewEntry(overrides: Record<string, unknown> = {}) {
       imagedata_bytes: 0,
       total_inserted: 0,
       total_updated: 42,
+      changes: [
+        'grade image-guid-1: Pending → Rejected (clouds)',
+        'grade image-guid-2: Accepted → Rejected (satellite trail)',
+      ],
     },
     ...overrides,
   };
@@ -70,6 +74,13 @@ describe('RemoteSyncPreviews', () => {
     expect(screen.getByText('telescope-catalog')).toBeInTheDocument();
     expect(screen.getByText(/42 updated/)).toBeInTheDocument();
     expect(screen.getByText(/42 grades/)).toBeInTheDocument();
+
+    // The counts alone say nothing about WHICH rows move; the expandable
+    // details list the actual changes the apply would make.
+    await userEvent.click(screen.getByText('What would change'));
+    expect(
+      screen.getByText('grade image-guid-1: Pending → Rejected (clouds)')
+    ).toBeInTheDocument();
   });
 
   it('renders nothing when no previews are staged', async () => {

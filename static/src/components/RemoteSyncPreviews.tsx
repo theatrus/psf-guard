@@ -113,6 +113,16 @@ export default function RemoteSyncPreviews({
                   {entry.result.grades
                     ? ` · ${entry.result.grade_filled + entry.result.grade_preserved} grades`
                     : ''}
+                  {(entry.result.changes?.length ?? 0) > 0 && (
+                    <details className="remote-sync-preview-changes">
+                      <summary>What would change</summary>
+                      <ul>
+                        {entry.result.changes!.map((line, index) => (
+                          <li key={index}>{line}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
                 </td>
                 <td>{expiresIn(entry.expires_at)}</td>
                 <td className="remote-sync-preview-actions">

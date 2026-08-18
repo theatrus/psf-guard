@@ -212,6 +212,12 @@ async fn planning_and_grade_pushes_preview_before_writing() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(preview["data"]["result"]["dry_run"], true);
     assert_eq!(preview["data"]["result"]["grades"]["changed"], 1);
+    // The preview says WHAT would change, not only how much: one line per
+    // grade move, with the guid, transition, and reason.
+    let changes = preview["data"]["result"]["changes"].as_array().unwrap();
+    assert_eq!(changes.len(), 1, "{changes:#?}");
+    let line = changes[0].as_str().unwrap();
+    assert_eq!(line, "grade image-guid: Rejected → Accepted");
     let preview_id = preview["data"]["preview_id"].as_str().unwrap();
     let (status, restored) = get_request(
         app.clone(),
