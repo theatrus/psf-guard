@@ -438,9 +438,9 @@ export interface StackSkyOrientation {
 
 /**
  * The order a build integrated its frames in, which decides what its
- * progressive signal-to-noise curve answers. `capture` is chronological and
- * asks whether another night would help; `quality` puts the best-graded
- * frames first and asks which frames are worth keeping.
+ * progressive signal-to-noise curve answers. `capture` starts with the best
+ * registration reference, then follows the remaining frames chronologically;
+ * `quality` puts the best-graded frames first and asks which are worth keeping.
  */
 export type StackFrameOrder = 'capture' | 'quality';
 
@@ -457,7 +457,7 @@ export interface SnrPoint {
 }
 
 /** Where the curve stands, in one word. */
-export type SnrVerdict = 'improving' | 'diminishing' | 'plateau' | 'degrading';
+export type SnrVerdict = 'uncertain' | 'improving' | 'diminishing' | 'plateau' | 'degrading';
 
 /** What the fitted trend says more frames would buy. A prediction. */
 export interface SnrProjection {
@@ -502,6 +502,8 @@ export interface ProgressiveSnr {
   points: SnrPoint[];
   /** Absent until three depths have been measured. */
   analysis: SnrAnalysis | null;
+  /** Why the measured curve cannot support a fitted trend, when applicable. */
+  analysis_reason?: string | null;
 }
 
 export interface StackGroupStatus {
@@ -597,6 +599,8 @@ export interface LatestStackPreviewGroup {
   accepted_only: boolean;
   created_unix_seconds: number;
   cache_version: number;
+  /** The order this artifact integrated its frames in; old artifacts used capture order. */
+  order?: StackFrameOrder;
   group: StackGroupStatus;
 }
 

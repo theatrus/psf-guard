@@ -1,4 +1,5 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import StackSnrCurve from '../StackSnrCurve';
 import type { ProgressiveSnr, SnrPoint } from '../../api/types';
@@ -54,7 +55,7 @@ describe('StackSnrCurve', () => {
     expect(screen.getByText('+7')).toBeInTheDocument();
     expect(screen.getByText(/frames \(0.6 h\) for 10% more/)).toBeInTheDocument();
     expect(
-      screen.getByRole('img', { name: /M31 Ha: signal-to-noise ratio against frame count/ }),
+      screen.getByRole('img', { name: /M31 Ha: measured signal-to-noise ratio/ }),
     ).toBeInTheDocument();
   });
 
@@ -65,6 +66,53 @@ describe('StackSnrCurve', () => {
     expect(container.querySelector('.stack-snr-measured')).not.toBeNull();
     expect(container.querySelector('.stack-snr-ideal')).not.toBeNull();
     expect(container.querySelectorAll('.stack-snr-chart circle')).toHaveLength(6);
+    expect(screen.getByText('Measured')).toBeInTheDocument();
+    expect(screen.getByText('Ideal square-root trend')).toBeInTheDocument();
+  });
+
+  it('makes every exact measurement available without hovering the chart', async () => {
+    render(<StackSnrCurve curve={curve()} label="M31 Ha" />);
+
+    await userEvent.click(screen.getByText('Exact measurements (6)'));
+    const table = screen.getByRole('table', { name: 'M31 Ha signal-to-noise measurements' });
+    expect(within(table).getAllByRole('row')).toHaveLength(7);
+    expect(within(table).getByRole('cell', { name: '9600' })).toBeInTheDocument();
+    expect(within(table).getByRole('cell', { name: '141.421' })).toBeInTheDocument();
+  });
+
+  it('shows measured data only when the exposures cannot support a trend', () => {
+    const { container } = render(
+      <StackSnrCurve
+        curve={curve({ analysis_reason: 'Exposure durations vary across the selected frames.' })}
+        label="M31 Ha"
+      />,
+    );
+
+    expect(screen.getByText(/Exposure durations vary/)).toBeInTheDocument();
+    expect(container.querySelector('.stack-snr-measured')).not.toBeNull();
+    expect(container.querySelector('.stack-snr-ideal')).toBeNull();
+    expect(screen.queryByText('Ideal square-root trend')).not.toBeInTheDocument();
+    expect(screen.queryByText('Still improving')).not.toBeInTheDocument();
+    expect(screen.queryByText('+7')).not.toBeInTheDocument();
+  });
+
+  it('labels an inconsistent fit without showing a directional projection', () => {
+    const inconclusive = curve();
+    inconclusive.analysis = {
+      ...inconclusive.analysis!,
+      fit_r_squared: 0.27,
+      verdict: 'uncertain',
+      projections: [],
+      summary: 'The deeper measurements are too inconsistent to establish a trend.',
+    };
+
+    render(<StackSnrCurve curve={inconclusive} label="M31 Ha" />);
+
+    expect(screen.getByText('Inconclusive')).toBeInTheDocument();
+    expect(screen.getByText('27%')).toBeInTheDocument();
+    expect(screen.getByText('fit consistency; no projection')).toBeInTheDocument();
+    expect(screen.queryByText('of ideal averaging')).not.toBeInTheDocument();
+    expect(screen.queryByText('+7')).not.toBeInTheDocument();
   });
 
   it('names the frames that made the stack noisier, and what that means in quality order', () => {

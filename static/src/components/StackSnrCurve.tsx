@@ -8,6 +8,7 @@ interface StackSnrCurveProps {
 }
 
 const VERDICT_COPY: Record<SnrVerdict, string> = {
+  uncertain: 'Inconclusive',
   improving: 'Still improving',
   diminishing: 'Diminishing returns',
   plateau: 'Plateau',
@@ -23,6 +24,10 @@ function formatHours(seconds: number) {
   return hours >= 10 ? `${Math.round(hours)} h` : `${hours.toFixed(1)} h`;
 }
 
+function formatMeasurement(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toPrecision(6);
+}
+
 /**
  * The progressive signal-to-noise curve of one stack.
  *
@@ -33,14 +38,22 @@ function formatHours(seconds: number) {
  * between them is the whole reading.
  */
 export default function StackSnrCurve({ curve, label }: StackSnrCurveProps) {
-  const points = curve.points.filter((point) => point.frames >= 1 && point.snr > 0);
+  const points = useMemo(
+    () => curve.points.filter((point) => point.frames >= 1 && point.snr > 0),
+    [curve.points]
+  );
+  const analysisReason = curve.analysis_reason?.trim() || null;
+  const showIdeal = analysisReason === null;
   const geometry = useMemo(() => {
     if (points.length < 2) return null;
     const xs = points.map((point) => Math.log(point.frames));
     const first = points[0];
     // The ideal runs from the first measured depth at the square-root rate.
     const ideal = points.map((point) => first.snr * Math.sqrt(point.frames / first.frames));
-    const ys = [...points.map((point) => point.snr), ...ideal].map(Math.log);
+    const ys = [
+      ...points.map((point) => point.snr),
+      ...(showIdeal ? ideal : []),
+    ].map(Math.log);
     const [minX, maxX] = [Math.min(...xs), Math.max(...xs)];
     const [minY, maxY] = [Math.min(...ys), Math.max(...ys)];
     const spanX = maxX - minX || 1;
@@ -57,7 +70,7 @@ export default function StackSnrCurve({ curve, label }: StackSnrCurveProps) {
       .join(' ');
     return {
       path,
-      idealPath,
+      idealPath: showIdeal ? idealPath : null,
       marks: points.map((point) => ({
         x: toX(point.frames),
         y: toY(point.snr),
@@ -66,17 +79,19 @@ export default function StackSnrCurve({ curve, label }: StackSnrCurveProps) {
         seconds: point.exposure_seconds,
       })),
     };
-  }, [points]);
+  }, [points, showIdeal]);
 
   if (points.length < 2) return null;
-  const analysis = curve.analysis;
+  const analysis = analysisReason ? null : curve.analysis;
   const verdict = analysis?.verdict;
 
   return (
-    <section className="stack-snr">
+    <section className="stack-snr" aria-label={`${label} signal-to-noise analysis`}>
       <div className="stack-snr-head">
         <strong>Signal-to-noise vs depth</strong>
-        <span className="stack-snr-order">{curve.order} order</span>
+        <span className="stack-snr-order">
+          {curve.order === 'capture' ? 'Reference-first capture' : 'Quality order'}
+        </span>
         {verdict && <span className={`stack-snr-verdict ${verdict}`}>{VERDICT_COPY[verdict]}</span>}
       </div>
 
@@ -85,9 +100,14 @@ export default function StackSnrCurve({ curve, label }: StackSnrCurveProps) {
           className="stack-snr-chart"
           viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
           role="img"
-          aria-label={`${label}: signal-to-noise ratio against frame count, on log axes`}
+          aria-label={
+            `${label}: measured signal-to-noise ratio against frame count` +
+            `${showIdeal ? ' with the ideal square-root trend' : ''}, on log axes`
+          }
         >
-          <polyline className="stack-snr-ideal" points={geometry.idealPath} />
+          {geometry.idealPath && (
+            <polyline className="stack-snr-ideal" points={geometry.idealPath} />
+          )}
           <polyline className="stack-snr-measured" points={geometry.path} />
           {geometry.marks.map((mark) => (
             <circle key={mark.frames} cx={mark.x} cy={mark.y} r={2.5}>
@@ -113,35 +133,53 @@ export default function StackSnrCurve({ curve, label }: StackSnrCurveProps) {
         </svg>
       )}
 
-      {analysis ? (
+      <div className="stack-snr-legend" aria-label="Chart lines">
+        <span><i className="stack-snr-key measured" aria-hidden="true" />Measured</span>
+        {showIdeal && (
+          <span><i className="stack-snr-key ideal" aria-hidden="true" />Ideal square-root trend</span>
+        )}
+      </div>
+
+      {analysisReason ? (
+        <p className="stack-snr-summary">{analysisReason}</p>
+      ) : analysis ? (
         <>
           <p className="stack-snr-summary">{analysis.summary}</p>
-          <div className="stack-snr-metrics">
-            <div>
-              <strong>{analysis.noise_exponent.toFixed(2)}</strong>
-              <span>noise exponent (ideal -0.50)</span>
-            </div>
-            <div>
-              <strong>{Math.round(analysis.efficiency * 100)}%</strong>
-              <span>of ideal averaging</span>
-            </div>
-            {analysis.frames_for_90_percent !== null && (
+          {verdict === 'uncertain' ? (
+            <div className="stack-snr-metrics">
               <div>
-                <strong>{analysis.frames_for_90_percent}</strong>
-                <span>frames for 90% of the ratio</span>
+                <strong>{Math.round(analysis.fit_r_squared * 100)}%</strong>
+                <span>fit consistency; no projection</span>
               </div>
-            )}
-            {analysis.projections.map((projection) => (
-              <div key={projection.gain}>
-                <strong>+{projection.extra_frames}</strong>
-                <span>
-                  {`frames (${formatHours(projection.extra_seconds)}) for ${Math.round(
-                    (projection.gain - 1) * 100
-                  )}% more`}
-                </span>
+            </div>
+          ) : (
+            <div className="stack-snr-metrics">
+              <div>
+                <strong>{analysis.noise_exponent.toFixed(2)}</strong>
+                <span>noise exponent (ideal -0.50)</span>
               </div>
-            ))}
-          </div>
+              <div>
+                <strong>{Math.round(analysis.efficiency * 100)}%</strong>
+                <span>of ideal averaging</span>
+              </div>
+              {analysis.frames_for_90_percent !== null && (
+                <div>
+                  <strong>{analysis.frames_for_90_percent}</strong>
+                  <span>frames for 90% of the ratio</span>
+                </div>
+              )}
+              {analysis.projections.map((projection) => (
+                <div key={projection.gain}>
+                  <strong>+{projection.extra_frames}</strong>
+                  <span>
+                    {`frames (${formatHours(projection.extra_seconds)}) for ${Math.round(
+                      (projection.gain - 1) * 100
+                    )}% more`}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
           {analysis.regressions.length > 0 && (
             <p className="stack-snr-regression">
               {`Noise rose across ${analysis.regressions.length} span${
@@ -167,6 +205,37 @@ export default function StackSnrCurve({ curve, label }: StackSnrCurveProps) {
           before a trend can be read.
         </p>
       )}
+
+      <details className="stack-snr-data">
+        <summary>Exact measurements ({points.length})</summary>
+        <div className="stack-snr-data-table">
+          <table>
+            <caption>{label} signal-to-noise measurements</caption>
+            <thead>
+              <tr>
+                <th scope="col">Frames</th>
+                <th scope="col">Exposure (s)</th>
+                <th scope="col">Noise</th>
+                <th scope="col">Background</th>
+                <th scope="col">Signal</th>
+                <th scope="col">SNR</th>
+              </tr>
+            </thead>
+            <tbody>
+              {points.map((point) => (
+                <tr key={point.frames}>
+                  <td>{point.frames}</td>
+                  <td>{formatMeasurement(point.exposure_seconds)}</td>
+                  <td>{formatMeasurement(point.noise)}</td>
+                  <td>{formatMeasurement(point.background)}</td>
+                  <td>{formatMeasurement(point.signal)}</td>
+                  <td>{formatMeasurement(point.snr)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
     </section>
   );
 }

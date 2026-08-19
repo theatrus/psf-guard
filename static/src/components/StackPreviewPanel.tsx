@@ -56,6 +56,7 @@ interface StackArtifact {
   jobId: string;
   artifactRevision: string;
   acceptedOnly: boolean;
+  order: StackFrameOrder;
   group: StackGroupStatus;
 }
 
@@ -165,7 +166,9 @@ function staleReason(
   builtAcceptedOnly: boolean,
   acceptedOnly: boolean,
   builtCalibration: CalibrationMode,
-  calibrationMode: CalibrationMode
+  calibrationMode: CalibrationMode,
+  builtOrder: StackFrameOrder,
+  frameOrder: StackFrameOrder
 ): string | null {
   if (!current) return 'Out of date — this channel is not in the current input';
   if (inputImages.length === 0) return 'Out of date — rebuild required';
@@ -187,6 +190,9 @@ function staleReason(
   if (builtCalibration !== calibrationMode) {
     return 'Out of date — calibration mode changed';
   }
+  if (builtOrder !== frameOrder) {
+    return 'Out of date — frame order changed';
+  }
   return null;
 }
 // `calibrationMode` above is the channel's EFFECTIVE mode — its override
@@ -198,6 +204,7 @@ function artifactFromLatest(latest: LatestStackPreviewGroup | undefined): StackA
     jobId: latest.job_id,
     artifactRevision: latest.artifact_revision,
     acceptedOnly: latest.accepted_only,
+    order: latest.order ?? 'capture',
     group: latest.group,
   };
 }
@@ -409,6 +416,7 @@ export default function StackPreviewPanel({
     setWatchedJobIds([]);
     setInspector(null);
     setStretches({});
+    setFrameOrder('capture');
     resetStart();
     resetStop();
   }, [dbId, projectId, resetStart, resetStop]);
@@ -509,10 +517,15 @@ export default function StackPreviewPanel({
       activeEntry && activeEntry.group.state === 'ready'
         ? {
             acceptedOnly: activeEntry.job.accepted_only,
+            order: activeEntry.job.order ?? 'capture',
             group: activeEntry.group,
           }
         : latestEntry
-          ? { acceptedOnly: latestEntry.accepted_only, group: latestEntry.group }
+          ? {
+              acceptedOnly: latestEntry.accepted_only,
+              order: latestEntry.order ?? 'capture',
+              group: latestEntry.group,
+            }
           : undefined;
     return artifact
       ? staleReason(
@@ -521,7 +534,9 @@ export default function StackPreviewPanel({
           artifact.acceptedOnly,
           acceptedOnly,
           builtCalibrationMode(artifact.group),
-          effectiveCalibration(key)
+          effectiveCalibration(key),
+          artifact.order,
+          frameOrder
         ) !== null
       : false;
   }).length;
@@ -536,7 +551,9 @@ export default function StackPreviewPanel({
           entry.accepted_only,
           acceptedOnly,
           builtCalibrationMode(entry.group),
-          effectiveCalibration(key)
+          effectiveCalibration(key),
+          entry.order ?? 'capture',
+          frameOrder
         )
       ) {
         targetIds.add(entry.group.target_id);
@@ -544,7 +561,7 @@ export default function StackPreviewPanel({
     }
     return targetIds;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- effectiveCalibration reads calibrationMode and overrides, listed below.
-  }, [acceptedOnly, calibrationMode, overrides, currentChannels, latest.data]);
+  }, [acceptedOnly, calibrationMode, overrides, currentChannels, frameOrder, latest.data]);
   const colorSourceRevision = useMemo(
     () => (latest.data?.groups ?? [])
       .map((entry) => `${entry.job_id}:${entry.group.index}:${entry.artifact_revision}`)
@@ -646,10 +663,11 @@ export default function StackPreviewPanel({
               className="stack-preview-frame-order"
               title={
                 'The order the next build integrates its frames in, which decides what its ' +
-                'signal-to-noise curve answers. Capture order is chronological and asks ' +
-                'whether another night would help. Quality order puts the best-graded frames ' +
-                'first and asks which frames are worth keeping: the depth where the curve ' +
-                'leaves the ideal is where the weaker frames stop paying for themselves. ' +
+                'signal-to-noise curve answers. Capture sequence starts with the best ' +
+                'registration reference, then follows the remaining eligible frames ' +
+                'chronologically. Quality order puts the best-graded frames first and asks ' +
+                'which frames are worth keeping: the depth where the curve leaves the ideal ' +
+                'is where the weaker frames stop paying for themselves. ' +
                 'Quality order integrates every frame again, so it cannot resume.'
               }
             >
@@ -659,7 +677,7 @@ export default function StackPreviewPanel({
                 disabled={running}
                 onChange={(event) => setFrameOrder(event.target.value as StackFrameOrder)}
               >
-                <option value="capture">Capture</option>
+                <option value="capture">Capture sequence</option>
                 <option value="quality">Quality</option>
               </select>
             </label>
@@ -755,6 +773,7 @@ export default function StackPreviewPanel({
                         jobId: activeEntry.job.job_id,
                         artifactRevision: activeEntry.job.artifact_revision,
                         acceptedOnly: activeEntry.job.accepted_only,
+                        order: activeEntry.job.order ?? 'capture',
                         group: activeEntry.group,
                       }
                     : undefined;
@@ -771,13 +790,17 @@ export default function StackPreviewPanel({
                       artifact.acceptedOnly,
                       acceptedOnly,
                       builtCalibrationMode(artifact.group),
-                      effectiveCalibration(key)
+                      effectiveCalibration(key),
+                      artifact.order,
+                      frameOrder
                     )
                   : null;
                 const groupBusy =
                   activeGroup?.state === 'queued' || activeGroup?.state === 'running';
                 const canBuildChannel = (current?.images.length ?? 0) >= 2;
                 const progressGroup = activeGroup ?? artifact?.group;
+                const liveCurve = groupBusy ? activeGroup?.snr : null;
+                const artifactCurve = artifact?.group.snr;
                 const calibration = progressGroup?.calibration;
                 const progressState = progressGroup?.state ?? 'not-built';
                 const processedFrames = progressGroup?.processed_frames ?? 0;
@@ -1000,11 +1023,20 @@ export default function StackPreviewPanel({
                       </div>
                     )}
 
-                    {showSnrCurve && progressGroup?.snr && (
+                    {showSnrCurve && artifactCurve && (
                       <StackSnrCurve
-                        curve={progressGroup.snr}
-                        label={`${targetName} ${filterName || 'no filter'}`}
+                        curve={artifactCurve}
+                        label={`${targetName} ${filterName || 'no filter'} completed stack`}
                       />
+                    )}
+                    {showSnrCurve && liveCurve && (
+                      <section className="stack-snr-live" aria-label="Live build SNR progress">
+                        <strong>{artifact ? 'Live rebuild progress' : 'Live build progress'}</strong>
+                        <StackSnrCurve
+                          curve={liveCurve}
+                          label={`${targetName} ${filterName || 'no filter'} live build`}
+                        />
+                      </section>
                     )}
 
                     {calibration && calibration.state !== 'none' && (
