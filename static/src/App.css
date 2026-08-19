@@ -3958,6 +3958,24 @@
   font-size: 0.82rem;
 }
 
+.stack-snr-live {
+  padding: 0.55rem 0.9rem 0;
+  border-bottom: 1px solid var(--color-bg-tertiary);
+  background: color-mix(in srgb, var(--color-accent) 4%, transparent);
+}
+
+.stack-snr-live > strong {
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.stack-snr-live > .stack-snr {
+  padding-right: 0;
+  padding-left: 0;
+  border-bottom: 0;
+}
+
 .stack-snr {
   padding: 0.6rem 0.9rem 0.7rem;
   border-bottom: 1px solid var(--color-bg-tertiary);
@@ -4005,8 +4023,10 @@
 
 .stack-snr-chart {
   display: block;
-  width: 100%;
+  width: min(100%, 36rem);
   height: auto;
+  max-height: 13.5rem;
+  aspect-ratio: 8 / 3;
   margin: 0.45rem 0 0.2rem;
 }
 
@@ -4033,6 +4053,32 @@
 .stack-snr-chart .stack-snr-axis {
   fill: var(--color-text-muted);
   font-size: 8px;
+}
+
+.stack-snr-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.8rem;
+  color: var(--color-text-muted);
+  font-size: 0.66rem;
+}
+
+.stack-snr-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+}
+
+.stack-snr-key {
+  display: inline-block;
+  width: 1.1rem;
+  border-top: 2px solid var(--color-accent, #6ea8fe);
+}
+
+.stack-snr-key.ideal {
+  border-color: var(--color-text-muted);
+  border-top-style: dashed;
+  border-top-width: 1px;
 }
 
 .stack-snr-summary {
@@ -4066,6 +4112,53 @@
   color: var(--color-text-muted);
   font-size: 0.62rem;
   text-transform: uppercase;
+}
+
+.stack-snr-data {
+  margin-top: 0.45rem;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+}
+
+.stack-snr-data summary {
+  width: max-content;
+  cursor: pointer;
+}
+
+.stack-snr-data-table {
+  max-width: 100%;
+  margin-top: 0.35rem;
+  overflow-x: auto;
+}
+
+.stack-snr-data table {
+  width: 100%;
+  min-width: 29rem;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.stack-snr-data caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.stack-snr-data th,
+.stack-snr-data td {
+  padding: 0.25rem 0.4rem;
+  border-bottom: 1px solid var(--color-bg-tertiary);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.stack-snr-data th {
+  color: var(--color-text-secondary);
 }
 
 .stack-preview-calibration {

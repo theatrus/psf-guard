@@ -9,12 +9,12 @@
 //!
 //! What each depth records:
 //!
-//! - **Noise** is the median absolute difference between horizontally adjacent
-//!   samples, scaled to a standard deviation. First differences cancel any sky
-//!   gradient and any nebulosity broader than a pixel, and the median throws
-//!   the stars away, so what is left is the pixel-to-pixel noise of the
-//!   integration — the quantity that should fall as the square root of the
-//!   frame count.
+//! - **Noise** is the robust spread of second differences measured in both
+//!   image axes, scaled to a standard deviation. Second differences cancel a
+//!   planar sky gradient, the median throws the stars away, and taking the
+//!   noisier axis keeps row or column banding visible. What is left is the
+//!   pixel-scale noise of the integration — the quantity that should fall as
+//!   the square root of the frame count.
 //! - **Background** is the median sample.
 //! - **Signal** is how far the brightest one percent of samples sits above that
 //!   background. The fraction is fixed rather than a multiple of the noise, so
@@ -57,13 +57,32 @@ const PROJECTED_GAINS: [f64; 2] = [1.05, 1.10];
 /// a frame that hurt.
 const REGRESSION_THRESHOLD: f64 = 0.02;
 
+/// A fitted rise must exceed the same two-percent scatter allowance over one
+/// doubling before it is called a degrading trend: `ln(1.02) / ln(2)`.
+const DEGRADING_EXPONENT_THRESHOLD: f64 = 0.028_569_152_196_770_92;
+
+/// A slope needs to explain at least half the measured variation before it
+/// becomes a directional verdict rather than an inconclusive fit.
+const MIN_DIRECTIONAL_FIT_R_SQUARED: f64 = 0.5;
+
+/// Exposure durations within one percent are equivalent for the frame-count
+/// model. Larger differences need a weighted model that this curve does not
+/// currently claim to provide.
+const EXPOSURE_VARIATION_TOLERANCE: f64 = 0.01;
+
+const MISSING_EXPOSURE_REASON: &str =
+    "Analysis unavailable because exposure duration is missing for one or more accepted frames.";
+const MIXED_EXPOSURE_REASON: &str =
+    "Analysis unavailable because exposure duration varies between accepted frames.";
+
 /// The order a build pushes its frames in, which decides what its curve
 /// answers.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StackFrameOrder {
-    /// Chronological. The curve answers "did the last night help, and would
-    /// another one help?".
+    /// Registration reference first, then the remaining frames in capture
+    /// order. The curve shows the broad trend through the later data while
+    /// keeping registration anchored to the chosen frame.
     #[default]
     Capture,
     /// Best-graded frame first. The curve answers "which of these frames are
@@ -122,6 +141,8 @@ pub struct SnrSample {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SnrVerdict {
+    /// The deeper measurements do not support a stable directional fit.
+    Uncertain,
     /// Noise is still falling at close to the ideal rate. More frames pay.
     Improving,
     /// Noise is still falling, but well short of the ideal rate.
@@ -135,6 +156,7 @@ pub enum SnrVerdict {
 impl SnrVerdict {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Uncertain => "uncertain",
             Self::Improving => "improving",
             Self::Diminishing => "diminishing",
             Self::Plateau => "plateau",
@@ -202,8 +224,13 @@ pub struct SnrAnalysis {
 pub struct ProgressiveSnr {
     pub order: StackFrameOrder,
     pub points: Vec<SnrPoint>,
-    /// Absent until three depths have been measured.
+    /// Absent until three depths have been measured, or when their exposure
+    /// durations cannot support the frame-count model.
     pub analysis: Option<SnrAnalysis>,
+    /// Why a complete measured curve cannot be modeled. An ordinary partial
+    /// curve has neither an analysis nor a reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_reason: Option<String>,
 }
 
 impl ProgressiveSnr {
@@ -220,7 +247,11 @@ impl ProgressiveSnr {
     /// from the noise alone. Each depth keeps the signal it measured, which
     /// is worth seeing when it drifts: that is normalization moving, not the
     /// sky.
-    pub fn new(order: StackFrameOrder, mut points: Vec<SnrPoint>) -> Self {
+    ///
+    /// `frame_exposures` contains every accepted frame through the deepest
+    /// point. The fitted frame-count model is withheld unless each duration
+    /// is known and equivalent.
+    pub fn new(order: StackFrameOrder, mut points: Vec<SnrPoint>, frame_exposures: &[f64]) -> Self {
         if let Some(signal) = points.last().map(|deepest| deepest.signal) {
             for point in &mut points {
                 point.snr = if point.noise > 0.0 {
@@ -230,10 +261,17 @@ impl ProgressiveSnr {
                 };
             }
         }
+        let analysis_reason = exposure_analysis_reason(&points, frame_exposures).map(str::to_owned);
+        let analysis = if analysis_reason.is_none() {
+            analyze_curve(&points)
+        } else {
+            None
+        };
         Self {
             order,
-            analysis: analyze(&points),
             points,
+            analysis,
+            analysis_reason,
         }
     }
 }
@@ -261,50 +299,71 @@ pub fn checkpoint_depths(total: usize) -> Vec<usize> {
 /// Read the live accumulator. `None` when too little of the frame is covered
 /// to measure, or when the samples carry no noise at all.
 pub fn measure(view: seiza_stacking::StackView<'_>) -> Option<SnrSample> {
+    if view.width < 3 || view.height < 3 {
+        return None;
+    }
     let channels = view.channels.max(1);
-    let stride = view.height.div_ceil(MAX_SAMPLED_ROWS).max(1);
+    let interior_rows = view.height - 2;
+    let stride = interior_rows.div_ceil(MAX_SAMPLED_ROWS).max(1);
     let mut channel_noise = Vec::with_capacity(channels);
     let mut channel_background = Vec::with_capacity(channels);
     let mut channel_signal = Vec::with_capacity(channels);
 
     for channel in 0..channels {
         let mut levels: Vec<f32> = Vec::new();
-        let mut differences: Vec<f32> = Vec::new();
-        let mut y = 0usize;
-        while y < view.height {
+        let mut horizontal_differences: Vec<f32> = Vec::new();
+        let mut vertical_differences: Vec<f32> = Vec::new();
+        let mut y = 1usize;
+        while y + 1 < view.height {
             let row = y * view.width;
-            // Reset at the start of every row: the last sample of one row is
-            // not adjacent to the first of the next.
-            let mut previous: Option<(f32, u32)> = None;
-            for x in 0..view.width {
+            for x in 1..view.width - 1 {
                 let index = (row + x) * channels + channel;
                 let coverage = view.coverage[index];
                 let value = view.mean[index];
                 if coverage == 0 || !value.is_finite() {
-                    previous = None;
                     continue;
                 }
-                // Two samples only compare when the same number of frames
-                // reached both. At a dithered edge one neighbour can be
-                // thinner than the other, and its extra noise is not a
-                // difference between neighbouring pixels.
-                if let Some((earlier, earlier_coverage)) = previous
-                    && earlier_coverage == coverage
-                {
-                    differences.push((value - earlier).abs());
-                }
                 levels.push(value);
-                previous = Some((value, coverage));
+
+                // A second difference removes any linear gradient. All three
+                // samples need equal coverage so dithered edges cannot
+                // masquerade as pixel structure.
+                let left = index - channels;
+                let right = index + channels;
+                if view.coverage[left] == coverage
+                    && view.coverage[right] == coverage
+                    && view.mean[left].is_finite()
+                    && view.mean[right].is_finite()
+                {
+                    horizontal_differences.push(view.mean[left] - 2.0 * value + view.mean[right]);
+                }
+
+                let above = index - view.width * channels;
+                let below = index + view.width * channels;
+                if view.coverage[above] == coverage
+                    && view.coverage[below] == coverage
+                    && view.mean[above].is_finite()
+                    && view.mean[below].is_finite()
+                {
+                    vertical_differences.push(view.mean[above] - 2.0 * value + view.mean[below]);
+                }
             }
             y += stride;
         }
 
-        if differences.len() < MIN_SAMPLES || levels.len() < MIN_SAMPLES {
+        if horizontal_differences.len() < MIN_SAMPLES
+            || vertical_differences.len() < MIN_SAMPLES
+            || levels.len() < MIN_SAMPLES
+        {
             return None;
         }
-        // Differences of two samples of equal noise carry root-two times the
-        // noise of one sample.
-        let noise = median(&mut differences) * MAD_TO_SIGMA / std::f64::consts::SQRT_2;
+        // A second difference has coefficients 1, -2, 1, so independent
+        // samples with sigma noise produce a difference with sqrt(6) sigma.
+        // Keep the noisier axis: that makes horizontal and vertical banding
+        // equally visible instead of averaging either one away.
+        let horizontal_noise = second_difference_noise(&mut horizontal_differences)?;
+        let vertical_noise = second_difference_noise(&mut vertical_differences)?;
+        let noise = horizontal_noise.max(vertical_noise);
         if noise <= 0.0 || !noise.is_finite() {
             return None;
         }
@@ -342,7 +401,12 @@ pub fn point(sample: SnrSample, exposure_seconds: f64) -> SnrPoint {
 
 /// Read a finished curve. `None` until three usable depths exist, because two
 /// points fit any power law exactly and say nothing about the fit.
-pub fn analyze(points: &[SnrPoint]) -> Option<SnrAnalysis> {
+#[cfg(test)]
+fn analyze(points: &[SnrPoint]) -> Option<SnrAnalysis> {
+    analyze_curve(points)
+}
+
+fn analyze_curve(points: &[SnrPoint]) -> Option<SnrAnalysis> {
     let usable: Vec<&SnrPoint> = points
         .iter()
         .filter(|point| point.frames >= 1 && point.noise > 0.0 && point.snr.is_finite())
@@ -383,7 +447,9 @@ pub fn analyze(points: &[SnrPoint]) -> Option<SnrAnalysis> {
     let (frames_for_95_percent, seconds_for_95_percent) = reached(0.95);
 
     let efficiency = (recent_fit.exponent / IDEAL_EXPONENT).max(0.0);
-    let verdict = if recent_fit.exponent >= 0.0 {
+    let verdict = if recent_fit.r_squared < MIN_DIRECTIONAL_FIT_R_SQUARED {
+        SnrVerdict::Uncertain
+    } else if recent_fit.exponent > DEGRADING_EXPONENT_THRESHOLD {
         SnrVerdict::Degrading
     } else if efficiency >= 0.75 {
         SnrVerdict::Improving
@@ -398,7 +464,11 @@ pub fn analyze(points: &[SnrPoint]) -> Option<SnrAnalysis> {
     } else {
         0.0
     };
-    let projections = project(deepest.frames, recent_fit.exponent, average_exposure);
+    let projections = if verdict == SnrVerdict::Uncertain {
+        Vec::new()
+    } else {
+        project(deepest.frames, recent_fit.exponent, average_exposure)
+    };
     let regressions = regressions(&usable);
     let summary = summarize(
         verdict,
@@ -427,6 +497,38 @@ pub fn analyze(points: &[SnrPoint]) -> Option<SnrAnalysis> {
         verdict,
         summary,
     })
+}
+
+/// Confirm that frame count is a meaningful independent variable from every
+/// accepted frame, rather than from checkpoint averages that could hide a
+/// mixture of short and long exposures.
+fn exposure_analysis_reason(points: &[SnrPoint], frame_exposures: &[f64]) -> Option<&'static str> {
+    let expected_frames = points.last().map_or(0, |point| point.frames as usize);
+    if expected_frames == 0 {
+        return None;
+    }
+    if frame_exposures.len() < expected_frames {
+        return Some(MISSING_EXPOSURE_REASON);
+    }
+    let mut minimum_per_frame = f64::INFINITY;
+    let mut maximum_per_frame = f64::NEG_INFINITY;
+
+    for &exposure in &frame_exposures[..expected_frames] {
+        if !exposure.is_finite() || exposure <= 0.0 {
+            return Some(MISSING_EXPOSURE_REASON);
+        }
+        minimum_per_frame = minimum_per_frame.min(exposure);
+        maximum_per_frame = maximum_per_frame.max(exposure);
+    }
+
+    if minimum_per_frame.is_finite()
+        && (maximum_per_frame - minimum_per_frame) / maximum_per_frame
+            > EXPOSURE_VARIATION_TOLERANCE
+    {
+        Some(MIXED_EXPOSURE_REASON)
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -504,9 +606,9 @@ fn project(frames: u32, exponent: f64, average_exposure: f64) -> Vec<SnrProjecti
         .collect()
 }
 
-/// Steps where the noise rose. In capture order these are the nights that
-/// hurt; in quality order they are where the weaker frames start costing more
-/// than they add.
+/// Steps where the noise rose. In reference-first capture order these are
+/// later parts of the capture sequence that hurt; in quality order they are
+/// where the weaker frames start costing more than they add.
 fn regressions(points: &[&SnrPoint]) -> Vec<SnrRegression> {
     points
         .windows(2)
@@ -534,6 +636,9 @@ fn summarize(
 ) -> String {
     let share = (efficiency * 100.0).round();
     let mut summary = match verdict {
+        SnrVerdict::Uncertain =>
+            "The deeper measurements are too inconsistent to establish a trend. No projection is made from this curve."
+                .to_string(),
         SnrVerdict::Improving => format!(
             "Noise is still falling at {share:.0}% of the ideal rate (exponent {exponent:.2} against -0.50). More frames pay off."
         ),
@@ -570,6 +675,18 @@ fn median(values: &mut [f32]) -> f64 {
     let middle = values.len() / 2;
     let (_, value, _) = values.select_nth_unstable_by(middle, f32::total_cmp);
     f64::from(*value)
+}
+
+fn second_difference_noise(differences: &mut [f32]) -> Option<f64> {
+    if differences.len() < MIN_SAMPLES {
+        return None;
+    }
+    let center = median(differences);
+    for difference in differences.iter_mut() {
+        *difference = (f64::from(*difference) - center).abs() as f32;
+    }
+    let noise = median(differences) * MAD_TO_SIGMA / 6.0f64.sqrt();
+    (noise >= 0.0 && noise.is_finite()).then_some(noise)
 }
 
 /// How far the brightest [`SIGNAL_FRACTION`] of the samples sits above the
@@ -635,6 +752,39 @@ mod tests {
         data
     }
 
+    fn planar_gradient_frame(width: usize, height: usize, sigma: f64, seed: u64) -> Vec<f32> {
+        let mut noise = Noise(seed);
+        let mut data = vec![0.0f32; width * height];
+        for (index, sample) in data.iter_mut().enumerate() {
+            let (x, y) = (index % width, index / width);
+            *sample =
+                1000.0 + x as f32 * 5.0 + y as f32 * 3.0 + (noise.next_normal() * sigma) as f32;
+        }
+        data
+    }
+
+    fn banded_frame(
+        width: usize,
+        height: usize,
+        rows: bool,
+        band_sigma: f64,
+        pixel_sigma: f64,
+        seed: u64,
+    ) -> Vec<f32> {
+        let mut noise = Noise(seed);
+        let band_count = if rows { height } else { width };
+        let bands: Vec<f32> = (0..band_count)
+            .map(|_| (noise.next_normal() * band_sigma) as f32)
+            .collect();
+        let mut data = vec![0.0f32; width * height];
+        for (index, sample) in data.iter_mut().enumerate() {
+            let (x, y) = (index % width, index / width);
+            let band = if rows { bands[y] } else { bands[x] };
+            *sample = 1000.0 + band + (noise.next_normal() * pixel_sigma) as f32;
+        }
+        data
+    }
+
     fn view<'a>(
         data: &'a [f32],
         coverage: &'a [u32],
@@ -689,6 +839,42 @@ mod tests {
             sample.background
         );
         assert!(sample.signal > 400.0, "{}", sample.signal);
+    }
+
+    #[test]
+    fn a_strong_planar_gradient_does_not_become_a_noise_floor() {
+        let (width, height) = (400, 400);
+        let data = planar_gradient_frame(width, height, 12.0, 29);
+        let coverage = vec![4u32; data.len()];
+        let sample = measure(view(&data, &coverage, width, height, 4)).expect("measurable");
+        assert!(
+            (sample.noise - 12.0).abs() < 0.8,
+            "measured {} for a sigma of 12 through a strong plane",
+            sample.noise
+        );
+    }
+
+    #[test]
+    fn row_and_column_banding_are_measured_symmetrically() {
+        let (width, height) = (400, 400);
+        let coverage = vec![4u32; width * height];
+        let rows = banded_frame(width, height, true, 16.0, 0.0, 31);
+        let columns = banded_frame(width, height, false, 16.0, 0.0, 31);
+        let row_noise = measure(view(&rows, &coverage, width, height, 4))
+            .expect("row banding is measurable")
+            .noise;
+        let column_noise = measure(view(&columns, &coverage, width, height, 4))
+            .expect("column banding is measurable")
+            .noise;
+        assert!(row_noise > 12.0, "row banding measured as {row_noise}");
+        assert!(
+            column_noise > 12.0,
+            "column banding measured as {column_noise}"
+        );
+        assert!(
+            (row_noise - column_noise).abs() < 1.5,
+            "row {row_noise}, column {column_noise}"
+        );
     }
 
     #[test]
@@ -804,9 +990,124 @@ mod tests {
     }
 
     #[test]
+    fn a_tiny_well_fitted_rise_is_measurement_scatter() {
+        let points = curve(
+            |n| 10.0 * f64::from(n).powf(0.015),
+            &[1, 2, 4, 8, 16, 32, 64],
+        );
+        let analysis = analyze(&points).expect("analyzable");
+        assert!(analysis.noise_exponent > 0.0);
+        assert!(analysis.fit_r_squared > 0.99);
+        assert_eq!(analysis.verdict, SnrVerdict::Plateau);
+    }
+
+    #[test]
+    fn a_poorly_fitted_positive_slope_is_not_called_degrading() {
+        let mut points = curve(|n| 20.0 / f64::from(n).sqrt(), &[1, 2, 4, 8, 16, 32, 64]);
+        points[4].noise = 10.0;
+        points[5].noise = 14.0;
+        points[6].noise = 10.8;
+        for point in &mut points[4..] {
+            point.snr = point.signal / point.noise;
+        }
+        let analysis = analyze_curve(&points).expect("the raw fit is available");
+        assert!(
+            analysis.noise_exponent > DEGRADING_EXPONENT_THRESHOLD,
+            "{}",
+            analysis.noise_exponent
+        );
+        assert!(
+            analysis.fit_r_squared < MIN_DIRECTIONAL_FIT_R_SQUARED,
+            "{}",
+            analysis.fit_r_squared
+        );
+        let progressive = ProgressiveSnr::new(StackFrameOrder::Capture, points, &[300.0; 64]);
+        let analysis = progressive.analysis.expect("an inconclusive analysis");
+        assert_eq!(analysis.verdict, SnrVerdict::Uncertain);
+        assert!(analysis.projections.is_empty());
+        assert!(progressive.analysis_reason.is_none());
+    }
+
+    #[test]
+    fn a_poorly_fitted_negative_slope_does_not_make_promises() {
+        let mut points = curve(|n| 20.0 / f64::from(n).sqrt(), &[1, 2, 4, 8, 16, 32, 64]);
+        points[4].noise = 10.0;
+        points[5].noise = 30.0;
+        points[6].noise = 3.0;
+        for point in &mut points[4..] {
+            point.snr = point.signal / point.noise;
+        }
+        let raw = analyze_curve(&points).expect("the raw fit is available");
+        assert!(raw.noise_exponent < 0.0);
+        assert!(raw.fit_r_squared < MIN_DIRECTIONAL_FIT_R_SQUARED);
+
+        let progressive = ProgressiveSnr::new(StackFrameOrder::Capture, points, &[300.0; 64]);
+        let analysis = progressive.analysis.expect("an inconclusive analysis");
+        assert_eq!(analysis.verdict, SnrVerdict::Uncertain);
+        assert!(analysis.projections.is_empty());
+        assert!(progressive.analysis_reason.is_none());
+    }
+
+    #[test]
     fn two_points_are_not_a_curve() {
         let points = curve(|n| 20.0 / f64::from(n).sqrt(), &[1, 2]);
         assert!(analyze(&points).is_none());
+    }
+
+    #[test]
+    fn mixed_exposures_keep_measurements_but_suppress_the_model() {
+        let points = curve(|n| 20.0 / f64::from(n).sqrt(), &[1, 2, 4, 8]);
+        // The 200 and 400 second frames average to 300 at the four-frame
+        // checkpoint. Per-frame validation must still catch the mixture.
+        let exposures = [300.0, 300.0, 200.0, 400.0, 300.0, 300.0, 300.0, 300.0];
+
+        let progressive = ProgressiveSnr::new(StackFrameOrder::Capture, points.clone(), &exposures);
+        assert_eq!(progressive.points.len(), points.len());
+        assert!(progressive.analysis.is_none());
+        assert_eq!(
+            progressive.analysis_reason.as_deref(),
+            Some(MIXED_EXPOSURE_REASON)
+        );
+    }
+
+    #[test]
+    fn missing_exposure_suppresses_the_model_with_a_reason() {
+        let points = curve(|n| 20.0 / f64::from(n).sqrt(), &[1, 2, 4, 8]);
+        let progressive = ProgressiveSnr::new(
+            StackFrameOrder::Capture,
+            points,
+            &[300.0, 300.0, 0.0, 300.0, 300.0, 300.0, 300.0, 300.0],
+        );
+        assert!(progressive.analysis.is_none());
+        assert_eq!(
+            progressive.analysis_reason.as_deref(),
+            Some(MISSING_EXPOSURE_REASON)
+        );
+    }
+
+    #[test]
+    fn insignificant_exposure_rounding_keeps_the_model_available() {
+        let points = curve(|n| 20.0 / f64::from(n).sqrt(), &[1, 2, 4, 8]);
+        let progressive = ProgressiveSnr::new(
+            StackFrameOrder::Capture,
+            points,
+            &[300.0, 302.0, 301.0, 302.0, 300.0, 302.0, 301.0, 302.0],
+        );
+        assert!(progressive.analysis.is_some());
+        assert!(progressive.analysis_reason.is_none());
+    }
+
+    #[test]
+    fn accepted_frames_after_the_last_measurement_do_not_invalidate_it() {
+        let points = curve(|n| 20.0 / f64::from(n).sqrt(), &[1, 2, 4]);
+        let progressive = ProgressiveSnr::new(
+            StackFrameOrder::Capture,
+            points,
+            &[300.0, 300.0, 300.0, 300.0, 600.0],
+        );
+
+        assert!(progressive.analysis.is_some());
+        assert!(progressive.analysis_reason.is_none());
     }
 
     #[test]
@@ -827,7 +1128,7 @@ mod tests {
         let mut points = curve(|n| 20.0 / f64::from(n).sqrt(), &[1, 2, 4, 8]);
         points[0].signal = 300.0;
         points[0].snr = 300.0 / points[0].noise;
-        let progressive = ProgressiveSnr::new(StackFrameOrder::Capture, points);
+        let progressive = ProgressiveSnr::new(StackFrameOrder::Capture, points, &[300.0; 8]);
         // Every ratio now comes off the deepest signal, 500.
         for point in &progressive.points {
             assert!((point.snr - 500.0 / point.noise).abs() < 1e-9);
