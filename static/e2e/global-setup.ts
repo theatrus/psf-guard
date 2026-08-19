@@ -186,10 +186,22 @@ export default async function globalSetup() {
   const baseSeqTs = Math.floor(Date.UTC(2026, 3, 16, 22, 25, 0) / 1000); // 2026-04-16 22:25 UTC
   const betaTs = Math.floor(Date.UTC(2026, 3, 17, 0, 6, 0) / 1000);
 
-  insertImg.run(1, 1, 1, baseSeqTs + 0, 'B', 0, JSON.stringify({ FileName: alpha1 }));
-  insertImg.run(2, 1, 1, baseSeqTs + 66, 'B', 1, JSON.stringify({ FileName: alpha2 }));
-  insertImg.run(3, 1, 1, baseSeqTs + 132, 'B', 0, JSON.stringify({ FileName: alpha3 }));
-  insertImg.run(4, 2, 2, betaTs, 'B', 0, JSON.stringify({ FileName: beta1 }));
+  insertImg.run(
+    1, 1, 1, baseSeqTs + 0, 'B', 0,
+    JSON.stringify({ FileName: alpha1, ExposureDuration: 60 })
+  );
+  insertImg.run(
+    2, 1, 1, baseSeqTs + 66, 'B', 1,
+    JSON.stringify({ FileName: alpha2, ExposureDuration: 60 })
+  );
+  insertImg.run(
+    3, 1, 1, baseSeqTs + 132, 'B', 0,
+    JSON.stringify({ FileName: alpha3, ExposureDuration: 60 })
+  );
+  insertImg.run(
+    4, 2, 2, betaTs, 'B', 0,
+    JSON.stringify({ FileName: beta1, ExposureDuration: 60 })
+  );
 
   db.close();
 

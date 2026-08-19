@@ -14,7 +14,16 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::UNIX_EPOCH;
 
-pub const CALIBRATION_SCHEMA_VERSION: i64 = 1;
+/// Shape of PSF Guard's own tables inside a scheduler catalog.
+///
+/// Bump this whenever those tables change, and add the step that gets an
+/// older catalog here to [`MIGRATIONS`]. A catalog is upgraded in place when
+/// it is opened; see [`migrate_existing`].
+///
+/// 1: the original calibration library.
+/// 2: `psf_guard_calibration_frame.rotation`, so a flat only matches a light
+///    shot at the same rotator angle.
+pub const CALIBRATION_SCHEMA_VERSION: i64 = 2;
 // 2: flat masters suppress defective pixels spatially after integration.
 pub const MASTER_CACHE_VERSION: u32 = 2;
 const MIN_MASTER_FRAMES: usize = 2;
@@ -316,6 +325,224 @@ pub fn kind_from_meta(meta: &FrameMeta) -> Option<CalibrationKind> {
     }
 }
 
+/// One rung of the upgrade ladder: the version it produces, and the step that
+/// gets there from the version below it.
+///
+/// Two rules bind every step.
+///
+/// It must be safe to run twice. A catalog can arrive here half upgraded — an
+/// older build added the `rotation` column from its write path without
+/// recording a version — and the version row is written after the step, so a
+/// crash in between leaves the step to run again.
+///
+/// It must only add. Someone runs PSF Guard on two machines and one upgrades
+/// first; the older build still has to read that catalog. Adding a column
+/// leaves every older query working, which is why
+/// [`schema_supports_current_reads`] checks physical columns instead of
+/// rejecting a newer version number. Renaming or dropping one would not, and
+/// would need a different mechanism than this ladder.
+struct Migration {
+    to_version: i64,
+    apply: fn(&Connection) -> Result<bool>,
+}
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    to_version: 2,
+    apply: add_rotation_column,
+}];
+
+/// Columns selected by the calibration matching and master-building paths.
+///
+/// The version row says which migrations should have run, but it is not proof
+/// that their physical changes are present. Older write paths and interrupted
+/// upgrades can leave the two out of step, so readers verify the shape they
+/// actually need before issuing a query that names these columns.
+const READABLE_FRAME_COLUMNS: &[&str] = &[
+    "id",
+    "frame_uuid",
+    "rig_uuid",
+    "kind",
+    "source_path",
+    "source_fingerprint",
+    "captured_at",
+    "telescope",
+    "camera",
+    "width",
+    "height",
+    "channels",
+    "binning_x",
+    "binning_y",
+    "gain",
+    "offset",
+    "readout_mode",
+    "bayer_pattern",
+    "exposure_s",
+    "camera_temp",
+    "filter_name",
+    "focal_length_mm",
+    "rotation",
+];
+
+fn add_rotation_column(conn: &Connection) -> Result<bool> {
+    // NULL means "not recorded", which the matcher treats as compatible, so
+    // an upgraded catalog keeps matching the flats it matched before.
+    add_column_if_missing(conn, "psf_guard_calibration_frame", "rotation", "REAL")
+}
+
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    declaration: &str,
+) -> Result<bool> {
+    let present = table_column_names(conn, table)?
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(column));
+    if present {
+        return Ok(false);
+    }
+    match conn.execute_batch(&format!(
+        "ALTER TABLE {table} ADD COLUMN {column} {declaration};"
+    )) {
+        Ok(()) => Ok(true),
+        // Two processes can open the same catalog at the same moment, both
+        // find the column missing, and both try to add it. SQLite serializes
+        // the writes, so one wins and the other is told the column is already
+        // there — which is the state we wanted. Treating that as a failure
+        // would make the loser log an upgrade error and report no calibration
+        // library for a catalog that had just been upgraded correctly.
+        Err(error) => {
+            let present_after_error = table_column_names(conn, table)
+                .map(|columns| columns.iter().any(|name| name.eq_ignore_ascii_case(column)))
+                .unwrap_or(false);
+            if present_after_error {
+                Ok(false)
+            } else {
+                Err(error).with_context(|| format!("adding {table}.{column}"))
+            }
+        }
+    }
+}
+
+fn recorded_schema_version(conn: &Connection) -> Result<i64> {
+    Ok(conn.query_row(
+        "SELECT version FROM psf_guard_calibration_schema WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )?)
+}
+
+/// Advance the migration cursor without ever overwriting a version written by
+/// a newer process. Return the version currently stored and whether this call
+/// moved it.
+fn advance_schema_version(conn: &Connection, to_version: i64) -> Result<(i64, bool)> {
+    let advanced = conn.execute(
+        "UPDATE psf_guard_calibration_schema
+         SET version = ?1
+         WHERE singleton = 1 AND version < ?1",
+        [to_version],
+    )? > 0;
+    Ok((recorded_schema_version(conn)?, advanced))
+}
+
+/// Run every idempotent physical check and advance the stored version through
+/// any steps this catalog still needs. Assumes the tables exist.
+fn run_migrations(conn: &Connection) -> Result<bool> {
+    let mut version = recorded_schema_version(conn)?;
+    if version > CALIBRATION_SCHEMA_VERSION {
+        anyhow::bail!(
+            "PSF Guard calibration schema version {version} is newer than this build \
+             supports (expected at most {CALIBRATION_SCHEMA_VERSION}); upgrade PSF Guard"
+        );
+    }
+    let mut changed = false;
+    for migration in MIGRATIONS {
+        // Another process may have advanced the catalog since the previous
+        // rung. Known physical steps are additive, but this build must stop
+        // before changing a schema whose recorded version is now newer.
+        version = recorded_schema_version(conn)?;
+        if version > CALIBRATION_SCHEMA_VERSION {
+            anyhow::bail!(
+                "PSF Guard calibration schema version {version} is newer than this build \
+                 supports (expected at most {CALIBRATION_SCHEMA_VERSION}); upgrade PSF Guard"
+            );
+        }
+        // The version row is a migration cursor, not proof that the physical
+        // change survived. Each step is required to be idempotent, so rerun
+        // it even at the recorded version and repair supported schema drift.
+        changed |= (migration.apply)(conn).with_context(|| {
+            format!(
+                "upgrading the PSF Guard calibration schema to version {}",
+                migration.to_version
+            )
+        })?;
+        if version < migration.to_version {
+            let (observed, advanced) = advance_schema_version(conn, migration.to_version)?;
+            version = observed;
+            changed |= advanced;
+            if advanced {
+                tracing::info!("Upgraded the PSF Guard calibration schema to version {version}");
+            }
+        } else {
+            // Detect a concurrent newer writer even when this rung needed no
+            // cursor update of its own.
+            version = recorded_schema_version(conn)?;
+        }
+        if version > CALIBRATION_SCHEMA_VERSION {
+            anyhow::bail!(
+                "PSF Guard calibration schema version {version} is newer than this build \
+                 supports (expected at most {CALIBRATION_SCHEMA_VERSION}); upgrade PSF Guard"
+            );
+        }
+    }
+    Ok(changed)
+}
+
+/// Upgrade a catalog that already carries PSF Guard's tables, and report
+/// whether there was anything to upgrade.
+///
+/// This never creates the calibration tables. A catalog that has never held
+/// calibration data is left alone by this function; the first calibration
+/// import creates those tables.
+pub fn migrate_existing(conn: &Connection) -> Result<bool> {
+    if !schema_exists(conn) {
+        return Ok(false);
+    }
+    run_migrations(conn)
+}
+
+/// Whether this catalog's PSF Guard tables carry every frame column this build
+/// reads, regardless of what the version row claims.
+///
+/// An older or read-only catalog can have the required columns while its
+/// version row still lags; it remains safe to read. Conversely, a version row
+/// at or above the current number is not allowed to hide a missing physical
+/// column and recreate the `no such column` failure this guard prevents.
+pub fn schema_supports_current_reads(conn: &Connection) -> bool {
+    if !schema_exists(conn) {
+        return false;
+    }
+    let complete = table_column_names(conn, "psf_guard_calibration_frame")
+        .map(|columns| {
+            READABLE_FRAME_COLUMNS.iter().all(|required| {
+                columns
+                    .iter()
+                    .any(|column| column.eq_ignore_ascii_case(required))
+            })
+        })
+        .unwrap_or(false);
+    if !complete {
+        // Loud, because the alternative is a stack or export quietly
+        // calibrating nothing. This is the one state a user has to act on.
+        tracing::warn!(
+            "This catalog's calibration tables are missing columns this build reads and \
+             could not be upgraded, so no calibration will be applied. Open it with \
+             write access once to upgrade it."
+        );
+    }
+    complete
+}
+
 pub fn ensure_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         r#"
@@ -323,9 +550,6 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
             version   INTEGER NOT NULL
         );
-        INSERT INTO psf_guard_calibration_schema (singleton, version)
-            VALUES (1, 1)
-            ON CONFLICT(singleton) DO NOTHING;
 
         CREATE TABLE IF NOT EXISTS psf_guard_rig (
             rig_uuid      TEXT PRIMARY KEY,
@@ -411,28 +635,16 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         "#,
     )
     .context("creating PSF Guard calibration tables")?;
-    let version: i64 = conn.query_row(
-        "SELECT version FROM psf_guard_calibration_schema WHERE singleton = 1",
-        [],
-        |row| row.get(0),
+    // A catalog that has just had its tables created is already at the
+    // current version; one that had them from an older build is stamped with
+    // whatever it was, and the ladder below carries it up.
+    conn.execute(
+        "INSERT INTO psf_guard_calibration_schema (singleton, version)
+             VALUES (1, ?1)
+             ON CONFLICT(singleton) DO NOTHING",
+        [CALIBRATION_SCHEMA_VERSION],
     )?;
-    if version != CALIBRATION_SCHEMA_VERSION {
-        anyhow::bail!(
-            "PSF Guard calibration schema version {version} is not supported by this build \
-             (expected {CALIBRATION_SCHEMA_VERSION})"
-        );
-    }
-    // Catalogs created before the rotation column: add it in place. NULL
-    // means "not recorded", which the matcher treats as compatible.
-    let has_rotation = conn
-        .prepare("PRAGMA table_info('psf_guard_calibration_frame')")?
-        .query_map([], |row| row.get::<_, String>(1))?
-        .filter_map(|name| name.ok())
-        .any(|name| name.eq_ignore_ascii_case("rotation"));
-    if !has_rotation {
-        conn.execute_batch("ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;")?;
-    }
-    Ok(())
+    run_migrations(conn).map(|_| ())
 }
 
 pub fn schema_exists(conn: &Connection) -> bool {
@@ -635,7 +847,8 @@ pub fn library_details(conn: &Connection) -> Result<CalibrationLibraryDetails> {
         SELECT id, frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
                captured_at, telescope, camera, width, height, channels,
                binning_x, binning_y, gain, offset, readout_mode, bayer_pattern,
-               exposure_s, camera_temp, filter_name, focal_length_mm
+               exposure_s, camera_temp, filter_name, focal_length_mm,
+               NULL AS rotation
         FROM psf_guard_calibration_frame
         ORDER BY kind, captured_at DESC, source_path COLLATE NOCASE
         "#,
@@ -915,7 +1128,11 @@ fn table_column_names(conn: &Connection, table: &str) -> Result<Vec<String>> {
 }
 
 pub fn select_for_light(conn: &Connection, light: &FrameMeta) -> Result<CalibrationSelection> {
-    if !schema_exists(conn) {
+    // Not `schema_exists`: a catalog whose tables predate a column this query
+    // selects has the table but not the column, and asking for it fails the
+    // whole stack with a raw SQL error. Opening the catalog upgrades it; one
+    // that could not be upgraded reports no calibration instead.
+    if !schema_supports_current_reads(conn) {
         return Ok(CalibrationSelection::default());
     }
     let mut statement = conn.prepare(
@@ -1552,7 +1769,29 @@ fn resolve_or_build_masters_pinned(
         return Ok((seiza_stacking::CalibrationMasters::default(), applied));
     }
 
-    ensure_schema(conn)?;
+    // A read-only catalog, or one written by a newer build, can still reuse
+    // masters whose row and cache file already exist. Do not turn that read
+    // path into a fatal setup write. If a new master is needed,
+    // `build_master` reports the blocker and the stack continues without it.
+    let master_recording_blocker = if conn.is_readonly(rusqlite::MAIN_DB)? {
+        Some("catalog is read-only".to_string())
+    } else {
+        // Refuse a future schema before `ensure_schema` runs any
+        // `CREATE IF NOT EXISTS` statements. Newer catalogs are readable but
+        // this build must not change their shape or record new masters.
+        match migrate_existing(conn).and_then(|_| ensure_schema(conn)) {
+            Ok(()) => None,
+            Err(error) => {
+                tracing::warn!(
+                    "Cannot prepare the calibration catalog to record generated masters: \
+                     {error:#}. Existing recorded cached masters remain usable."
+                );
+                Some(format!(
+                    "catalog schema cannot be updated by this build: {error:#}"
+                ))
+            }
+        }
+    };
     let master_root = cache_root.join("calibration-masters");
     std::fs::create_dir_all(&master_root)
         .with_context(|| format!("creating {}", master_root.display()))?;
@@ -1582,7 +1821,14 @@ fn resolve_or_build_masters_pinned(
             failures.push((kind, reason));
             return None;
         }
-        match build_master(conn, &master_root, kind, frames, inputs) {
+        match build_master(
+            conn,
+            &master_root,
+            kind,
+            frames,
+            inputs,
+            master_recording_blocker.as_deref(),
+        ) {
             Ok(master) => master,
             Err(error) => {
                 tracing::warn!(
@@ -2127,6 +2373,7 @@ fn build_master(
     kind: CalibrationKind,
     frames: &[CalibrationFrame],
     inputs: MasterInputs<'_>,
+    recording_blocker: Option<&str>,
 ) -> Result<Option<BuiltMaster>> {
     // Reduce to the frames that can actually combine (one temperature, one
     // flat session). The master's content hash below covers exactly this
@@ -2165,8 +2412,20 @@ fn build_master(
         if row_exists && file_valid {
             return Ok(Some(BuiltMaster { path, master_uuid }));
         }
+        if let Some(blocker) = recording_blocker {
+            anyhow::bail!(
+                "{blocker}; no valid recorded cached {} master exists",
+                kind.as_str()
+            );
+        }
         std::fs::remove_file(&path)
             .with_context(|| format!("removing stale master {}", path.display()))?;
+    }
+    if let Some(blocker) = recording_blocker {
+        anyhow::bail!(
+            "{blocker}; no recorded cached {} master exists",
+            kind.as_str()
+        );
     }
     let seiza_kind = match kind {
         CalibrationKind::Bias => seiza_stacking::MasterFrameKind::Bias,
@@ -2693,6 +2952,10 @@ fn sort_candidates(frames: &mut [CalibrationFrame], reference_at: Option<i64>) {
 }
 
 fn query_kind(conn: &Connection, kind: CalibrationKind) -> Result<Vec<CalibrationFrame>> {
+    // See `select_for_light`: an un-upgraded catalog has no rotation column.
+    if !schema_supports_current_reads(conn) {
+        return Ok(Vec::new());
+    }
     let mut statement = conn.prepare(
         r#"
         SELECT id, frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
@@ -2993,6 +3256,272 @@ mod tests {
         }
     }
 
+    /// A catalog exactly as an older build left it: the tables, the version
+    /// row saying 1, and no `rotation` column.
+    fn version_one_catalog() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE psf_guard_calibration_schema (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                version   INTEGER NOT NULL
+            );
+            INSERT INTO psf_guard_calibration_schema (singleton, version) VALUES (1, 1);
+            CREATE TABLE psf_guard_calibration_frame (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                frame_uuid         TEXT NOT NULL UNIQUE,
+                rig_uuid           TEXT NOT NULL,
+                kind               TEXT NOT NULL,
+                source_path        TEXT NOT NULL UNIQUE,
+                source_fingerprint TEXT NOT NULL,
+                captured_at        INTEGER,
+                image_type_raw     TEXT,
+                telescope          TEXT,
+                camera             TEXT,
+                width              INTEGER,
+                height             INTEGER,
+                channels           INTEGER,
+                binning_x          INTEGER,
+                binning_y          INTEGER,
+                gain               INTEGER,
+                offset             INTEGER,
+                readout_mode       INTEGER,
+                bayer_pattern      TEXT,
+                bayer_x_offset     INTEGER,
+                bayer_y_offset     INTEGER,
+                exposure_s         REAL,
+                camera_temp        REAL,
+                filter_name        TEXT,
+                focal_length_mm    REAL,
+                file_size          INTEGER,
+                file_mtime_ns      TEXT,
+                added_at           INTEGER NOT NULL,
+                updated_at         INTEGER NOT NULL
+            );
+            "#,
+        )
+        .unwrap();
+        conn
+    }
+
+    fn columns(conn: &Connection, table: &str) -> Vec<String> {
+        table_column_names(conn, table).unwrap()
+    }
+
+    #[test]
+    fn opening_a_version_one_catalog_upgrades_it_in_place() {
+        let conn = version_one_catalog();
+        assert!(!columns(&conn, "psf_guard_calibration_frame")
+            .iter()
+            .any(|name| name == "rotation"));
+
+        assert!(migrate_existing(&conn).unwrap(), "there was work to do");
+
+        assert!(columns(&conn, "psf_guard_calibration_frame")
+            .iter()
+            .any(|name| name == "rotation"));
+        assert!(schema_supports_current_reads(&conn));
+        let version: i64 = conn
+            .query_row(
+                "SELECT version FROM psf_guard_calibration_schema WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, CALIBRATION_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn the_upgrade_is_what_lets_a_stack_read_the_library() {
+        // The reported failure: `no such column: rotation`, raised from
+        // inside a stack build against a catalog an older build wrote.
+        let conn = version_one_catalog();
+        let light = frame("/lights/one.fits", "LIGHT");
+        assert!(
+            select_for_light(&conn, &light).is_ok(),
+            "an un-upgraded catalog must report no calibration, not fail"
+        );
+        assert!(select_for_light(&conn, &light).unwrap().bias.is_empty());
+
+        migrate_existing(&conn).unwrap();
+        assert!(select_for_light(&conn, &light).is_ok());
+        assert!(query_kind(&conn, CalibrationKind::Flat).is_ok());
+    }
+
+    #[test]
+    fn upgrading_twice_is_a_no_op() {
+        let conn = version_one_catalog();
+        assert!(migrate_existing(&conn).unwrap());
+        assert!(!migrate_existing(&conn).unwrap(), "nothing left to do");
+        assert!(!migrate_existing(&conn).unwrap());
+    }
+
+    #[test]
+    fn a_half_upgraded_catalog_finishes_the_job() {
+        // An older build added the column from its own write path without
+        // recording a version, so the step must survive being run over it.
+        let conn = version_one_catalog();
+        conn.execute_batch("ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;")
+            .unwrap();
+        assert!(
+            schema_supports_current_reads(&conn),
+            "the physical shape is readable even while its version lags"
+        );
+        assert!(migrate_existing(&conn).unwrap());
+        assert!(schema_supports_current_reads(&conn));
+    }
+
+    #[test]
+    fn a_current_version_row_does_not_hide_schema_drift() {
+        let conn = version_one_catalog();
+        conn.execute(
+            "UPDATE psf_guard_calibration_schema SET version = ?1 WHERE singleton = 1",
+            [CALIBRATION_SCHEMA_VERSION],
+        )
+        .unwrap();
+        assert!(!schema_supports_current_reads(&conn));
+
+        assert!(
+            migrate_existing(&conn).unwrap(),
+            "the missing column was repaired"
+        );
+        assert!(schema_supports_current_reads(&conn));
+        assert!(
+            !migrate_existing(&conn).unwrap(),
+            "the repair is idempotent"
+        );
+    }
+
+    #[test]
+    fn a_catalog_with_no_psf_guard_tables_is_left_alone() {
+        // Opening someone's scheduler database must not write to it.
+        let conn = Connection::open_in_memory().unwrap();
+        assert!(!migrate_existing(&conn).unwrap());
+        assert!(!schema_exists(&conn));
+        assert!(!schema_supports_current_reads(&conn));
+    }
+
+    #[test]
+    fn a_fresh_catalog_is_created_at_the_current_version() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        assert!(schema_supports_current_reads(&conn));
+        assert!(!migrate_existing(&conn).unwrap(), "nothing to upgrade");
+    }
+
+    #[test]
+    fn every_version_this_build_claims_has_a_step_that_reaches_it() {
+        // The constant and the ladder live far apart. Bumping one without the
+        // other would log a successful upgrade on every open while the catalog
+        // stayed behind, and calibration would quietly vanish.
+        assert_eq!(
+            MIGRATIONS.last().map(|migration| migration.to_version),
+            Some(CALIBRATION_SCHEMA_VERSION),
+            "the last rung must reach the version this build claims"
+        );
+        let mut previous = 1;
+        for migration in MIGRATIONS {
+            assert!(
+                migration.to_version > previous,
+                "rungs must ascend; run_migrations walks them in order"
+            );
+            previous = migration.to_version;
+        }
+    }
+
+    #[test]
+    fn a_stale_migrator_cannot_move_the_version_backward() {
+        let conn = version_one_catalog();
+        let newer_version = CALIBRATION_SCHEMA_VERSION + 1;
+        conn.execute(
+            "UPDATE psf_guard_calibration_schema SET version = ?1 WHERE singleton = 1",
+            [newer_version],
+        )
+        .unwrap();
+
+        let (observed, advanced) =
+            advance_schema_version(&conn, CALIBRATION_SCHEMA_VERSION).unwrap();
+        assert!(!advanced);
+        assert_eq!(observed, newer_version);
+        assert_eq!(recorded_schema_version(&conn).unwrap(), newer_version);
+    }
+
+    #[test]
+    fn a_catalog_that_has_the_columns_reads_even_with_a_stale_version() {
+        // The state real catalogs are in: an earlier build added the column
+        // from its write path and never recorded a version. Gating reads on
+        // the version row would report no calibration for a catalog that is
+        // perfectly readable, including where it cannot be upgraded at all.
+        let conn = version_one_catalog();
+        conn.execute_batch("ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;")
+            .unwrap();
+        assert!(
+            schema_supports_current_reads(&conn),
+            "the columns are all there"
+        );
+        let light = frame("/lights/one.fits", "LIGHT");
+        assert!(select_for_light(&conn, &light).is_ok());
+        assert!(query_kind(&conn, CalibrationKind::Flat).is_ok());
+    }
+
+    #[test]
+    fn a_catalog_missing_the_columns_reports_absent_rather_than_failing() {
+        let conn = version_one_catalog();
+        assert!(!schema_supports_current_reads(&conn));
+        let light = frame("/lights/one.fits", "LIGHT");
+        assert!(select_for_light(&conn, &light).unwrap().bias.is_empty());
+    }
+
+    #[test]
+    fn two_openers_racing_the_same_upgrade_both_succeed() {
+        // Both pass the column check, both try the ALTER, SQLite serializes
+        // them and tells the loser the column already exists. That is the
+        // state we wanted, so it is not a failure.
+        let conn = version_one_catalog();
+        add_column_if_missing(&conn, "psf_guard_calibration_frame", "rotation", "REAL").unwrap();
+        assert!(
+            add_column_if_missing(&conn, "psf_guard_calibration_frame", "rotation", "REAL").is_ok(),
+            "the loser of the race must not report an upgrade failure"
+        );
+    }
+
+    #[test]
+    fn a_catalog_from_a_newer_build_is_refused_rather_than_guessed_at() {
+        let conn = version_one_catalog();
+        // A newer build would have run every step this one knows about, so the
+        // columns are there; it simply also knows steps this build does not.
+        conn.execute_batch("ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;")
+            .unwrap();
+        conn.execute(
+            "UPDATE psf_guard_calibration_schema SET version = ?1 WHERE singleton = 1",
+            [CALIBRATION_SCHEMA_VERSION + 1],
+        )
+        .unwrap();
+        let error = migrate_existing(&conn).unwrap_err().to_string();
+        assert!(error.contains("newer than this build"), "{error}");
+        // Refusing to upgrade it is not the same as refusing to read it.
+        // Steps only add columns, so every column this build names is there.
+        assert!(schema_supports_current_reads(&conn));
+        let light = frame("/lights/one.fits", "LIGHT");
+        assert!(select_for_light(&conn, &light).is_ok());
+    }
+
+    #[test]
+    fn a_version_row_cannot_hide_a_missing_required_column() {
+        let conn = version_one_catalog();
+        conn.execute(
+            "UPDATE psf_guard_calibration_schema SET version = ?1 WHERE singleton = 1",
+            [CALIBRATION_SCHEMA_VERSION + 1],
+        )
+        .unwrap();
+
+        assert!(!schema_supports_current_reads(&conn));
+        let light = frame("/lights/one.fits", "LIGHT");
+        let selection = select_for_light(&conn, &light).unwrap();
+        assert!(selection.bias.is_empty());
+        assert!(query_kind(&conn, CalibrationKind::Flat).unwrap().is_empty());
+    }
+
     fn fits_card(output: &mut Vec<u8>, value: &str) {
         let mut card = value.as_bytes().to_vec();
         card.resize(80, b' ');
@@ -3030,6 +3559,28 @@ mod tests {
         let mut file = std::fs::File::create(path).unwrap();
         file.write_all(&header).unwrap();
         file.write_all(&payload).unwrap();
+    }
+
+    fn file_backed_bias_library(temp: &tempfile::TempDir) -> (PathBuf, PathBuf, PathBuf) {
+        let mut calibration_meta = Vec::new();
+        for index in 0..2 {
+            let path = temp.path().join(format!("bias-{index}.fits"));
+            write_test_fits(&path, "BIAS", 100 + index);
+            calibration_meta.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        let light_path = temp.path().join("light.fits");
+        write_test_fits(&light_path, "LIGHT", 1_100);
+
+        let database_path = temp.path().join("catalog.sqlite");
+        let mut conn = Connection::open(&database_path).unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &calibration_meta, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        drop(conn);
+
+        (database_path, temp.path().join("cache"), light_path)
     }
 
     #[test]
@@ -3179,6 +3730,9 @@ mod tests {
         assert_eq!(selection.dark.len(), 1);
         assert!(selection.bias.is_empty());
         assert_eq!(library_summary(&conn).unwrap().frame_count, 1);
+        let details = library_details(&conn).unwrap();
+        assert_eq!(details.frames.len(), 1);
+        assert_eq!(details.frames[0].kind, CalibrationKind::Dark);
     }
 
     #[test]
@@ -4041,6 +4595,157 @@ mod tests {
             "warning must name the failed master and why: {warning}"
         );
         assert_eq!(applied.state, "applied");
+    }
+
+    #[test]
+    fn read_only_catalog_reuses_a_recorded_cached_master() {
+        let temp = tempfile::tempdir().unwrap();
+        let (database_path, cache, light_path) = file_backed_bias_library(&temp);
+
+        let writable = Connection::open(&database_path).unwrap();
+        let (built, first) = resolve_or_build_masters(
+            &writable,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        assert!(!built.is_empty());
+        assert!(first.bias_master.is_some());
+        drop(writable);
+
+        let read_only =
+            Connection::open_with_flags(&database_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap();
+        assert!(read_only.is_readonly(rusqlite::MAIN_DB).unwrap());
+        let (reused, applied) = resolve_or_build_masters(
+            &read_only,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+
+        assert!(!reused.is_empty());
+        assert_eq!(applied.state, "applied");
+        assert_eq!(applied.bias_master, first.bias_master);
+    }
+
+    #[test]
+    fn read_only_catalog_skips_an_uncached_master_without_writing() {
+        let temp = tempfile::tempdir().unwrap();
+        let (database_path, cache, light_path) = file_backed_bias_library(&temp);
+        let read_only =
+            Connection::open_with_flags(&database_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap();
+
+        let (masters, applied) = resolve_or_build_masters(
+            &read_only,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+
+        assert!(masters.is_empty());
+        assert!(applied.bias_master.is_none());
+        assert_eq!(applied.state, "incomplete");
+        let warning = applied.warning.as_deref().unwrap_or_default();
+        assert!(
+            warning.contains("catalog is read-only; no recorded cached bias master exists"),
+            "{warning}"
+        );
+        let master_root = cache.join("calibration-masters");
+        assert!(master_root.is_dir());
+        assert!(
+            std::fs::read_dir(master_root).unwrap().next().is_none(),
+            "a read-only catalog must not leave an unrecorded cache file"
+        );
+    }
+
+    #[test]
+    fn newer_catalog_reuses_a_recorded_cached_master() {
+        let temp = tempfile::tempdir().unwrap();
+        let (database_path, cache, light_path) = file_backed_bias_library(&temp);
+        let conn = Connection::open(&database_path).unwrap();
+        let (_, first) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE psf_guard_calibration_schema SET version = ?1 WHERE singleton = 1",
+            [CALIBRATION_SCHEMA_VERSION + 1],
+        )
+        .unwrap();
+
+        let (reused, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+
+        assert!(!reused.is_empty());
+        assert_eq!(applied.state, "applied");
+        assert_eq!(applied.bias_master, first.bias_master);
+    }
+
+    #[test]
+    fn newer_catalog_is_not_changed_to_record_an_uncached_master() {
+        let temp = tempfile::tempdir().unwrap();
+        let (database_path, cache, light_path) = file_backed_bias_library(&temp);
+        let conn = Connection::open(&database_path).unwrap();
+        conn.execute_batch(&format!(
+            "DROP TABLE psf_guard_calibration_master;
+             UPDATE psf_guard_calibration_schema
+             SET version = {} WHERE singleton = 1;",
+            CALIBRATION_SCHEMA_VERSION + 1
+        ))
+        .unwrap();
+
+        let (masters, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+
+        assert!(masters.is_empty());
+        assert_eq!(applied.state, "incomplete");
+        let warning = applied.warning.as_deref().unwrap_or_default();
+        assert!(warning.contains("newer than this build"), "{warning}");
+        let master_table_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'psf_guard_calibration_master'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(master_table_count, 0, "a newer schema must not be changed");
+        let master_root = cache.join("calibration-masters");
+        assert!(master_root.is_dir());
+        assert!(
+            std::fs::read_dir(master_root).unwrap().next().is_none(),
+            "a future schema must not leave an unrecorded cache file"
+        );
     }
 
     #[test]

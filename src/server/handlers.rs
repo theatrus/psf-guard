@@ -4017,14 +4017,21 @@ pub async fn get_targets_overview(
 ) -> Result<Json<ApiResponse<Vec<TargetOverviewResponse>>>, AppError> {
     tracing::debug!("🎯 Getting targets overview");
 
-    let conn = ctx.db();
-    let conn = conn.lock().map_err(AppError::db)?;
-    let db = Database::new(&conn);
-
-    // Get all targets with project info and stats including desired values
-    let targets_data = db
-        .get_all_targets_with_desired_stats()
-        .map_err(AppError::db)?;
+    // Everything this handler needs from the catalog, then the shared
+    // connection goes back. It used to be held for the whole response,
+    // including a query pair per target; the Overview page asks for this and
+    // the overall stats together, so a slow pass here blocked its own page.
+    let (targets_data, mut spans, mut filters_by_target) = {
+        let conn = ctx.db();
+        let conn = conn.lock().map_err(AppError::db)?;
+        let db = Database::new(&conn);
+        (
+            db.get_all_targets_with_desired_stats()
+                .map_err(AppError::db)?,
+            db.get_acquisition_spans().map_err(AppError::db)?,
+            db.get_filters_by_target().map_err(AppError::db)?,
+        )
+    };
 
     // Get file existence map
     let file_existence_map: std::collections::HashMap<i32, bool> = {
@@ -4035,30 +4042,10 @@ pub async fn get_targets_overview(
     let mut response = Vec::new();
 
     for target_data in targets_data {
-        // Get date range and filters for this target
-        let (earliest, latest, filters) = {
-            let mut stmt = conn.prepare(
-                "SELECT MIN(acquireddate), MAX(acquireddate) FROM acquiredimage WHERE targetId = ?",
-            ).map_err(AppError::db)?;
-
-            let (earliest, latest): (Option<i64>, Option<i64>) = stmt
-                .query_row([target_data.target.id], |row| {
-                    Ok((row.get(0)?, row.get(1)?))
-                })
-                .map_err(AppError::db)?;
-
-            let mut filter_stmt = conn.prepare(
-                "SELECT DISTINCT filtername FROM acquiredimage WHERE targetId = ? AND filtername IS NOT NULL ORDER BY filtername",
-            ).map_err(AppError::db)?;
-
-            let filters: Vec<String> = filter_stmt
-                .query_map([target_data.target.id], |row| row.get(0))
-                .map_err(AppError::db)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(AppError::db)?;
-
-            (earliest, latest, filters)
-        };
+        let (earliest, latest) = spans.remove(&target_data.target.id).unwrap_or((None, None));
+        let filters = filters_by_target
+            .remove(&target_data.target.id)
+            .unwrap_or_default();
 
         let span_days = match (earliest, latest) {
             (Some(start), Some(end)) => {

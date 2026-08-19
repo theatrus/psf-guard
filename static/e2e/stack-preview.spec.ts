@@ -109,7 +109,7 @@ function seedSyntheticColorStacks(databaseId: string, projectId: number): void {
       // Must track STACK_PREVIEW_CACHE_VERSION in src/server/stack_preview.rs.
       // The server hides remembered stacks from an older build, so a stale
       // number here leaves the color panel with no channels to combine.
-      cache_version: 12,
+      cache_version: 13,
       group: {
         index: 0,
         target_id: 2,
@@ -227,7 +227,7 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   // the card carries the curve, the ideal it is read against, and a verdict.
   const curve = panel.locator('.stack-snr');
   await expect(curve).toBeVisible();
-  await expect(curve.locator('.stack-snr-order')).toHaveText('capture order');
+  await expect(curve.locator('.stack-snr-order')).toHaveText('Reference-first capture');
   await expect(curve.locator('.stack-snr-chart .stack-snr-measured')).toBeVisible();
   await expect(curve.locator('.stack-snr-chart .stack-snr-ideal')).toBeVisible();
   await expect(curve.locator('.stack-snr-verdict')).toHaveCount(1);

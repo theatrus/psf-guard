@@ -230,6 +230,47 @@ the dark and flat to the lights automatically, and calibrated them.
 Rejected lights remain excluded in either layout. Repeated calibration sources
 are deduplicated per destination. Name collisions receive a numbered suffix.
 
+## Catalog upgrades
+
+PSF Guard keeps its own tables — the calibration library among them — inside
+your Target Scheduler catalog. When those tables change shape, an existing
+catalog is upgraded in place the moment it is opened, and the version it sits
+at is recorded beside them.
+
+Upgrades only ever add. That keeps two machines on different PSF Guard
+versions able to read the same catalog: the older build finds every column it
+knows about, and simply does not see the new one. It also means an upgrade
+cannot lose anything you already had.
+
+A catalog that cannot be written — read-only storage, someone else's file —
+is left as it is. PSF Guard says so in its log and opens the catalog read-only.
+Calibration matching and recorded cached masters remain available when the
+catalog has every column this build reads. If a stack needs a new master, it
+continues without that master and explains that the catalog cannot record it.
+If an older catalog is missing a required column, PSF Guard reports no
+calibration library rather than failing part way through a stack. A catalog
+written by a *newer* PSF Guard is read normally and can also reuse its recorded
+cached masters; PSF Guard declines to change its schema or record new masters,
+and says which way round the version mismatch is.
+
+A catalog that has never held calibration data gets none of PSF Guard's own
+tables written to it. They appear the first time you import calibration
+frames. Starting the server can still add performance indexes — see below.
+
+PSF Guard also adds two indexes to `acquiredimage`, the table Target Scheduler
+records images in. This happens in the background once at server startup,
+before catalog cache refreshes begin: building an index takes the catalog's
+write lock, and a catalog that N.I.N.A. is writing to right then is left alone
+and retried at the next server start. A catalog added while the server is
+running likewise waits for the next start. Until then queries still work; they
+just scan. Target Scheduler ships it without any, so looking up one
+target's images meant reading every row of the table — seconds per query on a
+catalog of a few thousand images, and repeated often enough to hold up the
+Overview page. The indexes are named `idx_psf_guard_acquiredimage_target` and
+`idx_psf_guard_acquiredimage_project`, so it is clear who added them and they
+are safe to drop. Adding an index changes no data and no table: Target
+Scheduler and N.I.N.A. keep working exactly as before, and simply run faster.
+
 ## Database transfer
 
 **Merge catalogs** and `sync pull` copy rigs, profile bindings, and raw

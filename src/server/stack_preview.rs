@@ -1910,11 +1910,13 @@ fn run_group(
     let ctx = state
         .get_database(database_id)
         .ok_or_else(|| format!("Database {database_id} is no longer configured"))?;
-    let calibration_conn = rusqlite::Connection::open(&ctx.database_path)
-        .map_err(|error| format!("Opening calibration catalog: {error}"))?;
-    calibration_conn
-        .busy_timeout(std::time::Duration::from_secs(60))
-        .map_err(|error| format!("Configuring calibration catalog: {error}"))?;
+    // Through the shared opener, so this connection gets the same busy
+    // timeout as every other and the same in-place upgrade of PSF Guard's
+    // tables. Opening it raw is how a stack came to read a catalog whose
+    // calibration tables predated a column the query names.
+    let calibration_conn =
+        crate::server::database_context::open_scheduler_connection(&ctx.database_path)
+            .map_err(|error| format!("Opening calibration catalog: {error}"))?;
     let directory_tree = ctx
         .get_directory_tree()
         .map_err(|error| format!("Indexing calibration folders: {error}"))?;

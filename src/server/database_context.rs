@@ -19,11 +19,15 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tokio::sync::Mutex as TokioMutex;
 
-/// Flags used to (re)open every scheduler database connection. `NO_MUTEX`
+/// Flags used to (re)open a writable scheduler database connection. `NO_MUTEX`
 /// because we serialize access ourselves with `Mutex<Connection>`; no `CREATE`
 /// so a vanished path errors instead of leaving a junk empty database behind.
 fn db_open_flags() -> OpenFlags {
     OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX
+}
+
+fn db_read_only_flags() -> OpenFlags {
+    OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX
 }
 
 /// How long a connection waits on SQLITE_BUSY before giving up. The scheduler
@@ -44,9 +48,100 @@ const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
 /// busy timeout. Every open site (initial, both reopen paths, the refresh
 /// connection) must go through here so none silently loses the busy handler.
 pub(crate) fn open_scheduler_connection(path: &str) -> rusqlite::Result<Connection> {
-    let conn = Connection::open_with_flags(path, db_open_flags())?;
+    let conn = match Connection::open_with_flags(path, db_open_flags()) {
+        Ok(conn) => conn,
+        Err(read_write_error) => {
+            // `SQLITE_OPEN_READWRITE` does not fall back by itself. Without
+            // this retry a catalog on read-only storage fails before the
+            // nonfatal migration handling below can preserve ordinary reads.
+            match Connection::open_with_flags(path, db_read_only_flags()) {
+                Ok(conn) => {
+                    tracing::warn!(
+                        "Opened scheduler catalog {path} read-only after read-write open failed: \
+                         {read_write_error}"
+                    );
+                    conn
+                }
+                Err(_) => return Err(read_write_error),
+            }
+        }
+    };
     conn.busy_timeout(DB_BUSY_TIMEOUT)?;
+    upgrade_psf_guard_tables(&conn, path);
     Ok(conn)
+}
+
+/// Bring PSF Guard's own tables in this catalog up to the shape this build
+/// reads, once, as the catalog is opened.
+///
+/// It used to happen on whichever write path ran first — an import, a sync, a
+/// master build — so a catalog that was only ever read kept an old shape, and
+/// the first query naming a newer column failed with a raw
+/// `no such column` from inside a stack. Opening is the one moment every
+/// caller passes through, so it is where the upgrade belongs.
+///
+/// A failure here is never fatal. The catalog may sit on read-only storage or
+/// belong to another user; it still serves every read that does not need the
+/// newer columns. Calibration remains available when the physical columns are
+/// already present; otherwise its readers report no library rather than
+/// failing. The warning says which catalog to look at.
+fn upgrade_psf_guard_tables(conn: &Connection, path: &str) {
+    match crate::calibration::migrate_existing(conn) {
+        Ok(true) => tracing::info!("Upgraded PSF Guard tables in {path}"),
+        Ok(false) => {}
+        Err(error) => {
+            let effect = if crate::calibration::schema_supports_current_reads(conn) {
+                "The existing calibration tables remain readable."
+            } else {
+                "Calibration will be reported as unavailable for this catalog."
+            };
+            tracing::warn!("Could not upgrade PSF Guard tables in {path}: {error:#}. {effect}");
+        }
+    }
+}
+
+/// How long the index build waits for the catalog's write lock before giving
+/// up for now. Deliberately short: N.I.N.A. may be saving frames into this
+/// file, and a query that scans is far better than a capture that blocks.
+const INDEX_BUILD_BUSY_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Build PSF Guard's query indexes on a catalog, off the open path.
+///
+/// This is an optimization, not a correctness step, and it is the expensive
+/// half: building an index takes the catalog's write lock, and on a rollback
+/// journal that blocks every other writer for the duration. Doing it during
+/// `open_scheduler_connection` put it on whichever thread happened to open the
+/// connection — including Tokio workers inside request handlers — and gave it
+/// the full sixty-second busy timeout to sit on.
+///
+/// So it runs on its own thread, on its own connection, with a short timeout,
+/// and only where the server knows it is not in the middle of something —
+/// once at startup, not every time a `DatabaseContext` is built. Constructing
+/// a context happens during imports and database management, and a background
+/// writer arriving mid-import is exactly the contention this is trying to
+/// avoid creating.
+///
+/// A catalog being written right now is left alone and picked up at the next
+/// server start; the only cost of skipping is that per-target lookups scan
+/// until then.
+pub(crate) fn spawn_query_index_build(path: String) {
+    std::thread::spawn(move || {
+        let built = Connection::open_with_flags(&path, db_open_flags())
+            .and_then(|conn| {
+                conn.busy_timeout(INDEX_BUILD_BUSY_TIMEOUT)?;
+                Ok(conn)
+            })
+            .map_err(anyhow::Error::from)
+            .and_then(|conn| crate::db::ensure_query_indexes(&conn));
+        match built {
+            Ok(true) => tracing::info!("Added PSF Guard query indexes to {path}"),
+            Ok(false) => {}
+            Err(error) => tracing::info!(
+                "Left PSF Guard query indexes for later on {path}: {error:#}. \
+                 Queries still work; per-target lookups scan the image table."
+            ),
+        }
+    });
 }
 
 /// Identity of the on-disk database file: the `(device, inode)` pair on unix.
@@ -1108,6 +1203,76 @@ mod tests {
                     (300, 1, 30, 3000, 'L', 0, 'not json', NULL, 'default');",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn scheduler_connection_upgrades_calibration_schema_on_open() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("version-one.sqlite");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE psf_guard_calibration_schema (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                version INTEGER NOT NULL
+             );
+             INSERT INTO psf_guard_calibration_schema (singleton, version) VALUES (1, 1);
+             CREATE TABLE psf_guard_calibration_frame (
+                id INTEGER PRIMARY KEY,
+                frame_uuid TEXT NOT NULL UNIQUE
+             );",
+        )
+        .unwrap();
+        drop(conn);
+
+        let conn = open_scheduler_connection(path.to_str().unwrap()).unwrap();
+        let version: i64 = conn
+            .query_row(
+                "SELECT version FROM psf_guard_calibration_schema WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, crate::calibration::CALIBRATION_SCHEMA_VERSION);
+        let has_rotation = conn
+            .prepare("PRAGMA table_info('psf_guard_calibration_frame')")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .iter()
+            .any(|column| column == "rotation");
+        assert!(has_rotation, "opening the catalog must run its migration");
+    }
+
+    #[test]
+    fn scheduler_connection_falls_back_to_read_only_access() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("read-only.sqlite");
+        make_db(&path, "Readable");
+
+        let original_permissions = std::fs::metadata(&path).unwrap().permissions();
+        let mut read_only_permissions = original_permissions.clone();
+        read_only_permissions.set_readonly(true);
+        std::fs::set_permissions(&path, read_only_permissions).unwrap();
+
+        let opened = open_scheduler_connection(path.to_str().unwrap());
+
+        // Restore the file before any assertion can panic so TempDir can
+        // remove it on Windows as well as Unix.
+        std::fs::set_permissions(&path, original_permissions).unwrap();
+        let conn = opened.expect("a readable catalog should still open");
+        let project: String = conn
+            .query_row("SELECT name FROM project WHERE Id = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(project, "Readable");
+        assert!(
+            conn.execute("INSERT INTO project (Id, name) VALUES (2, 'No')", [])
+                .is_err(),
+            "the fallback connection must remain read-only"
+        );
     }
 
     // Only used by the unix-only replace-by-rename test below; gated to match so
