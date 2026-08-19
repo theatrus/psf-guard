@@ -130,6 +130,24 @@
 
 ## Fixed
 
+- A catalog written by an earlier PSF Guard is now upgraded the moment it is
+  opened, instead of whenever some later write happened to notice. Stacking a
+  project whose catalog predated rotator-aware flat matching failed outright
+  with `no such column: rotation`; it now works, and an upgrade that cannot be
+  written — a read-only catalog — reports no calibration library rather than
+  failing part way through a stack. See
+  [calibration libraries](https://github.com/theatrus/psf-guard/blob/main/docs/CALIBRATION_LIBRARY.md).
+- The Overview page no longer times out on large catalogs. It used to ask the
+  database for each target's date range and filter set one target at a time,
+  holding the shared connection for the whole page; on a catalog of nineteen
+  targets and ten thousand images that was thirteen seconds of scanning per
+  load, long enough to time out and to stall every other request behind it.
+  The same answers now come from one pass each, and the connection is released
+  before the response is built.
+- PSF Guard now adds two indexes to Target Scheduler's image table the first
+  time it opens a catalog. Target Scheduler ships none, so looking up one
+  target's images read every row. Adding an index changes no data and no
+  table, so Target Scheduler and N.I.N.A. keep working exactly as before.
 - Progressive stack SNR now invalidates pre-curve checkpoints, resumes only an
   exact sequence prefix, verifies the checkpoint files agree, and retries
   transient frame-read failures from a clean stack. It measures row and column

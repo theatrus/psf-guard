@@ -46,7 +46,40 @@ const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
 pub(crate) fn open_scheduler_connection(path: &str) -> rusqlite::Result<Connection> {
     let conn = Connection::open_with_flags(path, db_open_flags())?;
     conn.busy_timeout(DB_BUSY_TIMEOUT)?;
+    upgrade_psf_guard_tables(&conn, path);
     Ok(conn)
+}
+
+/// Bring PSF Guard's own tables in this catalog up to the shape this build
+/// reads, once, as the catalog is opened.
+///
+/// It used to happen on whichever write path ran first — an import, a sync, a
+/// master build — so a catalog that was only ever read kept an old shape, and
+/// the first query naming a newer column failed with a raw
+/// `no such column` from inside a stack. Opening is the one moment every
+/// caller passes through, so it is where the upgrade belongs.
+///
+/// A failure here is never fatal. The catalog may sit on read-only storage or
+/// belong to another user; it still serves every read that does not need the
+/// newer columns, and the calibration readers report no library rather than
+/// failing. The warning says which catalog to look at.
+fn upgrade_psf_guard_tables(conn: &Connection, path: &str) {
+    match crate::calibration::migrate_existing(conn) {
+        Ok(true) => tracing::info!("Upgraded PSF Guard tables in {path}"),
+        Ok(false) => {}
+        Err(error) => tracing::warn!(
+            "Could not upgrade PSF Guard tables in {path}: {error:#}. \
+             Calibration will be reported as unavailable for this catalog."
+        ),
+    }
+    match crate::db::ensure_query_indexes(conn) {
+        Ok(true) => tracing::info!("Added PSF Guard query indexes to {path}"),
+        Ok(false) => {}
+        Err(error) => tracing::warn!(
+            "Could not add PSF Guard query indexes to {path}: {error:#}. \
+             Queries still work; per-target lookups will scan the image table."
+        ),
+    }
 }
 
 /// Identity of the on-disk database file: the `(device, inode)` pair on unix.

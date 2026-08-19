@@ -14,7 +14,16 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::UNIX_EPOCH;
 
-pub const CALIBRATION_SCHEMA_VERSION: i64 = 1;
+/// Shape of PSF Guard's own tables inside a scheduler catalog.
+///
+/// Bump this whenever those tables change, and add the step that gets an
+/// older catalog here to [`MIGRATIONS`]. A catalog is upgraded in place when
+/// it is opened; see [`migrate_existing`].
+///
+/// 1: the original calibration library.
+/// 2: `psf_guard_calibration_frame.rotation`, so a flat only matches a light
+///    shot at the same rotator angle.
+pub const CALIBRATION_SCHEMA_VERSION: i64 = 2;
 // 2: flat masters suppress defective pixels spatially after integration.
 pub const MASTER_CACHE_VERSION: u32 = 2;
 const MIN_MASTER_FRAMES: usize = 2;
@@ -316,6 +325,126 @@ pub fn kind_from_meta(meta: &FrameMeta) -> Option<CalibrationKind> {
     }
 }
 
+/// One rung of the upgrade ladder: the version it produces, and the step that
+/// gets there from the version below it.
+///
+/// Two rules bind every step.
+///
+/// It must be safe to run twice. A catalog can arrive here half upgraded — an
+/// older build added the `rotation` column from its write path without
+/// recording a version — and the version row is written after the step, so a
+/// crash in between leaves the step to run again.
+///
+/// It must only add. Someone runs PSF Guard on two machines and one upgrades
+/// first; the older build still has to read that catalog. Adding a column
+/// leaves every older query working, which is why [`schema_is_current`] calls
+/// a newer catalog readable. Renaming or dropping one would not, and would
+/// need a different mechanism than this ladder.
+struct Migration {
+    to_version: i64,
+    apply: fn(&Connection) -> Result<()>,
+}
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    to_version: 2,
+    apply: add_rotation_column,
+}];
+
+fn add_rotation_column(conn: &Connection) -> Result<()> {
+    // NULL means "not recorded", which the matcher treats as compatible, so
+    // an upgraded catalog keeps matching the flats it matched before.
+    add_column_if_missing(conn, "psf_guard_calibration_frame", "rotation", "REAL")
+}
+
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    declaration: &str,
+) -> Result<()> {
+    let present = table_column_names(conn, table)?
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(column));
+    if !present {
+        conn.execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {declaration};"
+        ))
+        .with_context(|| format!("adding {table}.{column}"))?;
+    }
+    Ok(())
+}
+
+/// Run every upgrade step this catalog still needs. Assumes the tables exist.
+fn run_migrations(conn: &Connection) -> Result<()> {
+    let mut version: i64 = conn.query_row(
+        "SELECT version FROM psf_guard_calibration_schema WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    if version > CALIBRATION_SCHEMA_VERSION {
+        anyhow::bail!(
+            "PSF Guard calibration schema version {version} is newer than this build supports              (expected at most {CALIBRATION_SCHEMA_VERSION}); upgrade PSF Guard"
+        );
+    }
+    for migration in MIGRATIONS {
+        if version >= migration.to_version {
+            continue;
+        }
+        (migration.apply)(conn).with_context(|| {
+            format!(
+                "upgrading the PSF Guard calibration schema to version {}",
+                migration.to_version
+            )
+        })?;
+        conn.execute(
+            "UPDATE psf_guard_calibration_schema SET version = ?1 WHERE singleton = 1",
+            [migration.to_version],
+        )?;
+        version = migration.to_version;
+        tracing::info!("Upgraded the PSF Guard calibration schema to version {version}");
+    }
+    Ok(())
+}
+
+/// Upgrade a catalog that already carries PSF Guard's tables, and report
+/// whether there was anything to upgrade.
+///
+/// This never creates the tables. A catalog that has never held calibration
+/// data is left exactly as it was found: opening someone's scheduler database
+/// should not write to it, and the first import creates the tables anyway.
+pub fn migrate_existing(conn: &Connection) -> Result<bool> {
+    if !schema_exists(conn) {
+        return Ok(false);
+    }
+    let before: i64 = conn.query_row(
+        "SELECT version FROM psf_guard_calibration_schema WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    run_migrations(conn)?;
+    Ok(before < CALIBRATION_SCHEMA_VERSION)
+}
+
+/// Whether this catalog's PSF Guard tables carry every column this build
+/// reads.
+///
+/// A catalog that could not be upgraded — one on read-only storage — answers
+/// `false`, and readers degrade to "no calibration" instead of failing on a
+/// column that is not there. A catalog from a *newer* build answers `true`:
+/// steps only add columns, so everything this build names is still present.
+pub fn schema_is_current(conn: &Connection) -> bool {
+    if !schema_exists(conn) {
+        return false;
+    }
+    conn.query_row(
+        "SELECT version FROM psf_guard_calibration_schema WHERE singleton = 1",
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|version| version >= CALIBRATION_SCHEMA_VERSION)
+    .unwrap_or(false)
+}
+
 pub fn ensure_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         r#"
@@ -323,9 +452,6 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
             version   INTEGER NOT NULL
         );
-        INSERT INTO psf_guard_calibration_schema (singleton, version)
-            VALUES (1, 1)
-            ON CONFLICT(singleton) DO NOTHING;
 
         CREATE TABLE IF NOT EXISTS psf_guard_rig (
             rig_uuid      TEXT PRIMARY KEY,
@@ -411,28 +537,16 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         "#,
     )
     .context("creating PSF Guard calibration tables")?;
-    let version: i64 = conn.query_row(
-        "SELECT version FROM psf_guard_calibration_schema WHERE singleton = 1",
-        [],
-        |row| row.get(0),
+    // A catalog that has just had its tables created is already at the
+    // current version; one that had them from an older build is stamped with
+    // whatever it was, and the ladder below carries it up.
+    conn.execute(
+        "INSERT INTO psf_guard_calibration_schema (singleton, version)
+             VALUES (1, ?1)
+             ON CONFLICT(singleton) DO NOTHING",
+        [CALIBRATION_SCHEMA_VERSION],
     )?;
-    if version != CALIBRATION_SCHEMA_VERSION {
-        anyhow::bail!(
-            "PSF Guard calibration schema version {version} is not supported by this build \
-             (expected {CALIBRATION_SCHEMA_VERSION})"
-        );
-    }
-    // Catalogs created before the rotation column: add it in place. NULL
-    // means "not recorded", which the matcher treats as compatible.
-    let has_rotation = conn
-        .prepare("PRAGMA table_info('psf_guard_calibration_frame')")?
-        .query_map([], |row| row.get::<_, String>(1))?
-        .filter_map(|name| name.ok())
-        .any(|name| name.eq_ignore_ascii_case("rotation"));
-    if !has_rotation {
-        conn.execute_batch("ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;")?;
-    }
-    Ok(())
+    run_migrations(conn)
 }
 
 pub fn schema_exists(conn: &Connection) -> bool {
@@ -915,7 +1029,11 @@ fn table_column_names(conn: &Connection, table: &str) -> Result<Vec<String>> {
 }
 
 pub fn select_for_light(conn: &Connection, light: &FrameMeta) -> Result<CalibrationSelection> {
-    if !schema_exists(conn) {
+    // Not `schema_exists`: a catalog whose tables predate a column this query
+    // selects has the table but not the column, and asking for it fails the
+    // whole stack with a raw SQL error. Opening the catalog upgrades it; one
+    // that could not be upgraded reports no calibration instead.
+    if !schema_is_current(conn) {
         return Ok(CalibrationSelection::default());
     }
     let mut statement = conn.prepare(
@@ -2693,6 +2811,10 @@ fn sort_candidates(frames: &mut [CalibrationFrame], reference_at: Option<i64>) {
 }
 
 fn query_kind(conn: &Connection, kind: CalibrationKind) -> Result<Vec<CalibrationFrame>> {
+    // See `select_for_light`: an un-upgraded catalog has no rotation column.
+    if !schema_is_current(conn) {
+        return Ok(Vec::new());
+    }
     let mut statement = conn.prepare(
         r#"
         SELECT id, frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
@@ -2991,6 +3113,149 @@ mod tests {
             filter: Some("Ha".into()),
             ..Default::default()
         }
+    }
+
+    /// A catalog exactly as an older build left it: the tables, the version
+    /// row saying 1, and no `rotation` column.
+    fn version_one_catalog() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE psf_guard_calibration_schema (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                version   INTEGER NOT NULL
+            );
+            INSERT INTO psf_guard_calibration_schema (singleton, version) VALUES (1, 1);
+            CREATE TABLE psf_guard_calibration_frame (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                frame_uuid         TEXT NOT NULL UNIQUE,
+                rig_uuid           TEXT NOT NULL,
+                kind               TEXT NOT NULL,
+                source_path        TEXT NOT NULL UNIQUE,
+                source_fingerprint TEXT NOT NULL,
+                captured_at        INTEGER,
+                image_type_raw     TEXT,
+                telescope          TEXT,
+                camera             TEXT,
+                width              INTEGER,
+                height             INTEGER,
+                channels           INTEGER,
+                binning_x          INTEGER,
+                binning_y          INTEGER,
+                gain               INTEGER,
+                offset             INTEGER,
+                readout_mode       INTEGER,
+                bayer_pattern      TEXT,
+                bayer_x_offset     INTEGER,
+                bayer_y_offset     INTEGER,
+                exposure_s         REAL,
+                camera_temp        REAL,
+                filter_name        TEXT,
+                focal_length_mm    REAL,
+                file_size          INTEGER,
+                file_mtime_ns      TEXT,
+                added_at           INTEGER NOT NULL,
+                updated_at         INTEGER NOT NULL
+            );
+            "#,
+        )
+        .unwrap();
+        conn
+    }
+
+    fn columns(conn: &Connection, table: &str) -> Vec<String> {
+        table_column_names(conn, table).unwrap()
+    }
+
+    #[test]
+    fn opening_a_version_one_catalog_upgrades_it_in_place() {
+        let conn = version_one_catalog();
+        assert!(!columns(&conn, "psf_guard_calibration_frame")
+            .iter()
+            .any(|name| name == "rotation"));
+
+        assert!(migrate_existing(&conn).unwrap(), "there was work to do");
+
+        assert!(columns(&conn, "psf_guard_calibration_frame")
+            .iter()
+            .any(|name| name == "rotation"));
+        assert!(schema_is_current(&conn));
+        let version: i64 = conn
+            .query_row(
+                "SELECT version FROM psf_guard_calibration_schema WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, CALIBRATION_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn the_upgrade_is_what_lets_a_stack_read_the_library() {
+        // The reported failure: `no such column: rotation`, raised from
+        // inside a stack build against a catalog an older build wrote.
+        let conn = version_one_catalog();
+        let light = frame("/lights/one.fits", "LIGHT");
+        assert!(
+            select_for_light(&conn, &light).is_ok(),
+            "an un-upgraded catalog must report no calibration, not fail"
+        );
+        assert!(select_for_light(&conn, &light).unwrap().bias.is_empty());
+
+        migrate_existing(&conn).unwrap();
+        assert!(select_for_light(&conn, &light).is_ok());
+        assert!(query_kind(&conn, CalibrationKind::Flat).is_ok());
+    }
+
+    #[test]
+    fn upgrading_twice_is_a_no_op() {
+        let conn = version_one_catalog();
+        assert!(migrate_existing(&conn).unwrap());
+        assert!(!migrate_existing(&conn).unwrap(), "nothing left to do");
+        assert!(!migrate_existing(&conn).unwrap());
+    }
+
+    #[test]
+    fn a_half_upgraded_catalog_finishes_the_job() {
+        // An older build added the column from its own write path without
+        // recording a version, so the step must survive being run over it.
+        let conn = version_one_catalog();
+        conn.execute_batch("ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;")
+            .unwrap();
+        assert!(migrate_existing(&conn).unwrap());
+        assert!(schema_is_current(&conn));
+    }
+
+    #[test]
+    fn a_catalog_with_no_psf_guard_tables_is_left_alone() {
+        // Opening someone's scheduler database must not write to it.
+        let conn = Connection::open_in_memory().unwrap();
+        assert!(!migrate_existing(&conn).unwrap());
+        assert!(!schema_exists(&conn));
+        assert!(!schema_is_current(&conn));
+    }
+
+    #[test]
+    fn a_fresh_catalog_is_created_at_the_current_version() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        assert!(schema_is_current(&conn));
+        assert!(!migrate_existing(&conn).unwrap(), "nothing to upgrade");
+    }
+
+    #[test]
+    fn a_catalog_from_a_newer_build_is_refused_rather_than_guessed_at() {
+        let conn = version_one_catalog();
+        conn.execute(
+            "UPDATE psf_guard_calibration_schema SET version = ?1 WHERE singleton = 1",
+            [CALIBRATION_SCHEMA_VERSION + 1],
+        )
+        .unwrap();
+        let error = migrate_existing(&conn).unwrap_err().to_string();
+        assert!(error.contains("newer than this build"), "{error}");
+        // Refusing to upgrade it is not the same as refusing to read it.
+        // Steps only add columns, so every column this build names is there.
+        assert!(schema_is_current(&conn));
     }
 
     fn fits_card(output: &mut Vec<u8>, value: &str) {

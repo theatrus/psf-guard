@@ -7,6 +7,10 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
 
+/// Earliest and latest acquisition for one target, in Unix seconds. Either
+/// end is `None` when the target has no dated images.
+type AcquisitionSpan = (Option<i64>, Option<i64>);
+
 /// Schema version detection - checks if guid columns exist
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SchemaCapabilities {
@@ -78,6 +82,68 @@ pub fn reconcile_accepted_counts(conn: &Connection) -> Result<usize> {
 pub struct Database<'a> {
     conn: &'a Connection,
     schema: SchemaCapabilities,
+}
+
+/// Indexes PSF Guard adds to a Target Scheduler catalog so its own queries do
+/// not scan.
+///
+/// Target Scheduler ships `acquiredimage` with no index but its primary key,
+/// so every lookup by `targetId` or `projectId` — the two things nearly
+/// everything here filters by — reads the whole table. On a ten-thousand
+/// image catalog that is seconds per query, and it is why the Overview page
+/// could take a minute.
+///
+/// Adding an index is additive and invisible: SQLite picks it up on its own,
+/// and Target Scheduler's queries keep working exactly as before, so this
+/// stays inside the compatibility contract. The names carry the `psf_guard`
+/// prefix so it is obvious who added them and safe to drop.
+const QUERY_INDEXES: &[(&str, &str)] = &[
+    (
+        "idx_psf_guard_acquiredimage_target",
+        "CREATE INDEX IF NOT EXISTS idx_psf_guard_acquiredimage_target
+             ON acquiredimage(targetId)",
+    ),
+    (
+        "idx_psf_guard_acquiredimage_project",
+        "CREATE INDEX IF NOT EXISTS idx_psf_guard_acquiredimage_project
+             ON acquiredimage(projectId)",
+    ),
+];
+
+/// Create any of [`QUERY_INDEXES`] this catalog is missing, and report
+/// whether anything was created.
+///
+/// Building an index takes a write lock, so a catalog that N.I.N.A. is
+/// writing to right now waits out the connection's busy timeout. That happens
+/// once per catalog: afterwards every call is a cheap no-op.
+pub fn ensure_query_indexes(conn: &Connection) -> Result<bool> {
+    let has_table = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'acquiredimage'",
+            [],
+            |_| Ok(()),
+        )
+        .is_ok();
+    if !has_table {
+        return Ok(false);
+    }
+    let mut created = false;
+    for (name, statement) in QUERY_INDEXES {
+        let exists = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                [name],
+                |_| Ok(()),
+            )
+            .is_ok();
+        if exists {
+            continue;
+        }
+        conn.execute_batch(statement)
+            .with_context(|| format!("creating {name}"))?;
+        created = true;
+    }
+    Ok(created)
 }
 
 impl<'a> Database<'a> {
@@ -1368,6 +1434,48 @@ impl<'a> Database<'a> {
         Ok(rows)
     }
 
+    /// Earliest and latest acquisition for every target, in one pass.
+    ///
+    /// Target Scheduler ships no index on `acquiredimage`, so
+    /// `WHERE targetId = ?` is a full table scan. Asking once per target
+    /// therefore scanned the whole table once per target; on a catalog with
+    /// nineteen targets and ten thousand images that was thirteen seconds of
+    /// scanning per page load, with the shared connection held throughout.
+    /// Grouping asks for the same answer in a single scan.
+    pub fn get_acquisition_spans(&self) -> Result<HashMap<i32, AcquisitionSpan>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT targetId, MIN(acquireddate), MAX(acquireddate)
+             FROM acquiredimage
+             GROUP BY targetId",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i32>(0)?, (row.get(1)?, row.get(2)?)))
+        })?;
+        rows.collect::<rusqlite::Result<HashMap<_, _>>>()
+            .map_err(Into::into)
+    }
+
+    /// The filters each target was shot through, in one pass. See
+    /// [`Self::get_acquisition_spans`] for why this is not asked per target.
+    pub fn get_filters_by_target(&self) -> Result<HashMap<i32, Vec<String>>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT targetId, filtername
+             FROM acquiredimage
+             WHERE filtername IS NOT NULL
+             GROUP BY targetId, filtername
+             ORDER BY targetId, filtername",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut by_target: HashMap<i32, Vec<String>> = HashMap::new();
+        for row in rows {
+            let (target_id, filter) = row?;
+            by_target.entry(target_id).or_default().push(filter);
+        }
+        Ok(by_target)
+    }
+
     pub fn get_all_targets_with_desired_stats(&self) -> Result<Vec<TargetWithDesiredStats>> {
         let query = if self.schema.has_target_guid {
             "SELECT t.Id, t.name, t.active, t.ra, t.dec, t.projectid, t.guid, p.name,
@@ -1645,6 +1753,140 @@ mod tests {
             .unwrap();
         assert_eq!(plan1, 2);
         assert_eq!(plan2, 1);
+    }
+
+    #[test]
+    fn query_indexes_are_created_once_and_turn_a_scan_into_a_search() {
+        let conn = Connection::open_in_memory().unwrap();
+        // A catalog exactly as Target Scheduler ships it: no index but the key.
+        conn.execute_batch(
+            "CREATE TABLE acquiredimage (
+                Id INTEGER PRIMARY KEY, projectId INTEGER NOT NULL,
+                targetId INTEGER NOT NULL, acquireddate INTEGER,
+                filtername TEXT, gradingStatus INTEGER NOT NULL
+             );",
+        )
+        .unwrap();
+        let plan = |sql: &str| -> String {
+            let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(3))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+                .join(" | ")
+        };
+        let by_target = "SELECT 1 FROM acquiredimage WHERE targetId = 1";
+        assert!(plan(by_target).contains("SCAN"), "{}", plan(by_target));
+
+        assert!(ensure_query_indexes(&conn).unwrap(), "there was work to do");
+        let after = plan(by_target);
+        assert!(
+            after.contains("SEARCH") && after.contains("idx_psf_guard_acquiredimage_target"),
+            "{after}"
+        );
+        let by_project = plan("SELECT 1 FROM acquiredimage WHERE projectId = 1");
+        assert!(
+            by_project.contains("SEARCH")
+                && by_project.contains("idx_psf_guard_acquiredimage_project"),
+            "{by_project}"
+        );
+
+        // Idempotent: opening the same catalog again writes nothing.
+        assert!(!ensure_query_indexes(&conn).unwrap());
+    }
+
+    #[test]
+    fn query_indexes_skip_a_database_with_no_image_table() {
+        // A registry can point at a file that is not a scheduler catalog, and
+        // opening it must not fail or create tables.
+        let conn = Connection::open_in_memory().unwrap();
+        assert!(!ensure_query_indexes(&conn).unwrap());
+    }
+
+    #[test]
+    fn query_indexes_are_named_so_their_owner_is_obvious() {
+        // They live in someone else's schema, so they have to be traceable
+        // back to us and safe to drop by hand.
+        for (name, statement) in QUERY_INDEXES {
+            assert!(name.starts_with("idx_psf_guard_"), "{name}");
+            assert!(statement.contains("IF NOT EXISTS"), "{name}");
+            assert!(statement.contains(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn overview_reads_every_target_span_and_filter_set_in_one_pass() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE acquiredimage (
+                Id INTEGER PRIMARY KEY, projectId INTEGER NOT NULL,
+                targetId INTEGER NOT NULL, acquireddate INTEGER,
+                filtername TEXT, gradingStatus INTEGER NOT NULL
+             );
+             INSERT INTO acquiredimage VALUES
+                (1, 1, 10, 300, 'R',    0),
+                (2, 1, 10, 100, 'Ha',   1),
+                (3, 1, 10, 200, 'Ha',   2),
+                (4, 2, 20, 150, NULL,   0),
+                (5, 2, 20, 250, 'OIII', 1),
+                (6, 2, 30, NULL, 'B',   0);",
+        )
+        .unwrap();
+
+        let db = Database::new(&conn);
+
+        let spans = db.get_acquisition_spans().unwrap();
+        assert_eq!(spans.get(&10), Some(&(Some(100), Some(300))));
+        assert_eq!(spans.get(&20), Some(&(Some(150), Some(250))));
+        // A target whose only image carries no date still appears, with no span.
+        assert_eq!(spans.get(&30), Some(&(None, None)));
+        assert_eq!(spans.len(), 3);
+
+        let filters = db.get_filters_by_target().unwrap();
+        // Sorted and de-duplicated per target, as the per-target query was.
+        assert_eq!(
+            filters.get(&10).unwrap(),
+            &vec!["Ha".to_string(), "R".to_string()]
+        );
+        // A NULL filter is left out rather than becoming an empty name.
+        assert_eq!(filters.get(&20).unwrap(), &vec!["OIII".to_string()]);
+        assert_eq!(filters.get(&30).unwrap(), &vec!["B".to_string()]);
+    }
+
+    #[test]
+    fn overview_lookups_scan_the_image_table_once_each() {
+        // Target Scheduler ships no index on acquiredimage, so every lookup
+        // by targetId is a full scan. The overview used to run two of them
+        // per target; the whole point of these two queries is that the cost
+        // no longer multiplies by the number of targets.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE acquiredimage (
+                Id INTEGER PRIMARY KEY, projectId INTEGER NOT NULL,
+                targetId INTEGER NOT NULL, acquireddate INTEGER,
+                filtername TEXT, gradingStatus INTEGER NOT NULL
+             );",
+        )
+        .unwrap();
+        let plan = |sql: &str| -> Vec<String> {
+            let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(3))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        for sql in [
+            "SELECT targetId, MIN(acquireddate), MAX(acquireddate) FROM acquiredimage GROUP BY targetId",
+            "SELECT targetId, filtername FROM acquiredimage WHERE filtername IS NOT NULL \
+             GROUP BY targetId, filtername ORDER BY targetId, filtername",
+        ] {
+            let steps = plan(sql);
+            let scans = steps
+                .iter()
+                .filter(|step| step.contains("SCAN") || step.contains("SEARCH"))
+                .count();
+            assert_eq!(scans, 1, "expected a single pass over acquiredimage: {steps:?}");
+        }
     }
 
     #[test]
