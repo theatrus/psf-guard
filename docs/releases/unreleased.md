@@ -133,10 +133,15 @@
 - A catalog written by an earlier PSF Guard is now upgraded the moment it is
   opened, instead of whenever some later write happened to notice. Stacking a
   project whose catalog predated rotator-aware flat matching failed outright
-  with `no such column: rotation`; it now works, and an upgrade that cannot be
-  written — a read-only catalog — reports no calibration library rather than
-  failing part way through a stack. See
+  with `no such column: rotation`; it now works. A read-only catalog still
+  opens for ordinary reads and can reuse recorded cached calibration masters.
+  If it needs a new master, the stack continues without that master and says
+  why; if an unwritable older catalog is missing a required column, PSF Guard
+  reports no calibration library rather than failing part way through a stack.
+  See
   [calibration libraries](https://github.com/theatrus/psf-guard/blob/main/docs/CALIBRATION_LIBRARY.md).
+- Calibration library details now load when the library contains frames
+  instead of failing with an invalid-column error.
 - The Overview page no longer times out on large catalogs. It used to ask the
   database for each target's date range and filter set one target at a time,
   holding the shared connection for the whole page; on a catalog of nineteen
@@ -144,10 +149,11 @@
   load, long enough to time out and to stall every other request behind it.
   The same answers now come from one pass each, and the connection is released
   before the response is built.
-- PSF Guard now adds two indexes to Target Scheduler's image table the first
-  time it opens a catalog. Target Scheduler ships none, so looking up one
-  target's images read every row. Adding an index changes no data and no
-  table, so Target Scheduler and N.I.N.A. keep working exactly as before.
+- PSF Guard now adds two indexes to Target Scheduler's image table in the
+  background at server startup. A busy catalog is left alone and retried at
+  the next start. Target Scheduler ships no such indexes, so looking up one
+  target's images read every row. Adding an index changes no data and no table,
+  so Target Scheduler and N.I.N.A. keep working exactly as before.
 - Progressive stack SNR now invalidates pre-curve checkpoints, resumes only an
   exact sequence prefix, verifies the checkpoint files agree, and retries
   transient frame-read failures from a clean stack. It measures row and column

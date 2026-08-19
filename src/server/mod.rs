@@ -297,6 +297,27 @@ async fn run_server_internal(
     // hours; browser reloads only read this cache through the API.
     state.update_notices.start_refresh_loop();
 
+    // Build PSF Guard's query indexes on each configured catalog, once, off
+    // the request path and before cache refreshes start long-lived reads.
+    // Startup is the quietest moment: no PSF Guard import or database
+    // management is in flight. An external writer can still win the race; the
+    // short index attempt then skips safely. See `spawn_query_index_build`.
+    {
+        let paths: Vec<String> = state
+            .databases
+            .read()
+            .map(|databases| {
+                databases
+                    .values()
+                    .map(|ctx| ctx.database_path.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for path in paths {
+            crate::server::database_context::spawn_query_index_build(path);
+        }
+    }
+
     // Kick off a background cache refresh for every configured database.
     for ctx in state.all_databases() {
         let status = ctx.ensure_cache_available();
@@ -314,26 +335,6 @@ async fn run_server_internal(
                     ctx.id
                 );
             }
-        }
-    }
-
-    // Build PSF Guard's query indexes on each configured catalog, once, off
-    // the request path. Startup is the quiet moment: no import or database
-    // management is in flight, so a background writer here cannot collide
-    // with one. See `spawn_query_index_build`.
-    {
-        let paths: Vec<String> = state
-            .databases
-            .read()
-            .map(|databases| {
-                databases
-                    .values()
-                    .map(|ctx| ctx.database_path.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        for path in paths {
-            crate::server::database_context::spawn_query_index_build(path);
         }
     }
 
