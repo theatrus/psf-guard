@@ -2868,6 +2868,8 @@ mod tests {
             created_unix_seconds: 10,
             cache_version: super::super::STACK_PREVIEW_CACHE_VERSION,
             group: StackGroupStatus {
+                snr: None,
+                snr_url: None,
                 index,
                 target_id: 7,
                 target_name: "Color target".into(),

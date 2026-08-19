@@ -602,6 +602,22 @@ pub fn main() -> Result<()> {
                 verbose,
             )?;
         }
+        Commands::StackSnr {
+            paths,
+            order,
+            json,
+            csv,
+            threads,
+        } => {
+            let options = crate::commands::stack_snr::StackSnrOptions {
+                order: order.into(),
+                json,
+                csv,
+                detector_threads: threads,
+            };
+            crate::commands::stack_snr(&paths, &options)?;
+        }
+
         Commands::ScreenFits {
             path,
             detector,

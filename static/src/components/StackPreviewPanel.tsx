@@ -8,10 +8,12 @@ import type {
   StackFrameDecision,
   StackGroupStatus,
   StackInputImage,
+  StackFrameOrder,
   StackPreviewJob,
   StackStretchPreview,
 } from '../api/types';
 import StackPreviewInspector from './StackPreviewInspector';
+import StackSnrCurve from './StackSnrCurve';
 import StackColorPreviewPanel from './StackColorPreviewPanel';
 import StackStretchControls from './StackStretchControls';
 import { isSkyOriented } from './stackOrientation';
@@ -218,6 +220,10 @@ export default function StackPreviewPanel({
     return next;
   });
   const [acceptedOnly, setAcceptedOnly] = useState(false);
+  // Not remembered across reloads: capture order is the free reading every
+  // build produces, and quality order is a deliberate one-off question about
+  // culling that should never be the state someone comes back to.
+  const [frameOrder, setFrameOrder] = useState<StackFrameOrder>('capture');
   const [calibrationMode, setCalibrationMode] = useState<CalibrationMode>(readCalibrationMode);
   const chooseCalibrationMode = (mode: CalibrationMode) => {
     setCalibrationMode(mode);
@@ -305,6 +311,7 @@ export default function StackPreviewPanel({
         image_ids: variables.imageIds,
         accepted_only: acceptedOnly,
         force: variables.force,
+        order: frameOrder,
         calibration: calibrationMode,
         calibration_overrides: [...currentChannels.values()]
           .filter((channel) => channelOverride(channel.key) !== undefined)
@@ -590,6 +597,27 @@ export default function StackPreviewPanel({
                 <option value="auto">Auto</option>
                 <option value="on">Force on</option>
                 <option value="off">Off</option>
+              </select>
+            </label>
+            <label
+              className="stack-preview-frame-order"
+              title={
+                'The order the next build integrates its frames in, which decides what its ' +
+                'signal-to-noise curve answers. Capture order is chronological and asks ' +
+                'whether another night would help. Quality order puts the best-graded frames ' +
+                'first and asks which frames are worth keeping: the depth where the curve ' +
+                'leaves the ideal is where the weaker frames stop paying for themselves. ' +
+                'Quality order integrates every frame again, so it cannot resume.'
+              }
+            >
+              Order
+              <select
+                value={frameOrder}
+                disabled={running}
+                onChange={(event) => setFrameOrder(event.target.value as StackFrameOrder)}
+              >
+                <option value="capture">Capture</option>
+                <option value="quality">Quality</option>
               </select>
             </label>
             <button
@@ -927,6 +955,13 @@ export default function StackPreviewPanel({
                         <div><strong>{progressGroup.quality_excluded}</strong><span>quality excluded</span></div>
                         <div><strong>{formatExposure(progressGroup.total_exposure_seconds)}</strong><span>exposure</span></div>
                       </div>
+                    )}
+
+                    {progressGroup?.snr && (
+                      <StackSnrCurve
+                        curve={progressGroup.snr}
+                        label={`${targetName} ${filterName || 'no filter'}`}
+                      />
                     )}
 
                     {calibration && calibration.state !== 'none' && (

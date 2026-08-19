@@ -436,6 +436,74 @@ export interface StackSkyOrientation {
   source_to_output: unknown;
 }
 
+/**
+ * The order a build integrated its frames in, which decides what its
+ * progressive signal-to-noise curve answers. `capture` is chronological and
+ * asks whether another night would help; `quality` puts the best-graded
+ * frames first and asks which frames are worth keeping.
+ */
+export type StackFrameOrder = 'capture' | 'quality';
+
+/** One depth on a progressive signal-to-noise curve. */
+export interface SnrPoint {
+  frames: number;
+  exposure_seconds: number;
+  /** Pixel-to-pixel noise of the integration, in the stack's own units. */
+  noise: number;
+  background: number;
+  signal: number;
+  snr: number;
+  channel_noise?: number[];
+}
+
+/** Where the curve stands, in one word. */
+export type SnrVerdict = 'improving' | 'diminishing' | 'plateau' | 'degrading';
+
+/** What the fitted trend says more frames would buy. A prediction. */
+export interface SnrProjection {
+  /** The gain being priced, as a multiplier: 1.05 is five percent. */
+  gain: number;
+  extra_frames: number;
+  extra_seconds: number;
+}
+
+/** A span of the curve where the noise rose instead of falling. */
+export interface SnrRegression {
+  from_frames: number;
+  to_frames: number;
+  noise_increase: number;
+}
+
+export interface SnrAnalysis {
+  measured_frames: number;
+  measured_seconds: number;
+  best_snr: number;
+  final_noise: number;
+  /** The exponent in `noise ∝ frames^b`, fitted over the deeper points. */
+  noise_exponent: number;
+  overall_noise_exponent: number;
+  fit_r_squared: number;
+  /** What perfect averaging gives: −0.5. */
+  ideal_exponent: number;
+  /** `noise_exponent` against the ideal, so 1 is textbook square-root gain. */
+  efficiency: number;
+  frames_for_90_percent: number | null;
+  seconds_for_90_percent: number | null;
+  frames_for_95_percent: number | null;
+  seconds_for_95_percent: number | null;
+  projections: SnrProjection[];
+  regressions: SnrRegression[];
+  verdict: SnrVerdict;
+  summary: string;
+}
+
+export interface ProgressiveSnr {
+  order: StackFrameOrder;
+  points: SnrPoint[];
+  /** Absent until three depths have been measured. */
+  analysis: SnrAnalysis | null;
+}
+
 export interface StackGroupStatus {
   index: number;
   target_id: number;
@@ -460,6 +528,10 @@ export interface StackGroupStatus {
   total_exposure_seconds: number;
   preview_url: string | null;
   fits_url: string | null;
+  /** The curve this build measured, and what it reads as. */
+  snr?: ProgressiveSnr | null;
+  /** Where the curve is published as JSON, beside the stack's own FITS. */
+  snr_url?: string | null;
   error: string | null;
   calibration: AppliedCalibration;
   input_images: StackInputImage[];
@@ -513,6 +585,8 @@ export interface StackPreviewJob {
   artifact_revision: string;
   cache_version: number;
   stacking_version: string;
+  /** The order every group integrated its frames in. */
+  order?: StackFrameOrder;
   groups: StackGroupStatus[];
   error: string | null;
 }

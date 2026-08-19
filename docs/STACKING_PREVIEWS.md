@@ -107,6 +107,120 @@ Channels that already finished keep their previews and are remembered as usual.
 Build again when you are ready; a stopped job is never reused as a cached
 result.
 
+## How deep is deep enough
+
+Every stack build measures how its signal-to-noise ratio grows with depth, and
+the card draws the result. The question it answers is the one you ask at the
+end of a night: is another night worth shooting, or has this target stopped
+paying?
+
+Perfect averaging halves the noise for every four frames, so noise should fall
+as the square root of the frame count. On the card's log-log chart that ideal
+is a straight dashed line, and the solid line is what your frames actually did.
+The gap between them is the reading.
+
+### What is measured, and what is predicted
+
+The curve is measurement. The stack accumulator already holds the integration
+of every frame pushed so far, so the build reads it on the way past instead of
+integrating the same frames again once per depth: depths double — 1, 2, 4, 8,
+16 and so on, plus the full set — which keeps the whole curve to about nine
+extra batch boundaries across five hundred frames and costs no extra pass over
+the pixels.
+
+At each depth the build records:
+
+- **Noise**, the median absolute difference between neighbouring samples,
+  scaled to a standard deviation. Working on differences cancels any sky
+  gradient and any nebulosity broader than a pixel, and taking a median throws
+  the stars away, so what is left is the pixel-to-pixel noise of the
+  integration — the quantity that is supposed to fall as the square root of the
+  frame count.
+- **Background**, the median sample.
+- **Signal**, how far the brightest one percent of the frame sits above that
+  background.
+
+Every depth's ratio is read against the deepest depth's signal, not its own. A
+target's flux does not change as a stack deepens; only the noise does. But the
+brightest-percent statistic is itself lifted by noise where the stack is
+shallow — a one-frame stack's brightest percent is part star and part noise
+peak — so reading each depth against its own signal would write that bias into
+the ratio and flatter the early frames. Each depth keeps the signal it
+measured, which is worth seeing when it drifts: that is normalization moving,
+not the sky.
+
+Everything past the curve is prediction, and is labelled as such. The fitted
+exponent, how far short of the ideal the run falls, where the returns
+flattened, and how many more frames a further five or ten percent would take
+all come from a least-squares fit through the deeper half of the curve — the
+part that describes where the stack is now, since the first frames of any stack
+improve it steeply and would flatter the estimate.
+
+The verdict is one word:
+
+| Verdict | What it means |
+|---|---|
+| Still improving | Noise is falling at three quarters of the ideal rate or better. More frames pay. |
+| Diminishing returns | Noise is still falling, but each frame buys well under what it should. |
+| Plateau | Noise has all but stopped falling. More frames like these will not help. |
+| Getting worse | Noise rose over the deeper part of the run. |
+
+A plateau is usually a floor the frames cannot get under: light-pollution
+gradient residual, a fixed pattern an undithered run cannot average away, or
+walking noise. It is a reason to change something about the acquisition, not to
+shoot more of the same.
+
+### Capture order or quality order
+
+The **Order** control decides which question the curve answers.
+
+**Capture** is the default and is chronological. Its curve reads as one night
+after another, so it answers "did the last night help, and would another one?".
+It costs nothing: it is the order the stacker already integrates in.
+
+**Quality** puts the best-graded frames first. Its curve reads as the frames
+you would keep before the ones you would throw away, so the depth where it
+leaves the ideal is where the weaker frames stop paying for themselves — the
+answer to "which of these should I reject?". A span where the noise rose is
+called out under the chart.
+
+Quality order integrates every frame again. A frame added later can sort into
+the middle of the order, and the accumulator has already integrated everything
+that would come after it, so a quality build never resumes from a checkpoint
+and never writes one. Your capture-order checkpoint is left untouched, and a
+quality build is a full restack every time. It is a question you ask
+deliberately, not a default.
+
+The best-graded frame is the registration reference under either order. Only
+what follows it changes.
+
+### Where the curve goes
+
+The card draws it live as the build passes each depth, and keeps it with the
+finished result. It is also published three ways:
+
+- as JSON beside the stack's FITS, at
+  `/api/db/{db}/stack-previews/{job}/{group}/snr`, which is the same file the
+  card reads and survives a server restart;
+- as `SNRORDER`, `SNRNOISE`, `SNRVALUE`, `SNRSLOPE`, and `SNRVERDT` cards in
+  the downloaded stack FITS;
+- inside the resume checkpoint, so a target stacked one night at a time still
+  ends with one curve over the whole season rather than one per session.
+
+### Without a catalog
+
+`psf-guard stack-snr` runs the same measurement over a folder:
+
+```bash
+psf-guard stack-snr /path/to/lights
+psf-guard stack-snr /path/to/lights --order quality --csv curve.csv --json curve.json
+```
+
+It stacks the frames raw — calibration lives in the catalog, and a folder has
+none to match against — and prints the curve and its reading. Its quality order
+ranks frames by detected stars against their sharpness rather than by a catalog
+grade, so it need not agree with the server's order frame for frame.
+
 ## Stack orientation
 
 A stack keeps the rotation of its reference frame. Registration matches star
@@ -664,6 +778,7 @@ GET  /api/db/{db}/projects/{project}/stack-previews/{job}
 GET  /api/db/{db}/stack-previews/{job}/{group}/preview[?size=screen|original]
 POST /api/db/{db}/stack-previews/{job}/{group}/stretch
 GET  /api/db/{db}/stack-previews/{job}/{group}/fits
+GET  /api/db/{db}/stack-previews/{job}/{group}/snr
 GET  /api/db/{db}/projects/{project}/stack-previews/color
 POST /api/db/{db}/projects/{project}/stack-previews/color
 GET  /api/db/{db}/projects/{project}/stack-previews/color/{job}
@@ -692,7 +807,8 @@ request fragment above. The GET response is also the export document: the
 import endpoint accepts it verbatim and replaces same-named setups.
 
 The POST body is `{ "image_ids": [...], "accepted_only": false, "force":
-false }`. Status responses contain the group counters, captured image/grade
+false, "order": "capture" | "quality" }`; `order` defaults to `capture`.
+Status responses contain the group counters, captured image/grade
 snapshot, and complete per-frame decision records used by the UI. The latest
 endpoint returns the durable last-successful result for each target/channel.
 The color catalog reports role/palette availability and durable results. Its

@@ -6,6 +6,19 @@
 
 ## Added
 
+- Every stack build now measures how its signal-to-noise ratio grows with
+  depth and draws the curve on the channel card, beside a straight line for
+  the square-root improvement perfect averaging would give. It says in one
+  word whether the noise is still falling, how far short of ideal the run is,
+  where the returns flattened, and about how many more frames another five or
+  ten percent would take. The measurement is free: the build reads its own
+  accumulator on the way past instead of stacking anything twice, and the
+  curve is kept in the resume checkpoint, so a target stacked one night at a
+  time ends with one curve over the whole season. A new **Order** control
+  switches the reading: capture order asks whether another night would help,
+  quality order asks which frames are worth keeping. `psf-guard stack-snr`
+  runs the same analysis over a folder of frames without a catalog. See
+  [stack previews](https://github.com/theatrus/psf-guard/blob/main/docs/STACKING_PREVIEWS.md).
 - Remote image intake now accepts bias, dark, dark-flat, and flat frames as
   well as lights. Calibration uploads enter PSF Guard's calibration library
   without creating Target Scheduler image rows, and identical retries remain

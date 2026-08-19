@@ -223,6 +223,16 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   );
   expect(integrated).toBeGreaterThanOrEqual(2);
 
+  // The build measured its signal-to-noise against depth on the way past, so
+  // the card carries the curve, the ideal it is read against, and a verdict.
+  const curve = panel.locator('.stack-snr');
+  await expect(curve).toBeVisible();
+  await expect(curve.locator('.stack-snr-order')).toHaveText('capture order');
+  await expect(curve.locator('.stack-snr-chart .stack-snr-measured')).toBeVisible();
+  await expect(curve.locator('.stack-snr-chart .stack-snr-ideal')).toBeVisible();
+  await expect(curve.locator('.stack-snr-verdict')).toHaveCount(1);
+  await expect(curve).toContainText('noise exponent');
+
   const fitsLink = panel.getByRole('link', { name: 'Download linear FITS' });
   const fitsHref = await fitsLink.getAttribute('href');
   expect(fitsHref).toMatch(/\/stack-previews\/[a-f0-9]{64}\/0\/fits\?v=[a-f0-9-]+$/);
@@ -236,6 +246,10 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   const fitsHeaderText = (await fitsResponse.body()).subarray(0, 2880).toString('ascii');
   expect(fitsHeaderText).toContain('STACKCNT');
   expect(fitsHeaderText).toContain('STACKREJ');
+  // The curve's summary travels with the pixels.
+  expect(fitsHeaderText).toContain('SNRORDER');
+  expect(fitsHeaderText).toContain('SNRSLOPE');
+  expect(fitsHeaderText).toContain('SNRVERDT');
   // The build keeps the reference frame's rotation, so it neither reprojects
   // the pixels nor stamps the canonical sky-up WCS over them.
   expect(fitsHeaderText).not.toContain('SKYORIEN');
@@ -247,7 +261,24 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
     `/api/db/${encodeURIComponent(dbId)}/projects/1/stack-previews/${jobId}`
   );
   expect(jobResponse.status()).toBe(200);
-  const orientation = (await jobResponse.json()).data.groups[0].sky_orientation;
+  const builtGroup = (await jobResponse.json()).data.groups[0];
+  const orientation = builtGroup.sky_orientation;
+  // The curve is published beside the FITS, so it outlives the job list.
+  expect(builtGroup.snr.order).toBe('capture');
+  expect(builtGroup.snr.points.length).toBeGreaterThanOrEqual(3);
+  const snrResponse = await page.request.get(builtGroup.snr_url);
+  expect(snrResponse.status()).toBe(200);
+  const sidecar = await snrResponse.json();
+  expect(sidecar.points.map((point: { frames: number }) => point.frames)).toEqual(
+    builtGroup.snr.points.map((point: { frames: number }) => point.frames)
+  );
+  // Noise has to fall as frames are added, and the reading has to follow it.
+  const noise = sidecar.points.map((point: { noise: number }) => point.noise);
+  expect(noise[noise.length - 1]).toBeLessThan(noise[0]);
+  expect(sidecar.analysis.noise_exponent).toBeLessThan(0);
+  expect(['improving', 'diminishing', 'plateau', 'degrading']).toContain(
+    sidecar.analysis.verdict
+  );
   expect(orientation.convention).toBe('source_frame');
   expect(['sky_anchor', 'pier_side', 'exposure_majority']).toContain(orientation.source);
   expect(orientation.output_width).toBeGreaterThan(0);

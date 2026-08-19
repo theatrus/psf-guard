@@ -12,6 +12,7 @@
 //! stale accumulator. Seiza validates the context itself — format version,
 //! dimensions, configuration, checksum — when it reopens it.
 
+use super::snr;
 use super::StackFrameDecision;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -41,6 +42,16 @@ pub(super) struct ResumeManifest {
     pub filter_name: String,
     pub accepted_only: bool,
     pub calibration_fingerprint: String,
+    /// The order the frames were pushed in. Only a capture-order stack is
+    /// ever resumed, but the checkpoint records what it was so an older one
+    /// cannot be extended under a different reading.
+    #[serde(default)]
+    pub order: snr::StackFrameOrder,
+    /// The progressive signal-to-noise curve measured so far. Appending to a
+    /// stack appends to its curve, so a target stacked one night at a time
+    /// still ends with one curve over the whole season.
+    #[serde(default)]
+    pub snr_points: Vec<snr::SnrPoint>,
     /// Frames in push order, the reference first.
     pub frames: Vec<ResumeFrame>,
 }
@@ -130,12 +141,19 @@ pub(super) fn load(
     accepted_only: bool,
     stacking_version: &str,
     calibration_fingerprint: &str,
+    order: snr::StackFrameOrder,
     requested: &[(i32, &str)],
 ) -> ResumeDecision {
     let manifest_path = manifest_path(cache_root, database_id, target_id, filter_name);
     let context_path = context_path(cache_root, database_id, target_id, filter_name);
     if !context_path.exists() {
         return ResumeDecision::Fresh(None);
+    }
+    // A quality-ordered build cannot extend anything: a frame added later can
+    // sort into the middle of the order, and the accumulator has already
+    // integrated everything that would come after it.
+    if !order.resumable() {
+        return ResumeDecision::Fresh(Some("quality order integrates every frame again"));
     }
     let manifest: Option<ResumeManifest> = std::fs::read(&manifest_path)
         .ok()
@@ -155,6 +173,9 @@ pub(super) fn load(
     }
     if manifest.calibration_fingerprint != calibration_fingerprint {
         return ResumeDecision::Fresh(Some("calibration changed"));
+    }
+    if manifest.order != order {
+        return ResumeDecision::Fresh(Some("the frame order changed"));
     }
     // Every checkpointed frame must still be requested, byte-identical. A
     // fingerprint mismatch means the file changed under the same image id.
@@ -229,6 +250,8 @@ mod tests {
 
     fn manifest(frames: Vec<ResumeFrame>) -> ResumeManifest {
         ResumeManifest {
+            order: snr::StackFrameOrder::Capture,
+            snr_points: Vec::new(),
             schema_version: RESUME_SCHEMA_VERSION,
             stacking_version: "test".into(),
             target_id: 7,
@@ -262,7 +285,18 @@ mod tests {
     }
 
     fn try_load(cache_root: &Path, requested: &[(i32, &str)]) -> Option<ResumeState> {
-        load(cache_root, "db", 7, "Ha", false, "test", "cal-1", requested).state()
+        load(
+            cache_root,
+            "db",
+            7,
+            "Ha",
+            false,
+            "test",
+            "cal-1",
+            snr::StackFrameOrder::Capture,
+            requested,
+        )
+        .state()
     }
 
     #[test]
@@ -284,6 +318,85 @@ mod tests {
             &manifest(vec![frame(1, "f1"), frame(2, "f2")]),
         );
         assert!(try_load(cache.path(), &[(1, "f1"), (2, "f2")]).is_some());
+    }
+
+    #[test]
+    fn a_resumed_build_carries_the_curve_it_already_measured() {
+        // The whole point of persisting the curve: a target stacked one night
+        // at a time ends with one curve over the season, not one per session.
+        let cache = tempfile::tempdir().unwrap();
+        let mut recorded = manifest(vec![frame(1, "f1"), frame(2, "f2")]);
+        recorded.snr_points = vec![
+            snr::SnrPoint {
+                frames: 1,
+                exposure_seconds: 300.0,
+                noise: 20.0,
+                background: 1000.0,
+                signal: 500.0,
+                snr: 25.0,
+                channel_noise: vec![20.0],
+            },
+            snr::SnrPoint {
+                frames: 2,
+                exposure_seconds: 600.0,
+                noise: 14.1,
+                background: 1000.0,
+                signal: 500.0,
+                snr: 35.5,
+                channel_noise: vec![14.1],
+            },
+        ];
+        store(cache.path(), &recorded);
+        let resumed = try_load(cache.path(), &[(1, "f1"), (2, "f2"), (3, "f3")]).unwrap();
+        assert_eq!(resumed.manifest.snr_points.len(), 2);
+        assert_eq!(resumed.manifest.snr_points[1].frames, 2);
+        assert!((resumed.manifest.snr_points[1].noise - 14.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_quality_ordered_build_never_resumes() {
+        // A frame added later can sort into the middle of a quality order, and
+        // the accumulator has already integrated everything after it.
+        let cache = tempfile::tempdir().unwrap();
+        store(
+            cache.path(),
+            &manifest(vec![frame(1, "f1"), frame(2, "f2")]),
+        );
+        let decision = load(
+            cache.path(),
+            "db",
+            7,
+            "Ha",
+            false,
+            "test",
+            "cal-1",
+            snr::StackFrameOrder::Quality,
+            &[(1, "f1"), (2, "f2"), (3, "f3")],
+        );
+        assert_eq!(
+            decision.fresh_reason(),
+            Some("quality order integrates every frame again")
+        );
+    }
+
+    #[test]
+    fn a_capture_build_does_not_extend_a_quality_checkpoint() {
+        let cache = tempfile::tempdir().unwrap();
+        let mut recorded = manifest(vec![frame(1, "f1")]);
+        recorded.order = snr::StackFrameOrder::Quality;
+        store(cache.path(), &recorded);
+        let decision = load(
+            cache.path(),
+            "db",
+            7,
+            "Ha",
+            false,
+            "test",
+            "cal-1",
+            snr::StackFrameOrder::Capture,
+            &[(1, "f1"), (2, "f2")],
+        );
+        assert_eq!(decision.fresh_reason(), Some("the frame order changed"));
     }
 
     #[test]
@@ -318,6 +431,7 @@ mod tests {
             false,
             "test",
             "cal-2",
+            snr::StackFrameOrder::Capture,
             &[(1, "f1"), (2, "f2")],
         );
         assert_eq!(decision.fresh_reason(), Some("calibration changed"));
@@ -335,6 +449,7 @@ mod tests {
             false,
             "newer",
             "cal-1",
+            snr::StackFrameOrder::Capture,
             &[(1, "f1"), (2, "f2")],
         );
         assert_eq!(
@@ -355,6 +470,7 @@ mod tests {
             true,
             "test",
             "cal-1",
+            snr::StackFrameOrder::Capture,
             &[(1, "f1"), (2, "f2")],
         );
         assert_eq!(
