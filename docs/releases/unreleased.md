@@ -7,16 +7,17 @@
 ## Added
 
 - Every stack build now measures how its signal-to-noise ratio grows with
-  depth and draws the curve on the channel card, beside a straight line for
-  the square-root improvement perfect averaging would give. It says in one
-  word whether the noise is still falling, how far short of ideal the run is,
-  where the returns flattened, and about how many more frames another five or
-  ten percent would take. The measurement is free: the build reads its own
+  depth and draws the curve on the channel card. For equal, known exposures it
+  adds the square-root line perfect averaging would give and says whether the
+  noise is still falling, how far short of ideal the run is, where the returns
+  flattened, and about how many more frames another five or ten percent would
+  take. The measurement is free: the build reads its own
   accumulator on the way past instead of stacking anything twice, and the
   curve is kept in the resume checkpoint, so a target stacked one night at a
   time ends with one curve over the whole season. A new **Order** control
-  switches the reading: capture order asks whether another night would help,
-  quality order asks which frames are worth keeping. An **SNR curve** switch
+  switches the reading: capture sequence follows the frames after a fixed
+  high-quality reference, while quality order asks which frames are worth
+  keeping. An **SNR curve** switch
   hides the chart on every card and is remembered; builds measure and publish
   the curve either way. `psf-guard stack-snr`
   runs the same analysis over a folder of frames without a catalog. See
@@ -129,6 +130,13 @@
 
 ## Fixed
 
+- Progressive stack SNR now invalidates pre-curve checkpoints, resumes only an
+  exact sequence prefix, verifies the checkpoint files agree, and retries
+  transient frame-read failures from a clean stack. It measures row and column
+  structure without turning a linear gradient into a noise floor and treats
+  small uncertain rises as measurement scatter. Mixed or missing exposure
+  lengths and inconsistent fitted trends keep their measured curve but no
+  longer receive an invalid directional verdict or projection.
 - Flat matching now respects the rotator. A flat only corrects lights
   shot at (nearly) the same rotator angle — vignetting from the optics
   ahead of the rotator turns relative to the sensor — so flats now match

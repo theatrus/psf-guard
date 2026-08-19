@@ -73,8 +73,8 @@ pub fn stack_snr(paths: &[String], options: &StackSnrOptions) -> Result<()> {
         }
     }
 
-    let points = accumulate(&candidates)?;
-    let progressive = snr::ProgressiveSnr::new(options.order, points);
+    let (points, accepted_exposures) = accumulate(&candidates)?;
+    let progressive = snr::ProgressiveSnr::new(options.order, points, &accepted_exposures);
     report(&progressive);
 
     if let Some(path) = &options.json {
@@ -92,7 +92,7 @@ pub fn stack_snr(paths: &[String], options: &StackSnrOptions) -> Result<()> {
 
 /// Stack the frames in order, reading the accumulator at every depth on the
 /// ladder. This is the group build's loop with the catalog taken out.
-fn accumulate(candidates: &[Candidate]) -> Result<Vec<snr::SnrPoint>> {
+fn accumulate(candidates: &[Candidate]) -> Result<(Vec<snr::SnrPoint>, Vec<f64>)> {
     use seiza_stacking::{FrameDisposition, LiveStacker, NormalizationMode, StackOptions};
 
     let reference = crate::image_io::open_linear_frame(&candidates[0].path)
@@ -113,6 +113,7 @@ fn accumulate(candidates: &[Candidate]) -> Result<Vec<snr::SnrPoint>> {
     };
     let mut points = Vec::new();
     let mut integrated_exposure = candidates[0].exposure_seconds;
+    let mut accepted_exposures = vec![candidates[0].exposure_seconds];
     let mut pushed = 1usize;
     if let Some(sample) = snr::measure(stacker.view()) {
         points.push(snr::point(sample, integrated_exposure));
@@ -134,6 +135,7 @@ fn accumulate(candidates: &[Candidate]) -> Result<Vec<snr::SnrPoint>> {
                 match outcome {
                     Ok(FrameDisposition::Accepted(_)) => {
                         integrated_exposure += frame.exposure_seconds;
+                        accepted_exposures.push(frame.exposure_seconds);
                     }
                     Ok(FrameDisposition::Rejected(reason)) => {
                         eprintln!("  turned away {}: {reason}", frame.path.display());
@@ -160,7 +162,7 @@ fn accumulate(candidates: &[Candidate]) -> Result<Vec<snr::SnrPoint>> {
             points.push(measured);
         }
     }
-    Ok(points)
+    Ok((points, accepted_exposures))
 }
 
 /// Rank frames by detected stars against their sharpness: more stars and
@@ -170,9 +172,18 @@ fn accumulate(candidates: &[Candidate]) -> Result<Vec<snr::SnrPoint>> {
 fn score_frames(candidates: &mut [Candidate], threads: Option<usize>) -> Result<()> {
     use rayon::prelude::*;
 
-    println!("Detecting stars in {} frames…", candidates.len());
+    let frame_pixels = candidates
+        .first()
+        .and_then(|candidate| crate::concurrency::probe_frame_pixels(&candidate.path));
+    let budget = quality_worker_budget(threads, frame_pixels);
+    println!(
+        "Detecting stars in {} frames with {} worker(s) — {}",
+        candidates.len(),
+        budget.workers,
+        budget.rationale
+    );
     let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(threads.unwrap_or_else(rayon::current_num_threads))
+        .num_threads(budget.workers)
         .build()
         .context("Building the detection pool")?;
     pool.install(|| {
@@ -202,6 +213,18 @@ fn score_frames(candidates: &mut [Candidate], threads: Option<usize>) -> Result<
     Ok(())
 }
 
+fn quality_worker_budget(
+    requested: Option<usize>,
+    frame_pixels: Option<usize>,
+) -> crate::concurrency::WorkerBudget {
+    crate::concurrency::plan_workers(
+        requested,
+        &crate::concurrency::WorkerPolicy::all_cores(),
+        crate::concurrency::Priority::Interactive,
+        frame_pixels,
+    )
+}
+
 fn report(progressive: &snr::ProgressiveSnr) {
     println!(
         "\nProgressive signal-to-noise, {} order",
@@ -222,6 +245,10 @@ fn report(progressive: &snr::ProgressiveSnr) {
         );
     }
     let Some(analysis) = &progressive.analysis else {
+        if let Some(reason) = &progressive.analysis_reason {
+            println!("\n{reason}");
+            return;
+        }
         println!("\nToo few depths to read a trend.");
         return;
     };
@@ -327,4 +354,14 @@ fn string_card(headers: &[(String, HeaderValue)], name: &str) -> Option<String> 
             HeaderValue::String(text) | HeaderValue::Raw(text) => Some(text.trim().to_string()),
             _ => None,
         })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn an_explicit_quality_worker_count_is_preserved() {
+        let budget = super::quality_worker_budget(Some(3), Some(60_000_000));
+        assert_eq!(budget.workers, 3);
+        assert!(budget.rationale.contains("explicit override"));
+    }
 }

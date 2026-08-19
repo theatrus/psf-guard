@@ -489,7 +489,6 @@ pub enum Commands {
         verbose: bool,
     },
 
-    /// Screen FITS frames for occlusion, clouds, pointing and cached satellite risk
     /// Measure how the signal-to-noise ratio of a stack grows with depth.
     ///
     /// Integrates the frames one depth at a time and reads the accumulator on
@@ -521,6 +520,7 @@ pub enum Commands {
         threads: Option<usize>,
     },
 
+    /// Screen FITS frames for occlusion, clouds, pointing and cached satellite risk
     ScreenFits {
         /// Path to a FITS file or directory (searched recursively)
         path: String,

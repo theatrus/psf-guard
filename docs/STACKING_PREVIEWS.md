@@ -110,21 +110,23 @@ result.
 ## How deep is deep enough
 
 Every stack build measures how its signal-to-noise ratio grows with depth, and
-the card draws the result. The question it answers is the one you ask at the
-end of a night: is another night worth shooting, or has this target stopped
-paying?
+the card draws the result. When every accepted frame has the same known
+exposure, the card also compares that curve with ideal averaging and estimates
+what more frames would buy. Mixed or missing exposure lengths keep the measured
+curve, but PSF Guard withholds that model-dependent verdict instead of treating
+unequal frames as interchangeable.
 
-Perfect averaging halves the noise for every four frames, so noise should fall
-as the square root of the frame count. On the card's log-log chart that ideal
-is a straight dashed line, and the solid line is what your frames actually did.
-The gap between them is the reading.
+For equal exposures, perfect averaging halves the noise for every four frames,
+so noise should fall as the square root of the frame count. On the card's
+log-log chart that ideal is a straight dashed line, and the solid line is what
+your frames actually did. The gap between them is the reading.
 
 ![A 90-frame Ha stack whose curve sits above the square-root ideal](stack-snr-curve.png)
 
-The stack above ran in quality order, which is why its curve starts above the
-ideal: the best frames went in first, so the early depths beat what averaging
-alone would give, and the line settles back towards the ideal as the weaker
-frames arrive.
+The stack above ran in quality order, which is why its curve rises above the
+ideal after their shared first point: the best frames went in first, so the
+early depths beat what averaging alone would give, and the line settles back
+towards the ideal as the weaker frames arrive.
 
 ### What is measured, and what is predicted
 
@@ -137,12 +139,12 @@ the pixels.
 
 At each depth the build records:
 
-- **Noise**, the median absolute difference between neighbouring samples,
-  scaled to a standard deviation. Working on differences cancels any sky
-  gradient and any nebulosity broader than a pixel, and taking a median throws
-  the stars away, so what is left is the pixel-to-pixel noise of the
-  integration — the quantity that is supposed to fall as the square root of the
-  frame count.
+- **Noise**, a robust two-dimensional difference measurement scaled to a
+  standard deviation. It removes a local linear sky gradient, reads both axes
+  so row or column banding cannot disappear, and uses medians so stars do not
+  set the result. What remains is the pixel-scale noise of the integration —
+  the quantity that should fall as the square root of the frame count for
+  comparable exposures.
 - **Background**, the median sample.
 - **Signal**, how far the brightest one percent of the frame sits above that
   background.
@@ -156,17 +158,20 @@ the ratio and flatter the early frames. Each depth keeps the signal it
 measured, which is worth seeing when it drifts: that is normalization moving,
 not the sky.
 
-Everything past the curve is prediction, and is labelled as such. The fitted
-exponent, how far short of the ideal the run falls, where the returns
-flattened, and how many more frames a further five or ten percent would take
-all come from a least-squares fit through the deeper half of the curve — the
-part that describes where the stack is now, since the first frames of any stack
-improve it steeply and would flatter the estimate.
+Everything past the curve is prediction, and is labelled as such. For equal,
+known exposures, the fitted exponent, how far short of the ideal the run falls,
+where the returns flattened, and how many more frames a further five or ten
+percent would take all come from a least-squares fit through the deeper part of
+the curve. If those deeper measurements do not establish a consistent trend,
+PSF Guard labels the result inconclusive and withholds the projection.
+It also applies a scatter threshold before calling a run worse; a tiny upward
+wobble is a plateau, not evidence that later frames hurt.
 
 The verdict is one word:
 
 | Verdict | What it means |
 |---|---|
+| Inconclusive | The deeper measurements do not fit one stable direction, so PSF Guard makes no projection. |
 | Still improving | Noise is falling at three quarters of the ideal rate or better. More frames pay. |
 | Diminishing returns | Noise is still falling, but each frame buys well under what it should. |
 | Plateau | Noise has all but stopped falling. More frames like these will not help. |
@@ -181,9 +186,12 @@ shoot more of the same.
 
 The **Order** control decides which question the curve answers.
 
-**Capture** is the default and is chronological. Its curve reads as one night
-after another, so it answers "did the last night help, and would another one?".
-It costs nothing: it is the order the stacker already integrates in.
+**Capture sequence** is the default. The server seeds the stack with its
+best-graded registration reference, then integrates every other eligible frame
+chronologically. The curve therefore shows how the captured sequence grows
+after that fixed reference; it is a broad time trend, not a claim that the
+reference itself was the first exposure. It costs nothing because this is the
+order the stacker already integrates in.
 
 **Quality** puts the best-graded frames first. Its curve reads as the frames
 you would keep before the ones you would throw away, so the depth where it
@@ -198,8 +206,10 @@ and never writes one. Your capture-order checkpoint is left untouched, and a
 quality build is a full restack every time. It is a question you ask
 deliberately, not a default.
 
-The best-graded frame is the registration reference under either order. Only
-what follows it changes.
+The best-graded frame is the registration reference under either server order.
+Only what follows it changes. A resumed capture sequence is used only when its
+saved ledger is an exact prefix of the new sequence; a backfilled exposure or a
+changed reference forces a full restack.
 
 ### Turning the chart off
 
@@ -215,8 +225,9 @@ The card draws it live as the build passes each depth, and keeps it with the
 finished result. It is also published three ways:
 
 - as JSON beside the stack's FITS, at
-  `/api/db/{db}/stack-previews/{job}/{group}/snr`, which is the same file the
-  card reads and survives a server restart;
+  `/api/db/{db}/stack-previews/{job}/{group}/snr`; the card receives the same
+  data in job status, and the endpoint serves an atomic sidecar that survives
+  a server restart;
 - as `SNRORDER`, `SNRNOISE`, `SNRVALUE`, `SNRSLOPE`, and `SNRVERDT` cards in
   the downloaded stack FITS;
 - inside the resume checkpoint, so a target stacked one night at a time still
@@ -234,7 +245,9 @@ psf-guard stack-snr /path/to/lights --order quality --csv curve.csv --json curve
 It stacks the frames raw — calibration lives in the catalog, and a folder has
 none to match against — and prints the curve and its reading. Its quality order
 ranks frames by detected stars against their sharpness rather than by a catalog
-grade, so it need not agree with the server's order frame for frame.
+grade, so it need not agree with the server's order frame for frame. Unlike the
+server, a capture-order folder run has no separately chosen registration
+reference, so its first frame and every point after it are chronological.
 
 ## Stack orientation
 

@@ -49,7 +49,7 @@ use crate::server::state::AppState;
 pub const SEIZA_STACKING_VERSION: &str = "0.2.2";
 /// Bump whenever stack admission, rendering, or persisted artifact semantics
 /// change. This deliberately versions PSF Guard policy separately from Seiza.
-pub(super) const STACK_PREVIEW_CACHE_VERSION: u32 = 12;
+pub(super) const STACK_PREVIEW_CACHE_VERSION: u32 = 13;
 const MAX_REQUEST_IMAGES: usize = 10_000;
 const MAX_REMEMBERED_JOBS: usize = 64;
 const PREVIEW_MAX_DIMENSION: u32 = 2400;
@@ -300,6 +300,10 @@ pub struct LatestStackPreviewGroup {
     pub created_unix_seconds: i64,
     #[serde(default)]
     pub cache_version: u32,
+    /// The order used to build this persisted artifact. Old indices default
+    /// to capture order, which was the only order available before this field.
+    #[serde(default)]
+    pub order: snr::StackFrameOrder,
     pub group: StackGroupStatus,
 }
 
@@ -1375,6 +1379,8 @@ fn prepare_job(
             };
             let source_fingerprint = source_fingerprint(&path);
             hasher.update(source_fingerprint.as_bytes());
+            let exposure_seconds = exposure_seconds_from_metadata(&image.metadata);
+            hasher.update(exposure_seconds.to_le_bytes());
             frames.push(PreparedFrame {
                 image_id: image.id,
                 acquired_date: image.acquired_date,
@@ -1382,7 +1388,7 @@ fn prepare_job(
                 path,
                 source_fingerprint,
                 expected_target: expected_by_image.get(&image.id).copied().flatten(),
-                exposure_seconds: exposure_seconds_from_metadata(&image.metadata),
+                exposure_seconds,
             });
         }
 
@@ -1396,8 +1402,8 @@ fn prepare_job(
         });
         let reference_image_id = frames.first().map(|frame| frame.image_id);
         // The best-graded frame is the registration reference either way. What
-        // the order decides is the rest: chronological, so the curve reads as
-        // one night after another, or best-first, so the curve reads as the
+        // the order decides is the rest: chronological for a broad capture
+        // trend after that reference, or best-first so the curve reads as the
         // frames you would keep before the ones you would throw away.
         if frames.len() > 1 && request.order == snr::StackFrameOrder::Capture {
             frames[1..].sort_by_key(|frame| (frame.acquired_date.unwrap_or(0), frame.image_id));
@@ -1474,10 +1480,6 @@ fn prepare_job(
             ));
             group.fits_url = Some(format!(
                 "/api/db/{}/stack-previews/{}/{}/fits?v={}",
-                ctx.id, job_id, group.index, artifact_revision
-            ));
-            group.snr_url = Some(format!(
-                "/api/db/{}/stack-previews/{}/{}/snr?v={}",
                 ctx.id, job_id, group.index, artifact_revision
             ));
         }
@@ -1984,7 +1986,13 @@ fn run_group(
     let requested = group
         .frames
         .iter()
-        .map(|frame| (frame.image_id, frame.source_fingerprint.as_str()))
+        .map(|frame| {
+            (
+                frame.image_id,
+                frame.source_fingerprint.as_str(),
+                frame.exposure_seconds,
+            )
+        })
         .collect::<Vec<_>>();
     let decision = resume::load(
         cache_root,
@@ -2051,7 +2059,26 @@ fn run_group(
         // truncated file — is discarded and the group builds from scratch.
         let restored = checkpoint.and_then(|checkpoint| {
             match LiveStacker::open_context(&checkpoint.context_path) {
-                Ok(stacker) => Some((stacker, checkpoint.manifest)),
+                Ok(stacker)
+                    if resume::context_matches_manifest(
+                        stacker.view().accepted_frames,
+                        stacker.view().rejected_frames,
+                        &checkpoint.manifest,
+                    ) =>
+                {
+                    Some((stacker, checkpoint.manifest))
+                }
+                Ok(_) => {
+                    tracing::warn!(
+                        "Stack checkpoint context and manifest did not match; rebuilding from scratch"
+                    );
+                    resume::discard(cache_root, database_id, group_target_id, &group_filter_name);
+                    state.stack_previews.update(job_id, |job| {
+                        job.groups[group.index].resume_note =
+                            Some("Full restack: the checkpoint files did not match".into());
+                    });
+                    None
+                }
                 Err(error) => {
                     tracing::warn!(
                         "Stack checkpoint could not be reopened ({error}); rebuilding from scratch"
@@ -2105,8 +2132,10 @@ fn run_group(
                         .map(|frame| frame.exposure_seconds)
                         .sum();
                     status.frames = ledger.iter().map(|frame| frame.decision.clone()).collect();
-                    status.snr = (!points.is_empty())
-                        .then(|| snr::ProgressiveSnr::new(order, points.clone()));
+                    let exposures = accepted_exposures(&ledger);
+                    status.snr = (!points.is_empty()).then(|| {
+                        snr::ProgressiveSnr::new(order, points.clone(), &exposures)
+                    });
                 });
                 (stacker, ledger, points)
             }
@@ -2163,6 +2192,7 @@ fn run_group(
                 let ledger = vec![resume::ResumeFrame {
                     decision: reference_decision,
                     exposure_seconds: reference_exposure,
+                    retryable_failure: false,
                     rotation_radians: Some(0.0),
                 }];
                 (stacker, ledger, Vec::new())
@@ -2175,8 +2205,6 @@ fn run_group(
         {
             points.push(snr::point(sample, integrated_exposure(&ledger)));
         }
-        let already_integrated: std::collections::HashSet<i32> =
-            ledger.iter().map(|frame| frame.decision.image_id).collect();
         let save_checkpoint = |stacker: &LiveStacker,
                                ledger: &[resume::ResumeFrame],
                                points: &[snr::SnrPoint]| {
@@ -2184,6 +2212,10 @@ fn run_group(
             // accumulator here would leave a checkpoint no later build can
             // extend, in place of the capture-order one that can be.
             if !order.resumable() {
+                return;
+            }
+            if ledger.iter().any(|frame| frame.retryable_failure) {
+                resume::discard(cache_root, database_id, group_target_id, &group_filter_name);
                 return;
             }
             let context_path =
@@ -2231,12 +2263,8 @@ fn run_group(
 
         // Pending frames keep their index into `group.frames`, which is what
         // the calibration plan's session assignments are aligned with.
-        let pending: Vec<(usize, &PreparedFrame)> = group
-            .frames
-            .iter()
-            .enumerate()
-            .filter(|(_, frame)| !already_integrated.contains(&frame.image_id))
-            .collect();
+        let pending: Vec<(usize, &PreparedFrame)> =
+            group.frames.iter().enumerate().skip(ledger.len()).collect();
         // Reads, calibration, registration and normalization overlap across
         // frames while integration stays in this order, so the accumulator
         // sees exactly the sequence a frame-at-a-time loop would. A frame
@@ -2292,11 +2320,11 @@ fn run_group(
                     let (_, frame) = batch[consumed];
                     consumed += 1;
                     let exposure = frame.exposure_seconds;
-                    let decision = match outcome {
+                    let (decision, retryable_failure) = match outcome {
                         Ok(FrameDisposition::Accepted(diagnostics)) => {
                             orientation_vote
                                 .add(diagnostics.mapping.transform().rotation_radians, exposure);
-                            StackFrameDecision {
+                            (StackFrameDecision {
                                 image_id: frame.image_id,
                                 disposition: "accepted".into(),
                                 reason: None,
@@ -2314,19 +2342,20 @@ fn run_group(
                                 source_fingerprint: Some(frame.source_fingerprint.clone()),
                                 overlap_fraction: Some(diagnostics.overlap_fraction),
                                 integrated_fraction: Some(diagnostics.integrated_fraction),
-                            }
+                            }, false)
                         }
                         // A frame the stack turned away and one that could not be
                         // read are both "not integrated" to a caller reading the
                         // group's decisions; only the reason differs.
                         Ok(FrameDisposition::Rejected(reason)) => {
-                            rejected_decision(frame, reason.to_string())
+                            (rejected_decision(frame, reason.to_string()), false)
                         }
-                        Err(error) => rejected_decision(frame, error.to_string()),
+                        Err(error) => (rejected_decision(frame, error.to_string()), true),
                     };
                     ledger.push(resume::ResumeFrame {
                         decision: decision.clone(),
                         exposure_seconds: exposure,
+                        retryable_failure,
                         rotation_radians: if decision.disposition == "accepted" {
                             decision
                                 .registered_mapping
@@ -2379,7 +2408,9 @@ fn run_group(
                 && let Some(sample) = snr::measure(stacker.view())
             {
                 points.push(snr::point(sample, integrated_exposure(&ledger)));
-                let progressive = snr::ProgressiveSnr::new(order, points.clone());
+                let exposures = accepted_exposures(&ledger);
+                let progressive =
+                    snr::ProgressiveSnr::new(order, points.clone(), &exposures);
                 state.stack_previews.update(job_id, |job| {
                     job.groups[group.index].snr = Some(progressive);
                 });
@@ -2491,7 +2522,8 @@ fn run_group(
             )
             .with_comment("rejected input frames"),
         );
-        let progressive = snr::ProgressiveSnr::new(order, points);
+        let exposures = accepted_exposures(&ledger);
+        let progressive = snr::ProgressiveSnr::new(order, points, &exposures);
         output_cards.push(
             seiza_fits::WriteHeaderCard::new(
                 "SNRORDER",
@@ -2539,10 +2571,6 @@ fn run_group(
         )
         .map_err(|error| error.to_string())?;
         std::fs::rename(&fits_temporary, &fits_destination).map_err(|error| error.to_string())?;
-        write_snr_artifact(&snr_path(cache_root, job_id, group.index), &progressive);
-        state.stack_previews.update(job_id, |job| {
-            job.groups[group.index].snr = Some(progressive);
-        });
         stretch::render_image_previews_atomic(
             &image,
             &stretch::default_linear_config(),
@@ -2550,7 +2578,23 @@ fn run_group(
             &preview_path(cache_root, job_id, group.index),
             &original_preview_path(cache_root, job_id, group.index),
         )
-        .map(|_| GroupOutcome::Built)
+        .map_err(|error| error.to_string())?;
+        let snr_url = state.stack_previews.get(job_id).and_then(|current| {
+            publish_snr_artifact(
+                &snr_path(cache_root, job_id, group.index),
+                &progressive,
+                format!(
+                    "/api/db/{}/stack-previews/{}/{}/snr?v={}",
+                    database_id, job_id, group.index, current.artifact_revision
+                ),
+            )
+        });
+        state.stack_previews.update(job_id, |job| {
+            let status = &mut job.groups[group.index];
+            status.snr = Some(progressive);
+            status.snr_url = snr_url;
+        });
+        Ok(GroupOutcome::Built)
     })
 }
 
@@ -2672,6 +2716,7 @@ fn persist_latest_groups(cache_root: &FsPath, job: &StackPreviewJob) -> Result<(
             accepted_only: job.accepted_only,
             created_unix_seconds: job.created_unix_seconds,
             cache_version: job.cache_version,
+            order: job.order,
             group,
         };
         if let Some(existing) = latest.groups.iter_mut().find(|existing| {
@@ -2775,20 +2820,42 @@ fn integrated_exposure(ledger: &[resume::ResumeFrame]) -> f64 {
         .sum()
 }
 
+fn accepted_exposures(ledger: &[resume::ResumeFrame]) -> Vec<f64> {
+    ledger
+        .iter()
+        .filter(|frame| frame.rotation_radians.is_some())
+        .map(|frame| frame.exposure_seconds)
+        .collect()
+}
+
 /// Publish the curve beside the stack, through a temporary name like every
-/// other artifact. A curve that fails to write is a missing sidecar, never a
-/// failed build.
-fn write_snr_artifact(path: &FsPath, progressive: &snr::ProgressiveSnr) {
-    let written = serde_json::to_vec_pretty(progressive)
-        .map_err(|error| error.to_string())
-        .and_then(|bytes| {
-            let temporary = path.with_extension(format!("{}.tmp.json", std::process::id()));
-            std::fs::write(&temporary, bytes)
-                .map_err(|error| error.to_string())
-                .and_then(|()| std::fs::rename(&temporary, path).map_err(|error| error.to_string()))
-        });
-    if let Err(error) = written {
-        tracing::warn!("Failed to write the stack SNR curve: {error}");
+/// other artifact. The caller exposes its URL only after this succeeds.
+fn write_snr_artifact(path: &FsPath, progressive: &snr::ProgressiveSnr) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "stack SNR path has no parent".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let bytes = serde_json::to_vec_pretty(progressive).map_err(|error| error.to_string())?;
+    let temporary = path.with_extension(format!("{}.tmp.json", std::process::id()));
+    std::fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
+fn publish_snr_artifact(
+    path: &FsPath,
+    progressive: &snr::ProgressiveSnr,
+    url: String,
+) -> Option<String> {
+    match write_snr_artifact(path, progressive) {
+        Ok(()) => Some(url),
+        Err(error) => {
+            tracing::warn!("Failed to write the stack SNR curve: {error}");
+            None
+        }
     }
 }
 
@@ -3125,6 +3192,22 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_snr_sidecar_is_not_advertised() {
+        let cache = tempfile::tempdir().unwrap();
+        let blocked_parent = cache.path().join("not-a-directory");
+        std::fs::write(&blocked_parent, b"file").unwrap();
+        let progressive = snr::ProgressiveSnr::new(snr::StackFrameOrder::Capture, Vec::new(), &[]);
+
+        let url = publish_snr_artifact(
+            &blocked_parent.join("curve.json"),
+            &progressive,
+            "/curve.json".into(),
+        );
+
+        assert!(url.is_none());
+    }
+
+    #[test]
     fn latest_index_replaces_only_the_rebuilt_channel() {
         let cache = tempfile::tempdir().unwrap();
         let first = completed_job(
@@ -3135,7 +3218,8 @@ mod tests {
 
         let mut rebuilt_blue = ready_group(10, "B", 3);
         rebuilt_blue.index = 4;
-        let second = completed_job("second", vec![rebuilt_blue]);
+        let mut second = completed_job("second", vec![rebuilt_blue]);
+        second.order = snr::StackFrameOrder::Quality;
         persist_latest_groups(cache.path(), &second).unwrap();
 
         let bytes = std::fs::read(latest_path(cache.path(), 7)).unwrap();
@@ -3153,18 +3237,21 @@ mod tests {
             .unwrap();
         assert_eq!(blue.job_id, "second");
         assert_eq!(blue.group.reference_image_id, Some(3));
+        assert_eq!(blue.order, snr::StackFrameOrder::Quality);
         assert_eq!(red.job_id, "first");
         assert_eq!(red.group.reference_image_id, Some(2));
+        assert_eq!(red.order, snr::StackFrameOrder::Capture);
     }
 
     #[test]
-    fn latest_index_hides_pre_orientation_artifacts() {
+    fn latest_index_hides_artifacts_from_older_cache_versions() {
         let current = LatestStackPreviewGroup {
             job_id: "current".into(),
             artifact_revision: "current-revision".into(),
             accepted_only: false,
             created_unix_seconds: 100,
             cache_version: STACK_PREVIEW_CACHE_VERSION,
+            order: snr::StackFrameOrder::Capture,
             group: ready_group(10, "B", 1),
         };
         let mut legacy = current.clone();
@@ -3184,6 +3271,25 @@ mod tests {
     }
 
     #[test]
+    fn an_old_latest_entry_defaults_to_capture_order() {
+        let current = LatestStackPreviewGroup {
+            job_id: "legacy".into(),
+            artifact_revision: "legacy-revision".into(),
+            accepted_only: false,
+            created_unix_seconds: 100,
+            cache_version: STACK_PREVIEW_CACHE_VERSION,
+            order: snr::StackFrameOrder::Capture,
+            group: ready_group(10, "B", 1),
+        };
+        let mut serialized = serde_json::to_value(current).unwrap();
+        serialized.as_object_mut().unwrap().remove("order");
+
+        let restored: LatestStackPreviewGroup = serde_json::from_value(serialized).unwrap();
+
+        assert_eq!(restored.order, snr::StackFrameOrder::Capture);
+    }
+
+    #[test]
     fn latest_index_keeps_both_orientation_conventions() {
         let source_frame = LatestStackPreviewGroup {
             job_id: "source-frame".into(),
@@ -3191,6 +3297,7 @@ mod tests {
             accepted_only: false,
             created_unix_seconds: 100,
             cache_version: STACK_PREVIEW_CACHE_VERSION,
+            order: snr::StackFrameOrder::Capture,
             group: ready_group(10, "B", 1),
         };
         let mut north_up = source_frame.clone();
