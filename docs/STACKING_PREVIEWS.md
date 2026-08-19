@@ -119,6 +119,13 @@ as the square root of the frame count. On the card's log-log chart that ideal
 is a straight dashed line, and the solid line is what your frames actually did.
 The gap between them is the reading.
 
+![A 90-frame Ha stack whose curve sits above the square-root ideal](stack-snr-curve.png)
+
+The stack above ran in quality order, which is why its curve starts above the
+ideal: the best frames went in first, so the early depths beat what averaging
+alone would give, and the line settles back towards the ideal as the weaker
+frames arrive.
+
 ### What is measured, and what is predicted
 
 The curve is measurement. The stack accumulator already holds the integration
