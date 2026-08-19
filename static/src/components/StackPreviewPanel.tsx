@@ -8,10 +8,12 @@ import type {
   StackFrameDecision,
   StackGroupStatus,
   StackInputImage,
+  StackFrameOrder,
   StackPreviewJob,
   StackStretchPreview,
 } from '../api/types';
 import StackPreviewInspector from './StackPreviewInspector';
+import StackSnrCurve from './StackSnrCurve';
 import StackColorPreviewPanel from './StackColorPreviewPanel';
 import StackStretchControls from './StackStretchControls';
 import { isSkyOriented } from './stackOrientation';
@@ -70,6 +72,25 @@ function readCalibrationMode(): CalibrationMode {
     return stored === 'on' || stored === 'off' ? stored : 'auto';
   } catch {
     return 'auto';
+  }
+}
+
+/**
+ * Whether the cards draw their signal-to-noise curve. Remembered across
+ * reloads, like the calibration mode: someone who does not want the chart
+ * should not have to dismiss it once per session.
+ *
+ * The curve is hidden only by this switch. It never disappears because a
+ * build is short, a channel is small, or a value looks uninteresting — an
+ * element that comes and goes on its own reads as a bug.
+ */
+const SNR_CURVE_KEY = 'psf-guard.stack-snr-curve';
+
+function readShowSnrCurve(): boolean {
+  try {
+    return window.localStorage.getItem(SNR_CURVE_KEY) !== 'off';
+  } catch {
+    return true;
   }
 }
 
@@ -218,6 +239,19 @@ export default function StackPreviewPanel({
     return next;
   });
   const [acceptedOnly, setAcceptedOnly] = useState(false);
+  // Not remembered across reloads: capture order is the free reading every
+  // build produces, and quality order is a deliberate one-off question about
+  // culling that should never be the state someone comes back to.
+  const [frameOrder, setFrameOrder] = useState<StackFrameOrder>('capture');
+  const [showSnrCurve, setShowSnrCurve] = useState(readShowSnrCurve);
+  const chooseShowSnrCurve = (show: boolean) => {
+    setShowSnrCurve(show);
+    try {
+      window.localStorage.setItem(SNR_CURVE_KEY, show ? 'on' : 'off');
+    } catch {
+      // Keep the in-memory preference even when it cannot be persisted.
+    }
+  };
   const [calibrationMode, setCalibrationMode] = useState<CalibrationMode>(readCalibrationMode);
   const chooseCalibrationMode = (mode: CalibrationMode) => {
     setCalibrationMode(mode);
@@ -305,6 +339,7 @@ export default function StackPreviewPanel({
         image_ids: variables.imageIds,
         accepted_only: acceptedOnly,
         force: variables.force,
+        order: frameOrder,
         calibration: calibrationMode,
         calibration_overrides: [...currentChannels.values()]
           .filter((channel) => channelOverride(channel.key) !== undefined)
@@ -590,6 +625,42 @@ export default function StackPreviewPanel({
                 <option value="auto">Auto</option>
                 <option value="on">Force on</option>
                 <option value="off">Off</option>
+              </select>
+            </label>
+            <label
+              className="stack-preview-checkbox"
+              title={
+                'Draw the signal-to-noise curve on each card. Builds measure it either ' +
+                'way, so turning this off hides the chart without changing what is ' +
+                'recorded; the curve stays in the stack FITS and its JSON sidecar.'
+              }
+            >
+              <input
+                type="checkbox"
+                checked={showSnrCurve}
+                onChange={(event) => chooseShowSnrCurve(event.target.checked)}
+              />
+              SNR curve
+            </label>
+            <label
+              className="stack-preview-frame-order"
+              title={
+                'The order the next build integrates its frames in, which decides what its ' +
+                'signal-to-noise curve answers. Capture order is chronological and asks ' +
+                'whether another night would help. Quality order puts the best-graded frames ' +
+                'first and asks which frames are worth keeping: the depth where the curve ' +
+                'leaves the ideal is where the weaker frames stop paying for themselves. ' +
+                'Quality order integrates every frame again, so it cannot resume.'
+              }
+            >
+              Order
+              <select
+                value={frameOrder}
+                disabled={running}
+                onChange={(event) => setFrameOrder(event.target.value as StackFrameOrder)}
+              >
+                <option value="capture">Capture</option>
+                <option value="quality">Quality</option>
               </select>
             </label>
             <button
@@ -927,6 +998,13 @@ export default function StackPreviewPanel({
                         <div><strong>{progressGroup.quality_excluded}</strong><span>quality excluded</span></div>
                         <div><strong>{formatExposure(progressGroup.total_exposure_seconds)}</strong><span>exposure</span></div>
                       </div>
+                    )}
+
+                    {showSnrCurve && progressGroup?.snr && (
+                      <StackSnrCurve
+                        curve={progressGroup.snr}
+                        label={`${targetName} ${filterName || 'no filter'}`}
+                      />
                     )}
 
                     {calibration && calibration.state !== 'none' && (

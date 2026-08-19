@@ -59,6 +59,7 @@ import type {
   SatelliteAnalysisStatus,
   StackPreviewJob,
   CalibrationMode,
+  StackFrameOrder,
   ArtifactSearchJob,
   ReferenceRegion,
   LatestStackPreviews,
@@ -836,6 +837,12 @@ export const apiClient = {
       force?: boolean;
       /** Reproject onto the shared north-up, east-left grid. Off by default. */
       north_up?: boolean;
+      /**
+       * Integration order. `capture` (default) is chronological; `quality`
+       * puts the best-graded frames first, which makes the progressive
+       * signal-to-noise curve a reading of which frames are worth keeping.
+       */
+      order?: StackFrameOrder;
       /** How to calibrate the lights: auto (default), on (forced), or off. */
       calibration?: CalibrationMode;
       /** Per-channel exceptions to `calibration`, by target and filter. */

@@ -14,6 +14,25 @@ pub struct Cli {
     pub command: Commands,
 }
 
+/// CLI spelling of [`crate::server::stack_preview::snr::StackFrameOrder`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum StackOrderArg {
+    /// Chronological.
+    #[default]
+    Capture,
+    /// Best frame first.
+    Quality,
+}
+
+impl From<StackOrderArg> for crate::server::stack_preview::snr::StackFrameOrder {
+    fn from(value: StackOrderArg) -> Self {
+        match value {
+            StackOrderArg::Capture => Self::Capture,
+            StackOrderArg::Quality => Self::Quality,
+        }
+    }
+}
+
 /// CLI spelling of [`crate::commands::export::ExportLayout`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 pub enum ExportLayoutArg {
@@ -471,6 +490,37 @@ pub enum Commands {
     },
 
     /// Screen FITS frames for occlusion, clouds, pointing and cached satellite risk
+    /// Measure how the signal-to-noise ratio of a stack grows with depth.
+    ///
+    /// Integrates the frames one depth at a time and reads the accumulator on
+    /// the way past, so the whole curve costs one stack rather than one stack
+    /// per depth. Reports the fitted exponent against the −0.5 of perfect
+    /// averaging, where the returns flattened, and what more frames would buy.
+    /// Frames are stacked raw; calibration lives in the catalog.
+    StackSnr {
+        /// FITS or XISF files, or directories searched all the way down
+        #[arg(required = true)]
+        paths: Vec<String>,
+
+        /// Integration order. `capture` is chronological and asks whether
+        /// another night would help; `quality` puts the frames with the most
+        /// and tightest stars first and asks which ones are worth keeping.
+        #[arg(long, value_enum, default_value = "capture")]
+        order: StackOrderArg,
+
+        /// Write the curve and its reading here as JSON
+        #[arg(long)]
+        json: Option<std::path::PathBuf>,
+
+        /// Write the curve here as CSV
+        #[arg(long)]
+        csv: Option<std::path::PathBuf>,
+
+        /// Worker threads for the star detection a quality order needs
+        #[arg(long)]
+        threads: Option<usize>,
+    },
+
     ScreenFits {
         /// Path to a FITS file or directory (searched recursively)
         path: String,

@@ -3943,6 +3943,131 @@
   text-transform: uppercase;
 }
 
+.stack-preview-frame-order {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.stack-preview-frame-order select {
+  padding: 0.28rem 0.4rem;
+  border-radius: 5px;
+  font-size: 0.82rem;
+}
+
+.stack-snr {
+  padding: 0.6rem 0.9rem 0.7rem;
+  border-bottom: 1px solid var(--color-bg-tertiary);
+}
+
+.stack-snr-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+}
+
+.stack-snr-order {
+  color: var(--color-text-muted);
+  font-size: 0.66rem;
+  text-transform: uppercase;
+}
+
+.stack-snr-verdict {
+  margin-left: auto;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-muted);
+}
+
+.stack-snr-verdict.improving {
+  background: color-mix(in srgb, var(--color-success) 22%, transparent);
+  color: var(--color-success);
+}
+
+.stack-snr-verdict.diminishing {
+  background: color-mix(in srgb, var(--color-warning) 22%, transparent);
+  color: var(--color-warning);
+}
+
+.stack-snr-verdict.plateau,
+.stack-snr-verdict.degrading {
+  background: color-mix(in srgb, var(--color-error) 22%, transparent);
+  color: var(--color-error);
+}
+
+.stack-snr-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 0.45rem 0 0.2rem;
+}
+
+.stack-snr-chart polyline {
+  fill: none;
+  stroke-width: 1.6;
+}
+
+.stack-snr-chart .stack-snr-measured {
+  stroke: var(--color-accent, #6ea8fe);
+}
+
+.stack-snr-chart .stack-snr-ideal {
+  stroke: var(--color-text-muted);
+  stroke-dasharray: 4 3;
+  stroke-width: 1;
+  opacity: 0.7;
+}
+
+.stack-snr-chart circle {
+  fill: var(--color-accent, #6ea8fe);
+}
+
+.stack-snr-chart .stack-snr-axis {
+  fill: var(--color-text-muted);
+  font-size: 8px;
+}
+
+.stack-snr-summary {
+  margin: 0.3rem 0 0;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.stack-snr-regression {
+  margin: 0.35rem 0 0;
+  color: var(--color-warning);
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+
+.stack-snr-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.1rem;
+  margin-top: 0.45rem;
+}
+
+.stack-snr-metrics strong {
+  font-size: 0.86rem;
+}
+
+.stack-snr-metrics span {
+  display: block;
+  margin-top: 0.05rem;
+  color: var(--color-text-muted);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+}
+
 .stack-preview-calibration {
   display: flex;
   flex-wrap: wrap;

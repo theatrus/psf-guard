@@ -9,6 +9,7 @@ pub mod artifact;
 pub mod color;
 mod janitor;
 mod resume;
+pub mod snr;
 pub mod stretch;
 
 use axum::{
@@ -76,6 +77,12 @@ pub struct StackPreviewRequest {
     /// filter group; a channel without an entry uses `calibration`.
     #[serde(default)]
     pub calibration_overrides: Vec<CalibrationOverride>,
+    /// The order frames are integrated in, which decides what the progressive
+    /// signal-to-noise curve answers. `capture` (default) is chronological and
+    /// asks whether another night would help; `quality` puts the best-graded
+    /// frames first and asks which of these frames are worth keeping.
+    #[serde(default)]
+    pub order: snr::StackFrameOrder,
 }
 
 /// One channel's calibration mode, overriding the request-wide choice.
@@ -249,6 +256,13 @@ pub struct StackGroupStatus {
     pub total_exposure_seconds: f64,
     pub preview_url: Option<String>,
     pub fits_url: Option<String>,
+    /// The progressive signal-to-noise curve this build measured, and what it
+    /// reads as. Absent until the build has passed its first checkpoint.
+    #[serde(default)]
+    pub snr: Option<snr::ProgressiveSnr>,
+    /// Where the curve is published as JSON, beside the stack's own FITS.
+    #[serde(default)]
+    pub snr_url: Option<String>,
     pub error: Option<String>,
     #[serde(default)]
     pub calibration: crate::calibration::AppliedCalibration,
@@ -271,6 +285,9 @@ pub struct StackPreviewJob {
     #[serde(default)]
     pub cache_version: u32,
     pub stacking_version: String,
+    /// The order every group integrated its frames in.
+    #[serde(default)]
+    pub order: snr::StackFrameOrder,
     pub groups: Vec<StackGroupStatus>,
     pub error: Option<String>,
 }
@@ -673,6 +690,7 @@ struct PreparedJob {
     groups: Vec<PreparedGroup>,
     cache_root: PathBuf,
     north_up: bool,
+    order: snr::StackFrameOrder,
 }
 
 /// Weighs how much integrated exposure faces the same way as the reference
@@ -1077,6 +1095,29 @@ pub async fn get_stack_preview_image(
         })
 }
 
+/// A group's progressive signal-to-noise curve. Served from the sidecar the
+/// build wrote, so it survives a server restart and outlives the in-memory
+/// job list.
+pub async fn get_stack_preview_snr(
+    ctx: DbContext,
+    Path((_db_id, job_id, group_index)): Path<(String, String, usize)>,
+) -> Result<Response, AppError> {
+    validate_job_id(&job_id)?;
+    let path = snr_path(&ctx.cache_dir_path, &job_id, group_index);
+    let body = tokio::fs::read(&path)
+        .await
+        .map_err(|_| AppError::NotFound)?;
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/json")
+        .header(CONTENT_LENGTH, body.len())
+        .header(CACHE_CONTROL, "private, max-age=31536000, immutable")
+        .body(Body::from(body))
+        .map_err(|error| {
+            AppError::InternalError(format!("Failed to build stack SNR response: {error}"))
+        })
+}
+
 pub async fn download_stack_preview_fits(
     ctx: DbContext,
     Path((_db_id, job_id, group_index)): Path<(String, String, usize)>,
@@ -1268,6 +1309,7 @@ fn prepare_job(
     hasher.update(seiza_stacking::SKY_ORIENTATION_NAME.as_bytes());
     hasher.update(PREVIEW_MAX_DIMENSION.to_le_bytes());
     hasher.update(stretch::SEIZA_STRETCH_VERSION.as_bytes());
+    hasher.update(request.order.as_str().as_bytes());
 
     for (index, ((target_id, target_name, filter_name), mut entries)) in
         grouped.into_iter().enumerate()
@@ -1353,7 +1395,11 @@ fn prepare_job(
                 .then_with(|| left.image_id.cmp(&right.image_id))
         });
         let reference_image_id = frames.first().map(|frame| frame.image_id);
-        if frames.len() > 1 {
+        // The best-graded frame is the registration reference either way. What
+        // the order decides is the rest: chronological, so the curve reads as
+        // one night after another, or best-first, so the curve reads as the
+        // frames you would keep before the ones you would throw away.
+        if frames.len() > 1 && request.order == snr::StackFrameOrder::Capture {
             frames[1..].sort_by_key(|frame| (frame.acquired_date.unwrap_or(0), frame.image_id));
         }
         if !frames.is_empty() {
@@ -1401,6 +1447,8 @@ fn prepare_job(
             total_exposure_seconds: 0.0,
             preview_url: None,
             fits_url: None,
+            snr: None,
+            snr_url: None,
             error: (eligible_frames < 2).then(|| "Fewer than two eligible FITS frames".to_string()),
             calibration: crate::calibration::AppliedCalibration::default(),
             input_images,
@@ -1428,6 +1476,10 @@ fn prepare_job(
                 "/api/db/{}/stack-previews/{}/{}/fits?v={}",
                 ctx.id, job_id, group.index, artifact_revision
             ));
+            group.snr_url = Some(format!(
+                "/api/db/{}/stack-previews/{}/{}/snr?v={}",
+                ctx.id, job_id, group.index, artifact_revision
+            ));
         }
     }
     let now = chrono::Utc::now().timestamp();
@@ -1443,12 +1495,14 @@ fn prepare_job(
             artifact_revision,
             cache_version: STACK_PREVIEW_CACHE_VERSION,
             stacking_version: SEIZA_STACKING_VERSION.into(),
+            order: request.order,
             groups: public_groups,
             error: None,
         },
         groups: prepared_groups,
         cache_root: ctx.cache_dir_path.clone(),
         north_up: request.north_up,
+        order: request.order,
     })
 }
 
@@ -1727,6 +1781,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
         groups,
         cache_root,
         north_up,
+        order,
     } = prepared;
     state.stack_previews.update(&job_id, |job| {
         job.state = StackJobState::Running;
@@ -1743,6 +1798,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
         cache_root: &cache_root,
         north_up,
         accepted_only,
+        order,
         worker_policy: &worker_policy,
         cancel,
     };
@@ -1826,6 +1882,7 @@ struct GroupJob<'a> {
     cache_root: &'a FsPath,
     north_up: bool,
     accepted_only: bool,
+    order: snr::StackFrameOrder,
     worker_policy: &'a crate::concurrency::WorkerPolicy,
     cancel: &'a Arc<AtomicBool>,
 }
@@ -1844,6 +1901,7 @@ fn run_group(
         cache_root,
         north_up,
         accepted_only,
+        order,
         worker_policy,
         cancel,
     } = job;
@@ -1936,6 +1994,7 @@ fn run_group(
         accepted_only,
         SEIZA_STACKING_VERSION,
         &calibration_fingerprint,
+        order,
         &requested,
     );
     if let Some(reason) = decision.fresh_reason() {
@@ -2007,11 +2066,12 @@ fn run_group(
             }
         });
         let mut orientation_vote = OrientationVote::default();
-        let (mut stacker, mut ledger) = match restored {
+        let (mut stacker, mut ledger, mut points) = match restored {
             Some((stacker, manifest)) => {
                 // Replay the checkpointed ledger: the per-frame record, the
                 // counters, and each accepted frame's orientation vote. The
                 // reference is the ledger's first entry and votes upright.
+                let points = manifest.snr_points;
                 let ledger = manifest.frames;
                 for frame in &ledger {
                     if let Some(rotation) = frame.rotation_radians {
@@ -2045,8 +2105,10 @@ fn run_group(
                         .map(|frame| frame.exposure_seconds)
                         .sum();
                     status.frames = ledger.iter().map(|frame| frame.decision.clone()).collect();
+                    status.snr = (!points.is_empty())
+                        .then(|| snr::ProgressiveSnr::new(order, points.clone()));
                 });
-                (stacker, ledger)
+                (stacker, ledger, points)
             }
             None => {
                 // From the record, like every other frame's. Reading this one
@@ -2103,12 +2165,27 @@ fn run_group(
                     exposure_seconds: reference_exposure,
                     rotation_radians: Some(0.0),
                 }];
-                (stacker, ledger)
+                (stacker, ledger, Vec::new())
             }
         };
+        // The reference frame alone is the first depth on the curve and the
+        // baseline every later depth is read against: one frame's noise.
+        if points.is_empty()
+            && let Some(sample) = snr::measure(stacker.view())
+        {
+            points.push(snr::point(sample, integrated_exposure(&ledger)));
+        }
         let already_integrated: std::collections::HashSet<i32> =
             ledger.iter().map(|frame| frame.decision.image_id).collect();
-        let save_checkpoint = |stacker: &LiveStacker, ledger: &[resume::ResumeFrame]| {
+        let save_checkpoint = |stacker: &LiveStacker,
+                               ledger: &[resume::ResumeFrame],
+                               points: &[snr::SnrPoint]| {
+            // A quality-ordered build is a full restack by nature. Writing its
+            // accumulator here would leave a checkpoint no later build can
+            // extend, in place of the capture-order one that can be.
+            if !order.resumable() {
+                return;
+            }
             let context_path =
                 resume::context_path(cache_root, database_id, group_target_id, &group_filter_name);
             let manifest = resume::ResumeManifest {
@@ -2118,6 +2195,8 @@ fn run_group(
                 filter_name: group_filter_name.clone(),
                 accepted_only,
                 calibration_fingerprint: calibration_fingerprint.clone(),
+                order,
+                snr_points: points.to_vec(),
                 frames: ledger.to_vec(),
             };
             let saved = context_path
@@ -2168,6 +2247,14 @@ fn run_group(
             ..seiza_stacking::PipelineOptions::default()
         };
         let mut cancelled = false;
+        // Depths already behind us were measured by the build that wrote the
+        // checkpoint, so only the ones ahead split this run's batches.
+        let start_depth = ledger.len();
+        let mut checkpoints: std::collections::VecDeque<usize> =
+            snr::checkpoint_depths(start_depth + pending.len())
+                .into_iter()
+                .filter(|depth| *depth > start_depth)
+                .collect();
         // Consecutive frames of one calibration session push as one
         // pipelined batch, with the session's masters swapped in first. The
         // frames after the reference are chronological, so a night is one
@@ -2177,11 +2264,21 @@ fn run_group(
         let mut batch_start = 0usize;
         while batch_start < pending.len() && !cancelled {
             let session = plan.assignments[pending[batch_start].0];
-            let batch_end = pending[batch_start..]
+            let mut batch_end = pending[batch_start..]
                 .iter()
                 .position(|(index, _)| plan.assignments[*index] != session)
                 .map(|offset| batch_start + offset)
                 .unwrap_or(pending.len());
+            // A batch also ends at the next depth the curve is measured at.
+            // The accumulator can only be read between batches, and the
+            // doubling ladder keeps this to about one extra boundary per
+            // doubling — nine of them across five hundred frames.
+            if let Some(&next) = checkpoints.front() {
+                let limit = next.saturating_sub(start_depth);
+                if limit > batch_start {
+                    batch_end = batch_end.min(limit);
+                }
+            }
             let batch = &pending[batch_start..batch_end];
             let paths: Vec<PathBuf> = batch.iter().map(|(_, frame)| frame.path.clone()).collect();
             stacker
@@ -2262,17 +2359,42 @@ fn run_group(
                 })
                 .map_err(|error| error.to_string())?;
             batch_start = batch_end;
+
+            // Read the accumulator whenever this batch carried it past a
+            // depth on the ladder, and once more wherever a stop landed, so a
+            // stopped build still publishes the curve it paid for.
+            let depth = start_depth + batch_start;
+            let crossed = checkpoints.front().is_some_and(|next| *next <= depth);
+            while checkpoints.front().is_some_and(|next| *next <= depth) {
+                checkpoints.pop_front();
+            }
+            // Frames the stack turned away move the depth without moving the
+            // accepted count, and a step that integrated nothing is not a
+            // depth on the curve.
+            let advanced = points
+                .last()
+                .is_none_or(|last| last.frames < stacker.view().accepted_frames);
+            if (crossed || cancelled)
+                && advanced
+                && let Some(sample) = snr::measure(stacker.view())
+            {
+                points.push(snr::point(sample, integrated_exposure(&ledger)));
+                let progressive = snr::ProgressiveSnr::new(order, points.clone());
+                state.stack_previews.update(job_id, |job| {
+                    job.groups[group.index].snr = Some(progressive);
+                });
+            }
         }
 
         if cancelled {
             // The frames that did land are checkpointed, so building again
             // continues from them.
-            save_checkpoint(&stacker, &ledger);
+            save_checkpoint(&stacker, &ledger, &points);
             return Ok(GroupOutcome::Cancelled);
         }
         // The accumulator is complete: checkpoint it before the snapshot
         // consumes the stacker, so an additive rebuild can pick it up here.
-        save_checkpoint(&stacker, &ledger);
+        save_checkpoint(&stacker, &ledger, &points);
         // Last exit before the job writes anything. Orienting and rendering
         // follow, and a stop after this point would have to clean up published
         // artifacts.
@@ -2369,6 +2491,46 @@ fn run_group(
             )
             .with_comment("rejected input frames"),
         );
+        let progressive = snr::ProgressiveSnr::new(order, points);
+        output_cards.push(
+            seiza_fits::WriteHeaderCard::new(
+                "SNRORDER",
+                seiza_fits::HeaderValue::String(order.as_str().into()),
+            )
+            .with_comment("frame order the SNR curve was measured in"),
+        );
+        if let Some(deepest) = progressive.points.last() {
+            output_cards.push(
+                seiza_fits::WriteHeaderCard::new(
+                    "SNRNOISE",
+                    seiza_fits::HeaderValue::Float(deepest.noise),
+                )
+                .with_comment("measured pixel-to-pixel noise"),
+            );
+            output_cards.push(
+                seiza_fits::WriteHeaderCard::new(
+                    "SNRVALUE",
+                    seiza_fits::HeaderValue::Float(deepest.snr),
+                )
+                .with_comment("measured signal-to-noise ratio"),
+            );
+        }
+        if let Some(analysis) = &progressive.analysis {
+            output_cards.push(
+                seiza_fits::WriteHeaderCard::new(
+                    "SNRSLOPE",
+                    seiza_fits::HeaderValue::Float(analysis.noise_exponent),
+                )
+                .with_comment("fitted noise exponent; -0.5 is perfect averaging"),
+            );
+            output_cards.push(
+                seiza_fits::WriteHeaderCard::new(
+                    "SNRVERDT",
+                    seiza_fits::HeaderValue::String(analysis.verdict.as_str().into()),
+                )
+                .with_comment("reading of the progressive SNR curve"),
+            );
+        }
         seiza_stacking::write_linear_image_fits_f32(
             &fits_temporary,
             &image,
@@ -2377,6 +2539,10 @@ fn run_group(
         )
         .map_err(|error| error.to_string())?;
         std::fs::rename(&fits_temporary, &fits_destination).map_err(|error| error.to_string())?;
+        write_snr_artifact(&snr_path(cache_root, job_id, group.index), &progressive);
+        state.stack_previews.update(job_id, |job| {
+            job.groups[group.index].snr = Some(progressive);
+        });
         stretch::render_image_previews_atomic(
             &image,
             &stretch::default_linear_config(),
@@ -2592,6 +2758,40 @@ fn fits_path(cache_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
     stack_dir(cache_root, job_id).join(format!("group-{group_index}.fits"))
 }
 
+/// A group's progressive signal-to-noise curve, as JSON beside its FITS. It
+/// lives inside the job directory, so the cache janitor sweeps it with the
+/// rest of the job.
+fn snr_path(cache_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
+    stack_dir(cache_root, job_id).join(format!("group-{group_index}-snr.json"))
+}
+
+/// The exposure the accumulator has taken so far. Turned-away frames carry no
+/// rotation and contribute none of their time.
+fn integrated_exposure(ledger: &[resume::ResumeFrame]) -> f64 {
+    ledger
+        .iter()
+        .filter(|frame| frame.rotation_radians.is_some())
+        .map(|frame| frame.exposure_seconds)
+        .sum()
+}
+
+/// Publish the curve beside the stack, through a temporary name like every
+/// other artifact. A curve that fails to write is a missing sidecar, never a
+/// failed build.
+fn write_snr_artifact(path: &FsPath, progressive: &snr::ProgressiveSnr) {
+    let written = serde_json::to_vec_pretty(progressive)
+        .map_err(|error| error.to_string())
+        .and_then(|bytes| {
+            let temporary = path.with_extension(format!("{}.tmp.json", std::process::id()));
+            std::fs::write(&temporary, bytes)
+                .map_err(|error| error.to_string())
+                .and_then(|()| std::fs::rename(&temporary, path).map_err(|error| error.to_string()))
+        });
+    if let Err(error) = written {
+        tracing::warn!("Failed to write the stack SNR curve: {error}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -2663,6 +2863,8 @@ mod tests {
             total_exposure_seconds: 120.0,
             preview_url: None,
             fits_url: None,
+            snr: None,
+            snr_url: None,
             error: None,
             calibration: crate::calibration::AppliedCalibration::default(),
             input_images: vec![StackInputImage {
@@ -2685,6 +2887,7 @@ mod tests {
             artifact_revision: format!("revision-{job_id}"),
             cache_version: STACK_PREVIEW_CACHE_VERSION,
             stacking_version: SEIZA_STACKING_VERSION.into(),
+            order: snr::StackFrameOrder::Capture,
             groups,
             error: None,
         }
@@ -2846,6 +3049,7 @@ mod tests {
             north_up: false,
             calibration: crate::calibration::CalibrationMode::Auto,
             calibration_overrides: Vec::new(),
+            order: snr::StackFrameOrder::Capture,
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
@@ -2855,6 +3059,7 @@ mod tests {
             north_up: false,
             calibration: crate::calibration::CalibrationMode::Auto,
             calibration_overrides: Vec::new(),
+            order: snr::StackFrameOrder::Capture,
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
@@ -2864,6 +3069,7 @@ mod tests {
             north_up: false,
             calibration: crate::calibration::CalibrationMode::Auto,
             calibration_overrides: Vec::new(),
+            order: snr::StackFrameOrder::Capture,
         })
         .is_ok());
     }
@@ -2877,6 +3083,7 @@ mod tests {
             force: false,
             north_up: false,
             calibration: CalibrationMode::Auto,
+            order: snr::StackFrameOrder::Capture,
             calibration_overrides: vec![CalibrationOverride {
                 target_id: 7,
                 filter_name: "Ha".into(),

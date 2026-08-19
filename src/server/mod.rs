@@ -422,6 +422,10 @@ async fn run_server_internal(
             get(stack_preview::download_stack_preview_fits),
         )
         .route(
+            "/stack-previews/{job_id}/{group_index}/snr",
+            get(stack_preview::get_stack_preview_snr),
+        )
+        .route(
             "/stack-previews/color/{job_id}/preview",
             get(stack_preview::color::get_stack_color_image),
         )
