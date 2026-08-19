@@ -2,14 +2,16 @@
 //!
 //! A finished or stopped group build checkpoints its Seiza live-stack context
 //! beside a manifest of every frame it pushed. A later build of the same
-//! target/filter whose frame set only grew reopens that context and pushes the
-//! new frames, instead of registering and integrating the whole set again.
+//! target/filter whose ordered frame sequence only grew at the end reopens
+//! that context and pushes the new frames, instead of registering and
+//! integrating the whole set again.
 //!
-//! The manifest is the proof of "only grew": every recorded frame must still
-//! be requested with an identical source fingerprint, and the calibration
-//! fingerprint must match, or the build starts fresh. Removing a frame,
-//! regrading one in place, or changing calibration therefore never reuses a
-//! stale accumulator. Seiza validates the context itself — format version,
+//! The manifest is the proof of "only grew": its frame ledger must be an exact
+//! ordered prefix of the new request, every source fingerprint and exposure
+//! must match, and the calibration fingerprint must match, or the build starts
+//! fresh. Inserting, removing, reordering, regrading, or correcting exposure
+//! metadata never reuses a stale accumulator. A transient read failure is not
+//! checkpointed. Seiza validates the context itself — format version,
 //! dimensions, configuration, checksum — when it reopens it.
 
 use super::snr;
@@ -21,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 /// Bumped whenever the recorded shape or the stacking pipeline changes in a
 /// way that makes an old accumulator wrong to extend.
-pub(super) const RESUME_SCHEMA_VERSION: u32 = 1;
+pub(super) const RESUME_SCHEMA_VERSION: u32 = 2;
 
 /// One frame the checkpointed stack already integrated or turned away, with
 /// everything needed to replay its ledger entry and its orientation vote.
@@ -29,6 +31,10 @@ pub(super) const RESUME_SCHEMA_VERSION: u32 = 1;
 pub(super) struct ResumeFrame {
     pub decision: StackFrameDecision,
     pub exposure_seconds: f64,
+    /// A read or pipeline error may clear on retry, so no checkpoint that
+    /// contains one is safe to extend.
+    #[serde(default)]
+    pub retryable_failure: bool,
     /// Registration rotation for an accepted frame; `None` for a rejection.
     pub rotation_radians: Option<f64>,
 }
@@ -61,6 +67,22 @@ pub(super) struct ResumeManifest {
 pub(super) struct ResumeState {
     pub context_path: PathBuf,
     pub manifest: ResumeManifest,
+}
+
+/// The Seiza context and our ledger are published separately. Refuse a pair
+/// interrupted between those writes rather than integrating frames twice.
+pub(super) fn context_matches_manifest(
+    context_accepted_frames: u32,
+    context_rejected_frames: u32,
+    manifest: &ResumeManifest,
+) -> bool {
+    let accepted = manifest
+        .frames
+        .iter()
+        .filter(|frame| frame.rotation_radians.is_some())
+        .count();
+    let rejected = manifest.frames.len() - accepted;
+    accepted == context_accepted_frames as usize && rejected == context_rejected_frames as usize
 }
 
 /// Whether a build may extend the checkpoint or must start over, and — when a
@@ -142,7 +164,7 @@ pub(super) fn load(
     stacking_version: &str,
     calibration_fingerprint: &str,
     order: snr::StackFrameOrder,
-    requested: &[(i32, &str)],
+    requested: &[(i32, &str, f64)],
 ) -> ResumeDecision {
     let manifest_path = manifest_path(cache_root, database_id, target_id, filter_name);
     let context_path = context_path(cache_root, database_id, target_id, filter_name);
@@ -177,19 +199,24 @@ pub(super) fn load(
     if manifest.order != order {
         return ResumeDecision::Fresh(Some("the frame order changed"));
     }
-    // Every checkpointed frame must still be requested, byte-identical. A
-    // fingerprint mismatch means the file changed under the same image id.
-    let requested_fingerprints: std::collections::HashMap<i32, &str> =
-        requested.iter().copied().collect();
-    let all_present = manifest.frames.iter().all(|frame| {
-        let recorded = frame.decision.source_fingerprint.as_deref();
-        matches!(
-            (requested_fingerprints.get(&frame.decision.image_id), recorded),
-            (Some(requested), Some(recorded)) if *requested == recorded
-        )
-    });
-    if !all_present {
-        return ResumeDecision::Fresh(Some("frames were removed or changed since the last build"));
+    if manifest.frames.iter().any(|frame| frame.retryable_failure) {
+        return ResumeDecision::Fresh(Some("a frame could not be read"));
+    }
+    // The accumulator is order-sensitive, so membership is not enough. Its
+    // complete ledger must be the exact prefix the new build would push,
+    // including the first frame that defines registration and WCS provenance.
+    let exact_prefix = manifest.frames.len() <= requested.len()
+        && manifest
+            .frames
+            .iter()
+            .zip(requested)
+            .all(|(frame, requested)| {
+                frame.decision.image_id == requested.0
+                    && frame.decision.source_fingerprint.as_deref() == Some(requested.1)
+                    && frame.exposure_seconds.to_bits() == requested.2.to_bits()
+            });
+    if !exact_prefix {
+        return ResumeDecision::Fresh(Some("the frame sequence changed since the last build"));
     }
     ResumeDecision::Resume(Box::new(ResumeState {
         context_path,
@@ -266,6 +293,7 @@ mod tests {
         ResumeFrame {
             decision: decision(image_id, fingerprint),
             exposure_seconds: 300.0,
+            retryable_failure: false,
             rotation_radians: Some(0.0),
         }
     }
@@ -285,6 +313,17 @@ mod tests {
     }
 
     fn try_load(cache_root: &Path, requested: &[(i32, &str)]) -> Option<ResumeState> {
+        let requested = requested
+            .iter()
+            .map(|&(image_id, fingerprint)| (image_id, fingerprint, 300.0))
+            .collect::<Vec<_>>();
+        try_load_with_exposures(cache_root, &requested)
+    }
+
+    fn try_load_with_exposures(
+        cache_root: &Path,
+        requested: &[(i32, &str, f64)],
+    ) -> Option<ResumeState> {
         load(
             cache_root,
             "db",
@@ -308,6 +347,74 @@ mod tests {
         );
         let resumed = try_load(cache.path(), &[(1, "f1"), (2, "f2"), (3, "f3")]).unwrap();
         assert_eq!(resumed.manifest.frames.len(), 2);
+    }
+
+    #[test]
+    fn a_context_newer_than_its_manifest_is_rejected() {
+        let recorded = manifest(vec![frame(1, "f1"), frame(2, "f2")]);
+        assert!(context_matches_manifest(2, 0, &recorded));
+        assert!(!context_matches_manifest(3, 0, &recorded));
+        assert!(!context_matches_manifest(2, 1, &recorded));
+
+        let mut rejected = frame(2, "f2");
+        rejected.decision.disposition = "rejected".into();
+        rejected.rotation_radians = None;
+        let recorded = manifest(vec![frame(1, "f1"), rejected]);
+        assert!(context_matches_manifest(1, 1, &recorded));
+    }
+
+    #[test]
+    fn a_frame_inserted_inside_the_checkpoint_prefix_rebuilds_from_scratch() {
+        let cache = tempfile::tempdir().unwrap();
+        store(
+            cache.path(),
+            &manifest(vec![frame(1, "f1"), frame(2, "f2")]),
+        );
+        assert!(try_load(cache.path(), &[(1, "f1"), (3, "f3"), (2, "f2")]).is_none());
+    }
+
+    #[test]
+    fn a_changed_reference_rebuilds_from_scratch() {
+        let cache = tempfile::tempdir().unwrap();
+        store(
+            cache.path(),
+            &manifest(vec![frame(1, "f1"), frame(2, "f2")]),
+        );
+        assert!(try_load(cache.path(), &[(3, "f3"), (1, "f1"), (2, "f2")]).is_none());
+    }
+
+    #[test]
+    fn a_changed_exposure_rebuilds_from_scratch() {
+        let cache = tempfile::tempdir().unwrap();
+        store(
+            cache.path(),
+            &manifest(vec![frame(1, "f1"), frame(2, "f2")]),
+        );
+        assert!(
+            try_load_with_exposures(cache.path(), &[(1, "f1", 300.0), (2, "f2", 600.0)]).is_none()
+        );
+    }
+
+    #[test]
+    fn a_retryable_frame_failure_never_resumes() {
+        let cache = tempfile::tempdir().unwrap();
+        let mut failed = frame(2, "f2");
+        failed.retryable_failure = true;
+        store(cache.path(), &manifest(vec![frame(1, "f1"), failed]));
+
+        let decision = load(
+            cache.path(),
+            "db",
+            7,
+            "Ha",
+            false,
+            "test",
+            "cal-1",
+            snr::StackFrameOrder::Capture,
+            &[(1, "f1", 300.0), (2, "f2", 300.0)],
+        );
+
+        assert_eq!(decision.fresh_reason(), Some("a frame could not be read"));
     }
 
     #[test]
@@ -371,7 +478,7 @@ mod tests {
             "test",
             "cal-1",
             snr::StackFrameOrder::Quality,
-            &[(1, "f1"), (2, "f2"), (3, "f3")],
+            &[(1, "f1", 300.0), (2, "f2", 300.0), (3, "f3", 300.0)],
         );
         assert_eq!(
             decision.fresh_reason(),
@@ -394,7 +501,7 @@ mod tests {
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
-            &[(1, "f1"), (2, "f2")],
+            &[(1, "f1", 300.0), (2, "f2", 300.0)],
         );
         assert_eq!(decision.fresh_reason(), Some("the frame order changed"));
     }
@@ -432,7 +539,7 @@ mod tests {
             "test",
             "cal-2",
             snr::StackFrameOrder::Capture,
-            &[(1, "f1"), (2, "f2")],
+            &[(1, "f1", 300.0), (2, "f2", 300.0)],
         );
         assert_eq!(decision.fresh_reason(), Some("calibration changed"));
     }
@@ -450,7 +557,50 @@ mod tests {
             "newer",
             "cal-1",
             snr::StackFrameOrder::Capture,
-            &[(1, "f1"), (2, "f2")],
+            &[(1, "f1", 300.0), (2, "f2", 300.0)],
+        );
+        assert_eq!(
+            decision.fresh_reason(),
+            Some("the stacking pipeline changed")
+        );
+    }
+
+    #[test]
+    fn a_pre_snr_v1_checkpoint_rebuilds_the_complete_curve() {
+        let cache = tempfile::tempdir().unwrap();
+        let recorded = manifest(vec![frame(1, "f1"), frame(2, "f2")]);
+        let path = manifest_path(
+            cache.path(),
+            "db",
+            recorded.target_id,
+            &recorded.filter_name,
+        );
+        let mut legacy = serde_json::to_value(&recorded).unwrap();
+        legacy["schema_version"] = serde_json::Value::from(1);
+        legacy.as_object_mut().unwrap().remove("snr_points");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+        std::fs::write(
+            context_path(
+                cache.path(),
+                "db",
+                recorded.target_id,
+                &recorded.filter_name,
+            ),
+            b"legacy context",
+        )
+        .unwrap();
+
+        let decision = load(
+            cache.path(),
+            "db",
+            7,
+            "Ha",
+            false,
+            "test",
+            "cal-1",
+            snr::StackFrameOrder::Capture,
+            &[(1, "f1", 300.0), (2, "f2", 300.0), (3, "f3", 300.0)],
         );
         assert_eq!(
             decision.fresh_reason(),
@@ -471,7 +621,7 @@ mod tests {
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
-            &[(1, "f1"), (2, "f2")],
+            &[(1, "f1", 300.0), (2, "f2", 300.0)],
         );
         assert_eq!(
             decision.fresh_reason(),

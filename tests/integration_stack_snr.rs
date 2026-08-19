@@ -126,7 +126,7 @@ fn sixteen_frames_measure_a_quarter_of_one_frame_s_noise() {
         points.push(snr::point(sample, depth as f64 * 300.0));
     }
 
-    let progressive = snr::ProgressiveSnr::new(snr::StackFrameOrder::Capture, points);
+    let progressive = snr::ProgressiveSnr::new(snr::StackFrameOrder::Capture, points, &[300.0; 16]);
     let points = &progressive.points;
     for pair in points.windows(2) {
         assert!(

@@ -2865,6 +2865,7 @@ mod tests {
             job_id: format!("{index:064x}"),
             artifact_revision: format!("rev-{index}"),
             accepted_only: false,
+            order: crate::server::stack_preview::snr::StackFrameOrder::Capture,
             created_unix_seconds: 10,
             cache_version: super::super::STACK_PREVIEW_CACHE_VERSION,
             group: StackGroupStatus {
