@@ -317,6 +317,26 @@ async fn run_server_internal(
         }
     }
 
+    // Build PSF Guard's query indexes on each configured catalog, once, off
+    // the request path. Startup is the quiet moment: no import or database
+    // management is in flight, so a background writer here cannot collide
+    // with one. See `spawn_query_index_build`.
+    {
+        let paths: Vec<String> = state
+            .databases
+            .read()
+            .map(|databases| {
+                databases
+                    .values()
+                    .map(|ctx| ctx.database_path.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for path in paths {
+            crate::server::database_context::spawn_query_index_build(path);
+        }
+    }
+
     // Start background image pre-generation if enabled
     if config.pregeneration_config.is_enabled() {
         let state_clone = Arc::clone(&state);

@@ -72,14 +72,50 @@ fn upgrade_psf_guard_tables(conn: &Connection, path: &str) {
              Calibration will be reported as unavailable for this catalog."
         ),
     }
-    match crate::db::ensure_query_indexes(conn) {
-        Ok(true) => tracing::info!("Added PSF Guard query indexes to {path}"),
-        Ok(false) => {}
-        Err(error) => tracing::warn!(
-            "Could not add PSF Guard query indexes to {path}: {error:#}. \
-             Queries still work; per-target lookups will scan the image table."
-        ),
-    }
+}
+
+/// How long the index build waits for the catalog's write lock before giving
+/// up for now. Deliberately short: N.I.N.A. may be saving frames into this
+/// file, and a query that scans is far better than a capture that blocks.
+const INDEX_BUILD_BUSY_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Build PSF Guard's query indexes on a catalog, off the open path.
+///
+/// This is an optimization, not a correctness step, and it is the expensive
+/// half: building an index takes the catalog's write lock, and on a rollback
+/// journal that blocks every other writer for the duration. Doing it during
+/// `open_scheduler_connection` put it on whichever thread happened to open the
+/// connection — including Tokio workers inside request handlers — and gave it
+/// the full sixty-second busy timeout to sit on.
+///
+/// So it runs on its own thread, on its own connection, with a short timeout,
+/// and only where the server knows it is not in the middle of something —
+/// once at startup, not every time a `DatabaseContext` is built. Constructing
+/// a context happens during imports and database management, and a background
+/// writer arriving mid-import is exactly the contention this is trying to
+/// avoid creating.
+///
+/// A catalog being written right now is left alone and picked up at the next
+/// server start; the only cost of skipping is that per-target lookups scan
+/// until then.
+pub(crate) fn spawn_query_index_build(path: String) {
+    std::thread::spawn(move || {
+        let built = Connection::open_with_flags(&path, db_open_flags())
+            .and_then(|conn| {
+                conn.busy_timeout(INDEX_BUILD_BUSY_TIMEOUT)?;
+                Ok(conn)
+            })
+            .map_err(anyhow::Error::from)
+            .and_then(|conn| crate::db::ensure_query_indexes(&conn));
+        match built {
+            Ok(true) => tracing::info!("Added PSF Guard query indexes to {path}"),
+            Ok(false) => {}
+            Err(error) => tracing::info!(
+                "Left PSF Guard query indexes for later on {path}: {error:#}. \
+                 Queries still work; per-target lookups scan the image table."
+            ),
+        }
+    });
 }
 
 /// Identity of the on-disk database file: the `(device, inode)` pair on unix.

@@ -365,13 +365,26 @@ fn add_column_if_missing(
     let present = table_column_names(conn, table)?
         .iter()
         .any(|name| name.eq_ignore_ascii_case(column));
-    if !present {
-        conn.execute_batch(&format!(
-            "ALTER TABLE {table} ADD COLUMN {column} {declaration};"
-        ))
-        .with_context(|| format!("adding {table}.{column}"))?;
+    if present {
+        return Ok(());
     }
-    Ok(())
+    match conn.execute_batch(&format!(
+        "ALTER TABLE {table} ADD COLUMN {column} {declaration};"
+    )) {
+        Ok(()) => Ok(()),
+        // Two processes can open the same catalog at the same moment, both
+        // find the column missing, and both try to add it. SQLite serializes
+        // the writes, so one wins and the other is told the column is already
+        // there — which is the state we wanted. Treating that as a failure
+        // would make the loser log an upgrade error and report no calibration
+        // library for a catalog that had just been upgraded correctly.
+        Err(error) if is_duplicate_column(&error) => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("adding {table}.{column}")),
+    }
+}
+
+fn is_duplicate_column(error: &rusqlite::Error) -> bool {
+    error.to_string().contains("duplicate column name")
 }
 
 /// Run every upgrade step this catalog still needs. Assumes the tables exist.
@@ -383,7 +396,8 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     )?;
     if version > CALIBRATION_SCHEMA_VERSION {
         anyhow::bail!(
-            "PSF Guard calibration schema version {version} is newer than this build supports              (expected at most {CALIBRATION_SCHEMA_VERSION}); upgrade PSF Guard"
+            "PSF Guard calibration schema version {version} is newer than this build \
+             supports (expected at most {CALIBRATION_SCHEMA_VERSION}); upgrade PSF Guard"
         );
     }
     for migration in MIGRATIONS {
@@ -416,33 +430,60 @@ pub fn migrate_existing(conn: &Connection) -> Result<bool> {
     if !schema_exists(conn) {
         return Ok(false);
     }
-    let before: i64 = conn.query_row(
-        "SELECT version FROM psf_guard_calibration_schema WHERE singleton = 1",
-        [],
-        |row| row.get(0),
-    )?;
+    let recorded_version = |conn: &Connection| -> Result<i64> {
+        Ok(conn.query_row(
+            "SELECT version FROM psf_guard_calibration_schema WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )?)
+    };
+    let before = recorded_version(conn)?;
     run_migrations(conn)?;
-    Ok(before < CALIBRATION_SCHEMA_VERSION)
+    // What the ladder reached, not what it set out to reach. Reporting the
+    // constant would let a build that bumped the version without adding the
+    // step log a successful upgrade on every open while nothing changed.
+    Ok(recorded_version(conn)? > before)
 }
+
+/// Columns this build's calibration queries name beyond the original schema.
+/// The gate below asks for these directly rather than trusting the version
+/// row, so add a column here whenever a query starts selecting one.
+const REQUIRED_FRAME_COLUMNS: &[&str] = &["rotation"];
 
 /// Whether this catalog's PSF Guard tables carry every column this build
 /// reads.
 ///
-/// A catalog that could not be upgraded — one on read-only storage — answers
-/// `false`, and readers degrade to "no calibration" instead of failing on a
-/// column that is not there. A catalog from a *newer* build answers `true`:
-/// steps only add columns, so everything this build names is still present.
+/// This asks the table, not the version row. The two can disagree: an earlier
+/// build added `rotation` from its write path without recording a version, so
+/// catalogs in the wild have the column and still say version 1. Gating on the
+/// version alone would report no calibration library for a catalog that is
+/// perfectly readable — including on paths that cannot upgrade it, like the
+/// CLI's read-only export.
+///
+/// A catalog from a *newer* build answers `true`: upgrade steps only add
+/// columns, so everything this build names is still there.
 pub fn schema_is_current(conn: &Connection) -> bool {
     if !schema_exists(conn) {
         return false;
     }
-    conn.query_row(
-        "SELECT version FROM psf_guard_calibration_schema WHERE singleton = 1",
-        [],
-        |row| row.get::<_, i64>(0),
-    )
-    .map(|version| version >= CALIBRATION_SCHEMA_VERSION)
-    .unwrap_or(false)
+    let Ok(columns) = table_column_names(conn, "psf_guard_calibration_frame") else {
+        return false;
+    };
+    let complete = REQUIRED_FRAME_COLUMNS.iter().all(|required| {
+        columns
+            .iter()
+            .any(|column| column.eq_ignore_ascii_case(required))
+    });
+    if !complete {
+        // Loud, because the alternative is a stack or an export quietly
+        // calibrating nothing. This is the one state a user has to act on.
+        tracing::warn!(
+            "This catalog's calibration tables predate this build and could not be \
+             upgraded, so no calibration will be applied. Open it with write access \
+             once to upgrade it."
+        );
+    }
+    complete
 }
 
 pub fn ensure_schema(conn: &Connection) -> Result<()> {
@@ -3244,8 +3285,68 @@ mod tests {
     }
 
     #[test]
+    fn every_version_this_build_claims_has_a_step_that_reaches_it() {
+        // The constant and the ladder live far apart. Bumping one without the
+        // other would log a successful upgrade on every open while the catalog
+        // stayed behind, and calibration would quietly vanish.
+        assert_eq!(
+            MIGRATIONS.last().map(|migration| migration.to_version),
+            Some(CALIBRATION_SCHEMA_VERSION),
+            "the last rung must reach the version this build claims"
+        );
+        let mut previous = 1;
+        for migration in MIGRATIONS {
+            assert!(
+                migration.to_version > previous,
+                "rungs must ascend; run_migrations walks them in order"
+            );
+            previous = migration.to_version;
+        }
+    }
+
+    #[test]
+    fn a_catalog_that_has_the_columns_reads_even_with_a_stale_version() {
+        // The state real catalogs are in: an earlier build added the column
+        // from its write path and never recorded a version. Gating reads on
+        // the version row would report no calibration for a catalog that is
+        // perfectly readable, including where it cannot be upgraded at all.
+        let conn = version_one_catalog();
+        conn.execute_batch("ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;")
+            .unwrap();
+        assert!(schema_is_current(&conn), "the columns are all there");
+        let light = frame("/lights/one.fits", "LIGHT");
+        assert!(select_for_light(&conn, &light).is_ok());
+        assert!(query_kind(&conn, CalibrationKind::Flat).is_ok());
+    }
+
+    #[test]
+    fn a_catalog_missing_the_columns_reports_absent_rather_than_failing() {
+        let conn = version_one_catalog();
+        assert!(!schema_is_current(&conn));
+        let light = frame("/lights/one.fits", "LIGHT");
+        assert!(select_for_light(&conn, &light).unwrap().bias.is_empty());
+    }
+
+    #[test]
+    fn two_openers_racing_the_same_upgrade_both_succeed() {
+        // Both pass the column check, both try the ALTER, SQLite serializes
+        // them and tells the loser the column already exists. That is the
+        // state we wanted, so it is not a failure.
+        let conn = version_one_catalog();
+        add_column_if_missing(&conn, "psf_guard_calibration_frame", "rotation", "REAL").unwrap();
+        assert!(
+            add_column_if_missing(&conn, "psf_guard_calibration_frame", "rotation", "REAL").is_ok(),
+            "the loser of the race must not report an upgrade failure"
+        );
+    }
+
+    #[test]
     fn a_catalog_from_a_newer_build_is_refused_rather_than_guessed_at() {
         let conn = version_one_catalog();
+        // A newer build would have run every step this one knows about, so the
+        // columns are there; it simply also knows steps this build does not.
+        conn.execute_batch("ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;")
+            .unwrap();
         conn.execute(
             "UPDATE psf_guard_calibration_schema SET version = ?1 WHERE singleton = 1",
             [CALIBRATION_SCHEMA_VERSION + 1],

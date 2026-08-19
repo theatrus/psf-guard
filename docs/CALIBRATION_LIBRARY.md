@@ -248,12 +248,17 @@ library for that catalog rather than failing part way through a stack. A
 catalog written by a *newer* PSF Guard is read normally; PSF Guard only
 declines to upgrade it, and says which way round the version mismatch is.
 
-A catalog that has never held calibration data is not touched at all. Opening
-someone's scheduler database does not write to it; the tables appear the first
-time you import calibration frames.
+A catalog that has never held calibration data gets none of PSF Guard's own
+tables written to it. They appear the first time you import calibration
+frames. Opening a catalog is not entirely read-only, though — see the indexes
+below.
 
 PSF Guard also adds two indexes to `acquiredimage`, the table Target Scheduler
-records images in. Target Scheduler ships it without any, so looking up one
+records images in. This happens in the background shortly after a catalog is
+first opened, not during the open itself: building an index takes the
+catalog's write lock, and a catalog that N.I.N.A. is writing to right now is
+left alone and picked up next time. Until then queries still work; they just
+scan. Target Scheduler ships it without any, so looking up one
 target's images meant reading every row of the table — seconds per query on a
 catalog of a few thousand images, and repeated often enough to hold up the
 Overview page. The indexes are named `idx_psf_guard_acquiredimage_target` and
