@@ -266,7 +266,8 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   // The curve is published beside the FITS, so it outlives the job list.
   expect(builtGroup.snr.order).toBe('capture');
   expect(builtGroup.snr.points.length).toBeGreaterThanOrEqual(3);
-  const snrResponse = await page.request.get(builtGroup.snr_url);
+  const snrHref = builtGroup.snr_url as string;
+  const snrResponse = await page.request.get(snrHref);
   expect(snrResponse.status()).toBe(200);
   const sidecar = await snrResponse.json();
   expect(sidecar.points.map((point: { frames: number }) => point.frames)).toEqual(
@@ -555,6 +556,25 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
     .getByRole('img', { name: /stack preview/i })
     .getAttribute('src');
   expect(rebuiltSrc).not.toBe(cachedSrc);
+
+  // The curve is hidden only by its own switch, and the choice is remembered:
+  // someone who does not want the chart should not dismiss it once a session.
+  const curveSwitch = page.locator('.stack-preview-panel')
+    .getByRole('checkbox', { name: 'SNR curve' });
+  await expect(page.locator('.stack-snr')).toBeVisible();
+  await curveSwitch.uncheck();
+  await expect(page.locator('.stack-snr')).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator('.stack-preview-card')).toHaveCount(1);
+  await expect(page.locator('.stack-snr')).toHaveCount(0);
+  // Hiding the chart hides nothing else: the build still measured the curve
+  // and still publishes it.
+  const stillPublished = await page.request.get(snrHref!);
+  expect(stillPublished.status()).toBe(200);
+  await page.locator('.stack-preview-panel')
+    .getByRole('checkbox', { name: 'SNR curve' })
+    .check();
+  await expect(page.locator('.stack-snr')).toBeVisible();
 });
 
 test('keeps a running stack visible in the header and re-attaches the panel', async ({

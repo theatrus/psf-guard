@@ -75,6 +75,25 @@ function readCalibrationMode(): CalibrationMode {
   }
 }
 
+/**
+ * Whether the cards draw their signal-to-noise curve. Remembered across
+ * reloads, like the calibration mode: someone who does not want the chart
+ * should not have to dismiss it once per session.
+ *
+ * The curve is hidden only by this switch. It never disappears because a
+ * build is short, a channel is small, or a value looks uninteresting — an
+ * element that comes and goes on its own reads as a bug.
+ */
+const SNR_CURVE_KEY = 'psf-guard.stack-snr-curve';
+
+function readShowSnrCurve(): boolean {
+  try {
+    return window.localStorage.getItem(SNR_CURVE_KEY) !== 'off';
+  } catch {
+    return true;
+  }
+}
+
 /** The mode a finished artifact was built under; older artifacts ran auto. */
 function builtCalibrationMode(group: StackGroupStatus): CalibrationMode {
   return group.calibration?.mode ?? 'auto';
@@ -224,6 +243,15 @@ export default function StackPreviewPanel({
   // build produces, and quality order is a deliberate one-off question about
   // culling that should never be the state someone comes back to.
   const [frameOrder, setFrameOrder] = useState<StackFrameOrder>('capture');
+  const [showSnrCurve, setShowSnrCurve] = useState(readShowSnrCurve);
+  const chooseShowSnrCurve = (show: boolean) => {
+    setShowSnrCurve(show);
+    try {
+      window.localStorage.setItem(SNR_CURVE_KEY, show ? 'on' : 'off');
+    } catch {
+      // Keep the in-memory preference even when it cannot be persisted.
+    }
+  };
   const [calibrationMode, setCalibrationMode] = useState<CalibrationMode>(readCalibrationMode);
   const chooseCalibrationMode = (mode: CalibrationMode) => {
     setCalibrationMode(mode);
@@ -600,6 +628,21 @@ export default function StackPreviewPanel({
               </select>
             </label>
             <label
+              className="stack-preview-checkbox"
+              title={
+                'Draw the signal-to-noise curve on each card. Builds measure it either ' +
+                'way, so turning this off hides the chart without changing what is ' +
+                'recorded; the curve stays in the stack FITS and its JSON sidecar.'
+              }
+            >
+              <input
+                type="checkbox"
+                checked={showSnrCurve}
+                onChange={(event) => chooseShowSnrCurve(event.target.checked)}
+              />
+              SNR curve
+            </label>
+            <label
               className="stack-preview-frame-order"
               title={
                 'The order the next build integrates its frames in, which decides what its ' +
@@ -957,7 +1000,7 @@ export default function StackPreviewPanel({
                       </div>
                     )}
 
-                    {progressGroup?.snr && (
+                    {showSnrCurve && progressGroup?.snr && (
                       <StackSnrCurve
                         curve={progressGroup.snr}
                         label={`${targetName} ${filterName || 'no filter'}`}

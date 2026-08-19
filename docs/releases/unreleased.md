@@ -16,7 +16,9 @@
   curve is kept in the resume checkpoint, so a target stacked one night at a
   time ends with one curve over the whole season. A new **Order** control
   switches the reading: capture order asks whether another night would help,
-  quality order asks which frames are worth keeping. `psf-guard stack-snr`
+  quality order asks which frames are worth keeping. An **SNR curve** switch
+  hides the chart on every card and is remembered; builds measure and publish
+  the curve either way. `psf-guard stack-snr`
   runs the same analysis over a folder of frames without a catalog. See
   [stack previews](https://github.com/theatrus/psf-guard/blob/main/docs/STACKING_PREVIEWS.md).
 - Remote image intake now accepts bias, dark, dark-flat, and flat frames as

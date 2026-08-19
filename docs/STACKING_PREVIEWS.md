@@ -201,6 +201,14 @@ deliberately, not a default.
 The best-graded frame is the registration reference under either order. Only
 what follows it changes.
 
+### Turning the chart off
+
+**SNR curve** beside the build buttons hides the chart on every card, and the
+choice is remembered across reloads. Nothing else changes: the build measures
+the curve either way, and still writes it to the FITS header, the JSON sidecar,
+and the resume checkpoint. The chart is hidden only by this switch — it never
+disappears on its own because a channel is small or a reading looks dull.
+
 ### Where the curve goes
 
 The card draws it live as the build passes each depth, and keeps it with the
