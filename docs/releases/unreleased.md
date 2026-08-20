@@ -139,7 +139,14 @@
 - Checking that a calibration file on disk is still the frame the catalog
   recorded now compares the rotator angle for flats, as matching already did.
   A flat shot at a different angle is not the frame the record describes; an
-  angle neither side wrote down still matches.
+  angle neither side wrote down still matches. That check also now needs
+  positive evidence of identity — an agreeing camera name, or width and height
+  that both sides record — so a catalog row that captured neither no longer
+  verifies against any file.
+- A FITS header that reads as "not a number" is treated as absent rather than
+  as a reading. A light whose `CCD-TEMP` was unparseable used to match no dark
+  at all; it now matches on the settings it did record, the same as a light
+  from a rig with no temperature sensor.
 
 ## Fixed
 

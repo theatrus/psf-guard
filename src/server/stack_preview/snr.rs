@@ -255,7 +255,6 @@ impl ProgressiveSnr {
     }
 }
 
-/// Turn a sample into a curve point once its exposure is known.
 /// Turn one of Seiza's readings into a curve point, once its exposure is
 /// known.
 pub fn point(sample: seiza_stacking::SnrSample, exposure_seconds: f64) -> SnrPoint {

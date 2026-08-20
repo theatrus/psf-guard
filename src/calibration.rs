@@ -28,17 +28,6 @@ pub const CALIBRATION_SCHEMA_VERSION: i64 = 2;
 pub const MASTER_CACHE_VERSION: u32 = 2;
 const MIN_MASTER_FRAMES: usize = 2;
 const MAX_MASTER_FRAMES: usize = 64;
-/// Flats feeding one master must come from one flat session: within this
-/// window of the frame that anchors the chosen coherent subset. Dust moves
-/// between sessions, so a master must not mix a fresh set with one shot
-/// months earlier. Bias, dark, and dark-flat libraries are stable across
-/// months and get no time window — only temperature coherence.
-const FLAT_SESSION_WINDOW_SECONDS: u64 = 24 * 60 * 60;
-/// Sensor-temperature coherence for the frames feeding one master. Matches
-/// seiza-stacking's own frame-for-frame CCD-TEMP gate (±1 °C against the
-/// first frame): a looser window here would assemble sets seiza refuses,
-/// reintroducing the silent build failure this selection exists to avoid.
-const MASTER_TEMPERATURE_COHERENCE_C: f64 = 1.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1611,6 +1600,7 @@ fn fit_pedestal_against_flat(
             image.height,
             image.channels,
         )
+        .map_err(|error| tracing::debug!("pedestal fit skipped: {error}"))
         .ok()
     }
     let (light_view, flat_view) = (view(light)?, view(flat)?);
@@ -2809,12 +2799,12 @@ fn coherent_master_subset(
 ) -> Vec<CalibrationFrame> {
     let coherent = |anchor: &CalibrationFrame, frame: &CalibrationFrame| -> bool {
         let temperature_ok = match (anchor.camera_temp, frame.camera_temp) {
-            (Some(a), Some(b)) => (a - b).abs() <= MASTER_TEMPERATURE_COHERENCE_C,
+            (Some(a), Some(b)) => (a - b).abs() <= tolerances().master_temperature_c,
             _ => true,
         };
         let session_ok = if kind == CalibrationKind::Flat {
             match (anchor.captured_at, frame.captured_at) {
-                (Some(a), Some(b)) => a.abs_diff(b) <= FLAT_SESSION_WINDOW_SECONDS,
+                (Some(a), Some(b)) => a.abs_diff(b) <= tolerances().flat_session_seconds,
                 _ => true,
             }
         } else {
@@ -3502,6 +3492,48 @@ mod tests {
         let summary = library_summary(&conn).unwrap();
         assert_eq!(summary.frame_count, 0);
         assert!(!schema_exists(&conn));
+    }
+
+    #[test]
+    fn a_long_dark_matches_within_a_proportion_of_its_exposure() {
+        // The rule is a floor or a proportion of the longer exposure,
+        // whichever is larger. A flat 0.05 s is a six-thousandth of a
+        // five-minute sub — tighter than a shutter, and tighter than the rule
+        // the master builder applies to the same frames.
+        assert!(exposure_matches(Some(300.0), Some(300.25)));
+        assert!(!exposure_matches(Some(300.0), Some(301.0)));
+        // Below a minute the floor still decides, because a tenth of a
+        // percent of half a second is nothing any header records.
+        assert!(exposure_matches(Some(0.5), Some(0.52)));
+        assert!(!exposure_matches(Some(0.5), Some(0.7)));
+    }
+
+    #[test]
+    fn a_header_that_reads_as_not_a_number_recorded_nothing() {
+        // A NaN temperature is not a temperature. Left in place it would read
+        // as "unknown, accepts anything" and pair a light of no known
+        // temperature with a dark of any temperature at all — a +20 °C dark
+        // under a -10 °C light, silently, which is worse than no dark.
+        let mut file = Vec::new();
+        fits_card(&mut file, "SIMPLE  =                    T");
+        fits_card(&mut file, "BITPIX  =                   16");
+        fits_card(&mut file, "NAXIS   =                    2");
+        fits_card(&mut file, "NAXIS1  =                  100");
+        fits_card(&mut file, "NAXIS2  =                  100");
+        fits_card(&mut file, "IMAGETYP= 'LIGHT'");
+        fits_card(&mut file, "CCD-TEMP=                  nan");
+        fits_card(&mut file, "ROTATANG=                  nan");
+        fits_card(&mut file, "END");
+        file.resize(file.len().div_ceil(2880) * 2880, b' ');
+        file.resize(file.len() + 2880 * 4, 0);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nan.fits");
+        std::fs::write(&path, &file).unwrap();
+        let meta = crate::commands::import::headers::read_frame_meta(&path);
+        assert!(meta.readable, "the frame parses");
+        assert_eq!(meta.camera_temp, None, "NaN is absent, not a reading");
+        assert_eq!(meta.rotator_position, None);
     }
 
     #[test]

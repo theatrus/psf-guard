@@ -2,11 +2,12 @@
 //!
 //! Seiza measures each depth now, but the reading is still the evidence this
 //! application's verdicts and projections rest on, so it is checked here
-//! against a real accumulation rather than assumed from upstream's own tests. So this drives Seiza's live
-//! stacker over synthetic frames whose noise is known to be independent from
-//! frame to frame, reads the accumulator at the same depths a group build
-//! reads it at, and checks that sixteen frames land within reach of the
-//! quarter-noise that perfect averaging gives.
+//! against a real accumulation rather than assumed from upstream's own tests.
+//!
+//! It drives Seiza's live stacker over synthetic frames whose noise is known
+//! to be independent from frame to frame, reads the accumulator at the same
+//! depths a group build reads it at, and checks that sixteen frames land
+//! within reach of the quarter-noise that perfect averaging gives.
 
 use psf_guard::server::stack_preview::snr;
 use std::io::Write as _;
