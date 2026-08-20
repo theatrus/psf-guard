@@ -1,12 +1,13 @@
 //! Stacking more frames has to be seen to lower the noise.
 //!
-//! The progressive curve is the whole feature's evidence: if the estimator
-//! did not track the noise of a real accumulation, every verdict and
-//! projection built on it would be decoration. So this drives Seiza's live
-//! stacker over synthetic frames whose noise is known to be independent from
-//! frame to frame, reads the accumulator at the same depths a group build
-//! reads it at, and checks that sixteen frames land within reach of the
-//! quarter-noise that perfect averaging gives.
+//! Seiza measures each depth now, but the reading is still the evidence this
+//! application's verdicts and projections rest on, so it is checked here
+//! against a real accumulation rather than assumed from upstream's own tests.
+//!
+//! It drives Seiza's live stacker over synthetic frames whose noise is known
+//! to be independent from frame to frame, reads the accumulator at the same
+//! depths a group build reads it at, and checks that sixteen frames land
+//! within reach of the quarter-noise that perfect averaging gives.
 
 use psf_guard::server::stack_preview::snr;
 use std::io::Write as _;
@@ -104,7 +105,7 @@ fn sixteen_frames_measure_a_quarter_of_one_frame_s_noise() {
 
     // Exactly what a group build does: push to the next depth on the ladder,
     // read the accumulator, push on.
-    let depths = snr::checkpoint_depths(count);
+    let depths = seiza_stacking::checkpoint_depths(count);
     assert_eq!(depths, vec![1, 2, 4, 8, 16]);
     let mut points = Vec::new();
     let mut pushed = 1usize;
@@ -121,7 +122,8 @@ fn sixteen_frames_measure_a_quarter_of_one_frame_s_noise() {
             }
             pushed += 1;
         }
-        let sample = snr::measure(stacker.view()).expect("a 200-pixel frame is measurable");
+        let sample =
+            seiza_stacking::measure_depth(stacker.view()).expect("a 200-pixel frame is measurable");
         assert_eq!(sample.frames as usize, depth);
         points.push(snr::point(sample, depth as f64 * 300.0));
     }

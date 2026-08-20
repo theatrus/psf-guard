@@ -1,13 +1,17 @@
-//! Progressive signal-to-noise measurement for a mono stack build.
+//! Reading a progressive signal-to-noise curve for a mono stack build.
 //!
-//! A stack accumulator holds a running mean that is already the integration of
-//! every frame pushed so far. Reading how deep a stack needs to go is
-//! therefore a matter of looking at that mean a few times on the way past, not
-//! of integrating the same frames again once per depth: [`checkpoint_depths`]
-//! picks the depths, the group build splits its push batches there, and
-//! [`measure`] reads the live accumulator without copying it.
+//! Seiza takes the measurement: `seiza_stacking::checkpoint_depths` picks the
+//! depths a build should look at, and `measure_depth` reads the live
+//! accumulator without copying it. This module is what PSF Guard does with
+//! those readings — the curve it keeps, the trend it fits, and the words it
+//! puts on a card.
 //!
-//! What each depth records:
+//! The split is deliberate. What the noise of an integration *is* belongs to
+//! whoever owns the accumulator; what it *means* for a night's shooting
+//! depends on an exposure model and a vocabulary that are this application's,
+//! not a library's.
+//!
+//! What each depth records, measured upstream:
 //!
 //! - **Noise** is the robust spread of second differences measured in both
 //!   image axes, scaled to a standard deviation. Second differences cancel a
@@ -30,21 +34,6 @@
 //! buy — and everything it produces is labelled as the estimate it is.
 
 use serde::{Deserialize, Serialize};
-
-/// Rows read per measurement, at most. Noise and level statistics converge
-/// long before a full frame is consumed, and this keeps the cost of a
-/// checkpoint flat across sensor sizes.
-const MAX_SAMPLED_ROWS: usize = 512;
-
-/// Fewer samples than this and the medians are not worth reporting.
-const MIN_SAMPLES: usize = 1024;
-
-/// The brightest share of the frame that stands in for the target's signal.
-const SIGNAL_FRACTION: f64 = 0.01;
-
-/// Median absolute deviation to standard deviation, for a normal
-/// distribution.
-const MAD_TO_SIGMA: f64 = 1.482_602_218_505_602;
 
 /// Perfect averaging: noise falls as the square root of the frame count.
 const IDEAL_EXPONENT: f64 = -0.5;
@@ -124,16 +113,6 @@ pub struct SnrPoint {
     pub snr: f64,
     /// Per-channel noise. One entry for mono, three for a debayered stack.
     #[serde(default)]
-    pub channel_noise: Vec<f64>,
-}
-
-/// What one read of the live accumulator found.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SnrSample {
-    pub frames: u32,
-    pub noise: f64,
-    pub background: f64,
-    pub signal: f64,
     pub channel_noise: Vec<f64>,
 }
 
@@ -276,125 +255,16 @@ impl ProgressiveSnr {
     }
 }
 
-/// The depths a build of `total` frames measures at: the doubling ladder, and
-/// the full set.
-///
-/// Doubling keeps the count of checkpoints logarithmic, so a five-hundred
-/// frame stack splits its push batches nine times rather than five hundred,
-/// and the points still spread evenly once the curve is drawn against a log
-/// axis.
-pub fn checkpoint_depths(total: usize) -> Vec<usize> {
-    let mut depths = Vec::new();
-    let mut depth = 1usize;
-    while depth < total {
-        depths.push(depth);
-        depth *= 2;
-    }
-    if total > 0 {
-        depths.push(total);
-    }
-    depths
-}
-
-/// Read the live accumulator. `None` when too little of the frame is covered
-/// to measure, or when the samples carry no noise at all.
-pub fn measure(view: seiza_stacking::StackView<'_>) -> Option<SnrSample> {
-    if view.width < 3 || view.height < 3 {
-        return None;
-    }
-    let channels = view.channels.max(1);
-    let interior_rows = view.height - 2;
-    let stride = interior_rows.div_ceil(MAX_SAMPLED_ROWS).max(1);
-    let mut channel_noise = Vec::with_capacity(channels);
-    let mut channel_background = Vec::with_capacity(channels);
-    let mut channel_signal = Vec::with_capacity(channels);
-
-    for channel in 0..channels {
-        let mut levels: Vec<f32> = Vec::new();
-        let mut horizontal_differences: Vec<f32> = Vec::new();
-        let mut vertical_differences: Vec<f32> = Vec::new();
-        let mut y = 1usize;
-        while y + 1 < view.height {
-            let row = y * view.width;
-            for x in 1..view.width - 1 {
-                let index = (row + x) * channels + channel;
-                let coverage = view.coverage[index];
-                let value = view.mean[index];
-                if coverage == 0 || !value.is_finite() {
-                    continue;
-                }
-                levels.push(value);
-
-                // A second difference removes any linear gradient. All three
-                // samples need equal coverage so dithered edges cannot
-                // masquerade as pixel structure.
-                let left = index - channels;
-                let right = index + channels;
-                if view.coverage[left] == coverage
-                    && view.coverage[right] == coverage
-                    && view.mean[left].is_finite()
-                    && view.mean[right].is_finite()
-                {
-                    horizontal_differences.push(view.mean[left] - 2.0 * value + view.mean[right]);
-                }
-
-                let above = index - view.width * channels;
-                let below = index + view.width * channels;
-                if view.coverage[above] == coverage
-                    && view.coverage[below] == coverage
-                    && view.mean[above].is_finite()
-                    && view.mean[below].is_finite()
-                {
-                    vertical_differences.push(view.mean[above] - 2.0 * value + view.mean[below]);
-                }
-            }
-            y += stride;
-        }
-
-        if horizontal_differences.len() < MIN_SAMPLES
-            || vertical_differences.len() < MIN_SAMPLES
-            || levels.len() < MIN_SAMPLES
-        {
-            return None;
-        }
-        // A second difference has coefficients 1, -2, 1, so independent
-        // samples with sigma noise produce a difference with sqrt(6) sigma.
-        // Keep the noisier axis: that makes horizontal and vertical banding
-        // equally visible instead of averaging either one away.
-        let horizontal_noise = second_difference_noise(&mut horizontal_differences)?;
-        let vertical_noise = second_difference_noise(&mut vertical_differences)?;
-        let noise = horizontal_noise.max(vertical_noise);
-        if noise <= 0.0 || !noise.is_finite() {
-            return None;
-        }
-        let background = median(&mut levels);
-        channel_noise.push(noise);
-        channel_background.push(background);
-        channel_signal.push(brightest_above(&mut levels, background));
-    }
-
-    let frames = view.accepted_frames;
-    let noise = mean(&channel_noise);
-    let background = mean(&channel_background);
-    let signal = mean(&channel_signal);
-    Some(SnrSample {
-        frames,
-        noise,
-        background,
-        signal,
-        channel_noise,
-    })
-}
-
-/// Turn a sample into a curve point once its exposure is known.
-pub fn point(sample: SnrSample, exposure_seconds: f64) -> SnrPoint {
+/// Turn one of Seiza's readings into a curve point, once its exposure is
+/// known.
+pub fn point(sample: seiza_stacking::SnrSample, exposure_seconds: f64) -> SnrPoint {
     SnrPoint {
         frames: sample.frames,
         exposure_seconds,
         noise: sample.noise,
         background: sample.background,
         signal: sample.signal,
-        snr: sample.signal / sample.noise,
+        snr: sample.snr(),
         channel_noise: sample.channel_noise,
     }
 }
@@ -671,248 +541,9 @@ fn summarize(
     summary
 }
 
-fn median(values: &mut [f32]) -> f64 {
-    let middle = values.len() / 2;
-    let (_, value, _) = values.select_nth_unstable_by(middle, f32::total_cmp);
-    f64::from(*value)
-}
-
-fn second_difference_noise(differences: &mut [f32]) -> Option<f64> {
-    if differences.len() < MIN_SAMPLES {
-        return None;
-    }
-    let center = median(differences);
-    for difference in differences.iter_mut() {
-        *difference = (f64::from(*difference) - center).abs() as f32;
-    }
-    let noise = median(differences) * MAD_TO_SIGMA / 6.0f64.sqrt();
-    (noise >= 0.0 && noise.is_finite()).then_some(noise)
-}
-
-/// How far the brightest [`SIGNAL_FRACTION`] of the samples sits above the
-/// background. Reorders `values`.
-fn brightest_above(values: &mut [f32], background: f64) -> f64 {
-    let cut = ((values.len() as f64) * (1.0 - SIGNAL_FRACTION)) as usize;
-    let cut = cut.min(values.len().saturating_sub(1));
-    let (_, pivot, brightest) = values.select_nth_unstable_by(cut, f32::total_cmp);
-    let mut total = f64::from(*pivot);
-    let mut count = 1usize;
-    for value in brightest {
-        total += f64::from(*value);
-        count += 1;
-    }
-    (total / count as f64 - background).max(0.0)
-}
-
-fn mean(values: &[f64]) -> f64 {
-    if values.is_empty() {
-        return 0.0;
-    }
-    values.iter().sum::<f64>() / values.len() as f64
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A deterministic normal generator, so a noise measurement can be
-    /// checked against a number the test chose.
-    struct Noise(u64);
-
-    impl Noise {
-        fn next_uniform(&mut self) -> f64 {
-            self.0 = self
-                .0
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            ((self.0 >> 11) as f64 / (1u64 << 53) as f64).mul_add(0.999_999, 5e-7)
-        }
-
-        fn next_normal(&mut self) -> f64 {
-            let first = self.next_uniform();
-            let second = self.next_uniform();
-            (-2.0 * first.ln()).sqrt() * (std::f64::consts::TAU * second).cos()
-        }
-    }
-
-    /// A flat field of the given background plus the given noise, with a
-    /// bright patch standing in for a target.
-    fn frame(width: usize, height: usize, background: f32, sigma: f64, seed: u64) -> Vec<f32> {
-        let mut noise = Noise(seed);
-        let mut data = vec![0.0f32; width * height];
-        for (index, sample) in data.iter_mut().enumerate() {
-            let (x, y) = (index % width, index / width);
-            // Two percent of the frame is bright, so the signal statistic has
-            // something to find above the background.
-            let object = if y < height / 10 { 500.0 } else { 0.0 };
-            // A sky gradient the difference estimator must ignore.
-            let gradient = x as f32 * 0.05;
-            *sample = background + object + gradient + (noise.next_normal() * sigma) as f32;
-        }
-        data
-    }
-
-    fn planar_gradient_frame(width: usize, height: usize, sigma: f64, seed: u64) -> Vec<f32> {
-        let mut noise = Noise(seed);
-        let mut data = vec![0.0f32; width * height];
-        for (index, sample) in data.iter_mut().enumerate() {
-            let (x, y) = (index % width, index / width);
-            *sample =
-                1000.0 + x as f32 * 5.0 + y as f32 * 3.0 + (noise.next_normal() * sigma) as f32;
-        }
-        data
-    }
-
-    fn banded_frame(
-        width: usize,
-        height: usize,
-        rows: bool,
-        band_sigma: f64,
-        pixel_sigma: f64,
-        seed: u64,
-    ) -> Vec<f32> {
-        let mut noise = Noise(seed);
-        let band_count = if rows { height } else { width };
-        let bands: Vec<f32> = (0..band_count)
-            .map(|_| (noise.next_normal() * band_sigma) as f32)
-            .collect();
-        let mut data = vec![0.0f32; width * height];
-        for (index, sample) in data.iter_mut().enumerate() {
-            let (x, y) = (index % width, index / width);
-            let band = if rows { bands[y] } else { bands[x] };
-            *sample = 1000.0 + band + (noise.next_normal() * pixel_sigma) as f32;
-        }
-        data
-    }
-
-    fn view<'a>(
-        data: &'a [f32],
-        coverage: &'a [u32],
-        width: usize,
-        height: usize,
-        frames: u32,
-    ) -> seiza_stacking::StackView<'a> {
-        seiza_stacking::StackView {
-            width,
-            height,
-            channels: 1,
-            mean: data,
-            coverage,
-            rejected_samples: coverage,
-            accepted_frames: frames,
-            rejected_frames: 0,
-        }
-    }
-
-    #[test]
-    fn checkpoint_depths_double_and_end_on_the_full_set() {
-        assert_eq!(checkpoint_depths(0), Vec::<usize>::new());
-        assert_eq!(checkpoint_depths(1), vec![1]);
-        assert_eq!(checkpoint_depths(5), vec![1, 2, 4, 5]);
-        assert_eq!(checkpoint_depths(16), vec![1, 2, 4, 8, 16]);
-        assert_eq!(checkpoint_depths(100), vec![1, 2, 4, 8, 16, 32, 64, 100]);
-    }
-
-    #[test]
-    fn a_five_hundred_frame_stack_splits_its_batches_nine_times() {
-        // The whole point of the doubling ladder: measuring is cheap, but
-        // every checkpoint costs a pipelined batch boundary.
-        assert_eq!(checkpoint_depths(500).len(), 10);
-    }
-
-    #[test]
-    fn noise_is_measured_through_a_sky_gradient_and_a_bright_target() {
-        let (width, height) = (400, 400);
-        let data = frame(width, height, 1000.0, 12.0, 7);
-        let coverage = vec![4u32; data.len()];
-        let sample = measure(view(&data, &coverage, width, height, 4)).expect("measurable");
-        assert!(
-            (sample.noise - 12.0).abs() < 0.6,
-            "measured {} for a sigma of 12",
-            sample.noise
-        );
-        // The gradient runs to 20 ADU across the frame and the target sits
-        // 500 above it; neither may leak into the noise.
-        assert!(
-            (sample.background - 1010.0).abs() < 5.0,
-            "{}",
-            sample.background
-        );
-        assert!(sample.signal > 400.0, "{}", sample.signal);
-    }
-
-    #[test]
-    fn a_strong_planar_gradient_does_not_become_a_noise_floor() {
-        let (width, height) = (400, 400);
-        let data = planar_gradient_frame(width, height, 12.0, 29);
-        let coverage = vec![4u32; data.len()];
-        let sample = measure(view(&data, &coverage, width, height, 4)).expect("measurable");
-        assert!(
-            (sample.noise - 12.0).abs() < 0.8,
-            "measured {} for a sigma of 12 through a strong plane",
-            sample.noise
-        );
-    }
-
-    #[test]
-    fn row_and_column_banding_are_measured_symmetrically() {
-        let (width, height) = (400, 400);
-        let coverage = vec![4u32; width * height];
-        let rows = banded_frame(width, height, true, 16.0, 0.0, 31);
-        let columns = banded_frame(width, height, false, 16.0, 0.0, 31);
-        let row_noise = measure(view(&rows, &coverage, width, height, 4))
-            .expect("row banding is measurable")
-            .noise;
-        let column_noise = measure(view(&columns, &coverage, width, height, 4))
-            .expect("column banding is measurable")
-            .noise;
-        assert!(row_noise > 12.0, "row banding measured as {row_noise}");
-        assert!(
-            column_noise > 12.0,
-            "column banding measured as {column_noise}"
-        );
-        assert!(
-            (row_noise - column_noise).abs() < 1.5,
-            "row {row_noise}, column {column_noise}"
-        );
-    }
-
-    #[test]
-    fn averaging_four_times_the_frames_halves_the_measured_noise() {
-        let (width, height) = (400, 400);
-        let coverage_four = vec![4u32; width * height];
-        let coverage_sixteen = vec![16u32; width * height];
-        let shallow = frame(width, height, 1000.0, 20.0, 11);
-        let deep = frame(width, height, 1000.0, 10.0, 13);
-        let shallow = measure(view(&shallow, &coverage_four, width, height, 4)).expect("shallow");
-        let deep = measure(view(&deep, &coverage_sixteen, width, height, 16)).expect("deep");
-        let ratio = deep.noise / shallow.noise;
-        assert!((ratio - 0.5).abs() < 0.05, "ratio {ratio}");
-    }
-
-    #[test]
-    fn uncovered_samples_are_not_measured() {
-        let (width, height) = (400, 400);
-        let data = frame(width, height, 1000.0, 12.0, 17);
-        // Half the frame never had a frame land on it. Its samples are zero
-        // and would read as an enormous noise if they were counted.
-        let mut coverage = vec![4u32; data.len()];
-        for (index, count) in coverage.iter_mut().enumerate() {
-            if index % width >= width / 2 {
-                *count = 0;
-            }
-        }
-        let sample = measure(view(&data, &coverage, width, height, 4)).expect("measurable");
-        assert!((sample.noise - 12.0).abs() < 0.8, "{}", sample.noise);
-    }
-
-    #[test]
-    fn too_little_coverage_is_not_measured() {
-        let (width, height) = (20, 20);
-        let data = frame(width, height, 1000.0, 12.0, 19);
-        let coverage = vec![1u32; data.len()];
-        assert!(measure(view(&data, &coverage, width, height, 1)).is_none());
-    }
 
     fn curve(noise_at: impl Fn(u32) -> f64, depths: &[u32]) -> Vec<SnrPoint> {
         depths

@@ -109,7 +109,18 @@ pub fn read_frame_meta_named(path: &Path, declared: &Path) -> FrameMeta {
             .filter(|v| !v.is_empty())
             .map(str::to_string)
     };
-    let f64_of = |names: &[&str]| find(names).and_then(HeaderValue::as_f64);
+    // A header that parses to NaN or an infinity is a header that did not
+    // record anything, and is read as absent rather than as a reading.
+    // Matching treats an absent value as "cannot rule anything out"; a
+    // non-finite one left in place would compare false against everything, or
+    // — once the comparison moved to a crate that reads non-finite as unknown
+    // — against nothing, which silently paired a light of no known
+    // temperature with a dark of any temperature at all.
+    let f64_of = |names: &[&str]| {
+        find(names)
+            .and_then(HeaderValue::as_f64)
+            .filter(|value| value.is_finite())
+    };
     let i64_of = |names: &[&str]| {
         find(names).and_then(|v| {
             v.as_i64()

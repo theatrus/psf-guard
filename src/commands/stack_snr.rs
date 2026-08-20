@@ -115,11 +115,11 @@ fn accumulate(candidates: &[Candidate]) -> Result<(Vec<snr::SnrPoint>, Vec<f64>)
     let mut integrated_exposure = candidates[0].exposure_seconds;
     let mut accepted_exposures = vec![candidates[0].exposure_seconds];
     let mut pushed = 1usize;
-    if let Some(sample) = snr::measure(stacker.view()) {
+    if let Some(sample) = seiza_stacking::measure_depth(stacker.view()) {
         points.push(snr::point(sample, integrated_exposure));
     }
 
-    for depth in snr::checkpoint_depths(candidates.len()) {
+    for depth in seiza_stacking::checkpoint_depths(candidates.len()) {
         if depth <= pushed {
             continue;
         }
@@ -153,7 +153,7 @@ fn accumulate(candidates: &[Candidate]) -> Result<(Vec<snr::SnrPoint>, Vec<f64>)
         let advanced = points
             .last()
             .is_none_or(|last| last.frames < stacker.view().accepted_frames);
-        if advanced && let Some(sample) = snr::measure(stacker.view()) {
+        if advanced && let Some(sample) = seiza_stacking::measure_depth(stacker.view()) {
             let measured = snr::point(sample, integrated_exposure);
             println!(
                 "  {:>5} frames  noise {:>10.2}  ratio {:>8.2}",

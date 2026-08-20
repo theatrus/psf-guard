@@ -128,6 +128,26 @@
   any one install without signing out the rest. Manually configured keys
   keep working.
 
+## Changed
+
+- A dark now suits a light when their exposures agree to a tenth of a percent
+  or 0.05 seconds, whichever is the larger allowance. It was a flat 0.05
+  seconds, which is a six-thousandth of a five-minute sub — tighter than a
+  shutter can be trusted, and tighter than the rule Seiza applied to the same
+  frames when it built the master. A 300.25-second dark now pairs with a
+  300-second light where it previously did not.
+- Checking that a calibration file on disk is still the frame the catalog
+  recorded now compares the rotator angle for flats, as matching already did.
+  A flat shot at a different angle is not the frame the record describes; an
+  angle neither side wrote down still matches. That check also now needs
+  positive evidence of identity — an agreeing camera name, or width and height
+  that both sides record — so a catalog row that captured neither no longer
+  verifies against any file.
+- A FITS header that reads as "not a number" is treated as absent rather than
+  as a reading. A light whose `CCD-TEMP` was unparseable used to match no dark
+  at all; it now matches on the settings it did record, the same as a light
+  from a rig with no temperature sensor.
+
 ## Fixed
 
 - A catalog written by an earlier PSF Guard is now upgraded the moment it is

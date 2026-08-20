@@ -28,19 +28,6 @@ pub const CALIBRATION_SCHEMA_VERSION: i64 = 2;
 pub const MASTER_CACHE_VERSION: u32 = 2;
 const MIN_MASTER_FRAMES: usize = 2;
 const MAX_MASTER_FRAMES: usize = 64;
-const DARK_TEMPERATURE_TOLERANCE_C: f64 = 3.0;
-/// Flats feeding one master must come from one flat session: within this
-/// window of the frame that anchors the chosen coherent subset. Dust moves
-/// between sessions, so a master must not mix a fresh set with one shot
-/// months earlier. Bias, dark, and dark-flat libraries are stable across
-/// months and get no time window — only temperature coherence.
-const FLAT_SESSION_WINDOW_SECONDS: u64 = 24 * 60 * 60;
-/// Sensor-temperature coherence for the frames feeding one master. Matches
-/// seiza-stacking's own frame-for-frame CCD-TEMP gate (±1 °C against the
-/// first frame): a looser window here would assemble sets seiza refuses,
-/// reintroducing the silent build failure this selection exists to avoid.
-const MASTER_TEMPERATURE_COHERENCE_C: f64 = 1.0;
-const EXPOSURE_TOLERANCE_SECONDS: f64 = 0.05;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1595,97 +1582,35 @@ fn estimate_flat_pedestal(
     Some(pedestal)
 }
 
-/// One light against the normalized flat: per-tile low-percentile
-/// background versus per-tile median response, then a sigma-clipped least
-/// squares line. Returns the intercept — the pedestal — when the fit has
-/// enough lever arm to be trusted.
+/// Fit the pedestal a camera added, by regressing each tile's sky against the
+/// flat's response there.
+///
+/// The fit is `seiza-calibration`'s. It declines rather than guesses when the
+/// frame cannot support one, and reports a caller mistake — a colour frame, a
+/// mismatched size — separately from that, which is why the two outcomes are
+/// distinguished here rather than collapsed into "no pedestal".
 fn fit_pedestal_against_flat(
     light: &seiza_stacking::LinearImage,
     flat: &seiza_stacking::LinearImage,
 ) -> Option<f32> {
-    const MIN_TILES: usize = 32;
-    const MIN_RESPONSE_SPAN: f32 = 0.02;
-    const BACKGROUND_PERCENTILE: f64 = 0.2;
-    const CLIP_SIGMA: f32 = 2.5;
-    const CLIP_ROUNDS: usize = 3;
-
-    let width = light.width;
-    let height = light.height;
-    let tile = (width.min(height) / 32).clamp(8, 128);
-    let mut pairs = Vec::new();
-    let mut light_tile = Vec::with_capacity(tile * tile);
-    let mut flat_tile = Vec::with_capacity(tile * tile);
-    for tile_y in (0..height.saturating_sub(tile - 1)).step_by(tile) {
-        for tile_x in (0..width.saturating_sub(tile - 1)).step_by(tile) {
-            light_tile.clear();
-            flat_tile.clear();
-            for y in tile_y..tile_y + tile {
-                let row = y * width + tile_x;
-                light_tile.extend(light.data[row..row + tile].iter().filter(|v| v.is_finite()));
-                flat_tile.extend(flat.data[row..row + tile].iter().filter(|v| v.is_finite()));
-            }
-            if light_tile.is_empty() || flat_tile.is_empty() {
-                continue;
-            }
-            let background_rank = ((light_tile.len() as f64 * BACKGROUND_PERCENTILE) as usize)
-                .min(light_tile.len() - 1);
-            let (_, background, _) =
-                light_tile.select_nth_unstable_by(background_rank, f32::total_cmp);
-            let background = *background;
-            let median_rank = flat_tile.len() / 2;
-            let (_, response, _) = flat_tile.select_nth_unstable_by(median_rank, f32::total_cmp);
-            pairs.push((*response, background));
+    fn view(image: &seiza_stacking::LinearImage) -> Option<seiza_calibration::LinearImageRef<'_>> {
+        seiza_calibration::LinearImageRef::new(
+            &image.data,
+            image.width,
+            image.height,
+            image.channels,
+        )
+        .map_err(|error| tracing::debug!("pedestal fit skipped: {error}"))
+        .ok()
+    }
+    let (light_view, flat_view) = (view(light)?, view(flat)?);
+    match seiza_calibration::fit_flat_pedestal(light_view, flat_view) {
+        Ok(pedestal) => pedestal,
+        Err(error) => {
+            tracing::debug!("pedestal fit skipped: {error}");
+            None
         }
     }
-    if pairs.len() < MIN_TILES {
-        return None;
-    }
-    let span = pairs.iter().map(|(v, _)| *v).fold(f32::MIN, f32::max)
-        - pairs.iter().map(|(v, _)| *v).fold(f32::MAX, f32::min);
-    if span < MIN_RESPONSE_SPAN {
-        return None;
-    }
-
-    let mut kept = pairs;
-    let mut slope = 0.0f64;
-    let mut intercept = 0.0f64;
-    for _ in 0..CLIP_ROUNDS {
-        let n = kept.len() as f64;
-        let sum_v: f64 = kept.iter().map(|(v, _)| *v as f64).sum();
-        let sum_b: f64 = kept.iter().map(|(_, b)| *b as f64).sum();
-        let sum_vv: f64 = kept.iter().map(|(v, _)| (*v as f64) * (*v as f64)).sum();
-        let sum_vb: f64 = kept.iter().map(|(v, b)| (*v as f64) * (*b as f64)).sum();
-        let denominator = n * sum_vv - sum_v * sum_v;
-        if denominator.abs() < f64::EPSILON {
-            return None;
-        }
-        slope = (n * sum_vb - sum_v * sum_b) / denominator;
-        intercept = (sum_b - slope * sum_v) / n;
-        let residual_sigma = (kept
-            .iter()
-            .map(|(v, b)| {
-                let residual = *b as f64 - (slope * *v as f64 + intercept);
-                residual * residual
-            })
-            .sum::<f64>()
-            / n)
-            .sqrt();
-        if residual_sigma == 0.0 {
-            break;
-        }
-        let limit = residual_sigma * CLIP_SIGMA as f64;
-        kept.retain(|(v, b)| (*b as f64 - (slope * *v as f64 + intercept)).abs() <= limit);
-        if kept.len() < MIN_TILES {
-            return None;
-        }
-    }
-    // The sky term cannot be negative: an anti-correlation between
-    // background and flat response means the model does not describe this
-    // field (a gradient aligned against the vignette).
-    if slope < 0.0 || !intercept.is_finite() {
-        return None;
-    }
-    Some(intercept as f32)
 }
 
 /// The camera's recorded offset as a pedestal in 16-bit ADU, for camera
@@ -2756,137 +2681,104 @@ fn count_kind(outcome: &mut CalibrationImportOutcome, kind: CalibrationKind) {
     }
 }
 
+/// Everything Seiza's matcher needs from a light frame's headers.
+///
+/// PSF Guard's own records carry more — catalog identity, paths, grades — and
+/// none of it decides whether two frames belong together. That question is
+/// `seiza-calibration`'s, and these two adapters are the whole of what it
+/// takes to ask it.
+fn light_signature(light: &FrameMeta) -> seiza_calibration::FrameSignature {
+    let mut signature = seiza_calibration::FrameSignature::default();
+    signature.camera = light.camera.clone();
+    signature.telescope = light.telescope.clone();
+    signature.bayer_pattern = light.bayer_pattern.clone();
+    signature.filter = light.filter.clone();
+    signature.width = light.width;
+    signature.height = light.height;
+    signature.channels = light.channels;
+    signature.binning_x = light.binning_x;
+    signature.binning_y = light.binning_y;
+    signature.gain = light.gain;
+    signature.offset = light.offset;
+    signature.readout_mode = light.readout_mode;
+    signature.focal_length_mm = light.focal_length_mm;
+    signature.rotation_deg = light.rotator_position;
+    signature.exposure_seconds = light.exposure_s;
+    signature.camera_temp_c = light.camera_temp;
+    signature.captured_at_unix = light.timestamp;
+    signature
+}
+
+/// The same, for a calibration frame already in the catalog.
+fn frame_signature(frame: &CalibrationFrame) -> seiza_calibration::FrameSignature {
+    let mut signature = seiza_calibration::FrameSignature::default();
+    signature.camera = frame.camera.clone();
+    signature.telescope = frame.telescope.clone();
+    signature.bayer_pattern = frame.bayer_pattern.clone();
+    signature.filter = frame.filter.clone();
+    signature.width = frame.width;
+    signature.height = frame.height;
+    signature.channels = frame.channels;
+    signature.binning_x = frame.binning_x;
+    signature.binning_y = frame.binning_y;
+    signature.gain = frame.gain;
+    signature.offset = frame.offset;
+    signature.readout_mode = frame.readout_mode;
+    signature.focal_length_mm = frame.focal_length_mm;
+    signature.rotation_deg = frame.rotation;
+    signature.exposure_seconds = frame.exposure_s;
+    signature.camera_temp_c = frame.camera_temp;
+    signature.captured_at_unix = frame.captured_at;
+    signature
+}
+
+fn tolerances() -> seiza_calibration::MatchTolerances {
+    seiza_calibration::MatchTolerances::default()
+}
+
 fn sensor_matches(light: &FrameMeta, candidate: &CalibrationFrame) -> bool {
-    sensor_identity_matches(
-        light.camera.as_deref(),
-        candidate.camera.as_deref(),
-        light.width,
-        candidate.width,
-        light.height,
-        candidate.height,
-    ) && text_equal_if_known(light.camera.as_deref(), candidate.camera.as_deref())
-        && equal_if_known(light.width, candidate.width)
-        && equal_if_known(light.height, candidate.height)
-        && equal_if_known(light.channels, candidate.channels)
-        && equal_if_known(light.binning_x, candidate.binning_x)
-        && equal_if_known(light.binning_y, candidate.binning_y)
-        && equal_if_known(light.gain, candidate.gain)
-        && equal_if_known(light.offset, candidate.offset)
-        && equal_if_known(light.readout_mode, candidate.readout_mode)
-        && text_equal_if_known(
-            light.bayer_pattern.as_deref(),
-            candidate.bayer_pattern.as_deref(),
-        )
+    seiza_calibration::sensor_matches(&light_signature(light), &frame_signature(candidate))
 }
 
 fn flat_matches(light: &FrameMeta, candidate: &CalibrationFrame) -> bool {
-    text_equal_if_known(light.filter.as_deref(), candidate.filter.as_deref())
-        && text_equal_if_known(light.telescope.as_deref(), candidate.telescope.as_deref())
-        && option_near(
-            light.focal_length_mm,
-            candidate.focal_length_mm,
-            |left, right| (left - right).abs() <= 1.0,
-        )
-        && rotation_matches(light.rotator_position, candidate.rotation)
-}
-
-/// Rotator tolerance when pairing a flat with a light or another flat.
-const ROTATION_TOLERANCE_DEG: f64 = 1.0;
-
-/// The rotator sits between the telescope and the camera, so vignetting
-/// from the optics ahead of it rotates relative to the sensor as the
-/// rotator moves — a flat only corrects lights shot at (nearly) the same
-/// angle. Unknown on either side matches: NULL means the rig recorded no
-/// rotator, or the frame predates the column, and punishing either would
-/// strip flats from every catalog imported before rotation was stored.
-fn rotation_matches(left: Option<f64>, right: Option<f64>) -> bool {
-    match (left, right) {
-        (Some(left), Some(right)) => {
-            let diff = (left - right).rem_euclid(360.0);
-            diff.min(360.0 - diff) <= ROTATION_TOLERANCE_DEG
-        }
-        _ => true,
-    }
-}
-
-fn frame_pair_matches(left: &CalibrationFrame, right: &CalibrationFrame) -> bool {
-    sensor_identity_matches(
-        left.camera.as_deref(),
-        right.camera.as_deref(),
-        left.width,
-        right.width,
-        left.height,
-        right.height,
-    ) && text_equal_if_known(left.camera.as_deref(), right.camera.as_deref())
-        && equal_if_known(left.width, right.width)
-        && equal_if_known(left.height, right.height)
-        && equal_if_known(left.channels, right.channels)
-        && equal_if_known(left.binning_x, right.binning_x)
-        && equal_if_known(left.binning_y, right.binning_y)
-        && equal_if_known(left.gain, right.gain)
-        && equal_if_known(left.offset, right.offset)
-        && equal_if_known(left.readout_mode, right.readout_mode)
-        && text_equal_if_known(
-            left.bayer_pattern.as_deref(),
-            right.bayer_pattern.as_deref(),
-        )
-}
-
-fn sensor_identity_matches(
-    left_camera: Option<&str>,
-    right_camera: Option<&str>,
-    left_width: Option<i64>,
-    right_width: Option<i64>,
-    left_height: Option<i64>,
-    right_height: Option<i64>,
-) -> bool {
-    matches!(
-        (left_camera, right_camera),
-        (Some(left), Some(right)) if left.trim().eq_ignore_ascii_case(right.trim())
-    ) || matches!(
-        (left_width, right_width, left_height, right_height),
-        (Some(lw), Some(rw), Some(lh), Some(rh)) if lw == rw && lh == rh
+    seiza_calibration::optics_match(
+        &light_signature(light),
+        &frame_signature(candidate),
+        &tolerances(),
     )
 }
 
+fn rotation_matches(left: Option<f64>, right: Option<f64>) -> bool {
+    seiza_calibration::rotation_matches(left, right, tolerances().rotation_deg)
+}
+
+fn frame_pair_matches(left: &CalibrationFrame, right: &CalibrationFrame) -> bool {
+    seiza_calibration::sensor_matches(&frame_signature(left), &frame_signature(right))
+}
+
+/// Whether a dark's exposure suits what it would be subtracted from.
+///
+/// Seiza reads this off a pair of signatures, and the callers here have only
+/// the two numbers, so the numbers become signatures. Worth the allocation to
+/// keep one answer to "are these the same exposure": the rule is a floor or a
+/// proportion of the longer exposure, whichever is larger, and reproducing
+/// that here is how the two drifted apart in the first place.
 fn exposure_matches(left: Option<f64>, right: Option<f64>) -> bool {
-    option_near(left, right, |a, b| {
-        (a - b).abs() <= EXPOSURE_TOLERANCE_SECONDS
-    })
+    let signature = |exposure| {
+        let mut signature = seiza_calibration::FrameSignature::default();
+        signature.exposure_seconds = exposure;
+        signature
+    };
+    seiza_calibration::exposure_matches(&signature(left), &signature(right), &tolerances())
 }
 
 fn temperature_matches(left: Option<f64>, right: Option<f64>) -> bool {
-    option_near(left, right, |a, b| {
-        (a - b).abs() <= DARK_TEMPERATURE_TOLERANCE_C
-    })
-}
-
-fn equal_if_known<T: PartialEq>(left: Option<T>, right: Option<T>) -> bool {
-    match (left, right) {
-        (Some(left), Some(right)) => left == right,
-        (Some(_), None) => false,
-        (None, _) => true,
-    }
-}
-
-fn text_equal_if_known(left: Option<&str>, right: Option<&str>) -> bool {
-    match (left, right) {
-        (Some(left), Some(right)) => left.trim().eq_ignore_ascii_case(right.trim()),
-        (Some(_), None) => false,
-        (None, _) => true,
-    }
-}
-
-fn option_near(
-    left: Option<f64>,
-    right: Option<f64>,
-    compare: impl FnOnce(f64, f64) -> bool,
-) -> bool {
-    match (left, right) {
-        (Some(left), Some(right)) => compare(left, right),
-        (Some(_), None) => false,
-        (None, _) => true,
-    }
+    let signature = |temperature| {
+        let mut signature = seiza_calibration::FrameSignature::default();
+        signature.camera_temp_c = temperature;
+        signature
+    };
+    seiza_calibration::temperature_matches(&signature(left), &signature(right), &tolerances())
 }
 
 /// The coherent subset of verified, nearest-first candidates that can
@@ -2907,12 +2799,12 @@ fn coherent_master_subset(
 ) -> Vec<CalibrationFrame> {
     let coherent = |anchor: &CalibrationFrame, frame: &CalibrationFrame| -> bool {
         let temperature_ok = match (anchor.camera_temp, frame.camera_temp) {
-            (Some(a), Some(b)) => (a - b).abs() <= MASTER_TEMPERATURE_COHERENCE_C,
+            (Some(a), Some(b)) => (a - b).abs() <= tolerances().master_temperature_c,
             _ => true,
         };
         let session_ok = if kind == CalibrationKind::Flat {
             match (anchor.captured_at, frame.captured_at) {
-                (Some(a), Some(b)) => a.abs_diff(b) <= FLAT_SESSION_WINDOW_SECONDS,
+                (Some(a), Some(b)) => a.abs_diff(b) <= tolerances().flat_session_seconds,
                 _ => true,
             }
         } else {
@@ -3181,19 +3073,10 @@ fn calibration_file_matches(frame: &CalibrationFrame, path: &Path) -> bool {
     if !meta.readable || kind_from_meta(&meta) != Some(frame.kind) {
         return false;
     }
-    let hard_matches = text_equal_if_known(frame.camera.as_deref(), meta.camera.as_deref())
-        && equal_if_known(frame.width, meta.width)
-        && equal_if_known(frame.height, meta.height)
-        && equal_if_known(frame.channels, meta.channels)
-        && equal_if_known(frame.binning_x, meta.binning_x)
-        && equal_if_known(frame.binning_y, meta.binning_y)
-        && equal_if_known(frame.gain, meta.gain)
-        && equal_if_known(frame.offset, meta.offset)
-        && equal_if_known(frame.readout_mode, meta.readout_mode)
-        && text_equal_if_known(
-            frame.bayer_pattern.as_deref(),
-            meta.bayer_pattern.as_deref(),
-        );
+    // The catalog row is the reference and the file on disk the candidate:
+    // a file that does not record a setting cannot prove it is this frame.
+    let hard_matches =
+        seiza_calibration::sensor_matches(&frame_signature(frame), &light_signature(&meta));
     if !hard_matches {
         return false;
     }
@@ -3203,15 +3086,15 @@ fn calibration_file_matches(frame: &CalibrationFrame, path: &Path) -> bool {
             exposure_matches(frame.exposure_s, meta.exposure_s)
                 && temperature_matches(frame.camera_temp, meta.camera_temp)
         }
-        CalibrationKind::Flat => {
-            text_equal_if_known(frame.filter.as_deref(), meta.filter.as_deref())
-                && text_equal_if_known(frame.telescope.as_deref(), meta.telescope.as_deref())
-                && option_near(
-                    frame.focal_length_mm,
-                    meta.focal_length_mm,
-                    |left, right| (left - right).abs() <= 1.0,
-                )
-        }
+        // Filter, telescope and focal length, as before — and now the
+        // rotator angle too, which the written-out version here omitted. A
+        // flat shot at a different angle is not the frame this row describes,
+        // and an angle neither side recorded still matches.
+        CalibrationKind::Flat => seiza_calibration::optics_match(
+            &frame_signature(frame),
+            &light_signature(&meta),
+            &tolerances(),
+        ),
     }
 }
 
@@ -3609,6 +3492,48 @@ mod tests {
         let summary = library_summary(&conn).unwrap();
         assert_eq!(summary.frame_count, 0);
         assert!(!schema_exists(&conn));
+    }
+
+    #[test]
+    fn a_long_dark_matches_within_a_proportion_of_its_exposure() {
+        // The rule is a floor or a proportion of the longer exposure,
+        // whichever is larger. A flat 0.05 s is a six-thousandth of a
+        // five-minute sub — tighter than a shutter, and tighter than the rule
+        // the master builder applies to the same frames.
+        assert!(exposure_matches(Some(300.0), Some(300.25)));
+        assert!(!exposure_matches(Some(300.0), Some(301.0)));
+        // Below a minute the floor still decides, because a tenth of a
+        // percent of half a second is nothing any header records.
+        assert!(exposure_matches(Some(0.5), Some(0.52)));
+        assert!(!exposure_matches(Some(0.5), Some(0.7)));
+    }
+
+    #[test]
+    fn a_header_that_reads_as_not_a_number_recorded_nothing() {
+        // A NaN temperature is not a temperature. Left in place it would read
+        // as "unknown, accepts anything" and pair a light of no known
+        // temperature with a dark of any temperature at all — a +20 °C dark
+        // under a -10 °C light, silently, which is worse than no dark.
+        let mut file = Vec::new();
+        fits_card(&mut file, "SIMPLE  =                    T");
+        fits_card(&mut file, "BITPIX  =                   16");
+        fits_card(&mut file, "NAXIS   =                    2");
+        fits_card(&mut file, "NAXIS1  =                  100");
+        fits_card(&mut file, "NAXIS2  =                  100");
+        fits_card(&mut file, "IMAGETYP= 'LIGHT'");
+        fits_card(&mut file, "CCD-TEMP=                  nan");
+        fits_card(&mut file, "ROTATANG=                  nan");
+        fits_card(&mut file, "END");
+        file.resize(file.len().div_ceil(2880) * 2880, b' ');
+        file.resize(file.len() + 2880 * 4, 0);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nan.fits");
+        std::fs::write(&path, &file).unwrap();
+        let meta = crate::commands::import::headers::read_frame_meta(&path);
+        assert!(meta.readable, "the frame parses");
+        assert_eq!(meta.camera_temp, None, "NaN is absent, not a reading");
+        assert_eq!(meta.rotator_position, None);
     }
 
     #[test]

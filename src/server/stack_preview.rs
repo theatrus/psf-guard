@@ -2203,7 +2203,7 @@ fn run_group(
         // The reference frame alone is the first depth on the curve and the
         // baseline every later depth is read against: one frame's noise.
         if points.is_empty()
-            && let Some(sample) = snr::measure(stacker.view())
+            && let Some(sample) = seiza_stacking::measure_depth(stacker.view())
         {
             points.push(snr::point(sample, integrated_exposure(&ledger)));
         }
@@ -2281,7 +2281,7 @@ fn run_group(
         // checkpoint, so only the ones ahead split this run's batches.
         let start_depth = ledger.len();
         let mut checkpoints: std::collections::VecDeque<usize> =
-            snr::checkpoint_depths(start_depth + pending.len())
+            seiza_stacking::checkpoint_depths(start_depth + pending.len())
                 .into_iter()
                 .filter(|depth| *depth > start_depth)
                 .collect();
@@ -2407,7 +2407,7 @@ fn run_group(
                 .is_none_or(|last| last.frames < stacker.view().accepted_frames);
             if (crossed || cancelled)
                 && advanced
-                && let Some(sample) = snr::measure(stacker.view())
+                && let Some(sample) = seiza_stacking::measure_depth(stacker.view())
             {
                 points.push(snr::point(sample, integrated_exposure(&ledger)));
                 let exposures = accepted_exposures(&ledger);
