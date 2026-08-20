@@ -3987,6 +3987,33 @@
   align-items: center;
   gap: 0.45rem;
   font-size: 0.78rem;
+  cursor: pointer;
+  user-select: none;
+  /* The row already carries a heading, an order and a verdict chip; the
+     default disclosure triangle sits awkwardly against a flex layout, so the
+     caret below is drawn explicitly and kept at the start. */
+  list-style: none;
+}
+
+.stack-snr-head::-webkit-details-marker {
+  display: none;
+}
+
+.stack-snr-head::before {
+  content: '▸';
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+  transition: transform 0.12s ease;
+}
+
+.stack-snr[open] > .stack-snr-head::before {
+  transform: rotate(90deg);
+}
+
+/* Folded, the summary is the whole section, so it should not look like a
+   heading with a gap under it. */
+.stack-snr:not([open]) {
+  padding-bottom: 0.6rem;
 }
 
 .stack-snr-order {

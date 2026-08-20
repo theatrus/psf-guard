@@ -5,6 +5,9 @@ interface StackSnrCurveProps {
   curve: ProgressiveSnr;
   /** Names the chart for a screen reader. */
   label: string;
+  /** Whether the chart is expanded. The panel owns it so the choice sticks. */
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }
 
 const VERDICT_COPY: Record<SnrVerdict, string> = {
@@ -37,7 +40,12 @@ function formatMeasurement(value: number) {
  * measured depth; the solid line is what the frames actually did. The gap
  * between them is the whole reading.
  */
-export default function StackSnrCurve({ curve, label }: StackSnrCurveProps) {
+export default function StackSnrCurve({
+  curve,
+  label,
+  open,
+  onOpenChange,
+}: StackSnrCurveProps) {
   const points = useMemo(
     () => curve.points.filter((point) => point.frames >= 1 && point.snr > 0),
     [curve.points]
@@ -86,14 +94,30 @@ export default function StackSnrCurve({ curve, label }: StackSnrCurveProps) {
   const verdict = analysis?.verdict;
 
   return (
-    <section className="stack-snr" aria-label={`${label} signal-to-noise analysis`}>
-      <div className="stack-snr-head">
+    <details
+      className="stack-snr"
+      aria-label={`${label} signal-to-noise analysis`}
+      open={open}
+      // Only report a state that differs from the one we were given. The
+      // nested measurements table's toggle reaches this handler too, and a
+      // re-render re-applies `open`, so a handler that reported every event
+      // would rewrite the remembered state of the chart whenever someone
+      // opened the table beneath it.
+      onToggle={(event) => {
+        if (event.currentTarget.open !== open) {
+          onOpenChange(event.currentTarget.open);
+        }
+      }}
+    >
+      {/* The verdict rides in the summary, so folding the chart away leaves
+          the answer on one line rather than taking it off the card. */}
+      <summary className="stack-snr-head">
         <strong>Signal-to-noise vs depth</strong>
         <span className="stack-snr-order">
           {curve.order === 'capture' ? 'Reference-first capture' : 'Quality order'}
         </span>
         {verdict && <span className={`stack-snr-verdict ${verdict}`}>{VERDICT_COPY[verdict]}</span>}
-      </div>
+      </summary>
 
       {geometry && (
         <svg
@@ -236,6 +260,6 @@ export default function StackSnrCurve({ curve, label }: StackSnrCurveProps) {
           </table>
         </div>
       </details>
-    </section>
+    </details>
   );
 }

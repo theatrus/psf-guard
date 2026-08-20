@@ -557,24 +557,33 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
     .getAttribute('src');
   expect(rebuiltSrc).not.toBe(cachedSrc);
 
-  // The curve is hidden only by its own switch, and the choice is remembered:
-  // someone who does not want the chart should not dismiss it once a session.
-  const curveSwitch = page.locator('.stack-preview-panel')
-    .getByRole('checkbox', { name: 'SNR curve' });
-  await expect(page.locator('.stack-snr')).toBeVisible();
-  await curveSwitch.uncheck();
-  await expect(page.locator('.stack-snr')).toHaveCount(0);
+  // The chart folds away from its own heading, and the choice is remembered:
+  // someone who folds it should not fold it again every session, or per card.
+  const curveSection = page.locator('.stack-preview-panel .stack-snr');
+  const curveHeading = curveSection.getByText('Signal-to-noise vs depth');
+  await expect(curveSection).toHaveAttribute('open', '');
+  await expect(curveSection.locator('.stack-snr-chart')).toBeVisible();
+
+  await curveHeading.click();
+  await expect(curveSection).not.toHaveAttribute('open', '');
+  await expect(curveSection.locator('.stack-snr-chart')).toBeHidden();
+  // Folded is not hidden: the heading and the verdict stay on the card, so
+  // the answer is still one line rather than gone.
+  await expect(curveHeading).toBeVisible();
+  await expect(curveSection.locator('.stack-snr-verdict')).toBeVisible();
+
   await page.reload();
   await expect(page.locator('.stack-preview-card')).toHaveCount(1);
-  await expect(page.locator('.stack-snr')).toHaveCount(0);
-  // Hiding the chart hides nothing else: the build still measured the curve
-  // and still publishes it.
+  await expect(page.locator('.stack-preview-panel .stack-snr')).not.toHaveAttribute('open', '');
+
+  // Folding changes nothing that was measured or published.
   const stillPublished = await page.request.get(snrHref!);
   expect(stillPublished.status()).toBe(200);
-  await page.locator('.stack-preview-panel')
-    .getByRole('checkbox', { name: 'SNR curve' })
-    .check();
-  await expect(page.locator('.stack-snr')).toBeVisible();
+
+  await page.locator('.stack-preview-panel .stack-snr')
+    .getByText('Signal-to-noise vs depth')
+    .click();
+  await expect(page.locator('.stack-preview-panel .stack-snr')).toHaveAttribute('open', '');
 });
 
 test('keeps a running stack visible in the header and re-attaches the panel', async ({

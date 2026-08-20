@@ -47,7 +47,7 @@ function curve(overrides: Partial<ProgressiveSnr> = {}): ProgressiveSnr {
 
 describe('StackSnrCurve', () => {
   it('shows the verdict, the fitted exponent and what more frames would buy', () => {
-    render(<StackSnrCurve curve={curve()} label="M31 Ha" />);
+    render(<StackSnrCurve curve={curve()} label="M31 Ha" open onOpenChange={() => {}} />);
 
     expect(screen.getByText('Still improving')).toBeInTheDocument();
     expect(screen.getByText('-0.50')).toBeInTheDocument();
@@ -59,8 +59,45 @@ describe('StackSnrCurve', () => {
     ).toBeInTheDocument();
   });
 
+  it('folds away to a summary that still carries the answer', () => {
+    const { rerender, container } = render(
+      <StackSnrCurve curve={curve()} label="M31 Ha" open onOpenChange={() => {}} />,
+    );
+    expect(container.querySelector('.stack-snr-chart')).not.toBeNull();
+
+    rerender(
+      <StackSnrCurve curve={curve()} label="M31 Ha" open={false} onOpenChange={() => {}} />,
+    );
+    // Folded is not hidden: the heading and the verdict stay, so a glance
+    // still answers "is this worth more frames?".
+    expect(screen.getByText('Signal-to-noise vs depth')).toBeInTheDocument();
+    expect(screen.getByText('Still improving')).toBeInTheDocument();
+    expect(container.querySelector('details.stack-snr')).not.toHaveAttribute('open');
+  });
+
+  it('reports its own toggle and ignores the measurements table beneath it', async () => {
+    const user = userEvent.setup();
+    const changes: boolean[] = [];
+    render(
+      <StackSnrCurve
+        curve={curve()}
+        label="M31 Ha"
+        open
+        onOpenChange={(next) => changes.push(next)}
+      />,
+    );
+
+    // Opening the nested table must not rewrite the chart's remembered state:
+    // React delivers its toggle to this handler too.
+    await user.click(screen.getByText(/Exact measurements/));
+    expect(changes).toEqual([]);
+
+    await user.click(screen.getByText('Signal-to-noise vs depth'));
+    expect(changes).toEqual([false]);
+  });
+
   it('draws the ideal square-root line beside the measured one', () => {
-    const { container } = render(<StackSnrCurve curve={curve()} label="M31 Ha" />);
+    const { container } = render(<StackSnrCurve curve={curve()} label="M31 Ha" open onOpenChange={() => {}} />);
 
     // Both lines are needed: the reading is the gap between them.
     expect(container.querySelector('.stack-snr-measured')).not.toBeNull();
@@ -71,7 +108,7 @@ describe('StackSnrCurve', () => {
   });
 
   it('makes every exact measurement available without hovering the chart', async () => {
-    render(<StackSnrCurve curve={curve()} label="M31 Ha" />);
+    render(<StackSnrCurve curve={curve()} label="M31 Ha" open onOpenChange={() => {}} />);
 
     await userEvent.click(screen.getByText('Exact measurements (6)'));
     const table = screen.getByRole('table', { name: 'M31 Ha signal-to-noise measurements' });
@@ -85,6 +122,8 @@ describe('StackSnrCurve', () => {
       <StackSnrCurve
         curve={curve({ analysis_reason: 'Exposure durations vary across the selected frames.' })}
         label="M31 Ha"
+        open
+        onOpenChange={() => {}}
       />,
     );
 
@@ -106,7 +145,7 @@ describe('StackSnrCurve', () => {
       summary: 'The deeper measurements are too inconsistent to establish a trend.',
     };
 
-    render(<StackSnrCurve curve={inconclusive} label="M31 Ha" />);
+    render(<StackSnrCurve curve={inconclusive} label="M31 Ha" open onOpenChange={() => {}} />);
 
     expect(screen.getByText('Inconclusive')).toBeInTheDocument();
     expect(screen.getByText('27%')).toBeInTheDocument();
@@ -127,6 +166,8 @@ describe('StackSnrCurve', () => {
           },
         })}
         label="M31 Ha"
+        open
+        onOpenChange={() => {}}
       />,
     );
 
@@ -142,6 +183,8 @@ describe('StackSnrCurve', () => {
       <StackSnrCurve
         curve={curve({ points: points((n) => 20 / Math.sqrt(n), [1, 2]), analysis: null })}
         label="M31 Ha"
+        open
+        onOpenChange={() => {}}
       />,
     );
 
@@ -154,6 +197,8 @@ describe('StackSnrCurve', () => {
       <StackSnrCurve
         curve={curve({ points: points((n) => 20 / Math.sqrt(n), [1]), analysis: null })}
         label="M31 Ha"
+        open
+        onOpenChange={() => {}}
       />,
     );
 
