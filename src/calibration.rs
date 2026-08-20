@@ -2748,10 +2748,6 @@ fn flat_matches(light: &FrameMeta, candidate: &CalibrationFrame) -> bool {
     )
 }
 
-fn rotation_matches(left: Option<f64>, right: Option<f64>) -> bool {
-    seiza_calibration::rotation_matches(left, right, tolerances().rotation_deg)
-}
-
 fn frame_pair_matches(left: &CalibrationFrame, right: &CalibrationFrame) -> bool {
     seiza_calibration::sensor_matches(&frame_signature(left), &frame_signature(right))
 }
@@ -2786,53 +2782,26 @@ fn temperature_matches(left: Option<f64>, right: Option<f64>) -> bool {
 /// per-light selection fingerprint (per-light trimming split fingerprints
 /// across multi-night stack groups, which refuse mixed selections).
 ///
-/// Each candidate in order anchors a cluster: frames within
-/// [`MASTER_TEMPERATURE_COHERENCE_C`] of the anchor (unknown temperatures
-/// cannot prove incoherence and join), and for flats also captured within
-/// [`FLAT_SESSION_WINDOW_SECONDS`] of it. The first cluster with enough
-/// frames to build wins, so a stray single flat shot near the lights does
-/// not orphan a complete session from a week earlier. With no viable
-/// cluster the first cluster is returned and the build skips quietly.
+/// The rule itself belongs to `seiza-calibration`, which anchors a cluster on
+/// each candidate in turn and takes the first with enough frames to build, so
+/// a stray single flat shot near the lights does not orphan a complete session
+/// from a week earlier. All that is left here is naming the frames: Seiza
+/// hands back positions rather than copies of its own signatures, so the rows
+/// that come out are the caller's, with their ids and paths intact.
 fn coherent_master_subset(
     kind: CalibrationKind,
     frames: &[CalibrationFrame],
 ) -> Vec<CalibrationFrame> {
-    let coherent = |anchor: &CalibrationFrame, frame: &CalibrationFrame| -> bool {
-        let temperature_ok = match (anchor.camera_temp, frame.camera_temp) {
-            (Some(a), Some(b)) => (a - b).abs() <= tolerances().master_temperature_c,
-            _ => true,
-        };
-        let session_ok = if kind == CalibrationKind::Flat {
-            match (anchor.captured_at, frame.captured_at) {
-                (Some(a), Some(b)) => a.abs_diff(b) <= tolerances().flat_session_seconds,
-                _ => true,
-            }
-        } else {
-            true
-        };
-        let rotation_ok = if kind == CalibrationKind::Flat {
-            rotation_matches(anchor.rotation, frame.rotation)
-        } else {
-            true
-        };
-        temperature_ok && session_ok && rotation_ok
+    let signatures: Vec<_> = frames.iter().map(frame_signature).collect();
+    let role = if kind == CalibrationKind::Flat {
+        seiza_calibration::FrameRole::Flat
+    } else {
+        seiza_calibration::FrameRole::Other
     };
-
-    let mut first_cluster: Option<Vec<CalibrationFrame>> = None;
-    for anchor in frames {
-        let cluster: Vec<CalibrationFrame> = frames
-            .iter()
-            .filter(|frame| coherent(anchor, frame))
-            .cloned()
-            .collect();
-        if cluster.len() >= MIN_MASTER_FRAMES {
-            return cluster;
-        }
-        if first_cluster.is_none() {
-            first_cluster = Some(cluster);
-        }
-    }
-    first_cluster.unwrap_or_default()
+    seiza_calibration::coherent_subset_indices(&signatures, role, MIN_MASTER_FRAMES, &tolerances())
+        .into_iter()
+        .map(|index| frames[index].clone())
+        .collect()
 }
 
 fn sort_candidates(frames: &mut [CalibrationFrame], reference_at: Option<i64>) {
@@ -3534,21 +3503,6 @@ mod tests {
         assert!(meta.readable, "the frame parses");
         assert_eq!(meta.camera_temp, None, "NaN is absent, not a reading");
         assert_eq!(meta.rotator_position, None);
-    }
-
-    #[test]
-    fn flats_match_rotation_within_tolerance_and_across_the_wrap() {
-        // Same axis expressed on either side of 0°/360° still matches;
-        // a quarter turn does not.
-        assert!(rotation_matches(Some(120.0), Some(120.6)));
-        assert!(rotation_matches(Some(359.8), Some(0.4)));
-        assert!(!rotation_matches(Some(120.0), Some(122.0)));
-        assert!(!rotation_matches(Some(0.0), Some(90.0)));
-        // Unknown on either side is compatible: rigs without rotators, and
-        // flats catalogued before the column existed, keep matching.
-        assert!(rotation_matches(None, Some(45.0)));
-        assert!(rotation_matches(Some(45.0), None));
-        assert!(rotation_matches(None, None));
     }
 
     #[test]

@@ -4964,9 +4964,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-calibration"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4310f7d0a37f45d4df72262291fe831f1af92f2232cbf31267ac43a701f3f257"
+checksum = "a9d4e5d39295d42a6681272d18330a96137c8b14e35d4e74e2cd045f10babc21"
 dependencies = [
  "seiza-imgproc",
  "seiza-stats",
