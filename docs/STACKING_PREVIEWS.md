@@ -211,13 +211,20 @@ Only what follows it changes. A resumed capture sequence is used only when its
 saved ledger is an exact prefix of the new sequence; a backfilled exposure or a
 changed reference forces a full restack.
 
-### Turning the chart off
+### Folding the chart away
 
-**SNR curve** beside the build buttons hides the chart on every card, and the
-choice is remembered across reloads. Nothing else changes: the build measures
-the curve either way, and still writes it to the FITS header, the JSON sidecar,
-and the resume checkpoint. The chart is hidden only by this switch — it never
-disappears on its own because a channel is small or a reading looks dull.
+Click **Signal-to-noise vs depth** on any card to fold the chart away, the same
+way frame decisions and view processing fold. The choice is remembered across
+reloads and applies to every card, so folding it once is enough.
+
+Folded is not hidden. The heading keeps the frame order and the verdict beside
+it, so a glance still answers whether more frames are worth shooting — you lose
+the chart, not the answer. And nothing about the build changes: it measures the
+curve either way and still writes it to the FITS header, the JSON sidecar, and
+the resume checkpoint.
+
+The chart is folded only by this control. It never collapses on its own because
+a channel is small or a reading looks dull.
 
 ### Where the curve goes
 

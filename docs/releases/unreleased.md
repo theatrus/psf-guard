@@ -17,9 +17,10 @@
   time ends with one curve over the whole season. A new **Order** control
   switches the reading: capture sequence follows the frames after a fixed
   high-quality reference, while quality order asks which frames are worth
-  keeping. An **SNR curve** switch
-  hides the chart on every card and is remembered; builds measure and publish
-  the curve either way. `psf-guard stack-snr`
+  keeping. The chart folds away from its own heading, the way frame decisions
+  and view processing do, and the choice is remembered — folded still shows the
+  frame order and the verdict, so you lose the chart rather than the answer.
+  `psf-guard stack-snr`
   runs the same analysis over a folder of frames without a catalog. See
   [stack previews](https://github.com/theatrus/psf-guard/blob/main/docs/STACKING_PREVIEWS.md).
 - Remote image intake now accepts bias, dark, dark-flat, and flat frames as

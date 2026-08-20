@@ -159,7 +159,7 @@ describe('StackPreviewPanel stop', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: 'Rebuild current set' }));
 
-    const completed = await screen.findByRole('region', {
+    const completed = await screen.findByRole('group', {
       name: 'Sh2 86 Ha completed stack signal-to-noise analysis',
     });
     expect(within(completed).getByText('Exact measurements (3)')).toBeInTheDocument();
@@ -173,7 +173,7 @@ describe('StackPreviewPanel stop', () => {
     await waitFor(() =>
       expect(screen.queryByRole('region', { name: 'Live build SNR progress' })).not.toBeInTheDocument()
     );
-    expect(screen.getByRole('region', {
+    expect(screen.getByRole('group', {
       name: 'Sh2 86 Ha completed stack signal-to-noise analysis',
     })).toBeInTheDocument();
   });

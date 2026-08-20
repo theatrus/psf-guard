@@ -77,17 +77,18 @@ function readCalibrationMode(): CalibrationMode {
 }
 
 /**
- * Whether the cards draw their signal-to-noise curve. Remembered across
- * reloads, like the calibration mode: someone who does not want the chart
- * should not have to dismiss it once per session.
+ * Whether the cards show their signal-to-noise chart expanded. Remembered
+ * across reloads, like the calibration mode: someone who folds it away should
+ * not have to fold it again every session, or once per card.
  *
- * The curve is hidden only by this switch. It never disappears because a
- * build is short, a channel is small, or a value looks uninteresting — an
- * element that comes and goes on its own reads as a bug.
+ * Folded is not hidden. The heading and the verdict stay on the card, so the
+ * answer is still there in one line — the chart never disappears because a
+ * build is short or a value looks uninteresting, which is the sort of thing
+ * that reads as a bug.
  */
 const SNR_CURVE_KEY = 'psf-guard.stack-snr-curve';
 
-function readShowSnrCurve(): boolean {
+function readSnrCurveOpen(): boolean {
   try {
     return window.localStorage.getItem(SNR_CURVE_KEY) !== 'off';
   } catch {
@@ -250,11 +251,11 @@ export default function StackPreviewPanel({
   // build produces, and quality order is a deliberate one-off question about
   // culling that should never be the state someone comes back to.
   const [frameOrder, setFrameOrder] = useState<StackFrameOrder>('capture');
-  const [showSnrCurve, setShowSnrCurve] = useState(readShowSnrCurve);
-  const chooseShowSnrCurve = (show: boolean) => {
-    setShowSnrCurve(show);
+  const [snrCurveOpen, setSnrCurveOpen] = useState(readSnrCurveOpen);
+  const chooseSnrCurveOpen = (open: boolean) => {
+    setSnrCurveOpen(open);
     try {
-      window.localStorage.setItem(SNR_CURVE_KEY, show ? 'on' : 'off');
+      window.localStorage.setItem(SNR_CURVE_KEY, open ? 'on' : 'off');
     } catch {
       // Keep the in-memory preference even when it cannot be persisted.
     }
@@ -645,21 +646,6 @@ export default function StackPreviewPanel({
               </select>
             </label>
             <label
-              className="stack-preview-checkbox"
-              title={
-                'Draw the signal-to-noise curve on each card. Builds measure it either ' +
-                'way, so turning this off hides the chart without changing what is ' +
-                'recorded; the curve stays in the stack FITS and its JSON sidecar.'
-              }
-            >
-              <input
-                type="checkbox"
-                checked={showSnrCurve}
-                onChange={(event) => chooseShowSnrCurve(event.target.checked)}
-              />
-              SNR curve
-            </label>
-            <label
               className="stack-preview-frame-order"
               title={
                 'The order the next build integrates its frames in, which decides what its ' +
@@ -1023,18 +1009,22 @@ export default function StackPreviewPanel({
                       </div>
                     )}
 
-                    {showSnrCurve && artifactCurve && (
+                    {artifactCurve && (
                       <StackSnrCurve
                         curve={artifactCurve}
                         label={`${targetName} ${filterName || 'no filter'} completed stack`}
+                        open={snrCurveOpen}
+                        onOpenChange={chooseSnrCurveOpen}
                       />
                     )}
-                    {showSnrCurve && liveCurve && (
+                    {liveCurve && (
                       <section className="stack-snr-live" aria-label="Live build SNR progress">
                         <strong>{artifact ? 'Live rebuild progress' : 'Live build progress'}</strong>
                         <StackSnrCurve
                           curve={liveCurve}
                           label={`${targetName} ${filterName || 'no filter'} live build`}
+                          open={snrCurveOpen}
+                          onOpenChange={chooseSnrCurveOpen}
                         />
                       </section>
                     )}
