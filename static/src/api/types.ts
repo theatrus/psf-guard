@@ -1059,6 +1059,13 @@ export interface CatalogInstallStatus {
   progress: CatalogInstallProgress;
 }
 
+export interface CalibrationSettings {
+  /** Configured override in degrees; null when the library default applies. */
+  rotation_tolerance_deg: number | null;
+  /** What applies with no override, for labeling the placeholder. */
+  default_rotation_tolerance_deg: number;
+}
+
 export interface ServerInfo {
   version: string;
   cache_directory: string;

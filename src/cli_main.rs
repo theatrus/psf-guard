@@ -1161,6 +1161,12 @@ pub fn main() -> Result<()> {
                 PregenerationConfig::from_config(app_config.get_pregeneration())
             };
 
+            crate::calibration::configure_rotation_tolerance(
+                db_registry
+                    .calibration
+                    .as_ref()
+                    .and_then(|calibration| calibration.rotation_tolerance_deg),
+            );
             let cache_directory = app_config.get_cache_directory();
             let server_host = app_config.get_host();
             let server_port = app_config.get_port();

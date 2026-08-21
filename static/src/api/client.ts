@@ -3,6 +3,7 @@ import type { AxiosInstance } from 'axios';
 import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
 import type {
+  CalibrationSettings,
   ApiResponse,
   ExportLayout,
   Project,
@@ -229,6 +230,26 @@ export const apiClient = {
   },
 
   // ── Global ────────────────────────────────────────────────────────────────
+
+  getCalibrationSettings: async (): Promise<CalibrationSettings> => {
+    const apiInstance = await getApi();
+    const { data } =
+      await apiInstance.get<ApiResponse<CalibrationSettings>>('/settings/calibration');
+    if (!data.data) throw new Error(data.error || 'Failed to get calibration settings');
+    return data.data;
+  },
+
+  updateCalibrationSettings: async (
+    rotationToleranceDeg: number | null
+  ): Promise<CalibrationSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<CalibrationSettings>>(
+      '/settings/calibration',
+      { rotation_tolerance_deg: rotationToleranceDeg }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to update calibration settings');
+    return data.data;
+  },
 
   getServerInfo: async (): Promise<ServerInfo> => {
     const apiInstance = await getApi();

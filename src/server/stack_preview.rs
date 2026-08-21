@@ -2313,9 +2313,35 @@ fn run_group(
             }
             let batch = &pending[batch_start..batch_end];
             let paths: Vec<PathBuf> = batch.iter().map(|(_, frame)| frame.path.clone()).collect();
-            stacker
-                .set_calibration(plan.sessions[session].masters.clone())
-                .map_err(|error| error.to_string())?;
+            // Auto mode's contract: a calibration problem is something to
+            // warn about and work around, never a reason to abandon a stack
+            // half-integrated. A swap the stacker refuses falls back to
+            // stacking this session's frames raw, and the group warning says
+            // so and why. Forced calibration keeps the hard error: the user
+            // explicitly asked for these masters.
+            if let Err(error) = stacker.set_calibration(plan.sessions[session].masters.clone()) {
+                if group.calibration == crate::calibration::CalibrationMode::On {
+                    return Err(error.to_string());
+                }
+                tracing::warn!(
+                    "session {session} masters refused; stacking its frames uncalibrated: {error}"
+                );
+                stacker
+                    .set_calibration(seiza_stacking::CalibrationMasters::default())
+                    .map_err(|error| error.to_string())?;
+                let note = format!(
+                    "Session {} stacked uncalibrated: its masters were refused — {error}",
+                    session + 1
+                );
+                state.stack_previews.update(job_id, |job| {
+                    let calibration = &mut job.groups[group.index].calibration;
+                    calibration.warning = Some(match calibration.warning.take() {
+                        Some(previous) if previous.contains(&note) => previous,
+                        Some(previous) => format!("{previous}. {note}"),
+                        None => note,
+                    });
+                });
+            }
             let mut consumed = 0usize;
             // Every frame's outcome is recorded in the callback above, so the
             // summary adds nothing here.

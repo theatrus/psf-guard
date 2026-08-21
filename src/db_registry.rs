@@ -299,6 +299,25 @@ pub struct DbRegistry {
     /// registry v2; absent means none are configured.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub peers: Vec<PeerEntry>,
+    /// Process-global calibration matching settings shared by every database,
+    /// edited from the settings panel. Additive within registry v2; absent
+    /// means the library defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calibration: Option<CalibrationSettings>,
+}
+
+/// How far apart two readings may sit and still calibrate each other.
+///
+/// Lives beside [`DbRegistry::astrometry`] rather than in the server TOML for
+/// the same reason: it is a property of the person's rig, not of one
+/// deployment, and the settings panel — served identically in browser and
+/// desktop modes — is where they will reach for it when a flat is refused.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct CalibrationSettings {
+    /// Rotator angle between a flat and what it corrects, in degrees.
+    /// Absent uses the library default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_tolerance_deg: Option<f64>,
 }
 
 impl Default for DbRegistry {
@@ -309,6 +328,7 @@ impl Default for DbRegistry {
             active_db_id: None,
             astrometry: None,
             peers: Vec::new(),
+            calibration: None,
         }
     }
 }
@@ -668,6 +688,32 @@ mod tests {
         reg.save(&path).unwrap();
         let reloaded = DbRegistry::load_or_init(&path).unwrap();
         assert_eq!(reloaded.databases, reg.databases);
+    }
+
+    #[test]
+    fn round_trips_calibration_settings_and_absence_stays_absent() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let reg = DbRegistry {
+            calibration: Some(CalibrationSettings {
+                rotation_tolerance_deg: Some(3.5),
+            }),
+            ..Default::default()
+        };
+        reg.save(&path).unwrap();
+
+        let reloaded = DbRegistry::load_or_init(&path).unwrap();
+        assert_eq!(reloaded.calibration, reg.calibration);
+        let serialized = std::fs::read_to_string(&path).unwrap();
+        assert!(serialized.contains("\"calibration\""));
+        assert!(serialized.contains("rotation_tolerance_deg"));
+
+        // A registry that never configured it keeps a clean file: additive
+        // within v2, and an older build reading this file sees nothing new.
+        let bare = DbRegistry::default();
+        bare.save(&path).unwrap();
+        let serialized = std::fs::read_to_string(&path).unwrap();
+        assert!(!serialized.contains("calibration"));
     }
 
     #[test]

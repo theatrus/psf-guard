@@ -64,6 +64,12 @@ pub fn main() {
 
     let server_databases = initial_registry.databases.clone();
     let server_astrometry = initial_registry.astrometry.clone();
+    crate::calibration::configure_rotation_tolerance(
+        initial_registry
+            .calibration
+            .as_ref()
+            .and_then(|calibration| calibration.rotation_tolerance_deg),
+    );
     let server_config_for_task = server_config.clone();
     let registry_path_for_task = registry_path.clone();
     rt.spawn(async move {
@@ -537,6 +543,7 @@ mod tests {
             }],
             active_db_id: None,
             astrometry: None,
+            calibration: None,
             peers: Vec::new(),
         }
     }
