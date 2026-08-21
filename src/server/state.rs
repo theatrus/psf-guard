@@ -338,6 +338,32 @@ impl FileCheckCache {
         self.has_initial_data && self.refresh_in_progress
     }
 
+    /// Fold one newly resolved image into an already initialized navigation
+    /// cache without turning the discovery into a full refresh.
+    pub fn record_resolved_image(
+        &mut self,
+        project_id: i32,
+        target_id: i32,
+        acquired_date: Option<i64>,
+    ) {
+        // A partial map must not masquerade as the initial full scan. The
+        // running refresh will include the file through the directory tree,
+        // or a later request will record it after initialization completes.
+        if !self.has_initial_data {
+            return;
+        }
+        self.projects_with_files.insert(project_id, true);
+        self.targets_with_files.insert(target_id, true);
+        if let Some(acquired_date) = acquired_date {
+            self.project_latest_image_dates
+                .entry(project_id)
+                .and_modify(|latest| *latest = (*latest).max(acquired_date))
+                .or_insert(acquired_date);
+        }
+        // Deliberately leave last_updated alone. One positive observation does
+        // not make every other cached file check fresh.
+    }
+
     pub fn get_refresh_status(&self) -> RefreshStatus {
         if self.refresh_in_progress {
             if self.has_initial_data {
@@ -345,11 +371,7 @@ impl FileCheckCache {
             } else {
                 RefreshStatus::InProgressWait
             }
-        } else if self.is_expired()
-            || (!self.has_initial_data
-                && self.projects_with_files.is_empty()
-                && self.targets_with_files.is_empty())
-        {
+        } else if !self.has_initial_data || self.is_expired() {
             RefreshStatus::NeedsRefresh
         } else {
             RefreshStatus::NotNeeded
