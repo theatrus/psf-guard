@@ -1841,6 +1841,14 @@ fn resolve_or_build_masters_pinned(
             inputs,
             master_recording_blocker.as_deref(),
         ) {
+            // The integrator reads the headers, so it catches what selection
+            // could not: a catalog holds only what it recorded at import.
+            Ok(Some(master)) => {
+                if let Some((path, _)) = master.skipped.first() {
+                    set_aside.push((kind, master.skipped.len(), path.display().to_string()));
+                }
+                Some(master)
+            }
             Ok(master) => master,
             Err(error) => {
                 tracing::warn!(
@@ -2381,6 +2389,9 @@ pub fn resolve_or_build_masters_for_group(
 struct BuiltMaster {
     path: PathBuf,
     master_uuid: String,
+    /// Inputs the integrator refused, which only it can see: it reads the
+    /// headers, while selection has only what the catalog recorded.
+    skipped: Vec<(PathBuf, String)>,
 }
 
 impl BuiltMaster {
@@ -2444,7 +2455,13 @@ fn build_master(
             .and_then(|frame| frame.validate_master_kind(expected_kind))
             .is_ok();
         if row_exists && file_valid {
-            return Ok(Some(BuiltMaster { path, master_uuid }));
+            return Ok(Some(BuiltMaster {
+                path,
+                master_uuid,
+                // A cached master is served without rebuilding, so there is
+                // no fresh refusal to report.
+                skipped: Vec::new(),
+            }));
         }
         if let Some(blocker) = recording_blocker {
             anyhow::bail!(
@@ -2485,6 +2502,18 @@ fn build_master(
         .collect::<Vec<_>>();
     let frame = seiza_stacking::build_master_from_fits(&paths, seiza_kind, &options)
         .with_context(|| format!("building master {}", kind.as_str()))?;
+    let skipped: Vec<(PathBuf, String)> = frame
+        .skipped_inputs
+        .iter()
+        .map(|skipped| (skipped.path.clone(), skipped.reason.clone()))
+        .collect();
+    for (path, reason) in &skipped {
+        tracing::warn!(
+            "master {}: left out {} — {reason}",
+            kind.as_str(),
+            path.display()
+        );
+    }
     if frame.defect_pixels_replaced > 0 {
         tracing::info!(
             "master {} suppressed {} defective pixel(s)",
@@ -2513,7 +2542,11 @@ fn build_master(
             dark_dependency,
         },
     )?;
-    Ok(Some(BuiltMaster { path, master_uuid }))
+    Ok(Some(BuiltMaster {
+        path,
+        master_uuid,
+        skipped,
+    }))
 }
 
 fn record_master(

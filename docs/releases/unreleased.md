@@ -328,3 +328,12 @@
   offered as one set. The files recorded the angle all along; now the catalog
   reads it. Flats only, headers only, and a flat whose file has moved away
   keeps its empty angle rather than stopping the upgrade.
+- One calibration frame that disagrees with the rest no longer costs you the
+  whole master. The integrator reads each frame's headers, and a frame whose
+  metadata contradicts the reference is now left out and named in the
+  calibration warning instead of stopping the build. This is the half
+  selection cannot do: a catalog holds only what it recorded at import, so a
+  flat shot at a rotator angle the catalog never wrote down looked compatible
+  with every other flat until the files themselves were read. A set that
+  falls below two usable frames is still reported rather than integrated,
+  since a master built from one frame is that frame.
