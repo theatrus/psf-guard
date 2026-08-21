@@ -13,10 +13,12 @@ use crate::directory_tree::DirectoryTree;
 use crate::server::state::{FileCheckCache, RefreshProgress, RefreshStage, RefreshStatus};
 use anyhow::Result;
 use rusqlite::{Connection, OpenFlags};
-use std::path::PathBuf;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex as TokioMutex;
 
 /// Flags used to (re)open a writable scheduler database connection. `NO_MUTEX`
@@ -267,6 +269,15 @@ pub struct DatabaseContext {
     reopen_lock: Arc<Mutex<()>>,
     pub file_check_cache: Arc<RwLock<FileCheckCache>>,
     pub directory_tree_cache: Arc<RwLock<Option<DirectoryTree>>>,
+    /// Files proven by requests since the current tree scan began. A rebuild
+    /// merges these just before publishing so it cannot overwrite a late hit.
+    directory_tree_additions: Arc<RwLock<HashSet<PathBuf>>>,
+    /// Navigation facts proven since the current file-cache refresh began.
+    file_check_additions: Arc<RwLock<HashMap<(i32, i32), FileCheckAddition>>>,
+    /// Images changed by a scheduler pull whose source files may arrive
+    /// shortly afterwards. Status polling advances each entry through a
+    /// bounded, nonblocking probe schedule.
+    delayed_remote_images: Arc<Mutex<HashMap<i32, DelayedRemoteImage>>>,
     /// Serializes cold directory-tree builds so N concurrent requests on an
     /// empty cache share one filesystem scan instead of starting N.
     tree_build_lock: Arc<Mutex<()>>,
@@ -292,6 +303,116 @@ pub struct DatabaseContext {
     /// Serializes publish/import for remotely posted images within one
     /// database, keeping basename checks and database inserts coherent.
     pub image_import_mutex: Arc<TokioMutex<()>>,
+}
+
+const DELAYED_REMOTE_IMAGE_GRACE: Duration = Duration::from_secs(10 * 60);
+const DELAYED_REMOTE_IMAGE_BACKOFF_SECS: [u64; 3] = [1, 2, 5];
+const MAX_DELAYED_REMOTE_IMAGES: usize = 4096;
+
+#[derive(Debug, Clone)]
+struct DelayedRemoteImage {
+    expires_at: Instant,
+    next_probe_at: Instant,
+    backoff_step: usize,
+    observed_source: Option<ArrivalSourceFingerprint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ArrivalSourceFingerprint {
+    canonical_path: PathBuf,
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+fn arrival_source_fingerprint(path: &Path) -> Option<ArrivalSourceFingerprint> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some(ArrivalSourceFingerprint {
+        canonical_path: std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+    })
+}
+
+fn advance_delayed_probe(arrival: &mut DelayedRemoteImage, now: Instant) {
+    let delay = DELAYED_REMOTE_IMAGE_BACKOFF_SECS[arrival
+        .backoff_step
+        .min(DELAYED_REMOTE_IMAGE_BACKOFF_SECS.len() - 1)];
+    arrival.next_probe_at = now + Duration::from_secs(delay);
+    arrival.backoff_step =
+        (arrival.backoff_step + 1).min(DELAYED_REMOTE_IMAGE_BACKOFF_SECS.len() - 1);
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FileCheckAddition {
+    has_files: bool,
+    latest_image_date: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DelayedFileProbe {
+    NotPending,
+    Wait,
+    Probe,
+}
+
+fn publish_directory_tree_cache(
+    cache: &RwLock<Option<DirectoryTree>>,
+    additions: &RwLock<HashSet<PathBuf>>,
+    mut rebuilt: DirectoryTree,
+) -> DirectoryTree {
+    // Lock order matches record_resolved_image_file. The filesystem scan is
+    // already finished; only small in-memory merges happen while held.
+    let mut additions = additions.write().unwrap();
+    // The set is normally tiny. Check liveness before taking the tree cache
+    // lock so a file deleted while the scan ran is not published as a stale
+    // positive, and no filesystem call runs under the tree write lock.
+    let live_additions: Vec<PathBuf> = additions
+        .iter()
+        .filter(|path| path.is_file())
+        .cloned()
+        .collect();
+    let mut cache = cache.write().unwrap();
+    for path in &live_additions {
+        rebuilt.insert_file(path);
+    }
+    *cache = Some(rebuilt.clone());
+    additions.clear();
+    rebuilt
+}
+
+fn publish_file_check_cache(
+    cache: &RwLock<FileCheckCache>,
+    additions: &RwLock<HashMap<(i32, i32), FileCheckAddition>>,
+    projects_with_files: HashMap<i32, bool>,
+    project_latest_image_dates: HashMap<i32, i64>,
+    targets_with_files: HashMap<i32, bool>,
+) {
+    // Lock order matches record_resolved_image_file. A request that proves a
+    // late file while this refresh is publishing either lands in this merge
+    // or waits and patches the published snapshot immediately afterwards.
+    let mut additions = additions.write().unwrap();
+    let mut cache = cache.write().unwrap();
+    cache.projects_with_files = projects_with_files;
+    cache.project_latest_image_dates = project_latest_image_dates;
+    cache.targets_with_files = targets_with_files;
+    cache.has_initial_data = true;
+    for (&(project_id, target_id), addition) in additions.iter() {
+        if addition.has_files {
+            cache.record_resolved_image(project_id, target_id, addition.latest_image_date);
+        } else {
+            cache.projects_with_files.entry(project_id).or_insert(false);
+            cache.targets_with_files.entry(target_id).or_insert(false);
+            if let Some(acquired_date) = addition.latest_image_date {
+                cache
+                    .project_latest_image_dates
+                    .entry(project_id)
+                    .and_modify(|latest| *latest = (*latest).max(acquired_date))
+                    .or_insert(acquired_date);
+            }
+        }
+    }
+    additions.clear();
+    cache.last_updated = std::time::Instant::now();
 }
 
 impl DatabaseContext {
@@ -380,6 +501,9 @@ impl DatabaseContext {
             reopen_lock: Arc::new(Mutex::new(())),
             file_check_cache: Arc::new(RwLock::new(FileCheckCache::new())),
             directory_tree_cache: Arc::new(RwLock::new(None)),
+            directory_tree_additions: Arc::new(RwLock::new(HashSet::new())),
+            file_check_additions: Arc::new(RwLock::new(HashMap::new())),
+            delayed_remote_images: Arc::new(Mutex::new(HashMap::new())),
             tree_build_lock: Arc::new(Mutex::new(())),
             tree_rebuild_inflight: Arc::new(AtomicBool::new(false)),
             refresh_mutex: Arc::new(TokioMutex::new(())),
@@ -567,8 +691,11 @@ impl DatabaseContext {
         };
         let ctx = self.clone();
         std::thread::spawn(move || {
-            let _inflight = inflight;
             let _build_guard = lock_recover(ctx.tree_build_lock.as_ref());
+            // Drop the in-flight marker before releasing the build lock. A
+            // waiter that acquires the lock next can then own the marker for
+            // its actual scan instead of observing the prior scanner's flag.
+            let _inflight = inflight;
             {
                 let cache = ctx.directory_tree_cache.read().unwrap();
                 if let Some(ref tree) = *cache
@@ -611,6 +738,11 @@ impl DatabaseContext {
         let roots: Vec<&std::path::Path> =
             self.image_dir_paths.iter().map(|p| p.as_path()).collect();
         let tree = DirectoryTree::build_multiple(&roots)?;
+        let tree = publish_directory_tree_cache(
+            self.directory_tree_cache.as_ref(),
+            self.directory_tree_additions.as_ref(),
+            tree,
+        );
         let stats = tree.stats();
 
         tracing::debug!(
@@ -621,11 +753,6 @@ impl DatabaseContext {
             stats.roots.len(),
             stats.format_age()
         );
-
-        {
-            let mut cache = self.directory_tree_cache.write().unwrap();
-            *cache = Some(tree.clone());
-        }
 
         Ok(Arc::new(tree))
     }
@@ -674,6 +801,275 @@ impl DatabaseContext {
     pub fn get_directory_tree_stats(&self) -> Option<crate::directory_tree::DirectoryTreeStats> {
         let cache = self.directory_tree_cache.read().unwrap();
         cache.as_ref().map(|tree| tree.stats())
+    }
+
+    /// Record one source file that a request found after the cached tree was
+    /// built. This updates only the proven path and its navigation rows; it
+    /// does not reset either cache's age or scan the configured roots.
+    pub(crate) fn record_resolved_image_file(
+        &self,
+        image: &crate::models::AcquiredImage,
+        path: &std::path::Path,
+    ) {
+        let tree_needs_update = self.tree_rebuild_inflight.load(Ordering::SeqCst) || {
+            let cache = self.directory_tree_cache.read().unwrap();
+            cache
+                .as_ref()
+                .is_none_or(|directory_tree| !directory_tree.contains_path(path))
+        };
+        let inserted = if tree_needs_update {
+            let mut additions = self.directory_tree_additions.write().unwrap();
+            let mut cache = self.directory_tree_cache.write().unwrap();
+            let preserve_for_rebuild =
+                self.tree_rebuild_inflight.load(Ordering::SeqCst) || cache.is_none();
+            if preserve_for_rebuild {
+                additions.insert(path.to_path_buf());
+            }
+            cache
+                .as_mut()
+                .is_some_and(|directory_tree| directory_tree.insert_file(path))
+        } else {
+            false
+        };
+
+        let file_cache_needs_update = {
+            let cache = self.file_check_cache.read().unwrap();
+            cache.refresh_in_progress
+                || !cache.has_initial_data
+                || cache.projects_with_files.get(&image.project_id) != Some(&true)
+                || cache.targets_with_files.get(&image.target_id) != Some(&true)
+                || image.acquired_date.is_some_and(|acquired_date| {
+                    cache
+                        .project_latest_image_dates
+                        .get(&image.project_id)
+                        .is_none_or(|latest| *latest < acquired_date)
+                })
+        };
+        if file_cache_needs_update {
+            let mut additions = self.file_check_additions.write().unwrap();
+            let mut cache = self.file_check_cache.write().unwrap();
+            if cache.refresh_in_progress || !cache.has_initial_data {
+                additions
+                    .entry((image.project_id, image.target_id))
+                    .and_modify(|addition| {
+                        addition.has_files = true;
+                        if image.acquired_date > addition.latest_image_date {
+                            addition.latest_image_date = image.acquired_date;
+                        }
+                    })
+                    .or_insert(FileCheckAddition {
+                        has_files: true,
+                        latest_image_date: image.acquired_date,
+                    });
+            }
+            cache.record_resolved_image(image.project_id, image.target_id, image.acquired_date);
+        }
+        if inserted {
+            tracing::debug!(
+                "Added delayed image {} to the directory cache for db={}",
+                path.display(),
+                self.id
+            );
+        }
+    }
+
+    /// Give acquired-image rows changed by a successful scheduler pull a
+    /// bounded window in which their separately copied source files may
+    /// arrive. Also seed navigation as known-but-missing immediately, so a
+    /// fresh project or target is visible before the file cache refreshes.
+    pub(crate) fn register_remote_image_arrivals(
+        &self,
+        changed_images: &[crate::commands::sync::ChangedAcquiredImage],
+    ) {
+        if changed_images.is_empty() {
+            return;
+        }
+        let mut navigation: HashMap<(i32, i32), Option<i64>> = HashMap::new();
+        let mut candidate_dates: HashMap<i32, i64> = HashMap::new();
+        let mut newest = BinaryHeap::with_capacity(MAX_DELAYED_REMOTE_IMAGES + 1);
+        for image in changed_images {
+            let (Ok(image_id), Ok(project_id), Ok(target_id)) = (
+                i32::try_from(image.id),
+                i32::try_from(image.project_id),
+                i32::try_from(image.target_id),
+            ) else {
+                continue;
+            };
+            navigation
+                .entry((project_id, target_id))
+                .and_modify(|latest| {
+                    if image.acquired_date > *latest {
+                        *latest = image.acquired_date;
+                    }
+                })
+                .or_insert(image.acquired_date);
+
+            candidate_dates
+                .entry(image_id)
+                .and_modify(|date| {
+                    *date = (*date).max(image.acquired_date.unwrap_or(i64::MIN));
+                })
+                .or_insert(image.acquired_date.unwrap_or(i64::MIN));
+        }
+        for (image_id, acquired_date) in candidate_dates {
+            newest.push(Reverse((acquired_date, image_id)));
+            if newest.len() > MAX_DELAYED_REMOTE_IMAGES {
+                newest.pop();
+            }
+        }
+
+        {
+            let mut additions = self.file_check_additions.write().unwrap();
+            let mut cache = self.file_check_cache.write().unwrap();
+            for (&(project_id, target_id), &acquired_date) in &navigation {
+                if cache.refresh_in_progress || !cache.has_initial_data {
+                    additions
+                        .entry((project_id, target_id))
+                        .and_modify(|addition| {
+                            if acquired_date > addition.latest_image_date {
+                                addition.latest_image_date = acquired_date;
+                            }
+                        })
+                        .or_insert(FileCheckAddition {
+                            has_files: false,
+                            latest_image_date: acquired_date,
+                        });
+                }
+                cache.projects_with_files.entry(project_id).or_insert(false);
+                cache.targets_with_files.entry(target_id).or_insert(false);
+                if let Some(acquired_date) = acquired_date {
+                    cache
+                        .project_latest_image_dates
+                        .entry(project_id)
+                        .and_modify(|latest| *latest = (*latest).max(acquired_date))
+                        .or_insert(acquired_date);
+                }
+            }
+        }
+
+        let now = Instant::now();
+        let mut pending = self.delayed_remote_images.lock().unwrap();
+        pending.retain(|_, arrival| arrival.expires_at > now);
+        for Reverse((_, image_id)) in newest {
+            pending.insert(
+                image_id,
+                DelayedRemoteImage {
+                    expires_at: now + DELAYED_REMOTE_IMAGE_GRACE,
+                    next_probe_at: now,
+                    backoff_step: 0,
+                    observed_source: None,
+                },
+            );
+        }
+        if pending.len() > MAX_DELAYED_REMOTE_IMAGES {
+            let mut by_recency: Vec<(i32, Instant)> = pending
+                .iter()
+                .map(|(&image_id, arrival)| (image_id, arrival.expires_at))
+                .collect();
+            by_recency.sort_unstable_by_key(|entry| Reverse(entry.1));
+            let keep: HashSet<i32> = by_recency
+                .into_iter()
+                .take(MAX_DELAYED_REMOTE_IMAGES)
+                .map(|(image_id, _)| image_id)
+                .collect();
+            pending.retain(|image_id, _| keep.contains(image_id));
+        }
+    }
+
+    /// Advance one delayed source through its 1s, 2s, then 5s capped probe
+    /// schedule. Callers do no filesystem work for `Wait`.
+    pub(crate) fn delayed_file_probe(&self, image_id: i32) -> DelayedFileProbe {
+        let now = Instant::now();
+        let mut pending = self.delayed_remote_images.lock().unwrap();
+        let Some(arrival) = pending.get_mut(&image_id) else {
+            return DelayedFileProbe::NotPending;
+        };
+        if arrival.expires_at <= now {
+            pending.remove(&image_id);
+            return DelayedFileProbe::NotPending;
+        }
+        if arrival.next_probe_at > now {
+            return DelayedFileProbe::Wait;
+        }
+        advance_delayed_probe(arrival, now);
+        DelayedFileProbe::Probe
+    }
+
+    /// Claim at most `limit` due probes for a status batch under one tracker
+    /// lock. Oldest deadlines win, so deferred images are selected before the
+    /// previous batch's probes become due again.
+    pub(crate) fn delayed_file_probes_for_batch(
+        &self,
+        image_ids: &[i32],
+        limit: usize,
+    ) -> HashMap<i32, DelayedFileProbe> {
+        let now = Instant::now();
+        let requested: HashSet<i32> = image_ids.iter().copied().collect();
+        let mut pending = self.delayed_remote_images.lock().unwrap();
+        pending.retain(|_, arrival| arrival.expires_at > now);
+
+        let mut result = HashMap::with_capacity(requested.len());
+        let mut due = Vec::new();
+        for image_id in requested {
+            match pending.get(&image_id) {
+                None => {
+                    result.insert(image_id, DelayedFileProbe::NotPending);
+                }
+                Some(arrival) if arrival.next_probe_at > now => {
+                    result.insert(image_id, DelayedFileProbe::Wait);
+                }
+                Some(arrival) => {
+                    result.insert(image_id, DelayedFileProbe::Wait);
+                    due.push((arrival.next_probe_at, image_id));
+                }
+            }
+        }
+        due.sort_unstable();
+        for (_, image_id) in due.into_iter().take(limit) {
+            if let Some(arrival) = pending.get_mut(&image_id) {
+                advance_delayed_probe(arrival, now);
+                result.insert(image_id, DelayedFileProbe::Probe);
+            }
+        }
+        result
+    }
+
+    /// Retire a delayed-arrival probe after a completed artifact has been
+    /// validated against the source's current fingerprint. The next browser
+    /// reload can then take the ordinary cache-hit path instead of re-entering
+    /// the probe backoff.
+    pub(crate) fn complete_delayed_file_probe(&self, image_id: i32, source_path: &Path) -> bool {
+        let fingerprint = arrival_source_fingerprint(source_path);
+        let mut pending = self.delayed_remote_images.lock().unwrap();
+        let validated = pending.get(&image_id).is_some_and(|arrival| {
+            fingerprint.is_some() && arrival.observed_source.as_ref() == fingerprint.as_ref()
+        });
+        if validated {
+            pending.remove(&image_id);
+        }
+        validated
+    }
+
+    /// A tracked source must present the same path/size/mtime on two scheduled
+    /// observations before decoding. This narrows the window where a copy
+    /// pauses at a decodable prefix and would otherwise produce a permanent
+    /// preview before more pixels arrive.
+    pub(crate) fn delayed_source_is_stable(&self, image_id: i32, path: &Path) -> bool {
+        let fingerprint = arrival_source_fingerprint(path);
+        let mut pending = self.delayed_remote_images.lock().unwrap();
+        let Some(arrival) = pending.get_mut(&image_id) else {
+            return true;
+        };
+        if arrival.expires_at <= Instant::now() {
+            pending.remove(&image_id);
+            return true;
+        }
+        if arrival.observed_source.as_ref() == fingerprint.as_ref() && fingerprint.is_some() {
+            true
+        } else {
+            arrival.observed_source = fingerprint;
+            false
+        }
     }
 
     pub fn ensure_cache_available(&self) -> RefreshStatus {
@@ -853,14 +1249,13 @@ impl DatabaseContext {
                 .set_stage(RefreshStage::UpdatingCache);
         }
 
-        {
-            let mut cache = self.file_check_cache.write().unwrap();
-            cache.projects_with_files = project_cache_updates;
-            cache.project_latest_image_dates = project_latest_image_updates;
-            cache.targets_with_files = target_cache_updates;
-            cache.last_updated = std::time::Instant::now();
-            cache.has_initial_data = true;
-        }
+        publish_file_check_cache(
+            self.file_check_cache.as_ref(),
+            self.file_check_additions.as_ref(),
+            project_cache_updates,
+            project_latest_image_updates,
+            target_cache_updates,
+        );
 
         let duration = start_time.elapsed();
         let total_checked = projects.len() + total_targets;
@@ -976,8 +1371,6 @@ impl DatabaseContext {
             }
         }
 
-        let _inflight = self.try_mark_directory_tree_rebuild();
-
         tracing::info!(
             "🌳 Building directory tree cache for db={} ({} directories) with progress tracking",
             self.id,
@@ -1001,7 +1394,9 @@ impl DatabaseContext {
 
         let image_dir_paths = self.image_dir_paths.clone();
         let directory_tree_cache = Arc::clone(&self.directory_tree_cache);
+        let directory_tree_additions = Arc::clone(&self.directory_tree_additions);
         let tree_build_lock = Arc::clone(&self.tree_build_lock);
+        let tree_rebuild_inflight = Arc::clone(&self.tree_rebuild_inflight);
         let tree_result = tokio::task::spawn_blocking(move || -> Result<(DirectoryTree, bool)> {
             let _build_guard = lock_recover(tree_build_lock.as_ref());
             {
@@ -1012,6 +1407,13 @@ impl DatabaseContext {
                     return Ok((tree.clone(), false));
                 }
             }
+            let _inflight = if tree_rebuild_inflight.swap(true, Ordering::SeqCst) {
+                None
+            } else {
+                Some(TreeRebuildInflight {
+                    flag: Arc::clone(&tree_rebuild_inflight),
+                })
+            };
 
             let roots: Vec<&std::path::Path> =
                 image_dir_paths.iter().map(|p| p.as_path()).collect();
@@ -1029,11 +1431,11 @@ impl DatabaseContext {
                 &roots,
                 &mut progress_callback,
             )?;
-
-            {
-                let mut cache = directory_tree_cache.write().unwrap();
-                *cache = Some(tree.clone());
-            }
+            let tree = publish_directory_tree_cache(
+                directory_tree_cache.as_ref(),
+                directory_tree_additions.as_ref(),
+                tree,
+            );
 
             Ok((tree, true))
         })
@@ -1097,6 +1499,9 @@ impl DatabaseContext {
             reopen_lock: Arc::new(Mutex::new(())),
             file_check_cache: Arc::new(RwLock::new(FileCheckCache::new())),
             directory_tree_cache: Arc::new(RwLock::new(None)),
+            directory_tree_additions: Arc::new(RwLock::new(HashSet::new())),
+            file_check_additions: Arc::new(RwLock::new(HashMap::new())),
+            delayed_remote_images: Arc::new(Mutex::new(HashMap::new())),
             tree_build_lock: Arc::new(Mutex::new(())),
             tree_rebuild_inflight: Arc::new(AtomicBool::new(false)),
             refresh_mutex: Arc::new(TokioMutex::new(())),
@@ -1129,6 +1534,9 @@ impl Clone for DatabaseContext {
             reopen_lock: self.reopen_lock.clone(),
             file_check_cache: self.file_check_cache.clone(),
             directory_tree_cache: self.directory_tree_cache.clone(),
+            directory_tree_additions: self.directory_tree_additions.clone(),
+            file_check_additions: self.file_check_additions.clone(),
+            delayed_remote_images: self.delayed_remote_images.clone(),
             tree_build_lock: self.tree_build_lock.clone(),
             tree_rebuild_inflight: self.tree_rebuild_inflight.clone(),
             refresh_mutex: self.refresh_mutex.clone(),
@@ -1346,6 +1754,175 @@ mod tests {
         assert_eq!(cache.targets_with_files.get(&10), Some(&true));
         assert_eq!(cache.targets_with_files.get(&20), Some(&false));
         assert_eq!(cache.targets_with_files.get(&30), Some(&false));
+    }
+
+    #[test]
+    fn cold_remote_arrival_seeds_navigation_without_suppressing_refresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("sched.sqlite");
+        make_file_refresh_db(&db_path);
+        let ctx = build_ctx(tmp.path(), &db_path);
+        let changed = [crate::commands::sync::ChangedAcquiredImage {
+            id: 500,
+            project_id: 42,
+            target_id: 84,
+            acquired_date: Some(12_345),
+        }];
+
+        ctx.register_remote_image_arrivals(&changed);
+
+        {
+            let cache = ctx.file_check_cache.read().unwrap();
+            assert!(!cache.has_initial_data);
+            assert_eq!(cache.projects_with_files.get(&42), Some(&false));
+            assert_eq!(cache.targets_with_files.get(&84), Some(&false));
+            assert_eq!(cache.project_latest_image_dates.get(&42), Some(&12_345));
+            assert_eq!(cache.get_refresh_status(), RefreshStatus::NeedsRefresh);
+        }
+
+        publish_file_check_cache(
+            ctx.file_check_cache.as_ref(),
+            ctx.file_check_additions.as_ref(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
+        let cache = ctx.file_check_cache.read().unwrap();
+        assert_eq!(cache.projects_with_files.get(&42), Some(&false));
+        assert_eq!(cache.targets_with_files.get(&84), Some(&false));
+        assert_eq!(cache.project_latest_image_dates.get(&42), Some(&12_345));
+    }
+
+    #[test]
+    fn delayed_arrival_probe_backs_off_expires_and_requires_stability() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("sched.sqlite");
+        make_file_refresh_db(&db_path);
+        let ctx = build_ctx(tmp.path(), &db_path);
+        ctx.register_remote_image_arrivals(&[crate::commands::sync::ChangedAcquiredImage {
+            id: 500,
+            project_id: 42,
+            target_id: 84,
+            acquired_date: Some(12_345),
+        }]);
+
+        assert_eq!(ctx.delayed_file_probe(500), DelayedFileProbe::Probe);
+        assert_eq!(ctx.delayed_file_probe(500), DelayedFileProbe::Wait);
+        {
+            let mut pending = ctx.delayed_remote_images.lock().unwrap();
+            pending.get_mut(&500).unwrap().next_probe_at = Instant::now();
+        }
+        assert_eq!(ctx.delayed_file_probe(500), DelayedFileProbe::Probe);
+
+        let source = tmp.path().join("images/arriving.fits");
+        std::fs::write(&source, b"first observation").unwrap();
+        assert!(!ctx.delayed_source_is_stable(500, &source));
+        assert!(ctx.delayed_source_is_stable(500, &source));
+        std::fs::write(&source, b"the source grew after a pause").unwrap();
+        assert!(!ctx.delayed_source_is_stable(500, &source));
+
+        ctx.delayed_remote_images
+            .lock()
+            .unwrap()
+            .get_mut(&500)
+            .unwrap()
+            .expires_at = Instant::now();
+        assert_eq!(ctx.delayed_file_probe(500), DelayedFileProbe::NotPending);
+    }
+
+    #[test]
+    fn delayed_batch_claim_is_bounded_fair_and_does_not_advance_deferred_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("sched.sqlite");
+        make_file_refresh_db(&db_path);
+        let ctx = build_ctx(tmp.path(), &db_path);
+        let changed: Vec<_> = (1..=10)
+            .map(|id| crate::commands::sync::ChangedAcquiredImage {
+                id,
+                project_id: 42,
+                target_id: 84,
+                acquired_date: Some(12_345 + id),
+            })
+            .collect();
+        ctx.register_remote_image_arrivals(&changed);
+        let ids: Vec<i32> = (1..=10).collect();
+
+        let first = ctx.delayed_file_probes_for_batch(&ids, 8);
+        let first_probes: HashSet<i32> = first
+            .iter()
+            .filter_map(|(&id, &probe)| (probe == DelayedFileProbe::Probe).then_some(id))
+            .collect();
+        assert_eq!(first_probes.len(), 8);
+
+        let second = ctx.delayed_file_probes_for_batch(&ids, 8);
+        let second_probes: HashSet<i32> = second
+            .iter()
+            .filter_map(|(&id, &probe)| (probe == DelayedFileProbe::Probe).then_some(id))
+            .collect();
+        assert_eq!(second_probes.len(), 2);
+        assert!(first_probes.is_disjoint(&second_probes));
+    }
+
+    #[test]
+    fn delayed_completion_does_not_remove_a_concurrently_reregistered_arrival() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("sched.sqlite");
+        make_file_refresh_db(&db_path);
+        let ctx = build_ctx(tmp.path(), &db_path);
+        let changed = [crate::commands::sync::ChangedAcquiredImage {
+            id: 500,
+            project_id: 42,
+            target_id: 84,
+            acquired_date: Some(12_345),
+        }];
+        let source = tmp.path().join("arriving.fits");
+        std::fs::write(&source, b"complete").unwrap();
+        ctx.register_remote_image_arrivals(&changed);
+        assert!(!ctx.delayed_source_is_stable(500, &source));
+        assert!(ctx.delayed_source_is_stable(500, &source));
+
+        ctx.register_remote_image_arrivals(&changed);
+        assert!(!ctx.complete_delayed_file_probe(500, &source));
+        assert_eq!(ctx.delayed_file_probe(500), DelayedFileProbe::Probe);
+    }
+
+    #[test]
+    fn cache_publication_keeps_live_late_additions_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("images");
+        std::fs::create_dir_all(&root).unwrap();
+        let stale = DirectoryTree::build(&root).unwrap();
+        let live = root.join("late.fits");
+        let deleted = root.join("deleted.fits");
+        std::fs::write(&live, b"live").unwrap();
+        std::fs::write(&deleted, b"gone soon").unwrap();
+
+        let cache = RwLock::new(None);
+        let additions = RwLock::new(HashSet::from([live.clone(), deleted.clone()]));
+        std::fs::remove_file(&deleted).unwrap();
+        let published = publish_directory_tree_cache(&cache, &additions, stale);
+        assert!(published.contains_path(&live));
+        assert!(!published.contains_path(&deleted));
+
+        let file_cache = RwLock::new(FileCheckCache::new());
+        let file_additions = RwLock::new(HashMap::from([(
+            (7, 3),
+            FileCheckAddition {
+                has_files: true,
+                latest_image_date: Some(99),
+            },
+        )]));
+        publish_file_check_cache(
+            &file_cache,
+            &file_additions,
+            HashMap::from([(7, false)]),
+            HashMap::new(),
+            HashMap::from([(3, false)]),
+        );
+        let file_cache = file_cache.read().unwrap();
+        assert_eq!(file_cache.projects_with_files.get(&7), Some(&true));
+        assert_eq!(file_cache.targets_with_files.get(&3), Some(&true));
+        assert_eq!(file_cache.project_latest_image_dates.get(&7), Some(&99));
     }
 
     // Unix-only: the proactive reopen this exercises is itself `#[cfg(unix)]`

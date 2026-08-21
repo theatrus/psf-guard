@@ -569,7 +569,7 @@ export default function ImageComparisonView({
                         <line x1="9" y1="9" x2="15" y2="15" />
                         <line x1="15" y1="9" x2="9" y2="15" />
                       </svg>
-                      <p style={{ margin: 0, fontSize: '0.9rem', color: '#666' }}>Image not available</p>
+                      <p style={{ margin: 0, fontSize: '0.9rem', color: '#666' }}>{asyncLeft.error ?? 'Image not available'}</p>
                     </div>
                   </div>
                 ) : (
@@ -742,7 +742,7 @@ export default function ImageComparisonView({
                             <line x1="9" y1="9" x2="15" y2="15" />
                             <line x1="15" y1="9" x2="9" y2="15" />
                           </svg>
-                          <p style={{ margin: 0, fontSize: '0.9rem', color: '#666' }}>Image not available</p>
+                          <p style={{ margin: 0, fontSize: '0.9rem', color: '#666' }}>{asyncRight.error ?? 'Image not available'}</p>
                         </div>
                       </div>
                     ) : (() => {

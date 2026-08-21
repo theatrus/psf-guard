@@ -21,6 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
 use serde::Serialize;
 use tokio::sync::Semaphore;
@@ -97,13 +98,42 @@ impl GenerationStatus {
 
 /// Recent-error map cap, so a run of unresolvable frames can't grow it forever.
 const MAX_RECENT_ERRORS: usize = 512;
+const GENERATION_ERROR_MESSAGE: &str =
+    "preview generation failed; it will retry when the source file changes";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SourceFingerprint {
+    canonical_path: PathBuf,
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+fn source_fingerprint(path: &Path) -> Option<SourceFingerprint> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some(SourceFingerprint {
+        canonical_path: std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+    })
+}
+
+#[derive(Debug, Clone)]
+struct RecentError {
+    source_fingerprint: Option<SourceFingerprint>,
+}
 
 #[derive(Default)]
 struct QueueInner {
     /// `cache_path`s currently being generated (dedup).
     in_flight: HashSet<PathBuf>,
-    /// `cache_path` -> last generation error message.
-    recent_errors: HashMap<PathBuf, String>,
+    /// `cache_path` -> fingerprint of the source that failed. Error text is
+    /// deliberately not retained for API responses because decoder messages
+    /// can include a server-local path.
+    recent_errors: HashMap<PathBuf, RecentError>,
+    /// Source identity that produced a completed artifact in this process.
+    /// Tracked remote arrivals use it to invalidate a preview if the copy
+    /// resumes after an apparently stable prefix was rendered.
+    completed_sources: HashMap<PathBuf, SourceFingerprint>,
 }
 
 /// Process-global interactive preview/annotated generation queue. Held on
@@ -118,6 +148,32 @@ pub struct PreviewQueue {
 }
 
 impl PreviewQueue {
+    pub fn cached_source_matches(&self, cache_path: &Path, source_path: &Path) -> bool {
+        let current = source_fingerprint(source_path);
+        let inner = self.inner.lock().unwrap();
+        inner.completed_sources.get(cache_path) == current.as_ref()
+    }
+
+    pub fn forget_completed_source(&self, cache_path: &Path) {
+        self.inner
+            .lock()
+            .unwrap()
+            .completed_sources
+            .remove(cache_path);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remember_completed_source_for_test(
+        &self,
+        cache_path: PathBuf,
+        source_path: &Path,
+    ) {
+        self.inner.lock().unwrap().completed_sources.insert(
+            cache_path,
+            source_fingerprint(source_path).expect("test source fingerprint"),
+        );
+    }
+
     /// Report the state of one artifact by its `cache_path`. Pure read — does
     /// not enqueue (the caller enqueues when appropriate).
     pub fn status(&self, cache_path: &Path) -> Option<GenerationStatus> {
@@ -132,8 +188,36 @@ impl PreviewQueue {
         }
         inner
             .recent_errors
-            .get(cache_path)
-            .map(|e| GenerationStatus::error(e.clone()))
+            .contains_key(cache_path)
+            .then(|| GenerationStatus::error(GENERATION_ERROR_MESSAGE.to_string()))
+    }
+
+    /// Report status for a resolved source. A previous failure is forgotten
+    /// once that source's size or modification time changes, allowing a file
+    /// copied in place to resume preview generation without a server restart.
+    pub fn status_for_source(
+        &self,
+        cache_path: &Path,
+        source_path: &Path,
+    ) -> Option<GenerationStatus> {
+        if cache_path.exists() {
+            return Some(GenerationStatus::ready());
+        }
+        let fingerprint = source_fingerprint(source_path);
+        let mut inner = self.inner.lock().unwrap();
+        if inner.in_flight.contains(cache_path) {
+            return Some(GenerationStatus::generating());
+        }
+        match inner.recent_errors.get(cache_path) {
+            Some(error) if error.source_fingerprint.as_ref() == fingerprint.as_ref() => Some(
+                GenerationStatus::error(GENERATION_ERROR_MESSAGE.to_string()),
+            ),
+            Some(_) => {
+                inner.recent_errors.remove(cache_path);
+                None
+            }
+            None => None,
+        }
     }
 
     /// Lazily create (and reuse) the concurrency-bounding semaphore, sized from
@@ -162,13 +246,23 @@ impl AppState {
     /// a no-op, so the same artifact is never generated twice concurrently and
     /// re-requests are cheap.
     pub fn enqueue_preview(self: &Arc<Self>, job: GenJob) {
+        let current_source = source_fingerprint(&job.fits_path);
         // Dedup + claim the slot under the lock. `insert` returns false when
         // the path was already in-flight.
         {
             let mut inner = self.preview_queue.inner.lock().unwrap();
-            if job.cache_path.exists() || !inner.in_flight.insert(job.cache_path.clone()) {
+            if job.cache_path.exists()
+                || inner
+                    .recent_errors
+                    .get(&job.cache_path)
+                    .is_some_and(|error| {
+                        error.source_fingerprint.as_ref() == current_source.as_ref()
+                    })
+                || !inner.in_flight.insert(job.cache_path.clone())
+            {
                 return;
             }
+            inner.recent_errors.remove(&job.cache_path);
         }
 
         let sem = self
@@ -184,31 +278,60 @@ impl AppState {
             let _permit = sem.acquire_owned().await;
 
             let cache_path = job.cache_path.clone();
-            let outcome = tokio::task::spawn_blocking(move || generate(&job)).await;
+            let attempted_source = source_fingerprint(&job.fits_path);
+            let worker_source = attempted_source.clone();
+            let outcome =
+                tokio::task::spawn_blocking(move || generate_with_fingerprint(&job, worker_source))
+                    .await;
 
             let mut inner = state.preview_queue.inner.lock().unwrap();
             inner.in_flight.remove(&cache_path);
             match outcome {
                 Ok(Ok(())) => {
                     inner.recent_errors.remove(&cache_path);
+                    if let Some(source) = attempted_source {
+                        if inner.completed_sources.len() >= MAX_RECENT_ERRORS * 16
+                            && let Some(oldest) = inner.completed_sources.keys().next().cloned()
+                        {
+                            inner.completed_sources.remove(&oldest);
+                        }
+                        inner.completed_sources.insert(cache_path, source);
+                    }
                 }
-                Ok(Err(e)) => record_error(&mut inner, cache_path, e.to_string()),
-                Err(join) => record_error(&mut inner, cache_path, format!("panicked: {join}")),
+                Ok(Err(error)) => {
+                    inner.completed_sources.remove(&cache_path);
+                    record_error(&mut inner, cache_path, attempted_source, error.to_string())
+                }
+                Err(join) => record_error(
+                    &mut inner,
+                    cache_path,
+                    attempted_source,
+                    format!("panicked: {join}"),
+                ),
             }
         });
     }
 }
 
-fn record_error(inner: &mut QueueInner, cache_path: PathBuf, msg: String) {
+fn record_error(
+    inner: &mut QueueInner,
+    cache_path: PathBuf,
+    source_fingerprint: Option<SourceFingerprint>,
+    detail: String,
+) {
     tracing::warn!(
         "🖼️ Preview generation failed for {}: {}",
         cache_path.display(),
-        msg
+        detail
     );
-    if inner.recent_errors.len() >= MAX_RECENT_ERRORS {
-        inner.recent_errors.clear();
+    if inner.recent_errors.len() >= MAX_RECENT_ERRORS
+        && let Some(oldest) = inner.recent_errors.keys().next().cloned()
+    {
+        inner.recent_errors.remove(&oldest);
     }
-    inner.recent_errors.insert(cache_path, msg);
+    inner
+        .recent_errors
+        .insert(cache_path, RecentError { source_fingerprint });
 }
 
 /// Generate one artifact to a unique temp path, then atomically rename into
@@ -217,6 +340,14 @@ fn record_error(inner: &mut QueueInner, cache_path: PathBuf, msg: String) {
 /// both are atomic and a pregen/queue double-generate can't clobber a reader.
 /// Blocking; call from `spawn_blocking`.
 pub fn generate(job: &GenJob) -> anyhow::Result<()> {
+    let attempted_source = source_fingerprint(&job.fits_path);
+    generate_with_fingerprint(job, attempted_source)
+}
+
+fn generate_with_fingerprint(
+    job: &GenJob,
+    attempted_source: Option<SourceFingerprint>,
+) -> anyhow::Result<()> {
     let tmp = temp_path(&job.cache_path);
     let result = match &job.kind {
         GenKind::Preview {
@@ -245,7 +376,14 @@ pub fn generate(job: &GenJob) -> anyhow::Result<()> {
 
     // Clean up the temp file on both a generation failure and a rename
     // failure, so a failed run never orphans a `.tmp.*` file.
-    match result.and_then(|()| std::fs::rename(&tmp, &job.cache_path).map_err(Into::into)) {
+    let result = result.and_then(|()| {
+        anyhow::ensure!(
+            source_fingerprint(&job.fits_path).as_ref() == attempted_source.as_ref(),
+            "source file changed while the preview was generated"
+        );
+        std::fs::rename(&tmp, &job.cache_path).map_err(Into::into)
+    });
+    match result {
         Ok(()) => Ok(()),
         Err(e) => {
             let _ = std::fs::remove_file(&tmp);
@@ -425,14 +563,101 @@ mod tests {
         assert_eq!(q.status(&p).unwrap().state, GenerationState::Generating);
 
         q.inner.lock().unwrap().in_flight.remove(&p);
-        q.inner
-            .lock()
-            .unwrap()
-            .recent_errors
-            .insert(p.clone(), "boom".into());
+        record_error(
+            &mut q.inner.lock().unwrap(),
+            p.clone(),
+            None,
+            r"decoder failed at \\server\private\frame.fits".into(),
+        );
         let s = q.status(&p).unwrap();
         assert_eq!(s.state, GenerationState::Error);
-        assert_eq!(s.error.as_deref(), Some("boom"));
+        assert_eq!(s.error.as_deref(), Some(GENERATION_ERROR_MESSAGE));
+        assert!(!s.error.unwrap().contains("private"));
+    }
+
+    #[test]
+    fn source_change_clears_a_cached_generation_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("arriving.fits");
+        let cache = dir.path().join("preview.png");
+        std::fs::write(&source, b"partial").unwrap();
+
+        let q = PreviewQueue::default();
+        q.inner.lock().unwrap().recent_errors.insert(
+            cache.clone(),
+            RecentError {
+                source_fingerprint: source_fingerprint(&source),
+            },
+        );
+        assert_eq!(
+            q.status_for_source(&cache, &source).unwrap().state,
+            GenerationState::Error
+        );
+
+        std::fs::write(&source, b"a larger complete frame").unwrap();
+        assert!(q.status_for_source(&cache, &source).is_none());
+        assert!(!q.inner.lock().unwrap().recent_errors.contains_key(&cache));
+    }
+
+    #[test]
+    fn a_different_source_path_clears_an_equal_sized_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.fits");
+        let second = dir.path().join("second.fits");
+        let cache = dir.path().join("preview.png");
+        std::fs::write(&first, b"same bytes").unwrap();
+        std::fs::write(&second, b"same bytes").unwrap();
+
+        let q = PreviewQueue::default();
+        q.inner.lock().unwrap().recent_errors.insert(
+            cache.clone(),
+            RecentError {
+                source_fingerprint: source_fingerprint(&first),
+            },
+        );
+        assert!(q.status_for_source(&cache, &second).is_none());
+    }
+
+    #[test]
+    fn a_completed_artifact_is_invalid_after_its_source_grows() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("arriving.fits");
+        let cache = dir.path().join("preview.png");
+        std::fs::write(&source, b"stable prefix").unwrap();
+        std::fs::write(&cache, b"rendered prefix").unwrap();
+
+        let q = PreviewQueue::default();
+        q.inner.lock().unwrap().completed_sources.insert(
+            cache.clone(),
+            source_fingerprint(&source).expect("source fingerprint"),
+        );
+        assert!(q.cached_source_matches(&cache, &source));
+
+        std::fs::write(&source, b"stable prefix followed by the remaining pixels").unwrap();
+        assert!(!q.cached_source_matches(&cache, &source));
+    }
+
+    #[test]
+    fn recording_one_more_error_evicts_only_one_entry() {
+        let mut inner = QueueInner::default();
+        for index in 0..MAX_RECENT_ERRORS {
+            inner.recent_errors.insert(
+                PathBuf::from(format!("/cache/{index}.png")),
+                RecentError {
+                    source_fingerprint: None,
+                },
+            );
+        }
+        record_error(
+            &mut inner,
+            PathBuf::from("/cache/new.png"),
+            None,
+            "failed".into(),
+        );
+        assert_eq!(inner.recent_errors.len(), MAX_RECENT_ERRORS);
+        assert!(inner
+            .recent_errors
+            .contains_key(Path::new("/cache/new.png")));
     }
 
     #[test]

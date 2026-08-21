@@ -62,8 +62,20 @@ pub struct PullSummary {
     pub calibration_rigs: TableCounts,
     pub calibration_rig_bindings: TableCounts,
     pub calibration_frames: TableCounts,
+    /// Destination acquiredimage IDs inserted or updated by this pull. Server
+    /// callers use these to watch briefly for files copied after the database
+    /// transaction; CLI reporting intentionally ignores them.
+    pub(crate) changed_acquiredimages: Vec<ChangedAcquiredImage>,
     /// Per-entity trace lines (for `--verbose`).
     pub changes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ChangedAcquiredImage {
+    pub id: i64,
+    pub project_id: i64,
+    pub target_id: i64,
+    pub acquired_date: Option<i64>,
 }
 
 impl PullSummary {
@@ -121,6 +133,43 @@ fn value_eq(a: &Value, b: &Value) -> bool {
 
 fn values_equal(a: &[Value], b: &[Value]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(x, y)| value_eq(x, y))
+}
+
+fn metadata_file_identity(value: &Value) -> Option<(String, Option<String>, Option<String>)> {
+    let Value::Text(metadata) = value else {
+        return None;
+    };
+    let metadata: serde_json::Value = serde_json::from_str(metadata).ok()?;
+    Some((
+        metadata.get("FileName")?.as_str()?.to_string(),
+        metadata
+            .get("ExposureStartTime")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+        metadata
+            .get("FilterName")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+    ))
+}
+
+fn file_discovery_identity_changed(
+    columns: &[&str],
+    incoming: &[Value],
+    current: &[Value],
+) -> bool {
+    columns.iter().enumerate().any(|(index, column)| {
+        if column.eq_ignore_ascii_case("metadata") {
+            metadata_file_identity(&incoming[index]) != metadata_file_identity(&current[index])
+        } else if ["projectId", "targetId", "acquireddate", "filtername"]
+            .iter()
+            .any(|identity| column.eq_ignore_ascii_case(identity))
+        {
+            !value_eq(&incoming[index], &current[index])
+        } else {
+            false
+        }
+    })
 }
 
 /// Column names of `table` in declared order.
@@ -483,9 +532,10 @@ fn upsert_acquired_images(
     let guid_w = wpos("guid").unwrap();
     let grade_w = wpos("gradingStatus").ok_or_else(|| anyhow!("gradingStatus missing"))?;
     let reason_w = wpos("rejectreason");
-    let proj_w = wpos("projectId");
-    let tgt_w = wpos("targetId");
+    let proj_w = wpos("projectId").ok_or_else(|| anyhow!("projectId missing"))?;
+    let tgt_w = wpos("targetId").ok_or_else(|| anyhow!("targetId missing"))?;
     let expo_w = wpos("exposureId");
+    let acquired_date_w = wpos("acquireddate");
 
     // Pre-pull destination state + duplicate-guid sets (ambiguous rows skipped).
     let (dest_map, dest_dups) = dest_guid_map(tx, table, &write_cols, guid_w)?;
@@ -545,8 +595,8 @@ fn upsert_acquired_images(
         // projectId/targetId are required FKs: skip the row if either parent
         // wasn't pulled, rather than retaining a source id that points at an
         // unrelated destination row.
-        if !remap_fk_checked(&mut write_values, proj_w, proj_map)
-            || !remap_fk_checked(&mut write_values, tgt_w, tgt_map)
+        if !remap_fk_checked(&mut write_values, Some(proj_w), proj_map)
+            || !remap_fk_checked(&mut write_values, Some(tgt_w), tgt_map)
         {
             summary.acquiredimage.skipped += 1;
             summary
@@ -561,6 +611,11 @@ fn upsert_acquired_images(
         {
             write_values[p] = Value::Integer(plan_map.get(&src_plan).copied().unwrap_or(0));
         }
+        let project_id = as_i64(&write_values[proj_w])
+            .ok_or_else(|| anyhow!("acquiredimage.projectId is not an integer"))?;
+        let target_id = as_i64(&write_values[tgt_w])
+            .ok_or_else(|| anyhow!("acquiredimage.targetId is not an integer"))?;
+        let acquired_date = acquired_date_w.and_then(|position| as_i64(&write_values[position]));
 
         match dest_map.get(&guid) {
             Some((dest_id, cur_vals)) => {
@@ -581,12 +636,22 @@ fn upsert_acquired_images(
                 if values_equal(&write_values, cur_vals) {
                     summary.acquiredimage.unchanged += 1;
                 } else {
+                    let discovery_identity_changed =
+                        file_discovery_identity_changed(&write_cols, &write_values, cur_vals);
                     let mut p: Vec<&dyn ToSql> =
                         write_values.iter().map(|v| v as &dyn ToSql).collect();
                     let did = *dest_id;
                     p.push(&did);
                     upd_stmt.execute(p.as_slice())?;
                     summary.acquiredimage.updated += 1;
+                    if discovery_identity_changed {
+                        summary.changed_acquiredimages.push(ChangedAcquiredImage {
+                            id: did,
+                            project_id,
+                            target_id,
+                            acquired_date,
+                        });
+                    }
                     summary
                         .changes
                         .push(format!("update acquiredimage {}", guid));
@@ -597,6 +662,12 @@ fn upsert_acquired_images(
                 let dest_id = tx.last_insert_rowid();
                 id_map.insert(src_id, dest_id);
                 summary.acquiredimage.inserted += 1;
+                summary.changed_acquiredimages.push(ChangedAcquiredImage {
+                    id: dest_id,
+                    project_id,
+                    target_id,
+                    acquired_date,
+                });
                 summary
                     .changes
                     .push(format!("insert acquiredimage {}", guid));
@@ -1032,6 +1103,12 @@ mod tests {
         assert_eq!(s.exposureplan.inserted, 1);
         assert_eq!(s.acquiredimage.inserted, 2);
         assert_eq!(s.ruleweight.inserted, 1);
+        assert_eq!(s.changed_acquiredimages.len(), 2);
+        assert!(s.changed_acquiredimages.iter().all(|image| {
+            image.project_id == 1
+                && image.target_id == 1
+                && matches!(image.acquired_date, Some(1000 | 2000))
+        }));
 
         // Referential integrity: target.projectid points at the new project Id,
         // and acquiredimage FKs resolve.
@@ -1058,12 +1135,17 @@ mod tests {
              INSERT INTO target (Id,name,active,ra,dec,epochcode,projectid,guid) VALUES (70,'OtherT',1,0,0,0,50,'other-tg');",
         ).unwrap();
 
-        sync_pull(&src, &dest, &opts()).unwrap();
+        let summary = sync_pull(&src, &dest, &opts()).unwrap();
         // Pulled project got a fresh Id (not 1); its target points at it.
         let proj_id: i64 = one(&dest, "SELECT Id FROM project WHERE guid='pg'");
         assert_ne!(proj_id, 1);
         let tgt_proj: i64 = one(&dest, "SELECT projectid FROM target WHERE guid='tg'");
         assert_eq!(tgt_proj, proj_id);
+        let target_id: i64 = one(&dest, "SELECT Id FROM target WHERE guid='tg'");
+        assert!(summary
+            .changed_acquiredimages
+            .iter()
+            .all(|image| { image.project_id == proj_id && image.target_id == target_id }));
         // acquiredimage.exposureId remapped to the dest plan Id.
         let plan_id: i64 = one(&dest, "SELECT Id FROM exposureplan WHERE guid='lg'");
         assert_eq!(
@@ -1126,6 +1208,24 @@ mod tests {
     }
 
     #[test]
+    fn grade_only_update_does_not_register_a_file_arrival() {
+        let src = telescope();
+        let dest = empty_local();
+        sync_pull(&src, &dest, &opts()).unwrap();
+        dest.execute(
+            "UPDATE acquiredimage SET gradingStatus=0 WHERE guid='img1'",
+            [],
+        )
+        .unwrap();
+
+        let summary = sync_pull(&src, &dest, &opts()).unwrap();
+
+        assert_eq!(summary.grade_filled, 1);
+        assert_eq!(summary.acquiredimage.updated, 1);
+        assert!(summary.changed_acquiredimages.is_empty());
+    }
+
+    #[test]
     fn pull_derives_accepted_counts_from_merged_grades() {
         // The telescope's counter says 8, but only one of its images is
         // actually Accepted. The pull must not copy the stale counter — the
@@ -1157,6 +1257,7 @@ mod tests {
         assert_eq!(s.exposureplan.inserted + s.exposureplan.updated, 0);
         assert_eq!(s.acquiredimage.inserted + s.acquiredimage.updated, 0);
         assert_eq!(s.acquiredimage.unchanged, 2);
+        assert!(s.changed_acquiredimages.is_empty());
     }
 
     #[test]

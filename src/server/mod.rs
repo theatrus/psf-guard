@@ -1092,8 +1092,20 @@ async fn pregenerate_preview(
     tracing::debug!("🎨 Pre-generating {} preview for image {}", size, image_id);
 
     // Find FITS file using existing function
-    let fits_path = handlers::find_fits_file(ctx, &image_data, target_name, file_only)
-        .map_err(|_| anyhow::anyhow!("FITS file not found for image {}", image_id))?;
+    let fits_path =
+        handlers::find_fits_file(ctx, &image_data, target_name, file_only).map_err(|error| {
+            match error {
+                handlers::AppError::Conflict(message) => anyhow::anyhow!(message),
+                handlers::AppError::NotFound => {
+                    anyhow::anyhow!("FITS file not found for image {}", image_id)
+                }
+                other => anyhow::anyhow!(
+                    "Source resolution failed for image {}: {:?}",
+                    image_id,
+                    other
+                ),
+            }
+        })?;
 
     // Determine target dimensions
     let max_dimensions = match size {
@@ -1154,16 +1166,7 @@ async fn pregenerate_annotated(
     // Create cache key matching the on-demand annotated format for consistency
     let size = "screen"; // Pre-generation uses screen size for annotated images
     let max_stars = 1000; // Pre-generation uses default max_stars
-    let cache_key = format!(
-        "annotated_{}_{}_{}_{}_{}_{}_{}",
-        image_id,
-        image_data.project_id,
-        image_data.target_id,
-        image_data.acquired_date.unwrap_or(0),
-        file_only.replace(&['.', ' ', '-'][..], "_"),
-        size,
-        max_stars
-    );
+    let cache_key = handlers::annotated_cache_key(&image_data, file_only, size, max_stars);
 
     let cache_manager = CacheManager::new(std::path::PathBuf::from(&ctx.cache_dir));
     cache_manager.ensure_category_dir("annotated")?;
@@ -1186,8 +1189,20 @@ async fn pregenerate_annotated(
     tracing::debug!("🎨 Pre-generating annotated image for image {}", image_id);
 
     // Find FITS file
-    let fits_path = handlers::find_fits_file(ctx, &image_data, target_name, file_only)
-        .map_err(|_| anyhow::anyhow!("FITS file not found for image {}", image_id))?;
+    let fits_path =
+        handlers::find_fits_file(ctx, &image_data, target_name, file_only).map_err(|error| {
+            match error {
+                handlers::AppError::Conflict(message) => anyhow::anyhow!(message),
+                handlers::AppError::NotFound => {
+                    anyhow::anyhow!("FITS file not found for image {}", image_id)
+                }
+                other => anyhow::anyhow!(
+                    "Source resolution failed for image {}: {:?}",
+                    image_id,
+                    other
+                ),
+            }
+        })?;
 
     // Generate atomically via the shared queue helper — consistent sizing with
     // the on-demand path, and temp-then-rename so a viewer never sees a partial
@@ -1196,7 +1211,7 @@ async fn pregenerate_annotated(
         fits_path,
         cache_path,
         kind: crate::server::preview_queue::GenKind::Annotated {
-            max_stars: max_stars as usize,
+            max_stars,
             size: size.to_string(),
         },
         encoding: state.preview_encoding(),

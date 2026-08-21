@@ -8,8 +8,10 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fmt::Write as _;
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
@@ -650,7 +652,11 @@ pub(crate) async fn execute_scheduler_sync_paths(
     let destination_id_for_cache = destination_id.clone();
 
     let response = tokio::task::spawn_blocking(
-        move || -> anyhow::Result<(SchedulerSyncResponse, Option<String>)> {
+        move || -> anyhow::Result<(
+            SchedulerSyncResponse,
+            Option<String>,
+            Vec<crate::commands::sync::ChangedAcquiredImage>,
+        )> {
             let source_canon =
                 std::fs::canonicalize(&source_path).unwrap_or_else(|_| source_path.clone());
             let destination_canon = std::fs::canonicalize(&destination_path)
@@ -665,22 +671,25 @@ pub(crate) async fn execute_scheduler_sync_paths(
             let destination =
                 Connection::open_with_flags(&destination_path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
 
-            let run =
-                |transaction: Option<&Transaction<'_>>| -> anyhow::Result<SchedulerSyncResponse> {
-                    let response = match kind {
+            let run = |transaction: Option<&Transaction<'_>>| -> anyhow::Result<(
+                SchedulerSyncResponse,
+                Vec<crate::commands::sync::ChangedAcquiredImage>,
+            )> {
+                    let (response, changed_image_ids) = match kind {
                         SchedulerSyncKind::Pull => {
                             let options = PullOptions {
                                 dry_run,
                                 with_image_data,
                                 project_filter: project.clone(),
                             };
-                            let summary = match transaction {
+                        let mut summary = match transaction {
                                 Some(transaction) => {
                                     sync_pull_in_transaction(&source, transaction, &options)?
                                 }
                                 None => sync_pull(&source, &destination, &options)?,
                             };
-                            SchedulerSyncResponse {
+                        let changed_images = std::mem::take(&mut summary.changed_acquiredimages);
+                            (SchedulerSyncResponse {
                                 kind,
                                 dry_run,
                                 source_db_id: source_id,
@@ -701,7 +710,7 @@ pub(crate) async fn execute_scheduler_sync_paths(
                                 total_inserted: summary.total_inserted(),
                                 total_updated: summary.total_updated(),
                                 changes: capped_change_lines(summary.changes),
-                            }
+                            }, changed_images)
                         }
                         SchedulerSyncKind::PushPlanning => {
                             let options = PlanningOptions {
@@ -714,7 +723,7 @@ pub(crate) async fn execute_scheduler_sync_paths(
                                 }
                                 None => sync_planning(&source, &destination, &options)?,
                             };
-                            SchedulerSyncResponse {
+                            (SchedulerSyncResponse {
                                 kind,
                                 dry_run,
                                 source_db_id: source_id,
@@ -733,7 +742,7 @@ pub(crate) async fn execute_scheduler_sync_paths(
                                 total_inserted: summary.total_inserted(),
                                 total_updated: summary.total_updated(),
                                 changes: capped_change_lines(summary.changes),
-                            }
+                            }, Vec::new())
                         }
                         SchedulerSyncKind::PushGrades => {
                             let options = SyncGradesOptions {
@@ -749,7 +758,7 @@ pub(crate) async fn execute_scheduler_sync_paths(
                                 }
                                 None => sync_grades(&source, &destination, &options)?,
                             };
-                            SchedulerSyncResponse {
+                            (SchedulerSyncResponse {
                                 kind,
                                 dry_run,
                                 source_db_id: source_id,
@@ -797,14 +806,17 @@ pub(crate) async fn execute_scheduler_sync_paths(
                                         })
                                         .collect(),
                                 ),
-                            }
+                            }, Vec::new())
                         }
                     };
-                    Ok(response)
+                    Ok((response, changed_image_ids))
                 };
 
             match guard_mode {
-                SyncGuardMode::None => Ok((run(None)?, None)),
+                SyncGuardMode::None => {
+                    let (response, changed_image_ids) = run(None)?;
+                    Ok((response, None, changed_image_ids))
+                }
                 SyncGuardMode::Preview => {
                     let transaction =
                         Transaction::new_unchecked(&destination, TransactionBehavior::Deferred)?;
@@ -812,9 +824,9 @@ pub(crate) async fn execute_scheduler_sync_paths(
                         &transaction,
                         &fingerprint_queries,
                     )?;
-                    let response = run(Some(&transaction))?;
+                    let (response, _) = run(Some(&transaction))?;
                     transaction.rollback()?;
-                    Ok((response, Some(fingerprint)))
+                    Ok((response, Some(fingerprint), Vec::new()))
                 }
                 SyncGuardMode::Apply {
                     destination_fingerprint,
@@ -828,9 +840,9 @@ pub(crate) async fn execute_scheduler_sync_paths(
                     if fingerprint != destination_fingerprint {
                         return Err(StaleSyncPreview.into());
                     }
-                    let response = run(Some(&transaction))?;
+                    let (response, changed_image_ids) = run(Some(&transaction))?;
                     transaction.commit()?;
-                    Ok((response, None))
+                    Ok((response, None, changed_image_ids))
                 }
             }
         },
@@ -848,10 +860,25 @@ pub(crate) async fn execute_scheduler_sync_paths(
         }
     })?;
 
-    if !dry_run && let Some(destination_ctx) = state.get_database(&destination_id_for_cache) {
-        let _ = destination_ctx.ensure_cache_available();
+    let (response, fingerprint, changed_images) = response;
+    if !dry_run
+        && let Some(destination_ctx) = state.get_database(&destination_id_for_cache)
+        && let Err(error) = tokio::task::spawn_blocking(move || {
+            destination_ctx.register_remote_image_arrivals(&changed_images);
+            let _ = destination_ctx.ensure_cache_available();
+        })
+        .await
+    {
+        // The database transaction already committed. A cache bookkeeping
+        // panic must not report the apply as failed and invite a duplicate
+        // retry; the ordinary refresh remains the fallback.
+        tracing::error!(
+            "scheduler cache update panicked for db={}: {}",
+            destination_id_for_cache,
+            error
+        );
     }
-    Ok(response)
+    Ok((response, fingerprint))
 }
 
 fn sync_endpoint_paths(
@@ -2599,14 +2626,13 @@ pub async fn list_projects(
             db.ambiguous_project_names().map_err(AppError::db)?,
         )
     };
-    // `projects_with_files` has one entry for every project that owns an
-    // acquisition, even when no source file was found. Keep the picker's old
-    // scope without querying `acquiredimage` again here.
+    // Keep the established acquisition-backed scope. A scheduler pull seeds
+    // newly changed projects into this map as known-but-missing, so they stay
+    // visible without exposing planning-only projects.
     let projects = projects
         .into_iter()
         .filter(|(project, _)| file_existence_map.contains_key(&project.project.id))
         .collect::<Vec<_>>();
-
     let response: Vec<ProjectResponse> = projects
         .into_iter()
         .map(|(project_with_profile, state)| {
@@ -2852,42 +2878,71 @@ pub async fn get_image(
         (image, proj_name, target_name, metadata, ambiguous_names)
     }; // Database connection is dropped here
 
-    // Now we can do async operations
-    let stats_cache_filename = format!(
-        "stats_{}_{}_{}_{}.json",
-        image_id,
-        image.project_id,
-        image.target_id,
-        image.acquired_date.unwrap_or(0)
-    );
-    let stats_cache_path = ctx.get_cache_path("stats", &stats_cache_filename);
+    // Try to resolve the filesystem path for the FITS file
+    let delayed_probe = ctx.delayed_file_probe(image.id);
+    let resolved_fits_path = metadata["FileName"].as_str().and_then(|filename| {
+        let file_only = filename.split(&['\\', '/'][..]).next_back()?;
+        if delayed_probe == crate::server::database_context::DelayedFileProbe::Wait {
+            return None;
+        }
+        let resolved = if delayed_probe == crate::server::database_context::DelayedFileProbe::Probe
+        {
+            find_fits_file_cached(&ctx, &image, &target_name, file_only)
+        } else {
+            find_fits_file(&ctx, &image, &target_name, file_only)
+        };
+        // Detail metadata remains usable for a missing or ambiguous source;
+        // preview generation-status carries the specific terminal message.
+        resolved.ok().filter(|path| {
+            delayed_probe != crate::server::database_context::DelayedFileProbe::Probe
+                || ctx.delayed_source_is_stable(image.id, path)
+        })
+    });
 
-    // Ensure cache directory exists
-    if let Some(parent) = stats_cache_path.parent() {
+    let filesystem_path_string = resolved_fits_path
+        .as_ref()
+        .map(|path| path.to_string_lossy().to_string());
+
+    // Statistics are keyed by both scheduler identity and the resolved source
+    // fingerprint. A same-ID remote path update or a copy that resumes after a
+    // stable prefix therefore cannot reuse statistics from the old pixels.
+    let stats_cache = resolved_fits_path.as_ref().and_then(|fits_path| {
+        source_file_cache_token(fits_path).map(|source_token| {
+            let filename = format!(
+                "stats_v2_{}_{}_{}_{}_{}_{}.json",
+                image_id,
+                image.project_id,
+                image.target_id,
+                image.acquired_date.unwrap_or(0),
+                image_file_identity_cache_token(&image),
+                source_token,
+            );
+            (ctx.get_cache_path("stats", &filename), source_token)
+        })
+    });
+    if let Some((stats_cache_path, _)) = stats_cache.as_ref()
+        && let Some(parent) = stats_cache_path.parent()
+    {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
 
-    // Try to resolve the filesystem path for the FITS file
-    let filesystem_path = metadata["FileName"].as_str().and_then(|filename| {
-        filename
-            .split(&['\\', '/'][..])
-            .next_back()
-            .map(|file_only| find_fits_file(&ctx, &image, &target_name, file_only))
-    });
-
-    let resolved_fits_path = filesystem_path
-        .as_ref()
-        .and_then(|result| result.as_ref().ok());
-    let filesystem_path_string = resolved_fits_path.map(|p| p.to_string_lossy().to_string());
-
-    // Check if statistics are already cached
-    let fits_stats = if tokio::fs::metadata(&stats_cache_path).await.is_ok() {
-        // Load from cache
-        match tokio::fs::read_to_string(&stats_cache_path).await {
-            Ok(cached_data) => serde_json::from_str::<serde_json::Value>(&cached_data).ok(),
-            Err(_) => None,
+    let cached_fits_stats = if let Some((stats_cache_path, _)) = stats_cache.as_ref() {
+        let cached = tokio::fs::read_to_string(stats_cache_path)
+            .await
+            .ok()
+            .and_then(|cached_data| serde_json::from_str::<serde_json::Value>(&cached_data).ok());
+        if cached.is_none() && stats_cache_path.is_file() {
+            let _ = tokio::fs::remove_file(stats_cache_path).await;
         }
-    } else if let Some(fits_path) = resolved_fits_path {
+        cached
+    } else {
+        None
+    };
+    let fits_stats = if cached_fits_stats.is_some() {
+        cached_fits_stats
+    } else if let (Some(fits_path), Some((stats_cache_path, source_token))) =
+        (resolved_fits_path.as_ref(), stats_cache.as_ref())
+    {
         // Calculate statistics from FITS file
         if let Ok(fits) = FitsImage::from_file(fits_path) {
             let stats = fits.calculate_basic_statistics();
@@ -2915,12 +2970,16 @@ pub async fn get_image(
                 stats_json["Camera"] = serde_json::json!(camera);
             }
 
-            // Cache the statistics
-            if let Ok(cached_data) = serde_json::to_string(&stats_json) {
-                let _ = tokio::fs::write(&stats_cache_path, cached_data).await;
+            // Do not publish statistics if the source changed while it was
+            // decoded. The next request will use the new fingerprint key.
+            if source_file_cache_token(fits_path).as_ref() != Some(source_token) {
+                None
+            } else {
+                if let Ok(cached_data) = serde_json::to_string(&stats_json) {
+                    let _ = write_cache_atomic(stats_cache_path, cached_data.as_bytes()).await;
+                }
+                Some(stats_json)
             }
-
-            Some(stats_json)
         } else {
             None
         }
@@ -2958,6 +3017,25 @@ pub async fn get_image(
     };
 
     Ok(Json(ApiResponse::success(response)))
+}
+
+fn source_file_cache_token(path: &FsPath) -> Option<String> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(
+        std::fs::canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .as_bytes(),
+    );
+    hasher.update([0]);
+    hasher.update(metadata.len().to_le_bytes());
+    if let Ok(modified) = metadata.modified()
+        && let Ok(since_epoch) = modified.duration_since(std::time::UNIX_EPOCH)
+    {
+        hasher.update(since_epoch.as_nanos().to_le_bytes());
+    }
+    Some(finish_cache_token(hasher))
 }
 
 pub async fn update_image_grade(
@@ -3112,7 +3190,7 @@ pub(crate) fn preview_cache_key(
     // The colour marker only appears when colour was asked for, so every
     // greyscale preview already on disk keeps its key and stays valid.
     format!(
-        "{}_{}_{}_{}_{}_{}_{}_{}_{}{}",
+        "{}_{}_{}_{}_{}_{}_{}_{}_{}_{}{}",
         image.id,
         image.project_id,
         image.target_id,
@@ -3122,12 +3200,77 @@ pub(crate) fn preview_cache_key(
         if stretch { "stretch" } else { "linear" },
         (midtone * 10000.0) as i32,
         (shadow * 10000.0) as i32,
+        image_file_identity_cache_token(image),
         if color { "_color" } else { "" },
     )
 }
 
+fn image_file_identity_cache_token(image: &crate::models::AcquiredImage) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(image.metadata.as_bytes());
+    hasher.update([0]);
+    hasher.update(image.filter_name.as_bytes());
+    hasher.update([0]);
+    hasher.update(image.acquired_date.unwrap_or_default().to_le_bytes());
+    finish_cache_token(hasher)
+}
+
+fn finish_cache_token(hasher: Sha256) -> String {
+    let digest = hasher.finalize();
+    let mut token = String::with_capacity(16);
+    for byte in digest.iter().take(8) {
+        let _ = write!(&mut token, "{byte:02x}");
+    }
+    token
+}
+
+fn star_detection_cache_key(
+    image: &crate::models::AcquiredImage,
+    file_only: &str,
+    source_token: &str,
+) -> String {
+    format!(
+        "stars_v4_{}_{}_{}_{}_{}_{}_{}",
+        image.id,
+        image.project_id,
+        image.target_id,
+        image.acquired_date.unwrap_or(0),
+        file_only.replace(&['.', ' ', '-'][..], "_"),
+        image_file_identity_cache_token(image),
+        source_token,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn psf_multi_cache_key(
+    image: &crate::models::AcquiredImage,
+    file_only: &str,
+    num_stars: usize,
+    psf_type: &str,
+    sort_by: &str,
+    selection: &str,
+    grid_cols: Option<usize>,
+    source_token: &str,
+) -> String {
+    format!(
+        "psf_multi_v2_{}_{}_{}_{}_{}_{}_{}_{}_{}_{}_{}_{}",
+        image.id,
+        image.project_id,
+        image.target_id,
+        image.acquired_date.unwrap_or(0),
+        file_only.replace(&['.', ' ', '-'][..], "_"),
+        num_stars,
+        psf_type,
+        sort_by,
+        selection,
+        grid_cols.unwrap_or(0),
+        image_file_identity_cache_token(image),
+        source_token,
+    )
+}
+
 /// Cache key for an annotated (star-marked) PNG. Same stability requirement.
-fn annotated_cache_key(
+pub(crate) fn annotated_cache_key(
     image: &crate::models::AcquiredImage,
     file_only: &str,
     size: &str,
@@ -3136,7 +3279,7 @@ fn annotated_cache_key(
     // v3: stars now carry HFR labels (v2: telescope-class presets), so
     // earlier renders are stale.
     format!(
-        "annotated_v3_{}_{}_{}_{}_{}_{}_{}",
+        "annotated_v4_{}_{}_{}_{}_{}_{}_{}_{}",
         image.id,
         image.project_id,
         image.target_id,
@@ -3144,6 +3287,7 @@ fn annotated_cache_key(
         file_only.replace(&['.', ' ', '-'][..], "_"),
         size,
         max_stars,
+        image_file_identity_cache_token(image),
     )
 }
 
@@ -3186,6 +3330,53 @@ async fn serve_cached_png(cache_path: &std::path::Path) -> Result<Response, AppE
         .into_response())
 }
 
+async fn write_cache_atomic(path: &FsPath, contents: &[u8]) -> std::io::Result<()> {
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("cache");
+    let temporary =
+        path.with_extension(format!("{extension}.tmp.{}", uuid::Uuid::new_v4().simple()));
+    if let Err(error) = tokio::fs::write(&temporary, contents).await {
+        let _ = tokio::fs::remove_file(&temporary).await;
+        return Err(error);
+    }
+    if let Err(error) = tokio::fs::rename(&temporary, path).await {
+        let _ = tokio::fs::remove_file(&temporary).await;
+        if !path.is_file() {
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+fn tracked_cache_matches_source(
+    state: &AppState,
+    cache_path: &FsPath,
+    source_path: &FsPath,
+) -> Result<bool, AppError> {
+    if !cache_path.is_file() {
+        return Ok(false);
+    }
+    if state
+        .preview_queue
+        .cached_source_matches(cache_path, source_path)
+    {
+        return Ok(true);
+    }
+    if let Err(error) = std::fs::remove_file(cache_path) {
+        tracing::warn!(
+            "Could not invalidate a preview whose delayed source changed: {}",
+            error
+        );
+        return Err(AppError::InternalError(
+            "Cached preview could not be refreshed".to_string(),
+        ));
+    }
+    state.preview_queue.forget_completed_source(cache_path);
+    Ok(false)
+}
+
 /// The immediate "not ready — poll for it" response on a cache miss. `<img>`
 /// treats the non-image body as an error and the frontend then batch-polls the
 /// generation-status endpoint.
@@ -3224,13 +3415,43 @@ pub async fn get_image_preview(
     let cache_key = preview_cache_key(&image, &file_only, size, stretch, midtone, shadow, color);
     let cache_path = artifact_cache_path(&ctx, "previews", &cache_key, state.preview_encoding())?;
 
-    if cache_path.exists() {
+    let delayed_probe = ctx.delayed_file_probe(image.id);
+    if delayed_probe == crate::server::database_context::DelayedFileProbe::NotPending
+        && cache_path.exists()
+    {
         return serve_cached_png(&cache_path).await;
     }
 
     // Miss: resolve the source (404 if truly missing), hand generation to the
     // bounded interactive queue, and tell the client to poll.
-    let fits_path = find_fits_file(&ctx, &image, &target_name, &file_only)?;
+    if delayed_probe == crate::server::database_context::DelayedFileProbe::Wait {
+        return Ok(generating_response());
+    }
+    let source = if delayed_probe == crate::server::database_context::DelayedFileProbe::Probe {
+        find_fits_file_cached(&ctx, &image, &target_name, &file_only)
+    } else {
+        find_fits_file(&ctx, &image, &target_name, &file_only)
+    };
+    let fits_path = match source {
+        Ok(path) => path,
+        Err(AppError::NotFound)
+            if delayed_probe == crate::server::database_context::DelayedFileProbe::Probe =>
+        {
+            return Ok(generating_response());
+        }
+        Err(error) => return Err(error),
+    };
+    if !ctx.delayed_source_is_stable(image.id, &fits_path) {
+        return Ok(generating_response());
+    }
+    if delayed_probe == crate::server::database_context::DelayedFileProbe::Probe
+        && tracked_cache_matches_source(&state, &cache_path, &fits_path)?
+    {
+        if ctx.complete_delayed_file_probe(image.id, &fits_path) {
+            return serve_cached_png(&cache_path).await;
+        }
+        return Ok(generating_response());
+    }
     state.enqueue_preview(crate::server::preview_queue::GenJob {
         fits_path,
         cache_path,
@@ -3252,6 +3473,43 @@ pub fn find_fits_file(
     target_name: &str,
     filename: &str,
 ) -> Result<std::path::PathBuf, AppError> {
+    find_fits_file_inner(ctx, image, target_name, filename, true, None)
+}
+
+fn find_fits_file_cached(
+    ctx: &DatabaseContext,
+    image: &crate::models::AcquiredImage,
+    target_name: &str,
+    filename: &str,
+) -> Result<std::path::PathBuf, AppError> {
+    find_fits_file_inner(ctx, image, target_name, filename, false, None)
+}
+
+fn find_fits_file_cached_with_roots(
+    ctx: &DatabaseContext,
+    image: &crate::models::AcquiredImage,
+    target_name: &str,
+    filename: &str,
+    canonical_roots: &[PathBuf],
+) -> Result<std::path::PathBuf, AppError> {
+    find_fits_file_inner(
+        ctx,
+        image,
+        target_name,
+        filename,
+        false,
+        Some(canonical_roots),
+    )
+}
+
+fn find_fits_file_inner(
+    ctx: &DatabaseContext,
+    image: &crate::models::AcquiredImage,
+    target_name: &str,
+    filename: &str,
+    allow_tree_build: bool,
+    shared_canonical_roots: Option<&[PathBuf]>,
+) -> Result<std::path::PathBuf, AppError> {
     use crate::commands::filter_rejected::get_possible_paths;
 
     tracing::debug!(
@@ -3261,28 +3519,38 @@ pub fn find_fits_file(
         target_name,
         ctx.image_dirs
     );
+    let owned_canonical_roots = shared_canonical_roots
+        .is_none()
+        .then(|| canonical_image_roots(ctx));
+    let canonical_roots = shared_canonical_roots
+        .or(owned_canonical_roots.as_deref())
+        .unwrap_or_default();
 
-    // Extract date from acquired_date
-    let acquired_date = image
-        .acquired_date
-        .and_then(|d| chrono::DateTime::from_timestamp(d, 0))
-        .ok_or_else(|| {
-            tracing::error!(
-                "❌ Invalid date for image {}: {:?}",
-                image.id,
-                image.acquired_date
-            );
-            AppError::BadRequest("Invalid date".to_string())
-        })?;
-
-    let date_str = acquired_date.format("%Y-%m-%d").to_string();
-    tracing::debug!("📅 Date string for image {}: {}", image.id, date_str);
-
-    // Try to find the file in different possible locations across all directories
+    // Date-based layouts are a fast path, not a prerequisite. A remote sync
+    // can legitimately carry no acquireddate while retaining the original
+    // FileName and ExposureStartTime in metadata.
     let mut all_possible_paths = Vec::new();
-    for base_dir in &ctx.image_dirs {
-        let paths = get_possible_paths(base_dir, &date_str, target_name, filename);
-        all_possible_paths.extend(paths);
+    let layout_timestamp = image
+        .acquired_date
+        .or_else(|| metadata_exposure_start(image));
+    if let Some(acquired_date) =
+        layout_timestamp.and_then(|timestamp| chrono::DateTime::from_timestamp(timestamp, 0))
+    {
+        let date_str = acquired_date.format("%Y-%m-%d").to_string();
+        tracing::debug!("📅 Date string for image {}: {}", image.id, date_str);
+        for base_dir in &ctx.image_dirs {
+            all_possible_paths.extend(get_possible_paths(
+                base_dir,
+                &date_str,
+                target_name,
+                filename,
+            ));
+        }
+    } else {
+        tracing::debug!(
+            "Skipping date-layout probes for image {} because no usable capture time is available",
+            image.id
+        );
     }
 
     tracing::debug!(
@@ -3298,15 +3566,33 @@ pub fn find_fits_file(
     }
 
     for (idx, path) in all_possible_paths.iter().enumerate() {
-        tracing::debug!(
-            "  📁 Path {}: {:?} (exists: {})",
-            idx + 1,
-            path,
-            path.exists()
-        );
-        if path.exists() {
+        tracing::debug!("  📁 Path {}: {:?}", idx + 1, path);
+        if let Some(path) = existing_file_under_configured_root(path, canonical_roots) {
             tracing::info!("✅ Found file at path {}: {:?}", idx + 1, path);
-            return Ok(path.clone());
+            ctx.record_resolved_image_file(image, &path);
+            return Ok(path);
+        }
+    }
+
+    // A scheduler row sent by another N.I.N.A. host carries that host's
+    // absolute FileName. Remote copy tools commonly preserve the meaningful
+    // tail (target/night/LIGHT/file) below a different local image root. Probe
+    // those tails directly so a file that arrived after the directory scan is
+    // visible immediately. Components are joined one at a time and the final
+    // canonical path must remain under a configured root.
+    let mut delayed_candidates = metadata_file_name(image)
+        .map(|metadata_path| metadata_suffix_candidates(ctx, &metadata_path, filename))
+        .unwrap_or_default();
+    // Some copy tools flatten the remote hierarchy directly into an image
+    // root. Treat those as identity candidates, never exact-path hits: their
+    // capture headers must agree and multiple matches remain a conflict.
+    delayed_candidates.extend(ctx.image_dir_paths.iter().map(|root| root.join(filename)));
+    if !allow_tree_build {
+        let cache = ctx.directory_tree_cache.read().unwrap();
+        if let Some(tree) = cache.as_ref()
+            && let Some(candidates) = tree.find_file(filename)
+        {
+            delayed_candidates.extend(candidates.iter().cloned());
         }
     }
 
@@ -3317,42 +3603,33 @@ pub fn find_fits_file(
 
     // Try directory tree cache lookup as fallback
     let search_start = std::time::Instant::now();
-    let directory_tree = ctx.get_directory_tree().map_err(|e| {
-        tracing::error!("Failed to get directory tree cache: {}", e);
-        AppError::InternalError("Directory cache error".to_string())
-    })?;
-
-    tracing::debug!(
-        "🌳 Directory tree cache has {} total files, {} unique filenames",
-        directory_tree.stats().total_files,
-        directory_tree.stats().unique_filenames
-    );
-
-    if let Some(first_path) = directory_tree.find_file_first(filename) {
-        tracing::debug!(
-            "🔍 Found first match in directory tree cache for {}",
-            filename
-        );
-
-        if first_path.exists() {
-            tracing::info!(
-                "✅ Found file via directory tree cache in {:?}: {:?}",
-                search_start.elapsed(),
-                first_path
-            );
-            return Ok(first_path.clone());
-        } else {
-            tracing::warn!(
-                "❌ First cached path is stale for {}: {:?}",
-                filename,
-                first_path
-            );
-        }
+    let basename_candidates = if allow_tree_build {
+        let tree = ctx.get_directory_tree().map_err(|e| {
+            tracing::error!("Failed to get directory tree cache: {}", e);
+            AppError::InternalError("Directory cache error".to_string())
+        })?;
+        tree.find_file(filename).cloned().unwrap_or_default()
     } else {
+        Vec::new()
+    };
+    if basename_candidates.is_empty() {
         tracing::debug!(
             "🔍 No matches in directory tree cache for filename: {}",
             filename
         );
+    }
+
+    delayed_candidates.extend(basename_candidates);
+    if let Some(path) =
+        unique_header_matched_file(image, filename, delayed_candidates, canonical_roots)?
+    {
+        tracing::info!(
+            "✅ Found header-matched file via directory tree cache in {:?}: {:?}",
+            search_start.elapsed(),
+            path
+        );
+        ctx.record_resolved_image_file(image, &path);
+        return Ok(path);
     }
 
     tracing::warn!(
@@ -3362,6 +3639,181 @@ pub fn find_fits_file(
         filename
     );
     Err(AppError::NotFound)
+}
+
+const CAPTURE_IDENTITY_TIME_TOLERANCE_SECS: u64 = 2;
+
+fn metadata_file_name(image: &crate::models::AcquiredImage) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(&image.metadata)
+        .ok()?
+        .get("FileName")?
+        .as_str()
+        .map(str::to_string)
+}
+
+fn metadata_exposure_start(image: &crate::models::AcquiredImage) -> Option<i64> {
+    serde_json::from_str::<serde_json::Value>(&image.metadata)
+        .ok()?
+        .get("ExposureStartTime")?
+        .as_str()
+        .and_then(crate::commands::import::headers::parse_fits_datetime)
+}
+
+/// Candidate paths made only from safe suffixes of a remote scheduler path.
+/// At least one parent component is retained: basename-only discovery belongs
+/// to the header-validated fallback below.
+fn metadata_suffix_candidates(
+    ctx: &DatabaseContext,
+    metadata_path: &str,
+    filename: &str,
+) -> Vec<PathBuf> {
+    const MAX_METADATA_PATH_BYTES: usize = 4096;
+    const MAX_METADATA_PATH_COMPONENTS: usize = 128;
+    if metadata_path.len() > MAX_METADATA_PATH_BYTES || metadata_path.chars().any(char::is_control)
+    {
+        return Vec::new();
+    }
+    let components: Vec<&str> = metadata_path
+        .split(['/', '\\'])
+        .filter(|component| !component.is_empty())
+        .collect();
+    if components.len() < 2
+        || components.len() > MAX_METADATA_PATH_COMPONENTS
+        || !components
+            .last()
+            .is_some_and(|last| last.eq_ignore_ascii_case(filename))
+        || components
+            .iter()
+            .any(|component| matches!(*component, "." | "..") || component.contains('\0'))
+    {
+        return Vec::new();
+    }
+
+    let mut candidates = Vec::new();
+    for start in 0..components.len() - 1 {
+        let suffix = &components[start..];
+        if suffix.iter().any(|component| component.contains(':')) {
+            continue;
+        }
+        for root in &ctx.image_dir_paths {
+            let mut candidate = root.clone();
+            for component in suffix {
+                candidate.push(component);
+            }
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
+    candidates
+}
+
+fn existing_file_under_configured_root(
+    candidate: &FsPath,
+    canonical_roots: &[PathBuf],
+) -> Option<PathBuf> {
+    if !candidate.is_file() {
+        return None;
+    }
+    canonical_file_under_roots(candidate, canonical_roots)
+}
+
+fn canonical_image_roots(ctx: &DatabaseContext) -> Vec<PathBuf> {
+    ctx.image_dir_paths
+        .iter()
+        .filter_map(|root| std::fs::canonicalize(root).ok())
+        .collect()
+}
+
+fn canonical_file_under_roots(candidate: &FsPath, canonical_roots: &[PathBuf]) -> Option<PathBuf> {
+    let canonical_candidate = std::fs::canonicalize(candidate).ok()?;
+    let is_configured = canonical_roots
+        .iter()
+        .any(|root| canonical_candidate.starts_with(root));
+    is_configured.then(|| candidate.to_path_buf())
+}
+
+fn unique_header_matched_file(
+    image: &crate::models::AcquiredImage,
+    filename: &str,
+    candidates: Vec<PathBuf>,
+    canonical_roots: &[PathBuf],
+) -> Result<Option<PathBuf>, AppError> {
+    let mut validated: Option<(PathBuf, PathBuf)> = None;
+    let candidates: Vec<PathBuf> = candidates
+        .into_iter()
+        .filter(|candidate| candidate.is_file())
+        .collect();
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    for candidate in candidates {
+        let Some(candidate) = canonical_file_under_roots(&candidate, canonical_roots) else {
+            continue;
+        };
+        if !basename_headers_match(&candidate, image) {
+            tracing::debug!(
+                "Ignoring path whose capture headers disagree for image {}: {:?}",
+                image.id,
+                candidate
+            );
+            continue;
+        }
+        let identity = std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
+        match validated.as_ref() {
+            None => validated = Some((identity, candidate)),
+            Some((known, _)) if known == &identity => {}
+            Some(_) => {
+                tracing::warn!(
+                    "Refusing multiple header-matched files named {} for image {}",
+                    filename,
+                    image.id
+                );
+                return Err(AppError::Conflict(format!(
+                    "{filename} matches multiple files with the same capture time and filter"
+                )));
+            }
+        }
+    }
+
+    Ok(validated.map(|(_, path)| path))
+}
+
+fn basename_headers_match(path: &FsPath, image: &crate::models::AcquiredImage) -> bool {
+    let headers = crate::commands::import::headers::read_frame_meta(path);
+    if !headers.readable {
+        return false;
+    }
+    // ExposureStartTime and FITS DATE-OBS describe the same camera event.
+    // Prefer that direct pairing; acquireddate remains the fallback for older
+    // scheduler rows whose metadata did not retain an exposure start.
+    let expected_timestamp = metadata_exposure_start(image).or(image.acquired_date);
+    let Some(expected_timestamp) = expected_timestamp else {
+        return false;
+    };
+    let Some(actual_timestamp) = headers.timestamp else {
+        return false;
+    };
+    if expected_timestamp.abs_diff(actual_timestamp) > CAPTURE_IDENTITY_TIME_TOLERANCE_SECS {
+        return false;
+    }
+
+    let expected_filter = if image.filter_name.trim().is_empty() {
+        serde_json::from_str::<serde_json::Value>(&image.metadata)
+            .ok()
+            .and_then(|metadata| {
+                metadata
+                    .get("FilterName")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string)
+            })
+    } else {
+        Some(image.filter_name.clone())
+    };
+    match (expected_filter.as_deref(), headers.filter.as_deref()) {
+        (Some(expected), Some(actual)) => crate::utils::filter_names_match(expected, actual),
+        _ => false,
+    }
 }
 
 #[axum::debug_handler(state = Arc<AppState>)]
@@ -3408,17 +3860,14 @@ pub async fn get_image_stars(
         (image, file_only, target_name)
     };
 
+    let fits_path = find_fits_file(&ctx, &image, &target_name, &file_only)?;
+    let source_token = source_file_cache_token(&fits_path)
+        .ok_or_else(|| AppError::Conflict("Source file is not ready".to_string()))?;
+
     // Create comprehensive cache key for star detection results. v2: the
     // detector picks a telescope-class preset from the frame's headers, so
     // v1 entries (fixed defaults) are stale for wide/long rigs.
-    let cache_key = format!(
-        "stars_v3_{}_{}_{}_{}_{}",
-        image_id,
-        image.project_id,
-        image.target_id,
-        image.acquired_date.unwrap_or(0),
-        file_only.replace(&['.', ' ', '-'][..], "_")
-    );
+    let cache_key = star_detection_cache_key(&image, &file_only, &source_token);
     let cache_manager = CacheManager::new(PathBuf::from(&ctx.cache_dir));
     cache_manager
         .ensure_category_dir("stars")
@@ -3427,19 +3876,13 @@ pub async fn get_image_stars(
 
     // Check if cached version exists
     if cache_manager.is_cached(&cache_path) {
-        // Read from cache
-        let cached_data = tokio::fs::read_to_string(&cache_path)
-            .await
-            .map_err(|_| AppError::InternalError("Failed to read cache".to_string()))?;
-
-        let response: StarDetectionResponse = serde_json::from_str(&cached_data)
-            .map_err(|_| AppError::InternalError("Invalid cached data".to_string()))?;
-
-        return Ok(Json(ApiResponse::success(response)));
+        if let Ok(cached_data) = tokio::fs::read_to_string(&cache_path).await
+            && let Ok(response) = serde_json::from_str::<StarDetectionResponse>(&cached_data)
+        {
+            return Ok(Json(ApiResponse::success(response)));
+        }
+        let _ = tokio::fs::remove_file(&cache_path).await;
     }
-
-    // Find FITS file path first (this is fast)
-    let fits_path = find_fits_file(&ctx, &image, &target_name, &file_only)?;
 
     // Move expensive operations to spawn_blocking
     let fits_path_str = fits_path.to_string_lossy().to_string();
@@ -3516,7 +3959,12 @@ pub async fn get_image_stars(
     let cached_data = serde_json::to_string(&response)
         .map_err(|_| AppError::InternalError("Failed to serialize response".to_string()))?;
 
-    tokio::fs::write(&cache_path, cached_data)
+    if source_file_cache_token(&fits_path).as_deref() != Some(source_token.as_str()) {
+        return Err(AppError::Conflict(
+            "Source file changed during star detection; retry shortly".to_string(),
+        ));
+    }
+    write_cache_atomic(&cache_path, cached_data.as_bytes())
         .await
         .map_err(|_| AppError::InternalError("Failed to write cache".to_string()))?;
 
@@ -3539,11 +3987,41 @@ pub async fn get_annotated_image(
     let cache_key = annotated_cache_key(&image, &file_only, size, max_stars);
     let cache_path = artifact_cache_path(&ctx, "annotated", &cache_key, state.preview_encoding())?;
 
-    if cache_path.exists() {
+    let delayed_probe = ctx.delayed_file_probe(image.id);
+    if delayed_probe == crate::server::database_context::DelayedFileProbe::NotPending
+        && cache_path.exists()
+    {
         return serve_cached_png(&cache_path).await;
     }
 
-    let fits_path = find_fits_file(&ctx, &image, &target_name, &file_only)?;
+    if delayed_probe == crate::server::database_context::DelayedFileProbe::Wait {
+        return Ok(generating_response());
+    }
+    let source = if delayed_probe == crate::server::database_context::DelayedFileProbe::Probe {
+        find_fits_file_cached(&ctx, &image, &target_name, &file_only)
+    } else {
+        find_fits_file(&ctx, &image, &target_name, &file_only)
+    };
+    let fits_path = match source {
+        Ok(path) => path,
+        Err(AppError::NotFound)
+            if delayed_probe == crate::server::database_context::DelayedFileProbe::Probe =>
+        {
+            return Ok(generating_response());
+        }
+        Err(error) => return Err(error),
+    };
+    if !ctx.delayed_source_is_stable(image.id, &fits_path) {
+        return Ok(generating_response());
+    }
+    if delayed_probe == crate::server::database_context::DelayedFileProbe::Probe
+        && tracked_cache_matches_source(&state, &cache_path, &fits_path)?
+    {
+        if ctx.complete_delayed_file_probe(image.id, &fits_path) {
+            return serve_cached_png(&cache_path).await;
+        }
+        return Ok(generating_response());
+    }
     state.enqueue_preview(crate::server::preview_queue::GenJob {
         fits_path,
         cache_path,
@@ -3591,6 +4069,26 @@ pub struct GenerationStatusBatch {
     pub statuses: Vec<crate::server::preview_queue::GenerationStatus>,
 }
 
+const MAX_DELAYED_FILE_PROBES_PER_STATUS_BATCH: usize = 8;
+
+fn consume_delayed_batch_probe(
+    probes: &HashMap<i32, crate::server::database_context::DelayedFileProbe>,
+    image_id: i32,
+    consumed_probe_ids: &mut std::collections::HashSet<i32>,
+) -> crate::server::database_context::DelayedFileProbe {
+    let probe = probes
+        .get(&image_id)
+        .copied()
+        .unwrap_or(crate::server::database_context::DelayedFileProbe::NotPending);
+    if probe == crate::server::database_context::DelayedFileProbe::Probe
+        && !consumed_probe_ids.insert(image_id)
+    {
+        crate::server::database_context::DelayedFileProbe::Wait
+    } else {
+        probe
+    }
+}
+
 /// POST /api/db/{db_id}/images/generation-status
 ///
 /// Batch readiness poll for on-demand previews / annotated images. For each
@@ -3625,11 +4123,38 @@ pub async fn post_generation_status(
         )
     };
 
-    let statuses = req
-        .requests
-        .iter()
-        .map(|item| status_for_item(&state, &ctx, item, &images_by_id, &target_names))
-        .collect();
+    let delayed_probes =
+        ctx.delayed_file_probes_for_batch(&ids, MAX_DELAYED_FILE_PROBES_PER_STATUS_BATCH);
+    let ctx = Arc::clone(&ctx.0);
+    let requests = req.requests;
+    let statuses = tokio::task::spawn_blocking(move || {
+        let mut canonical_roots = None;
+        let mut consumed_probe_ids = std::collections::HashSet::new();
+        requests
+            .iter()
+            .map(|item| {
+                let delayed_probe = consume_delayed_batch_probe(
+                    &delayed_probes,
+                    item.image_id,
+                    &mut consumed_probe_ids,
+                );
+                status_for_item(
+                    &state,
+                    &ctx,
+                    item,
+                    &images_by_id,
+                    &target_names,
+                    delayed_probe,
+                    &mut canonical_roots,
+                )
+            })
+            .collect()
+    })
+    .await
+    .map_err(|error| {
+        tracing::error!("generation-status filesystem task failed: {error}");
+        AppError::InternalError("Preview status could not be checked".to_string())
+    })?;
     Ok(Json(ApiResponse::success(GenerationStatusBatch {
         statuses,
     })))
@@ -3646,12 +4171,18 @@ fn status_for_item(
     item: &GenStatusItem,
     images_by_id: &HashMap<i32, crate::models::AcquiredImage>,
     target_names: &HashMap<i32, String>,
+    delayed_probe: crate::server::database_context::DelayedFileProbe,
+    canonical_roots: &mut Option<Vec<PathBuf>>,
 ) -> crate::server::preview_queue::GenerationStatus {
     use crate::server::preview_queue::{GenJob, GenKind, GenerationState, GenerationStatus};
 
     let err = |msg: &str| GenerationStatus {
         state: GenerationState::Error,
         error: Some(msg.to_string()),
+    };
+    let generating = || GenerationStatus {
+        state: GenerationState::Generating,
+        error: None,
     };
     // One read of each, used for both the path this polls and the job it may
     // enqueue, so a setting change mid-request cannot split the two.
@@ -3708,24 +4239,76 @@ fn status_for_item(
     };
 
     if let Some(status) = state.preview_queue.status(&cache_path) {
-        return status;
+        match status.state {
+            GenerationState::Ready
+                if delayed_probe
+                    == crate::server::database_context::DelayedFileProbe::NotPending =>
+            {
+                return status;
+            }
+            GenerationState::Generating => return status,
+            GenerationState::Ready | GenerationState::Error => {}
+        }
+    }
+
+    if delayed_probe == crate::server::database_context::DelayedFileProbe::Wait {
+        return generating();
     }
 
     // Neither cached, in-flight, nor errored: ensure it's enqueued to generate.
-    match find_fits_file(ctx, image, target_name, &file_only) {
+    let source = if delayed_probe == crate::server::database_context::DelayedFileProbe::Probe {
+        let canonical_roots = canonical_roots.get_or_insert_with(|| canonical_image_roots(ctx));
+        find_fits_file_cached_with_roots(ctx, image, target_name, &file_only, canonical_roots)
+    } else {
+        find_fits_file(ctx, image, target_name, &file_only)
+    };
+    match source {
         Ok(fits_path) => {
+            if !ctx.delayed_source_is_stable(image.id, &fits_path) {
+                return generating();
+            }
+            if delayed_probe == crate::server::database_context::DelayedFileProbe::Probe {
+                match tracked_cache_matches_source(state, &cache_path, &fits_path) {
+                    Ok(true) => {
+                        if ctx.complete_delayed_file_probe(image.id, &fits_path) {
+                            return state
+                                .preview_queue
+                                .status(&cache_path)
+                                .unwrap_or_else(generating);
+                        }
+                        return generating();
+                    }
+                    Ok(false) => {}
+                    Err(_) => return err("cached preview could not be refreshed"),
+                }
+            }
+            if let Some(status) = state
+                .preview_queue
+                .status_for_source(&cache_path, &fits_path)
+            {
+                if status.state == GenerationState::Error
+                    && delayed_probe == crate::server::database_context::DelayedFileProbe::Probe
+                {
+                    return generating();
+                }
+                return status;
+            }
             state.enqueue_preview(GenJob {
                 fits_path,
                 cache_path,
                 kind,
                 encoding,
             });
-            GenerationStatus {
-                state: GenerationState::Generating,
-                error: None,
-            }
+            generating()
         }
-        Err(_) => err("source file not found"),
+        Err(AppError::Conflict(message)) => err(&message),
+        Err(AppError::NotFound)
+            if delayed_probe == crate::server::database_context::DelayedFileProbe::Probe =>
+        {
+            generating()
+        }
+        Err(AppError::NotFound) => err("source file not found"),
+        Err(_) => err("source file is unavailable"),
     }
 }
 
@@ -3795,19 +4378,20 @@ pub async fn get_psf_visualization(
 
     let psf_type: PSFType = psf_type_str.parse().unwrap_or(PSFType::Moffat4);
 
+    let fits_path = find_fits_file(&ctx, &image, &target_name, &file_only)?;
+    let source_token = source_file_cache_token(&fits_path)
+        .ok_or_else(|| AppError::Conflict("Source file is not ready".to_string()))?;
+
     // Create comprehensive cache key for PSF multi image
-    let cache_key = format!(
-        "psf_multi_{}_{}_{}_{}_{}_{}_{}_{}_{}_{}",
-        image_id,
-        image.project_id,
-        image.target_id,
-        image.acquired_date.unwrap_or(0),
-        file_only.replace(&['.', ' ', '-'][..], "_"),
+    let cache_key = psf_multi_cache_key(
+        &image,
+        &file_only,
         num_stars,
-        psf_type_str,
-        sort_by,
-        selection,
-        grid_cols.unwrap_or(0)
+        &psf_type_str,
+        &sort_by,
+        &selection,
+        grid_cols,
+        &source_token,
     );
     let cache_manager = CacheManager::new(PathBuf::from(&ctx.cache_dir));
     cache_manager
@@ -3837,15 +4421,15 @@ pub async fn get_psf_visualization(
         ));
     }
 
-    // Find FITS file path first (this is fast)
-    let fits_path = find_fits_file(&ctx, &image, &target_name, &file_only)?;
-
     // Move expensive operations to spawn_blocking
-    let fits_path_str = fits_path.to_string_lossy().to_string();
+    let fits_path_clone = fits_path.clone();
     let cache_path_clone = cache_path.clone();
+    let source_token_clone = source_token.clone();
     tokio::task::spawn_blocking(move || {
+        let temporary =
+            cache_path_clone.with_extension(format!("png.tmp.{}", uuid::Uuid::new_v4().simple()));
         // Load FITS file
-        let fits = FitsImage::from_file(std::path::Path::new(&fits_path_str))
+        let fits = FitsImage::from_file(&fits_path_clone)
             .map_err(|e| anyhow::anyhow!("Failed to load FITS: {}", e))?;
 
         // Create PSF multi visualization using the common function
@@ -3854,7 +4438,7 @@ pub async fn get_psf_visualization(
                 .map_err(|e| anyhow::anyhow!("Failed to create PSF visualization: {}", e))?;
 
         // Save to cache
-        let cache_file = std::fs::File::create(&cache_path_clone)
+        let cache_file = std::fs::File::create(&temporary)
             .map_err(|e| anyhow::anyhow!("Failed to create cache file: {}", e))?;
         let writer = std::io::BufWriter::new(cache_file);
         let encoder =
@@ -3868,6 +4452,18 @@ pub async fn get_psf_visualization(
                 ColorType::Rgba8.into(),
             )
             .map_err(|e| anyhow::anyhow!("Failed to encode PNG: {}", e))?;
+
+        if source_file_cache_token(&fits_path_clone).as_deref() != Some(source_token_clone.as_str())
+        {
+            let _ = std::fs::remove_file(&temporary);
+            anyhow::bail!("source file changed while rendering");
+        }
+        if let Err(error) = std::fs::rename(&temporary, &cache_path_clone) {
+            let _ = std::fs::remove_file(&temporary);
+            if !cache_path_clone.is_file() {
+                return Err(error.into());
+            }
+        }
 
         Ok::<(), anyhow::Error>(())
     })
@@ -4936,7 +5532,7 @@ async fn start_spatial_scan_with_priority(
                         *need_astrometry,
                         *need_satellite,
                     )),
-                    Err(_) => {
+                    Err(error) => {
                         let mut s = ctx_arc.spatial_metrics.write().unwrap();
                         // The stage total counts only spatial work; advancing
                         // it for an astrometry-only item would overshoot it.
@@ -4944,7 +5540,18 @@ async fn start_spatial_scan_with_priority(
                             s.progress.processed += 1;
                         }
                         s.progress.errors += 1;
-                        s.progress.last_error = Some(format!("{}: FITS file not found", file_only));
+                        s.progress.last_error = Some(match error {
+                            AppError::Conflict(message) => message,
+                            AppError::NotFound => format!("{file_only}: FITS file not found"),
+                            other => {
+                                tracing::warn!(
+                                    "Source resolution failed during quality scan for image {}: {:?}",
+                                    img.id,
+                                    other
+                                );
+                                format!("{file_only}: source file could not be resolved")
+                            }
+                        });
                     }
                 }
             }
@@ -5275,8 +5882,233 @@ impl IntoResponse for AppError {
 }
 
 #[cfg(test)]
+mod delayed_ready_tests {
+    use super::*;
+    use crate::commands::sync::ChangedAcquiredImage;
+    use crate::db_registry::DbEntry;
+    use crate::server::preview_queue::GenerationState;
+    use rusqlite::Connection;
+    use std::io::Write;
+
+    const IMAGE_ID: i32 = 700;
+    const PROJECT_ID: i32 = 7;
+    const TARGET_ID: i32 = 70;
+    const CAPTURE_TIME: i64 = 1_784_869_200;
+
+    fn write_header(path: &FsPath) {
+        let mut header = Vec::new();
+        for card in [
+            "SIMPLE  =                    T",
+            "BITPIX  =                    8",
+            "NAXIS   =                    0",
+            "FILTER  = 'Ha'",
+            "DATE-OBS= '2026-07-24T05:00:00'",
+            "END",
+        ] {
+            let mut padded = format!("{card:<80}").into_bytes();
+            padded.truncate(80);
+            header.extend(padded);
+        }
+        header.resize(2880, b' ');
+        std::fs::File::create(path)
+            .unwrap()
+            .write_all(&header)
+            .unwrap();
+    }
+
+    fn setup() -> (
+        tempfile::TempDir,
+        Arc<AppState>,
+        Arc<DatabaseContext>,
+        crate::models::AcquiredImage,
+        PathBuf,
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        let database_path = temp.path().join("scheduler.sqlite");
+        crate::ts_schema::create_fresh_db(&database_path).unwrap();
+        let image_root = temp.path().join("images");
+        std::fs::create_dir_all(&image_root).unwrap();
+        let source = image_root.join("arrived.fits");
+        write_header(&source);
+        let metadata = serde_json::json!({
+            "FileName": source.to_string_lossy(),
+            "ExposureStartTime": "2026-07-24T05:00:00Z",
+        });
+        let connection = Connection::open(&database_path).unwrap();
+        connection
+            .execute_batch(&format!(
+                "INSERT INTO project (Id, profileId, name) VALUES ({PROJECT_ID}, 'default', 'Project');
+                 INSERT INTO target (Id, name, active, epochcode, projectid)
+                    VALUES ({TARGET_ID}, 'Target', 1, 0, {PROJECT_ID});"
+            ))
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO acquiredimage
+                    (Id, projectId, targetId, acquireddate, filtername, gradingStatus, metadata, profileId)
+                 VALUES (?1, ?2, ?3, ?4, 'Ha', 0, ?5, 'default')",
+                rusqlite::params![IMAGE_ID, PROJECT_ID, TARGET_ID, CAPTURE_TIME, metadata.to_string()],
+            )
+            .unwrap();
+        drop(connection);
+
+        let state = Arc::new(
+            AppState::from_databases(
+                vec![DbEntry {
+                    id: "test".into(),
+                    name: "Test".into(),
+                    db_path: database_path.to_string_lossy().into_owned(),
+                    image_dirs: vec![image_root.to_string_lossy().into_owned()],
+                    reject_archive: None,
+                    remote_image_upload: None,
+                    export_dir: None,
+                }],
+                temp.path().join("cache").to_string_lossy().into_owned(),
+                crate::cli::PregenerationConfig::default(),
+            )
+            .unwrap(),
+        );
+        let ctx = state.get_database("test").unwrap();
+        let image = {
+            let connection = ctx.db();
+            let connection = connection.lock().unwrap();
+            Database::new(&connection)
+                .get_images_by_ids(&[IMAGE_ID])
+                .unwrap()
+                .pop()
+                .unwrap()
+        };
+        (temp, state, ctx, image, source)
+    }
+
+    #[tokio::test]
+    async fn validated_ready_status_makes_immediate_preview_and_annotated_gets_cache_hits() {
+        let (_temp, state, ctx, image, source) = setup();
+        let images = HashMap::from([(IMAGE_ID, image.clone())]);
+        let targets = HashMap::from([(TARGET_ID, "Target".to_string())]);
+
+        for kind in ["preview", "annotated"] {
+            ctx.register_remote_image_arrivals(&[ChangedAcquiredImage {
+                id: i64::from(IMAGE_ID),
+                project_id: i64::from(PROJECT_ID),
+                target_id: i64::from(TARGET_ID),
+                acquired_date: Some(CAPTURE_TIME),
+            }]);
+            let cache_path = if kind == "annotated" {
+                artifact_cache_path(
+                    &ctx,
+                    "annotated",
+                    &annotated_cache_key(&image, "arrived.fits", "screen", 1000),
+                    state.preview_encoding(),
+                )
+                .unwrap()
+            } else {
+                artifact_cache_path(
+                    &ctx,
+                    "previews",
+                    &preview_cache_key(
+                        &image,
+                        "arrived.fits",
+                        "screen",
+                        true,
+                        0.2,
+                        -2.8,
+                        state.preview_color_default(),
+                    ),
+                    state.preview_encoding(),
+                )
+                .unwrap()
+            };
+            std::fs::write(&cache_path, b"cached image").unwrap();
+            state
+                .preview_queue
+                .remember_completed_source_for_test(cache_path, &source);
+            assert!(!ctx.delayed_source_is_stable(IMAGE_ID, &source));
+
+            let delayed_probe = ctx.delayed_file_probes_for_batch(
+                &[IMAGE_ID],
+                MAX_DELAYED_FILE_PROBES_PER_STATUS_BATCH,
+            )[&IMAGE_ID];
+            let mut canonical_roots = None;
+            let status = status_for_item(
+                &state,
+                &ctx,
+                &GenStatusItem {
+                    image_id: IMAGE_ID,
+                    kind: Some(kind.to_string()),
+                    size: Some("screen".to_string()),
+                    stretch: None,
+                    midtone: None,
+                    shadow: None,
+                    max_stars: None,
+                    color: None,
+                },
+                &images,
+                &targets,
+                delayed_probe,
+                &mut canonical_roots,
+            );
+            assert_eq!(status.state, GenerationState::Ready);
+            assert!(canonical_roots.is_some());
+            assert_eq!(
+                ctx.delayed_file_probe(IMAGE_ID),
+                crate::server::database_context::DelayedFileProbe::NotPending
+            );
+
+            let options = PreviewOptions {
+                size: Some("screen".into()),
+                stretch: None,
+                midtone: None,
+                shadow: None,
+                max_stars: None,
+                color: None,
+            };
+            let response = if kind == "annotated" {
+                get_annotated_image(
+                    State(Arc::clone(&state)),
+                    DbContext(Arc::clone(&ctx)),
+                    Path(("test".into(), IMAGE_ID)),
+                    Query(options),
+                )
+                .await
+                .unwrap()
+            } else {
+                get_image_preview(
+                    State(Arc::clone(&state)),
+                    DbContext(Arc::clone(&ctx)),
+                    Path(("test".into(), IMAGE_ID)),
+                    Query(options),
+                )
+                .await
+                .unwrap()
+            };
+            assert_eq!(response.status(), StatusCode::OK, "{kind}");
+        }
+    }
+
+    #[test]
+    fn delayed_duplicate_descriptors_consume_one_probe_observation() {
+        use crate::server::database_context::DelayedFileProbe;
+
+        let probes = HashMap::from([(IMAGE_ID, DelayedFileProbe::Probe)]);
+        let mut consumed = std::collections::HashSet::new();
+        assert_eq!(
+            consume_delayed_batch_probe(&probes, IMAGE_ID, &mut consumed),
+            DelayedFileProbe::Probe
+        );
+        assert_eq!(
+            consume_delayed_batch_probe(&probes, IMAGE_ID, &mut consumed),
+            DelayedFileProbe::Wait
+        );
+    }
+}
+
+#[cfg(test)]
 mod preview_cache_key_tests {
-    use super::preview_cache_key;
+    use super::{
+        annotated_cache_key, image_file_identity_cache_token, preview_cache_key,
+        psf_multi_cache_key, star_detection_cache_key,
+    };
     use crate::models::AcquiredImage;
 
     fn image() -> AcquiredImage {
@@ -5340,5 +6172,285 @@ mod preview_cache_key_tests {
                 preview_cache_key(&image(), "one.fits", "screen", true, 0.2, -2.8, color);
             assert_eq!(warmed, requested);
         }
+    }
+
+    #[test]
+    fn scheduler_file_identity_changes_invalidate_derived_artifact_keys() {
+        let mut first = image();
+        first.metadata =
+            r#"{"FileName":"D:\\old\\one.fits","ExposureStartTime":"2025-06-15T00:00:00Z"}"#.into();
+        let mut moved = first.clone();
+        moved.metadata =
+            r#"{"FileName":"E:\\new\\one.fits","ExposureStartTime":"2025-06-15T00:00:00Z"}"#.into();
+
+        assert_ne!(
+            image_file_identity_cache_token(&first),
+            image_file_identity_cache_token(&moved)
+        );
+        assert_ne!(
+            preview_cache_key(&first, "one.fits", "screen", true, 0.2, -2.8, false),
+            preview_cache_key(&moved, "one.fits", "screen", true, 0.2, -2.8, false)
+        );
+        assert_ne!(
+            annotated_cache_key(&first, "one.fits", "screen", 1000),
+            annotated_cache_key(&moved, "one.fits", "screen", 1000)
+        );
+        assert_ne!(
+            star_detection_cache_key(&first, "one.fits", "source-a"),
+            star_detection_cache_key(&moved, "one.fits", "source-a")
+        );
+        assert_ne!(
+            psf_multi_cache_key(&first, "one.fits", 9, "moffat", "r2", "top-n", None, "source-a",),
+            psf_multi_cache_key(&moved, "one.fits", 9, "moffat", "r2", "top-n", None, "source-a",)
+        );
+    }
+}
+
+#[cfg(test)]
+mod file_resolution_tests {
+    use super::{
+        find_fits_file, find_fits_file_cached, metadata_suffix_candidates, AppError,
+        DatabaseContext,
+    };
+    use crate::models::AcquiredImage;
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
+    const CAPTURE_TIME: i64 = 1_784_869_200;
+
+    fn context(temp: &tempfile::TempDir) -> (DatabaseContext, PathBuf) {
+        let (ctx, roots) = context_with_roots(temp, &["images"]);
+        (ctx, roots.into_iter().next().unwrap())
+    }
+
+    fn context_with_roots(
+        temp: &tempfile::TempDir,
+        names: &[&str],
+    ) -> (DatabaseContext, Vec<PathBuf>) {
+        let database = temp.path().join("scheduler.sqlite");
+        crate::ts_schema::create_fresh_db(&database).unwrap();
+        let image_roots: Vec<PathBuf> = names.iter().map(|name| temp.path().join(name)).collect();
+        for image_root in &image_roots {
+            std::fs::create_dir_all(image_root).unwrap();
+        }
+        let ctx = DatabaseContext::new(
+            "test".into(),
+            "Test".into(),
+            database.to_string_lossy().into_owned(),
+            image_roots
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect(),
+            None,
+            None,
+            temp.path().join("cache").to_string_lossy().into_owned(),
+        )
+        .unwrap();
+        (ctx, image_roots)
+    }
+
+    fn image(metadata_path: &str, filter: &str) -> AcquiredImage {
+        AcquiredImage {
+            id: 42,
+            project_id: 7,
+            target_id: 3,
+            acquired_date: Some(CAPTURE_TIME),
+            filter_name: filter.into(),
+            grading_status: 0,
+            metadata: serde_json::json!({
+                "FileName": metadata_path,
+                "ExposureStartTime": "2026-07-24T05:00:00Z",
+                "FilterName": filter,
+            })
+            .to_string(),
+            reject_reason: None,
+            profile_id: None,
+            guid: None,
+        }
+    }
+
+    fn fits_card(output: &mut Vec<u8>, text: &str) {
+        let mut bytes = text.as_bytes().to_vec();
+        assert!(bytes.len() <= 80);
+        bytes.resize(80, b' ');
+        output.extend_from_slice(&bytes);
+    }
+
+    fn write_fits(path: &Path, filter: &str, date_obs: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut header = Vec::new();
+        fits_card(&mut header, "SIMPLE  =                    T");
+        fits_card(&mut header, "BITPIX  =                   16");
+        fits_card(&mut header, "NAXIS   =                    2");
+        fits_card(&mut header, "NAXIS1  =                   10");
+        fits_card(&mut header, "NAXIS2  =                   10");
+        fits_card(&mut header, "IMAGETYP= 'LIGHT'");
+        fits_card(&mut header, &format!("FILTER  = '{filter}'"));
+        fits_card(&mut header, &format!("DATE-OBS= '{date_obs}'"));
+        fits_card(&mut header, "EXPTIME =                300.0");
+        fits_card(&mut header, "END");
+        header.resize(header.len().div_ceil(2880) * 2880, b' ');
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(&header).unwrap();
+        file.write_all(&[0u8; 2880]).unwrap();
+    }
+
+    #[test]
+    fn delayed_metadata_suffix_is_found_and_folded_into_both_caches() {
+        let temp = tempfile::tempdir().unwrap();
+        let (ctx, image_root) = context(&temp);
+
+        ctx.get_directory_tree().unwrap();
+        let tree_age_before = ctx.get_directory_tree_stats().unwrap().age;
+        let file_cache_updated_at = {
+            let mut cache = ctx.file_check_cache.write().unwrap();
+            cache.has_initial_data = true;
+            cache.projects_with_files.insert(7, false);
+            cache.targets_with_files.insert(3, false);
+            cache
+                .project_latest_image_dates
+                .insert(7, CAPTURE_TIME - 60);
+            cache.last_updated
+        };
+        std::thread::sleep(Duration::from_millis(5));
+
+        let delayed = image_root.join("rig-a/odd-layout/delayed.fits");
+        write_fits(&delayed, "Ha", "2026-07-24T05:00:00");
+        let image = image(r"C:\remote-captures\rig-a\odd-layout\delayed.fits", "Ha");
+
+        let resolved = find_fits_file(&ctx, &image, "Unrelated Target", "delayed.fits").unwrap();
+        assert_eq!(resolved, delayed);
+
+        {
+            let tree = ctx.directory_tree_cache.read().unwrap();
+            let tree = tree.as_ref().unwrap();
+            assert_eq!(tree.find_file_first("delayed.fits"), Some(&delayed));
+            assert!(tree.stats().age >= tree_age_before);
+        }
+
+        let cache = ctx.file_check_cache.read().unwrap();
+        assert_eq!(cache.projects_with_files.get(&7), Some(&true));
+        assert_eq!(cache.targets_with_files.get(&3), Some(&true));
+        assert_eq!(
+            cache.project_latest_image_dates.get(&7),
+            Some(&CAPTURE_TIME)
+        );
+        assert_eq!(cache.last_updated, file_cache_updated_at);
+    }
+
+    #[test]
+    fn delayed_flattened_copy_is_found_without_rebuilding_the_tree() {
+        let temp = tempfile::tempdir().unwrap();
+        let (ctx, image_root) = context(&temp);
+        ctx.get_directory_tree().unwrap();
+
+        let flattened = image_root.join("flattened.fits");
+        write_fits(&flattened, "Ha", "2026-07-24T05:00:00");
+        let mut image = image(r"C:\remote\deep\layout\flattened.fits", "Ha");
+        image.acquired_date = None;
+
+        assert_eq!(
+            find_fits_file_cached(&ctx, &image, "M 31", "flattened.fits").unwrap(),
+            flattened
+        );
+    }
+
+    #[test]
+    fn metadata_suffixes_cannot_traverse_or_degrade_to_a_basename() {
+        let temp = tempfile::tempdir().unwrap();
+        let (ctx, image_root) = context(&temp);
+
+        assert!(
+            metadata_suffix_candidates(&ctx, r"C:\remote\..\outside\frame.fits", "frame.fits")
+                .is_empty()
+        );
+        let candidates =
+            metadata_suffix_candidates(&ctx, r"C:\remote\rig\night\frame.fits", "frame.fits");
+        assert!(candidates.iter().all(|path| path.starts_with(&image_root)));
+        assert!(candidates.contains(&image_root.join("rig/night/frame.fits")));
+        assert!(!candidates.contains(&image_root.join("frame.fits")));
+    }
+
+    #[test]
+    fn basename_fallback_requires_one_header_match() {
+        let temp = tempfile::tempdir().unwrap();
+        let (ctx, image_root) = context(&temp);
+        let wrong = image_root.join("archive-a/repeated.fits");
+        let correct = image_root.join("archive-b/repeated.fits");
+        write_fits(&wrong, "OIII", "2026-07-24T05:00:00");
+        write_fits(&correct, "Ha", "2026-07-24T05:00:00");
+        ctx.get_directory_tree().unwrap();
+        let image = image(r"C:\elsewhere\repeated.fits", "Ha");
+
+        assert_eq!(
+            find_fits_file(&ctx, &image, "M 31", "repeated.fits").unwrap(),
+            correct
+        );
+
+        write_fits(&wrong, "Ha", "2026-07-24T05:00:00");
+        match find_fits_file(&ctx, &image, "M 31", "repeated.fits") {
+            Err(AppError::Conflict(message)) => {
+                assert!(message.contains("matches multiple files"), "{message}");
+            }
+            _ => panic!("two header-matched basenames must be refused"),
+        }
+    }
+
+    #[test]
+    fn basename_fallback_rejects_a_timestamp_mismatch() {
+        let temp = tempfile::tempdir().unwrap();
+        let (ctx, image_root) = context(&temp);
+        write_fits(
+            &image_root.join("archive/repeated.fits"),
+            "Ha",
+            "2026-07-24T05:00:03",
+        );
+        ctx.get_directory_tree().unwrap();
+        let image = image(r"C:\elsewhere\repeated.fits", "Ha");
+
+        assert!(matches!(
+            find_fits_file(&ctx, &image, "M 31", "repeated.fits"),
+            Err(AppError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn metadata_suffix_requires_one_header_matched_path_across_roots() {
+        let temp = tempfile::tempdir().unwrap();
+        let (ctx, roots) = context_with_roots(&temp, &["images-a", "images-b"]);
+        ctx.get_directory_tree().unwrap();
+        let first = roots[0].join("rig/night/repeated.fits");
+        let second = roots[1].join("rig/night/repeated.fits");
+        write_fits(&first, "OIII", "2026-07-24T05:00:00");
+        write_fits(&second, "Ha", "2026-07-24T05:00:00");
+        let image = image(r"C:\remote\rig\night\repeated.fits", "Ha");
+
+        assert_eq!(
+            find_fits_file(&ctx, &image, "M 31", "repeated.fits").unwrap(),
+            second
+        );
+
+        write_fits(&first, "Ha", "2026-07-24T05:00:00");
+        assert!(matches!(
+            find_fits_file(&ctx, &image, "M 31", "repeated.fits"),
+            Err(AppError::Conflict(_))
+        ));
+    }
+
+    #[test]
+    fn basename_fallback_prefers_exposure_start_over_acquired_date() {
+        let temp = tempfile::tempdir().unwrap();
+        let (ctx, image_root) = context(&temp);
+        let expected = image_root.join("archive/repeated.fits");
+        write_fits(&expected, "Ha", "2026-07-24T05:00:00");
+        ctx.get_directory_tree().unwrap();
+        let mut image = image(r"C:\elsewhere\repeated.fits", "Ha");
+        image.acquired_date = Some(CAPTURE_TIME + 3_600);
+
+        assert_eq!(
+            find_fits_file(&ctx, &image, "M 31", "repeated.fits").unwrap(),
+            expected
+        );
     }
 }

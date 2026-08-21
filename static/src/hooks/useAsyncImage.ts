@@ -8,6 +8,8 @@ export interface AsyncImageResult {
   /** Feed this to `<img src>` (carries a cache-buster after a reload). */
   src: string;
   state: AsyncImageState;
+  /** Sanitized terminal message returned by the generation-status endpoint. */
+  error?: string;
   onLoad: () => void;
   onError: () => void;
 }
@@ -16,6 +18,7 @@ interface AsyncImageRecord {
   baseSrc: string;
   state: AsyncImageState;
   reloadTick: number;
+  error?: string;
 }
 
 /**
@@ -49,7 +52,7 @@ export function useAsyncImage(
     setRecord((current) =>
       current.baseSrc === src
         ? current
-        : { baseSrc: src, state: 'loading', reloadTick: 0 }
+        : { baseSrc: src, state: 'loading', reloadTick: 0, error: undefined }
     );
     return () => {
       unregisterRef.current?.();
@@ -64,6 +67,7 @@ export function useAsyncImage(
       baseSrc: src,
       state: 'ready',
       reloadTick: current.baseSrc === src ? current.reloadTick : 0,
+      error: undefined,
     }));
   }, [src]);
 
@@ -75,6 +79,7 @@ export function useAsyncImage(
         baseSrc: src,
         state: 'error',
         reloadTick: current.baseSrc === src ? current.reloadTick : 0,
+        error: undefined,
       }));
       return;
     }
@@ -82,6 +87,7 @@ export function useAsyncImage(
       baseSrc: src,
       state: 'generating',
       reloadTick: current.baseSrc === src ? current.reloadTick : 0,
+      error: undefined,
     }));
     unregisterRef.current = registerPending(dbId, descRef.current, {
       onReady: () => {
@@ -90,14 +96,16 @@ export function useAsyncImage(
           baseSrc: src,
           state: 'loading',
           reloadTick: (current.baseSrc === src ? current.reloadTick : 0) + 1,
+          error: undefined,
         })); // force <img> to re-fetch (now cached)
       },
-      onError: () => {
+      onError: (message) => {
         unregisterRef.current = null;
         setRecord((current) => ({
           baseSrc: src,
           state: 'error',
           reloadTick: current.baseSrc === src ? current.reloadTick : 0,
+          error: message,
         }));
       },
     });
@@ -105,9 +113,10 @@ export function useAsyncImage(
 
   const state = record.baseSrc === src ? record.state : 'loading';
   const reloadTick = record.baseSrc === src ? record.reloadTick : 0;
+  const error = record.baseSrc === src ? record.error : undefined;
   const displaySrc =
     reloadTick > 0 ? withParam(src, 'v', String(reloadTick)) : src;
-  return { src: displaySrc, state, onLoad, onError };
+  return { src: displaySrc, state, error, onLoad, onError };
 }
 
 function withParam(url: string, key: string, value: string): string {

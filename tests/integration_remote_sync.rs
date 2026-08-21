@@ -13,7 +13,7 @@ use http_body_util::BodyExt;
 use psf_guard::{
     cli::PregenerationConfig,
     db_registry::{DbEntry, RemoteImageUploadConfig},
-    server::{remote_sync, state::AppState},
+    server::{handlers, remote_sync, state::AppState},
 };
 use rusqlite::Connection;
 use serde_json::{json, Value};
@@ -84,6 +84,10 @@ fn app(state: Arc<AppState>) -> Router {
             "/api/sync/v1/jobs/{job_id}",
             get(remote_sync::get_preview_job),
         )
+        .route(
+            "/api/db/{db_id}/images/generation-status",
+            post(handlers::post_generation_status),
+        )
         .with_state(state)
 }
 
@@ -144,6 +148,25 @@ async fn create_async_preview(app: Router, operation: &str, bundle: Value) -> (S
     let status = response.status();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+async fn preview_generation_state(harness: &Harness, image_id: i64) -> Value {
+    let (status, response) = call(
+        harness.router.clone(),
+        "POST",
+        "/api/db/destination/images/generation-status",
+        None,
+        Some(json!({
+            "requests": [{
+                "image_id": image_id,
+                "kind": "preview",
+                "size": "screen"
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response:#}");
+    response["data"]["statuses"][0].clone()
 }
 
 /// Two token-scoped catalogs wired to one router, the shape every remote sync
@@ -512,6 +535,20 @@ async fn merge_brings_a_remote_catalogs_projects_targets_and_captures_across() {
     assert_eq!(count(&destination, "project"), 1);
     assert_eq!(count(&destination, "target"), 1);
     assert_eq!(count(&destination, "acquiredimage"), 2);
+    let first_id: i64 = destination
+        .query_row(
+            "SELECT Id FROM acquiredimage WHERE guid = 'image-one'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    drop(destination);
+    assert_eq!(
+        preview_generation_state(&harness, first_id).await["state"],
+        "generating",
+        "a committed capture merge should wait for its separately copied file"
+    );
+    let destination = harness.destination();
     let (grade, reason): (i64, Option<String>) = destination
         .query_row(
             "SELECT gradingStatus, rejectreason FROM acquiredimage WHERE guid = 'image-two'",
@@ -598,6 +635,13 @@ async fn push_grades_moves_grading_state_and_leaves_planning_alone() {
         .query_row("SELECT description FROM project", [], |row| row.get(0))
         .unwrap();
     assert_eq!(description, "local settings");
+    drop(statement);
+    drop(destination);
+    assert_eq!(
+        preview_generation_state(&harness, 60).await["state"],
+        "error",
+        "a grade-only apply must not start a delayed-file grace window"
+    );
 }
 
 #[tokio::test]
