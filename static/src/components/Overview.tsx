@@ -863,11 +863,6 @@ export default function Overview() {
                                   }}
                                   alt={`${image.target_name}, ${filter}`}
                                   loading="lazy"
-                                  fallback={
-                                    <span className="project-frame-fallback">
-                                      Preview unavailable
-                                    </span>
-                                  }
                                 />
                                 {isNew && <span className="project-frame-new">New</span>}
                                 {isNewest && (

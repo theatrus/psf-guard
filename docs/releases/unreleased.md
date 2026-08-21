@@ -151,6 +151,13 @@
 
 ## Fixed
 
+- Scheduler rows can now find image files copied into a PSF Guard image root
+  shortly after remote sync, without waiting for the directory cache to expire.
+  PSF Guard waits up to ten minutes with backed-off checks, retries preview
+  failures when a growing source changes, and keeps local paths out of errors.
+  Remote path suffixes stay confined to configured roots; candidates must agree
+  on capture time and filter, and ambiguous copies are refused instead of
+  opening the first one found.
 - A catalog written by an earlier PSF Guard is now upgraded the moment it is
   opened, instead of whenever some later write happened to notice. Stacking a
   project whose catalog predated rotator-aware flat matching failed outright

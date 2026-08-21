@@ -191,6 +191,70 @@ impl DirectoryTree {
         self.file_map.get(filename).and_then(|paths| paths.first())
     }
 
+    pub(crate) fn contains_path(&self, path: &Path) -> bool {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|filename| self.file_map.get(filename))
+            .is_some_and(|paths| paths.iter().any(|known| known == path))
+    }
+
+    /// Add one file discovered after the tree was built.
+    ///
+    /// This is intentionally narrower than a refresh: a request that proves a
+    /// delayed copy has arrived can make later lookups see it without changing
+    /// the tree's age or walking the image roots again.
+    pub(crate) fn insert_file(&mut self, path: &Path) -> bool {
+        let Some(root_index) = self.roots.iter().position(|root| path.starts_with(root)) else {
+            return false;
+        };
+        let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+
+        let insert_at = {
+            let paths = self.file_map.entry(filename.to_string()).or_default();
+            if paths.iter().any(|known| known == path) {
+                return false;
+            }
+            paths
+                .iter()
+                .position(|known| {
+                    self.roots
+                        .iter()
+                        .position(|root| known.starts_with(root))
+                        .unwrap_or(self.roots.len())
+                        > root_index
+                })
+                .unwrap_or(paths.len())
+        };
+        self.file_map
+            .get_mut(filename)
+            .expect("filename entry was just created")
+            .insert(insert_at, path.to_path_buf());
+
+        // Keep directory browsing coherent too. Each parent contains its
+        // immediate child, up to and including the configured root.
+        let root = &self.roots[root_index];
+        let mut child = path.to_path_buf();
+        let mut parent = path.parent();
+        while let Some(directory) = parent {
+            if !directory.starts_with(root) {
+                break;
+            }
+            let contents = self.dir_map.entry(directory.to_path_buf()).or_default();
+            if !contents.iter().any(|known| known == &child) {
+                contents.push(child.clone());
+            }
+            if directory == root {
+                break;
+            }
+            child = directory.to_path_buf();
+            parent = directory.parent();
+        }
+
+        true
+    }
+
     /// Find files matching a pattern in the filename
     pub fn find_files_matching<F>(&self, predicate: F) -> Vec<&PathBuf>
     where
@@ -353,6 +417,53 @@ mod tests {
         assert!(tree.find_file("good.fits").is_some());
         assert!(tree.find_file("dark1.fits").is_some());
         assert!(tree.find_file("config").is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn inserts_a_delayed_file_without_refreshing_the_tree_age() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let root = temp_dir.path();
+        let mut tree = DirectoryTree::build(root)?;
+        std::thread::sleep(Duration::from_millis(5));
+        let age_before = tree.stats().age;
+
+        let nested = root.join("target/night/LIGHT");
+        fs::create_dir_all(&nested)?;
+        let delayed = nested.join("delayed.fits");
+        fs::write(&delayed, "test")?;
+
+        assert!(tree.insert_file(&delayed));
+        assert_eq!(tree.find_file_first("delayed.fits"), Some(&delayed));
+        assert!(tree.stats().age >= age_before);
+        assert!(tree
+            .get_directory_contents(root)
+            .is_some_and(|entries| entries.contains(&root.join("target"))));
+        assert!(!tree.insert_file(&delayed), "a retry stays idempotent");
+
+        Ok(())
+    }
+
+    #[test]
+    fn delayed_insert_keeps_configured_root_priority() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let first_root = temp_dir.path().join("first");
+        let second_root = temp_dir.path().join("second");
+        fs::create_dir_all(&first_root)?;
+        fs::create_dir_all(&second_root)?;
+        let second = second_root.join("same.fits");
+        fs::write(&second, "second")?;
+        let mut tree = DirectoryTree::build_multiple(&[&first_root, &second_root])?;
+
+        let first = first_root.join("same.fits");
+        fs::write(&first, "first")?;
+        assert!(tree.insert_file(&first));
+        assert_eq!(tree.find_file("same.fits"), Some(&vec![first, second]));
+
+        let outside = temp_dir.path().join("outside.fits");
+        fs::write(&outside, "outside")?;
+        assert!(!tree.insert_file(&outside));
 
         Ok(())
     }

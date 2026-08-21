@@ -537,7 +537,7 @@ export default function ImageDetailView({
                       <line x1="15" y1="9" x2="9" y2="15" />
                     </svg>
                     <h3 style={{ margin: '0 0 8px 0', fontSize: '1.2rem', fontWeight: 'normal' }}>Image not available</h3>
-                    <p style={{ margin: 0, fontSize: '0.9rem', color: '#666' }}>The requested image could not be found on the server</p>
+                    <p style={{ margin: 0, fontSize: '0.9rem', color: '#666' }}>{asyncImg.error ?? 'The requested image could not be found on the server'}</p>
                   </div>
                 </div>
               ) : (

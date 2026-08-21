@@ -1367,7 +1367,8 @@ fn prepare_job(
             };
             let path = match super::handlers::find_fits_file(ctx, &image, &target_name, &filename) {
                 Ok(path) => path,
-                Err(_) => {
+                Err(AppError::Conflict(message)) => return Err(AppError::Conflict(message)),
+                Err(AppError::NotFound) => {
                     missing_files += 1;
                     decisions.push(excluded_decision(
                         &image,
@@ -1376,6 +1377,7 @@ fn prepare_job(
                     ));
                     continue;
                 }
+                Err(error) => return Err(error),
             };
             let source_fingerprint = source_fingerprint(&path);
             hasher.update(source_fingerprint.as_bytes());

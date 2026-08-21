@@ -449,6 +449,41 @@ row first, the upload attaches the file to that row without importing a
 duplicate. An ambiguous registered basename or an existing receive file with
 different content returns `409 Conflict`.
 
+### Files copied after scheduler sync
+
+Scheduler metadata may arrive before an external copy puts the corresponding
+frame below one of the database's image roots. File lookup checks the usual
+target/date layout first, then safe suffixes of the remote `FileName` below
+each configured root, flattened copies at the root, and filenames already in
+the directory cache. A suffix is never allowed to escape its root. PSF Guard
+reads candidate headers and requires a matching filter and `DATE-OBS` within
+two seconds of metadata `ExposureStartTime` (or `acquireddate` when the metadata
+omitted it). It treats more than one matching file as a terminal ambiguity
+instead of showing or grading an arbitrary same-named frame.
+
+After a successful remote merge, newly inserted captures and captures whose
+file-discovery identity changed get a ten-minute arrival window. Status requests
+probe cached candidates after one, two, then five seconds without starting a
+directory scan. A large merge seeds navigation for every changed project and
+target but tracks only the newest 4096 captures for this automatic wait. Preview
+and detail requests require two unchanged observations of path, size, and
+modification time before decoding a tracked source. Preview generation also
+checks that fingerprint again before publishing its artifact. A decoder failure
+is reported without exposing the server path and becomes retryable after the
+source fingerprint changes. Grade-only transfers do not start an arrival window.
+When the ten-minute wait expires, requests stop reporting the source as pending,
+but the running server keeps requiring matching capture headers for that row. A
+matching file can still resolve later. This strict marker is in memory and shares
+the 4096-entry cap; a restart or displacement by newer remote captures returns
+the row to ordinary catalog lookup.
+
+A file found after the directory scan is added to the directory and navigation
+caches in place. This does not reset either cache's age and does not trigger a
+tree-wide scan; ordinary expiry still revalidates everything. External copy
+tools should write to a temporary non-frame name and rename it atomically when
+complete. The automatic wait is bounded, so atomic publication remains the
+reliable way to prevent a partially copied FITS or XISF file from being read.
+
 ## Security
 
 Remote sync is disabled by default.

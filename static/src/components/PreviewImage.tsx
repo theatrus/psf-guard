@@ -67,7 +67,7 @@ export default function PreviewImage({
           )}
         </div>
       )}
-      {img.state === 'error' && (fallback ?? <PreviewError />)}
+      {img.state === 'error' && (fallback ?? <PreviewError message={img.error} />)}
       {/* The img stays in layout (never display:none) so it actually loads —
           a lazy + display:none image has no box and the browser never fetches
           it, so onError/onLoad would never fire. While pending/error it is
@@ -85,7 +85,7 @@ export default function PreviewImage({
   );
 }
 
-function PreviewError() {
+function PreviewError({ message }: { message?: string }) {
   return (
     <div className="preview-status-box preview-status-error">
       <svg
@@ -100,7 +100,7 @@ function PreviewError() {
         <line x1="9" y1="9" x2="15" y2="15" />
         <line x1="15" y1="9" x2="9" y2="15" />
       </svg>
-      <span className="preview-status-label">Image not found</span>
+      <span className="preview-status-label">{message ?? 'Image not found'}</span>
     </div>
   );
 }
