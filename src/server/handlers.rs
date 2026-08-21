@@ -3473,7 +3473,21 @@ pub fn find_fits_file(
     target_name: &str,
     filename: &str,
 ) -> Result<std::path::PathBuf, AppError> {
-    find_fits_file_inner(ctx, image, target_name, filename, true, None)
+    let policy = if ctx.requires_delayed_file_identity(image.id) {
+        FileResolutionPolicy::DelayedRemote
+    } else {
+        FileResolutionPolicy::Ordinary
+    };
+    find_fits_file_inner(ctx, image, target_name, filename, policy, true, None)
+}
+
+/// A delayed remote row needs stronger identity proof than an ordinary local
+/// catalog lookup. Its file may still be in flight, and an older capture with
+/// the same basename may already be present below another configured root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileResolutionPolicy {
+    Ordinary,
+    DelayedRemote,
 }
 
 fn find_fits_file_cached(
@@ -3482,7 +3496,15 @@ fn find_fits_file_cached(
     target_name: &str,
     filename: &str,
 ) -> Result<std::path::PathBuf, AppError> {
-    find_fits_file_inner(ctx, image, target_name, filename, false, None)
+    find_fits_file_inner(
+        ctx,
+        image,
+        target_name,
+        filename,
+        FileResolutionPolicy::DelayedRemote,
+        false,
+        None,
+    )
 }
 
 fn find_fits_file_cached_with_roots(
@@ -3497,6 +3519,7 @@ fn find_fits_file_cached_with_roots(
         image,
         target_name,
         filename,
+        FileResolutionPolicy::DelayedRemote,
         false,
         Some(canonical_roots),
     )
@@ -3507,6 +3530,7 @@ fn find_fits_file_inner(
     image: &crate::models::AcquiredImage,
     target_name: &str,
     filename: &str,
+    policy: FileResolutionPolicy,
     allow_tree_build: bool,
     shared_canonical_roots: Option<&[PathBuf]>,
 ) -> Result<std::path::PathBuf, AppError> {
@@ -3565,12 +3589,14 @@ fn find_fits_file_inner(
         tracing::debug!("✅ Base directory exists: {}", base_dir);
     }
 
-    for (idx, path) in all_possible_paths.iter().enumerate() {
-        tracing::debug!("  📁 Path {}: {:?}", idx + 1, path);
-        if let Some(path) = existing_file_under_configured_root(path, canonical_roots) {
-            tracing::info!("✅ Found file at path {}: {:?}", idx + 1, path);
-            ctx.record_resolved_image_file(image, &path);
-            return Ok(path);
+    if policy == FileResolutionPolicy::Ordinary {
+        for (idx, path) in all_possible_paths.iter().enumerate() {
+            tracing::debug!("  📁 Path {}: {:?}", idx + 1, path);
+            if let Some(path) = existing_file_under_configured_root(path, canonical_roots) {
+                tracing::info!("✅ Found file at path {}: {:?}", idx + 1, path);
+                ctx.record_resolved_image_file(image, &path);
+                return Ok(path);
+            }
         }
     }
 
@@ -3580,19 +3606,27 @@ fn find_fits_file_inner(
     // those tails directly so a file that arrived after the directory scan is
     // visible immediately. Components are joined one at a time and the final
     // canonical path must remain under a configured root.
-    let mut delayed_candidates = metadata_file_name(image)
-        .map(|metadata_path| metadata_suffix_candidates(ctx, &metadata_path, filename))
-        .unwrap_or_default();
+    let mut resolution_candidates = if policy == FileResolutionPolicy::DelayedRemote {
+        all_possible_paths
+    } else {
+        Vec::new()
+    };
+    resolution_candidates.extend(
+        metadata_file_name(image)
+            .map(|metadata_path| metadata_suffix_candidates(ctx, &metadata_path, filename))
+            .unwrap_or_default(),
+    );
     // Some copy tools flatten the remote hierarchy directly into an image
-    // root. Treat those as identity candidates, never exact-path hits: their
-    // capture headers must agree and multiple matches remain a conflict.
-    delayed_candidates.extend(ctx.image_dir_paths.iter().map(|root| root.join(filename)));
+    // root. Treat those as basename candidates, never exact-path hits. An
+    // ordinary catalog accepts only one contained candidate; a delayed remote
+    // lookup additionally requires matching capture headers.
+    resolution_candidates.extend(ctx.image_dir_paths.iter().map(|root| root.join(filename)));
     if !allow_tree_build {
         let cache = ctx.directory_tree_cache.read().unwrap();
         if let Some(tree) = cache.as_ref()
             && let Some(candidates) = tree.find_file(filename)
         {
-            delayed_candidates.extend(candidates.iter().cloned());
+            resolution_candidates.extend(candidates.iter().cloned());
         }
     }
 
@@ -3603,7 +3637,7 @@ fn find_fits_file_inner(
 
     // Try directory tree cache lookup as fallback
     let search_start = std::time::Instant::now();
-    let basename_candidates = if allow_tree_build {
+    let tree_candidates = if allow_tree_build {
         let tree = ctx.get_directory_tree().map_err(|e| {
             tracing::error!("Failed to get directory tree cache: {}", e);
             AppError::InternalError("Directory cache error".to_string())
@@ -3612,19 +3646,25 @@ fn find_fits_file_inner(
     } else {
         Vec::new()
     };
-    if basename_candidates.is_empty() {
+    if tree_candidates.is_empty() {
         tracing::debug!(
             "🔍 No matches in directory tree cache for filename: {}",
             filename
         );
     }
 
-    delayed_candidates.extend(basename_candidates);
-    if let Some(path) =
-        unique_header_matched_file(image, filename, delayed_candidates, canonical_roots)?
-    {
+    resolution_candidates.extend(tree_candidates);
+    let resolved = match policy {
+        FileResolutionPolicy::Ordinary => {
+            unique_contained_file(filename, resolution_candidates, canonical_roots)?
+        }
+        FileResolutionPolicy::DelayedRemote => {
+            unique_header_matched_file(image, filename, resolution_candidates, canonical_roots)?
+        }
+    };
+    if let Some(path) = resolved {
         tracing::info!(
-            "✅ Found header-matched file via directory tree cache in {:?}: {:?}",
+            "✅ Found file via directory tree cache in {:?}: {:?}",
             search_start.elapsed(),
             path
         );
@@ -3731,6 +3771,35 @@ fn canonical_file_under_roots(candidate: &FsPath, canonical_roots: &[PathBuf]) -
         .iter()
         .any(|root| canonical_candidate.starts_with(root));
     is_configured.then(|| candidate.to_path_buf())
+}
+
+fn unique_contained_file(
+    filename: &str,
+    candidates: Vec<PathBuf>,
+    canonical_roots: &[PathBuf],
+) -> Result<Option<PathBuf>, AppError> {
+    let mut resolved: Option<(PathBuf, PathBuf)> = None;
+    for candidate in candidates {
+        let Some(candidate) = existing_file_under_configured_root(&candidate, canonical_roots)
+        else {
+            continue;
+        };
+        let identity = std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
+        match resolved.as_ref() {
+            None => resolved = Some((identity, candidate)),
+            Some((known, _)) if known == &identity => {}
+            Some(_) => {
+                tracing::warn!(
+                    "Refusing multiple files named {} in configured image directories",
+                    filename
+                );
+                return Err(AppError::Conflict(format!(
+                    "{filename} matches multiple files in configured image directories"
+                )));
+            }
+        }
+    }
+    Ok(resolved.map(|(_, path)| path))
 }
 
 fn unique_header_matched_file(
@@ -6212,6 +6281,7 @@ mod file_resolution_tests {
         find_fits_file, find_fits_file_cached, metadata_suffix_candidates, AppError,
         DatabaseContext,
     };
+    use crate::commands::sync::ChangedAcquiredImage;
     use crate::models::AcquiredImage;
     use std::io::Write;
     use std::path::{Path, PathBuf};
@@ -6319,7 +6389,8 @@ mod file_resolution_tests {
         write_fits(&delayed, "Ha", "2026-07-24T05:00:00");
         let image = image(r"C:\remote-captures\rig-a\odd-layout\delayed.fits", "Ha");
 
-        let resolved = find_fits_file(&ctx, &image, "Unrelated Target", "delayed.fits").unwrap();
+        let resolved =
+            find_fits_file_cached(&ctx, &image, "Unrelated Target", "delayed.fits").unwrap();
         assert_eq!(resolved, delayed);
 
         {
@@ -6373,7 +6444,97 @@ mod file_resolution_tests {
     }
 
     #[test]
-    fn basename_fallback_requires_one_header_match() {
+    fn ordinary_unique_basename_accepts_legacy_coarse_timestamp() {
+        let temp = tempfile::tempdir().unwrap();
+        let (ctx, image_root) = context(&temp);
+        let expected = image_root.join("archive/legacy.fits");
+        write_fits(&expected, "Ha", "2026-07-24T05:00:00");
+        ctx.get_directory_tree().unwrap();
+        let mut image = image("legacy.fits", "Ha");
+        image.acquired_date = Some(CAPTURE_TIME + 3_600);
+        image.metadata = r#"{"FileName":"legacy.fits"}"#.into();
+
+        assert_eq!(
+            find_fits_file(&ctx, &image, "M 31", "legacy.fits").unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn expired_remote_arrival_stops_polling_but_keeps_strict_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let (ctx, image_root) = context(&temp);
+        write_fits(
+            &image_root.join("archive/remote.fits"),
+            "Ha",
+            "2026-07-24T05:00:03",
+        );
+        ctx.get_directory_tree().unwrap();
+        let image = image(r"C:\remote\remote.fits", "Ha");
+        ctx.register_remote_image_arrivals(&[ChangedAcquiredImage {
+            id: i64::from(image.id),
+            project_id: i64::from(image.project_id),
+            target_id: i64::from(image.target_id),
+            acquired_date: image.acquired_date,
+        }]);
+
+        assert!(matches!(
+            find_fits_file(&ctx, &image, "M 31", "remote.fits"),
+            Err(AppError::NotFound)
+        ));
+        assert_eq!(
+            ctx.delayed_file_probe(image.id),
+            crate::server::database_context::DelayedFileProbe::Probe,
+            "strict resolution must not consume the preview probe"
+        );
+
+        ctx.expire_delayed_remote_image_for_test(image.id);
+        assert_eq!(
+            ctx.delayed_file_probe(image.id),
+            crate::server::database_context::DelayedFileProbe::NotPending
+        );
+        assert!(ctx.requires_delayed_file_identity(image.id));
+        assert!(matches!(
+            find_fits_file(&ctx, &image, "M 31", "remote.fits"),
+            Err(AppError::NotFound)
+        ));
+
+        let expected = image_root.join("archive/remote.fits");
+        write_fits(&expected, "Ha", "2026-07-24T05:00:00");
+        assert_eq!(
+            find_fits_file(&ctx, &image, "M 31", "remote.fits").unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn ordinary_basename_fallback_rejects_ambiguity() {
+        let temp = tempfile::tempdir().unwrap();
+        let (ctx, image_root) = context(&temp);
+        write_fits(
+            &image_root.join("archive-a/repeated.fits"),
+            "OIII",
+            "2026-07-24T06:00:00",
+        );
+        write_fits(
+            &image_root.join("archive-b/repeated.fits"),
+            "Ha",
+            "2026-07-24T05:00:00",
+        );
+        ctx.get_directory_tree().unwrap();
+        let mut image = image("repeated.fits", "Ha");
+        image.metadata = r#"{"FileName":"repeated.fits"}"#.into();
+
+        match find_fits_file(&ctx, &image, "M 31", "repeated.fits") {
+            Err(AppError::Conflict(message)) => {
+                assert!(message.contains("matches multiple files"), "{message}");
+            }
+            _ => panic!("ordinary basename ambiguity must be refused"),
+        }
+    }
+
+    #[test]
+    fn delayed_basename_fallback_requires_one_header_match() {
         let temp = tempfile::tempdir().unwrap();
         let (ctx, image_root) = context(&temp);
         let wrong = image_root.join("archive-a/repeated.fits");
@@ -6384,12 +6545,12 @@ mod file_resolution_tests {
         let image = image(r"C:\elsewhere\repeated.fits", "Ha");
 
         assert_eq!(
-            find_fits_file(&ctx, &image, "M 31", "repeated.fits").unwrap(),
+            find_fits_file_cached(&ctx, &image, "M 31", "repeated.fits").unwrap(),
             correct
         );
 
         write_fits(&wrong, "Ha", "2026-07-24T05:00:00");
-        match find_fits_file(&ctx, &image, "M 31", "repeated.fits") {
+        match find_fits_file_cached(&ctx, &image, "M 31", "repeated.fits") {
             Err(AppError::Conflict(message)) => {
                 assert!(message.contains("matches multiple files"), "{message}");
             }
@@ -6398,7 +6559,7 @@ mod file_resolution_tests {
     }
 
     #[test]
-    fn basename_fallback_rejects_a_timestamp_mismatch() {
+    fn delayed_basename_fallback_rejects_a_timestamp_mismatch() {
         let temp = tempfile::tempdir().unwrap();
         let (ctx, image_root) = context(&temp);
         write_fits(
@@ -6410,13 +6571,13 @@ mod file_resolution_tests {
         let image = image(r"C:\elsewhere\repeated.fits", "Ha");
 
         assert!(matches!(
-            find_fits_file(&ctx, &image, "M 31", "repeated.fits"),
+            find_fits_file_cached(&ctx, &image, "M 31", "repeated.fits"),
             Err(AppError::NotFound)
         ));
     }
 
     #[test]
-    fn metadata_suffix_requires_one_header_matched_path_across_roots() {
+    fn delayed_metadata_suffix_requires_one_header_matched_path_across_roots() {
         let temp = tempfile::tempdir().unwrap();
         let (ctx, roots) = context_with_roots(&temp, &["images-a", "images-b"]);
         ctx.get_directory_tree().unwrap();
@@ -6427,19 +6588,19 @@ mod file_resolution_tests {
         let image = image(r"C:\remote\rig\night\repeated.fits", "Ha");
 
         assert_eq!(
-            find_fits_file(&ctx, &image, "M 31", "repeated.fits").unwrap(),
+            find_fits_file_cached(&ctx, &image, "M 31", "repeated.fits").unwrap(),
             second
         );
 
         write_fits(&first, "Ha", "2026-07-24T05:00:00");
         assert!(matches!(
-            find_fits_file(&ctx, &image, "M 31", "repeated.fits"),
+            find_fits_file_cached(&ctx, &image, "M 31", "repeated.fits"),
             Err(AppError::Conflict(_))
         ));
     }
 
     #[test]
-    fn basename_fallback_prefers_exposure_start_over_acquired_date() {
+    fn delayed_basename_fallback_prefers_exposure_start_over_acquired_date() {
         let temp = tempfile::tempdir().unwrap();
         let (ctx, image_root) = context(&temp);
         let expected = image_root.join("archive/repeated.fits");
@@ -6449,7 +6610,7 @@ mod file_resolution_tests {
         image.acquired_date = Some(CAPTURE_TIME + 3_600);
 
         assert_eq!(
-            find_fits_file(&ctx, &image, "M 31", "repeated.fits").unwrap(),
+            find_fits_file_cached(&ctx, &image, "M 31", "repeated.fits").unwrap(),
             expected
         );
     }

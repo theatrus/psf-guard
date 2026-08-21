@@ -276,7 +276,8 @@ pub struct DatabaseContext {
     file_check_additions: Arc<RwLock<HashMap<(i32, i32), FileCheckAddition>>>,
     /// Images changed by a scheduler pull whose source files may arrive
     /// shortly afterwards. Status polling advances each entry through a
-    /// bounded, nonblocking probe schedule.
+    /// bounded, nonblocking probe schedule; expired entries remain as strict
+    /// identity markers until displaced by the bounded-cap policy.
     delayed_remote_images: Arc<Mutex<HashMap<i32, DelayedRemoteImage>>>,
     /// Serializes cold directory-tree builds so N concurrent requests on an
     /// empty cache share one filesystem scan instead of starting N.
@@ -949,7 +950,6 @@ impl DatabaseContext {
 
         let now = Instant::now();
         let mut pending = self.delayed_remote_images.lock().unwrap();
-        pending.retain(|_, arrival| arrival.expires_at > now);
         for Reverse((_, image_id)) in newest {
             pending.insert(
                 image_id,
@@ -985,7 +985,6 @@ impl DatabaseContext {
             return DelayedFileProbe::NotPending;
         };
         if arrival.expires_at <= now {
-            pending.remove(&image_id);
             return DelayedFileProbe::NotPending;
         }
         if arrival.next_probe_at > now {
@@ -993,6 +992,30 @@ impl DatabaseContext {
         }
         advance_delayed_probe(arrival, now);
         DelayedFileProbe::Probe
+    }
+
+    /// Whether every consumer of this row must use remote-arrival identity
+    /// validation. Unlike [`Self::delayed_file_probe`], this does not claim a
+    /// probe or advance its backoff; analysis, stacking, and pre-generation
+    /// still need the strict resolver while previews control polling cadence.
+    /// The identity requirement remains after polling expires.
+    pub(crate) fn requires_delayed_file_identity(&self, image_id: i32) -> bool {
+        self.delayed_remote_images
+            .lock()
+            .unwrap()
+            .contains_key(&image_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn expire_delayed_remote_image_for_test(&self, image_id: i32) {
+        if let Some(arrival) = self
+            .delayed_remote_images
+            .lock()
+            .unwrap()
+            .get_mut(&image_id)
+        {
+            arrival.expires_at = Instant::now();
+        }
     }
 
     /// Claim at most `limit` due probes for a status batch under one tracker
@@ -1006,13 +1029,15 @@ impl DatabaseContext {
         let now = Instant::now();
         let requested: HashSet<i32> = image_ids.iter().copied().collect();
         let mut pending = self.delayed_remote_images.lock().unwrap();
-        pending.retain(|_, arrival| arrival.expires_at > now);
 
         let mut result = HashMap::with_capacity(requested.len());
         let mut due = Vec::new();
         for image_id in requested {
             match pending.get(&image_id) {
                 None => {
+                    result.insert(image_id, DelayedFileProbe::NotPending);
+                }
+                Some(arrival) if arrival.expires_at <= now => {
                     result.insert(image_id, DelayedFileProbe::NotPending);
                 }
                 Some(arrival) if arrival.next_probe_at > now => {
@@ -1034,20 +1059,22 @@ impl DatabaseContext {
         result
     }
 
-    /// Retire a delayed-arrival probe after a completed artifact has been
-    /// validated against the source's current fingerprint. The next browser
-    /// reload can then take the ordinary cache-hit path instead of re-entering
-    /// the probe backoff.
+    /// Retire delayed-arrival polling after a completed artifact has been
+    /// validated against the source's current fingerprint. The entry remains
+    /// as a strict identity marker, so another consumer cannot later bind the
+    /// row to a stale same-basename file if the validated source disappears.
     pub(crate) fn complete_delayed_file_probe(&self, image_id: i32, source_path: &Path) -> bool {
         let fingerprint = arrival_source_fingerprint(source_path);
         let mut pending = self.delayed_remote_images.lock().unwrap();
-        let validated = pending.get(&image_id).is_some_and(|arrival| {
-            fingerprint.is_some() && arrival.observed_source.as_ref() == fingerprint.as_ref()
-        });
-        if validated {
-            pending.remove(&image_id);
+        let Some(arrival) = pending.get_mut(&image_id) else {
+            return false;
+        };
+        if fingerprint.is_some() && arrival.observed_source.as_ref() == fingerprint.as_ref() {
+            arrival.expires_at = Instant::now();
+            true
+        } else {
+            false
         }
-        validated
     }
 
     /// A tracked source must present the same path/size/mtime on two scheduled
@@ -1061,7 +1088,6 @@ impl DatabaseContext {
             return true;
         };
         if arrival.expires_at <= Instant::now() {
-            pending.remove(&image_id);
             return true;
         }
         if arrival.observed_source.as_ref() == fingerprint.as_ref() && fingerprint.is_some() {
@@ -1828,6 +1854,9 @@ mod tests {
             .unwrap()
             .expires_at = Instant::now();
         assert_eq!(ctx.delayed_file_probe(500), DelayedFileProbe::NotPending);
+        assert!(ctx.requires_delayed_file_identity(500));
+        assert!(ctx.delayed_source_is_stable(500, &source));
+        assert!(ctx.requires_delayed_file_identity(500));
     }
 
     #[test]
@@ -1884,6 +1913,29 @@ mod tests {
         ctx.register_remote_image_arrivals(&changed);
         assert!(!ctx.complete_delayed_file_probe(500, &source));
         assert_eq!(ctx.delayed_file_probe(500), DelayedFileProbe::Probe);
+    }
+
+    #[test]
+    fn delayed_completion_stops_polling_but_retains_identity_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("sched.sqlite");
+        make_file_refresh_db(&db_path);
+        let ctx = build_ctx(tmp.path(), &db_path);
+        let changed = [crate::commands::sync::ChangedAcquiredImage {
+            id: 500,
+            project_id: 42,
+            target_id: 84,
+            acquired_date: Some(12_345),
+        }];
+        let source = tmp.path().join("arriving.fits");
+        std::fs::write(&source, b"complete").unwrap();
+        ctx.register_remote_image_arrivals(&changed);
+        assert!(!ctx.delayed_source_is_stable(500, &source));
+        assert!(ctx.delayed_source_is_stable(500, &source));
+
+        assert!(ctx.complete_delayed_file_probe(500, &source));
+        assert_eq!(ctx.delayed_file_probe(500), DelayedFileProbe::NotPending);
+        assert!(ctx.requires_delayed_file_identity(500));
     }
 
     #[test]

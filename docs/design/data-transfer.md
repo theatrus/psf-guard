@@ -471,6 +471,11 @@ modification time before decoding a tracked source. Preview generation also
 checks that fingerprint again before publishing its artifact. A decoder failure
 is reported without exposing the server path and becomes retryable after the
 source fingerprint changes. Grade-only transfers do not start an arrival window.
+When the ten-minute wait expires, requests stop reporting the source as pending,
+but the running server keeps requiring matching capture headers for that row. A
+matching file can still resolve later. This strict marker is in memory and shares
+the 4096-entry cap; a restart or displacement by newer remote captures returns
+the row to ordinary catalog lookup.
 
 A file found after the directory scan is added to the directory and navigation
 caches in place. This does not reset either cache's age and does not trigger a
