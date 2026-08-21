@@ -364,3 +364,20 @@
   Calibration matching takes a value in degrees, applies it to the next stack
   without a restart, and an empty field returns to the default. The setting
   is server-wide and shared by the desktop and browser apps.
+- Stacking OIII and SII no longer fails against calibration masters generated
+  before mid-August. Two causes, both fixed. Validation treated a reading the
+  master never recorded — telescope, focal length — as a disagreement, when
+  an unrecorded reading proves nothing; masters now validate on what both
+  sides actually recorded. And those old masters should have rebuilt
+  themselves: the master cache records a generation number but reuse never
+  checked it, so masters from before metadata preservation were served
+  forever. Reuse now requires the current generation, and every older master
+  rebuilds itself once, with full metadata. "Clear generated masters" in the
+  Calibration Library remains the manual lever.
+- Auto-mode calibration now keeps its promise everywhere: a stack is never
+  abandoned over calibration. A plan that cannot be built, a reference frame
+  whose masters are refused, and a mid-stack master swap that fails all
+  degrade to stacking raw with a warning that says why; frames the stacker
+  turns away for calibration are summarized in the same warning — count and
+  reason — instead of hiding in the per-frame list. Forced calibration keeps
+  hard errors.

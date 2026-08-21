@@ -25,7 +25,11 @@ use std::time::UNIX_EPOCH;
 ///    shot at the same rotator angle.
 pub const CALIBRATION_SCHEMA_VERSION: i64 = 3;
 // 2: flat masters suppress defective pixels spatially after integration.
-pub const MASTER_CACHE_VERSION: u32 = 2;
+/// Version 3: masters preserve sensor, optics, exposure and capture-time
+/// metadata (seiza-stacking 0.11.1). Masters written before that carry no
+/// TELESCOP or FOCALLEN, which weakens validation and later matching to
+/// "nothing recorded, nothing to check" — so they rebuild once.
+pub const MASTER_CACHE_VERSION: u32 = 3;
 const MIN_MASTER_FRAMES: usize = 2;
 const MAX_MASTER_FRAMES: usize = 64;
 
@@ -2176,6 +2180,18 @@ pub struct CalibrationPlan {
 }
 
 impl CalibrationPlan {
+    /// A plan that calibrates nothing, for an automatic mode falling back
+    /// after the real plan could not be built. Distinct from mode Off: the
+    /// fingerprint says the fallback happened, so a later run whose plan
+    /// builds again does not resume an uncalibrated accumulator.
+    pub fn without_calibration(lights: usize) -> Self {
+        let (masters, mut applied) = calibration_off();
+        applied.mode = CalibrationMode::Auto;
+        applied.state = "unavailable".into();
+        applied.fingerprint = "auto-fallback-uncalibrated".into();
+        Self::single(masters, applied, lights)
+    }
+
     fn single(
         masters: seiza_stacking::CalibrationMasters,
         applied: AppliedCalibration,
@@ -2453,18 +2469,35 @@ fn build_master(
             CalibrationKind::Dark | CalibrationKind::DarkFlat => "DARK",
             CalibrationKind::Flat => "FLAT",
         };
-        let row_exists = conn
+        let recorded_version: Option<i64> = conn
             .query_row(
-                "SELECT 1 FROM psf_guard_calibration_master WHERE cache_path = ?1",
+                "SELECT cache_version FROM psf_guard_calibration_master WHERE cache_path = ?1",
                 [path.to_string_lossy().as_ref()],
-                |_| Ok(()),
+                |row| row.get(0),
             )
-            .optional()?
-            .is_some();
+            .optional()?;
+        // The version is what makes the cache honest: a master written by an
+        // older generation is not the artifact this build would produce from
+        // the same sources, so it is a miss, not a hit. Files predating
+        // metadata preservation sat in this cache validating as "nothing
+        // recorded, nothing to check" for a week because reuse never asked.
+        // The exception is a blocked recorder: it cannot rebuild, and an old
+        // master under today's validation still beats no master at all.
+        let row_current = recorded_version == Some(i64::from(MASTER_CACHE_VERSION));
         let file_valid = crate::image_io::open_linear_frame(&path)
             .and_then(|frame| frame.validate_master_kind(expected_kind))
             .is_ok();
-        if row_exists && file_valid {
+        if recorded_version.is_some()
+            && file_valid
+            && (row_current || recording_blocker.is_some())
+        {
+            if !row_current {
+                tracing::info!(
+                    "serving generation-{} master {} without rebuilding: recording is blocked",
+                    recorded_version.unwrap_or_default(),
+                    path.display()
+                );
+            }
             return Ok(Some(BuiltMaster {
                 path,
                 master_uuid,
@@ -4769,6 +4802,24 @@ mod tests {
     }
 
     #[test]
+    fn the_auto_fallback_plan_cannot_be_mistaken_for_off_or_resumed_into() {
+        // When the real plan cannot be built, auto mode stacks raw rather
+        // than failing — the edict is that calibration problems warn, never
+        // kill. The fallback must still be honest about what it is: mode
+        // auto (the user did not choose off), a state that says calibration
+        // was unavailable, and a fingerprint distinct from both "off" and
+        // any real selection, so a later run whose plan builds again does
+        // not resume an accumulator whose frames went in uncalibrated.
+        let plan = CalibrationPlan::without_calibration(3);
+        assert_eq!(plan.assignments, vec![0, 0, 0]);
+        assert_eq!(plan.applied.mode, CalibrationMode::Auto);
+        assert_eq!(plan.applied.state, "unavailable");
+        assert_ne!(plan.applied.fingerprint, "off");
+        assert_ne!(plan.applied.fingerprint, "none");
+        assert!(plan.sessions[0].masters.is_empty());
+    }
+
+    #[test]
     fn calibration_off_skips_matching_and_cannot_collide_with_a_real_selection() {
         // `Off` must not read the library at all, and its fingerprint must
         // differ from both a real selection and the empty-selection "none"
@@ -5074,6 +5125,97 @@ mod tests {
 
         assert!(!reused.is_empty());
         assert_eq!(applied.state, "applied");
+        assert_eq!(applied.bias_master, first.bias_master);
+    }
+
+    #[test]
+    fn a_master_from_an_older_generation_is_a_miss_not_a_hit() {
+        // What let masters without optics metadata survive for a week: reuse
+        // compared only the path and the file's kind, so bumping
+        // MASTER_CACHE_VERSION invalidated nothing. The version is part of
+        // what the cache promises — an older generation's file is not the
+        // artifact this build would produce from the same sources.
+        let temp = tempfile::tempdir().unwrap();
+        let (database_path, cache, light_path) = file_backed_bias_library(&temp);
+        let conn = Connection::open(&database_path).unwrap();
+        resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE psf_guard_calibration_master SET cache_version = ?1",
+            [i64::from(MASTER_CACHE_VERSION) - 1],
+        )
+        .unwrap();
+
+        let (rebuilt, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        assert!(!rebuilt.is_empty());
+        assert_eq!(applied.state, "applied");
+        let version: i64 = conn
+            .query_row(
+                "SELECT cache_version FROM psf_guard_calibration_master LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            version,
+            i64::from(MASTER_CACHE_VERSION),
+            "the stale master was rebuilt at the current generation"
+        );
+    }
+
+    #[test]
+    fn a_blocked_recorder_still_serves_an_older_generation_master() {
+        // A read-only flow cannot rebuild, and an old master under today's
+        // validation still beats no master at all.
+        let temp = tempfile::tempdir().unwrap();
+        let (database_path, cache, light_path) = file_backed_bias_library(&temp);
+        let conn = Connection::open(&database_path).unwrap();
+        let (_, first) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE psf_guard_calibration_master SET cache_version = ?1",
+            [i64::from(MASTER_CACHE_VERSION) - 1],
+        )
+        .unwrap();
+        drop(conn);
+
+        let read_only = Connection::open_with_flags(
+            &database_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let (masters, applied) = resolve_or_build_masters(
+            &read_only,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        assert!(!masters.is_empty());
         assert_eq!(applied.bias_master, first.bias_master);
     }
 
