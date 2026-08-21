@@ -1731,14 +1731,34 @@ fn resolve_or_build_masters_pinned(
     // master. Cancellation stays fatal via `stop_requested` between
     // builds.
     let mut build_failures: Vec<(CalibrationKind, String)> = Vec::new();
+    // Frames that clustered but that the integrator would have refused. The
+    // master still builds from the rest; this says what was left out, because
+    // a dropped frame usually means the library holds something the selection
+    // should not have offered.
+    let mut set_aside: Vec<(CalibrationKind, usize, String)> = Vec::new();
     let build_or_warn = |kind: CalibrationKind,
                          frames: &[CalibrationFrame],
                          inputs: MasterInputs<'_>,
                          skip_because: Option<&str>,
-                         failures: &mut Vec<(CalibrationKind, String)>|
+                         failures: &mut Vec<(CalibrationKind, String)>,
+                         set_aside: &mut Vec<(CalibrationKind, usize, String)>|
      -> Option<BuiltMaster> {
         if frames.is_empty() {
             return None;
+        }
+        let report = master_subset_report(kind, frames);
+        if let Some(first) = report.dropped.first() {
+            tracing::warn!(
+                "{} master: {} frame(s) set aside as incompatible with {}",
+                kind.as_str(),
+                report.dropped.len(),
+                first.source_path.display()
+            );
+            set_aside.push((
+                kind,
+                report.dropped.len(),
+                first.source_path.display().to_string(),
+            ));
         }
         if let Some(failed_dependency) = skip_because {
             let reason = format!("skipped because the {failed_dependency} master failed to build");
@@ -1773,6 +1793,7 @@ fn resolve_or_build_masters_pinned(
         MasterInputs::default(),
         None,
         &mut build_failures,
+        &mut set_aside,
     );
     applied.bias_master = bias.as_ref().map(|master| master.label());
     let bias_failed = !selected.bias.is_empty()
@@ -1797,6 +1818,7 @@ fn resolve_or_build_masters_pinned(
         },
         bias_failed.then_some("bias"),
         &mut build_failures,
+        &mut set_aside,
     );
     let dark_flat_failed = !selected.dark_flat.is_empty()
         && dark_flat.is_none()
@@ -1830,6 +1852,7 @@ fn resolve_or_build_masters_pinned(
         },
         bias_failed.then_some("bias"),
         &mut build_failures,
+        &mut set_aside,
     );
     applied.dark_master = dark.as_ref().map(|master| master.label());
     stop_requested(cancel)?;
@@ -1850,6 +1873,7 @@ fn resolve_or_build_masters_pinned(
             None
         },
         &mut build_failures,
+        &mut set_aside,
     );
     // A flat can only be DIVIDED into a light whose pedestal has been
     // removed. With neither a bias nor a dark master, the division
@@ -1986,6 +2010,24 @@ fn resolve_or_build_masters_pinned(
         applied.warning = Some(match applied.warning.take() {
             Some(previous) => format!("{previous}. {failed}"),
             None => failed,
+        });
+    }
+    if !set_aside.is_empty() {
+        let note = format!(
+            "Built without frames the integrator would not accept — {}. Check the library for \
+             frames filed under the wrong filter or camera",
+            set_aside
+                .iter()
+                .map(|(kind, count, example)| format!(
+                    "{}: {count} frame(s), e.g. {example}",
+                    kind.as_str()
+                ))
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+        applied.warning = Some(match applied.warning.take() {
+            Some(previous) => format!("{previous}. {note}"),
+            None => note,
         });
     }
     if let Some(note) = flat_note {
@@ -2782,26 +2824,92 @@ fn temperature_matches(left: Option<f64>, right: Option<f64>) -> bool {
 /// per-light selection fingerprint (per-light trimming split fingerprints
 /// across multi-night stack groups, which refuse mixed selections).
 ///
-/// The rule itself belongs to `seiza-calibration`, which anchors a cluster on
-/// each candidate in turn and takes the first with enough frames to build, so
-/// a stray single flat shot near the lights does not orphan a complete session
-/// from a week earlier. All that is left here is naming the frames: Seiza
-/// hands back positions rather than copies of its own signatures, so the rows
-/// that come out are the caller's, with their ids and paths intact.
+/// See [`master_subset_report`] for what "coherent" has to mean here.
 fn coherent_master_subset(
     kind: CalibrationKind,
     frames: &[CalibrationFrame],
 ) -> Vec<CalibrationFrame> {
+    master_subset_report(kind, frames).kept
+}
+
+/// The frames that will feed one master, and how many were set aside because
+/// the integrator would have refused them.
+struct MasterSubset {
+    kept: Vec<CalibrationFrame>,
+    /// Frames that clustered by temperature and session but that the master
+    /// builder would reject outright, so they were dropped instead.
+    dropped: Vec<CalibrationFrame>,
+}
+
+/// Reduce candidates to the frames that can actually combine into one master.
+///
+/// Two rules apply, and only the first used to. `seiza-calibration` anchors a
+/// cluster on each candidate in turn and takes the first with enough frames to
+/// build, so a stray single flat shot near the lights does not orphan a
+/// complete session from a week earlier. That rule knows about temperature,
+/// session and angle.
+///
+/// It does not know about the filter, and neither did this function, so a
+/// night's flats — one rotator angle, one temperature, five filters — clustered
+/// as one coherent set. The integrator then compared each frame against the
+/// first and refused the whole master on the first mismatch, which cost a
+/// perfectly good flat master because a single frame from another filter had
+/// been shot minutes earlier.
+///
+/// So candidates now also have to pass the integrator's own admission test,
+/// against the same anchor the integrator will use: its first frame. Seiza owns
+/// both halves of the rule, and asking it the second question here means an odd
+/// frame is set aside rather than taken as grounds to abandon the master.
+fn master_subset_report(kind: CalibrationKind, frames: &[CalibrationFrame]) -> MasterSubset {
     let signatures: Vec<_> = frames.iter().map(frame_signature).collect();
     let role = if kind == CalibrationKind::Flat {
         seiza_calibration::FrameRole::Flat
     } else {
         seiza_calibration::FrameRole::Other
     };
-    seiza_calibration::coherent_subset_indices(&signatures, role, MIN_MASTER_FRAMES, &tolerances())
-        .into_iter()
-        .map(|index| frames[index].clone())
-        .collect()
+    let clustered = seiza_calibration::coherent_subset_indices(
+        &signatures,
+        role,
+        MIN_MASTER_FRAMES,
+        &tolerances(),
+    );
+
+    // The integrator takes its first frame as the reference and measures every
+    // later one against it, so anchor on the same frame it will. Candidates
+    // arrive nearest-first, which makes that the frame closest to the lights.
+    let mut kept = Vec::new();
+    let mut dropped = Vec::new();
+    let mut anchor: Option<usize> = None;
+    for index in clustered {
+        match anchor {
+            None => {
+                anchor = Some(index);
+                kept.push(frames[index].clone());
+            }
+            Some(anchor) if integrates_with(kind, &signatures[anchor], &signatures[index]) => {
+                kept.push(frames[index].clone());
+            }
+            Some(_) => dropped.push(frames[index].clone()),
+        }
+    }
+    MasterSubset { kept, dropped }
+}
+
+/// Whether the master builder would accept `candidate` into a set anchored on
+/// `reference`. This asks Seiza the same questions `seiza-stacking` asks while
+/// integrating, so selection and integration cannot disagree about one frame.
+fn integrates_with(
+    kind: CalibrationKind,
+    reference: &seiza_calibration::FrameSignature,
+    candidate: &seiza_calibration::FrameSignature,
+) -> bool {
+    if !seiza_calibration::sensor_consistent(reference, candidate) {
+        return false;
+    }
+    // Only a flat records an optical path; a bias or a dark does not care
+    // which filter was in the way.
+    kind != CalibrationKind::Flat
+        || seiza_calibration::optics_consistent(reference, candidate, &tolerances())
 }
 
 fn sort_candidates(frames: &mut [CalibrationFrame], reference_at: Option<i64>) {
@@ -3503,6 +3611,149 @@ mod tests {
         assert!(meta.readable, "the frame parses");
         assert_eq!(meta.camera_temp, None, "NaN is absent, not a reading");
         assert_eq!(meta.rotator_position, None);
+    }
+
+    #[test]
+    fn one_odd_filter_does_not_cost_the_whole_flat_master() {
+        // Taken from a real night: C925, 2026-08-11. Forty-one flats, one
+        // rotator angle, one focal length, one temperature band — and five
+        // filters, because the whole wheel was run back to back. A single
+        // OIII frame was shot four minutes before the R set.
+        //
+        // Every one of those frames clusters: same angle, same session, same
+        // temperature. The integrator then measured each against its first
+        // frame, hit the filter change, and refused the master outright, so a
+        // good R flat was lost to one frame from another filter.
+        let flat = |id: i64, filter: &str, captured_at: i64| CalibrationFrame {
+            id,
+            frame_uuid: format!("f{id}"),
+            rig_uuid: "r".into(),
+            kind: CalibrationKind::Flat,
+            source_path: format!("/flat-{id}-{filter}.fits").into(),
+            source_fingerprint: "x".into(),
+            captured_at: Some(captured_at),
+            telescope: Some("C925".into()),
+            camera: Some("ZWO ASI2600MM Pro".into()),
+            width: Some(6248),
+            height: Some(4176),
+            channels: Some(1),
+            binning_x: Some(1),
+            binning_y: Some(1),
+            gain: Some(100),
+            offset: Some(30),
+            readout_mode: None,
+            bayer_pattern: None,
+            exposure_s: Some(5.0),
+            camera_temp: Some(-9.8),
+            filter: Some(filter.into()),
+            focal_length_mm: Some(2350.0),
+            rotation: Some(101.99),
+            source_verified: false,
+        };
+        // Nearest-first, as selection delivers them: the R set, with the one
+        // OIII frame trailing it.
+        let mut frames: Vec<CalibrationFrame> = (0..10)
+            .map(|id| flat(id, "R", 1_000_000_000 + id))
+            .collect();
+        frames.push(flat(10, "OIII", 999_999_787));
+
+        let report = master_subset_report(CalibrationKind::Flat, &frames);
+        assert_eq!(report.kept.len(), 10, "the ten R flats still make a master");
+        assert!(
+            report
+                .kept
+                .iter()
+                .all(|frame| frame.filter.as_deref() == Some("R")),
+            "a master must not average two filters"
+        );
+        assert_eq!(
+            report.dropped.len(),
+            1,
+            "the odd frame is set aside, not fatal"
+        );
+        assert_eq!(report.dropped[0].filter.as_deref(), Some("OIII"));
+    }
+
+    #[test]
+    fn a_bias_master_does_not_care_which_filter_was_in_the_way() {
+        // The optical test is for flats alone. Biases carry a filter name
+        // only because the wheel happened to be somewhere; refusing to
+        // combine them on that basis would leave a rig with no bias at all.
+        let bias = |id: i64, filter: &str| CalibrationFrame {
+            id,
+            frame_uuid: format!("b{id}"),
+            rig_uuid: "r".into(),
+            kind: CalibrationKind::Bias,
+            source_path: format!("/bias-{id}.fits").into(),
+            source_fingerprint: "x".into(),
+            captured_at: Some(1_000_000_000 + id),
+            telescope: Some("C925".into()),
+            camera: Some("ZWO ASI2600MM Pro".into()),
+            width: Some(6248),
+            height: Some(4176),
+            channels: Some(1),
+            binning_x: Some(1),
+            binning_y: Some(1),
+            gain: Some(100),
+            offset: Some(30),
+            readout_mode: None,
+            bayer_pattern: None,
+            exposure_s: Some(0.0),
+            camera_temp: Some(-10.0),
+            filter: Some(filter.into()),
+            focal_length_mm: Some(2350.0),
+            rotation: Some(101.99),
+            source_verified: false,
+        };
+        let frames = vec![bias(0, "R"), bias(1, "OIII"), bias(2, "L")];
+        let report = master_subset_report(CalibrationKind::Bias, &frames);
+        assert_eq!(report.kept.len(), 3);
+        assert!(report.dropped.is_empty());
+    }
+
+    #[test]
+    fn a_frame_from_another_camera_never_joins_a_master() {
+        // Sensor disagreement is not tolerated for any kind: averaging two
+        // cameras produces a master that describes neither.
+        let frame = |id: i64, camera: &str, gain: i64| CalibrationFrame {
+            id,
+            frame_uuid: format!("d{id}"),
+            rig_uuid: "r".into(),
+            kind: CalibrationKind::Dark,
+            source_path: format!("/dark-{id}.fits").into(),
+            source_fingerprint: "x".into(),
+            captured_at: Some(1_000_000_000 + id),
+            telescope: Some("C925".into()),
+            camera: Some(camera.into()),
+            width: Some(6248),
+            height: Some(4176),
+            channels: Some(1),
+            binning_x: Some(1),
+            binning_y: Some(1),
+            gain: Some(gain),
+            offset: Some(30),
+            readout_mode: None,
+            bayer_pattern: None,
+            exposure_s: Some(300.0),
+            camera_temp: Some(-10.0),
+            filter: None,
+            focal_length_mm: Some(2350.0),
+            rotation: None,
+            source_verified: false,
+        };
+        let frames = vec![
+            frame(0, "ZWO ASI2600MM Pro", 100),
+            frame(1, "ZWO ASI2600MM Pro", 100),
+            frame(2, "ZWO ASI6200MM Pro", 100),
+            frame(3, "ZWO ASI2600MM Pro", 200),
+        ];
+        let report = master_subset_report(CalibrationKind::Dark, &frames);
+        assert_eq!(report.kept.len(), 2, "only the matching pair combines");
+        assert_eq!(
+            report.dropped.len(),
+            2,
+            "other camera and other gain are set aside"
+        );
     }
 
     #[test]

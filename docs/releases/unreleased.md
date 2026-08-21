@@ -308,3 +308,15 @@
   master flat".
   See [calibration
   libraries](https://github.com/theatrus/psf-guard/blob/main/docs/CALIBRATION_LIBRARY.md).
+- A night's flats shot across several filters no longer costs you the flat
+  master. Frames chosen for a master are now checked against the same rule
+  the integrator applies before it will combine them, so a frame that would
+  be refused is set aside and the master builds from the rest. Before, one
+  OIII flat shot four minutes before a run of ten R flats was enough to
+  abandon the R master outright, because everything about those frames
+  except the filter agreed. The calibration warning names what was set
+  aside and how many. Bias and dark frames are unaffected by filter, which
+  only a flat records; a frame from another camera, gain or readout mode is
+  still set aside for every kind.
+  See [calibration
+  libraries](https://github.com/theatrus/psf-guard/blob/main/docs/CALIBRATION_LIBRARY.md).
