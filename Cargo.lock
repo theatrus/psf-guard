@@ -4930,9 +4930,9 @@ dependencies = [
 
 [[package]]
 name = "seiza"
-version = "0.18.0"
+version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7119cb2aaad7b26ee829836937a8c96901633482c0998bd0ae9906e13e67fc98"
+checksum = "1c6639411436b7359655f7f3eb90e85b2269387ef765e69b1b48d256aa5a8762"
 dependencies = [
  "directories",
  "image",
@@ -4964,9 +4964,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-calibration"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4310f7d0a37f45d4df72262291fe831f1af92f2232cbf31267ac43a701f3f257"
+checksum = "a9d4e5d39295d42a6681272d18330a96137c8b14e35d4e74e2cd045f10babc21"
 dependencies = [
  "seiza-imgproc",
  "seiza-stats",
@@ -5073,9 +5073,9 @@ checksum = "02427eea0eebef160eba79502519b73272924ccea855462292006af2320ef9e2"
 
 [[package]]
 name = "seiza-stretch"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36e449c39ffe12c989a715479ce8e60990d0c9e8108d18d4f272a4631abbac27"
+checksum = "33bdfe46bd6c8433637ae4aed63b409b795549cab5be6ea5d00b9c046955f078"
 dependencies = [
  "rayon",
  "seiza-stats",
