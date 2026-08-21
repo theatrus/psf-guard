@@ -397,6 +397,16 @@ fn add_rotation_column(conn: &Connection) -> Result<bool> {
 /// moved away or has no `ROTATANG` keeps its NULL and is read, as before, as
 /// an angle nobody wrote down.
 fn backfill_flat_rotation(conn: &Connection) -> Result<bool> {
+    // Data rungs run once, unlike column rungs, whose re-runs are free. A
+    // flat whose file has no ROTATANG keeps its NULL forever, so re-reading
+    // every NULL row's header on each open pays hundreds of file reads per
+    // connection to learn nothing — a real catalog held 238 such flats and
+    // paid on every open. Import records the angle itself now; the only rows
+    // this can ever fill are the ones that existed before the column did,
+    // and those were visited the first time.
+    if recorded_schema_version(conn)? >= 3 {
+        return Ok(false);
+    }
     // A rung must survive a catalog that predates the columns it reads. This
     // one needs `kind` and `source_path` to find a flat and its file at all,
     // and a catalog without them holds no frame this could fill in. Failing
@@ -2874,8 +2884,35 @@ fn frame_signature(frame: &CalibrationFrame) -> seiza_calibration::FrameSignatur
     signature
 }
 
+/// Configured rotation tolerance in f64 bits; zero means "not configured".
+/// Process-wide because the tolerance is a deployment's property, set once
+/// from `[calibration]` in the config before any matching runs. Threading it
+/// as a parameter would touch every selection, clustering and build path for
+/// a value that never changes after startup.
+static ROTATION_TOLERANCE_BITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Override the rotator-angle tolerance for every match this process makes.
+/// Call once at startup, before any catalog is opened. `None` keeps the
+/// library default.
+pub fn configure_rotation_tolerance(degrees: Option<f64>) {
+    let bits = match degrees {
+        Some(value) if value.is_finite() && value >= 0.0 => value.to_bits(),
+        Some(other) => {
+            tracing::warn!("ignoring rotation tolerance {other}: not a non-negative number");
+            return;
+        }
+        None => 0,
+    };
+    ROTATION_TOLERANCE_BITS.store(bits, std::sync::atomic::Ordering::Relaxed);
+}
+
 fn tolerances() -> seiza_calibration::MatchTolerances {
-    seiza_calibration::MatchTolerances::default()
+    let mut tolerances = seiza_calibration::MatchTolerances::default();
+    let bits = ROTATION_TOLERANCE_BITS.load(std::sync::atomic::Ordering::Relaxed);
+    if bits != 0 {
+        tolerances.rotation_deg = f64::from_bits(bits);
+    }
+    tolerances
 }
 
 fn sensor_matches(light: &FrameMeta, candidate: &CalibrationFrame) -> bool {
@@ -3631,6 +3668,14 @@ mod tests {
         )
         .unwrap();
 
+        // The rung runs only while the catalog still claims a version that
+        // predates it: on a current catalog every candidate was already
+        // visited once, and re-reading headers on each open buys nothing.
+        conn.execute(
+            "UPDATE psf_guard_calibration_schema SET version = 2 WHERE singleton = 1",
+            [],
+        )
+        .unwrap();
         assert!(backfill_flat_rotation(&conn).unwrap(), "an angle was found");
         let recovered: Option<f64> = conn
             .query_row(
@@ -3652,7 +3697,13 @@ mod tests {
             .unwrap();
         assert_eq!(missing, None, "a vanished file keeps its NULL");
 
-        // Idempotent: a second upgrade finds nothing left to do.
+        // Once the catalog records version 3 the rung is spent: it does not
+        // re-read hundreds of headers on every open to learn nothing.
+        conn.execute(
+            "UPDATE psf_guard_calibration_schema SET version = 3 WHERE singleton = 1",
+            [],
+        )
+        .unwrap();
         assert!(!backfill_flat_rotation(&conn).unwrap());
     }
 
@@ -3779,6 +3830,30 @@ mod tests {
         assert!(meta.readable, "the frame parses");
         assert_eq!(meta.camera_temp, None, "NaN is absent, not a reading");
         assert_eq!(meta.rotator_position, None);
+    }
+
+    #[test]
+    fn configured_rotation_tolerance_reaches_every_match() {
+        // The knob is process-wide, and these tests share the process, so the
+        // probe value differs from the default only by epsilon: enough to
+        // prove the configured number is the one used, small enough that no
+        // concurrent test's angle comparison can flip on it.
+        let probe = seiza_calibration::MatchTolerances::default().rotation_deg + 1.0e-7;
+        configure_rotation_tolerance(Some(probe));
+        assert_eq!(tolerances().rotation_deg.to_bits(), probe.to_bits());
+
+        // Nonsense is refused and the previous setting stands.
+        configure_rotation_tolerance(Some(f64::NAN));
+        assert_eq!(tolerances().rotation_deg.to_bits(), probe.to_bits());
+        configure_rotation_tolerance(Some(-1.0));
+        assert_eq!(tolerances().rotation_deg.to_bits(), probe.to_bits());
+
+        // Unsetting restores the library default.
+        configure_rotation_tolerance(None);
+        assert_eq!(
+            tolerances().rotation_deg,
+            seiza_calibration::MatchTolerances::default().rotation_deg
+        );
     }
 
     #[test]

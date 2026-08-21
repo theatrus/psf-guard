@@ -337,3 +337,23 @@
   with every other flat until the files themselves were read. A set that
   falls below two usable frames is still reported rather than integrated,
   since a master built from one frame is that frame.
+- A stack whose lights span several calibration sessions no longer dies at
+  the first session boundary. Swapping in a later night's masters was judged
+  against the stack's reference frame — a light from another night, already
+  integrated, that the new masters would never touch — so a rotator that
+  moved between nights killed the whole stack at the boundary even though
+  every light had a matching flat. The swap is now judged by the frames it
+  actually calibrates. A frame that genuinely does not match is turned away
+  alone, and its reason now names the field and both readings — for example
+  "rotation light=101.93deg master=104.24deg (2.31 deg apart, tolerance
+  1.00)" — instead of a sentence that says only that something disagreed.
+  In auto mode a calibration problem is never fatal: if a session's masters
+  cannot be applied at all, its frames stack uncalibrated and the warning
+  says so and why. Opening a catalog also no longer re-reads hundreds of
+  flat headers looking for rotator angles it already knows are not there.
+- Flats now match lights within 2 degrees of rotator angle rather than 1,
+  absorbing a rotator that re-homes to the same framing with a little scatter
+  between nights. The tolerance is also now yours to set: Settings → Setups →
+  Calibration matching takes a value in degrees, applies it to the next stack
+  without a restart, and an empty field returns to the default. The setting
+  is server-wide and shared by the desktop and browser apps.

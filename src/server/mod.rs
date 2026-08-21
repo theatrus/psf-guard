@@ -1,6 +1,7 @@
 pub mod api;
 pub mod auth;
 pub mod cache;
+pub mod calibration_settings;
 pub mod catalog_install;
 pub mod database_context;
 pub mod embedded_static;
@@ -556,6 +557,11 @@ async fn run_server_internal(
         )
         .route("/info", get(handlers::get_server_info))
         .route("/stack-activity", get(stack_preview::get_stack_activity))
+        .route(
+            "/settings/calibration",
+            get(calibration_settings::get_calibration_settings)
+                .put(calibration_settings::update_calibration_settings),
+        )
         .route(
             "/processing-setups",
             get(processing_setups::list_setups).post(processing_setups::save_setup),
