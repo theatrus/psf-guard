@@ -320,3 +320,11 @@
   still set aside for every kind.
   See [calibration
   libraries](https://github.com/theatrus/psf-guard/blob/main/docs/CALIBRATION_LIBRARY.md).
+- Upgrading a catalog now reads the rotator angle off flats that predate the
+  `rotation` column. Adding that column left every existing row empty, and an
+  empty angle means "nobody wrote one down", which matches any angle at all —
+  so a library filled before the column existed looked like one where the
+  rotator had never moved, and flats from nights a degree or more apart were
+  offered as one set. The files recorded the angle all along; now the catalog
+  reads it. Flats only, headers only, and a flat whose file has moved away
+  keeps its empty angle rather than stopping the upgrade.
