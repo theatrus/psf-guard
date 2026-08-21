@@ -2487,9 +2487,7 @@ fn build_master(
         let file_valid = crate::image_io::open_linear_frame(&path)
             .and_then(|frame| frame.validate_master_kind(expected_kind))
             .is_ok();
-        if recorded_version.is_some()
-            && file_valid
-            && (row_current || recording_blocker.is_some())
+        if recorded_version.is_some() && file_valid && (row_current || recording_blocker.is_some())
         {
             if !row_current {
                 tracing::info!(
@@ -5201,11 +5199,9 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        let read_only = Connection::open_with_flags(
-            &database_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .unwrap();
+        let read_only =
+            Connection::open_with_flags(&database_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap();
         let (masters, applied) = resolve_or_build_masters(
             &read_only,
             &cache,
