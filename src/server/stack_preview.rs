@@ -1946,10 +1946,29 @@ fn run_group(
     // `{:#}` keeps the whole anyhow chain: "building master flat: <why>".
     // `to_string()` printed only the outermost context, which reported a
     // failed master build with no cause at all.
-    let plan = plan.map_err(|error| {
-        tracing::warn!("Stack group calibration failed: {error:#}");
-        format!("{error:#}")
-    })?;
+    //
+    // Auto mode's contract reaches here too: a plan that cannot be built —
+    // an unreadable cached master, a selection query refused — is a reason
+    // to stack raw and say why, never to abandon the group. The cancel
+    // check above already returned, so this cannot swallow a stop. Forced
+    // calibration keeps the hard error.
+    let plan = match plan {
+        Ok(plan) => plan,
+        Err(error) if group.calibration != crate::calibration::CalibrationMode::On => {
+            tracing::warn!("calibration plan failed; stacking raw: {error:#}");
+            let mut plan =
+                crate::calibration::CalibrationPlan::without_calibration(group.frames.len());
+            plan.applied.warning = Some(format!(
+                "Stacked without calibration: the calibration plan could not be built — \
+                 {error:#}"
+            ));
+            plan
+        }
+        Err(error) => {
+            tracing::warn!("Stack group calibration failed: {error:#}");
+            return Err(format!("{error:#}"));
+        }
+    };
     let mut applied_calibration = plan.applied.clone();
     // With no dark master anywhere in the plan, the lights keep their hot
     // pixels and the stack runs the spatial impulse filter over each frame.
@@ -2166,9 +2185,46 @@ fn run_group(
                 };
                 // The reference calibrates with its own session's masters;
                 // later sessions swap theirs in per batch.
+                //
+                // Creation validates the reference against those masters, so
+                // this is a place a calibration refusal can escape — it did
+                // once, killing two filters at frame zero over cached masters
+                // that predate optics metadata. Auto mode's contract instead:
+                // degrade to a raw stack, and say so and why. Forced
+                // calibration keeps the hard error.
                 let reference_masters = plan.sessions[plan.assignments[0]].masters.clone();
-                let stacker = LiveStacker::new(reference_frame, reference_masters, options)
-                    .map_err(|error| error.to_string())?;
+                let stacker = match LiveStacker::new(reference_frame, reference_masters, options.clone()) {
+                    Ok(stacker) => stacker,
+                    Err(error)
+                        if group.calibration != crate::calibration::CalibrationMode::On =>
+                    {
+                        tracing::warn!(
+                            "reference refused its session masters; stacking raw: {error}"
+                        );
+                        let note = format!(
+                            "Stacked without calibration: the reference frame's masters were \
+                             refused — {error}"
+                        );
+                        state.stack_previews.update(job_id, |job| {
+                            let calibration = &mut job.groups[group.index].calibration;
+                            calibration.warning = Some(match calibration.warning.take() {
+                                Some(previous) if previous.contains(&note) => previous,
+                                Some(previous) => format!("{previous}. {note}"),
+                                None => note,
+                            });
+                        });
+                        let reference_frame =
+                            crate::image_io::open_linear_frame(&group.frames[0].path)
+                                .map_err(|error| error.to_string())?;
+                        LiveStacker::new(
+                            reference_frame,
+                            seiza_stacking::CalibrationMasters::default(),
+                            options,
+                        )
+                        .map_err(|error| error.to_string())?
+                    }
+                    Err(error) => return Err(error.to_string()),
+                };
                 let reference_mapping = stacker.reference_mapping();
                 let reference_decision = StackFrameDecision {
                     image_id: group.frames[0].image_id,
@@ -2293,6 +2349,11 @@ fn run_group(
         // batch and a single-session group is exactly one call. On a
         // resumed stack this also replaces whatever masters the checkpoint
         // stored with the ones this batch needs.
+        // Frames the stacker turned away for calibration, folded into the
+        // group warning below: each carries its reason in the frame list,
+        // but nobody reads a hundred rows to learn that six frames shared
+        // one cause.
+        let mut calibration_rejections: Vec<String> = Vec::new();
         let mut batch_start = 0usize;
         while batch_start < pending.len() && !cancelled {
             let session = plan.assignments[pending[batch_start].0];
@@ -2378,6 +2439,11 @@ fn run_group(
                         // read are both "not integrated" to a caller reading the
                         // group's decisions; only the reason differs.
                         Ok(FrameDisposition::Rejected(reason)) => {
+                            if let seiza_stacking::FrameRejectionReason::Calibration(message) =
+                                &reason
+                            {
+                                calibration_rejections.push(message.clone());
+                            }
                             (rejected_decision(frame, reason.to_string()), false)
                         }
                         Err(error) => (rejected_decision(frame, error.to_string()), true),
@@ -2456,6 +2522,34 @@ fn run_group(
         // The accumulator is complete: checkpoint it before the snapshot
         // consumes the stacker, so an additive rebuild can pick it up here.
         save_checkpoint(&stacker, &ledger, &points);
+        // The per-frame reasons live in the frame list; the summary is what a
+        // person actually reads. One line per distinct cause, with a count.
+        if !calibration_rejections.is_empty() {
+            let mut counts: Vec<(String, usize)> = Vec::new();
+            for reason in &calibration_rejections {
+                match counts.iter_mut().find(|(existing, _)| existing == reason) {
+                    Some((_, count)) => *count += 1,
+                    None => counts.push((reason.clone(), 1)),
+                }
+            }
+            let note = format!(
+                "{} frame(s) could not be calibrated and were left out — {}",
+                calibration_rejections.len(),
+                counts
+                    .iter()
+                    .map(|(reason, count)| format!("{count}× {reason}"))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            );
+            state.stack_previews.update(job_id, |job| {
+                let calibration = &mut job.groups[group.index].calibration;
+                calibration.warning = Some(match calibration.warning.take() {
+                    Some(previous) if previous.contains(&note) => previous,
+                    Some(previous) => format!("{previous}. {note}"),
+                    None => note,
+                });
+            });
+        }
         // Last exit before the job writes anything. Orienting and rendering
         // follow, and a stop after this point would have to clean up published
         // artifacts.
