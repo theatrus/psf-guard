@@ -23,7 +23,7 @@ use std::time::UNIX_EPOCH;
 /// 1: the original calibration library.
 /// 2: `psf_guard_calibration_frame.rotation`, so a flat only matches a light
 ///    shot at the same rotator angle.
-pub const CALIBRATION_SCHEMA_VERSION: i64 = 2;
+pub const CALIBRATION_SCHEMA_VERSION: i64 = 3;
 // 2: flat masters suppress defective pixels spatially after integration.
 pub const MASTER_CACHE_VERSION: u32 = 2;
 const MIN_MASTER_FRAMES: usize = 2;
@@ -333,10 +333,16 @@ struct Migration {
     apply: fn(&Connection) -> Result<bool>,
 }
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    to_version: 2,
-    apply: add_rotation_column,
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        to_version: 2,
+        apply: add_rotation_column,
+    },
+    Migration {
+        to_version: 3,
+        apply: backfill_flat_rotation,
+    },
+];
 
 /// Columns selected by the calibration matching and master-building paths.
 ///
@@ -373,7 +379,68 @@ const READABLE_FRAME_COLUMNS: &[&str] = &[
 fn add_rotation_column(conn: &Connection) -> Result<bool> {
     // NULL means "not recorded", which the matcher treats as compatible, so
     // an upgraded catalog keeps matching the flats it matched before.
+    // [`backfill_flat_rotation`] then fills in what the files actually say.
     add_column_if_missing(conn, "psf_guard_calibration_frame", "rotation", "REAL")
+}
+
+/// Read the rotator angle off the flats that predate the `rotation` column.
+///
+/// Adding the column left every existing row NULL, and NULL means "not
+/// recorded", which matching treats as compatible with any angle. A library
+/// filled before the column existed therefore looked like one where the
+/// rotator had never moved, and flats from nights an angle apart were offered
+/// as one coherent set. The files knew all along; only the catalog did not.
+///
+/// Flats alone, because only a flat records an optical path — that also keeps
+/// this to the smallest group in a library, where darks and biases usually
+/// outnumber flats many times over. Headers only, no pixels. A file that has
+/// moved away or has no `ROTATANG` keeps its NULL and is read, as before, as
+/// an angle nobody wrote down.
+fn backfill_flat_rotation(conn: &Connection) -> Result<bool> {
+    // A rung must survive a catalog that predates the columns it reads. This
+    // one needs `kind` and `source_path` to find a flat and its file at all,
+    // and a catalog without them holds no frame this could fill in. Failing
+    // here would stall the ladder and leave every later rung unrun.
+    let columns = table_column_names(conn, "psf_guard_calibration_frame").unwrap_or_default();
+    let has = |wanted: &str| {
+        columns
+            .iter()
+            .any(|column| column.eq_ignore_ascii_case(wanted))
+    };
+    if !(has("kind") && has("source_path") && has("rotation")) {
+        return Ok(false);
+    }
+
+    let pending: Vec<(i64, String)> = conn
+        .prepare(
+            "SELECT id, source_path FROM psf_guard_calibration_frame
+             WHERE kind = ?1 AND rotation IS NULL",
+        )?
+        .query_map([CalibrationKind::Flat.as_str()], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if pending.is_empty() {
+        return Ok(false);
+    }
+
+    let mut recovered = 0_usize;
+    for (id, source_path) in &pending {
+        let meta = crate::commands::import::headers::read_frame_meta(Path::new(source_path));
+        let Some(rotation) = meta.rotator_position else {
+            continue;
+        };
+        conn.execute(
+            "UPDATE psf_guard_calibration_frame SET rotation = ?1 WHERE id = ?2",
+            rusqlite::params![rotation, id],
+        )?;
+        recovered += 1;
+    }
+    tracing::info!(
+        "calibration upgrade: recovered a rotator angle for {recovered} of {} flat(s)",
+        pending.len()
+    );
+    Ok(recovered > 0)
 }
 
 fn add_column_if_missing(
@@ -1774,6 +1841,14 @@ fn resolve_or_build_masters_pinned(
             inputs,
             master_recording_blocker.as_deref(),
         ) {
+            // The integrator reads the headers, so it catches what selection
+            // could not: a catalog holds only what it recorded at import.
+            Ok(Some(master)) => {
+                if let Some((path, _)) = master.skipped.first() {
+                    set_aside.push((kind, master.skipped.len(), path.display().to_string()));
+                }
+                Some(master)
+            }
             Ok(master) => master,
             Err(error) => {
                 tracing::warn!(
@@ -2314,6 +2389,9 @@ pub fn resolve_or_build_masters_for_group(
 struct BuiltMaster {
     path: PathBuf,
     master_uuid: String,
+    /// Inputs the integrator refused, which only it can see: it reads the
+    /// headers, while selection has only what the catalog recorded.
+    skipped: Vec<(PathBuf, String)>,
 }
 
 impl BuiltMaster {
@@ -2377,7 +2455,13 @@ fn build_master(
             .and_then(|frame| frame.validate_master_kind(expected_kind))
             .is_ok();
         if row_exists && file_valid {
-            return Ok(Some(BuiltMaster { path, master_uuid }));
+            return Ok(Some(BuiltMaster {
+                path,
+                master_uuid,
+                // A cached master is served without rebuilding, so there is
+                // no fresh refusal to report.
+                skipped: Vec::new(),
+            }));
         }
         if let Some(blocker) = recording_blocker {
             anyhow::bail!(
@@ -2418,6 +2502,18 @@ fn build_master(
         .collect::<Vec<_>>();
     let frame = seiza_stacking::build_master_from_fits(&paths, seiza_kind, &options)
         .with_context(|| format!("building master {}", kind.as_str()))?;
+    let skipped: Vec<(PathBuf, String)> = frame
+        .skipped_inputs
+        .iter()
+        .map(|skipped| (skipped.path.clone(), skipped.reason.clone()))
+        .collect();
+    for (path, reason) in &skipped {
+        tracing::warn!(
+            "master {}: left out {} — {reason}",
+            kind.as_str(),
+            path.display()
+        );
+    }
     if frame.defect_pixels_replaced > 0 {
         tracing::info!(
             "master {} suppressed {} defective pixel(s)",
@@ -2446,7 +2542,11 @@ fn build_master(
             dark_dependency,
         },
     )?;
-    Ok(Some(BuiltMaster { path, master_uuid }))
+    Ok(Some(BuiltMaster {
+        path,
+        master_uuid,
+        skipped,
+    }))
 }
 
 fn record_master(
@@ -3486,6 +3586,74 @@ mod tests {
         let mut card = value.as_bytes().to_vec();
         card.resize(80, b' ');
         output.extend(card);
+    }
+
+    #[test]
+    fn upgrading_recovers_the_rotator_angle_the_catalog_never_recorded() {
+        // Adding the `rotation` column left every existing row NULL, and NULL
+        // reads as "no angle was written down", which matches any angle. A
+        // library filled before the column existed therefore looked like one
+        // where the rotator had never moved, and flats from nights an angle
+        // apart were offered as one set. The files knew all along.
+        let temp = tempfile::tempdir().unwrap();
+        let flat = temp.path().join("flat.fits");
+        let mut header = Vec::new();
+        fits_card(&mut header, "SIMPLE  =                    T");
+        fits_card(&mut header, "BITPIX  =                   16");
+        fits_card(&mut header, "NAXIS   =                    2");
+        fits_card(&mut header, "NAXIS1  =                    4");
+        fits_card(&mut header, "NAXIS2  =                    4");
+        fits_card(&mut header, "IMAGETYP= 'FLAT'");
+        fits_card(&mut header, "ROTATANG=      101.98999786377");
+        fits_card(&mut header, "END");
+        header.resize(header.len().div_ceil(2880) * 2880, b' ');
+        let mut payload = vec![0_u8; 2880];
+        payload[0] = 1;
+        let mut file = std::fs::File::create(&flat).unwrap();
+        file.write_all(&header).unwrap();
+        file.write_all(&payload).unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO psf_guard_calibration_frame
+               (frame_uuid, rig_uuid, kind, source_path, source_fingerprint, rotation, added_at, updated_at)
+             VALUES ('u', 'r', 'flat', ?1, 'fp', NULL, 0, 0)",
+            [flat.to_string_lossy().as_ref()],
+        )
+        .unwrap();
+        // A flat whose file has gone must survive the upgrade, not stop it.
+        conn.execute(
+            "INSERT INTO psf_guard_calibration_frame
+               (frame_uuid, rig_uuid, kind, source_path, source_fingerprint, rotation, added_at, updated_at)
+             VALUES ('gone', 'r', 'flat', '/nowhere/missing.fits', 'fp', NULL, 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        assert!(backfill_flat_rotation(&conn).unwrap(), "an angle was found");
+        let recovered: Option<f64> = conn
+            .query_row(
+                "SELECT rotation FROM psf_guard_calibration_frame WHERE frame_uuid = 'u'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            recovered.is_some_and(|angle| (angle - 101.99).abs() < 0.01),
+            "the angle comes off the file: {recovered:?}"
+        );
+        let missing: Option<f64> = conn
+            .query_row(
+                "SELECT rotation FROM psf_guard_calibration_frame WHERE frame_uuid = 'gone'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(missing, None, "a vanished file keeps its NULL");
+
+        // Idempotent: a second upgrade finds nothing left to do.
+        assert!(!backfill_flat_rotation(&conn).unwrap());
     }
 
     fn write_test_fits(path: &Path, kind: &str, value: i16) {

@@ -320,3 +320,20 @@
   still set aside for every kind.
   See [calibration
   libraries](https://github.com/theatrus/psf-guard/blob/main/docs/CALIBRATION_LIBRARY.md).
+- Upgrading a catalog now reads the rotator angle off flats that predate the
+  `rotation` column. Adding that column left every existing row empty, and an
+  empty angle means "nobody wrote one down", which matches any angle at all —
+  so a library filled before the column existed looked like one where the
+  rotator had never moved, and flats from nights a degree or more apart were
+  offered as one set. The files recorded the angle all along; now the catalog
+  reads it. Flats only, headers only, and a flat whose file has moved away
+  keeps its empty angle rather than stopping the upgrade.
+- One calibration frame that disagrees with the rest no longer costs you the
+  whole master. The integrator reads each frame's headers, and a frame whose
+  metadata contradicts the reference is now left out and named in the
+  calibration warning instead of stopping the build. This is the half
+  selection cannot do: a catalog holds only what it recorded at import, so a
+  flat shot at a rotator angle the catalog never wrote down looked compatible
+  with every other flat until the files themselves were read. A set that
+  falls below two usable frames is still reported rather than integrated,
+  since a master built from one frame is that frame.
