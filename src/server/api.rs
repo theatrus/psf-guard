@@ -249,6 +249,110 @@ pub struct StarDetectionResponse {
     #[serde(default)]
     pub height: Option<usize>,
     pub stars: Vec<StarInfo>,
+    /// Per-region star statistics over the 3×3 grid, computed server-side by
+    /// `seiza-stars` so every consumer reads the same numbers the inspector
+    /// shows. Defaulted so star caches written before this field deserialize;
+    /// the handler recomputes on serve either way.
+    #[serde(default)]
+    pub cells: Vec<TiltCell>,
+    /// ASTAP-style corner-vs-center tilt and curvature verdict, when frame
+    /// dimensions are known.
+    #[serde(default)]
+    pub tilt: Option<TiltSummaryInfo>,
+}
+
+/// One 3×3 grid cell's aggregate star statistics, for tilt and aberration
+/// inspection. Mirrors `seiza_stars::tilt::CellStats`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TiltCell {
+    pub row: usize,
+    pub col: usize,
+    pub star_count: usize,
+    pub median_hfr: Option<f64>,
+    pub median_eccentricity: Option<f64>,
+    /// Mean elongation direction in radians over [0, π); axial circular mean.
+    pub mean_theta: Option<f64>,
+    /// Direction agreement, 0 (random) to 1 (aligned).
+    pub theta_coherence: f64,
+}
+
+/// One corner's median HFR. `corner` is kebab-case: "top-left" et al.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TiltCorner {
+    pub corner: String,
+    pub hfr: Option<f64>,
+}
+
+/// The tilt-versus-curvature verdict. Mirrors `seiza_stars::tilt::TiltSummary`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TiltSummaryInfo {
+    pub center_hfr: Option<f64>,
+    pub corners: Vec<TiltCorner>,
+    pub mean_hfr: Option<f64>,
+    /// (worst corner − best corner) / mean HFR, percent.
+    pub tilt_percent: Option<f64>,
+    /// mean(corners) / center − 1, percent.
+    pub curvature_percent: Option<f64>,
+    pub worst_corner: Option<String>,
+    pub best_corner: Option<String>,
+}
+
+impl TiltCell {
+    fn from_stats(stats: &seiza_stars::tilt::CellStats) -> Self {
+        Self {
+            row: stats.row,
+            col: stats.col,
+            star_count: stats.star_count,
+            median_hfr: stats.median_hfr,
+            median_eccentricity: stats.median_eccentricity,
+            mean_theta: stats.mean_theta,
+            theta_coherence: stats.theta_coherence,
+        }
+    }
+}
+
+/// Compute the grid and summary for a detection result. The math belongs to
+/// `seiza-stars`; this is only the shape the API speaks.
+pub fn tilt_analysis(
+    stars: &[StarInfo],
+    width: usize,
+    height: usize,
+) -> (Vec<TiltCell>, TiltSummaryInfo) {
+    let tilt_stars: Vec<seiza_stars::tilt::TiltStar> = stars
+        .iter()
+        .map(|star| seiza_stars::tilt::TiltStar {
+            x: star.x,
+            y: star.y,
+            hfr: star.hfr,
+            eccentricity: star.eccentricity,
+            theta: star.theta,
+        })
+        .collect();
+    let cells = seiza_stars::tilt::analyze_cells(&tilt_stars, width, height);
+    let summary = seiza_stars::tilt::tilt_summary(&cells);
+    (
+        cells.iter().map(TiltCell::from_stats).collect(),
+        TiltSummaryInfo {
+            center_hfr: summary.center_hfr,
+            corners: summary
+                .corners
+                .iter()
+                .map(|corner| TiltCorner {
+                    corner: corner.corner.as_str().to_string(),
+                    hfr: corner.hfr,
+                })
+                .collect(),
+            mean_hfr: summary.mean_hfr,
+            tilt_percent: summary.tilt_percent,
+            curvature_percent: summary.curvature_percent,
+            worst_corner: summary
+                .worst_corner
+                .map(|corner| corner.as_str().to_string()),
+            best_corner: summary
+                .best_corner
+                .map(|corner| corner.as_str().to_string()),
+        },
+    )
 }
 
 #[derive(Debug, Serialize, Deserialize)]

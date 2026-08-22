@@ -3946,8 +3946,16 @@ pub async fn get_image_stars(
     // Check if cached version exists
     if cache_manager.is_cached(&cache_path) {
         if let Ok(cached_data) = tokio::fs::read_to_string(&cache_path).await
-            && let Ok(response) = serde_json::from_str::<StarDetectionResponse>(&cached_data)
+            && let Ok(mut response) = serde_json::from_str::<StarDetectionResponse>(&cached_data)
         {
+            // The tilt analysis is derived, cheap, and versionless: compute
+            // it on serve rather than trusting what an older build cached.
+            if let (Some(width), Some(height)) = (response.width, response.height) {
+                let (cells, tilt) =
+                    crate::server::api::tilt_analysis(&response.stars, width, height);
+                response.cells = cells;
+                response.tilt = Some(tilt);
+            }
             return Ok(Json(ApiResponse::success(response)));
         }
         let _ = tokio::fs::remove_file(&cache_path).await;
@@ -4016,6 +4024,7 @@ pub async fn get_image_stars(
         .map_err(|e| AppError::InternalError(format!("Star detection task panicked: {}", e)))?
         .map_err(|e| AppError::InternalError(format!("Failed to detect stars: {}", e)))?;
 
+    let (cells, tilt) = crate::server::api::tilt_analysis(&stars, frame_width, frame_height);
     let response = StarDetectionResponse {
         detected_stars: detected_count,
         average_hfr,
@@ -4023,6 +4032,8 @@ pub async fn get_image_stars(
         width: Some(frame_width),
         height: Some(frame_height),
         stars,
+        cells,
+        tilt: Some(tilt),
     };
 
     // Save to cache
