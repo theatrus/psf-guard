@@ -381,3 +381,10 @@
   turns away for calibration are summarized in the same warning — count and
   reason — instead of hiding in the per-frame list. Forced calibration keeps
   hard errors.
+- The tilt inspector now draws ASTAP's tilt figure: each corner's HFD becomes
+  a vertex distance from center, so a flat field draws the dashed reference
+  square and a tilted sensor a quadrilateral leaning toward its soft corner.
+  The region statistics and the tilt/curvature verdict are computed by the
+  server, so the same numbers the dialog shows are available to every API
+  consumer, and a frame's analysis no longer depends on which browser
+  computed it.

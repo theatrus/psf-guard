@@ -73,3 +73,21 @@
   color: var(--color-error, #c0392b);
   margin: 0;
 }
+
+.tilt-verdict {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.tilt-diagram {
+  width: 160px;
+  height: 160px;
+  flex: none;
+  color: var(--color-text-secondary, #999);
+}
+
+.tilt-diagram-label {
+  font-size: 13px;
+  fill: currentColor;
+}

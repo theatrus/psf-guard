@@ -66,6 +66,41 @@ export interface StarDetectionResponse {
   width?: number | null;
   height?: number | null;
   stars: StarInfo[];
+  /** Per-region statistics over the 3×3 grid, computed server-side by
+   * seiza-stars. Absent only from a server predating the field. */
+  cells?: TiltCell[];
+  tilt?: TiltSummaryInfo | null;
+}
+
+/** One 3×3 grid cell's aggregate star statistics (server-computed). */
+export interface TiltCell {
+  row: number;
+  col: number;
+  star_count: number;
+  median_hfr: number | null;
+  median_eccentricity: number | null;
+  /** Mean elongation direction in radians over [0, π); axial circular mean. */
+  mean_theta: number | null;
+  /** Direction agreement, 0 (random) to 1 (aligned). */
+  theta_coherence: number;
+}
+
+export type TiltCornerName = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+
+export interface TiltCorner {
+  corner: TiltCornerName;
+  hfr: number | null;
+}
+
+/** ASTAP-style corner-vs-center tilt and curvature verdict (server-computed). */
+export interface TiltSummaryInfo {
+  center_hfr: number | null;
+  corners: TiltCorner[];
+  mean_hfr: number | null;
+  tilt_percent: number | null;
+  curvature_percent: number | null;
+  worst_corner: TiltCornerName | null;
+  best_corner: TiltCornerName | null;
 }
 
 export type AstrometryAnalysisStatus = 'unavailable' | 'catalog_only' | 'solved' | 'failed';
