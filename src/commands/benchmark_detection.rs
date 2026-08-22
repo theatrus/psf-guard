@@ -88,7 +88,7 @@ pub fn benchmark_detection(
         let class = match &preset_mode {
             PresetMode::Fixed => return (apply_flags(HocusFocusParams::default()), "fixed"),
             PresetMode::Class(class) => *class,
-            PresetMode::Auto => HocusFocusParams::for_frame_path(path).1,
+            PresetMode::Auto => crate::hocus_focus_star_detection::params_for_frame_path(path).1,
         };
         let label = match class {
             TelescopeClass::WideField => "wide",

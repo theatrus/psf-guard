@@ -7,6 +7,9 @@ static DEBUG_ENABLED: AtomicBool = AtomicBool::new(false);
 /// Initialize debug mode
 pub fn init_debug(verbose: bool) {
     DEBUG_ENABLED.store(verbose, Ordering::Relaxed);
+    // The detectors moved to seiza-stars with their own gate of the same
+    // shape; one verbose flag turns on both, as it always did.
+    seiza_stars::debug::init_debug(verbose);
 }
 
 /// Check if debug mode is enabled
