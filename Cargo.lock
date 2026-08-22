@@ -4931,9 +4931,9 @@ dependencies = [
 
 [[package]]
 name = "seiza"
-version = "0.18.3"
+version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61e5f0166ac95b3ff69a7da0c840b6ebd45ea4f3e0761053df4af83e9053d53b"
+checksum = "c21ff8013e9d22fdd8c7fc1b984c37ff9ddc14486397c8473aca33eeeba00668"
 dependencies = [
  "directories",
  "image",
@@ -5046,9 +5046,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-stacking"
-version = "0.11.2"
+version = "0.11.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6fc1e72241a3f376bfcd8401d19c3ed4a0daf942e9a04287acf77629c07ef6f"
+checksum = "f48d49764158fda6a78d1e0b6d73a79bdc9a7abacc945178edadf0094a4e9460"
 dependencies = [
  "rayon",
  "seiza",
