@@ -462,8 +462,7 @@ pub fn generate_annotated(
     let fits = FitsImage::from_file(fits_path)?;
     // Telescope-class preset from the frame's own headers, so a wide-field
     // or long-focal-length frame is annotated with knobs sized to its stars.
-    let (params, _class) =
-        crate::hocus_focus_star_detection::HocusFocusParams::for_frame_path(fits_path);
+    let (params, _class) = crate::hocus_focus_star_detection::params_for_frame_path(fits_path);
     let label_scale = hfr_label_scale_for(fits.width as u32, size);
     let rgb = create_annotated_image(
         &fits,

@@ -46,6 +46,7 @@ seiza-xisf = "0.2.0"
 seiza-background = "0.2.1"
 seiza-calibration = "0.4.1"
 seiza-deconvolution = "0.1.0"
+seiza-stars = "0.1.0"
 sha2 = "0.11"
 base64 = "0.23"
 rayon = "1"
@@ -124,3 +125,4 @@ overflow-checks = false
 
 [build-dependencies]
 tauri-build = { version = "2.6.2", features = [] }
+

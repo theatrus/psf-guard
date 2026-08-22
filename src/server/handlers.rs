@@ -3890,7 +3890,7 @@ pub async fn get_image_stars(
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,
 ) -> Result<Json<ApiResponse<StarDetectionResponse>>, AppError> {
-    use crate::hocus_focus_star_detection::{detect_stars_hocus_focus, HocusFocusParams};
+    use crate::hocus_focus_star_detection::detect_stars_hocus_focus;
     use crate::image_analysis::FitsImage;
     use crate::psf_fitting::PSFType;
     use crate::server::cache::CacheManager;
@@ -3962,8 +3962,9 @@ pub async fn get_image_stars(
 
             // Telescope-class preset from the frame's headers, with the
             // endpoint's PSF fitting on top.
-            let (mut params, _class) =
-                HocusFocusParams::for_frame_path(std::path::Path::new(&fits_path_str));
+            let (mut params, _class) = crate::hocus_focus_star_detection::params_for_frame_path(
+                std::path::Path::new(&fits_path_str),
+            );
             params.psf_type = PSFType::Moffat4;
 
             let detection_result =

@@ -1161,7 +1161,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4050,6 +4050,7 @@ dependencies = [
  "seiza-imgproc",
  "seiza-satellites",
  "seiza-stacking",
+ "seiza-stars",
  "seiza-stretch",
  "seiza-xisf",
  "semver",
@@ -4168,7 +4169,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4719,7 +4720,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4776,7 +4777,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5063,6 +5064,17 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.16",
  "zstd",
+]
+
+[[package]]
+name = "seiza-stars"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ace5b380efa4ccd2baab93408cc17a0c281d6a672241d513c898d68ac0813b40"
+dependencies = [
+ "nalgebra",
+ "rayon",
+ "seiza-imgproc",
 ]
 
 [[package]]
@@ -6073,7 +6085,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

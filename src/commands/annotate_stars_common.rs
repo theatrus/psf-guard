@@ -8,7 +8,7 @@ use seiza_stretch::{stretch_u16_to_u16, StretchParams};
 
 /// Create an annotated RGB image from FITS data. `params` selects the
 /// detection configuration — pass a telescope-class preset
-/// (`HocusFocusParams::for_frame_path`) when the frame's headers are
+/// (`params_for_frame_path`) when the frame's headers are
 /// available, or defaults otherwise.
 ///
 /// `hfr_label_scale` draws each star's measured HFR beside its circle at
