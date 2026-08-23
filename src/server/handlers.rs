@@ -3983,20 +3983,14 @@ pub async fn get_image_stars(
                 .stars
                 .iter()
                 .map(|star| {
-                    let (eccentricity, theta) = if let Some(psf) = &star.psf_model {
-                        // Report the MAJOR-axis direction in [0, π): the fit
-                        // may express the same ellipse as either sigma being
-                        // larger, and clients averaging directions must not
-                        // see the two forms 90° apart.
-                        let raw = if psf.sigma_x >= psf.sigma_y {
-                            psf.theta
-                        } else {
-                            psf.theta + std::f64::consts::FRAC_PI_2
-                        };
-                        let major = raw.rem_euclid(std::f64::consts::PI);
-                        (psf.eccentricity, Some(major))
-                    } else {
-                        (0.0, None)
+                    // Major-axis direction in [0, π): the fit may express
+                    // the same ellipse as either sigma being larger, and
+                    // clients averaging directions must not see the two
+                    // forms 90° apart. The rule this handler used to spell
+                    // out now lives on the model itself.
+                    let (eccentricity, theta) = match &star.psf_model {
+                        Some(psf) => (psf.eccentricity, Some(psf.major_axis_theta())),
+                        None => (0.0, None),
                     };
 
                     StarInfo {
