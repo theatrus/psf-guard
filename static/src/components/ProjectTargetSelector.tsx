@@ -24,6 +24,8 @@ export default function ProjectTargetSelector() {
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const optionsRef = useRef<HTMLDivElement>(null);
+  const revealedSelectionRef = useRef(false);
   const searchExpansionSeedRef = useRef<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -100,6 +102,25 @@ export default function ProjectTargetSelector() {
   useEffect(() => {
     if (pickerOpen) searchRef.current?.focus();
   }, [pickerOpen]);
+
+  // Opening the picker lands on the current selection, not the top of the
+  // list. The selected row is the one carrying aria-current; a selected
+  // target's row mounts only after its targets load, so this waits on the
+  // navigation model and scrolls once per open.
+  useEffect(() => {
+    // No database in scope means the current row is "Choose a project" at the
+    // very top, which needs no scrolling to be seen.
+    if (!pickerOpen || dbId === null) {
+      revealedSelectionRef.current = false;
+      return;
+    }
+    if (revealedSelectionRef.current) return;
+    const current = optionsRef.current?.querySelector<HTMLElement>('[aria-current="true"]');
+    if (!current) return;
+    revealedSelectionRef.current = true;
+    // jsdom has no layout, so guard for tests and older embedded webviews.
+    current.scrollIntoView?.({ block: 'center' });
+  }, [pickerOpen, dbId, navigation, targetsLoading]);
 
   // Seed expansion once for each search, and once more if target rows finish
   // loading after the user starts typing. Explicit state owns expansion after
@@ -266,7 +287,7 @@ export default function ProjectTargetSelector() {
                 </button>
               </div>
             )}
-            <div className="selector-options" aria-label="Projects and targets">
+            <div ref={optionsRef} className="selector-options" aria-label="Projects and targets">
               <button
                 type="button"
                 className={`selector-option ${dbId === null ? 'is-selected' : ''}`}
