@@ -304,6 +304,11 @@ pub struct DbRegistry {
     /// means the library defaults.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calibration: Option<CalibrationSettings>,
+    /// Process-global export defaults shared by every database, edited from
+    /// the settings panel. Additive within registry v2; absent means the
+    /// standard layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub export: Option<ExportSettings>,
 }
 
 /// How far apart two readings may sit and still calibrate each other.
@@ -320,6 +325,16 @@ pub struct CalibrationSettings {
     pub rotation_tolerance_deg: Option<f64>,
 }
 
+/// What the export dialog starts from. The dialog still offers every layout
+/// on each export; this only seeds the choice.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ExportSettings {
+    /// Layout new exports start from. Absent means the standard
+    /// grouped-by-target tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_layout: Option<crate::commands::export::ExportLayout>,
+}
+
 impl Default for DbRegistry {
     fn default() -> Self {
         Self {
@@ -329,6 +344,7 @@ impl Default for DbRegistry {
             astrometry: None,
             peers: Vec::new(),
             calibration: None,
+            export: None,
         }
     }
 }
@@ -714,6 +730,30 @@ mod tests {
         bare.save(&path).unwrap();
         let serialized = std::fs::read_to_string(&path).unwrap();
         assert!(!serialized.contains("calibration"));
+    }
+
+    #[test]
+    fn round_trips_export_settings_and_absence_stays_absent() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let reg = DbRegistry {
+            export: Some(ExportSettings {
+                default_layout: Some(crate::commands::export::ExportLayout::Wbpp),
+            }),
+            ..Default::default()
+        };
+        reg.save(&path).unwrap();
+
+        let reloaded = DbRegistry::load_or_init(&path).unwrap();
+        assert_eq!(reloaded.export, reg.export);
+        let serialized = std::fs::read_to_string(&path).unwrap();
+        assert!(serialized.contains("\"export\""));
+        assert!(serialized.contains("wbpp"));
+
+        let bare = DbRegistry::default();
+        bare.save(&path).unwrap();
+        let serialized = std::fs::read_to_string(&path).unwrap();
+        assert!(!serialized.contains("\"export\""));
     }
 
     #[test]

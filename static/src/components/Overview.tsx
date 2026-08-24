@@ -29,7 +29,7 @@ import {
   saveProjectSeenState,
 } from '../utils/projectRecency';
 import { formatRelativeTime } from '../utils/relativeTime';
-import { useDbProjectTarget } from '../hooks/useUrlState';
+import { useDbProjectTarget, useUrlParams } from '../hooks/useUrlState';
 import { imageDetailPath } from '../utils/imageDetailRoutes';
 import {
   groupProjectsByActivity,
@@ -41,6 +41,7 @@ import {
 } from '../utils/projectNavigation';
 import ProjectSchedulerDialog from './ProjectSchedulerDialog';
 import CalibrationReportDialog from './CalibrationReportDialog';
+import ExportDialog, { type ExportRequest } from './ExportDialog';
 import PreviewImage from './PreviewImage';
 import { useColorPreview } from '../hooks/useColorPreview';
 import './Overview.css';
@@ -64,6 +65,11 @@ export default function Overview() {
   const queryClient = useQueryClient();
   const [projectSearch, setProjectSearch] = useState('');
   const [projectSort, setProjectSort] = useState<ProjectSort>('recent');
+  // Narrows the projects list to one catalog. Lives in URL state (`dbfilter`)
+  // so reload restores it. Distinct from the parked `db` return-scope slug,
+  // which marks where the user came from and never filters this view.
+  const { getParam, updateParams } = useUrlParams();
+  const dbFilter = getParam('dbfilter');
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [organizing, setOrganizing] = useState<Organizing | null>(null);
   const [organizeBusy, setOrganizeBusy] = useState(false);
@@ -105,20 +111,33 @@ export default function Overview() {
   // The database whose server export this page last started (or found
   // running); drives the progress line under the catalog summary.
   const [exportJobDb, setExportJobDb] = useState<string | null>(null);
-  // One choice for every export affordance on the page. Kept here rather than
-  // per row so a project and its targets cannot disagree about the tree they
-  // land in.
-  const [exportLayout, setExportLayout] = useState<ExportLayout>('standard');
-  const handleLocalExport = async (
+  // The export the user clicked, awaiting its layout choice in the dialog.
+  const [pendingExport, setPendingExport] = useState<ExportRequest | null>(null);
+  // Seeds the dialog's layout choice; edited in the settings panel.
+  const { data: exportSettings } = useQuery({
+    queryKey: ['export-settings'],
+    queryFn: apiClient.getExportSettings,
+    staleTime: 5 * 60 * 1000,
+  });
+  const openExport = (
+    kind: ExportRequest['kind'],
     dbId: string,
     scope: { project_id?: number; target_id?: number },
     label: string
+  ) => {
+    if (!exportBusy) setPendingExport({ kind, dbId, scope, label });
+  };
+  const handleLocalExport = async (
+    dbId: string,
+    scope: { project_id?: number; target_id?: number },
+    label: string,
+    layout: ExportLayout
   ) => {
     try {
       const dest = await tauriFileSystem.pickImageDirectory();
       if (!dest) return;
       setExportBusy(true);
-      const summary = await apiClient.exportLocal(dbId, { dest, layout: exportLayout, ...scope });
+      const summary = await apiClient.exportLocal(dbId, { dest, layout, ...scope });
       const placed = summary.copied + summary.linked;
       alert(
         `Exported ${label}: ${placed} file(s) placed` +
@@ -140,13 +159,14 @@ export default function Overview() {
   const handleServerExport = async (
     dbId: string,
     scope: { project_id?: number; target_id?: number },
-    label: string
+    label: string,
+    layout: ExportLayout
   ) => {
     try {
       setExportBusy(true);
       const status = await apiClient.startServerExport(dbId, {
         ...scope,
-        layout: exportLayout,
+        layout,
         subdirectory: label,
         scope_label: label,
       });
@@ -226,13 +246,14 @@ export default function Overview() {
   const filteredProjects = useMemo(() => {
     const search = projectSearch.trim().toLocaleLowerCase();
     return projects.filter((project) => {
+      if (dbFilter && project.db_id !== dbFilter) return false;
       if (projectMatchesSearch(project, projectSearch)) return true;
       if (!search) return true;
       return (targetsByProject[`${project.db_id}:${project.id}`] || []).some((target) =>
         target.name.toLocaleLowerCase().includes(search)
       );
     });
-  }, [projectSearch, projects, targetsByProject]);
+  }, [dbFilter, projectSearch, projects, targetsByProject]);
 
   const activeProjectGroups = useMemo(
     () =>
@@ -482,21 +503,6 @@ export default function Overview() {
             <span>Catalog</span>
             <strong>{overallStats.total_images.toLocaleString()} images</strong>
           </div>
-          <label className="export-layout-choice">
-            <span>Export layout</span>
-            <select
-              value={exportLayout}
-              onChange={(event) => setExportLayout(event.target.value as ExportLayout)}
-              title={
-                exportLayout === 'wbpp'
-                  ? 'One folder per frame type, with dark flats among the darks, ready for WeightedBatchPreprocessing'
-                  : "Grouped by target: <target>/LIGHT/<filter>, with BIAS, DARK and DARKFLAT at the root"
-              }
-            >
-              <option value="standard">Grouped by target</option>
-              <option value="wbpp">WBPP</option>
-            </select>
-          </label>
           {exportJobLine && (
             <div
               className={`server-export-status${
@@ -596,6 +602,23 @@ export default function Overview() {
               <p>Grouped by the latest captured frame.</p>
             </div>
             <div className="projects-toolbar-controls">
+              {databases && databases.length > 1 && (
+                <label className="project-db-filter">
+                  <span>Database</span>
+                  <select
+                    value={dbFilter ?? 'all'}
+                    onChange={(event) => updateParams({ dbfilter: event.target.value })}
+                    aria-label="Filter projects by database"
+                  >
+                    <option value="all">All databases</option>
+                    {databases.map((db) => (
+                      <option key={db.id} value={db.id}>
+                        {db.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <label className="project-search">
                 <span className="sr-only">Search projects or targets</span>
                 <input
@@ -967,53 +990,31 @@ export default function Overview() {
                       <span>{project.filters_used.join(', ')}</span>
                     )}
                     {project.has_files && project.accepted_images > 0 && (
-                      isTauri ? (
-                        <span
-                          className="export-link"
-                          title="Export this project's accepted lights to a local folder (hardlink or copy, rejects excluded)"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (!exportBusy) {
-                              handleLocalExport(
-                                project.db_id,
-                                { project_id: project.id },
-                                project.display_name
-                              );
-                            }
-                          }}
-                        >
-                          ⬇ Export
-                        </span>
-                      ) : serverExportDir(project.db_id) ? (
-                        <span
-                          className="export-link"
-                          title={`Export this project's accepted lights to the server's export directory (${serverExportDir(project.db_id)}), reflinking where the filesystem supports it`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (!exportBusy) {
-                              handleServerExport(
-                                project.db_id,
-                                { project_id: project.id },
-                                project.display_name
-                              );
-                            }
-                          }}
-                        >
-                          ⬇ Export
-                        </span>
-                      ) : (
-                        <a
-                          className="export-link"
-                          href={apiClient.exportDownloadUrl(project.db_id, {
-                            project_id: project.id,
-                            layout: exportLayout,
-                          })}
-                          title={`Download this project's accepted lights as a zip (${exportLayout === 'wbpp' ? 'WBPP layout' : 'grouped by target'}, rejects excluded)`}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          ⬇ Export
-                        </a>
-                      )
+                      <span
+                        className="export-link"
+                        title={
+                          isTauri
+                            ? "Export this project's accepted lights to a local folder (hardlink or copy, rejects excluded)"
+                            : serverExportDir(project.db_id)
+                              ? `Export this project's accepted lights to the server's export directory (${serverExportDir(project.db_id)}), reflinking where the filesystem supports it`
+                              : "Download this project's accepted lights as a zip (rejects excluded)"
+                        }
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openExport(
+                            isTauri
+                              ? 'local'
+                              : serverExportDir(project.db_id)
+                                ? 'server'
+                                : 'download',
+                            project.db_id,
+                            { project_id: project.id },
+                            project.display_name
+                          );
+                        }}
+                      >
+                        ⬇ Export
+                      </span>
                     )}
                   </div>
 
@@ -1105,52 +1106,31 @@ export default function Overview() {
                                 </button>
                               )}
                               {target.has_files && target.accepted_count > 0 && (
-                                isTauri ? (
-                                  <button
-                                    type="button"
-                                    className="target-settings-button"
-                                    title="Export this target's accepted lights to a local folder"
-                                    onClick={() => {
-                                      if (!exportBusy) {
-                                        handleLocalExport(
-                                          target.db_id,
-                                          { target_id: target.id },
-                                          target.name
-                                        );
-                                      }
-                                    }}
-                                  >
-                                    ↓ Export
-                                  </button>
-                                ) : serverExportDir(target.db_id) ? (
-                                  <button
-                                    type="button"
-                                    className="target-settings-button"
-                                    title={`Export this target's accepted lights to the server's export directory (${serverExportDir(target.db_id)})`}
-                                    onClick={() => {
-                                      if (!exportBusy) {
-                                        handleServerExport(
-                                          target.db_id,
-                                          { target_id: target.id },
-                                          target.name
-                                        );
-                                      }
-                                    }}
-                                  >
-                                    ↓ Export
-                                  </button>
-                                ) : (
-                                  <a
-                                    className="target-settings-button"
-                                    href={apiClient.exportDownloadUrl(target.db_id, {
-                                      target_id: target.id,
-                                      layout: exportLayout,
-                                    })}
-                                    title={`Download this target's accepted lights as a zip (${exportLayout === 'wbpp' ? 'WBPP layout' : 'grouped by target'})`}
-                                  >
-                                    ↓ Export
-                                  </a>
-                                )
+                                <button
+                                  type="button"
+                                  className="target-settings-button"
+                                  title={
+                                    isTauri
+                                      ? "Export this target's accepted lights to a local folder"
+                                      : serverExportDir(target.db_id)
+                                        ? `Export this target's accepted lights to the server's export directory (${serverExportDir(target.db_id)})`
+                                        : "Download this target's accepted lights as a zip"
+                                  }
+                                  onClick={() =>
+                                    openExport(
+                                      isTauri
+                                        ? 'local'
+                                        : serverExportDir(target.db_id)
+                                          ? 'server'
+                                          : 'download',
+                                      target.db_id,
+                                      { target_id: target.id },
+                                      target.name
+                                    )
+                                  }
+                                >
+                                  ↓ Export
+                                </button>
                               )}
                             </div>
 
@@ -1273,6 +1253,24 @@ export default function Overview() {
           )}
         </div>
       </div>
+
+      {pendingExport && (
+        <ExportDialog
+          request={pendingExport}
+          defaultLayout={exportSettings?.default_layout ?? 'standard'}
+          busy={exportBusy}
+          onClose={() => setPendingExport(null)}
+          onConfirm={(layout) => {
+            const request = pendingExport;
+            setPendingExport(null);
+            if (request.kind === 'local') {
+              handleLocalExport(request.dbId, request.scope, request.label, layout);
+            } else {
+              handleServerExport(request.dbId, request.scope, request.label, layout);
+            }
+          }}
+        />
+      )}
 
       {schedulerProject && (
         <ProjectSchedulerDialog

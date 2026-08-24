@@ -240,17 +240,19 @@
   outline-offset: 2px;
 }
 
+/* The picker is capped so a wide window feeds the leftover width to the
+   status slot instead of stretching the picker button across the header. */
 .header-context {
   grid-area: context;
   display: grid;
-  grid-template-columns: minmax(19rem, 1fr) 17rem;
+  grid-template-columns: minmax(19rem, 30rem) minmax(17rem, 1fr);
   align-items: center;
   gap: 0.5rem;
   min-width: 0;
 }
 
 .header-context.header-context--overview {
-  grid-template-columns: 17rem;
+  grid-template-columns: minmax(17rem, 28rem);
   justify-content: end;
 }
 
@@ -258,9 +260,11 @@
   display: flex;
   align-items: center;
   gap: 0.35rem;
-  width: 17rem;
-  height: 32px;
+  width: 100%;
   min-width: 0;
+  max-width: 28rem;
+  justify-self: end;
+  height: 32px;
   overflow: hidden;
 }
 
@@ -481,6 +485,32 @@
   outline: 2px solid var(--color-primary-alpha-20);
 }
 
+.selector-db-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 7px;
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+}
+
+.selector-db-filter select {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: var(--color-bg-input);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.selector-db-filter select:focus {
+  border-color: var(--color-primary);
+  outline: 2px solid var(--color-primary-alpha-20);
+}
+
 .selector-options {
   max-height: min(62vh, 480px);
   margin-top: 7px;
@@ -683,7 +713,7 @@
   }
 
   .header-context {
-    grid-template-columns: minmax(19rem, 1fr) 17rem;
+    grid-template-columns: minmax(19rem, 30rem) minmax(17rem, 1fr);
   }
 
   .header-context.header-context--overview {
@@ -734,6 +764,8 @@
      both reduced to their indicators. */
   .header-cache-slot {
     width: 4.5rem;
+    min-width: 0;
+    max-width: none;
     height: 28px;
   }
 
@@ -6330,6 +6362,57 @@
 .dialog-intro {
   margin: 0 0 0.75rem;
   color: var(--color-text-muted);
+}
+
+/* Export dialog: the per-export layout choice */
+.export-dialog {
+  width: min(30rem, calc(100vw - 2rem));
+}
+
+.export-dialog-scope {
+  margin: 0 0 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.export-layout-options {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0.6rem 0.75rem 0.75rem;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 6px;
+}
+
+.export-layout-options legend {
+  padding: 0 0.3rem;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.export-layout-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  cursor: pointer;
+}
+
+.export-layout-option input {
+  margin-top: 0.2rem;
+}
+
+.export-layout-option span {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.export-layout-option small {
+  color: var(--color-text-muted);
+}
+
+.dialog-footer .export-dialog-download {
+  flex: 0 0 auto;
+  padding: 0.45rem 0.8rem;
+  text-decoration: none;
 }
 
 .reject-review-list {

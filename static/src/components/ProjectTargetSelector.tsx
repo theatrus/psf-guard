@@ -24,11 +24,16 @@ export default function ProjectTargetSelector() {
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const optionsRef = useRef<HTMLDivElement>(null);
+  const revealedSelectionRef = useRef(false);
   const searchExpansionSeedRef = useRef<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
+  // Picker-local: narrows the popover tree to one catalog without changing
+  // the selected scope until a row is chosen.
+  const [dbFilter, setDbFilter] = useState<string | null>(null);
   const [relativeNow, setRelativeNow] = useState(Date.now);
 
   const invalidateAllForDb = () => {
@@ -66,8 +71,9 @@ export default function ProjectTargetSelector() {
         databases: databases ?? [],
         search,
         relativeNow,
+        dbFilter,
       }),
-    [projects, targets, databases, search, relativeNow]
+    [projects, targets, databases, search, relativeNow, dbFilter]
   );
 
   useEffect(() => {
@@ -96,6 +102,25 @@ export default function ProjectTargetSelector() {
   useEffect(() => {
     if (pickerOpen) searchRef.current?.focus();
   }, [pickerOpen]);
+
+  // Opening the picker lands on the current selection, not the top of the
+  // list. The selected row is the one carrying aria-current; a selected
+  // target's row mounts only after its targets load, so this waits on the
+  // navigation model and scrolls once per open.
+  useEffect(() => {
+    // No database in scope means the current row is "Choose a project" at the
+    // very top, which needs no scrolling to be seen.
+    if (!pickerOpen || dbId === null) {
+      revealedSelectionRef.current = false;
+      return;
+    }
+    if (revealedSelectionRef.current) return;
+    const current = optionsRef.current?.querySelector<HTMLElement>('[aria-current="true"]');
+    if (!current) return;
+    revealedSelectionRef.current = true;
+    // jsdom has no layout, so guard for tests and older embedded webviews.
+    current.scrollIntoView?.({ block: 'center' });
+  }, [pickerOpen, dbId, navigation, targetsLoading]);
 
   // Seed expansion once for each search, and once more if target rows finish
   // loading after the user starts typing. Explicit state owns expansion after
@@ -235,6 +260,25 @@ export default function ProjectTargetSelector() {
               placeholder="Type to find a project or target"
               aria-label="Search projects or targets"
             />
+            {(databases?.length ?? 0) > 1 && (
+              <label className="selector-db-filter">
+                <span>Database</span>
+                <select
+                  value={dbFilter ?? 'all'}
+                  onChange={(event) =>
+                    setDbFilter(event.target.value === 'all' ? null : event.target.value)
+                  }
+                  aria-label="Filter the list by database"
+                >
+                  <option value="all">All databases</option>
+                  {databases!.map((database) => (
+                    <option key={database.id} value={database.id}>
+                      {database.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             {targetsError && (
               <div className="selector-load-error" role="alert">
                 <span>Some targets could not be loaded.</span>
@@ -243,7 +287,7 @@ export default function ProjectTargetSelector() {
                 </button>
               </div>
             )}
-            <div className="selector-options" aria-label="Projects and targets">
+            <div ref={optionsRef} className="selector-options" aria-label="Projects and targets">
               <button
                 type="button"
                 className={`selector-option ${dbId === null ? 'is-selected' : ''}`}

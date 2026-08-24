@@ -544,6 +544,7 @@ mod tests {
             active_db_id: None,
             astrometry: None,
             calibration: None,
+            export: None,
             peers: Vec::new(),
         }
     }

@@ -381,6 +381,19 @@
   turns away for calibration are summarized in the same warning — count and
   reason — instead of hiding in the per-frame list. Forced calibration keeps
   hard errors.
+- The Overview and the header's project picker can now filter by database: a
+  **Database** select in the Overview's projects toolbar narrows the project
+  list to one catalog (kept in the URL, so reload and shared links restore
+  it), and the picker's popover gained the same filter for its tree. The
+  header also stopped letting the picker swallow the whole bar — it caps at a
+  sensible width and the freed space goes to the activity and cache status,
+  which was squeezed to a sliver before. Opening the picker now lands on the
+  current selection instead of the top of the list.
+- The export layout is now chosen at export time. Every Export action opens a
+  small dialog offering grouped-by-target and WBPP with an explanation of
+  each, instead of one page-wide mode select at the top of the Overview. What
+  the dialog starts from is a new **Export** default in Settings → Setups,
+  server-wide and shared by the desktop and browser apps.
 - The tilt inspector now draws ASTAP's tilt figure: each corner's HFD becomes
   a vertex distance from center, so a flat field draws the dashed reference
   square and a tilted sensor a quadrilateral leaning toward its soft corner.
