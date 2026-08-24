@@ -206,8 +206,9 @@ lights. Two targets shot on different nights can need different flats for one
 filter, and merging them would have WBPP integrate both into a single master.
 
 Choose the layout with `--layout wbpp` on the CLI, the `layout` query parameter
-on the export download, or the **Export layout** control on the overview, which
-applies to every export on the page.
+on the export download, or in the dialog every Export action on the overview
+opens. The dialog starts from the **Export** default in Settings → Setups,
+which is server-wide and shared by the desktop and browser apps.
 
 A WBPP export also carries `run-wbpp.sh` and `run-wbpp.cmd`, which hand it to
 PixInsight. WBPP 3.x is driven from PixInsight's command line rather than

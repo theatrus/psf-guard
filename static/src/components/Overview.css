@@ -61,32 +61,6 @@
   white-space: nowrap;
 }
 
-/* Applies to every export affordance on the page, so it sits with the
-   catalog summary rather than beside any one of them. */
-.export-layout-choice {
-  display: flex;
-  flex-direction: column;
-  min-width: 132px;
-}
-
-.export-layout-choice > span {
-  color: var(--color-text-muted);
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-}
-
-.export-layout-choice > select {
-  margin-top: 2px;
-  padding: 2px 4px;
-  border: 1px solid var(--color-border-primary);
-  border-radius: 4px;
-  background: var(--color-bg-secondary);
-  color: var(--color-text-primary);
-  font-size: 0.85rem;
-}
-
 .summary-metrics {
   display: grid;
   grid-template-columns: repeat(5, minmax(76px, 1fr));
@@ -246,7 +220,8 @@
 }
 
 .project-search input,
-.project-sort select {
+.project-sort select,
+.project-db-filter select {
   box-sizing: border-box;
   min-height: 36px;
   border: 1px solid var(--color-border-secondary);
@@ -262,19 +237,22 @@
   padding: 7px 10px;
 }
 
-.project-sort {
+.project-sort,
+.project-db-filter {
   display: grid;
   gap: 3px;
   color: var(--color-text-muted);
   font-size: 0.7rem;
 }
 
-.project-sort select {
+.project-sort select,
+.project-db-filter select {
   padding: 6px 26px 6px 9px;
 }
 
 .project-search input:focus,
-.project-sort select:focus {
+.project-sort select:focus,
+.project-db-filter select:focus {
   border-color: var(--color-primary);
   outline: 2px solid var(--color-primary-alpha-20);
 }

@@ -6,6 +6,7 @@ import type {
   CalibrationSettings,
   ApiResponse,
   ExportLayout,
+  ExportSettings,
   Project,
   Target,
   TargetNavigation,
@@ -248,6 +249,22 @@ export const apiClient = {
       { rotation_tolerance_deg: rotationToleranceDeg }
     );
     if (!data.data) throw new Error(data.error || 'Failed to update calibration settings');
+    return data.data;
+  },
+
+  getExportSettings: async (): Promise<ExportSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<ExportSettings>>('/settings/export');
+    if (!data.data) throw new Error(data.error || 'Failed to get export settings');
+    return data.data;
+  },
+
+  updateExportSettings: async (defaultLayout: ExportLayout): Promise<ExportSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<ExportSettings>>('/settings/export', {
+      default_layout: defaultLayout,
+    });
+    if (!data.data) throw new Error(data.error || 'Failed to update export settings');
     return data.data;
   },
 

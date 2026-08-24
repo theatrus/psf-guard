@@ -20,6 +20,8 @@ interface NavigationModelInput {
   databases: DatabaseSummary[];
   search: string;
   relativeNow: number;
+  /** Narrows the whole tree to one database; null shows every catalog. */
+  dbFilter?: string | null;
 }
 
 export function buildProjectTargetNavigation({
@@ -28,8 +30,13 @@ export function buildProjectTargetNavigation({
   databases,
   search,
   relativeNow,
+  dbFilter = null,
 }: NavigationModelInput) {
   const normalizedSearch = search.trim().toLocaleLowerCase();
+  if (dbFilter) {
+    projects = projects.filter((project) => project.db_id === dbFilter);
+    databases = databases.filter((database) => database.id === dbFilter);
+  }
   const targetsByProject = new Map<string, NavigationTarget[]>();
   for (const target of targets) {
     const key = `${target.db_id}:${target.project_id}`;

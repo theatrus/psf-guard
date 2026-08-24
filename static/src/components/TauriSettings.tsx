@@ -13,6 +13,7 @@ import { useAccess } from '../auth/access';
 import type { SettingsIntent } from '../utils/settingsIntent';
 import ReviewPreferences from './ReviewPreferences';
 import CalibrationMatchingSettings from './CalibrationMatchingSettings';
+import ExportDefaultsSettings from './ExportDefaultsSettings';
 import type { DatabaseSummary } from '../api/types';
 import { describeImportProgress, useImportJob } from '../hooks/useImportJob';
 import { starMetadataFillEnabled } from '../hooks/useStarMetadataFill';
@@ -1503,6 +1504,7 @@ export default function TauriSettings({
             <>
               <ProcessingSetupsManager />
               <CalibrationMatchingSettings />
+              <ExportDefaultsSettings />
             </>
           )}
 

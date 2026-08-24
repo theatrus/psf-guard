@@ -29,6 +29,9 @@ export default function ProjectTargetSelector() {
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
+  // Picker-local: narrows the popover tree to one catalog without changing
+  // the selected scope until a row is chosen.
+  const [dbFilter, setDbFilter] = useState<string | null>(null);
   const [relativeNow, setRelativeNow] = useState(Date.now);
 
   const invalidateAllForDb = () => {
@@ -66,8 +69,9 @@ export default function ProjectTargetSelector() {
         databases: databases ?? [],
         search,
         relativeNow,
+        dbFilter,
       }),
-    [projects, targets, databases, search, relativeNow]
+    [projects, targets, databases, search, relativeNow, dbFilter]
   );
 
   useEffect(() => {
@@ -235,6 +239,25 @@ export default function ProjectTargetSelector() {
               placeholder="Type to find a project or target"
               aria-label="Search projects or targets"
             />
+            {(databases?.length ?? 0) > 1 && (
+              <label className="selector-db-filter">
+                <span>Database</span>
+                <select
+                  value={dbFilter ?? 'all'}
+                  onChange={(event) =>
+                    setDbFilter(event.target.value === 'all' ? null : event.target.value)
+                  }
+                  aria-label="Filter the list by database"
+                >
+                  <option value="all">All databases</option>
+                  {databases!.map((database) => (
+                    <option key={database.id} value={database.id}>
+                      {database.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             {targetsError && (
               <div className="selector-load-error" role="alert">
                 <span>Some targets could not be loaded.</span>

@@ -6,6 +6,7 @@ pub mod catalog_install;
 pub mod database_context;
 pub mod embedded_static;
 pub mod export_job;
+pub mod export_settings;
 pub mod extract;
 pub mod handlers;
 pub mod import_job;
@@ -561,6 +562,10 @@ async fn run_server_internal(
             "/settings/calibration",
             get(calibration_settings::get_calibration_settings)
                 .put(calibration_settings::update_calibration_settings),
+        )
+        .route(
+            "/settings/export",
+            get(export_settings::get_export_settings).put(export_settings::update_export_settings),
         )
         .route(
             "/processing-setups",

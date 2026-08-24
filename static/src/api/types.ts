@@ -1101,6 +1101,11 @@ export interface CalibrationSettings {
   default_rotation_tolerance_deg: number;
 }
 
+export interface ExportSettings {
+  /** The layout the export dialog starts from. */
+  default_layout: ExportLayout;
+}
+
 export interface ServerInfo {
   version: string;
   cache_directory: string;
