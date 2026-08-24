@@ -387,7 +387,8 @@
   it), and the picker's popover gained the same filter for its tree. The
   header also stopped letting the picker swallow the whole bar — it caps at a
   sensible width and the freed space goes to the activity and cache status,
-  which was squeezed to a sliver before.
+  which was squeezed to a sliver before. Opening the picker now lands on the
+  current selection instead of the top of the list.
 - The export layout is now chosen at export time. Every Export action opens a
   small dialog offering grouped-by-target and WBPP with an explanation of
   each, instead of one page-wide mode select at the top of the Overview. What
