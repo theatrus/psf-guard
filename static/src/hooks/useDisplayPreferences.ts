@@ -5,6 +5,9 @@ import { useSyncExternalStore } from 'react';
  * One preference, not one per view: the grid and the Sequence view must
  * never disagree about what a card shows.
  */
+/** How the top-bar project picker organizes its list. */
+export type ProjectPickerGrouping = 'activity' | 'database';
+
 export interface DisplayPreferences {
   /** Show the smaller "night <score>" chip — the per-session basis shown
    * when the main badge is the all-sessions score. */
@@ -15,6 +18,8 @@ export interface DisplayPreferences {
   /** Move to the next image after accept/reject/pending. Holding Shift
    * while grading does the opposite of this setting for that one grade. */
   advanceOnGrade: boolean;
+  /** Group the top-bar project picker by recent activity or by database. */
+  projectPickerGrouping: ProjectPickerGrouping;
 }
 
 const STORAGE_KEY = 'psf-guard.display-preferences';
@@ -22,6 +27,7 @@ const DEFAULTS: DisplayPreferences = {
   showNightChip: true,
   showAllChip: true,
   advanceOnGrade: true,
+  projectPickerGrouping: 'activity',
 };
 
 type Listener = () => void;
@@ -51,6 +57,8 @@ function sanitize(parsed: StoredPreferences): DisplayPreferences {
       typeof parsed.advanceOnGrade === 'boolean'
         ? parsed.advanceOnGrade
         : DEFAULTS.advanceOnGrade,
+    projectPickerGrouping:
+      parsed.projectPickerGrouping === 'database' ? 'database' : DEFAULTS.projectPickerGrouping,
   };
 }
 

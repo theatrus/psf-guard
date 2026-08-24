@@ -8,7 +8,12 @@ import {
 describe('display preferences', () => {
   beforeEach(() => {
     window.localStorage.removeItem('psf-guard.display-preferences');
-    setDisplayPreferences({ showNightChip: true, showAllChip: true, advanceOnGrade: true });
+    setDisplayPreferences({
+      showNightChip: true,
+      showAllChip: true,
+      advanceOnGrade: true,
+      projectPickerGrouping: 'activity',
+    });
   });
 
   it('defaults to showing both chip types and advancing after a grade', () => {
@@ -17,12 +22,18 @@ describe('display preferences', () => {
       showNightChip: true,
       showAllChip: true,
       advanceOnGrade: true,
+      projectPickerGrouping: 'activity',
     });
   });
 
   it('toggles each chip type independently', () => {
     act(() => {
-      setDisplayPreferences({ showNightChip: false, showAllChip: true, advanceOnGrade: true });
+      setDisplayPreferences({
+        showNightChip: false,
+        showAllChip: true,
+        advanceOnGrade: true,
+        projectPickerGrouping: 'activity',
+      });
     });
     const { result } = renderHook(() => useDisplayPreferences());
     expect(result.current.showNightChip).toBe(false);
@@ -35,7 +46,12 @@ describe('display preferences', () => {
     const grid = renderHook(() => useDisplayPreferences());
     const sequence = renderHook(() => useDisplayPreferences());
     act(() => {
-      setDisplayPreferences({ showNightChip: true, showAllChip: false, advanceOnGrade: true });
+      setDisplayPreferences({
+        showNightChip: true,
+        showAllChip: false,
+        advanceOnGrade: true,
+        projectPickerGrouping: 'activity',
+      });
     });
     expect(grid.result.current.showAllChip).toBe(false);
     expect(sequence.result.current.showAllChip).toBe(false);
@@ -43,11 +59,21 @@ describe('display preferences', () => {
 
   it('persists the choice to localStorage', () => {
     act(() => {
-      setDisplayPreferences({ showNightChip: false, showAllChip: false, advanceOnGrade: false });
+      setDisplayPreferences({
+        showNightChip: false,
+        showAllChip: false,
+        advanceOnGrade: false,
+        projectPickerGrouping: 'database',
+      });
     });
     expect(
       JSON.parse(window.localStorage.getItem('psf-guard.display-preferences')!),
-    ).toEqual({ showNightChip: false, showAllChip: false, advanceOnGrade: false });
+    ).toEqual({
+      showNightChip: false,
+      showAllChip: false,
+      advanceOnGrade: false,
+      projectPickerGrouping: 'database',
+    });
   });
 
   it('falls back to the default on malformed stored values', () => {
@@ -55,9 +81,11 @@ describe('display preferences', () => {
       showNightChip: 'yes' as unknown as boolean,
       showAllChip: true,
       advanceOnGrade: true,
+      projectPickerGrouping: 'sideways' as unknown as 'activity',
     });
     const { result } = renderHook(() => useDisplayPreferences());
     expect(result.current.showNightChip).toBe(true);
+    expect(result.current.projectPickerGrouping).toBe('activity');
   });
 
   it('honors the earlier single-switch stored form', () => {

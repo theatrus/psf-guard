@@ -93,4 +93,46 @@ describe('buildProjectTargetNavigation', () => {
     expect([...model.matchingTargetProjectKeys]).toEqual([]);
     expect(model.targetsForProject(projects[0]).map((target) => target.id)).toEqual([10]);
   });
+
+  it('groups one section per database when asked, in configured order', () => {
+    const shed: DatabaseSummary = { ...database, id: 'shed', name: 'Shed catalog' };
+    const shedProject: WithDb<Project> = {
+      ...projects[0],
+      id: 7,
+      name: 'Shed survey',
+      display_name: 'Shed survey',
+      db_id: shed.id,
+      db_name: shed.name,
+    };
+
+    const model = buildProjectTargetNavigation({
+      projects: [...projects, shedProject],
+      targets,
+      databases: [database, shed],
+      search: '',
+      relativeNow: 1_000_000,
+      grouping: 'database',
+    });
+
+    expect(model.projectGroups.map((group) => group.label)).toEqual([
+      'Imaging Rig',
+      'Shed catalog',
+    ]);
+    expect(model.projectGroups[0].projects.map((project) => project.id)).toEqual([2, 1]);
+    expect(model.projectGroups[1].projects.map((project) => project.id)).toEqual([7]);
+  });
+
+  it('drops a database section that has nothing to show', () => {
+    const empty: DatabaseSummary = { ...database, id: 'empty', name: 'Empty catalog' };
+    const model = buildProjectTargetNavigation({
+      projects,
+      targets,
+      databases: [database, empty],
+      search: '',
+      relativeNow: 1_000_000,
+      grouping: 'database',
+    });
+
+    expect(model.projectGroups.map((group) => group.label)).toEqual(['Imaging Rig']);
+  });
 });
