@@ -14,14 +14,17 @@ export function projectNavigationKey(project: NavigationProject): string {
   return `${project.db_id}:${project.id}`;
 }
 
+/** How the picker organizes its project list. */
+export type NavigationGrouping = 'activity' | 'database';
+
 interface NavigationModelInput {
   projects: NavigationProject[];
   targets: NavigationTarget[];
   databases: DatabaseSummary[];
   search: string;
   relativeNow: number;
-  /** Narrows the whole tree to one database; null shows every catalog. */
-  dbFilter?: string | null;
+  /** Group projects by recent activity (default) or one group per catalog. */
+  grouping?: NavigationGrouping;
 }
 
 export function buildProjectTargetNavigation({
@@ -30,13 +33,9 @@ export function buildProjectTargetNavigation({
   databases,
   search,
   relativeNow,
-  dbFilter = null,
+  grouping = 'activity',
 }: NavigationModelInput) {
   const normalizedSearch = search.trim().toLocaleLowerCase();
-  if (dbFilter) {
-    projects = projects.filter((project) => project.db_id === dbFilter);
-    databases = databases.filter((database) => database.id === dbFilter);
-  }
   const targetsByProject = new Map<string, NavigationTarget[]>();
   for (const target of targets) {
     const key = `${target.db_id}:${target.project_id}`;
@@ -69,12 +68,27 @@ export function buildProjectTargetNavigation({
       .map(projectNavigationKey)
   );
 
+  const activeProjects = matchingProjects.filter((project) => !isArchivedProject(project));
+  // Database grouping keeps the catalogs in their configured order and skips
+  // the ones with nothing to show. Archived projects stay in the shared
+  // section below either way; every row there already names its database.
+  const projectGroups =
+    grouping === 'database'
+      ? databases
+          .map((database) => ({
+            id: `db:${database.id}`,
+            label: database.name,
+            projects: sortProjects(
+              activeProjects.filter((project) => project.db_id === database.id),
+              'recent'
+            ),
+          }))
+          .filter((group) => group.projects.length > 0)
+      : groupProjectsByActivity(activeProjects, relativeNow);
+
   return {
     normalizedSearch,
-    projectGroups: groupProjectsByActivity(
-      matchingProjects.filter((project) => !isArchivedProject(project)),
-      relativeNow
-    ),
+    projectGroups,
     archivedProjects: sortProjects(matchingProjects.filter(isArchivedProject), 'recent'),
     matchingDatabases: databases.filter(
       (database) =>

@@ -58,6 +58,30 @@ export default function ReviewPreferences() {
         </span>
       </label>
 
+      <h3>Top bar</h3>
+      <label className="review-preference">
+        <span>
+          Project list grouping
+          <small>
+            How the project picker in the top bar organizes its list: by how
+            recently each project was worked, or one group per database.
+          </small>
+        </span>
+        <select
+          value={preferences.projectPickerGrouping}
+          aria-label="Project list grouping"
+          onChange={(event) =>
+            set({
+              projectPickerGrouping:
+                event.target.value === 'database' ? 'database' : 'activity',
+            })
+          }
+        >
+          <option value="activity">By recent activity</option>
+          <option value="database">By database</option>
+        </select>
+      </label>
+
       <p className="review-preferences-note">
         These preferences live in this browser and apply immediately.
       </p>

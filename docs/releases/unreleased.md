@@ -381,14 +381,15 @@
   turns away for calibration are summarized in the same warning — count and
   reason — instead of hiding in the per-frame list. Forced calibration keeps
   hard errors.
-- The Overview and the header's project picker can now filter by database: a
+- The Overview and the header's project picker got database-aware: a
   **Database** select in the Overview's projects toolbar narrows the project
   list to one catalog (kept in the URL, so reload and shared links restore
-  it), and the picker's popover gained the same filter for its tree. The
-  header also stopped letting the picker swallow the whole bar — it caps at a
-  sensible width and the freed space goes to the activity and cache status,
-  which was squeezed to a sliver before. Opening the picker now lands on the
-  current selection instead of the top of the list.
+  it), and a new **Top bar** preference in Settings → Review switches the
+  picker's list between grouping by recent activity and one group per
+  database. The header also stopped letting the picker swallow the whole
+  bar — it caps at a sensible width and the freed space goes to the activity
+  and cache status, which was squeezed to a sliver before. Opening the picker
+  now lands on the current selection instead of the top of the list.
 - The export layout is now chosen at export time. Every Export action opens a
   small dialog offering grouped-by-target and WBPP with an explanation of
   each, instead of one page-wide mode select at the top of the Overview. What
