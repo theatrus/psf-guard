@@ -82,7 +82,7 @@ tauri-plugin-updater = { version = "2.10.1", optional = true }
 dirs = "6.0"
 dunce = "1"
 rpassword = "7.5.4"
-async_zip = { version = "0.0.18", features = ["tokio"] }
+async_zip = { version = "0.0.19", features = ["tokio"] }
 reflink-copy = "0.1.30"
 # Platform memory probes for the occlusion-scan worker budget in
 # `concurrency` (both already in the tree transitively). Linux uses
