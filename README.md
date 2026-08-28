@@ -20,7 +20,7 @@ processing. Your image files stay where they are.
 > optional.
 
 **[⬇️ Download](https://github.com/theatrus/psf-guard/releases/latest)**
-· **[📖 Documentation](https://psf-guard.atpn.co/docs/)**
+· **[📖 Documentation](https://github.com/theatrus/psf-guard/blob/main/docs/README.md)**
 · **[🐛 Report an issue](https://github.com/theatrus/psf-guard/issues)**
 
 ## 🧭 Choose a workflow
@@ -56,11 +56,21 @@ processing. Your image files stay where they are.
   combine RGB, LRGB, or narrowband palettes, adjust the processing stack, and
   download the cached linear or processed FITS result. Draw around a visible
   stack artifact to rank the source-frame crops that differ in that area.
+- **Run RC-Astro tools on a stack** when the server has the standalone
+  `rc-astro` CLI installed and licensed: BlurXTerminator, NoiseXTerminator,
+  and StarXTerminator on the linear data, with controls built from each
+  tool's own schema. Star removal keeps both halves — the starless stack and
+  the stars — each with its own stretch and FITS download, so nebulosity can
+  be stretched hard and the stars screened back later.
+- **Inspect sensor tilt and aberrations** with a 3×3 mosaic of 1:1 corner
+  crops, per-region star measurements, and ASTAP-style tilt and field
+  curvature figures, computed server-side so every view agrees.
 - **Review plans and imports** with project settings, target coordinates,
   shared exposure templates, and exposure plans derived from FITS headers.
 - **Take data out safely** by exporting non-rejected lights for stacking or by
-  exporting them with matched calibration frames, or by moving rejected files
-  and sidecars into a recorded, reversible archive.
+  exporting them with matched calibration frames — grouped by target, or in
+  PixInsight WBPP's layout with ready-to-run scripts, chosen per export — or
+  by moving rejected files and sidecars into a recorded, reversible archive.
 - **Sync separate copies** by pulling telescope projects and captures, then
   pushing edited plans and reviewed grades back in the named direction.
 - **Run analysis tools** for N.I.N.A. Fast and HocusFocus star detection,
@@ -81,7 +91,7 @@ web server for Docker or a NAS, and as a standalone CLI.
 PSF Guard reads images in place; it does not copy the FITS library. Image
 folders can stay read-only. The database must be writable to save grades or
 planning changes. See [Import and Planning](docs/IMPORTING.md) for a new
-catalog, or the [Getting Started guide](https://psf-guard.atpn.co/docs/) for
+catalog, or the [documentation index](https://github.com/theatrus/psf-guard/blob/main/docs/README.md) for
 both paths.
 
 ## 📷 See it in practice
