@@ -91,7 +91,7 @@ web server for Docker or a NAS, and as a standalone CLI.
 PSF Guard reads images in place; it does not copy the FITS library. Image
 folders can stay read-only. The database must be writable to save grades or
 planning changes. See [Import and Planning](docs/IMPORTING.md) for a new
-catalog, or the [Getting Started guide](https://psf-guard.atpn.co/docs/) for
+catalog, or the [documentation index](https://github.com/theatrus/psf-guard/blob/main/docs/README.md) for
 both paths.
 
 ## 📷 See it in practice
