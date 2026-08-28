@@ -55,6 +55,16 @@ export default function StackStretchControls({
       setError(deconvolutionError);
       return;
     }
+    // A cleared number field reads as NaN and would serialize as null.
+    const badRcAstro = request.rc_astro?.steps.some((step) =>
+      Object.values(step.parameters).some(
+        (value) => typeof value === 'number' && !Number.isFinite(value)
+      )
+    );
+    if (badRcAstro) {
+      setError('Enter a finite value for every RC-Astro parameter');
+      return;
+    }
     setPending(true);
     setError(null);
     try {

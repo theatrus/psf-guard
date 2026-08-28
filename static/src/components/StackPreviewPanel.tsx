@@ -421,6 +421,7 @@ export default function StackPreviewPanel({
     setWatchedJobIds([]);
     setInspector(null);
     setStretches({});
+    setStarsView({});
     setFrameOrder('capture');
     resetStart();
     resetStop();
@@ -977,11 +978,20 @@ export default function StackPreviewPanel({
                           ...currentStretches,
                           [stretchKey]: preview,
                         }))}
-                        onRevert={() => setStretches((currentStretches) => {
-                          const next = { ...currentStretches };
-                          delete next[stretchKey];
-                          return next;
-                        })}
+                        onRevert={() => {
+                          setStretches((currentStretches) => {
+                            const next = { ...currentStretches };
+                            delete next[stretchKey];
+                            return next;
+                          });
+                          // The next star removal starts on the starless
+                          // view, not wherever this one was left.
+                          setStarsView((current) => {
+                            const next = { ...current };
+                            delete next[stretchKey];
+                            return next;
+                          });
+                        }}
                       />
                     )}
                     {!artifact && groupBusy && (

@@ -522,6 +522,15 @@ afterward. Find the CLI on `PATH`, or name it with the `PSF_GUARD_RC_ASTRO`
 environment variable for service units with a minimal `PATH`.
 `GET /api/tools/rc-astro` reports the probe the UI uses.
 
+A chain takes minutes on CPU, so an apply that includes RC-Astro tools runs
+detached: the request answers `202 Accepted` and the client re-sends the
+same request until the result is ready — no reverse-proxy timeout can kill
+the run, and identical concurrent requests join the same computation
+instead of duplicating it. A run that stays completely silent for ten
+minutes is killed (a first run downloads ML models; run
+`rc-astro download-models` once ahead of time). Chain results whose
+settings nobody has re-applied for two weeks are swept from the cache.
+
 The controls expose Seiza's identity, explicit linear, asinh,
 percentile-asinh, MTF, Generalized Hyperbolic Stretch (GHS), and Auto-MTF
 models. Auto-MTF with PSF Guard's established target median and shadow clipping

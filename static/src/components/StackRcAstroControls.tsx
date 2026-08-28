@@ -34,7 +34,22 @@ export default function StackRcAstroControls({
     retry: false,
   });
 
-  if (!capabilities.data?.available) return null;
+  // No install renders nothing; an install whose probe failed says so, so
+  // a broken setup is distinguishable from an absent one.
+  if (!capabilities.data?.available) {
+    if (capabilities.data?.error) {
+      return (
+        <section className="stack-rc-astro-controls" aria-label={`${label} RC-Astro tools`}>
+          <header>
+            <strong>RC-Astro tools</strong>
+            <span>unavailable</span>
+          </header>
+          <p>{capabilities.data.error}</p>
+        </section>
+      );
+    }
+    return null;
+  }
   const tools = capabilities.data.tools;
 
   const stepFor = (tool: string) => config?.steps.find((step) => step.tool === tool);

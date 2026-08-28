@@ -1044,19 +1044,34 @@ export const apiClient = {
     groupIndex: number,
     request: StackViewProcessingRequest
   ): Promise<StackStretchPreview> => {
-    try {
-      const apiInstance = await getApi();
-      const { data } = await apiInstance.post<ApiResponse<StackStretchPreview>>(
-        dbPath(
-          dbId,
-          `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/stretch`
-        ),
-        request
-      );
-      if (!data.data) throw new Error(data.error || 'Failed to apply stack stretch');
-      return normalizeStretchPreview(data.data);
-    } catch (cause) {
-      throw stackStretchError(cause, 'Failed to apply stack stretch');
+    // A long chain (RC-Astro tools take minutes) answers 202 and computes
+    // detached; re-sending the identical request polls it and finally
+    // returns the cached result. The cap is generous: a CPU-only
+    // StarXTerminator pass on a large stack legitimately takes a while.
+    const deadline = Date.now() + 60 * 60 * 1000;
+    for (;;) {
+      try {
+        const apiInstance = await getApi();
+        const response = await apiInstance.post<ApiResponse<StackStretchPreview>>(
+          dbPath(
+            dbId,
+            `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/stretch`
+          ),
+          request
+        );
+        if (response.status !== 202) {
+          if (!response.data.data) {
+            throw new Error(response.data.error || 'Failed to apply stack stretch');
+          }
+          return normalizeStretchPreview(response.data.data);
+        }
+      } catch (cause) {
+        throw stackStretchError(cause, 'Failed to apply stack stretch');
+      }
+      if (Date.now() > deadline) {
+        throw new Error('Stack processing is still running; try again later');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5000));
     }
   },
 
