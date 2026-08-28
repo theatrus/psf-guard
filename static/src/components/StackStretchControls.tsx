@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { StackStretchPreview, StackViewProcessingRequest } from '../api/types';
 import StackStretchStageEditor from './StackStretchStageEditor';
 import StackDeconvolutionControls from './StackDeconvolutionControls';
+import StackRcAstroControls from './StackRcAstroControls';
 import ProcessingSetupsBar from './ProcessingSetupsBar';
 import { builtinViewSetups } from './processingSetups';
 import { validateDeconvolution } from './stackDeconvolution';
@@ -33,13 +34,13 @@ export default function StackStretchControls({
 }: StackStretchControlsProps) {
   const initialType = displayReferred ? 'identity' : 'auto-mtf';
   const [request, setRequest] = useState<StackViewProcessingRequest>(() =>
-    ({ ...defaultStretchRequest(initialType), deconvolution: null })
+    ({ ...defaultStretchRequest(initialType), deconvolution: null, rc_astro: null })
   );
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const revert = () => {
-    setRequest({ ...defaultStretchRequest(initialType), deconvolution: null });
+    setRequest({ ...defaultStretchRequest(initialType), deconvolution: null, rc_astro: null });
     setError(null);
     onRevert();
   };
@@ -70,7 +71,7 @@ export default function StackStretchControls({
       <summary>
         <span>View processing</span>
         <small>{applied
-          ? `${applied.deconvolution ? `${applied.deconvolution.config.psf_fwhm_pixels}px deconv · ` : ''}${stretchModelLabels[applied.config.model.type]} applied`
+          ? `${applied.deconvolution ? `${applied.deconvolution.config.psf_fwhm_pixels}px deconv · ` : ''}${applied.rc_astro ? `RC-Astro ×${applied.rc_astro.steps.length} · ` : ''}${stretchModelLabels[applied.config.model.type]} applied`
           : 'Deconvolution off · default stretch'}</small>
       </summary>
       <div className="stack-stretch-body">
@@ -82,6 +83,7 @@ export default function StackStretchControls({
           onApply={(settings) => {
             setRequest({
               deconvolution: null,
+              rc_astro: null,
               ...(settings as StackViewProcessingRequest),
             });
             setError(null);
@@ -95,6 +97,16 @@ export default function StackStretchControls({
           onChange={(deconvolution) => setRequest((current) => ({
             ...current,
             deconvolution,
+          }))}
+        />
+        <StackRcAstroControls
+          label={label}
+          config={request.rc_astro}
+          result={applied?.rc_astro ?? undefined}
+          disabled={disabled || pending || displayReferred}
+          onChange={(rc_astro) => setRequest((current) => ({
+            ...current,
+            rc_astro,
           }))}
         />
         <StackStretchStageEditor

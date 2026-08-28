@@ -75,6 +75,7 @@ import type {
   StackStretchPreview,
   StackViewProcessingRequest,
   AstrometryCapabilities,
+  RcAstroCapabilities,
   AstrometryValidationReport,
   CatalogInstallPreset,
   CatalogInstallStatus,
@@ -288,6 +289,13 @@ export const apiClient = {
       '/astrometry/capabilities'
     );
     if (!data.data) throw new Error(data.error || 'Failed to inspect Seiza catalogs');
+    return data.data;
+  },
+
+  getRcAstroCapabilities: async (): Promise<RcAstroCapabilities> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<RcAstroCapabilities>>('/tools/rc-astro');
+    if (!data.data) throw new Error(data.error || 'Failed to probe RC-Astro tools');
     return data.data;
   },
 

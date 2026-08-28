@@ -129,6 +129,18 @@
   any one install without signing out the rest. Manually configured keys
   keep working.
 
+- Stack previews can now run RC-Astro's standalone tools. With the
+  `rc-astro` CLI installed and licensed on the server, **View processing**
+  offers BlurXTerminator, NoiseXTerminator, and StarXTerminator on the
+  linear stack, with controls built from each tool's own schema so they
+  track the installed version. Star removal keeps both images — the
+  starless stack and the stars — each with its own stretch, a **Starless /
+  Stars** view switch on the card, and its own FITS download, so the
+  nebulosity can be stretched hard and the stars screened back later.
+  Results cache by settings plus the CLI and model versions, and the
+  integration artifact is never modified. See [stack
+  previews](https://github.com/theatrus/psf-guard/blob/main/docs/STACKING_PREVIEWS.md).
+
 ## Changed
 
 - A dark now suits a light when their exposures agree to a tenth of a percent

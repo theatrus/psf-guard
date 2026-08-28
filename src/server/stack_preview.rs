@@ -8,6 +8,7 @@
 pub mod artifact;
 pub mod color;
 mod janitor;
+pub mod rc_astro;
 mod resume;
 pub mod snr;
 pub mod stretch;

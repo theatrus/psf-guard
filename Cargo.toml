@@ -38,7 +38,7 @@ seiza-download = "0.6.0"
 seiza-imgproc = { version = "0.3.2", features = ["parallel"] }
 seiza-fits = "=0.2.1"
 seiza-satellites = { version = "0.7.0", features = ["serde"] }
-seiza-stacking = "0.11.4"
+seiza-stacking = "0.11.5"
 seiza-stretch = "0.2.1"
 # XISF reading. Already in the tree through seiza-stacking, which decodes both
 # containers into the same `seiza_fits::FitsImage`.

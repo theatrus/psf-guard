@@ -502,6 +502,26 @@ Changing only the display stretch reuses the same restored FITS. Its cache key
 depends on the source revision, restoration settings, and Seiza algorithm
 version, not the display model.
 
+**RC-Astro tools are offered when the server has them.** With RC-Astro's
+standalone `rc-astro` CLI installed (and licensed), **View processing** adds
+an **RC-Astro tools** card offering BlurXTerminator, NoiseXTerminator, and
+StarXTerminator on the linear stack, after deconvolution and before the
+stretch. The controls are built from each tool's own machine-readable schema
+(`rc-astro <tool> --json`), so the knobs track the installed CLI version.
+Star removal keeps both halves: the starless image becomes the processed
+linear source, the stars image is stored beside it, and the card gains a
+**Starless / Stars** switch plus a stars FITS download — each stretched
+independently, which is the point: stretch the starless data hard without
+bloating stars, then screen the stars back in your processing tool. Results
+are content-addressed like deconvolution, keyed by the settings and the
+CLI and neural-network model versions, so a tool upgrade rebuilds instead of
+serving stale output. Runs use the tool's saved compute device (GPU where
+supported, CPU fallback) and PSF Guard exchanges 32-bit-float FITS
+normalized to the unit scale the tools expect, restoring the physical scale
+afterward. Find the CLI on `PATH`, or name it with the `PSF_GUARD_RC_ASTRO`
+environment variable for service units with a minimal `PATH`.
+`GET /api/tools/rc-astro` reports the probe the UI uses.
+
 The controls expose Seiza's identity, explicit linear, asinh,
 percentile-asinh, MTF, Generalized Hyperbolic Stretch (GHS), and Auto-MTF
 models. Auto-MTF with PSF Guard's established target median and shadow clipping
@@ -790,8 +810,9 @@ immutable cached response for the rebuilt output.
 - The retained FITS is a quick-look integration, whether calibrated or not. It
   is not a final science product.
 - Color is a visual channel combination, not photometric or
-  spectrophotometric calibration. There is no custom mixing matrix UI, star
-  removal, mosaic, drizzle, or cross-target integration.
+  spectrophotometric calibration. There is no custom mixing matrix UI,
+  mosaic, drizzle, or cross-target integration. Star removal exists only
+  through the RC-Astro tools on mono stacks, not for color composites.
 - Deconvolution requires a user-supplied FWHM and one circular Gaussian PSF for
   the whole channel. It does not estimate a PSF, vary it across the field, or
   replace a final scientific restoration workflow.

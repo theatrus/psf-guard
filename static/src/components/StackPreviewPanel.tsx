@@ -297,6 +297,10 @@ export default function StackPreviewPanel({
   const [watchedJobIds, setWatchedJobIds] = useState<string[]>([]);
   const [inspector, setInspector] = useState<StackArtifact | null>(null);
   const [stretches, setStretches] = useState<Record<string, StackStretchPreview>>({});
+  // Which channels currently show the stars image instead of the starless
+  // one, keyed like `stretches`. Only meaningful while star removal is
+  // applied to that channel.
+  const [starsView, setStarsView] = useState<Record<string, boolean>>({});
 
   const currentChannels = useMemo(() => {
     const channels = new Map<string, ChannelInput>();
@@ -924,13 +928,38 @@ export default function StackPreviewPanel({
                     {artifact && (
                       <div className="stack-preview-image">
                         <img
-                          src={appliedStretch?.preview_url ?? apiClient.getStackPreviewUrl(
-                            dbId, artifact.jobId, artifact.group.index, artifact.artifactRevision
-                          )}
+                          src={(stretchKey && starsView[stretchKey] && appliedStretch?.stars_preview_url)
+                            || appliedStretch?.preview_url
+                            || apiClient.getStackPreviewUrl(
+                              dbId, artifact.jobId, artifact.group.index, artifact.artifactRevision
+                            )}
                           alt={`${targetName} ${filterName} stack preview`}
                         />
                         {isSkyOriented(artifact.group.sky_orientation) && (
                           <span className="stack-preview-orientation">N ↑ · E ←</span>
+                        )}
+                        {stretchKey && appliedStretch?.stars_preview_url && (
+                          <div className="stack-preview-stars-toggle" role="group" aria-label="Star removal view">
+                            <button
+                              type="button"
+                              className={starsView[stretchKey] ? '' : 'is-active'}
+                              onClick={() => setStarsView((current) => ({ ...current, [stretchKey]: false }))}
+                            >
+                              Starless
+                            </button>
+                            <button
+                              type="button"
+                              className={starsView[stretchKey] ? 'is-active' : ''}
+                              onClick={() => setStarsView((current) => ({ ...current, [stretchKey]: true }))}
+                            >
+                              Stars
+                            </button>
+                            {appliedStretch.stars_fits_url && (
+                              <a href={appliedStretch.stars_fits_url} download title="Download the stars linear FITS">
+                                Stars FITS
+                              </a>
+                            )}
+                          </div>
                         )}
                       </div>
                     )}
