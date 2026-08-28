@@ -971,8 +971,8 @@ export default function StackPreviewPanel({
                         channels={artifact.group.output_channels === 3 ? 3 : 1}
                         disabled={!canCompute || running}
                         applied={appliedStretch}
-                        apply={(request) => apiClient.applyStackStretch(
-                          dbId, artifact.jobId, artifact.group.index, request
+                        apply={(request, onProgress) => apiClient.applyStackStretch(
+                          dbId, artifact.jobId, artifact.group.index, request, { onProgress }
                         )}
                         onApplied={(preview) => setStretches((currentStretches) => ({
                           ...currentStretches,

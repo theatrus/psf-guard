@@ -76,6 +76,7 @@ import type {
   StackViewProcessingRequest,
   AstrometryCapabilities,
   RcAstroCapabilities,
+  StackStretchPendingProgress,
   AstrometryValidationReport,
   CatalogInstallPreset,
   CatalogInstallStatus,
@@ -1042,17 +1043,26 @@ export const apiClient = {
     dbId: string,
     jobId: string,
     groupIndex: number,
-    request: StackViewProcessingRequest
+    request: StackViewProcessingRequest,
+    options?: {
+      /** Live progress from a detached run's 202 polls. */
+      onProgress?: (progress: StackStretchPendingProgress) => void;
+      /** Poll interval override, for tests. */
+      pollIntervalMs?: number;
+    }
   ): Promise<StackStretchPreview> => {
     // A long chain (RC-Astro tools take minutes) answers 202 and computes
-    // detached; re-sending the identical request polls it and finally
-    // returns the cached result. The cap is generous: a CPU-only
-    // StarXTerminator pass on a large stack legitimately takes a while.
+    // detached; re-sending the identical request polls it — each poll
+    // carrying the run's live progress — and finally returns the cached
+    // result. The cap is generous: a CPU-only StarXTerminator pass on a
+    // large stack legitimately takes a while.
     const deadline = Date.now() + 60 * 60 * 1000;
     for (;;) {
       try {
         const apiInstance = await getApi();
-        const response = await apiInstance.post<ApiResponse<StackStretchPreview>>(
+        const response = await apiInstance.post<
+          ApiResponse<StackStretchPreview | StackStretchPendingProgress>
+        >(
           dbPath(
             dbId,
             `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/stretch`
@@ -1060,18 +1070,21 @@ export const apiClient = {
           request
         );
         if (response.status !== 202) {
-          if (!response.data.data) {
+          const data = response.data.data as StackStretchPreview | null;
+          if (!data) {
             throw new Error(response.data.error || 'Failed to apply stack stretch');
           }
-          return normalizeStretchPreview(response.data.data);
+          return normalizeStretchPreview(data);
         }
+        const pending = response.data.data as StackStretchPendingProgress | null;
+        if (pending && options?.onProgress) options.onProgress(pending);
       } catch (cause) {
         throw stackStretchError(cause, 'Failed to apply stack stretch');
       }
       if (Date.now() > deadline) {
         throw new Error('Stack processing is still running; try again later');
       }
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await new Promise((resolve) => setTimeout(resolve, options?.pollIntervalMs ?? 5000));
     }
   },
 

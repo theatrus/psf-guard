@@ -405,8 +405,11 @@ pub(super) enum StretchApplyOutcome {
     Ready(Box<StackStretchPreview>),
     /// The work runs detached (RC-Astro chains take minutes — far past any
     /// reverse-proxy timeout); the client re-sends the same request until
-    /// it turns Ready. Keeps generation out of the HTTP request path.
-    Pending,
+    /// it turns Ready, each poll carrying the run's live progress. Keeps
+    /// generation out of the HTTP request path.
+    Pending {
+        stretch_id: String,
+    },
 }
 
 /// One entry per stretch id being computed right now, so identical
@@ -416,14 +419,41 @@ static IN_FLIGHT: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet
 /// The failure of a detached run, held for the next poll of that id.
 static FAILURES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
     std::sync::LazyLock::new(Default::default);
+/// Live progress of an in-flight computation, served to the pending poll:
+/// which tool is running and the chain's overall fraction.
+static PROGRESS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, PendingProgress>>,
+> = std::sync::LazyLock::new(Default::default);
 
-/// Removes its id from the in-flight set on drop — panic or success alike.
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct PendingProgress {
+    pub stage: String,
+    pub fraction: f32,
+}
+
+fn report_progress(stretch_id: &str, stage: &str, fraction: f32) {
+    if let Ok(mut progress) = PROGRESS.lock() {
+        progress.insert(
+            stretch_id.to_string(),
+            PendingProgress {
+                stage: stage.to_string(),
+                fraction,
+            },
+        );
+    }
+}
+
+/// Removes its id from the in-flight set (and its progress entry) on drop —
+/// panic or success alike.
 struct InFlightToken(String);
 
 impl Drop for InFlightToken {
     fn drop(&mut self) {
         if let Ok(mut in_flight) = IN_FLIGHT.lock() {
             in_flight.remove(&self.0);
+        }
+        if let Ok(mut progress) = PROGRESS.lock() {
+            progress.remove(&self.0);
         }
     }
 }
@@ -540,7 +570,7 @@ pub(super) async fn apply_to_fits(
     }
     let Some(token) = try_begin_in_flight(&stretch_id) else {
         // The same request is already computing; the caller polls.
-        return Ok(StretchApplyOutcome::Pending);
+        return Ok(StretchApplyOutcome::Pending { stretch_id });
     };
 
     let identity = StretchIdentity {
@@ -566,7 +596,7 @@ pub(super) async fn apply_to_fits(
             rc_astro,
             rc_astro_schemas,
         ));
-        return Ok(StretchApplyOutcome::Pending);
+        return Ok(StretchApplyOutcome::Pending { stretch_id });
     }
 
     // A plain stretch (or deconvolution) is fast enough to answer inline.
@@ -876,6 +906,7 @@ fn render_fits_variant(
             schemas,
             linear,
             &frame.headers,
+            &mut |stage, fraction| report_progress(stretch_id, stage, fraction),
         )?);
     }
     let linear = rc_astro_outcome
@@ -1227,17 +1258,38 @@ pub(super) fn write_json_atomic(path: &FsPath, value: &impl Serialize) -> Result
     std::fs::rename(&temporary, path).map_err(|error| error.to_string())
 }
 
+/// What a 202 poll answer carries: the run's live progress when known.
+#[derive(Debug, Serialize)]
+struct StretchPendingStatus {
+    pending: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fraction: Option<f32>,
+}
+
 /// A ready result answers 200 with the preview; a pending one answers 202
-/// with an empty body, telling the client to re-send the same request.
+/// with the run's live progress, telling the client to re-send the same
+/// request.
 pub(super) fn apply_response(outcome: StretchApplyOutcome) -> axum::response::Response {
     use axum::response::IntoResponse;
     match outcome {
         StretchApplyOutcome::Ready(result) => Json(ApiResponse::success(*result)).into_response(),
-        StretchApplyOutcome::Pending => (
-            StatusCode::ACCEPTED,
-            Json(ApiResponse::<Option<StackStretchPreview>>::success(None)),
-        )
-            .into_response(),
+        StretchApplyOutcome::Pending { stretch_id } => {
+            let progress = PROGRESS
+                .lock()
+                .ok()
+                .and_then(|progress| progress.get(&stretch_id).cloned());
+            (
+                StatusCode::ACCEPTED,
+                Json(ApiResponse::success(StretchPendingStatus {
+                    pending: true,
+                    stage: progress.as_ref().map(|progress| progress.stage.clone()),
+                    fraction: progress.map(|progress| progress.fraction),
+                })),
+            )
+                .into_response()
+        }
     }
 }
 

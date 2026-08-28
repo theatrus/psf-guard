@@ -293,6 +293,27 @@ pub(super) fn normalize_against_schemas(
                     }
                     ExternalParameterValue::Int(*v)
                 }
+                // The mirror coercion: the schema hands int bounds back as
+                // JSON numbers, so a UI clamping to them sends 2.0 for 2.
+                (
+                    seiza_stacking::ExternalParameterKind::Int { min, max, .. },
+                    ExternalParameterValue::Float(real),
+                ) => {
+                    if !real.is_finite() || real.fract() != 0.0 {
+                        return Err(format!(
+                            "{}: {name} = {real} is not a whole number",
+                            schema.name
+                        ));
+                    }
+                    let v = *real as i64;
+                    if v < *min || v > *max {
+                        return Err(format!(
+                            "{}: {name} = {v} is outside [{min}, {max}]",
+                            schema.name
+                        ));
+                    }
+                    ExternalParameterValue::Int(v)
+                }
                 (
                     seiza_stacking::ExternalParameterKind::Bool { .. },
                     ExternalParameterValue::Bool(v),
@@ -390,6 +411,7 @@ pub(super) fn apply_rc_astro(
     schemas: &[(String, ExternalToolSchema)],
     image: &LinearImage,
     reference_headers: &[(String, seiza_fits::HeaderValue)],
+    on_progress: &mut dyn FnMut(&str, f32),
 ) -> Result<RcAstroOutcome, String> {
     let fits = rc_astro_fits_path(cache_root, rc_astro_id);
     let stars_fits = rc_astro_stars_path(cache_root, rc_astro_id);
@@ -432,7 +454,8 @@ pub(super) fn apply_rc_astro(
     let mut stars: Option<LinearImage> = None;
     let mut steps = Vec::new();
     let mut cli_version = String::new();
-    for step in config.ordered() {
+    let total_steps = config.steps.len().max(1);
+    for (index, step) in config.ordered().into_iter().enumerate() {
         let (_, schema) = schemas
             .iter()
             .find(|(tool, _)| tool == &step.tool)
@@ -455,6 +478,12 @@ pub(super) fn apply_rc_astro(
             current.height,
             current.channels
         );
+        on_progress(&schema.name, index as f32 / total_steps as f32);
+        // The chain's overall fraction: completed steps plus this step's
+        // own fraction, over the step count.
+        let mut step_progress = |fraction: f32| {
+            on_progress(&schema.name, (index as f32 + fraction) / total_steps as f32)
+        };
         let processed = cli
             .process_image(
                 schema,
@@ -462,7 +491,7 @@ pub(super) fn apply_rc_astro(
                 &current,
                 reference_headers,
                 None,
-                &mut |_| {},
+                &mut step_progress,
             )
             .map_err(|error| error.to_string())?;
         if let Some(step_stars) = processed.stars {
@@ -765,6 +794,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 cp "$input" "$out"
+echo '{{"event":"progress","done":100.0}}'
 echo '{{"event":"status","phase":"complete","output":"'"$out"'"}}'
 if [ "$stars" = 1 ]; then
   sidecar="${{out%.fits}}-stars.fits"
@@ -810,6 +840,7 @@ fi
         let schemas = vec![("sxt".to_string(), schema)];
         let image = LinearImage::new(3, 2, 1, vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0]).unwrap();
 
+        let mut reported: Vec<(String, f32)> = Vec::new();
         let first = apply_rc_astro(
             cache.path(),
             "a".repeat(64).as_str(),
@@ -817,6 +848,7 @@ fi
             &schemas,
             &image,
             &[],
+            &mut |stage, fraction| reported.push((stage.to_string(), fraction)),
         )
         .unwrap();
         assert!(first.result.has_stars);
@@ -824,6 +856,14 @@ fi
         for (processed, original) in first.image.data.iter().zip(&image.data) {
             assert!((processed - original).abs() < 1e-2);
         }
+        // A one-step chain reports the step start at 0 and the tool's own
+        // fractions unscaled.
+        assert_eq!(
+            reported.first().map(|(stage, _)| stage.as_str()),
+            Some("RC-Astro sxt")
+        );
+        assert_eq!(reported.first().map(|(_, fraction)| *fraction), Some(0.0));
+        assert!(reported.iter().any(|(_, fraction)| *fraction >= 1.0));
 
         let second = apply_rc_astro(
             cache.path(),
@@ -832,6 +872,7 @@ fi
             &schemas,
             &image,
             &[],
+            &mut |_, _| {},
         )
         .unwrap();
         assert!(second.result.has_stars);

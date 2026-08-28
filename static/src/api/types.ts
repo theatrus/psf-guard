@@ -762,6 +762,15 @@ export interface StackRcAstroResult {
   has_stars: boolean;
 }
 
+/** A 202 poll answer while a detached processing run computes. */
+export interface StackStretchPendingProgress {
+  pending: true;
+  /** The tool currently running, e.g. "RC-Astro StarXTerminator". */
+  stage?: string;
+  /** The chain's overall fraction complete in 0..1. */
+  fraction?: number;
+}
+
 export interface StackDeconvolutionConfig {
   psf_fwhm_pixels: number;
   iterations: number;

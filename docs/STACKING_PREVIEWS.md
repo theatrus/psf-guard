@@ -526,7 +526,9 @@ A chain takes minutes on CPU, so an apply that includes RC-Astro tools runs
 detached: the request answers `202 Accepted` and the client re-sends the
 same request until the result is ready — no reverse-proxy timeout can kill
 the run, and identical concurrent requests join the same computation
-instead of duplicating it. A run that stays completely silent for ten
+instead of duplicating it. Each poll answer carries the run's live
+progress — which tool is running and the chain's overall fraction — and
+the **Apply processing** button shows it. A run that stays completely silent for ten
 minutes is killed (a first run downloads ML models; run
 `rc-astro download-models` once ahead of time). Chain results whose
 settings nobody has re-applied for two weeks are swept from the cache.
