@@ -23,7 +23,11 @@ use std::time::UNIX_EPOCH;
 /// 1: the original calibration library.
 /// 2: `psf_guard_calibration_frame.rotation`, so a flat only matches a light
 ///    shot at the same rotator angle.
-pub const CALIBRATION_SCHEMA_VERSION: i64 = 3;
+/// 4: `psf_guard_calibration_frame.valid_direction`, so a frame can be
+///    marked usable only for lights captured after it (a set shot after an
+///    optics change or cleaning) or only before it. NULL keeps the old
+///    behavior: usable in both directions.
+pub const CALIBRATION_SCHEMA_VERSION: i64 = 4;
 // 2: flat masters suppress defective pixels spatially after integration.
 /// Version 3: masters preserve sensor, optics, exposure and capture-time
 /// metadata (seiza-stacking 0.11.1). Masters written before that carry no
@@ -63,6 +67,38 @@ impl CalibrationKind {
     }
 }
 
+/// Which lights a calibration frame may serve, relative to its own capture
+/// time. Marked by the user around an optical change — a dust cleaning, a
+/// re-spaced imaging train — so a frame is never matched to imaging done on
+/// the other side of that change when nights lack their own calibration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValidDirection {
+    /// Only lights captured at or after this frame.
+    Forward,
+    /// Only lights captured at or before this frame.
+    Backward,
+}
+
+impl ValidDirection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Forward => "forward",
+            Self::Backward => "backward",
+        }
+    }
+
+    fn from_db(value: Option<String>) -> Option<Self> {
+        match value.as_deref() {
+            Some("forward") => Some(Self::Forward),
+            Some("backward") => Some(Self::Backward),
+            // Unknown text from a newer build reads as unrestricted rather
+            // than failing the row: the old behavior, safely.
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CalibrationFrame {
     pub id: i64,
@@ -89,6 +125,8 @@ pub struct CalibrationFrame {
     pub focal_length_mm: Option<f64>,
     /// Rotator angle in degrees at capture, when the rig recorded one.
     pub rotation: Option<f64>,
+    /// User-set validity boundary; absent means both directions.
+    pub valid_direction: Option<ValidDirection>,
     /// Set after the current file (or a basename-remapped file) has been
     /// checked against this catalog row's hard settings.
     pub source_verified: bool,
@@ -167,6 +205,8 @@ pub struct CalibrationFrameSummary {
     pub camera_temp: Option<f64>,
     pub filter: Option<String>,
     pub focal_length_mm: Option<f64>,
+    /// User-set validity boundary; absent means both directions.
+    pub valid_direction: Option<ValidDirection>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -346,6 +386,10 @@ const MIGRATIONS: &[Migration] = &[
         to_version: 3,
         apply: backfill_flat_rotation,
     },
+    Migration {
+        to_version: 4,
+        apply: add_valid_direction_column,
+    },
 ];
 
 /// Columns selected by the calibration matching and master-building paths.
@@ -378,7 +422,19 @@ const READABLE_FRAME_COLUMNS: &[&str] = &[
     "filter_name",
     "focal_length_mm",
     "rotation",
+    "valid_direction",
 ];
+
+fn add_valid_direction_column(conn: &Connection) -> Result<bool> {
+    // NULL means "no boundary": the frame keeps matching in both time
+    // directions, exactly as every frame did before the column existed.
+    add_column_if_missing(
+        conn,
+        "psf_guard_calibration_frame",
+        "valid_direction",
+        "TEXT",
+    )
+}
 
 fn add_rotation_column(conn: &Connection) -> Result<bool> {
     // NULL means "not recorded", which the matcher treats as compatible, so
@@ -661,6 +717,7 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
             filter_name        TEXT,
             focal_length_mm    REAL,
             rotation           REAL,
+            valid_direction    TEXT,
             file_size          INTEGER,
             file_mtime_ns      TEXT,
             added_at           INTEGER NOT NULL,
@@ -910,17 +967,27 @@ pub fn library_details(conn: &Connection) -> Result<CalibrationLibraryDetails> {
             frames: Vec::new(),
         });
     }
-    let mut statement = conn.prepare(
+    // The listing tolerates a catalog that could not be upgraded: an absent
+    // column reads as NULL rather than failing the whole dialog.
+    let has_validity = table_column_names(conn, "psf_guard_calibration_frame")?
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("valid_direction"));
+    let validity_column = if has_validity {
+        "valid_direction"
+    } else {
+        "NULL AS valid_direction"
+    };
+    let mut statement = conn.prepare(&format!(
         r#"
         SELECT id, frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
                captured_at, telescope, camera, width, height, channels,
                binning_x, binning_y, gain, offset, readout_mode, bayer_pattern,
                exposure_s, camera_temp, filter_name, focal_length_mm,
-               NULL AS rotation
+               NULL AS rotation, {validity_column}
         FROM psf_guard_calibration_frame
         ORDER BY kind, captured_at DESC, source_path COLLATE NOCASE
-        "#,
-    )?;
+        "#
+    ))?;
     let frames = statement
         .query_map([], row_to_frame)?
         .map(|row| {
@@ -946,10 +1013,48 @@ pub fn library_details(conn: &Connection) -> Result<CalibrationLibraryDetails> {
                 camera_temp: frame.camera_temp,
                 filter: frame.filter,
                 focal_length_mm: frame.focal_length_mm,
+                valid_direction: frame.valid_direction,
             })
         })
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(CalibrationLibraryDetails { summary, frames })
+}
+
+/// Mark frames with a validity boundary (or clear one with `None`). Returns
+/// how many rows changed. A catalog that could not be upgraded to carry the
+/// column reports zero rather than failing.
+pub fn set_frames_validity(
+    conn: &Connection,
+    frame_uuids: &[String],
+    direction: Option<ValidDirection>,
+) -> Result<usize> {
+    if frame_uuids.is_empty() || !schema_exists(conn) {
+        return Ok(0);
+    }
+    let has_validity = table_column_names(conn, "psf_guard_calibration_frame")?
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("valid_direction"));
+    if !has_validity {
+        anyhow::bail!(
+            "this catalog has not been upgraded to record calibration validity; \
+             open it with write access once and retry"
+        );
+    }
+    let mut changed = 0usize;
+    let mut statement = conn.prepare(
+        "UPDATE psf_guard_calibration_frame
+         SET valid_direction = ?1, updated_at = ?2
+         WHERE frame_uuid = ?3",
+    )?;
+    let now = chrono::Utc::now().timestamp();
+    for frame_uuid in frame_uuids {
+        changed += statement.execute(rusqlite::params![
+            direction.map(ValidDirection::as_str),
+            now,
+            frame_uuid
+        ])?;
+    }
+    Ok(changed)
 }
 
 pub fn forget_frame(conn: &mut Connection, frame_uuid: &str) -> Result<CalibrationMutationOutcome> {
@@ -1208,7 +1313,8 @@ pub fn select_for_light(conn: &Connection, light: &FrameMeta) -> Result<Calibrat
         SELECT id, frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
                captured_at, telescope, camera, width, height, channels,
                binning_x, binning_y, gain, offset, readout_mode, bayer_pattern,
-               exposure_s, camera_temp, filter_name, focal_length_mm, rotation
+               exposure_s, camera_temp, filter_name, focal_length_mm, rotation,
+               valid_direction
         FROM psf_guard_calibration_frame
         ORDER BY captured_at DESC, id DESC
         "#,
@@ -1218,6 +1324,12 @@ pub fn select_for_light(conn: &Connection, light: &FrameMeta) -> Result<Calibrat
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut selected = CalibrationSelection::default();
     for candidate in frames {
+        // A frame marked usable only forward or backward of its capture —
+        // shot around an optics change or cleaning — never serves a light
+        // on the other side of that boundary.
+        if !validity_admits(&candidate, light.timestamp) {
+            continue;
+        }
         if !sensor_matches(light, &candidate) {
             continue;
         }
@@ -1245,7 +1357,11 @@ pub fn select_for_light(conn: &Connection, light: &FrameMeta) -> Result<Calibrat
     sort_candidates(&mut selected.flat, light.timestamp);
     if let Some(flat) = selected.flat.first() {
         for candidate in query_kind(conn, CalibrationKind::DarkFlat)? {
-            if frame_pair_matches(flat, &candidate)
+            // Dark-flats pair with the flat, but the boundary is judged
+            // against the light: the mark protects the imaging on the
+            // other side of the change.
+            if validity_admits(&candidate, light.timestamp)
+                && frame_pair_matches(flat, &candidate)
                 && exposure_matches(flat.exposure_s, candidate.exposure_s)
                 && temperature_matches(flat.camera_temp, candidate.camera_temp)
             {
@@ -3098,7 +3214,8 @@ fn query_kind(conn: &Connection, kind: CalibrationKind) -> Result<Vec<Calibratio
         SELECT id, frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
                captured_at, telescope, camera, width, height, channels,
                binning_x, binning_y, gain, offset, readout_mode, bayer_pattern,
-               exposure_s, camera_temp, filter_name, focal_length_mm, rotation
+               exposure_s, camera_temp, filter_name, focal_length_mm, rotation,
+               valid_direction
         FROM psf_guard_calibration_frame WHERE kind = ?1
         ORDER BY captured_at DESC, id DESC
         "#,
@@ -3141,8 +3258,26 @@ fn row_to_frame(row: &rusqlite::Row<'_>) -> rusqlite::Result<CalibrationFrame> {
         filter: row.get(20)?,
         focal_length_mm: row.get(21)?,
         rotation: row.get(22)?,
+        valid_direction: ValidDirection::from_db(row.get(23)?),
         source_verified: false,
     })
+}
+
+/// Whether a candidate's validity boundary admits this light. A frame or
+/// light with no recorded time cannot be judged and matches, the same way
+/// an unrecorded angle matches any angle.
+fn validity_admits(candidate: &CalibrationFrame, light_timestamp: Option<i64>) -> bool {
+    let (Some(direction), Some(light), Some(frame)) = (
+        candidate.valid_direction,
+        light_timestamp,
+        candidate.captured_at,
+    ) else {
+        return true;
+    };
+    match direction {
+        ValidDirection::Forward => light >= frame,
+        ValidDirection::Backward => light <= frame,
+    }
 }
 
 pub fn export_destinations(
@@ -3489,8 +3624,11 @@ mod tests {
         // An older build added the column from its own write path without
         // recording a version, so the step must survive being run over it.
         let conn = version_one_catalog();
-        conn.execute_batch("ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;")
-            .unwrap();
+        conn.execute_batch(
+            "ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;
+             ALTER TABLE psf_guard_calibration_frame ADD COLUMN valid_direction TEXT;",
+        )
+        .unwrap();
         assert!(
             schema_supports_current_reads(&conn),
             "the physical shape is readable even while its version lags"
@@ -3581,8 +3719,11 @@ mod tests {
         // the version row would report no calibration for a catalog that is
         // perfectly readable, including where it cannot be upgraded at all.
         let conn = version_one_catalog();
-        conn.execute_batch("ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;")
-            .unwrap();
+        conn.execute_batch(
+            "ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;
+             ALTER TABLE psf_guard_calibration_frame ADD COLUMN valid_direction TEXT;",
+        )
+        .unwrap();
         assert!(
             schema_supports_current_reads(&conn),
             "the columns are all there"
@@ -3618,8 +3759,11 @@ mod tests {
         let conn = version_one_catalog();
         // A newer build would have run every step this one knows about, so the
         // columns are there; it simply also knows steps this build does not.
-        conn.execute_batch("ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;")
-            .unwrap();
+        conn.execute_batch(
+            "ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;
+             ALTER TABLE psf_guard_calibration_frame ADD COLUMN valid_direction TEXT;",
+        )
+        .unwrap();
         conn.execute(
             "UPDATE psf_guard_calibration_schema SET version = ?1 WHERE singleton = 1",
             [CALIBRATION_SCHEMA_VERSION + 1],
@@ -3922,6 +4066,7 @@ mod tests {
             filter: Some(filter.into()),
             focal_length_mm: Some(2350.0),
             rotation: Some(101.99),
+            valid_direction: None,
             source_verified: false,
         };
         // Nearest-first, as selection delivers them: the R set, with the one
@@ -3977,6 +4122,7 @@ mod tests {
             filter: Some(filter.into()),
             focal_length_mm: Some(2350.0),
             rotation: Some(101.99),
+            valid_direction: None,
             source_verified: false,
         };
         let frames = vec![bias(0, "R"), bias(1, "OIII"), bias(2, "L")];
@@ -4013,6 +4159,7 @@ mod tests {
             filter: None,
             focal_length_mm: Some(2350.0),
             rotation: None,
+            valid_direction: None,
             source_verified: false,
         };
         let frames = vec![
@@ -4056,6 +4203,7 @@ mod tests {
             filter: Some("Ha".into()),
             focal_length_mm: None,
             rotation,
+            valid_direction: None,
             source_verified: false,
         };
         // Five flats at 30° and two strays at 120°: the master takes only
@@ -4097,6 +4245,7 @@ mod tests {
             filter: None,
             focal_length_mm: None,
             rotation: None,
+            valid_direction: None,
             source_verified: false,
         };
         assert!(!sensor_matches(&light, &candidate));
@@ -4137,6 +4286,140 @@ mod tests {
         let details = library_details(&conn).unwrap();
         assert_eq!(details.frames.len(), 1);
         assert_eq!(details.frames[0].kind, CalibrationKind::Dark);
+    }
+
+    #[test]
+    fn a_validity_boundary_is_never_crossed() {
+        // A dark shot after a sensor cleaning must never serve a light from
+        // before it once marked forward, and the reverse for backward. Both
+        // directions return when the mark is cleared.
+        let temp = tempfile::tempdir().unwrap();
+        let dark_path = temp.path().join("dark.fits");
+        std::fs::write(&dark_path, b"dark").unwrap();
+        let mut dark = frame(dark_path.to_str().unwrap(), "DARK");
+        dark.timestamp = Some(1_000);
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &[dark], Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        let uuid: String = conn
+            .query_row(
+                "SELECT frame_uuid FROM psf_guard_calibration_frame",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mut older_light = frame("/light.fits", "LIGHT");
+        older_light.timestamp = Some(900);
+        let mut newer_light = frame("/light.fits", "LIGHT");
+        newer_light.timestamp = Some(1_100);
+
+        let selects = |conn: &Connection, light: &FrameMeta| {
+            select_for_light(conn, light).unwrap().dark.len() == 1
+        };
+        assert!(selects(&conn, &older_light));
+        assert!(selects(&conn, &newer_light));
+
+        assert_eq!(
+            set_frames_validity(
+                &conn,
+                std::slice::from_ref(&uuid),
+                Some(ValidDirection::Forward)
+            )
+            .unwrap(),
+            1
+        );
+        assert!(!selects(&conn, &older_light), "forward excludes the past");
+        assert!(selects(&conn, &newer_light));
+
+        set_frames_validity(
+            &conn,
+            std::slice::from_ref(&uuid),
+            Some(ValidDirection::Backward),
+        )
+        .unwrap();
+        assert!(selects(&conn, &older_light));
+        assert!(
+            !selects(&conn, &newer_light),
+            "backward excludes the future"
+        );
+
+        // A light captured exactly at the boundary is admitted either way.
+        let mut boundary_light = frame("/light.fits", "LIGHT");
+        boundary_light.timestamp = Some(1_000);
+        assert!(selects(&conn, &boundary_light));
+
+        set_frames_validity(&conn, std::slice::from_ref(&uuid), None).unwrap();
+        assert!(selects(&conn, &older_light));
+        assert!(selects(&conn, &newer_light));
+
+        // The listing carries the mark for the UI.
+        set_frames_validity(&conn, &[uuid], Some(ValidDirection::Forward)).unwrap();
+        let details = library_details(&conn).unwrap();
+        assert_eq!(
+            details.frames[0].valid_direction,
+            Some(ValidDirection::Forward)
+        );
+    }
+
+    #[test]
+    fn a_reimport_does_not_clear_a_validity_mark() {
+        // Re-scanning a folder updates a row's header-derived columns; the
+        // user's mark is not header-derived and must survive.
+        let temp = tempfile::tempdir().unwrap();
+        let dark_path = temp.path().join("dark.fits");
+        std::fs::write(&dark_path, b"dark").unwrap();
+        let mut dark = frame(dark_path.to_str().unwrap(), "DARK");
+        dark.timestamp = Some(1_000);
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &[dark.clone()], Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        let uuid: String = conn
+            .query_row(
+                "SELECT frame_uuid FROM psf_guard_calibration_frame",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        set_frames_validity(&conn, &[uuid], Some(ValidDirection::Backward)).unwrap();
+
+        // A changed file takes the upsert's update path.
+        std::fs::write(&dark_path, b"dark v2 with more bytes").unwrap();
+        dark.timestamp = Some(1_001);
+        {
+            let tx = conn.transaction().unwrap();
+            let outcome = import_calibration_frames(&tx, &[dark], Some("profile")).unwrap();
+            assert_eq!(outcome.updated, 1);
+            tx.commit().unwrap();
+        }
+        let details = library_details(&conn).unwrap();
+        assert_eq!(
+            details.frames[0].valid_direction,
+            Some(ValidDirection::Backward)
+        );
+    }
+
+    #[test]
+    fn marking_validity_needs_an_upgraded_catalog() {
+        let conn = version_one_catalog();
+        let error = set_frames_validity(&conn, &["x".to_string()], None)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("has not been upgraded"), "{error}");
+
+        migrate_existing(&conn).unwrap();
+        // Upgraded, an unknown frame is simply zero rows changed.
+        assert_eq!(
+            set_frames_validity(&conn, &["x".to_string()], None).unwrap(),
+            0
+        );
     }
 
     #[test]
@@ -4219,6 +4502,7 @@ mod tests {
             filter: Some("Ha".into()),
             focal_length_mm: None,
             rotation: None,
+            valid_direction: None,
             source_verified: false,
         };
         let day = 24 * 60 * 60;

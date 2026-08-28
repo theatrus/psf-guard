@@ -1464,7 +1464,14 @@ export interface CalibrationFrameSummary {
   camera_temp?: number | null;
   filter?: string | null;
   focal_length_mm?: number | null;
+  /**
+   * User-set validity boundary: `forward` serves only lights captured at or
+   * after this frame, `backward` only at or before. Absent means both.
+   */
+  valid_direction?: CalibrationValidDirection | null;
 }
+
+export type CalibrationValidDirection = 'forward' | 'backward';
 
 export interface CalibrationLibraryDetails {
   summary: CalibrationLibrarySummary;

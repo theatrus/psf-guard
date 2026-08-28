@@ -78,6 +78,24 @@ session (within a day of each other — dust moves between sessions). The
 nearest cluster with enough frames builds the master, so a stray single flat
 near the lights cannot orphan a complete session from a week earlier.
 
+### Validity boundaries
+
+Nearest-in-time is the right default, but it cannot know about a dust
+cleaning, a re-spaced imaging train, or any other change that makes older
+calibration wrong for newer lights. When nights lack their own frames, mark
+the boundary yourself: in the **Calibration library**, frames are grouped by
+imaging night — select a night (or several) and mark those frames usable
+**only for lights after them** (a set shot right after the change) or **only
+for lights before them** (the final set shot before it). Marked frames carry
+a badge, and matching never selects them across their boundary, in either
+direction, for any kind. Marking the same selection **in both directions
+again** clears the boundary. A light captured exactly at the boundary
+instant matches either way, and a frame with no recorded capture time
+cannot be judged and keeps matching — the same rule as any unrecorded
+setting. Marks survive folder re-scans, sync to other catalogs with the
+rest of the library, and immediately change which masters the next stack
+selects.
+
 A stack group whose lights need different master sets — a multi-night
 target with per-night flats, or a library large enough that the selection
 horizon moves — partitions into calibration sessions. Each light calibrates

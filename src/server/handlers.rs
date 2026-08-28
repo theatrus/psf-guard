@@ -136,6 +136,50 @@ pub async fn forget_calibration_frame(
     Ok(Json(ApiResponse::success(outcome)))
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct SetCalibrationValidityRequest {
+    pub frame_uuids: Vec<String>,
+    /// "forward", "backward", or "both" (which clears the mark).
+    pub direction: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SetCalibrationValidityResponse {
+    pub updated: usize,
+}
+
+/// PUT /api/db/{db}/calibrations/frames/validity — mark frames as usable
+/// only for lights after them, only before them, or both again.
+pub async fn set_calibration_validity(
+    State(_state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Json(request): Json<SetCalibrationValidityRequest>,
+) -> Result<Json<ApiResponse<SetCalibrationValidityResponse>>, AppError> {
+    let direction = match request.direction.as_str() {
+        "both" => None,
+        "forward" => Some(crate::calibration::ValidDirection::Forward),
+        "backward" => Some(crate::calibration::ValidDirection::Backward),
+        other => {
+            return Err(AppError::BadRequest(format!(
+                "direction must be both, forward, or backward, not {other:?}"
+            )));
+        }
+    };
+    if request.frame_uuids.is_empty() {
+        return Err(AppError::BadRequest("no frames named".into()));
+    }
+    let conn = ctx.db();
+    let conn = conn.lock().map_err(AppError::db)?;
+    let updated = crate::calibration::set_frames_validity(&conn, &request.frame_uuids, direction)
+        .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    if updated == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(Json(ApiResponse::success(SetCalibrationValidityResponse {
+        updated,
+    })))
+}
+
 pub async fn clear_calibration_masters(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
