@@ -630,6 +630,20 @@ export const apiClient = {
     return data.data;
   },
 
+  setCalibrationValidity: async (
+    dbId: string,
+    frameUuids: string[],
+    direction: 'both' | 'forward' | 'backward'
+  ): Promise<{ updated: number }> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<{ updated: number }>>(
+      dbPath(dbId, '/calibrations/frames/validity'),
+      { frame_uuids: frameUuids, direction }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to mark calibration validity');
+    return data.data;
+  },
+
   forgetCalibrationFrame: async (
     dbId: string,
     frameUuid: string

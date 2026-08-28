@@ -367,6 +367,10 @@ async fn run_server_internal(
             delete(handlers::forget_calibration_frame),
         )
         .route(
+            "/calibrations/frames/validity",
+            put(handlers::set_calibration_validity),
+        )
+        .route(
             "/calibrations/masters",
             delete(handlers::clear_calibration_masters),
         )

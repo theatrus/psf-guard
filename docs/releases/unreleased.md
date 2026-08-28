@@ -141,6 +141,16 @@
   integration artifact is never modified. See [stack
   previews](https://github.com/theatrus/psf-guard/blob/main/docs/STACKING_PREVIEWS.md).
 
+- Calibration frames can now be fenced around an optical change. The
+  Calibration library groups frames by imaging night; select a night or a
+  range of nights and mark those frames usable only for lights captured
+  after them (a set shot right after a dust cleaning or train change) or
+  only before them (the final set shot before it). Matching never selects a
+  marked frame across its boundary for any kind, marked frames carry a
+  badge, marks survive folder re-scans and library sync, and marking the
+  selection "in both directions again" clears the fence. See [calibration
+  libraries](https://github.com/theatrus/psf-guard/blob/main/docs/CALIBRATION_LIBRARY.md).
+
 ## Changed
 
 - A dark now suits a light when their exposures agree to a tenth of a percent
