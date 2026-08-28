@@ -485,32 +485,6 @@
   outline: 2px solid var(--color-primary-alpha-20);
 }
 
-.selector-db-filter {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-top: 7px;
-  color: var(--color-text-muted);
-  font-size: 0.78rem;
-}
-
-.selector-db-filter select {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 5px 8px;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 6px;
-  background: var(--color-bg-input);
-  color: var(--color-text-primary);
-  font: inherit;
-  font-size: 0.82rem;
-}
-
-.selector-db-filter select:focus {
-  border-color: var(--color-primary);
-  outline: 2px solid var(--color-primary-alpha-20);
-}
-
 .selector-options {
   max-height: min(62vh, 480px);
   margin-top: 7px;
