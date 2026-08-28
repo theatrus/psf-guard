@@ -4324,13 +4324,23 @@ mod tests {
         assert!(selects(&conn, &newer_light));
 
         assert_eq!(
-            set_frames_validity(&conn, std::slice::from_ref(&uuid), Some(ValidDirection::Forward)).unwrap(),
+            set_frames_validity(
+                &conn,
+                std::slice::from_ref(&uuid),
+                Some(ValidDirection::Forward)
+            )
+            .unwrap(),
             1
         );
         assert!(!selects(&conn, &older_light), "forward excludes the past");
         assert!(selects(&conn, &newer_light));
 
-        set_frames_validity(&conn, std::slice::from_ref(&uuid), Some(ValidDirection::Backward)).unwrap();
+        set_frames_validity(
+            &conn,
+            std::slice::from_ref(&uuid),
+            Some(ValidDirection::Backward),
+        )
+        .unwrap();
         assert!(selects(&conn, &older_light));
         assert!(
             !selects(&conn, &newer_light),
