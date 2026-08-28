@@ -67,6 +67,11 @@ pub struct StackViewProcessingRequest {
     /// newly created previews retain their original pixels unless requested.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deconvolution: Option<DeconvolutionConfig>,
+    /// Optional RC-Astro tool chain (BXT, NXT, SXT) applied to the linear
+    /// data after deconvolution and before the stretch. Star removal stores
+    /// the stars image beside the starless result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rc_astro: Option<super::rc_astro::RcAstroProcessing>,
 }
 
 impl StackStretchRequest {
@@ -104,10 +109,21 @@ pub struct StackStretchPreview {
     pub luminance_statistics: Option<RobustStatistics>,
     #[serde(default)]
     pub deconvolution: Option<StackDeconvolutionResult>,
+    #[serde(default)]
+    pub rc_astro: Option<super::rc_astro::StackRcAstroResult>,
+    #[serde(default)]
+    pub rc_astro_id: Option<String>,
     pub preview_url: String,
     pub original_preview_url: String,
     #[serde(default)]
     pub fits_url: Option<String>,
+    /// The stretched stars image, present when star removal kept one.
+    #[serde(default)]
+    pub stars_preview_url: Option<String>,
+    #[serde(default)]
+    pub stars_original_preview_url: Option<String>,
+    #[serde(default)]
+    pub stars_fits_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -313,6 +329,43 @@ fn render_image_previews_with_details(
     Ok(render)
 }
 
+/// Render one screen/original PNG pair by applying an already-resolved plan
+/// — how the stars image reuses the starless image's transform.
+fn render_previews_with_plan(
+    image: &LinearImage,
+    plan: &StretchPlan,
+    screen_destination: &FsPath,
+    original_destination: &FsPath,
+) -> Result<(), String> {
+    for destination in [screen_destination, original_destination] {
+        let parent = destination
+            .parent()
+            .ok_or_else(|| "Stack preview path has no parent".to_string())?;
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let pixels = plan
+        .apply_u8(&image.data, image.channels)
+        .map_err(|error| error.to_string())?;
+    let dynamic = if image.channels == 1 {
+        image::DynamicImage::ImageLuma8(
+            image::GrayImage::from_raw(image.width as u32, image.height as u32, pixels)
+                .ok_or_else(|| "Stack preview dimensions do not match pixels".to_string())?,
+        )
+    } else {
+        image::DynamicImage::ImageRgb8(
+            image::RgbImage::from_raw(image.width as u32, image.height as u32, pixels)
+                .ok_or_else(|| "Stack preview dimensions do not match pixels".to_string())?,
+        )
+    };
+    save_png_atomic(&dynamic, original_destination)?;
+    let resized = dynamic.resize(
+        PREVIEW_MAX_DIMENSION,
+        PREVIEW_MAX_DIMENSION,
+        image::imageops::FilterType::Lanczos3,
+    );
+    save_png_atomic(&resized, screen_destination)
+}
+
 fn render_dynamic_image(
     image: &LinearImage,
     config: &StretchConfig,
@@ -346,6 +399,86 @@ fn render_dynamic_image(
     Ok((dynamic, StretchRender { plan }))
 }
 
+/// What an apply request produced: the finished preview, or a note that
+/// the same request is being computed and the client should poll.
+pub(super) enum StretchApplyOutcome {
+    Ready(Box<StackStretchPreview>),
+    /// The work runs detached (RC-Astro chains take minutes — far past any
+    /// reverse-proxy timeout); the client re-sends the same request until
+    /// it turns Ready, each poll carrying the run's live progress. Keeps
+    /// generation out of the HTTP request path.
+    Pending {
+        stretch_id: String,
+    },
+}
+
+/// One entry per stretch id being computed right now, so identical
+/// concurrent requests wait on the same run instead of starting duplicates.
+static IN_FLIGHT: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+/// The failure of a detached run, held for the next poll of that id.
+static FAILURES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
+    std::sync::LazyLock::new(Default::default);
+/// Live progress of an in-flight computation, served to the pending poll:
+/// which tool is running and the chain's overall fraction.
+static PROGRESS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, PendingProgress>>,
+> = std::sync::LazyLock::new(Default::default);
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct PendingProgress {
+    pub stage: String,
+    pub fraction: f32,
+}
+
+fn report_progress(stretch_id: &str, stage: &str, fraction: f32) {
+    if let Ok(mut progress) = PROGRESS.lock() {
+        progress.insert(
+            stretch_id.to_string(),
+            PendingProgress {
+                stage: stage.to_string(),
+                fraction,
+            },
+        );
+    }
+}
+
+/// Removes its id from the in-flight set (and its progress entry) on drop —
+/// panic or success alike.
+struct InFlightToken(String);
+
+impl Drop for InFlightToken {
+    fn drop(&mut self) {
+        if let Ok(mut in_flight) = IN_FLIGHT.lock() {
+            in_flight.remove(&self.0);
+        }
+        if let Ok(mut progress) = PROGRESS.lock() {
+            progress.remove(&self.0);
+        }
+    }
+}
+
+fn try_begin_in_flight(stretch_id: &str) -> Option<InFlightToken> {
+    let mut in_flight = IN_FLIGHT.lock().ok()?;
+    if in_flight.insert(stretch_id.to_string()) {
+        Some(InFlightToken(stretch_id.to_string()))
+    } else {
+        None
+    }
+}
+
+struct StretchIdentity {
+    stretch_id: String,
+    deconvolution_id: Option<String>,
+    rc_astro_id: Option<String>,
+}
+
+fn read_cached_manifest(cache_root: &FsPath, stretch_id: &str) -> Option<StackStretchPreview> {
+    let bytes = std::fs::read(stretch_manifest_path(cache_root, stretch_id)).ok()?;
+    let cached = serde_json::from_slice::<StackStretchPreview>(&bytes).ok()?;
+    stretch_artifacts_exist(cache_root, stretch_id, &cached).then_some(cached)
+}
+
 pub(super) async fn apply_to_fits(
     state: Arc<AppState>,
     database_id: String,
@@ -354,11 +487,14 @@ pub(super) async fn apply_to_fits(
     source_revision: String,
     source_path: PathBuf,
     request: StackViewProcessingRequest,
-) -> Result<StackStretchPreview, AppError> {
+) -> Result<StretchApplyOutcome, AppError> {
     if let Some(deconvolution) = request.deconvolution {
         deconvolution
             .validate()
             .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    }
+    if let Some(rc_astro) = &request.rc_astro {
+        rc_astro.validate().map_err(AppError::BadRequest)?;
     }
     let config = request.stretch.config();
     let deconvolution = request.deconvolution;
@@ -367,6 +503,39 @@ pub(super) async fn apply_to_fits(
             deconvolution_cache_id(&database_id, &source_key, &source_revision, &request)
         })
         .transpose()?;
+    // Reading the tool schemas spawns short-lived rc-astro processes; they
+    // also pin the CLI and model versions into the cache identity.
+    let rc_astro_schemas = match request.rc_astro.clone() {
+        Some(config) => Some(
+            tokio::task::spawn_blocking(move || super::rc_astro::schemas_for(&config))
+                .await
+                .map_err(|error| {
+                    AppError::InternalError(format!("RC-Astro probe failed: {error}"))
+                })?
+                .map_err(AppError::BadRequest)?,
+        ),
+        None => None,
+    };
+    // Canonicalize before hashing: `1` and `1.0` are one request, and a bad
+    // parameter should be refused here, not minutes into the chain.
+    let rc_astro = match (&request.rc_astro, &rc_astro_schemas) {
+        (Some(config), Some(schemas)) => Some(
+            super::rc_astro::normalize_against_schemas(config, schemas)
+                .map_err(AppError::BadRequest)?,
+        ),
+        _ => None,
+    };
+    let rc_astro_id = match (&rc_astro, &rc_astro_schemas) {
+        (Some(config), Some(schemas)) => Some(super::rc_astro::rc_astro_cache_id(
+            &database_id,
+            &source_key,
+            &source_revision,
+            config,
+            schemas,
+            deconvolution_id.as_deref(),
+        )?),
+        _ => None,
+    };
     let encoded = serde_json::to_vec(&config).map_err(|error| {
         AppError::InternalError(format!("Failed to encode stretch request: {error}"))
     })?;
@@ -381,51 +550,177 @@ pub(super) async fn apply_to_fits(
         hasher.update(b"deconvolution");
         hasher.update(deconvolution_id.as_bytes());
     }
+    if let Some(rc_astro_id) = &rc_astro_id {
+        hasher.update(b"rc-astro");
+        hasher.update(rc_astro_id.as_bytes());
+    }
     let mut stretch_id = String::with_capacity(64);
     for byte in hasher.finalize() {
         write!(&mut stretch_id, "{byte:02x}").expect("writing to a String cannot fail");
     }
-    let manifest_path = stretch_manifest_path(&cache_root, &stretch_id);
-    if let Ok(bytes) = std::fs::read(&manifest_path)
-        && let Ok(cached) = serde_json::from_slice::<StackStretchPreview>(&bytes)
-        && stretch_artifacts_exist(&cache_root, &stretch_id, &cached)
+    if let Some(cached) = read_cached_manifest(&cache_root, &stretch_id) {
+        return Ok(StretchApplyOutcome::Ready(Box::new(cached)));
+    }
+    // A detached run for this exact request already failed: hand the reason
+    // to this poll instead of computing again unasked.
+    if let Ok(mut failures) = FAILURES.lock()
+        && let Some(message) = failures.remove(&stretch_id)
     {
-        return Ok(cached);
+        return Err(AppError::BadRequest(message));
+    }
+    let Some(token) = try_begin_in_flight(&stretch_id) else {
+        // The same request is already computing; the caller polls.
+        return Ok(StretchApplyOutcome::Pending { stretch_id });
+    };
+
+    let identity = StretchIdentity {
+        stretch_id: stretch_id.clone(),
+        deconvolution_id,
+        rc_astro_id,
+    };
+
+    if rc_astro.is_some() {
+        // Minutes of external-tool work: run detached so no reverse proxy
+        // can kill it mid-flight, and let the client poll. The permit and
+        // the interactive-job guard are taken inside the task and held
+        // until the blocking work finishes.
+        tokio::spawn(compute_stretch_variant(
+            state,
+            database_id,
+            cache_root,
+            token,
+            identity,
+            source_path,
+            config,
+            deconvolution,
+            rc_astro,
+            rc_astro_schemas,
+        ));
+        return Ok(StretchApplyOutcome::Pending { stretch_id });
     }
 
-    let permit = Arc::clone(&state.stack_previews.permit);
-    let _permit = permit
+    // A plain stretch (or deconvolution) is fast enough to answer inline.
+    match compute_stretch_variant(
+        state,
+        database_id,
+        cache_root.clone(),
+        token,
+        identity,
+        source_path,
+        config,
+        deconvolution,
+        None,
+        None,
+    )
+    .await
+    {
+        Some(response) => Ok(StretchApplyOutcome::Ready(Box::new(response))),
+        None => {
+            if let Ok(mut failures) = FAILURES.lock()
+                && let Some(message) = failures.remove(&stretch_id)
+            {
+                return Err(AppError::BadRequest(message));
+            }
+            Err(AppError::InternalError("Stretch rendering failed".into()))
+        }
+    }
+}
+
+/// Acquire the stack permit, render, and publish the manifest. Runs to
+/// completion regardless of the HTTP request that started it. A failure is
+/// parked in [`FAILURES`] for the next poll. Returns the response on
+/// success so the inline path can answer directly.
+#[allow(clippy::too_many_arguments)]
+async fn compute_stretch_variant(
+    state: Arc<AppState>,
+    database_id: String,
+    cache_root: PathBuf,
+    token: InFlightToken,
+    identity: StretchIdentity,
+    source_path: PathBuf,
+    config: StretchConfig,
+    deconvolution: Option<DeconvolutionConfig>,
+    rc_astro: Option<super::rc_astro::RcAstroProcessing>,
+    rc_astro_schemas: Option<Vec<(String, seiza_stacking::ExternalToolSchema)>>,
+) -> Option<StackStretchPreview> {
+    let _token = token;
+    let stretch_id = identity.stretch_id.clone();
+    let park_failure = |message: String| {
+        tracing::warn!("Stack stretch {stretch_id} failed: {message}");
+        if let Ok(mut failures) = FAILURES.lock() {
+            failures.insert(stretch_id.clone(), message);
+        }
+    };
+    let permit = match Arc::clone(&state.stack_previews.permit)
         .acquire_owned()
         .await
-        .map_err(|_| AppError::InternalError("Stack preview processor is unavailable".into()))?;
-    if let Ok(bytes) = std::fs::read(&manifest_path)
-        && let Ok(cached) = serde_json::from_slice::<StackStretchPreview>(&bytes)
-        && stretch_artifacts_exist(&cache_root, &stretch_id, &cached)
     {
-        return Ok(cached);
+        Ok(permit) => permit,
+        Err(_) => {
+            park_failure("Stack preview processor is unavailable".into());
+            return None;
+        }
+    };
+    if let Some(cached) = read_cached_manifest(&cache_root, &identity.stretch_id) {
+        return Some(cached);
     }
     let guard = state.begin_interactive_job();
     let state_for_render = Arc::clone(&state);
     let cache_for_render = cache_root.clone();
-    let id_for_render = stretch_id.clone();
-    let deconvolution_id_for_render = deconvolution_id.clone();
-    let rendered = tokio::task::spawn_blocking(move || {
+    let database_for_render = database_id.clone();
+    let result = tokio::task::spawn_blocking(move || {
         let _guard = guard;
-        render_fits_variant(
+        let _permit = permit;
+        let rendered = render_fits_variant(
             &state_for_render,
             &cache_for_render,
-            &id_for_render,
+            &identity.stretch_id,
             &source_path,
             &config,
             deconvolution,
-            deconvolution_id_for_render.as_deref(),
-        )
+            identity.deconvolution_id.as_deref(),
+            rc_astro,
+            identity.rc_astro_id.as_deref(),
+            rc_astro_schemas,
+        )?;
+        let response = build_stretch_preview(
+            &database_for_render,
+            &identity,
+            deconvolution.is_some(),
+            rendered,
+        );
+        write_json_atomic(
+            &stretch_manifest_path(&cache_for_render, &identity.stretch_id),
+            &response,
+        )?;
+        Ok::<_, String>(response)
     })
-    .await
-    .map_err(|error| AppError::InternalError(format!("Stretch worker failed: {error}")))?
-    .map_err(AppError::BadRequest)?;
+    .await;
+    match result {
+        Ok(Ok(response)) => Some(response),
+        Ok(Err(message)) => {
+            park_failure(message);
+            None
+        }
+        Err(join_error) => {
+            park_failure(format!("Stretch worker failed: {join_error}"));
+            None
+        }
+    }
+}
 
-    let response = StackStretchPreview {
+fn build_stretch_preview(
+    database_id: &str,
+    identity: &StretchIdentity,
+    deconvolution_requested: bool,
+    rendered: RenderedVariant,
+) -> StackStretchPreview {
+    let stretch_id = &identity.stretch_id;
+    let has_stars = rendered
+        .rc_astro
+        .as_ref()
+        .is_some_and(|result| result.has_stars);
+    StackStretchPreview {
         schema_version: 2,
         stretch_id: stretch_id.clone(),
         stretch_version: SEIZA_STRETCH_VERSION.into(),
@@ -433,7 +728,7 @@ pub(super) async fn apply_to_fits(
             .deconvolution
             .as_ref()
             .map(|_| deconvolution_version()),
-        deconvolution_id: deconvolution_id.clone(),
+        deconvolution_id: identity.deconvolution_id.clone(),
         config: rendered.config,
         resolved_plan: rendered.resolved_plan,
         source_transfer: rendered.source_transfer,
@@ -442,15 +737,23 @@ pub(super) async fn apply_to_fits(
         channel_statistics: rendered.channel_statistics,
         luminance_statistics: rendered.luminance_statistics,
         deconvolution: rendered.deconvolution,
+        rc_astro: rendered.rc_astro,
+        rc_astro_id: identity.rc_astro_id.clone(),
         preview_url: format!("/api/db/{database_id}/stack-previews/stretch/{stretch_id}/preview"),
         original_preview_url: format!(
             "/api/db/{database_id}/stack-previews/stretch/{stretch_id}/preview?size=original"
         ),
-        fits_url: deconvolution
-            .map(|_| format!("/api/db/{database_id}/stack-previews/stretch/{stretch_id}/fits")),
-    };
-    write_json_atomic(&manifest_path, &response).map_err(AppError::InternalError)?;
-    Ok(response)
+        fits_url: (deconvolution_requested || identity.rc_astro_id.is_some())
+            .then(|| format!("/api/db/{database_id}/stack-previews/stretch/{stretch_id}/fits")),
+        stars_preview_url: has_stars
+            .then(|| format!("/api/db/{database_id}/stack-previews/stretch/{stretch_id}/stars")),
+        stars_original_preview_url: has_stars.then(|| {
+            format!("/api/db/{database_id}/stack-previews/stretch/{stretch_id}/stars?size=original")
+        }),
+        stars_fits_url: has_stars.then(|| {
+            format!("/api/db/{database_id}/stack-previews/stretch/{stretch_id}/stars-fits")
+        }),
+    }
 }
 
 struct RenderedVariant {
@@ -462,8 +765,10 @@ struct RenderedVariant {
     channel_statistics: Vec<Option<RobustStatistics>>,
     luminance_statistics: Option<RobustStatistics>,
     deconvolution: Option<StackDeconvolutionResult>,
+    rc_astro: Option<super::rc_astro::StackRcAstroResult>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_fits_variant(
     state: &Arc<AppState>,
     cache_root: &FsPath,
@@ -472,11 +777,14 @@ fn render_fits_variant(
     config: &StretchConfig,
     deconvolution_request: Option<DeconvolutionConfig>,
     deconvolution_id: Option<&str>,
+    rc_astro_request: Option<super::rc_astro::RcAstroProcessing>,
+    rc_astro_id: Option<&str>,
+    rc_astro_schemas: Option<Vec<(String, seiza_stacking::ExternalToolSchema)>>,
 ) -> Result<RenderedVariant, String> {
     let frame =
         crate::image_io::open_linear_frame(source_path).map_err(|error| error.to_string())?;
     let samples = frame.image.data.len();
-    let bytes_per_sample = if deconvolution_request.is_some() {
+    let bytes_per_sample = if deconvolution_request.is_some() || rc_astro_id.is_some() {
         DECONVOLUTION_BYTES_PER_SAMPLE
     } else {
         STRETCH_BYTES_PER_SAMPLE
@@ -521,10 +829,10 @@ fn render_fits_variant(
         config.max_analysis_samples,
     )
     .map_err(|error| error.to_string())?;
-    if deconvolution_request.is_some()
+    if (deconvolution_request.is_some() || rc_astro_request.is_some())
         && source_transfer == StackStretchSourceTransfer::DisplayReferred
     {
-        return Err("Deconvolution requires a linear-light stack source".into());
+        return Err("Linear-light processing requires a linear stack source".into());
     }
     let mut processed = None;
     let mut cached_processed = None;
@@ -585,6 +893,26 @@ fn render_fits_variant(
         .as_ref()
         .or_else(|| cached_processed.as_ref().map(|frame| &frame.image))
         .unwrap_or(&frame.image);
+    // RC-Astro runs after deconvolution: the tools operate on whatever the
+    // linear image has become by this point.
+    let mut rc_astro_outcome = None;
+    if let (Some(rc_astro_config), Some(rc_astro_id), Some(schemas)) =
+        (rc_astro_request, rc_astro_id, rc_astro_schemas.as_ref())
+    {
+        rc_astro_outcome = Some(super::rc_astro::apply_rc_astro(
+            cache_root,
+            rc_astro_id,
+            &rc_astro_config,
+            schemas,
+            linear,
+            &frame.headers,
+            &mut |stage, fraction| report_progress(stretch_id, stage, fraction),
+        )?);
+    }
+    let linear = rc_astro_outcome
+        .as_ref()
+        .map(|outcome| &outcome.image)
+        .unwrap_or(linear);
     let normalized = if source_transfer == StackStretchSourceTransfer::Linear {
         Some(normalize_linear_image(linear)?)
     } else {
@@ -600,6 +928,42 @@ fn render_fits_variant(
     let render = pool.install(|| {
         render_image_previews_with_details(prepared, config, &screen, &original, |_| {})
     })?;
+    // The stars image shares the starless image's display transform —
+    // normalization range and resolved curves alike — so the two previews
+    // compose: screening the stars preview over the starless one
+    // approximates the un-separated stack. Analyzing the stars image on its
+    // own would instead auto-stretch its near-empty background into noise.
+    if let Some(outcome) = &rc_astro_outcome
+        && let Some(stars) = &outcome.stars
+    {
+        let stars_prepared = match &input_range {
+            Some(range) => {
+                let span = range.white - range.black;
+                let data = stars
+                    .data
+                    .iter()
+                    .map(|value| {
+                        if value.is_finite() {
+                            (*value - range.black) / span
+                        } else {
+                            f32::NAN
+                        }
+                    })
+                    .collect();
+                Some(
+                    LinearImage::new(stars.width, stars.height, stars.channels, data)
+                        .map_err(|error| error.to_string())?,
+                )
+            }
+            None => None,
+        };
+        let stars_source = stars_prepared.as_ref().unwrap_or(stars);
+        let stars_screen = stretch_stars_preview_path(cache_root, stretch_id);
+        let stars_original = stretch_stars_original_preview_path(cache_root, stretch_id);
+        pool.install(|| {
+            render_previews_with_plan(stars_source, &render.plan, &stars_screen, &stars_original)
+        })?;
+    }
     Ok(RenderedVariant {
         config: config.clone(),
         resolved_plan: serde_json::to_value(render.plan).map_err(|error| error.to_string())?,
@@ -609,6 +973,7 @@ fn render_fits_variant(
         channel_statistics: source_analysis.channel_statistics(),
         luminance_statistics: source_analysis.luminance_statistics(),
         deconvolution,
+        rc_astro: rc_astro_outcome.map(|outcome| outcome.result),
     })
 }
 
@@ -707,9 +1072,22 @@ pub async fn download_stack_stretch_fits(
         .ok()
         .and_then(|bytes| serde_json::from_slice::<StackStretchPreview>(&bytes).ok())
         .ok_or(AppError::NotFound)?;
-    let deconvolution_id = manifest.deconvolution_id.ok_or(AppError::NotFound)?;
-    validate_job_id(&deconvolution_id)?;
-    let path = deconvolution_fits_path(&ctx.cache_dir_path, &deconvolution_id);
+    // The furthest-processed linear image: RC-Astro's output already
+    // includes any deconvolution that ran before it.
+    let (path, label) = if let Some(rc_astro_id) = &manifest.rc_astro_id {
+        validate_job_id(rc_astro_id)?;
+        (
+            super::rc_astro::rc_astro_fits_path(&ctx.cache_dir_path, rc_astro_id),
+            "processed",
+        )
+    } else {
+        let deconvolution_id = manifest.deconvolution_id.ok_or(AppError::NotFound)?;
+        validate_job_id(&deconvolution_id)?;
+        (
+            deconvolution_fits_path(&ctx.cache_dir_path, &deconvolution_id),
+            "deconvolved",
+        )
+    };
     let file = tokio::fs::File::open(&path)
         .await
         .map_err(|_| AppError::NotFound)?;
@@ -720,7 +1098,7 @@ pub async fn download_stack_stretch_fits(
             AppError::InternalError(format!("Failed to stat processed FITS: {error}"))
         })?
         .len();
-    let filename = format!("psf-guard-deconvolved-{}.fits", &stretch_id[..12]);
+    let filename = format!("psf-guard-{label}-{}.fits", &stretch_id[..12]);
     Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, "application/fits")
@@ -733,6 +1111,77 @@ pub async fn download_stack_stretch_fits(
         .body(Body::from_stream(ReaderStream::new(file)))
         .map_err(|error| {
             AppError::InternalError(format!("Failed to build processed FITS response: {error}"))
+        })
+}
+
+/// GET /api/db/{db}/stack-previews/stretch/{id}/stars
+pub async fn get_stack_stretch_stars_image(
+    ctx: DbContext,
+    Path((_db_id, stretch_id)): Path<(String, String)>,
+    Query(query): Query<StackPreviewImageQuery>,
+) -> Result<Response, AppError> {
+    validate_job_id(&stretch_id)?;
+    let path = match query.size {
+        StackPreviewImageSize::Screen => {
+            stretch_stars_preview_path(&ctx.cache_dir_path, &stretch_id)
+        }
+        StackPreviewImageSize::Original => {
+            stretch_stars_original_preview_path(&ctx.cache_dir_path, &stretch_id)
+        }
+    };
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|_| AppError::NotFound)?;
+    let length = file
+        .metadata()
+        .await
+        .map_err(|error| AppError::InternalError(format!("Failed to stat stars PNG: {error}")))?
+        .len();
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "image/png")
+        .header(CONTENT_LENGTH, length)
+        .header(CACHE_CONTROL, "private, max-age=31536000, immutable")
+        .body(Body::from_stream(ReaderStream::new(file)))
+        .map_err(|error| {
+            AppError::InternalError(format!("Failed to build stars PNG response: {error}"))
+        })
+}
+
+/// GET /api/db/{db}/stack-previews/stretch/{id}/stars-fits
+pub async fn download_stack_stretch_stars_fits(
+    ctx: DbContext,
+    Path((_db_id, stretch_id)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    validate_job_id(&stretch_id)?;
+    let manifest = std::fs::read(stretch_manifest_path(&ctx.cache_dir_path, &stretch_id))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<StackStretchPreview>(&bytes).ok())
+        .ok_or(AppError::NotFound)?;
+    let rc_astro_id = manifest.rc_astro_id.ok_or(AppError::NotFound)?;
+    validate_job_id(&rc_astro_id)?;
+    let path = super::rc_astro::rc_astro_stars_path(&ctx.cache_dir_path, &rc_astro_id);
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|_| AppError::NotFound)?;
+    let length = file
+        .metadata()
+        .await
+        .map_err(|error| AppError::InternalError(format!("Failed to stat stars FITS: {error}")))?
+        .len();
+    let filename = format!("psf-guard-stars-{}.fits", &stretch_id[..12]);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/fits")
+        .header(CONTENT_LENGTH, length)
+        .header(
+            CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{filename}\""),
+        )
+        .header(CACHE_CONTROL, "private, max-age=31536000, immutable")
+        .body(Body::from_stream(ReaderStream::new(file)))
+        .map_err(|error| {
+            AppError::InternalError(format!("Failed to build stars FITS response: {error}"))
         })
 }
 
@@ -753,6 +1202,14 @@ fn stretch_preview_path(cache_root: &FsPath, stretch_id: &str) -> PathBuf {
 
 fn stretch_original_preview_path(cache_root: &FsPath, stretch_id: &str) -> PathBuf {
     stretch_dir(cache_root, stretch_id).join("preview-original.png")
+}
+
+fn stretch_stars_preview_path(cache_root: &FsPath, stretch_id: &str) -> PathBuf {
+    stretch_dir(cache_root, stretch_id).join("stars.png")
+}
+
+fn stretch_stars_original_preview_path(cache_root: &FsPath, stretch_id: &str) -> PathBuf {
+    stretch_dir(cache_root, stretch_id).join("stars-original.png")
 }
 
 fn deconvolution_dir(cache_root: &FsPath, deconvolution_id: &str) -> PathBuf {
@@ -780,9 +1237,17 @@ fn stretch_artifacts_exist(
         && manifest.deconvolution_id.as_ref().is_none_or(|id| {
             validate_job_id(id).is_ok() && deconvolution_fits_path(cache_root, id).is_file()
         })
+        && manifest.rc_astro_id.as_ref().is_none_or(|id| {
+            validate_job_id(id).is_ok()
+                && super::rc_astro::rc_astro_fits_path(cache_root, id).is_file()
+                && (manifest.stars_fits_url.is_none()
+                    || super::rc_astro::rc_astro_stars_path(cache_root, id).is_file())
+        })
+        && (manifest.stars_preview_url.is_none()
+            || stretch_stars_preview_path(cache_root, stretch_id).is_file())
 }
 
-fn write_json_atomic(path: &FsPath, value: &impl Serialize) -> Result<(), String> {
+pub(super) fn write_json_atomic(path: &FsPath, value: &impl Serialize) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "Stretch manifest path has no parent".to_string())?;
@@ -793,8 +1258,39 @@ fn write_json_atomic(path: &FsPath, value: &impl Serialize) -> Result<(), String
     std::fs::rename(&temporary, path).map_err(|error| error.to_string())
 }
 
-pub(super) fn response(result: StackStretchPreview) -> Json<ApiResponse<StackStretchPreview>> {
-    Json(ApiResponse::success(result))
+/// What a 202 poll answer carries: the run's live progress when known.
+#[derive(Debug, Serialize)]
+struct StretchPendingStatus {
+    pending: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fraction: Option<f32>,
+}
+
+/// A ready result answers 200 with the preview; a pending one answers 202
+/// with the run's live progress, telling the client to re-send the same
+/// request.
+pub(super) fn apply_response(outcome: StretchApplyOutcome) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match outcome {
+        StretchApplyOutcome::Ready(result) => Json(ApiResponse::success(*result)).into_response(),
+        StretchApplyOutcome::Pending { stretch_id } => {
+            let progress = PROGRESS
+                .lock()
+                .ok()
+                .and_then(|progress| progress.get(&stretch_id).cloned());
+            (
+                StatusCode::ACCEPTED,
+                Json(ApiResponse::success(StretchPendingStatus {
+                    pending: true,
+                    stage: progress.as_ref().map(|progress| progress.stage.clone()),
+                    fraction: progress.map(|progress| progress.fraction),
+                })),
+            )
+                .into_response()
+        }
+    }
 }
 
 #[cfg(test)]

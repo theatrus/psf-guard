@@ -75,6 +75,8 @@ import type {
   StackStretchPreview,
   StackViewProcessingRequest,
   AstrometryCapabilities,
+  RcAstroCapabilities,
+  StackStretchPendingProgress,
   AstrometryValidationReport,
   CatalogInstallPreset,
   CatalogInstallStatus,
@@ -288,6 +290,13 @@ export const apiClient = {
       '/astrometry/capabilities'
     );
     if (!data.data) throw new Error(data.error || 'Failed to inspect Seiza catalogs');
+    return data.data;
+  },
+
+  getRcAstroCapabilities: async (): Promise<RcAstroCapabilities> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<RcAstroCapabilities>>('/tools/rc-astro');
+    if (!data.data) throw new Error(data.error || 'Failed to probe RC-Astro tools');
     return data.data;
   },
 
@@ -1034,21 +1043,48 @@ export const apiClient = {
     dbId: string,
     jobId: string,
     groupIndex: number,
-    request: StackViewProcessingRequest
+    request: StackViewProcessingRequest,
+    options?: {
+      /** Live progress from a detached run's 202 polls. */
+      onProgress?: (progress: StackStretchPendingProgress) => void;
+      /** Poll interval override, for tests. */
+      pollIntervalMs?: number;
+    }
   ): Promise<StackStretchPreview> => {
-    try {
-      const apiInstance = await getApi();
-      const { data } = await apiInstance.post<ApiResponse<StackStretchPreview>>(
-        dbPath(
-          dbId,
-          `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/stretch`
-        ),
-        request
-      );
-      if (!data.data) throw new Error(data.error || 'Failed to apply stack stretch');
-      return normalizeStretchPreview(data.data);
-    } catch (cause) {
-      throw stackStretchError(cause, 'Failed to apply stack stretch');
+    // A long chain (RC-Astro tools take minutes) answers 202 and computes
+    // detached; re-sending the identical request polls it — each poll
+    // carrying the run's live progress — and finally returns the cached
+    // result. The cap is generous: a CPU-only StarXTerminator pass on a
+    // large stack legitimately takes a while.
+    const deadline = Date.now() + 60 * 60 * 1000;
+    for (;;) {
+      try {
+        const apiInstance = await getApi();
+        const response = await apiInstance.post<
+          ApiResponse<StackStretchPreview | StackStretchPendingProgress>
+        >(
+          dbPath(
+            dbId,
+            `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/stretch`
+          ),
+          request
+        );
+        if (response.status !== 202) {
+          const data = response.data.data as StackStretchPreview | null;
+          if (!data) {
+            throw new Error(response.data.error || 'Failed to apply stack stretch');
+          }
+          return normalizeStretchPreview(data);
+        }
+        const pending = response.data.data as StackStretchPendingProgress | null;
+        if (pending && options?.onProgress) options.onProgress(pending);
+      } catch (cause) {
+        throw stackStretchError(cause, 'Failed to apply stack stretch');
+      }
+      if (Date.now() > deadline) {
+        throw new Error('Stack processing is still running; try again later');
+      }
+      await new Promise((resolve) => setTimeout(resolve, options?.pollIntervalMs ?? 5000));
     }
   },
 

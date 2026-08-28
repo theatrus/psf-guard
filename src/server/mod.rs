@@ -473,6 +473,14 @@ async fn run_server_internal(
             get(stack_preview::stretch::download_stack_stretch_fits),
         )
         .route(
+            "/stack-previews/stretch/{stretch_id}/stars",
+            get(stack_preview::stretch::get_stack_stretch_stars_image),
+        )
+        .route(
+            "/stack-previews/stretch/{stretch_id}/stars-fits",
+            get(stack_preview::stretch::download_stack_stretch_stars_fits),
+        )
+        .route(
             "/stack-previews/color/{job_id}/fits",
             get(stack_preview::color::download_stack_color_fits),
         )
@@ -583,6 +591,10 @@ async fn run_server_internal(
         .route(
             "/astrometry/capabilities",
             get(handlers::get_astrometry_capabilities),
+        )
+        .route(
+            "/tools/rc-astro",
+            get(stack_preview::rc_astro::get_rc_astro_capabilities),
         )
         .route(
             "/astrometry/catalogs/validate",

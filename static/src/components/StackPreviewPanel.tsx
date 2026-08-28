@@ -297,6 +297,10 @@ export default function StackPreviewPanel({
   const [watchedJobIds, setWatchedJobIds] = useState<string[]>([]);
   const [inspector, setInspector] = useState<StackArtifact | null>(null);
   const [stretches, setStretches] = useState<Record<string, StackStretchPreview>>({});
+  // Which channels currently show the stars image instead of the starless
+  // one, keyed like `stretches`. Only meaningful while star removal is
+  // applied to that channel.
+  const [starsView, setStarsView] = useState<Record<string, boolean>>({});
 
   const currentChannels = useMemo(() => {
     const channels = new Map<string, ChannelInput>();
@@ -417,6 +421,7 @@ export default function StackPreviewPanel({
     setWatchedJobIds([]);
     setInspector(null);
     setStretches({});
+    setStarsView({});
     setFrameOrder('capture');
     resetStart();
     resetStop();
@@ -924,13 +929,38 @@ export default function StackPreviewPanel({
                     {artifact && (
                       <div className="stack-preview-image">
                         <img
-                          src={appliedStretch?.preview_url ?? apiClient.getStackPreviewUrl(
-                            dbId, artifact.jobId, artifact.group.index, artifact.artifactRevision
-                          )}
+                          src={(stretchKey && starsView[stretchKey] && appliedStretch?.stars_preview_url)
+                            || appliedStretch?.preview_url
+                            || apiClient.getStackPreviewUrl(
+                              dbId, artifact.jobId, artifact.group.index, artifact.artifactRevision
+                            )}
                           alt={`${targetName} ${filterName} stack preview`}
                         />
                         {isSkyOriented(artifact.group.sky_orientation) && (
                           <span className="stack-preview-orientation">N ↑ · E ←</span>
+                        )}
+                        {stretchKey && appliedStretch?.stars_preview_url && (
+                          <div className="stack-preview-stars-toggle" role="group" aria-label="Star removal view">
+                            <button
+                              type="button"
+                              className={starsView[stretchKey] ? '' : 'is-active'}
+                              onClick={() => setStarsView((current) => ({ ...current, [stretchKey]: false }))}
+                            >
+                              Starless
+                            </button>
+                            <button
+                              type="button"
+                              className={starsView[stretchKey] ? 'is-active' : ''}
+                              onClick={() => setStarsView((current) => ({ ...current, [stretchKey]: true }))}
+                            >
+                              Stars
+                            </button>
+                            {appliedStretch.stars_fits_url && (
+                              <a href={appliedStretch.stars_fits_url} download title="Download the stars linear FITS">
+                                Stars FITS
+                              </a>
+                            )}
+                          </div>
                         )}
                       </div>
                     )}
@@ -941,18 +971,27 @@ export default function StackPreviewPanel({
                         channels={artifact.group.output_channels === 3 ? 3 : 1}
                         disabled={!canCompute || running}
                         applied={appliedStretch}
-                        apply={(request) => apiClient.applyStackStretch(
-                          dbId, artifact.jobId, artifact.group.index, request
+                        apply={(request, onProgress) => apiClient.applyStackStretch(
+                          dbId, artifact.jobId, artifact.group.index, request, { onProgress }
                         )}
                         onApplied={(preview) => setStretches((currentStretches) => ({
                           ...currentStretches,
                           [stretchKey]: preview,
                         }))}
-                        onRevert={() => setStretches((currentStretches) => {
-                          const next = { ...currentStretches };
-                          delete next[stretchKey];
-                          return next;
-                        })}
+                        onRevert={() => {
+                          setStretches((currentStretches) => {
+                            const next = { ...currentStretches };
+                            delete next[stretchKey];
+                            return next;
+                          });
+                          // The next star removal starts on the starless
+                          // view, not wherever this one was left.
+                          setStarsView((current) => {
+                            const next = { ...current };
+                            delete next[stretchKey];
+                            return next;
+                          });
+                        }}
                       />
                     )}
                     {!artifact && groupBusy && (

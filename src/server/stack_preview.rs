@@ -8,6 +8,7 @@
 pub mod artifact;
 pub mod color;
 mod janitor;
+pub mod rc_astro;
 mod resume;
 pub mod snr;
 pub mod stretch;
@@ -570,6 +571,7 @@ impl StackPreviewManager {
     pub(super) fn prune_cache(&self, cache_root: &FsPath) {
         let keep = self.cache_keep_set(cache_root);
         janitor::prune(cache_root, &keep, SEIZA_STACKING_VERSION);
+        rc_astro::prune_rc_astro_cache(cache_root);
     }
 
     pub(crate) async fn acquire_maintenance_permit(
@@ -1157,7 +1159,7 @@ pub async fn apply_stack_preview_stretch(
     ctx: DbContext,
     Path((_db_id, job_id, group_index)): Path<(String, String, usize)>,
     Json(request): Json<stretch::StackViewProcessingRequest>,
-) -> Result<Json<ApiResponse<stretch::StackStretchPreview>>, AppError> {
+) -> Result<axum::response::Response, AppError> {
     validate_job_id(&job_id)?;
     let job = if let Some(job) = state.stack_previews.get(&job_id) {
         job
@@ -1187,7 +1189,7 @@ pub async fn apply_stack_preview_stretch(
         request,
     )
     .await?;
-    Ok(stretch::response(result))
+    Ok(stretch::apply_response(result))
 }
 
 fn validate_request(request: &StackPreviewRequest) -> Result<(), AppError> {

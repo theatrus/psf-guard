@@ -700,6 +700,75 @@ export interface StackStretchRequest {
 
 export interface StackViewProcessingRequest extends StackStretchRequest {
   deconvolution?: StackDeconvolutionConfig | null;
+  rc_astro?: RcAstroProcessing | null;
+}
+
+/** One RC-Astro schema parameter's type, default, and range. */
+export type ExternalParameterKind =
+  | { type: 'float'; default: number; min: number; max: number }
+  | { type: 'bool'; default: boolean }
+  | { type: 'int'; default: number; min: number; max: number };
+
+export interface ExternalToolParameter {
+  name: string;
+  /** The CLI flag; null marks a GUI-only parameter that cannot be set. */
+  flag: string | null;
+  label: string;
+  description: string;
+  kind: ExternalParameterKind;
+}
+
+/** One RC-Astro tool's live contract, read from `rc-astro <tool> --json`. */
+export interface ExternalToolSchema {
+  schema_version: number;
+  cli_version: string;
+  key: string;
+  name: string;
+  ml_version: number | null;
+  licensed: boolean;
+  license_message: string | null;
+  parameters: ExternalToolParameter[];
+}
+
+export interface RcAstroCapabilities {
+  available: boolean;
+  executable?: string;
+  tools: ExternalToolSchema[];
+  error?: string;
+}
+
+export type RcAstroParameterValue = number | boolean;
+
+export interface RcAstroStep {
+  tool: string;
+  parameters: Record<string, RcAstroParameterValue>;
+}
+
+export interface RcAstroProcessing {
+  steps: RcAstroStep[];
+}
+
+export interface RcAstroStepResult {
+  tool: string;
+  name: string;
+  ml_version: number | null;
+  device?: string;
+  warnings: string[];
+}
+
+export interface StackRcAstroResult {
+  cli_version: string;
+  steps: RcAstroStepResult[];
+  has_stars: boolean;
+}
+
+/** A 202 poll answer while a detached processing run computes. */
+export interface StackStretchPendingProgress {
+  pending: true;
+  /** The tool currently running, e.g. "RC-Astro StarXTerminator". */
+  stage?: string;
+  /** The chain's overall fraction complete in 0..1. */
+  fraction?: number;
 }
 
 export interface StackDeconvolutionConfig {
@@ -744,9 +813,15 @@ export interface StackStretchPreview {
   channel_statistics: Array<StackStretchStatistics | null>;
   luminance_statistics: StackStretchStatistics | null;
   deconvolution: StackDeconvolutionResult | null;
+  rc_astro?: StackRcAstroResult | null;
+  rc_astro_id?: string | null;
   preview_url: string;
   original_preview_url: string;
   fits_url: string | null;
+  /** Present when star removal kept a stars image. */
+  stars_preview_url?: string | null;
+  stars_original_preview_url?: string | null;
+  stars_fits_url?: string | null;
 }
 
 export type StackColorRole = 'luminance' | 'red' | 'green' | 'blue' | 'ha' | 'oiii' | 'sii';
