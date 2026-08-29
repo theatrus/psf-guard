@@ -25,7 +25,7 @@ use crate::server::api::ApiResponse;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-pub(super) const RC_ASTRO_CACHE_VERSION: u32 = 1;
+pub(super) const RC_ASTRO_CACHE_VERSION: u32 = 2;
 
 /// The order steps run when several are enabled: sharpen the linear data,
 /// denoise it, then separate the stars.
@@ -335,42 +335,60 @@ pub(super) fn normalize_against_schemas(
     Ok(RcAstroProcessing { steps })
 }
 
-/// The cache identity of one processing chain over one source. Includes
-/// each tool's CLI and model versions — an upgrade changes the output for
-/// identical inputs — and the identity of the deconvolution feeding it,
-/// because the chain processes the deconvolved image, not the raw stack.
-pub(super) fn rc_astro_cache_id(
+/// The cache identities of one processing chain over one source: one id per
+/// canonical-order prefix, ending with the whole chain's id.
+///
+/// Each step's id folds the previous id together with only that step's
+/// configuration and tool versions, so a change to a later step leaves every
+/// earlier id — and its cached artifact — untouched. Turning NoiseX on after
+/// a BlurX run reuses the BlurX output instead of recomputing it. The base
+/// includes the deconvolution identity because the chain processes the
+/// deconvolved image, not the raw stack, and each step's CLI and model
+/// versions because an upgrade changes the output for identical inputs.
+pub(super) fn rc_astro_chain_ids(
     database_id: &str,
     source_key: &str,
     source_revision: &str,
     config: &RcAstroProcessing,
     schemas: &[(String, ExternalToolSchema)],
     deconvolution_id: Option<&str>,
-) -> Result<String, AppError> {
-    // The canonical order is the identity: two requests that run the same
-    // steps the same way cache as one.
-    let ordered = config.ordered();
-    let encoded = serde_json::to_vec(&ordered).map_err(|error| {
-        AppError::InternalError(format!("Failed to encode RC-Astro request: {error}"))
-    })?;
+) -> Result<Vec<String>, AppError> {
     let mut hasher = Sha256::new();
     hasher.update(database_id.as_bytes());
     hasher.update(source_key.as_bytes());
     hasher.update(source_revision.as_bytes());
     hasher.update(RC_ASTRO_CACHE_VERSION.to_le_bytes());
-    hasher.update(&encoded);
     hasher.update(b"deconvolution");
     hasher.update(deconvolution_id.unwrap_or("none").as_bytes());
-    for (tool, schema) in schemas {
-        hasher.update(tool.as_bytes());
+    let mut previous = hasher.finalize();
+
+    let mut ids = Vec::new();
+    // The canonical order is the identity: two requests that run the same
+    // steps the same way cache as one.
+    for step in config.ordered() {
+        let encoded = serde_json::to_vec(step).map_err(|error| {
+            AppError::InternalError(format!("Failed to encode RC-Astro request: {error}"))
+        })?;
+        let (_, schema) = schemas
+            .iter()
+            .find(|(tool, _)| tool == &step.tool)
+            .ok_or_else(|| {
+                AppError::BadRequest(format!("no schema for RC-Astro tool {:?}", step.tool))
+            })?;
+        let mut hasher = Sha256::new();
+        hasher.update(previous);
+        hasher.update(&encoded);
+        hasher.update(step.tool.as_bytes());
         hasher.update(schema.cli_version.as_bytes());
         hasher.update(schema.ml_version.unwrap_or(0).to_le_bytes());
+        previous = hasher.finalize();
+        let mut id = String::with_capacity(64);
+        for byte in previous {
+            write!(&mut id, "{byte:02x}").expect("writing to a String cannot fail");
+        }
+        ids.push(id);
     }
-    let mut id = String::with_capacity(64);
-    for byte in hasher.finalize() {
-        write!(&mut id, "{byte:02x}").expect("writing to a String cannot fail");
-    }
-    Ok(id)
+    Ok(ids)
 }
 
 pub(super) fn rc_astro_dir(cache_root: &FsPath, rc_astro_id: &str) -> PathBuf {
@@ -401,61 +419,160 @@ pub(super) struct RcAstroOutcome {
     pub result: StackRcAstroResult,
 }
 
-/// Run (or reuse) the chain over one linear image. The processed FITS and
-/// the stars FITS land in the cache directory; the returned images feed the
-/// stretch renders directly.
-pub(super) fn apply_rc_astro(
+/// Mark a cache entry as recently useful, so age-based pruning keeps live
+/// variants and drops abandoned ones.
+fn refresh_manifest_mtime(manifest_path: &FsPath) {
+    if let Ok(file) = std::fs::File::options().append(true).open(manifest_path) {
+        let _ = file.set_modified(std::time::SystemTime::now());
+    }
+}
+
+/// Load one cached prefix, or say why it does not serve. A hit refreshes
+/// the manifest mtime.
+fn load_cached_prefix(
     cache_root: &FsPath,
     rc_astro_id: &str,
+    prefix: &RcAstroProcessing,
+) -> Option<(LinearImage, Option<LinearImage>, StackRcAstroResult)> {
+    let fits = rc_astro_fits_path(cache_root, rc_astro_id);
+    let stars_fits = rc_astro_stars_path(cache_root, rc_astro_id);
+    let manifest_path = rc_astro_manifest_path(cache_root, rc_astro_id);
+    let bytes = std::fs::read(&manifest_path).ok()?;
+    let cached = serde_json::from_slice::<CachedRcAstro>(&bytes).ok()?;
+    if cached.schema_version != RC_ASTRO_CACHE_VERSION
+        || cached.rc_astro_id != rc_astro_id
+        || &cached.config != prefix
+        || !fits.is_file()
+        || (cached.result.has_stars && !stars_fits.is_file())
+    {
+        return None;
+    }
+    refresh_manifest_mtime(&manifest_path);
+    let processed = crate::image_io::open_linear_frame(&fits).ok()?.image;
+    let stars = if cached.result.has_stars {
+        Some(crate::image_io::open_linear_frame(&stars_fits).ok()?.image)
+    } else {
+        None
+    };
+    Some((processed, stars, cached.result))
+}
+
+/// Write one prefix's artifacts: the processed FITS, the stars FITS when one
+/// exists, and the manifest naming what produced them.
+fn persist_prefix(
+    cache_root: &FsPath,
+    rc_astro_id: &str,
+    prefix: &RcAstroProcessing,
+    image: &LinearImage,
+    stars: Option<&LinearImage>,
+    result: &StackRcAstroResult,
+    reference_headers: &[(String, seiza_fits::HeaderValue)],
+) -> Result<(), String> {
+    let fits = rc_astro_fits_path(cache_root, rc_astro_id);
+    let stars_fits = rc_astro_stars_path(cache_root, rc_astro_id);
+    let parent = fits
+        .parent()
+        .ok_or_else(|| "RC-Astro FITS path has no parent".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    // The temp name carries a process-wide counter besides the pid: two
+    // writers within one process must never interleave into one temp file.
+    static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let unique = format!(
+        "{}-{}",
+        std::process::id(),
+        TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let temporary = fits.with_extension(format!("{unique}.tmp.fits"));
+    write_processed_image_fits_f32(&temporary, image, reference_headers, &rc_astro_cards())
+        .map_err(|error| error.to_string())?;
+    std::fs::rename(&temporary, &fits).map_err(|error| error.to_string())?;
+    if let Some(stars_image) = stars {
+        let temporary = stars_fits.with_extension(format!("{unique}.tmp.fits"));
+        write_processed_image_fits_f32(
+            &temporary,
+            stars_image,
+            reference_headers,
+            &rc_astro_cards(),
+        )
+        .map_err(|error| error.to_string())?;
+        std::fs::rename(&temporary, &stars_fits).map_err(|error| error.to_string())?;
+    }
+    super::stretch::write_json_atomic(
+        &rc_astro_manifest_path(cache_root, rc_astro_id),
+        &CachedRcAstro {
+            schema_version: RC_ASTRO_CACHE_VERSION,
+            rc_astro_id: rc_astro_id.into(),
+            config: prefix.clone(),
+            result: result.clone(),
+        },
+    )
+}
+
+/// Run (or reuse) the chain over one linear image. Every canonical prefix
+/// caches under its own identity from `rc_astro_chain_ids`, so this resumes
+/// from the deepest prefix already on disk: changing or adding a later step
+/// reruns only from that step. The final prefix's FITS files are what the
+/// download handlers serve; the returned images feed the stretch renders
+/// directly.
+pub(super) fn apply_rc_astro(
+    cache_root: &FsPath,
+    chain_ids: &[String],
     config: &RcAstroProcessing,
     schemas: &[(String, ExternalToolSchema)],
     image: &LinearImage,
     reference_headers: &[(String, seiza_fits::HeaderValue)],
     on_progress: &mut dyn FnMut(&str, f32),
 ) -> Result<RcAstroOutcome, String> {
-    let fits = rc_astro_fits_path(cache_root, rc_astro_id);
-    let stars_fits = rc_astro_stars_path(cache_root, rc_astro_id);
-    let manifest_path = rc_astro_manifest_path(cache_root, rc_astro_id);
-
-    if let Ok(bytes) = std::fs::read(&manifest_path)
-        && let Ok(cached) = serde_json::from_slice::<CachedRcAstro>(&bytes)
-        && cached.schema_version == RC_ASTRO_CACHE_VERSION
-        && cached.rc_astro_id == rc_astro_id
-        && &cached.config == config
-        && fits.is_file()
-        && (!cached.result.has_stars || stars_fits.is_file())
-    {
-        // A reuse marks the entry as recently useful, so age-based pruning
-        // keeps live variants and drops abandoned ones.
-        if let Ok(file) = std::fs::File::options().append(true).open(&manifest_path) {
-            let _ = file.set_modified(std::time::SystemTime::now());
-        }
-        let processed = crate::image_io::open_linear_frame(&fits)
-            .map_err(|error| error.to_string())?
-            .image;
-        let stars = if cached.result.has_stars {
-            Some(
-                crate::image_io::open_linear_frame(&stars_fits)
-                    .map_err(|error| error.to_string())?
-                    .image,
-            )
-        } else {
-            None
-        };
-        return Ok(RcAstroOutcome {
-            image: processed,
-            stars,
-            result: cached.result,
-        });
+    let ordered = config.ordered();
+    if chain_ids.len() != ordered.len() {
+        return Err(format!(
+            "RC-Astro chain lists {} ids for {} steps",
+            chain_ids.len(),
+            ordered.len()
+        ));
     }
+    let prefix_config = |end: usize| RcAstroProcessing {
+        steps: ordered[..end].iter().map(|step| (*step).clone()).collect(),
+    };
 
-    let cli = cli().ok_or_else(|| "rc-astro is not installed on this server".to_string())?;
+    // Resume from the deepest cached prefix — the whole chain when nothing
+    // changed, an earlier step's output when only later steps did.
     let mut current = image.clone();
     let mut stars: Option<LinearImage> = None;
     let mut steps = Vec::new();
     let mut cli_version = String::new();
-    let total_steps = config.steps.len().max(1);
-    for (index, step) in config.ordered().into_iter().enumerate() {
+    let mut resume_at = 0;
+    for end in (1..=ordered.len()).rev() {
+        if let Some((cached_image, cached_stars, cached_result)) =
+            load_cached_prefix(cache_root, &chain_ids[end - 1], &prefix_config(end))
+        {
+            // The served prefix refreshed its own mtime; refresh the ones
+            // under it too. A chain the user keeps re-applying must keep
+            // its intermediate artifacts alive through the age sweep, or
+            // the first later-step retune after two weeks reruns the whole
+            // chain — the recompute this cache layout exists to avoid.
+            for id in &chain_ids[..end - 1] {
+                refresh_manifest_mtime(&rc_astro_manifest_path(cache_root, id));
+            }
+            if end == ordered.len() {
+                return Ok(RcAstroOutcome {
+                    image: cached_image,
+                    stars: cached_stars,
+                    result: cached_result,
+                });
+            }
+            current = cached_image;
+            stars = cached_stars;
+            cli_version = cached_result.cli_version.clone();
+            steps = cached_result.steps;
+            resume_at = end;
+            break;
+        }
+    }
+
+    let cli = cli().ok_or_else(|| "rc-astro is not installed on this server".to_string())?;
+    let total_steps = ordered.len().max(1);
+    for (index, step) in ordered.iter().enumerate().skip(resume_at) {
         let (_, schema) = schemas
             .iter()
             .find(|(tool, _)| tool == &step.tool)
@@ -472,7 +589,7 @@ pub(super) fn apply_rc_astro(
         };
         tracing::info!(
             "RC-Astro {}: running {} on {}x{}x{}",
-            rc_astro_id,
+            chain_ids[index],
             schema.name,
             current.width,
             current.height,
@@ -505,6 +622,24 @@ pub(super) fn apply_rc_astro(
             warnings: processed.warnings.clone(),
         });
         current = processed.image;
+
+        // Persist this prefix under its own identity: a later request that
+        // shares it — the same steps with a new step added, or a later step
+        // changed — resumes from here instead of rerunning the tools.
+        let so_far = StackRcAstroResult {
+            cli_version: cli_version.clone(),
+            steps: steps.clone(),
+            has_stars: stars.is_some(),
+        };
+        persist_prefix(
+            cache_root,
+            &chain_ids[index],
+            &prefix_config(index + 1),
+            &current,
+            stars.as_ref(),
+            &so_far,
+            reference_headers,
+        )?;
     }
 
     let result = StackRcAstroResult {
@@ -512,43 +647,6 @@ pub(super) fn apply_rc_astro(
         steps,
         has_stars: stars.is_some(),
     };
-
-    let parent = fits
-        .parent()
-        .ok_or_else(|| "RC-Astro FITS path has no parent".to_string())?;
-    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    // The temp name carries a process-wide counter besides the pid: two
-    // writers within one process must never interleave into one temp file.
-    static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let unique = format!(
-        "{}-{}",
-        std::process::id(),
-        TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    );
-    let temporary = fits.with_extension(format!("{unique}.tmp.fits"));
-    write_processed_image_fits_f32(&temporary, &current, reference_headers, &rc_astro_cards())
-        .map_err(|error| error.to_string())?;
-    std::fs::rename(&temporary, &fits).map_err(|error| error.to_string())?;
-    if let Some(stars_image) = &stars {
-        let temporary = stars_fits.with_extension(format!("{unique}.tmp.fits"));
-        write_processed_image_fits_f32(
-            &temporary,
-            stars_image,
-            reference_headers,
-            &rc_astro_cards(),
-        )
-        .map_err(|error| error.to_string())?;
-        std::fs::rename(&temporary, &stars_fits).map_err(|error| error.to_string())?;
-    }
-    super::stretch::write_json_atomic(
-        &manifest_path,
-        &CachedRcAstro {
-            schema_version: RC_ASTRO_CACHE_VERSION,
-            rc_astro_id: rc_astro_id.into(),
-            config: config.clone(),
-            result: result.clone(),
-        },
-    )?;
 
     Ok(RcAstroOutcome {
         image: current,
@@ -658,13 +756,16 @@ mod tests {
 
     #[test]
     fn the_cache_identity_ignores_request_order_but_tracks_versions_and_deconvolution() {
-        let schemas = vec![("bxt".to_string(), schema("bxt", "2.6.6", 4))];
+        let schemas = vec![
+            ("bxt".to_string(), schema("bxt", "2.6.6", 4)),
+            ("sxt".to_string(), schema("sxt", "2.6.6", 11)),
+        ];
         let config = RcAstroProcessing {
             steps: vec![step("bxt"), step("sxt")],
         };
         let forward =
-            rc_astro_cache_id("db", "mono:job:0", "rev", &config, &schemas, None).unwrap();
-        let reversed = rc_astro_cache_id(
+            rc_astro_chain_ids("db", "mono:job:0", "rev", &config, &schemas, None).unwrap();
+        let reversed = rc_astro_chain_ids(
             "db",
             "mono:job:0",
             "rev",
@@ -676,13 +777,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(forward, reversed);
+        assert_eq!(forward.len(), 2);
 
-        let upgraded = rc_astro_cache_id(
+        let upgraded = rc_astro_chain_ids(
             "db",
             "mono:job:0",
             "rev",
             &config,
-            &[("bxt".to_string(), schema("bxt", "2.7.0", 5))],
+            &[
+                ("bxt".to_string(), schema("bxt", "2.7.0", 5)),
+                ("sxt".to_string(), schema("sxt", "2.6.6", 11)),
+            ],
             None,
         )
         .unwrap();
@@ -692,9 +797,83 @@ mod tests {
         // identity is part of this identity: without it, "BXT after 3px
         // deconvolution" and "BXT alone" would serve each other's pixels.
         let deconvolved =
-            rc_astro_cache_id("db", "mono:job:0", "rev", &config, &schemas, Some("abc123"))
+            rc_astro_chain_ids("db", "mono:job:0", "rev", &config, &schemas, Some("abc123"))
                 .unwrap();
         assert_ne!(forward, deconvolved);
+    }
+
+    #[test]
+    fn a_later_step_change_leaves_earlier_prefix_identities_alone() {
+        let schemas = vec![
+            ("bxt".to_string(), schema("bxt", "2.6.6", 4)),
+            ("nxt".to_string(), schema("nxt", "2.6.6", 3)),
+            ("sxt".to_string(), schema("sxt", "2.6.6", 11)),
+        ];
+        let bxt_only = rc_astro_chain_ids(
+            "db",
+            "mono:job:0",
+            "rev",
+            &RcAstroProcessing {
+                steps: vec![step("bxt")],
+            },
+            &schemas,
+            None,
+        )
+        .unwrap();
+        let with_nxt = rc_astro_chain_ids(
+            "db",
+            "mono:job:0",
+            "rev",
+            &RcAstroProcessing {
+                steps: vec![step("bxt"), step("nxt")],
+            },
+            &schemas,
+            None,
+        )
+        .unwrap();
+        // Turning NoiseX on keeps the BlurX prefix identity, so the cached
+        // BlurX artifact serves the longer chain.
+        assert_eq!(bxt_only[0], with_nxt[0]);
+        assert_ne!(with_nxt[0], with_nxt[1]);
+
+        // Changing a NoiseX parameter changes only the NoiseX identity.
+        let with_tuned_nxt = rc_astro_chain_ids(
+            "db",
+            "mono:job:0",
+            "rev",
+            &RcAstroProcessing {
+                steps: vec![
+                    step("bxt"),
+                    RcAstroStep {
+                        tool: "nxt".into(),
+                        parameters: BTreeMap::from([(
+                            "denoise".to_string(),
+                            ExternalParameterValue::Float(0.7),
+                        )]),
+                    },
+                ],
+            },
+            &schemas,
+            None,
+        )
+        .unwrap();
+        assert_eq!(with_nxt[0], with_tuned_nxt[0]);
+        assert_ne!(with_nxt[1], with_tuned_nxt[1]);
+
+        // An sxt-only chain shares nothing with a bxt-led one: its first
+        // step is a different tool, so its first identity differs.
+        let sxt_only = rc_astro_chain_ids(
+            "db",
+            "mono:job:0",
+            "rev",
+            &RcAstroProcessing {
+                steps: vec![step("sxt")],
+            },
+            &schemas,
+            None,
+        )
+        .unwrap();
+        assert_ne!(sxt_only[0], bxt_only[0]);
     }
 
     #[test]
@@ -736,9 +915,9 @@ mod tests {
         let normalized_int = normalize_against_schemas(&with_int, &schemas).unwrap();
         let normalized_float = normalize_against_schemas(&with_float, &schemas).unwrap();
         assert_eq!(normalized_int, normalized_float);
-        let id_int = rc_astro_cache_id("db", "s", "r", &normalized_int, &schemas, None).unwrap();
+        let id_int = rc_astro_chain_ids("db", "s", "r", &normalized_int, &schemas, None).unwrap();
         let id_float =
-            rc_astro_cache_id("db", "s", "r", &normalized_float, &schemas, None).unwrap();
+            rc_astro_chain_ids("db", "s", "r", &normalized_float, &schemas, None).unwrap();
         assert_eq!(id_int, id_float);
 
         // Unknown, GUI-only, and out-of-range parameters fail before any
@@ -828,8 +1007,8 @@ fi
                 )]),
             }],
         };
-        let mut schema = schema("sxt", "2.6.6", 11);
-        schema.parameters = vec![serde_json::from_value(serde_json::json!({
+        let mut sxt_schema = schema("sxt", "2.6.6", 11);
+        sxt_schema.parameters = vec![serde_json::from_value(serde_json::json!({
             "name": "stars",
             "flag": "--stars",
             "label": "Generate Star Image",
@@ -837,13 +1016,13 @@ fi
             "kind": {"type": "bool", "default": false},
         }))
         .unwrap()];
-        let schemas = vec![("sxt".to_string(), schema)];
+        let schemas = vec![("sxt".to_string(), sxt_schema)];
         let image = LinearImage::new(3, 2, 1, vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0]).unwrap();
 
         let mut reported: Vec<(String, f32)> = Vec::new();
         let first = apply_rc_astro(
             cache.path(),
-            "a".repeat(64).as_str(),
+            &["a".repeat(64)],
             &config,
             &schemas,
             &image,
@@ -867,7 +1046,7 @@ fi
 
         let second = apply_rc_astro(
             cache.path(),
-            "a".repeat(64).as_str(),
+            &["a".repeat(64)],
             &config,
             &schemas,
             &image,
@@ -876,7 +1055,6 @@ fi
         )
         .unwrap();
         assert!(second.result.has_stars);
-        unsafe { std::env::remove_var("PSF_GUARD_RC_ASTRO") };
 
         let invocations =
             std::fs::read_to_string(tool_dir.path().join("invocations")).unwrap_or_default();
@@ -884,6 +1062,131 @@ fi
             invocations.lines().count(),
             1,
             "second apply must be a cache hit"
+        );
+
+        // The regression this cache layout exists for: run BlurX alone, then
+        // add NoiseX. The longer chain must resume from the cached BlurX
+        // artifact instead of running BlurX again. (Same test because the
+        // env-var override is process-wide.)
+        let bxt = RcAstroProcessing {
+            steps: vec![step("bxt")],
+        };
+        let bxt_nxt = RcAstroProcessing {
+            steps: vec![step("bxt"), step("nxt")],
+        };
+        let chain_schemas = vec![
+            ("bxt".to_string(), schema("bxt", "2.6.6", 4)),
+            ("nxt".to_string(), schema("nxt", "2.6.6", 3)),
+        ];
+        let bxt_ids = vec!["b".repeat(64)];
+        let both_ids = vec!["b".repeat(64), "c".repeat(64)];
+        apply_rc_astro(
+            cache.path(),
+            &bxt_ids,
+            &bxt,
+            &chain_schemas,
+            &image,
+            &[],
+            &mut |_, _| {},
+        )
+        .unwrap();
+        let mut reported: Vec<(String, f32)> = Vec::new();
+        let extended = apply_rc_astro(
+            cache.path(),
+            &both_ids,
+            &bxt_nxt,
+            &chain_schemas,
+            &image,
+            &[],
+            &mut |stage, fraction| reported.push((stage.to_string(), fraction)),
+        )
+        .unwrap();
+        assert_eq!(extended.result.steps.len(), 2);
+        // The resumed chain reports only the step it actually runs, at its
+        // place in the whole chain: NoiseX starts at fraction 1/2.
+        assert_eq!(
+            reported.first().map(|(stage, _)| stage.as_str()),
+            Some("RC-Astro nxt")
+        );
+        assert_eq!(reported.first().map(|(_, fraction)| *fraction), Some(0.5));
+        let invocations =
+            std::fs::read_to_string(tool_dir.path().join("invocations")).unwrap_or_default();
+        assert_eq!(
+            invocations.lines().count(),
+            3,
+            "adding NoiseX must reuse the cached BlurX artifact: expected \
+             one sxt run, one bxt run, and one nxt run"
+        );
+
+        // The other half of the claim: a longer chain persists its
+        // intermediate prefixes as it runs. Run [bxt, nxt] under fresh
+        // identities, then ask for [bxt] alone with the prefix id — a full
+        // cache hit with no tool spawned.
+        let fresh_ids = vec!["e".repeat(64), "f".repeat(64)];
+        apply_rc_astro(
+            cache.path(),
+            &fresh_ids,
+            &bxt_nxt,
+            &chain_schemas,
+            &image,
+            &[],
+            &mut |_, _| {},
+        )
+        .unwrap();
+        let bxt_alone = apply_rc_astro(
+            cache.path(),
+            &fresh_ids[..1],
+            &bxt,
+            &chain_schemas,
+            &image,
+            &[],
+            &mut |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(bxt_alone.result.steps.len(), 1);
+
+        // A full-chain hit must keep the prefixes under it alive: age the
+        // BlurX prefix manifest past the sweep, serve the chain from cache,
+        // and the prefix manifest must come back fresh.
+        let bxt_manifest = rc_astro_manifest_path(cache.path(), &fresh_ids[0]);
+        let a_month_ago =
+            std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 24 * 3600);
+        std::fs::File::options()
+            .append(true)
+            .open(&bxt_manifest)
+            .unwrap()
+            .set_modified(a_month_ago)
+            .unwrap();
+        apply_rc_astro(
+            cache.path(),
+            &fresh_ids,
+            &bxt_nxt,
+            &chain_schemas,
+            &image,
+            &[],
+            &mut |_, _| {},
+        )
+        .unwrap();
+        let prefix_age = std::fs::metadata(&bxt_manifest)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .elapsed()
+            .unwrap_or_default();
+        assert!(
+            prefix_age < std::time::Duration::from_secs(3600),
+            "a full-chain cache hit must refresh the intermediate prefix \
+             manifests, or the sweep strands the chain's resume points"
+        );
+        unsafe { std::env::remove_var("PSF_GUARD_RC_ASTRO") };
+
+        let invocations =
+            std::fs::read_to_string(tool_dir.path().join("invocations")).unwrap_or_default();
+        assert_eq!(
+            invocations.lines().count(),
+            5,
+            "the fresh [bxt, nxt] run adds two invocations; the [bxt] \
+             replay and the full-chain replay must both be cache hits"
         );
     }
 }

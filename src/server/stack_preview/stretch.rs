@@ -470,7 +470,18 @@ fn try_begin_in_flight(stretch_id: &str) -> Option<InFlightToken> {
 struct StretchIdentity {
     stretch_id: String,
     deconvolution_id: Option<String>,
-    rc_astro_id: Option<String>,
+    /// Per-prefix cache ids for the RC-Astro chain, canonical order; the
+    /// last one is the chain's public identity.
+    rc_astro_chain: Option<Vec<String>>,
+}
+
+impl StretchIdentity {
+    fn rc_astro_id(&self) -> Option<&str> {
+        self.rc_astro_chain
+            .as_ref()
+            .and_then(|chain| chain.last())
+            .map(String::as_str)
+    }
 }
 
 fn read_cached_manifest(cache_root: &FsPath, stretch_id: &str) -> Option<StackStretchPreview> {
@@ -525,8 +536,8 @@ pub(super) async fn apply_to_fits(
         ),
         _ => None,
     };
-    let rc_astro_id = match (&rc_astro, &rc_astro_schemas) {
-        (Some(config), Some(schemas)) => Some(super::rc_astro::rc_astro_cache_id(
+    let rc_astro_chain = match (&rc_astro, &rc_astro_schemas) {
+        (Some(config), Some(schemas)) => Some(super::rc_astro::rc_astro_chain_ids(
             &database_id,
             &source_key,
             &source_revision,
@@ -536,6 +547,10 @@ pub(super) async fn apply_to_fits(
         )?),
         _ => None,
     };
+    let rc_astro_id = rc_astro_chain
+        .as_ref()
+        .and_then(|chain| chain.last())
+        .cloned();
     let encoded = serde_json::to_vec(&config).map_err(|error| {
         AppError::InternalError(format!("Failed to encode stretch request: {error}"))
     })?;
@@ -576,7 +591,7 @@ pub(super) async fn apply_to_fits(
     let identity = StretchIdentity {
         stretch_id: stretch_id.clone(),
         deconvolution_id,
-        rc_astro_id,
+        rc_astro_chain,
     };
 
     if rc_astro.is_some() {
@@ -680,7 +695,7 @@ async fn compute_stretch_variant(
             deconvolution,
             identity.deconvolution_id.as_deref(),
             rc_astro,
-            identity.rc_astro_id.as_deref(),
+            identity.rc_astro_chain.as_deref(),
             rc_astro_schemas,
         )?;
         let response = build_stretch_preview(
@@ -738,12 +753,12 @@ fn build_stretch_preview(
         luminance_statistics: rendered.luminance_statistics,
         deconvolution: rendered.deconvolution,
         rc_astro: rendered.rc_astro,
-        rc_astro_id: identity.rc_astro_id.clone(),
+        rc_astro_id: identity.rc_astro_id().map(str::to_string),
         preview_url: format!("/api/db/{database_id}/stack-previews/stretch/{stretch_id}/preview"),
         original_preview_url: format!(
             "/api/db/{database_id}/stack-previews/stretch/{stretch_id}/preview?size=original"
         ),
-        fits_url: (deconvolution_requested || identity.rc_astro_id.is_some())
+        fits_url: (deconvolution_requested || identity.rc_astro_id().is_some())
             .then(|| format!("/api/db/{database_id}/stack-previews/stretch/{stretch_id}/fits")),
         stars_preview_url: has_stars
             .then(|| format!("/api/db/{database_id}/stack-previews/stretch/{stretch_id}/stars")),
@@ -778,13 +793,13 @@ fn render_fits_variant(
     deconvolution_request: Option<DeconvolutionConfig>,
     deconvolution_id: Option<&str>,
     rc_astro_request: Option<super::rc_astro::RcAstroProcessing>,
-    rc_astro_id: Option<&str>,
+    rc_astro_chain: Option<&[String]>,
     rc_astro_schemas: Option<Vec<(String, seiza_stacking::ExternalToolSchema)>>,
 ) -> Result<RenderedVariant, String> {
     let frame =
         crate::image_io::open_linear_frame(source_path).map_err(|error| error.to_string())?;
     let samples = frame.image.data.len();
-    let bytes_per_sample = if deconvolution_request.is_some() || rc_astro_id.is_some() {
+    let bytes_per_sample = if deconvolution_request.is_some() || rc_astro_chain.is_some() {
         DECONVOLUTION_BYTES_PER_SAMPLE
     } else {
         STRETCH_BYTES_PER_SAMPLE
@@ -896,12 +911,12 @@ fn render_fits_variant(
     // RC-Astro runs after deconvolution: the tools operate on whatever the
     // linear image has become by this point.
     let mut rc_astro_outcome = None;
-    if let (Some(rc_astro_config), Some(rc_astro_id), Some(schemas)) =
-        (rc_astro_request, rc_astro_id, rc_astro_schemas.as_ref())
+    if let (Some(rc_astro_config), Some(chain_ids), Some(schemas)) =
+        (rc_astro_request, rc_astro_chain, rc_astro_schemas.as_ref())
     {
         rc_astro_outcome = Some(super::rc_astro::apply_rc_astro(
             cache_root,
-            rc_astro_id,
+            chain_ids,
             &rc_astro_config,
             schemas,
             linear,
