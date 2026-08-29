@@ -515,7 +515,10 @@ independently, which is the point: stretch the starless data hard without
 bloating stars, then screen the stars back in your processing tool. Results
 are content-addressed like deconvolution, keyed by the settings and the
 CLI and neural-network model versions, so a tool upgrade rebuilds instead of
-serving stale output. Runs use the tool's saved compute device (GPU where
+serving stale output. Each step of the chain caches under its own identity:
+turning NoiseXTerminator on after a BlurXTerminator run, or retuning a later
+step, reuses every artifact before the change instead of rerunning the whole
+chain. Runs use the tool's saved compute device (GPU where
 supported, CPU fallback) and PSF Guard exchanges 32-bit-float FITS
 normalized to the unit scale the tools expect, restoring the physical scale
 afterward. Find the CLI on `PATH`, or name it with the `PSF_GUARD_RC_ASTRO`
