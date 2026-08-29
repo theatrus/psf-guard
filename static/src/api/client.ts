@@ -644,6 +644,19 @@ export const apiClient = {
     return data.data;
   },
 
+  forgetCalibrationFrames: async (
+    dbId: string,
+    frameUuids: string[]
+  ): Promise<CalibrationMutationOutcome> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.delete<ApiResponse<CalibrationMutationOutcome>>(
+      dbPath(dbId, '/calibrations/frames'),
+      { data: { frame_uuids: frameUuids } }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to forget calibration frames');
+    return data.data;
+  },
+
   forgetCalibrationFrame: async (
     dbId: string,
     frameUuid: string

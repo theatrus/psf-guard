@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import CalibrationLibraryDialog from '../CalibrationLibraryDialog';
 
@@ -78,8 +78,8 @@ describe('calibration validity marking', () => {
     expect(await screen.findByText('Night of 2026-06-03')).toBeInTheDocument();
     expect(screen.getByText('Night of 2026-06-01')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Select Night of 2026-06-01' }));
-    expect(screen.getByText(/2 frames across 1 night/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select Flats Night of 2026-06-01' }));
+    expect(screen.getByText(/2 frames across 1 group/)).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Validity direction'), {
       target: { value: 'backward' },
@@ -107,6 +107,56 @@ describe('calibration validity marking', () => {
     expect(screen.getByText('▸ after only')).toBeInTheDocument();
   });
 
+  it('starts collapsed, separates darks from flats, and forgets a whole night', async () => {
+    serveLibrary([
+      flat('flat-a', earlyNight),
+      { ...flat('dark-a', earlyNight), kind: 'dark' },
+      { ...flat('bias-a', earlyNight), kind: 'bias' },
+    ]);
+    let received: unknown = null;
+    server.use(
+      http.delete('/api/db/demo/calibrations/frames', async ({ request }) => {
+        received = await request.json();
+        return HttpResponse.json({
+          success: true,
+          data: { frames_removed: 1, masters_removed: 0 },
+          error: null,
+        });
+      })
+    );
+
+    const { container } = render(
+      <CalibrationLibraryDialog dbId="demo" dbName="Demo" canManage onClose={() => {}} />,
+      { wrapper: wrapper() }
+    );
+
+    // Darks and bias sit in their own sections beside the flat nights: the
+    // same night appears once per section, not merged.
+    expect(await screen.findByText('Flats')).toBeInTheDocument();
+    const sectionRows = container.querySelectorAll('.calibration-section-row');
+    expect([...sectionRows].map((row) => row.querySelector('strong')?.textContent)).toEqual([
+      'Flats',
+      'Darks',
+      'Bias',
+    ]);
+    expect(screen.getAllByText('Night of 2026-06-01')).toHaveLength(3);
+
+    // Collapsed first: no frame rows until a group is expanded.
+    expect(screen.queryByText('flat-a.fits')).toBeNull();
+    expect(screen.queryByText('dark-a.fits')).toBeNull();
+    const toggles = screen.getAllByRole('button', { name: /Night of 2026-06-01/ });
+    fireEvent.click(toggles[0]);
+    expect(await screen.findByText('flat-a.fits')).toBeInTheDocument();
+    expect(screen.queryByText('dark-a.fits')).toBeNull();
+
+    // Forgetting a night names only that section's frames.
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const forgetButtons = screen.getAllByRole('button', { name: 'Forget night' });
+    fireEvent.click(forgetButtons[1]);
+    await waitFor(() => expect(received).toEqual({ frame_uuids: ['dark-a'] }));
+    confirm.mockRestore();
+  });
+
   it('offers no selection to a read-only viewer', async () => {
     serveLibrary([flat('old-a', earlyNight)]);
     render(
@@ -114,6 +164,6 @@ describe('calibration validity marking', () => {
       { wrapper: wrapper() }
     );
     expect(await screen.findByText('Night of 2026-06-01')).toBeInTheDocument();
-    expect(screen.queryByRole('checkbox', { name: /Select Night/ })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: /Select Flats/ })).toBeNull();
   });
 });

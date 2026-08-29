@@ -142,7 +142,11 @@
   previews](https://github.com/theatrus/psf-guard/blob/main/docs/STACKING_PREVIEWS.md).
 
 - Calibration frames can now be fenced around an optical change. The
-  Calibration library groups frames by imaging night; select a night or a
+  Calibration library groups frames by imaging night — collapsed to one
+  row per night until expanded, with flats (and their dark-flats) in one
+  section and the longer-lived darks and bias in their own, and a **Forget
+  night** action that removes a night's records for one section in a
+  single step; select a night or a
   range of nights and mark those frames usable only for lights captured
   after them (a set shot right after a dust cleaning or train change) or
   only before them (the final set shot before it). Matching never selects a
