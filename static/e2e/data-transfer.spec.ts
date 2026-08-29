@@ -219,6 +219,10 @@ test('settings shows calibration coverage for each database rig', async ({ page 
 
   const library = page.getByRole('dialog', { name: 'Calibration library' });
   await expect(library).toBeVisible();
+  // Night groups start collapsed: expand the flat's (no capture date) and
+  // the dark's before asserting their rows.
+  await library.getByRole('button', { name: /Date unknown/ }).click();
+  await library.getByRole('button', { name: /Night of/ }).click();
   await expect(library.getByText('dark-300s.fits', { exact: true })).toBeVisible();
   await expect(library.getByText('flat-ha.fits', { exact: true })).toBeVisible();
   await expect(library.getByText('⚠ Missing')).toBeVisible();
