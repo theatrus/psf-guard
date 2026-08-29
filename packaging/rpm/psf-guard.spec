@@ -7,7 +7,7 @@
 %global debug_package %{nil}
 
 Name:           psf-guard
-Version:        0.8.0
+Version:        0.9.0
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -90,6 +90,15 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Fri Aug 29 2026 Yann Ramin <github@theatr.us> - 0.9.0-1
+- Run RC-Astro BlurXTerminator, NoiseXTerminator, and StarXTerminator on stack previews
+- Star removal keeps starless and stars as separate stacked outputs
+- Fence calibration frames around an optical change; library grouped by night
+- Measure stack signal-to-noise growth with depth, with an SNR curve per channel
+- Calibrate each night of a multi-night stack with its own masters
+- Sensor tilt and aberration inspector with ASTAP-style figures
+- Database filters on the Overview and project picker; per-export WBPP layout
+- One-time-code pairing for remote clients
 * Fri Aug 14 2026 Yann Ramin <github@theatr.us> - 0.8.0-1
 - Read XISF frames everywhere FITS frames are read
 - Export a WBPP-ready tree with a PixInsight launch script
