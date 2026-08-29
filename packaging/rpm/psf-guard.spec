@@ -7,7 +7,7 @@
 %global debug_package %{nil}
 
 Name:           psf-guard
-Version:        0.9.0
+Version:        0.9.1
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -90,6 +90,10 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Fri Aug 29 2026 Yann Ramin <github@theatr.us> - 0.9.1-1
+- Every view lays out for phone screens
+- RC-Astro steps cache one by one, so changing a later step reuses earlier work
+
 * Fri Aug 29 2026 Yann Ramin <github@theatr.us> - 0.9.0-1
 - Run RC-Astro BlurXTerminator, NoiseXTerminator, and StarXTerminator on stack previews
 - Star removal keeps starless and stars as separate stacked outputs
