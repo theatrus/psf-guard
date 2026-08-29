@@ -1168,6 +1168,19 @@
 
   .project-open-main {
     width: calc(100% + 12px);
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  /* Full-width title row; badges and the open label wrap under it instead
+     of squeezing the name down to an ellipsis. */
+  .project-open-main .project-title {
+    flex: 1 1 100%;
+    white-space: normal;
+  }
+
+  .project-open-main .project-open-label {
+    margin-left: 0;
   }
 
   .project-header-actions {
