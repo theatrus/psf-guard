@@ -481,7 +481,10 @@ export default function CalibrationLibraryDialog({
                                 {VALIDITY_LABELS[shared]}
                               </span>
                             )}
-                            {canManage && (
+                            {/* Destructive, so it only appears once the
+                                night's checkbox says the user means this
+                                group. */}
+                            {canManage && selectedGroups.has(group.key) && (
                               <button
                                 className="remove-button"
                                 onClick={() => handleForgetNight(section, group)}

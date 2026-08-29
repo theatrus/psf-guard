@@ -149,10 +149,12 @@ describe('calibration validity marking', () => {
     expect(await screen.findByText('flat-a.fits')).toBeInTheDocument();
     expect(screen.queryByText('dark-a.fits')).toBeNull();
 
-    // Forgetting a night names only that section's frames.
+    // Forget night is destructive: it only appears once a night's checkbox
+    // is selected, and names only that section's frames.
+    expect(screen.queryByRole('button', { name: 'Forget night' })).toBeNull();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select Darks Night of 2026-06-01' }));
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    const forgetButtons = screen.getAllByRole('button', { name: 'Forget night' });
-    fireEvent.click(forgetButtons[1]);
+    fireEvent.click(screen.getByRole('button', { name: 'Forget night' }));
     await waitFor(() => expect(received).toEqual({ frame_uuids: ['dark-a'] }));
     confirm.mockRestore();
   });
