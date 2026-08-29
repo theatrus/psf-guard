@@ -419,9 +419,16 @@ pub(super) struct RcAstroOutcome {
     pub result: StackRcAstroResult,
 }
 
+/// Mark a cache entry as recently useful, so age-based pruning keeps live
+/// variants and drops abandoned ones.
+fn refresh_manifest_mtime(manifest_path: &FsPath) {
+    if let Ok(file) = std::fs::File::options().append(true).open(manifest_path) {
+        let _ = file.set_modified(std::time::SystemTime::now());
+    }
+}
+
 /// Load one cached prefix, or say why it does not serve. A hit refreshes
-/// the manifest mtime so age-based pruning keeps live variants and drops
-/// abandoned ones.
+/// the manifest mtime.
 fn load_cached_prefix(
     cache_root: &FsPath,
     rc_astro_id: &str,
@@ -440,9 +447,7 @@ fn load_cached_prefix(
     {
         return None;
     }
-    if let Ok(file) = std::fs::File::options().append(true).open(&manifest_path) {
-        let _ = file.set_modified(std::time::SystemTime::now());
-    }
+    refresh_manifest_mtime(&manifest_path);
     let processed = crate::image_io::open_linear_frame(&fits).ok()?.image;
     let stars = if cached.result.has_stars {
         Some(crate::image_io::open_linear_frame(&stars_fits).ok()?.image)
@@ -541,6 +546,14 @@ pub(super) fn apply_rc_astro(
         if let Some((cached_image, cached_stars, cached_result)) =
             load_cached_prefix(cache_root, &chain_ids[end - 1], &prefix_config(end))
         {
+            // The served prefix refreshed its own mtime; refresh the ones
+            // under it too. A chain the user keeps re-applying must keep
+            // its intermediate artifacts alive through the age sweep, or
+            // the first later-step retune after two weeks reruns the whole
+            // chain — the recompute this cache layout exists to avoid.
+            for id in &chain_ids[..end - 1] {
+                refresh_manifest_mtime(&rc_astro_manifest_path(cache_root, id));
+            }
             if end == ordered.len() {
                 return Ok(RcAstroOutcome {
                     image: cached_image,
@@ -1096,8 +1109,6 @@ fi
             Some("RC-Astro nxt")
         );
         assert_eq!(reported.first().map(|(_, fraction)| *fraction), Some(0.5));
-        unsafe { std::env::remove_var("PSF_GUARD_RC_ASTRO") };
-
         let invocations =
             std::fs::read_to_string(tool_dir.path().join("invocations")).unwrap_or_default();
         assert_eq!(
@@ -1105,6 +1116,77 @@ fi
             3,
             "adding NoiseX must reuse the cached BlurX artifact: expected \
              one sxt run, one bxt run, and one nxt run"
+        );
+
+        // The other half of the claim: a longer chain persists its
+        // intermediate prefixes as it runs. Run [bxt, nxt] under fresh
+        // identities, then ask for [bxt] alone with the prefix id — a full
+        // cache hit with no tool spawned.
+        let fresh_ids = vec!["e".repeat(64), "f".repeat(64)];
+        apply_rc_astro(
+            cache.path(),
+            &fresh_ids,
+            &bxt_nxt,
+            &chain_schemas,
+            &image,
+            &[],
+            &mut |_, _| {},
+        )
+        .unwrap();
+        let bxt_alone = apply_rc_astro(
+            cache.path(),
+            &fresh_ids[..1],
+            &bxt,
+            &chain_schemas,
+            &image,
+            &[],
+            &mut |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(bxt_alone.result.steps.len(), 1);
+
+        // A full-chain hit must keep the prefixes under it alive: age the
+        // BlurX prefix manifest past the sweep, serve the chain from cache,
+        // and the prefix manifest must come back fresh.
+        let bxt_manifest = rc_astro_manifest_path(cache.path(), &fresh_ids[0]);
+        let a_month_ago =
+            std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 24 * 3600);
+        std::fs::File::options()
+            .append(true)
+            .open(&bxt_manifest)
+            .unwrap()
+            .set_modified(a_month_ago)
+            .unwrap();
+        apply_rc_astro(
+            cache.path(),
+            &fresh_ids,
+            &bxt_nxt,
+            &chain_schemas,
+            &image,
+            &[],
+            &mut |_, _| {},
+        )
+        .unwrap();
+        let prefix_age = std::fs::metadata(&bxt_manifest)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .elapsed()
+            .unwrap_or_default();
+        assert!(
+            prefix_age < std::time::Duration::from_secs(3600),
+            "a full-chain cache hit must refresh the intermediate prefix \
+             manifests, or the sweep strands the chain's resume points"
+        );
+        unsafe { std::env::remove_var("PSF_GUARD_RC_ASTRO") };
+
+        let invocations =
+            std::fs::read_to_string(tool_dir.path().join("invocations")).unwrap_or_default();
+        assert_eq!(
+            invocations.lines().count(),
+            5,
+            "the fresh [bxt, nxt] run adds two invocations; the [bxt] \
+             replay and the full-chain replay must both be cache hits"
         );
     }
 }
