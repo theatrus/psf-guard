@@ -110,6 +110,10 @@ describe('CalibrationLibrarySummary', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Manage' }));
 
     expect(await screen.findByRole('dialog', { name: 'Calibration library' })).toBeInTheDocument();
+    // Groups start collapsed: the night header is visible, its rows are not.
+    const nightToggle = await screen.findByRole('button', { name: /Date unknown/ });
+    expect(screen.queryByText('dark-300s.fits')).toBeNull();
+    fireEvent.click(nightToggle);
     expect(await screen.findByText('dark-300s.fits')).toBeInTheDocument();
     expect(screen.getByText(/3000×2000 · 1×1 bin · gain 100/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Forget' })).toBeInTheDocument();

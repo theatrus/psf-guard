@@ -1058,19 +1058,32 @@ pub fn set_frames_validity(
 }
 
 pub fn forget_frame(conn: &mut Connection, frame_uuid: &str) -> Result<CalibrationMutationOutcome> {
-    if !schema_exists(conn) {
+    forget_frames(conn, std::slice::from_ref(&frame_uuid.to_string()))
+}
+
+/// Remove several catalog records in one transaction — a whole night of a
+/// kind at once — with the same transitive master invalidation a single
+/// forget performs. The FITS files are never touched.
+pub fn forget_frames(
+    conn: &mut Connection,
+    frame_uuids: &[String],
+) -> Result<CalibrationMutationOutcome> {
+    if frame_uuids.is_empty() || !schema_exists(conn) {
         return Ok(CalibrationMutationOutcome::default());
     }
     let transaction = conn.transaction()?;
-    let frame_exists = transaction
-        .query_row(
-            "SELECT 1 FROM psf_guard_calibration_frame WHERE frame_uuid = ?1",
-            [frame_uuid],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some();
-    if !frame_exists {
+    let uuid_set = frame_uuids
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    let any_exists = {
+        let mut statement = transaction
+            .prepare("SELECT 1 FROM psf_guard_calibration_frame WHERE frame_uuid = ?1")?;
+        frame_uuids
+            .iter()
+            .any(|uuid| statement.exists([uuid]).unwrap_or(false))
+    };
+    if !any_exists {
         return Ok(CalibrationMutationOutcome::default());
     }
 
@@ -1111,7 +1124,12 @@ pub fn forget_frame(conn: &mut Connection, frame_uuid: &str) -> Result<Calibrati
         .collect::<Result<Vec<_>>>()?;
     let mut invalid = links
         .iter()
-        .filter(|master| master.sources.iter().any(|source| source == frame_uuid))
+        .filter(|master| {
+            master
+                .sources
+                .iter()
+                .any(|source| uuid_set.contains(source.as_str()))
+        })
         .map(|master| master.uuid.clone())
         .collect::<std::collections::HashSet<_>>();
     loop {
@@ -1136,10 +1154,14 @@ pub fn forget_frame(conn: &mut Connection, frame_uuid: &str) -> Result<Calibrati
             [master_uuid],
         )?;
     }
-    let frames_removed = transaction.execute(
-        "DELETE FROM psf_guard_calibration_frame WHERE frame_uuid = ?1",
-        [frame_uuid],
-    )?;
+    let mut frames_removed = 0usize;
+    {
+        let mut statement =
+            transaction.prepare("DELETE FROM psf_guard_calibration_frame WHERE frame_uuid = ?1")?;
+        for frame_uuid in frame_uuids {
+            frames_removed += statement.execute([frame_uuid])?;
+        }
+    }
     transaction.commit()?;
     Ok(CalibrationMutationOutcome {
         frames_removed,
@@ -4362,6 +4384,48 @@ mod tests {
         assert_eq!(
             details.frames[0].valid_direction,
             Some(ValidDirection::Forward)
+        );
+    }
+
+    #[test]
+    fn forgetting_a_whole_night_removes_every_named_frame_at_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut meta = Vec::new();
+        for index in 0..3 {
+            let path = temp.path().join(format!("dark-{index}.fits"));
+            std::fs::write(&path, format!("dark {index}")).unwrap();
+            let mut dark = frame(path.to_str().unwrap(), "DARK");
+            dark.timestamp = Some(1_000 + index);
+            meta.push(dark);
+        }
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &meta, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        let uuids: Vec<String> = conn
+            .prepare("SELECT frame_uuid FROM psf_guard_calibration_frame")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(uuids.len(), 3);
+
+        // Unknown ids remove nothing rather than failing the batch.
+        let outcome = forget_frames(
+            &mut conn,
+            &["missing".to_string(), uuids[0].clone(), uuids[1].clone()],
+        )
+        .unwrap();
+        assert_eq!(outcome.frames_removed, 2);
+        assert_eq!(library_summary(&conn).unwrap().frame_count, 1);
+
+        assert_eq!(
+            forget_frames(&mut conn, &[]).unwrap().frames_removed,
+            0,
+            "an empty batch is a no-op"
         );
     }
 

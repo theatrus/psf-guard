@@ -137,6 +137,31 @@ pub async fn forget_calibration_frame(
 }
 
 #[derive(Debug, serde::Deserialize)]
+pub struct ForgetCalibrationFramesRequest {
+    pub frame_uuids: Vec<String>,
+}
+
+/// DELETE /api/db/{db}/calibrations/frames — forget several catalog records
+/// (a whole night of a kind) in one transaction. Files are never touched.
+pub async fn forget_calibration_frames(
+    State(_state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Json(request): Json<ForgetCalibrationFramesRequest>,
+) -> Result<Json<ApiResponse<crate::calibration::CalibrationMutationOutcome>>, AppError> {
+    if request.frame_uuids.is_empty() {
+        return Err(AppError::BadRequest("no frames named".into()));
+    }
+    let conn = ctx.db();
+    let mut conn = conn.lock().map_err(AppError::db)?;
+    let outcome =
+        crate::calibration::forget_frames(&mut conn, &request.frame_uuids).map_err(AppError::db)?;
+    if outcome.frames_removed == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(Json(ApiResponse::success(outcome)))
+}
+
+#[derive(Debug, serde::Deserialize)]
 pub struct SetCalibrationValidityRequest {
     pub frame_uuids: Vec<String>,
     /// "forward", "backward", or "both" (which clears the mark).

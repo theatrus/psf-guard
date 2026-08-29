@@ -84,7 +84,13 @@ Nearest-in-time is the right default, but it cannot know about a dust
 cleaning, a re-spaced imaging train, or any other change that makes older
 calibration wrong for newer lights. When nights lack their own frames, mark
 the boundary yourself: in the **Calibration library**, frames are grouped by
-imaging night — select a night (or several) and mark those frames usable
+imaging night, collapsed to one row per night until expanded, with flats
+(and their dark-flats) in one section and darks and bias in their own —
+those batches stay valid far longer than flats and should not interleave
+with per-night flat groups. Each night row can also **Forget night**,
+removing that section's records for the night (and dependent masters) in
+one step without touching the FITS files. Select a night (or several) and
+mark those frames usable
 **only for lights after them** (a set shot right after the change) or **only
 for lights before them** (the final set shot before it). Marked frames carry
 a badge, and matching never selects them across their boundary, in either

@@ -1221,29 +1221,77 @@
   background: color-mix(in srgb, var(--color-error) 6%, transparent);
 }
 
-/* One section per imaging night; the header row selects the whole night. */
+/* Kind sections (Flats / Darks / Bias), each holding collapsed night
+   groups. Darks and bias stay valid far longer than flats, so their
+   batches never interleave with the per-night flat groups. */
+.tauri-settings .calibration-section-row td {
+  padding: 9px 10px 5px;
+  border-bottom: 0;
+}
+
+.tauri-settings .calibration-section-row strong {
+  display: inline;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.tauri-settings .calibration-section-row span {
+  display: inline;
+  margin-left: 8px;
+  color: var(--color-text-hint);
+  font-size: 10px;
+}
+
+/* One collapsed row per imaging night; the header selects, expands, or
+   forgets the whole night. */
 .tauri-settings .calibration-night-row td {
-  padding: 7px 10px;
+  padding: 6px 10px;
   background: var(--color-bg-secondary);
   border-bottom: 1px solid var(--color-border-secondary);
 }
 
-.tauri-settings .calibration-night-row label {
+.tauri-settings .calibration-night-controls {
   display: flex;
   align-items: center;
   gap: 8px;
-  cursor: pointer;
 }
 
-.tauri-settings .calibration-night-row strong {
+.tauri-settings .calibration-night-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px 0;
+  background: none;
+  border: 0;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.tauri-settings .calibration-night-toggle strong {
   display: inline;
   font-size: 12px;
 }
 
-.tauri-settings .calibration-night-row span {
+.tauri-settings .calibration-night-toggle span:not(.expand-toggle) {
   display: inline;
   color: var(--color-text-muted);
   font-size: 11px;
+}
+
+.tauri-settings .calibration-night-toggle .expand-toggle {
+  display: inline-block;
+  color: var(--color-text-muted);
+  font-size: 9px;
+  transition: transform 0.15s;
+}
+
+.tauri-settings .calibration-night-toggle .expand-toggle.expanded {
+  transform: rotate(90deg);
 }
 
 /* The marking bar shown while nights are selected. */
