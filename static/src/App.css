@@ -1632,6 +1632,62 @@
   background: var(--color-bg-surface);
 }
 
+/* Phone layout: the desktop row (image beside a 360px info panel) leaves the
+   image no width at all on a narrow screen. Stack instead: image pinned on
+   top, info scrolling under it. The header wraps and the status banner drops
+   its absolute centering so it cannot sit on the title. */
+@media (max-width: 760px) {
+  .detail-header {
+    flex-wrap: wrap;
+    gap: 0.4rem 0.6rem;
+    padding: 0.6rem 0.75rem;
+  }
+
+  .detail-header h2 {
+    font-size: 1.05rem;
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .detail-header .status-banner {
+    position: static;
+    transform: none;
+    order: 1;
+    padding: 0.25rem 0.75rem;
+    font-size: 0.75rem;
+    min-width: 0;
+  }
+
+  .detail-header .close-button {
+    order: 2;
+  }
+
+  .detail-content {
+    flex-direction: column;
+  }
+
+  .detail-image {
+    flex: none;
+    height: 46vh;
+    min-height: 220px;
+    padding: 0.5rem;
+  }
+
+  .detail-info {
+    width: auto;
+    flex: 1;
+    padding: 0.85rem;
+  }
+
+  /* Keyboard cheat sheet: those keys do not exist on a touch screen. */
+  .detail-shortcuts {
+    display: none;
+  }
+}
+
 .detail-astrometry-overlay {
   position: absolute;
   top: 0;
@@ -2742,6 +2798,56 @@
   color: var(--color-text-muted);
   font-size: 0.85rem;
   font-family: monospace;
+}
+
+/* Phone layout: wrap the header so Swap stays reachable, tighten the panel
+   gutters, and drop the keyboard-shortcut bar — those keys do not exist on a
+   touch screen and the bar costs a full row of image height. */
+@media (max-width: 760px) {
+  .comparison-header {
+    flex-wrap: wrap;
+    gap: 0.4rem 0.75rem;
+    padding: 0.6rem 0.75rem;
+  }
+
+  /* Row one: title and close. Row two: the controls, full width. */
+  .comparison-header h2 {
+    font-size: 1.05rem;
+    flex: 1;
+  }
+
+  .comparison-header .close-button {
+    order: 1;
+  }
+
+  .comparison-controls {
+    order: 2;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.9rem;
+  }
+
+  .comparison-content {
+    gap: 0.5rem;
+    padding: 0.5rem;
+  }
+
+  .comparison-shortcuts {
+    display: none;
+  }
+
+  .panel-actions {
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    padding: 0.5rem;
+  }
+
+  .panel-actions .action-button {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0.45rem 0.5rem;
+    font-size: 0.82rem;
+  }
 }
 
 /* Statistics Dashboard */
@@ -6351,6 +6457,24 @@
 
   .selection-preset-control select {
     width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  /* One control per row: side by side, the threshold slider and its value
+     run off the panel edge. */
+  .sequence-review-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .threshold-control {
+    justify-content: space-between;
+  }
+
+  .threshold-control input[type="range"] {
+    flex: 1;
+    width: auto;
+    min-width: 0;
   }
 }
 
