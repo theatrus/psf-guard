@@ -542,6 +542,22 @@ pub enum Commands {
         #[arg(long, default_value = "0.08")]
         dead_cell_rise: f64,
 
+        /// Reject any frame whose measured HFR exceeds this value (pixels),
+        /// like N.I.N.A. subframe selection. Off by default.
+        #[arg(long)]
+        max_hfr: Option<f64>,
+
+        /// Reject any frame with fewer detected stars than this. Off by
+        /// default.
+        #[arg(long)]
+        min_stars: Option<u32>,
+
+        /// Ignore satellite-trail evidence: no score hit and no rejection
+        /// from predicted or pixel-aligned trails (trails are easy to
+        /// remove during stacking). The trail still shows as a warning.
+        #[arg(long)]
+        ignore_satellites: bool,
+
         /// Worker threads for frame analysis (default: all cores, bounded by
         /// available memory)
         #[arg(long)]

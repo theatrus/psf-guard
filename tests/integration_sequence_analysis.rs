@@ -815,6 +815,66 @@ async fn test_analyze_sequence_custom_weights() {
     );
 }
 
+/// Absolute reject limits: frames over the HFR ceiling or under the
+/// star-count floor get an [Auto] reject recommendation; without the
+/// params nothing is recommended.
+#[tokio::test]
+async fn test_analyze_sequence_absolute_reject_limits() {
+    // Baseline: the same data with no limit params recommends nothing.
+    let conn = Connection::open_in_memory().unwrap();
+    create_test_schema(&conn);
+    load_normal_sequence(&conn);
+    let app = create_test_app(conn);
+    let (_, json_default) = get_json(
+        app,
+        "/api/db/test/analysis/sequence?target_id=1&filter_name=L",
+    )
+    .await;
+    for img in json_default["data"]["sequences"][0]["images"]
+        .as_array()
+        .unwrap()
+    {
+        assert!(
+            img["regrade_reason"].is_null(),
+            "no limits set, but image {} got {}",
+            img["image_id"],
+            img["regrade_reason"]
+        );
+    }
+
+    // Fixture HFRs span 2.3-2.7 and star counts 300-350: a 2.65 HFR
+    // ceiling trips only image 10 (2.7) and a 305-star floor only
+    // image 5 (300).
+    let conn = Connection::open_in_memory().unwrap();
+    create_test_schema(&conn);
+    load_normal_sequence(&conn);
+    let app = create_test_app(conn);
+    let uri = "/api/db/test/analysis/sequence?target_id=1&filter_name=L\
+        &hfr_reject_above=2.65&star_count_reject_below=305";
+    let (status, json) = get_json(app, uri).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let images = json["data"]["sequences"][0]["images"].as_array().unwrap();
+    for img in images {
+        let id = img["image_id"].as_i64().unwrap();
+        let reason = img["regrade_reason"].as_str();
+        let score = img["quality_score"].as_f64().unwrap();
+        match id {
+            10 => {
+                let reason = reason.expect("HFR 2.7 must trip the 2.65 ceiling");
+                assert!(reason.contains("[Auto] HFR limit"), "got {reason}");
+                assert!(score <= 0.25, "capped score expected, got {score}");
+            }
+            5 => {
+                let reason = reason.expect("300 stars must trip the 305 floor");
+                assert!(reason.contains("[Auto] Star count limit"), "got {reason}");
+                assert!(score <= 0.25, "capped score expected, got {score}");
+            }
+            _ => assert!(reason.is_none(), "image {id} wrongly rejected: {reason:?}"),
+        }
+    }
+}
+
 /// Test 11: Custom session gap threshold splits sessions more aggressively
 #[tokio::test]
 async fn test_analyze_sequence_custom_session_gap() {

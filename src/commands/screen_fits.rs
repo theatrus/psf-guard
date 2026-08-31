@@ -42,6 +42,12 @@ pub struct ScreenOptions {
     pub format: String,
     pub min_score: f64,
     pub dead_cell_rise: f64,
+    /// Absolute HFR ceiling (pixels): reject any frame above it.
+    pub max_hfr: Option<f64>,
+    /// Absolute star-count floor: reject any frame below it.
+    pub min_stars: Option<u32>,
+    /// Ignore satellite-trail evidence in scoring and rejection.
+    pub ignore_satellites: bool,
     pub threads: Option<usize>,
     pub session_gap_minutes: u64,
     /// Registry slug or path of a scheduler DB to write `[Auto]` rejections
@@ -795,11 +801,16 @@ fn score_records(
     Vec<ScreenResult>,
     HashMap<usize, crate::photometry::FrameSignals>,
 ) {
-    let config = SequenceAnalyzerConfig {
+    let mut config = SequenceAnalyzerConfig {
         session_gap_minutes: options.session_gap_minutes,
         dead_cell_rise_threshold: options.dead_cell_rise,
+        hfr_reject_above: options.max_hfr,
+        star_count_reject_below: options.min_stars.map(f64::from),
         ..Default::default()
     };
+    if options.ignore_satellites {
+        config.penalty_scales.satellite = 0.0;
+    }
     let analyzer = SequenceAnalyzer::new(config.clone());
 
     // Group by (filter, exposure to the whole second): star counts are not
@@ -993,6 +1004,8 @@ fn category_label(category: &Option<IssueCategory>) -> &'static str {
         Some(IssueCategory::PlateSolveFailed) => "unsolved",
         Some(IssueCategory::SatelliteTrailDetected) => "satellite-trail",
         Some(IssueCategory::NoStarsDetected) => "no-stars",
+        Some(IssueCategory::HfrAboveLimit) => "hfr-limit",
+        Some(IssueCategory::StarCountBelowLimit) => "star-limit",
         Some(IssueCategory::UnknownDegradation) => "unknown",
         None => "-",
     }
@@ -1184,6 +1197,9 @@ mod tests {
             format: "table".into(),
             min_score: 0.35,
             dead_cell_rise: 0.08,
+            max_hfr: None,
+            min_stars: None,
+            ignore_satellites: false,
             threads: None,
             session_gap_minutes: 60,
             regrade_db: None,

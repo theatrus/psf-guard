@@ -14,10 +14,22 @@ export interface ScoringPreferences {
   satellite: number;
   pointing: number;
   temporal: number;
+  /** Absolute HFR ceiling: recommend rejecting frames whose measured HFR
+   * exceeds this. `null` (the default) turns the check off. */
+  hfrRejectAbove: number | null;
+  /** Absolute star-count floor: recommend rejecting frames with fewer
+   * measured stars. `null` (the default) turns the check off. */
+  starCountRejectBelow: number | null;
 }
 
 const STORAGE_KEY = 'psf-guard.penalty-scales';
-const DEFAULTS: ScoringPreferences = { satellite: 1, pointing: 1, temporal: 1 };
+const DEFAULTS: ScoringPreferences = {
+  satellite: 1,
+  pointing: 1,
+  temporal: 1,
+  hfrRejectAbove: null,
+  starCountRejectBelow: null,
+};
 
 type Listener = () => void;
 
@@ -28,16 +40,26 @@ function sanitize(value: unknown): number {
   return Math.min(2, Math.max(0, scale));
 }
 
+/** A reject limit is any positive finite number; everything else is "off". */
+function sanitizeLimit(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function normalize(parsed: Partial<ScoringPreferences>): ScoringPreferences {
+  return {
+    satellite: sanitize(parsed.satellite),
+    pointing: sanitize(parsed.pointing),
+    temporal: sanitize(parsed.temporal),
+    hfrRejectAbove: sanitizeLimit(parsed.hfrRejectAbove),
+    starCountRejectBelow: sanitizeLimit(parsed.starCountRejectBelow),
+  };
+}
+
 function readStored(): ScoringPreferences {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULTS };
-    const parsed = JSON.parse(raw) as Partial<ScoringPreferences>;
-    return {
-      satellite: sanitize(parsed.satellite),
-      pointing: sanitize(parsed.pointing),
-      temporal: sanitize(parsed.temporal),
-    };
+    return normalize(JSON.parse(raw) as Partial<ScoringPreferences>);
   } catch {
     return { ...DEFAULTS };
   }
@@ -56,11 +78,7 @@ if (typeof window !== 'undefined') {
 }
 
 export function setScoringPreferences(next: ScoringPreferences): void {
-  current = {
-    satellite: sanitize(next.satellite),
-    pointing: sanitize(next.pointing),
-    temporal: sanitize(next.temporal),
-  };
+  current = normalize(next);
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
   } catch {
@@ -81,13 +99,23 @@ export function penaltyParamsOf(preferences: ScoringPreferences): PenaltyScalePa
   if (preferences.satellite !== 1) params.penalty_satellite = preferences.satellite;
   if (preferences.pointing !== 1) params.penalty_pointing = preferences.pointing;
   if (preferences.temporal !== 1) params.penalty_temporal = preferences.temporal;
+  if (preferences.hfrRejectAbove != null) params.hfr_reject_above = preferences.hfrRejectAbove;
+  if (preferences.starCountRejectBelow != null) {
+    params.star_count_reject_below = preferences.starCountRejectBelow;
+  }
   return params;
 }
 
 /** The same snapshot as react-query key segments. Every scoring query key
  * spreads this, so a preference change refetches every surface. */
-export function penaltyKeyOf(preferences: ScoringPreferences): number[] {
-  return [preferences.satellite, preferences.pointing, preferences.temporal];
+export function penaltyKeyOf(preferences: ScoringPreferences): (number | null)[] {
+  return [
+    preferences.satellite,
+    preferences.pointing,
+    preferences.temporal,
+    preferences.hfrRejectAbove,
+    preferences.starCountRejectBelow,
+  ];
 }
 
 function subscribe(listener: Listener): () => void {

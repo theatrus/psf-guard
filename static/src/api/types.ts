@@ -1849,13 +1849,17 @@ export interface CacheRefreshProgress {
 
 // Sequence analysis types
 
-/** How hard event evidence hits the quality score: a multiplier on the
- * built-in penalty. 0 ignores the evidence, 1 (default) keeps calibrated
- * behavior, up to 2 deepens it. */
+/** Scoring overrides. The penalty scales say how hard event evidence hits
+ * the quality score: a multiplier on the built-in penalty, where 0 ignores
+ * the evidence, 1 (default) keeps calibrated behavior, and 2 deepens it.
+ * The reject limits are absolute operator thresholds: recommend rejection
+ * when measured HFR exceeds the limit or star count falls below it. */
 export interface PenaltyScaleParams {
   penalty_satellite?: number;
   penalty_pointing?: number;
   penalty_temporal?: number;
+  hfr_reject_above?: number;
+  star_count_reject_below?: number;
 }
 
 export interface SequenceAnalysisRequest extends PenaltyScaleParams {

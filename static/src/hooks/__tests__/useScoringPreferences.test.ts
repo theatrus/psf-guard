@@ -5,10 +5,19 @@ import {
   scoringPreferences,
   setScoringPreferences,
 } from '../useScoringPreferences';
+import type { ScoringPreferences } from '../useScoringPreferences';
+
+const DEFAULTS: ScoringPreferences = {
+  satellite: 1,
+  pointing: 1,
+  temporal: 1,
+  hfrRejectAbove: null,
+  starCountRejectBelow: null,
+};
 
 describe('scoring preferences', () => {
   beforeEach(() => {
-    setScoringPreferences({ satellite: 1, pointing: 1, temporal: 1 });
+    setScoringPreferences({ ...DEFAULTS });
   });
 
   it('omits defaults from the request params entirely', () => {
@@ -16,34 +25,68 @@ describe('scoring preferences', () => {
   });
 
   it('sends only the scales that differ from the calibrated default', () => {
-    setScoringPreferences({ satellite: 0, pointing: 1, temporal: 1.5 });
+    setScoringPreferences({ ...DEFAULTS, satellite: 0, temporal: 1.5 });
     expect(penaltyParamsOf(scoringPreferences())).toEqual({
       penalty_satellite: 0,
       penalty_temporal: 1.5,
     });
   });
 
+  it('sends absolute reject limits only when set', () => {
+    setScoringPreferences({
+      ...DEFAULTS,
+      hfrRejectAbove: 3.5,
+      starCountRejectBelow: 50,
+    });
+    expect(penaltyParamsOf(scoringPreferences())).toEqual({
+      hfr_reject_above: 3.5,
+      star_count_reject_below: 50,
+    });
+  });
+
   it('derives params and key from the same snapshot', () => {
-    const snapshot = { satellite: 0.5, pointing: 1, temporal: 2 };
+    const snapshot: ScoringPreferences = {
+      ...DEFAULTS,
+      satellite: 0.5,
+      temporal: 2,
+      hfrRejectAbove: 4,
+    };
     // Pure functions of the snapshot: mutating the store afterwards must
     // not change what a caller derived from an earlier snapshot.
     const params = penaltyParamsOf(snapshot);
     const key = penaltyKeyOf(snapshot);
-    setScoringPreferences({ satellite: 1, pointing: 1, temporal: 1 });
-    expect(params).toEqual({ penalty_satellite: 0.5, penalty_temporal: 2 });
-    expect(key).toEqual([0.5, 1, 2]);
+    setScoringPreferences({ ...DEFAULTS });
+    expect(params).toEqual({
+      penalty_satellite: 0.5,
+      penalty_temporal: 2,
+      hfr_reject_above: 4,
+    });
+    expect(key).toEqual([0.5, 1, 2, 4, null]);
   });
 
   it('clamps out-of-range and non-finite values', () => {
-    setScoringPreferences({ satellite: 9, pointing: -3, temporal: NaN });
-    expect(scoringPreferences()).toEqual({ satellite: 2, pointing: 0, temporal: 1 });
+    setScoringPreferences({
+      satellite: 9,
+      pointing: -3,
+      temporal: NaN,
+      hfrRejectAbove: -1,
+      starCountRejectBelow: NaN,
+    });
+    expect(scoringPreferences()).toEqual({
+      satellite: 2,
+      pointing: 0,
+      temporal: 1,
+      hfrRejectAbove: null,
+      starCountRejectBelow: null,
+    });
   });
 
   it('persists across a reload of the module state', () => {
-    setScoringPreferences({ satellite: 0.5, pointing: 1, temporal: 1 });
+    setScoringPreferences({ ...DEFAULTS, satellite: 0.5, starCountRejectBelow: 25 });
     const stored = JSON.parse(
       window.localStorage.getItem('psf-guard.penalty-scales') ?? '{}'
     );
     expect(stored.satellite).toBe(0.5);
+    expect(stored.starCountRejectBelow).toBe(25);
   });
 });

@@ -50,6 +50,7 @@ interface SequenceChoice {
 
 function formatCategory(category: string): string {
   if (category === 'satellite_trail_risk') return 'Satellite Trail Detected';
+  if (category === 'hfr_above_limit') return 'HFR Above Limit';
   return category
     .split('_')
     .map(w => w.charAt(0).toUpperCase() + w.slice(1))
