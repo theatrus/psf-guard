@@ -10,6 +10,9 @@ const database: DatabaseSummary = {
   image_directories: ['/tmp/images'],
   remote_image_upload: {
     enabled: false,
+    directory_template: '%YEAR%/%TARGET%/%NIGHT%/%TYPE%',
+    directory_template_source: 'preset',
+    directory_template_samples: 0,
     token_configured: false,
     sync_enabled: false,
   },

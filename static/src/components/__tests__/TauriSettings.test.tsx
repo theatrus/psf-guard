@@ -257,7 +257,11 @@ describe('TauriSettings import state', () => {
   });
 
   it('edits the per-database remote image receiver without exposing its token', async () => {
-    let savedPlacement: string | undefined;
+    const savedUpdates: Array<{
+      placement?: string;
+      directory_template?: string;
+      rescan_directory_layout?: boolean;
+    }> = [];
     server.use(
       http.get('/api/info', () =>
         HttpResponse.json({
@@ -286,6 +290,10 @@ describe('TauriSettings import state', () => {
                 token_configured: true,
                 sync_enabled: false,
                 placement: 'target_tree',
+                directory_template: '%TARGET%/%DATE%/%TYPE%',
+                catalog_directory_template: '2026/%TARGET%/%NIGHT%/%TYPE%',
+                directory_template_source: 'catalog',
+                directory_template_samples: 18,
               },
             },
           ],
@@ -316,9 +324,14 @@ describe('TauriSettings import state', () => {
       ),
       http.put('/api/databases/remote', async ({ request }) => {
         const body = await request.json() as {
-          remote_image_upload?: { placement?: string };
+          remote_image_upload?: {
+            placement?: string;
+            directory_template?: string;
+            rescan_directory_layout?: boolean;
+          };
         };
-        savedPlacement = body.remote_image_upload?.placement;
+        const update = body.remote_image_upload ?? {};
+        savedUpdates.push(update);
         return HttpResponse.json({
           success: true,
           data: {
@@ -331,7 +344,11 @@ describe('TauriSettings import state', () => {
               image_directory: '/images/remote',
               token_configured: true,
               sync_enabled: false,
-              placement: savedPlacement,
+              placement: update.placement,
+              directory_template:
+                update.directory_template ?? '%YEAR%/%TARGET%/%NIGHT%/%TYPE%',
+              directory_template_source: 'preset',
+              directory_template_samples: 0,
             },
           },
           error: null,
@@ -346,7 +363,7 @@ describe('TauriSettings import state', () => {
 
     expect(
       await screen.findByText(
-        'Remote receive: /images/remote (target and frame type)'
+        'Remote receive: /images/remote (match catalog, 18 samples)'
       )
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Edit Remote catalog' }));
@@ -355,6 +372,28 @@ describe('TauriSettings import state', () => {
     ).toBeChecked();
     expect(screen.getByLabelText('Receive directory:')).toHaveValue('/images/remote');
     expect(screen.getByLabelText('Folder layout:')).toHaveValue('target_tree');
+    const directoryTemplateSelect = screen.getByLabelText('New catalog layout:');
+    expect(directoryTemplateSelect).toHaveValue(
+      '%TARGET%/%DATE%/%TYPE%'
+    );
+    expect(
+      screen.getByText('Detected from 18 catalog images:')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('2026/%TARGET%/%NIGHT%/%TYPE%')
+    ).toBeInTheDocument();
+    expect(
+      within(directoryTemplateSelect)
+        .getAllByRole('option')
+        .map((option) => option.textContent)
+    ).toEqual([
+      '%YEAR%/%TARGET%/%NIGHT%/%TYPE%',
+      '%TARGET%/%NIGHT%/%TYPE%',
+      '%TARGET%/%DATE%/%TYPE%',
+      '%TARGET%/%TYPE%/%FILTER%',
+      '%NIGHT%/%TARGET%/%TYPE%',
+      'Custom',
+    ]);
     expect(screen.getByLabelText('Remote API key:')).toHaveAttribute(
       'placeholder',
       'Unchanged'
@@ -369,11 +408,41 @@ describe('TauriSettings import state', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Copy' })).toBeEnabled();
 
+    fireEvent.change(screen.getByLabelText('New catalog layout:'), {
+      target: { value: 'custom' },
+    });
+    fireEvent.change(screen.getByLabelText('Custom catalog layout:'), {
+      target: { value: '%TARGET%/%DATE%/%TYPE%/%FILTER%' },
+    });
+    const rescanButton = screen.getByRole('button', {
+      name: 'Rescan catalog layout',
+    });
+    fireEvent.click(rescanButton);
+    expect(rescanButton).toHaveAttribute('aria-pressed', 'true');
+    expect(rescanButton).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(savedUpdates).toHaveLength(1));
+    expect(savedUpdates[0]).toMatchObject({
+      placement: 'target_tree',
+      directory_template: '%TARGET%/%DATE%/%TYPE%/%FILTER%',
+      rescan_directory_layout: true,
+    });
+
+    await screen.findByText('Saved.');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Remote catalog' }));
+    expect(
+      screen.getByRole('button', { name: 'Rescan catalog layout' })
+    ).toHaveAttribute('aria-pressed', 'false');
+
     fireEvent.change(screen.getByLabelText('Folder layout:'), {
       target: { value: 'flat' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
-    await waitFor(() => expect(savedPlacement).toBe('flat'));
+    await waitFor(() => expect(savedUpdates).toHaveLength(2));
+    expect(savedUpdates[1].placement).toBe('flat');
+    expect(savedUpdates[1].directory_template).toBeUndefined();
+    expect(savedUpdates[1].rescan_directory_layout).toBeUndefined();
   });
 
   it('keeps the editor with the selected database in a multi-database list', async () => {

@@ -18,6 +18,7 @@ pub mod quality_backfill;
 pub mod remote_audit;
 pub mod remote_sync;
 pub mod remote_upload;
+pub mod remote_upload_layout;
 pub mod scheduler;
 pub mod slug;
 pub mod spatial_scan;

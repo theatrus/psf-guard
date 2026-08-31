@@ -28,6 +28,9 @@ pub struct FrameMeta {
     pub timestamp: Option<i64>,
     /// DATE-OBS original text, for the metadata JSON.
     pub date_obs: Option<String>,
+    /// DATE-LOC original text. N.I.N.A. directory templates use this local
+    /// value for observing-night (`DATEMINUS12`) folders.
+    pub date_local: Option<String>,
     pub exposure_s: Option<f64>,
     pub gain: Option<i64>,
     pub offset: Option<i64>,
@@ -143,6 +146,7 @@ pub fn read_frame_meta_named(path: &Path, declared: &Path) -> FrameMeta {
     meta.object = text(&["OBJECT"]);
     meta.filter = text(&["FILTER", "FILTERNAME"]);
     meta.date_obs = text(&["DATE-OBS", "DATE-LOC"]);
+    meta.date_local = text(&["DATE-LOC"]);
     meta.timestamp = meta.date_obs.as_deref().and_then(parse_fits_datetime);
     meta.exposure_s = f64_of(&["EXPTIME", "EXPOSURE"]).filter(|v| *v > 0.0);
     meta.gain = i64_of(&["GAIN"]);

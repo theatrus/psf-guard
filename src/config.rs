@@ -75,6 +75,10 @@ pub struct RemoteUploadConfig {
     /// Layout below `image_dir`. Omitted keeps the compatibility flat layout.
     #[serde(default)]
     pub placement: crate::db_registry::RemoteImageUploadPlacement,
+    /// Server-owned directory template for `target_tree` placement. A
+    /// headless server cannot use the Settings scanner, so this is explicit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directory_template: Option<String>,
     /// Bearer token, in the clear. Prefer `token_file`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
@@ -152,6 +156,24 @@ pub fn apply_remote_access(
         access.enabled = true;
         access.image_dir = config.image_dir.clone();
         access.placement = config.placement;
+        if let Some(template) = config.directory_template.as_deref() {
+            crate::server::remote_upload_layout::validate_directory_template(template)
+                .with_context(|| {
+                    format!(
+                        "remote upload directory template for database '{}'",
+                        config.database
+                    )
+                })?;
+            let template = template.trim().replace('\\', "/");
+            access.directory_layout = Some(crate::db_registry::RemoteImageUploadDirectoryLayout {
+                template: template.clone(),
+                fallback_template: template,
+                source: crate::db_registry::RemoteImageUploadTemplateSource::Preset,
+                samples: 0,
+            });
+        } else {
+            access.directory_layout = None;
+        }
         note(&mut opened, &config.database, "image upload");
     }
     Ok(opened
@@ -1205,6 +1227,15 @@ directory = "./cache"
         let directory = tempfile::tempdir().unwrap();
         let image_dir = directory.path().join("incoming");
         let mut entries = vec![entry("telescope")];
+        entries[0].remote_image_upload = Some(crate::db_registry::RemoteImageUploadConfig {
+            directory_layout: Some(crate::db_registry::RemoteImageUploadDirectoryLayout {
+                template: "%YEAR%/%TARGET%/%NIGHT%/%TYPE%".into(),
+                fallback_template: "%TARGET%/%DATE%/%TYPE%".into(),
+                source: crate::db_registry::RemoteImageUploadTemplateSource::Catalog,
+                samples: 12,
+            }),
+            ..Default::default()
+        });
 
         let opened = apply_remote_access(
             &mut entries,
@@ -1217,6 +1248,7 @@ directory = "./cache"
                 database: "telescope".into(),
                 image_dir: image_dir.to_string_lossy().into_owned(),
                 placement: crate::db_registry::RemoteImageUploadPlacement::TargetTree,
+                directory_template: None,
                 token: Some(TOKEN.into()),
                 token_file: None,
             }],
@@ -1231,6 +1263,10 @@ directory = "./cache"
         assert_eq!(
             access.placement,
             crate::db_registry::RemoteImageUploadPlacement::TargetTree
+        );
+        assert!(
+            access.directory_layout.is_none(),
+            "omitting a headless template keeps the legacy target/type/filter layout"
         );
         assert!(access.token_matches(TOKEN));
         // The receive directory is made ready at startup, not on the first
@@ -1254,6 +1290,7 @@ directory = "./cache"
                 database: "telescope".into(),
                 image_dir: directory.path().to_string_lossy().into_owned(),
                 placement: crate::db_registry::RemoteImageUploadPlacement::Flat,
+                directory_template: None,
                 token: Some("a-different-token-long-enough".into()),
                 token_file: None,
             }],

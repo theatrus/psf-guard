@@ -1288,12 +1288,21 @@ export interface RemoteClientSummary {
 }
 
 export type RemoteImageUploadPlacement = 'flat' | 'target_tree';
+export type RemoteImageUploadDirectoryTemplateSource = 'catalog' | 'preset';
 
 export interface RemoteImageUploadSummary {
   enabled: boolean;
   image_directory?: string;
   /** Server-owned layout below the configured receive directory. */
   placement?: RemoteImageUploadPlacement;
+  /** Persisted fallback used when no catalog layout can be detected. */
+  directory_template: string;
+  /** Catalog-derived layout currently taking precedence over the fallback. */
+  catalog_directory_template?: string;
+  /** Whether the effective layout came from existing catalog paths or configuration. */
+  directory_template_source: RemoteImageUploadDirectoryTemplateSource;
+  /** Number of catalog paths supporting a detected layout. */
+  directory_template_samples: number;
   token_configured: boolean;
   /** Remote scheduler sync is a separate grant from image upload. */
   sync_enabled: boolean;

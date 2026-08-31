@@ -80,6 +80,37 @@ pub enum RemoteImageUploadPlacement {
     TargetTree,
 }
 
+pub const DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE: &str = "%TARGET%/%TYPE%/%FILTER%";
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteImageUploadTemplateSource {
+    #[default]
+    Preset,
+    Catalog,
+}
+
+/// A validated server-owned directory layout below the configured receive
+/// root. The client still supplies only the image basename.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoteImageUploadDirectoryLayout {
+    /// Effective template rendered for new uploads.
+    pub template: String,
+    /// Operator-selected template retained when catalog detection succeeds, so
+    /// an empty or ambiguous later scan does not silently change the fallback.
+    #[serde(default = "default_remote_upload_directory_template")]
+    pub fallback_template: String,
+    #[serde(default)]
+    pub source: RemoteImageUploadTemplateSource,
+    /// Catalog files which supported a detected layout. Zero for a preset.
+    #[serde(default)]
+    pub samples: usize,
+}
+
+fn default_remote_upload_directory_template() -> String {
+    DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE.to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct RemoteImageUploadConfig {
     #[serde(default)]
@@ -104,11 +135,29 @@ pub struct RemoteImageUploadConfig {
     /// only a basename; it can never choose a directory or relative path.
     #[serde(default)]
     pub placement: RemoteImageUploadPlacement,
+    /// Persisted preset or catalog-derived template for `TargetTree`.
+    /// Missing in older registries means the original target/type/filter tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directory_layout: Option<RemoteImageUploadDirectoryLayout>,
 }
 
 impl RemoteImageUploadConfig {
     pub const MIN_TOKEN_LENGTH: usize = 24;
     pub const MAX_TOKEN_LENGTH: usize = 256;
+
+    pub fn directory_template(&self) -> &str {
+        self.directory_layout
+            .as_ref()
+            .map(|layout| layout.template.as_str())
+            .unwrap_or(DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE)
+    }
+
+    pub fn fallback_directory_template(&self) -> &str {
+        self.directory_layout
+            .as_ref()
+            .map(|layout| layout.fallback_template.as_str())
+            .unwrap_or(DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE)
+    }
 
     pub fn set_token(&mut self, token: &str) -> Result<()> {
         if token.len() < Self::MIN_TOKEN_LENGTH || token.len() > Self::MAX_TOKEN_LENGTH {

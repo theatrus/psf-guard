@@ -161,7 +161,11 @@ pub async fn upload_image(
     })?;
     let database_path = ctx.database_path.clone();
     let database_id = ctx.id.clone();
-    let placement = config.placement;
+    let directory_layout = UploadDirectoryLayout {
+        placement: config.placement,
+        template: config.directory_template().to_string(),
+        explicit: config.directory_layout.is_some(),
+    };
     let registered_roots = ctx.image_dir_paths.clone();
     let response_sha256 = sha256.clone();
     let response_filename = filename.clone();
@@ -171,7 +175,7 @@ pub async fn upload_image(
             &database_path,
             &upload_dir,
             &registered_roots,
-            placement,
+            &directory_layout,
             temporary,
             frame,
             filename,
@@ -218,13 +222,19 @@ struct PublishedRemoteImage {
     light_mapping_changed: bool,
 }
 
+struct UploadDirectoryLayout {
+    placement: RemoteImageUploadPlacement,
+    template: String,
+    explicit: bool,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn publish_and_import(
     database_id: &str,
     database_path: &str,
     upload_dir: &Path,
     registered_roots: &[PathBuf],
-    placement: RemoteImageUploadPlacement,
+    directory_layout: &UploadDirectoryLayout,
     temporary: tempfile::NamedTempFile,
     mut frame: import::headers::FrameMeta,
     filename: String,
@@ -266,7 +276,7 @@ fn publish_and_import(
                         registered_roots,
                         &filename,
                         &sha256,
-                        placement == RemoteImageUploadPlacement::Flat,
+                        directory_layout.placement == RemoteImageUploadPlacement::Flat,
                     )?
                 }
             }
@@ -278,7 +288,7 @@ fn publish_and_import(
             &filename,
             &sha256,
             kind,
-            placement,
+            directory_layout.placement,
         )?,
     };
     let destination = if let Some(registered) = registered_destination {
@@ -292,7 +302,7 @@ fn publish_and_import(
                 .as_ref()
                 .map(|existing| &existing.resolution),
             &filename,
-            placement,
+            directory_layout,
         )?;
         upload_dir.join(relative)
     };
@@ -546,52 +556,184 @@ fn upload_relative_destination(
     calibration_kind: Option<CalibrationKind>,
     existing_resolution: Option<&RemoteImageResolution>,
     filename: &str,
-    placement: RemoteImageUploadPlacement,
+    directory_layout: &UploadDirectoryLayout,
 ) -> Result<PathBuf, AppError> {
-    if placement == RemoteImageUploadPlacement::Flat {
+    if directory_layout.placement == RemoteImageUploadPlacement::Flat {
         return Ok(PathBuf::from(filename));
     }
-
-    let filter = upload_directory_component(frame.filter.as_deref().unwrap_or("NONE"), "NONE");
-    let relative = match calibration_kind {
-        None => {
-            let resolved_target = if let Some(resolution) = existing_resolution {
-                Some(resolution.target_name.clone())
-            } else {
-                import::resolve_existing_target_name(
-                    connection,
-                    frame,
-                    import::DEFAULT_MATCH_RADIUS_DEG,
-                )
-                .map_err(|error| {
-                    AppError::DatabaseError(format!("resolving the upload target: {error:#}"))
-                })?
+    if !directory_layout.explicit {
+        let filter = upload_directory_component(frame.filter.as_deref().unwrap_or("NONE"), "NONE");
+        match calibration_kind {
+            Some(CalibrationKind::Flat) => {
+                let target = upload_directory_component(
+                    frame.object.as_deref().unwrap_or("Unsorted"),
+                    "Unsorted",
+                );
+                return Ok(PathBuf::from(target)
+                    .join("FLAT")
+                    .join(filter)
+                    .join(filename));
             }
-            .or_else(|| frame.object.clone())
-            .unwrap_or_else(|| "Unknown Target".to_string());
-            PathBuf::from(upload_directory_component(
-                &resolved_target,
-                "Unknown Target",
-            ))
-            .join("LIGHT")
-            .join(filter)
-            .join(filename)
+            Some(CalibrationKind::Bias) => return Ok(PathBuf::from("BIAS").join(filename)),
+            Some(CalibrationKind::Dark) => return Ok(PathBuf::from("DARK").join(filename)),
+            Some(CalibrationKind::DarkFlat) => {
+                return Ok(PathBuf::from("DARKFLAT").join(filename));
+            }
+            None => {}
         }
-        Some(CalibrationKind::Flat) => {
-            let target = upload_directory_component(
-                frame.object.as_deref().unwrap_or("Unsorted"),
-                "Unsorted",
-            );
-            PathBuf::from(target)
-                .join("FLAT")
-                .join(filter)
-                .join(filename)
-        }
-        Some(CalibrationKind::Bias) => PathBuf::from("BIAS").join(filename),
-        Some(CalibrationKind::Dark) => PathBuf::from("DARK").join(filename),
-        Some(CalibrationKind::DarkFlat) => PathBuf::from("DARKFLAT").join(filename),
+    }
+
+    crate::server::remote_upload_layout::validate_directory_template(&directory_layout.template)
+        .map_err(|error| {
+            AppError::InternalError(format!("invalid configured remote upload layout: {error}"))
+        })?;
+    let (target, project) =
+        upload_directory_identity(connection, frame, calibration_kind, existing_resolution)?;
+    let frame_type = match calibration_kind {
+        None => "LIGHT",
+        Some(CalibrationKind::Flat) => "FLAT",
+        Some(CalibrationKind::Bias) => "BIAS",
+        Some(CalibrationKind::Dark) => "DARK",
+        Some(CalibrationKind::DarkFlat) => "DARKFLAT",
     };
+    let (capture_date, observing_night) = upload_capture_dates(frame);
+    let exposure = frame
+        .exposure_s
+        .map(format_upload_exposure)
+        .unwrap_or_else(|| "UNKNOWN".to_string());
+    let gain = frame
+        .gain
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "UNKNOWN".to_string());
+    let capture_year = observing_night
+        .split_once('-')
+        .map(|(year, _)| year)
+        .filter(|year| year.len() == 4 && year.bytes().all(|byte| byte.is_ascii_digit()))
+        .unwrap_or("Unknown Year");
+    let replacements = [
+        ("%TARGET%", target.as_str(), "Unknown Target"),
+        ("%PROJECT%", project.as_str(), "Unknown Project"),
+        ("%DATE%", capture_date.as_str(), "Unknown Date"),
+        ("%NIGHT%", observing_night.as_str(), "Unknown Date"),
+        ("%YEAR%", capture_year, "Unknown Year"),
+        ("%TYPE%", frame_type, "LIGHT"),
+        (
+            "%FILTER%",
+            frame.filter.as_deref().unwrap_or("NONE"),
+            "NONE",
+        ),
+        (
+            "%TELESCOPE%",
+            frame.telescope.as_deref().unwrap_or("Unknown Telescope"),
+            "Unknown Telescope",
+        ),
+        (
+            "%CAMERA%",
+            frame.camera.as_deref().unwrap_or("Unknown Camera"),
+            "Unknown Camera",
+        ),
+        ("%EXPOSURE%", exposure.as_str(), "UNKNOWN"),
+        ("%GAIN%", gain.as_str(), "UNKNOWN"),
+    ];
+    let mut relative = PathBuf::new();
+    for component in directory_layout.template.split(['/', '\\']) {
+        let rendered = render_upload_template_component(component, &replacements);
+        relative.push(upload_directory_component(&rendered, "Unsorted"));
+    }
+    relative.push(filename);
     Ok(relative)
+}
+
+fn render_upload_template_component(
+    component: &str,
+    replacements: &[(&str, &str, &str)],
+) -> String {
+    let mut rendered = String::with_capacity(component.len());
+    let mut remaining = component;
+    while let Some(start) = remaining.find('%') {
+        rendered.push_str(&remaining[..start]);
+        let token_start = &remaining[start..];
+        let end = token_start[1..]
+            .find('%')
+            .map(|offset| offset + 2)
+            .expect("validated remote upload templates contain complete tokens");
+        let token = &token_start[..end];
+        let (_, value, fallback) = replacements
+            .iter()
+            .find(|(candidate, _, _)| *candidate == token)
+            .expect("validated remote upload templates contain known tokens");
+        rendered.push_str(&upload_directory_component(value, fallback));
+        remaining = &token_start[end..];
+    }
+    rendered.push_str(remaining);
+    rendered
+}
+
+fn upload_directory_identity(
+    connection: &rusqlite::Connection,
+    frame: &import::headers::FrameMeta,
+    calibration_kind: Option<CalibrationKind>,
+    existing_resolution: Option<&RemoteImageResolution>,
+) -> Result<(String, String), AppError> {
+    if let Some(resolution) = existing_resolution {
+        return Ok((
+            resolution.target_name.clone(),
+            resolution.project_name.clone(),
+        ));
+    }
+    if calibration_kind.is_some() {
+        let target = frame
+            .object
+            .clone()
+            .unwrap_or_else(|| match calibration_kind {
+                Some(CalibrationKind::Flat) => "Unsorted".to_string(),
+                _ => "Calibration".to_string(),
+            });
+        return Ok((target.clone(), target));
+    }
+
+    if let Some(identity) = import::resolve_existing_target_identity(
+        connection,
+        frame,
+        import::DEFAULT_MATCH_RADIUS_DEG,
+    )
+    .map_err(|error| AppError::DatabaseError(format!("resolving the upload target: {error:#}")))?
+    {
+        return Ok(identity);
+    }
+    let target = frame
+        .object
+        .clone()
+        .unwrap_or_else(|| "Unknown Target".to_string());
+    Ok((target.clone(), target))
+}
+
+fn upload_capture_dates(frame: &import::headers::FrameMeta) -> (String, String) {
+    let local = frame.date_local.as_deref().or(frame.date_obs.as_deref());
+    let timestamp = local
+        .and_then(import::headers::parse_fits_datetime)
+        .or(frame.timestamp);
+    let Some(timestamp) =
+        timestamp.and_then(|value| chrono::DateTime::<chrono::Utc>::from_timestamp(value, 0))
+    else {
+        return ("Unknown Date".to_string(), "Unknown Date".to_string());
+    };
+    let date = timestamp.format("%Y-%m-%d").to_string();
+    let night = (timestamp - chrono::Duration::hours(12))
+        .format("%Y-%m-%d")
+        .to_string();
+    (date, night)
+}
+
+fn format_upload_exposure(value: f64) -> String {
+    let mut formatted = format!("{value:.3}");
+    while formatted.ends_with('0') {
+        formatted.pop();
+    }
+    if formatted.ends_with('.') {
+        formatted.pop();
+    }
+    formatted
 }
 
 /// Create and canonicalize the server-derived parent before publishing. This
@@ -794,7 +936,7 @@ fn metadata_is_link(metadata: &std::fs::Metadata) -> bool {
     false
 }
 
-fn upload_directory_component(value: &str, fallback: &str) -> String {
+pub(super) fn upload_directory_component(value: &str, fallback: &str) -> String {
     let value = if value.trim().is_empty() {
         fallback
     } else {
@@ -2143,5 +2285,108 @@ mod tests {
             &outcome,
         )
         .unwrap());
+    }
+
+    #[test]
+    fn nina_local_date_drives_observing_night_folders() {
+        let frame = import::headers::FrameMeta {
+            date_obs: Some("2026-08-31T11:30:00Z".into()),
+            date_local: Some("2026-08-31T04:30:00".into()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            upload_capture_dates(&frame),
+            ("2026-08-31".into(), "2026-08-30".into())
+        );
+    }
+
+    #[test]
+    fn catalog_template_renders_server_owned_components() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        let frame = import::headers::FrameMeta {
+            object: Some("M 31".into()),
+            filter: Some("Ha".into()),
+            date_local: Some("2026-08-31T04:30:00".into()),
+            exposure_s: Some(300.0),
+            gain: Some(100),
+            ..Default::default()
+        };
+        let resolution = RemoteImageResolution {
+            image_id: 1,
+            project_id: 2,
+            project_name: "Andromeda project".into(),
+            target_id: 3,
+            target_name: "M 31".into(),
+        };
+
+        let path = upload_relative_destination(
+            &connection,
+            &frame,
+            None,
+            Some(&resolution),
+            "frame.fits",
+            &UploadDirectoryLayout {
+                placement: RemoteImageUploadPlacement::TargetTree,
+                template: "%YEAR%/%PROJECT%/%TARGET%/%NIGHT%/%TYPE%/%FILTER%/%EXPOSURE%s_G%GAIN%"
+                    .into(),
+                explicit: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            path,
+            PathBuf::from("2026")
+                .join("Andromeda project")
+                .join("M 31")
+                .join("2026-08-30")
+                .join("LIGHT")
+                .join("Ha")
+                .join("300s_G100")
+                .join("frame.fits")
+        );
+    }
+
+    #[test]
+    fn project_token_uses_the_same_coordinate_aware_target_match() {
+        let temp = tempfile::tempdir().unwrap();
+        let database_path = temp.path().join("scheduler.sqlite");
+        crate::ts_schema::create_fresh_db(&database_path).unwrap();
+        let connection = rusqlite::Connection::open(database_path).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO project (Id, profileId, name, isMosaic, flatsHandling, guid)
+                     VALUES (1, 'profile', 'Far project', 0, 0, 'project-far');
+                 INSERT INTO project (Id, profileId, name, isMosaic, flatsHandling, guid)
+                     VALUES (2, 'profile', 'Near project', 0, 0, 'project-near');
+                 INSERT INTO target (Id, name, active, ra, dec, epochcode, projectId, guid)
+                     VALUES (1, 'Shared target', 1, 1.0, 20.0, 0, 1, 'target-far');
+                 INSERT INTO target (Id, name, active, ra, dec, epochcode, projectId, guid)
+                     VALUES (2, 'Shared target', 1, 2.0, 20.0, 0, 2, 'target-near');",
+            )
+            .unwrap();
+        let frame = import::headers::FrameMeta {
+            object: Some("Shared target".into()),
+            ra_deg: Some(30.0),
+            dec_deg: Some(20.0),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            upload_directory_identity(&connection, &frame, None, None).unwrap(),
+            ("Shared target".into(), "Near project".into())
+        );
+    }
+
+    #[test]
+    fn token_shaped_metadata_is_not_rendered_twice() {
+        let replacements = [
+            ("%TARGET%", "%TYPE%", "Unknown Target"),
+            ("%TYPE%", "LIGHT", "LIGHT"),
+        ];
+        assert_eq!(
+            render_upload_template_component("%TARGET%_%TYPE%", &replacements),
+            "%TYPE%_LIGHT"
+        );
     }
 }

@@ -1216,7 +1216,10 @@ async fn calibration_retry_restores_its_missing_file_after_layout_and_root_chang
             )
             .unwrap();
     assert_eq!(mapped_uuid, original_uuid);
-    assert_eq!(std::path::Path::new(&mapped_path), target_path);
+    assert_eq!(
+        dunce::canonicalize(&mapped_path).unwrap(),
+        dunce::canonicalize(&target_path).unwrap()
+    );
     assert_eq!(mapped_sha256, checksum);
     std::fs::remove_file(&target_path).unwrap();
 

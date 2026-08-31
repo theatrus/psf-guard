@@ -361,8 +361,20 @@ server filesystem paths. A headless deployment therefore takes both grants from
 naming a registry slug and a key (inline, or `token_file` for systemd
 credentials and Docker secrets).
 
-An upload block may set `placement = "target_tree"` to use the target and frame
-type layout. Omitting it keeps the compatibility `flat` layout.
+An upload block may set `placement = "target_tree"` and a validated
+`directory_template` such as `%YEAR%/%TARGET%/%NIGHT%/%TYPE%`. The basename is
+always appended by the server; clients cannot select a path. Available tokens
+are `%PROJECT%`, `%TARGET%`, `%DATE%`, `%NIGHT%`, `%YEAR%`, `%TYPE%`, `%FILTER%`,
+`%TELESCOPE%`, `%CAMERA%`, `%EXPOSURE%`, and `%GAIN%`. `%NIGHT%` follows N.I.N.A.'s
+observing-night convention: `DATE-LOC` minus 12 hours. Omitting placement keeps
+the compatibility `flat` layout.
+
+The desktop Settings flow scans catalog-linked files below the selected receive
+root when `target_tree` is saved. It persists a uniquely dominant pattern and
+shows how many catalog files supported it. Empty or mixed catalogs keep the
+selected preset, so placement never requires a filesystem scan during an image
+upload. Headless servers have no Settings scanner and use their explicit
+`directory_template` (or the legacy target/type/filter default).
 
 They apply to the in-memory database list at startup and are never written back
 to the registry, so the config file stays the whole account of what a

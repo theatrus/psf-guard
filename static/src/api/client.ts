@@ -367,6 +367,8 @@ export const apiClient = {
         token?: string;
         sync_enabled?: boolean;
         placement?: 'flat' | 'target_tree';
+        directory_template?: string;
+        rescan_directory_layout?: boolean;
       };
       /** New export directory; empty string clears it. */
       export_dir?: string;

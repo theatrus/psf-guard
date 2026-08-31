@@ -6,9 +6,9 @@
 
 ## Added
 
-- Remote image receivers can optionally organize uploaded lights and flats by
-  target, frame type, and filter while keeping the existing flat layout as the
-  default.
+- Remote image receivers can match an existing catalog folder tree or use a
+  preset/custom target, date, frame type, filter, camera, and exposure layout,
+  while keeping the existing flat layout as the default.
 
 ## Changed
 

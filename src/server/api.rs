@@ -418,6 +418,13 @@ pub struct RemoteImageUploadSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_directory: Option<String>,
     pub placement: crate::db_registry::RemoteImageUploadPlacement,
+    /// Operator-selected fallback below the receive directory.
+    pub directory_template: String,
+    /// Effective catalog-derived template, when detection found one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalog_directory_template: Option<String>,
+    pub directory_template_source: crate::db_registry::RemoteImageUploadTemplateSource,
+    pub directory_template_samples: usize,
     pub token_configured: bool,
     pub sync_enabled: bool,
     /// Paired clients, for the Settings list and per-client revocation.
@@ -449,6 +456,14 @@ pub struct RemoteImageUploadUpdate {
     /// Optional so older management clients leave the stored layout alone.
     #[serde(default)]
     pub placement: Option<crate::db_registry::RemoteImageUploadPlacement>,
+    /// Fallback used when the selected receive root has no unambiguous
+    /// catalog layout. Catalog detection can replace it while saving.
+    #[serde(default)]
+    pub directory_template: Option<String>,
+    /// Request a fresh catalog/tree match even when the layout settings did
+    /// not otherwise change.
+    #[serde(default)]
+    pub rescan_directory_layout: bool,
 }
 
 #[derive(Debug, Serialize)]

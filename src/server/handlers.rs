@@ -567,12 +567,27 @@ fn remote_image_upload_summary(
     ctx: &crate::server::database_context::DatabaseContext,
 ) -> RemoteImageUploadSummary {
     let config = ctx.remote_image_upload.as_ref();
+    let directory_layout = config.and_then(|config| config.directory_layout.as_ref());
     RemoteImageUploadSummary {
         enabled: ctx.remote_image_upload_dir.is_some(),
         image_directory: config
             .map(|config| config.image_dir.clone())
             .filter(|directory| !directory.is_empty()),
         placement: config.map(|config| config.placement).unwrap_or_default(),
+        directory_template: config
+            .map(|config| config.fallback_directory_template().to_string())
+            .unwrap_or_else(|| {
+                crate::db_registry::DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE.to_string()
+            }),
+        catalog_directory_template: directory_layout
+            .filter(|layout| {
+                layout.source == crate::db_registry::RemoteImageUploadTemplateSource::Catalog
+            })
+            .map(|layout| layout.template.clone()),
+        directory_template_source: directory_layout
+            .map(|layout| layout.source)
+            .unwrap_or_default(),
+        directory_template_samples: directory_layout.map(|layout| layout.samples).unwrap_or(0),
         token_configured: config.is_some_and(|config| config.token_is_configured()),
         sync_enabled: config.is_some_and(|config| config.sync_enabled),
         clients: config
@@ -1405,9 +1420,7 @@ pub async fn update_database_route(
     let mut reg = DbRegistry::load_or_init(&registry_path)
         .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
 
-    if reg.find(&db_id).is_none() {
-        return Err(AppError::NotFound);
-    }
+    let previous_entry = reg.find(&db_id).cloned().ok_or(AppError::NotFound)?;
 
     reg.update(
         &db_id,
@@ -1429,6 +1442,94 @@ pub async fn update_database_route(
                 "registry update lost the entry".into(),
             ))?;
         apply_remote_image_upload_update(entry, update)?;
+    }
+    let updated_entry = reg.find(&new_id).ok_or(AppError::InternalError(
+        "registry update lost the entry".into(),
+    ))?;
+    let remote_layout_scan = updated_entry
+        .remote_image_upload
+        .as_ref()
+        .filter(|config| {
+            config.enabled
+                && config.placement == crate::db_registry::RemoteImageUploadPlacement::TargetTree
+                && remote_image_layout_needs_scan(
+                    &previous_entry,
+                    updated_entry,
+                    req.remote_image_upload.as_ref(),
+                )
+        })
+        .map(|config| {
+            config
+                .validated_image_dir(&updated_entry.image_dirs)
+                .map(|receive_root| (updated_entry.db_path.clone(), receive_root))
+                .map_err(|error| AppError::BadRequest(error.to_string()))
+        })
+        .transpose()?;
+    if let Some((database_path, receive_root)) = remote_layout_scan {
+        let detected = tokio::task::spawn_blocking(move || {
+            crate::server::remote_upload_layout::detect_catalog_directory_layout(
+                &database_path,
+                &receive_root,
+            )
+        })
+        .await
+        .map_err(|error| {
+            AppError::InternalError(format!("remote upload layout scan failed: {error}"))
+        })?;
+        match detected {
+            Ok(Some(detected)) => {
+                let entry = reg
+                    .databases
+                    .iter_mut()
+                    .find(|entry| entry.id == new_id)
+                    .ok_or(AppError::InternalError(
+                        "registry update lost the entry".into(),
+                    ))?;
+                let config = entry
+                    .remote_image_upload
+                    .as_mut()
+                    .expect("layout scanning requires remote upload configuration");
+                config.directory_layout =
+                    Some(crate::db_registry::RemoteImageUploadDirectoryLayout {
+                        template: detected.template,
+                        fallback_template: config.fallback_directory_template().to_string(),
+                        source: crate::db_registry::RemoteImageUploadTemplateSource::Catalog,
+                        samples: detected.samples,
+                    });
+            }
+            Ok(None) => {
+                let entry = reg
+                    .databases
+                    .iter_mut()
+                    .find(|entry| entry.id == new_id)
+                    .ok_or(AppError::InternalError(
+                        "registry update lost the entry".into(),
+                    ))?;
+                let config = entry
+                    .remote_image_upload
+                    .as_mut()
+                    .expect("layout scanning requires remote upload configuration");
+                reset_catalog_directory_layout(config);
+            }
+            Err(error) => {
+                let entry = reg
+                    .databases
+                    .iter_mut()
+                    .find(|entry| entry.id == new_id)
+                    .ok_or(AppError::InternalError(
+                        "registry update lost the entry".into(),
+                    ))?;
+                let config = entry
+                    .remote_image_upload
+                    .as_mut()
+                    .expect("layout scanning requires remote upload configuration");
+                reset_catalog_directory_layout(config);
+                tracing::warn!(
+                    database = %new_id,
+                    "Could not detect remote upload catalog layout; using preset: {error:#}"
+                );
+            }
+        }
     }
     if let Some(export_dir) = req.export_dir.as_ref() {
         let entry = reg
@@ -1528,8 +1629,25 @@ fn apply_remote_image_upload_update(
     if let Some(sync_enabled) = update.sync_enabled {
         config.sync_enabled = sync_enabled;
     }
+    let target_tree_was_selected = update.placement.is_some_and(|placement| {
+        placement == crate::db_registry::RemoteImageUploadPlacement::TargetTree
+            && config.placement != crate::db_registry::RemoteImageUploadPlacement::TargetTree
+    });
     if let Some(placement) = update.placement {
         config.placement = placement;
+    }
+    if let Some(template) = update.directory_template.as_deref() {
+        crate::server::remote_upload_layout::validate_directory_template(template)
+            .map_err(|error| AppError::BadRequest(error.to_string()))?;
+        let template = template.trim().replace('\\', "/");
+        if target_tree_was_selected || template != config.fallback_directory_template() {
+            config.directory_layout = Some(crate::db_registry::RemoteImageUploadDirectoryLayout {
+                template: template.clone(),
+                fallback_template: template,
+                source: crate::db_registry::RemoteImageUploadTemplateSource::Preset,
+                samples: 0,
+            });
+        }
     }
     if config.sync_enabled && !config.token_is_configured() {
         return Err(AppError::BadRequest(
@@ -1543,6 +1661,125 @@ fn apply_remote_image_upload_update(
     }
     entry.remote_image_upload = Some(config);
     Ok(())
+}
+
+fn remote_image_layout_needs_scan(
+    previous: &crate::db_registry::DbEntry,
+    updated: &crate::db_registry::DbEntry,
+    request: Option<&RemoteImageUploadUpdate>,
+) -> bool {
+    if request.is_some_and(|request| request.rescan_directory_layout) {
+        return true;
+    }
+    let previous_config = previous.remote_image_upload.as_ref();
+    let updated_config = updated.remote_image_upload.as_ref();
+    previous.db_path != updated.db_path
+        || previous.image_dirs != updated.image_dirs
+        || previous_config.map(|config| config.enabled)
+            != updated_config.map(|config| config.enabled)
+        || previous_config.map(|config| config.image_dir.trim())
+            != updated_config.map(|config| config.image_dir.trim())
+        || previous_config.map(|config| config.placement)
+            != updated_config.map(|config| config.placement)
+        || previous_config.map(|config| config.fallback_directory_template())
+            != updated_config.map(|config| config.fallback_directory_template())
+}
+
+fn reset_catalog_directory_layout(config: &mut crate::db_registry::RemoteImageUploadConfig) {
+    if config.directory_layout.as_ref().is_some_and(|layout| {
+        layout.source == crate::db_registry::RemoteImageUploadTemplateSource::Catalog
+    }) {
+        let fallback = config.fallback_directory_template().to_string();
+        config.directory_layout = Some(crate::db_registry::RemoteImageUploadDirectoryLayout {
+            template: fallback.clone(),
+            fallback_template: fallback,
+            source: crate::db_registry::RemoteImageUploadTemplateSource::Preset,
+            samples: 0,
+        });
+    }
+}
+
+#[cfg(test)]
+mod remote_image_layout_settings_tests {
+    use super::*;
+
+    fn legacy_target_tree_entry() -> crate::db_registry::DbEntry {
+        crate::db_registry::DbEntry {
+            id: "catalog".into(),
+            name: "Catalog".into(),
+            db_path: "catalog.sqlite".into(),
+            image_dirs: vec!["images".into()],
+            reject_archive: None,
+            remote_image_upload: Some(crate::db_registry::RemoteImageUploadConfig {
+                placement: crate::db_registry::RemoteImageUploadPlacement::TargetTree,
+                ..Default::default()
+            }),
+            export_dir: None,
+        }
+    }
+
+    fn update() -> RemoteImageUploadUpdate {
+        RemoteImageUploadUpdate {
+            enabled: false,
+            image_directory: None,
+            token: None,
+            sync_enabled: None,
+            placement: Some(crate::db_registry::RemoteImageUploadPlacement::TargetTree),
+            directory_template: None,
+            rescan_directory_layout: false,
+        }
+    }
+
+    #[test]
+    fn unrelated_save_preserves_legacy_layout_and_skips_the_tree_scan() {
+        let previous = legacy_target_tree_entry();
+        let mut updated = previous.clone();
+        apply_remote_image_upload_update(&mut updated, &update()).unwrap();
+
+        assert!(updated
+            .remote_image_upload
+            .as_ref()
+            .unwrap()
+            .directory_layout
+            .is_none());
+        assert!(!remote_image_layout_needs_scan(
+            &previous,
+            &updated,
+            Some(&update())
+        ));
+
+        let mut rescan = update();
+        rescan.rescan_directory_layout = true;
+        assert!(remote_image_layout_needs_scan(
+            &previous,
+            &updated,
+            Some(&rescan)
+        ));
+    }
+
+    #[test]
+    fn a_failed_or_empty_scan_returns_a_catalog_layout_to_its_preset() {
+        let mut config = crate::db_registry::RemoteImageUploadConfig {
+            directory_layout: Some(crate::db_registry::RemoteImageUploadDirectoryLayout {
+                template: "%YEAR%/%TARGET%/%NIGHT%/%TYPE%".into(),
+                fallback_template: "%TARGET%/%DATE%/%TYPE%".into(),
+                source: crate::db_registry::RemoteImageUploadTemplateSource::Catalog,
+                samples: 42,
+            }),
+            ..Default::default()
+        };
+
+        reset_catalog_directory_layout(&mut config);
+
+        let layout = config.directory_layout.unwrap();
+        assert_eq!(layout.template, "%TARGET%/%DATE%/%TYPE%");
+        assert_eq!(layout.fallback_template, "%TARGET%/%DATE%/%TYPE%");
+        assert_eq!(
+            layout.source,
+            crate::db_registry::RemoteImageUploadTemplateSource::Preset
+        );
+        assert_eq!(layout.samples, 0);
+    }
 }
 
 /// `DELETE /api/databases/{db_id}` — drop the registered database. Returns
