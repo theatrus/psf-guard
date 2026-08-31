@@ -251,11 +251,22 @@ fn templates_from_sample(root: &Path, path: &Path, sample: &CatalogLayoutSample)
     let mut variants = vec![(Vec::<String>::new(), false, false)];
 
     for component in &components {
-        let replacements = if component.eq_ignore_ascii_case(&sample.target)
+        let target_match = component.eq_ignore_ascii_case(&sample.target)
             || component.eq_ignore_ascii_case(&super::remote_upload::upload_directory_component(
                 &sample.target,
                 "Unknown Target",
-            )) {
+            ));
+        let project_match = component.eq_ignore_ascii_case(&sample.project)
+            || component.eq_ignore_ascii_case(&super::remote_upload::upload_directory_component(
+                &sample.project,
+                "Unknown Project",
+            ));
+        let replacements = if target_match && project_match {
+            vec![
+                ("%TARGET%".to_string(), true, false),
+                ("%PROJECT%".to_string(), false, false),
+            ]
+        } else if target_match {
             vec![("%TARGET%".to_string(), true, false)]
         } else if component.eq_ignore_ascii_case("LIGHT") {
             vec![("%TYPE%".to_string(), false, true)]
@@ -266,13 +277,7 @@ fn templates_from_sample(root: &Path, path: &Path, sample: &CatalogLayoutSample)
                 ))
         {
             vec![("%FILTER%".to_string(), false, false)]
-        } else if (component.eq_ignore_ascii_case(&sample.project)
-            || component.eq_ignore_ascii_case(&super::remote_upload::upload_directory_component(
-                &sample.project,
-                "Unknown Project",
-            )))
-            && !component.eq_ignore_ascii_case(&sample.target)
-        {
+        } else if project_match {
             vec![("%PROJECT%".to_string(), false, false)]
         } else if matching_observing_year(component, observing_night.as_deref()) {
             vec![("%YEAR%".to_string(), false, false)]
@@ -625,6 +630,42 @@ mod tests {
         assert_eq!(
             detected.template,
             "%PROJECT%/%TARGET%/%NIGHT%/%TYPE%/%FILTER%"
+        );
+    }
+
+    #[test]
+    fn identical_project_and_target_levels_leave_the_preset_in_control() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("_Source");
+        let db_path = temp.path().join("scheduler.sqlite");
+        let connection = create_catalog(&db_path);
+        let filename = "m31-001.fits";
+        let directory = root
+            .join("M 31")
+            .join("M 31")
+            .join("2026-04-06")
+            .join("LIGHT");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join(filename), b"fixture").unwrap();
+        add_catalog_image(
+            &connection,
+            1,
+            "M 31",
+            "M 31",
+            "L",
+            filename,
+            crate::commands::import::headers::parse_fits_datetime("2026-04-07T04:00:00").unwrap(),
+        );
+        drop(connection);
+
+        assert!(
+            detect_catalog_directory_layout(
+                db_path.to_str().unwrap(),
+                &dunce::canonicalize(root).unwrap(),
+            )
+            .unwrap()
+            .is_none(),
+            "ambiguous project and target levels must not infer two target directories"
         );
     }
 

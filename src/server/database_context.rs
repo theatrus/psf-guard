@@ -45,6 +45,7 @@ fn db_read_only_flags() -> OpenFlags {
 /// Sized to cover the worst observed single-query duration. (External writers
 /// like N.I.N.A. on a network share get the same courtesy.)
 pub(crate) const SCHEDULER_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_REMOTE_IMAGE_VERIFICATIONS: usize = 4096;
 const MAX_REMOTE_FILE_VERIFICATIONS: usize = 4096;
 
 /// Apply the server's lock-wait policy to a scheduler database connection.
@@ -440,6 +441,8 @@ pub(crate) struct RemoteImageFileIdentity {
     file_index: Option<u64>,
     #[cfg(windows)]
     creation_time: u64,
+    #[cfg(windows)]
+    change_time: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -459,7 +462,7 @@ pub(crate) fn remote_image_file_identity(path: &Path) -> Option<RemoteImageFileI
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt as _;
     #[cfg(windows)]
-    let (volume_serial_number, file_index) = windows_file_id(path)?;
+    let (volume_serial_number, file_index, change_time) = windows_file_identity(path)?;
     Some(RemoteImageFileIdentity {
         canonical_path: std::fs::canonicalize(path).ok()?,
         len: metadata.len(),
@@ -481,27 +484,46 @@ pub(crate) fn remote_image_file_identity(path: &Path) -> Option<RemoteImageFileI
             use std::os::windows::fs::MetadataExt as _;
             metadata.creation_time()
         },
+        #[cfg(windows)]
+        change_time,
     })
 }
 
 #[cfg(windows)]
-fn windows_file_id(path: &Path) -> Option<(u32, u64)> {
+fn windows_file_identity(path: &Path) -> Option<(u32, u64, i64)> {
     use std::os::windows::io::AsRawHandle as _;
     use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::Storage::FileSystem::{
-        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        FileBasicInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
+        BY_HANDLE_FILE_INFORMATION, FILE_BASIC_INFO,
     };
 
     let file = std::fs::File::open(path).ok()?;
+    let handle = file.as_raw_handle() as HANDLE;
     let mut information = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
-    let success =
-        unsafe { GetFileInformationByHandle(file.as_raw_handle() as HANDLE, &mut information) };
+    let success = unsafe { GetFileInformationByHandle(handle, &mut information) };
     if success == 0 {
         return None;
     }
     let file_index =
         (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow);
-    Some((information.dwVolumeSerialNumber, file_index))
+    let mut basic_information = FILE_BASIC_INFO::default();
+    let basic_success = unsafe {
+        GetFileInformationByHandleEx(
+            handle,
+            FileBasicInfo,
+            std::ptr::addr_of_mut!(basic_information).cast::<std::ffi::c_void>(),
+            std::mem::size_of::<FILE_BASIC_INFO>() as u32,
+        )
+    };
+    if basic_success == 0 {
+        return None;
+    }
+    Some((
+        information.dwVolumeSerialNumber,
+        file_index,
+        basic_information.ChangeTime,
+    ))
 }
 
 fn arrival_source_fingerprint(path: &Path) -> Option<ArrivalSourceFingerprint> {
@@ -1037,18 +1059,29 @@ impl DatabaseContext {
         expected_sha256: &str,
     ) {
         let expected_sha256 = expected_sha256.to_ascii_lowercase();
-        let previous = lock_recover(&self.remote_image_verifications).insert(
+        let mut image_verifications = lock_recover(&self.remote_image_verifications);
+        let evicted = if !image_verifications.contains_key(&image_id)
+            && image_verifications.len() >= MAX_REMOTE_IMAGE_VERIFICATIONS
+            && let Some(image_to_evict) = image_verifications.keys().next().copied()
+        {
+            image_verifications.remove(&image_to_evict)
+        } else {
+            None
+        };
+        let previous = image_verifications.insert(
             image_id,
             RemoteImageVerification {
                 identity: identity.clone(),
                 expected_sha256: expected_sha256.clone(),
             },
         );
+        drop(image_verifications);
+
         let mut file_verifications = lock_recover(&self.remote_file_verifications);
-        if let Some(previous) = previous {
+        for stale in [evicted, previous].into_iter().flatten() {
             file_verifications.remove(&RemoteImageVerificationKey {
-                identity: previous.identity,
-                expected_sha256: previous.expected_sha256.to_ascii_lowercase(),
+                identity: stale.identity,
+                expected_sha256: stale.expected_sha256,
             });
         }
         if file_verifications.len() >= MAX_REMOTE_FILE_VERIFICATIONS
@@ -2414,5 +2447,85 @@ mod tests {
         );
         let after = remote_image_file_identity(&path).unwrap();
         assert_ne!(before, after);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn remote_file_identity_changes_for_in_place_write_with_preserved_mtime() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mapped.fits");
+        std::fs::write(&path, b"original").unwrap();
+        let original_metadata = std::fs::metadata(&path).unwrap();
+        let original_mtime = filetime::FileTime::from_last_modification_time(&original_metadata);
+        let before = remote_image_file_identity(&path).unwrap();
+
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(&path, b"replaced").unwrap();
+        filetime::set_file_mtime(&path, original_mtime).unwrap();
+
+        let after_metadata = std::fs::metadata(&path).unwrap();
+        assert_eq!(
+            filetime::FileTime::from_last_modification_time(&after_metadata),
+            original_mtime
+        );
+        let after = remote_image_file_identity(&path).unwrap();
+        assert_eq!(before.file_index, after.file_index);
+        assert_eq!(before.creation_time, after.creation_time);
+        assert_ne!(before.change_time, after.change_time);
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn remote_image_verifications_are_bounded() {
+        let context = DatabaseContext::new_for_test(Connection::open_in_memory().unwrap());
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mapped.fits");
+        std::fs::write(&path, b"fixture").unwrap();
+        let identity = remote_image_file_identity(&path).unwrap();
+
+        for image_id in 0..=MAX_REMOTE_IMAGE_VERIFICATIONS {
+            let mut image_identity = identity.clone();
+            image_identity.len = image_id as u64;
+            context.record_remote_image_verification(
+                image_id as i32,
+                image_identity,
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            );
+        }
+
+        let newest_image_id = MAX_REMOTE_IMAGE_VERIFICATIONS as i32;
+        let stale_key = {
+            let verifications = lock_recover(&context.remote_image_verifications);
+            assert_eq!(verifications.len(), MAX_REMOTE_IMAGE_VERIFICATIONS);
+            let newest = verifications.get(&newest_image_id).unwrap();
+            let file_verifications = lock_recover(&context.remote_file_verifications);
+            assert_eq!(file_verifications.len(), MAX_REMOTE_FILE_VERIFICATIONS);
+            assert!(verifications.values().all(|verification| {
+                file_verifications.contains(&RemoteImageVerificationKey {
+                    identity: verification.identity.clone(),
+                    expected_sha256: verification.expected_sha256.clone(),
+                })
+            }));
+            RemoteImageVerificationKey {
+                identity: newest.identity.clone(),
+                expected_sha256: newest.expected_sha256.clone(),
+            }
+        };
+
+        let mut replacement_identity = identity;
+        replacement_identity.len = (MAX_REMOTE_IMAGE_VERIFICATIONS + 1) as u64;
+        let replacement_sha = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        context.record_remote_image_verification(
+            newest_image_id,
+            replacement_identity.clone(),
+            replacement_sha,
+        );
+
+        let file_verifications = lock_recover(&context.remote_file_verifications);
+        assert!(!file_verifications.contains(&stale_key));
+        assert!(file_verifications.contains(&RemoteImageVerificationKey {
+            identity: replacement_identity,
+            expected_sha256: replacement_sha.to_string(),
+        }));
     }
 }
