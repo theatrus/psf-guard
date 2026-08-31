@@ -31,6 +31,11 @@ pub struct StoredSpatialMetrics {
     /// Basename of the FITS file the metrics were computed from; a changed
     /// filename invalidates the entry.
     pub filename: String,
+    /// Durable upload revision, when this row is backed by remote-image
+    /// provenance. Callers compare it with the live mapping before using the
+    /// cached evidence.
+    #[serde(default)]
+    pub source_revision: Option<String>,
     /// Detector used for scheduler-compatible star count and HFR values.
     #[serde(default)]
     pub detector: String,
@@ -128,6 +133,10 @@ pub struct SpatialMetricsStore {
     pub metrics: HashMap<i32, StoredSpatialMetrics>,
     pub progress: SpatialScanProgress,
     loaded_from_disk: bool,
+    /// Incremented when the source behind one scheduler row changes. A scan
+    /// that began before an upload remap may finish, but cannot publish
+    /// measurements from the old pixels afterward.
+    source_generations: HashMap<i32, u64>,
 }
 
 /// One unit of scan work, resolved from the DB before the blocking task runs.
@@ -136,6 +145,8 @@ pub struct ScanWorkItem {
     pub image_id: i32,
     pub filename: String,
     pub fits_path: PathBuf,
+    pub source_generation: u64,
+    pub source_revision: Option<String>,
 }
 
 const PERSIST_FILENAME: &str = "spatial_metrics.json";
@@ -218,6 +229,50 @@ fn persist(store: &RwLock<SpatialMetricsStore>, cache_dir: &Path) {
     }
 }
 
+pub fn source_generation(store: &RwLock<SpatialMetricsStore>, image_id: i32) -> u64 {
+    store
+        .read()
+        .unwrap()
+        .source_generations
+        .get(&image_id)
+        .copied()
+        .unwrap_or(0)
+}
+
+/// Forget pixel evidence for a row whose durable upload source changed and
+/// invalidate any scan work that resolved the old source before the remap.
+pub fn invalidate_image_source(
+    store: &RwLock<SpatialMetricsStore>,
+    cache_dir: &Path,
+    image_id: i32,
+) -> bool {
+    ensure_loaded(store, cache_dir);
+    {
+        let mut state = store.write().unwrap();
+        let generation = state.source_generations.entry(image_id).or_default();
+        *generation = generation.wrapping_add(1);
+        state.metrics.remove(&image_id).is_some()
+    }
+}
+
+fn record_scan_entry_if_current(
+    store: &RwLock<SpatialMetricsStore>,
+    item: &ScanWorkItem,
+    entry: StoredSpatialMetrics,
+) -> bool {
+    let mut state = store.write().unwrap();
+    let current = state
+        .source_generations
+        .get(&item.image_id)
+        .copied()
+        .unwrap_or(0);
+    if current != item.source_generation {
+        return false;
+    }
+    state.metrics.insert(item.image_id, entry);
+    true
+}
+
 /// Try to mark a scan as started. Returns false when one is already running.
 pub fn try_begin_scan(
     store: &RwLock<SpatialMetricsStore>,
@@ -288,10 +343,16 @@ pub fn run_scan(
 
         match outcome {
             Ok(entry) => {
+                let recorded = record_scan_entry_if_current(store, item, entry);
                 let mut s = store.write().unwrap();
-                s.metrics.insert(item.image_id, entry);
                 s.progress.processed += 1;
                 s.progress.spatial_processed += 1;
+                if !recorded {
+                    tracing::info!(
+                        image_id = item.image_id,
+                        "Discarded quality metrics because the image source changed during the scan"
+                    );
+                }
             }
             Err(e) => {
                 tracing::warn!(
@@ -415,6 +476,7 @@ fn compute_one(
     Ok(StoredSpatialMetrics {
         image_id: item.image_id,
         filename: item.filename.clone(),
+        source_revision: item.source_revision.clone(),
         detector: QUALITY_DETECTOR.to_string(),
         detector_version: QUALITY_DETECTOR_VERSION,
         star_count: result.star_list.len(),
@@ -466,20 +528,50 @@ pub fn star_metrics_metadata_patch(
     metadata_json: &str,
     star_count: usize,
     avg_hfr: f64,
+    source_revision: Option<&str>,
 ) -> Option<String> {
     let mut value: serde_json::Value = serde_json::from_str(metadata_json).ok()?;
     let map = value.as_object_mut()?;
     let missing = |map: &serde_json::Map<String, serde_json::Value>, key: &str| {
         map.get(key).is_none_or(serde_json::Value::is_null)
     };
-    let mut changed = false;
+    let same_source = source_revision.is_some_and(|source_revision| {
+        map.iter().any(|(key, value)| {
+            key.eq_ignore_ascii_case("PsfGuardQualitySource")
+                && value.as_str() == Some(source_revision)
+        })
+    });
+    let mut supplied = if same_source {
+        map.iter()
+            .find_map(|(key, value)| {
+                key.eq_ignore_ascii_case("PsfGuardQualityFields")
+                    .then(|| value.as_array())
+                    .flatten()
+            })
+            .map(|fields| {
+                fields
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let supplied_before = supplied.len();
     if missing(map, "DetectedStars") {
         map.insert("DetectedStars".to_string(), (star_count as u64).into());
-        changed = true;
+        supplied.push("DetectedStars".to_string());
     }
     if star_count > 0 && avg_hfr > 0.0 && missing(map, "HFR") {
         map.insert("HFR".to_string(), avg_hfr.into());
-        changed = true;
+        supplied.push("HFR".to_string());
+    }
+    let changed = supplied.len() != supplied_before;
+    if changed && let Some(source_revision) = source_revision {
+        map.insert("PsfGuardQualitySource".to_string(), source_revision.into());
+        map.insert("PsfGuardQualityFields".to_string(), supplied.clone().into());
     }
     changed.then(|| value.to_string())
 }
@@ -497,6 +589,24 @@ pub fn valid_entry(
         .cloned()
 }
 
+/// Look up an entry whose pixel provenance still agrees with the durable
+/// remote-image mapping. Native scheduler files have no mapping revision; in
+/// that case a previously mapped entry must not be reused.
+pub fn valid_entry_for_source(
+    store: &RwLock<SpatialMetricsStore>,
+    image_id: i32,
+    filename: &str,
+    mapped_source_revision: Option<&str>,
+) -> Option<StoredSpatialMetrics> {
+    valid_entry(store, image_id, filename).filter(|entry| match mapped_source_revision {
+        Some(expected) => entry.source_revision.as_deref() == Some(expected),
+        None => !entry
+            .source_revision
+            .as_deref()
+            .is_some_and(|revision| revision.starts_with("mapping:")),
+    })
+}
+
 /// Look up an entry that contains every field produced by the current quality
 /// scan. Older cache files deserialize successfully, but their defaulted grid
 /// dimensions and cell arrays cannot support photometric screening.
@@ -506,6 +616,16 @@ pub fn valid_quality_entry(
     filename: &str,
 ) -> Option<StoredSpatialMetrics> {
     valid_entry(store, image_id, filename).filter(|entry| quality_entry_is_current(entry, filename))
+}
+
+pub fn valid_quality_entry_for_source(
+    store: &RwLock<SpatialMetricsStore>,
+    image_id: i32,
+    filename: &str,
+    mapped_source_revision: Option<&str>,
+) -> Option<StoredSpatialMetrics> {
+    valid_entry_for_source(store, image_id, filename, mapped_source_revision)
+        .filter(|entry| quality_entry_is_current(entry, filename))
 }
 
 /// Whether a cached entry matches the source and current quality model.
@@ -544,6 +664,7 @@ mod tests {
         StoredSpatialMetrics {
             image_id,
             filename: filename.to_string(),
+            source_revision: None,
             detector: String::new(),
             detector_version: 0,
             star_count: 4000,
@@ -631,39 +752,64 @@ mod tests {
         // Header-first import: both keys absent → both filled.
         let imported = r#"{"FileName":"a.xisf","SessionId":0}"#;
         assert!(metadata_lacks_star_metrics(imported));
-        let patched = star_metrics_metadata_patch(imported, 120, 2.5).unwrap();
+        let patched =
+            star_metrics_metadata_patch(imported, 120, 2.5, Some("file:source-a")).unwrap();
         let value: serde_json::Value = serde_json::from_str(&patched).unwrap();
         assert_eq!(value["DetectedStars"], 120);
         assert_eq!(value["HFR"], 2.5);
+        assert_eq!(value["PsfGuardQualitySource"], "file:source-a");
+        assert_eq!(
+            value["PsfGuardQualityFields"],
+            serde_json::json!(["DetectedStars", "HFR"])
+        );
         assert_eq!(value["FileName"], "a.xisf", "existing keys must survive");
 
         // N.I.N.A. catalog: measurements present → untouched.
         let nina = r#"{"DetectedStars":300,"HFR":1.8}"#;
         assert!(!metadata_lacks_star_metrics(nina));
-        assert!(star_metrics_metadata_patch(nina, 120, 2.5).is_none());
+        assert!(star_metrics_metadata_patch(nina, 120, 2.5, None).is_none());
 
         // Null counts as missing (a writer may serialize unknowns as null).
         let with_null = r#"{"DetectedStars":null,"HFR":1.8}"#;
         assert!(metadata_lacks_star_metrics(with_null));
-        let patched = star_metrics_metadata_patch(with_null, 120, 2.5).unwrap();
+        let patched = star_metrics_metadata_patch(with_null, 120, 2.5, None).unwrap();
         let value: serde_json::Value = serde_json::from_str(&patched).unwrap();
         assert_eq!(value["DetectedStars"], 120);
         assert_eq!(value["HFR"], 1.8, "measured HFR must not be overwritten");
+
+        let patched = star_metrics_metadata_patch(
+            r#"{"DetectedStars":300}"#,
+            120,
+            2.5,
+            Some("mapping:current"),
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&patched).unwrap();
+        assert_eq!(value["DetectedStars"], 300);
+        assert_eq!(value["PsfGuardQualityFields"], serde_json::json!(["HFR"]));
+
+        let first = star_metrics_metadata_patch("{}", 0, 0.0, Some("mapping:current")).unwrap();
+        let second = star_metrics_metadata_patch(&first, 20, 2.0, Some("mapping:current")).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&second).unwrap();
+        assert_eq!(
+            value["PsfGuardQualityFields"],
+            serde_json::json!(["DetectedStars", "HFR"])
+        );
     }
 
     #[test]
     fn metadata_star_metrics_fill_handles_edge_inputs() {
         // No detected stars: the count is a real measurement, HFR is not.
-        let patched = star_metrics_metadata_patch("{}", 0, 0.0).unwrap();
+        let patched = star_metrics_metadata_patch("{}", 0, 0.0, None).unwrap();
         let value: serde_json::Value = serde_json::from_str(&patched).unwrap();
         assert_eq!(value["DetectedStars"], 0);
         assert!(value.get("HFR").is_none(), "no stars → no HFR measurement");
 
         // Unparsable or non-object metadata: nothing to check, nothing to fill.
         assert!(!metadata_lacks_star_metrics("not json"));
-        assert!(star_metrics_metadata_patch("not json", 10, 2.0).is_none());
+        assert!(star_metrics_metadata_patch("not json", 10, 2.0, None).is_none());
         assert!(!metadata_lacks_star_metrics("[1,2]"));
-        assert!(star_metrics_metadata_patch("[1,2]", 10, 2.0).is_none());
+        assert!(star_metrics_metadata_patch("[1,2]", 10, 2.0, None).is_none());
     }
 
     #[test]
@@ -681,5 +827,53 @@ mod tests {
         let missing = RwLock::new(SpatialMetricsStore::default());
         ensure_loaded(&missing, Path::new("/nonexistent-dir-for-test"));
         assert_eq!(progress_snapshot(&missing).1, 0);
+    }
+
+    #[test]
+    fn source_invalidation_removes_metrics_and_discards_in_flight_results() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut old_entry = entry(7, "old.fits");
+        old_entry.source_revision = Some("mapping-old".into());
+        let store = store_with(vec![old_entry.clone()]);
+        let item = ScanWorkItem {
+            image_id: 7,
+            filename: "old.fits".into(),
+            fits_path: directory.path().join("old.fits"),
+            source_generation: source_generation(&store, 7),
+            source_revision: Some("mapping-old".into()),
+        };
+
+        assert!(invalidate_image_source(&store, directory.path(), 7));
+        assert!(!store.read().unwrap().metrics.contains_key(&7));
+        assert!(!record_scan_entry_if_current(
+            &store,
+            &item,
+            old_entry.clone()
+        ));
+        assert_eq!(source_generation(&store, 7), 1);
+        persist(&store_with(vec![old_entry]), directory.path());
+        let restarted = RwLock::new(SpatialMetricsStore::default());
+        ensure_loaded(&restarted, directory.path());
+        assert!(
+            valid_quality_entry_for_source(&restarted, 7, "old.fits", Some("mapping-new"))
+                .is_none()
+        );
+
+        let mut current_entry = entry(7, "old.fits");
+        current_entry.source_revision = Some("mapping-new".into());
+        let current_item = ScanWorkItem {
+            source_generation: source_generation(&store, 7),
+            source_revision: Some("mapping-new".into()),
+            ..item
+        };
+        assert!(record_scan_entry_if_current(
+            &store,
+            &current_item,
+            current_entry
+        ));
+        persist(&store, directory.path());
+        let restarted = RwLock::new(SpatialMetricsStore::default());
+        ensure_loaded(&restarted, directory.path());
+        assert!(restarted.read().unwrap().metrics.contains_key(&7));
     }
 }

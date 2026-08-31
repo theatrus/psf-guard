@@ -173,6 +173,7 @@ async fn crud_lifecycle_adds_uses_and_removes_a_database() {
                 "enabled": true,
                 "image_directory": image_dir.to_string_lossy(),
                 "token": upload_token,
+                "placement": "target_tree",
             }
         })),
     )
@@ -186,6 +187,10 @@ async fn crud_lifecycle_adds_uses_and_removes_a_database() {
     assert_eq!(
         body["data"]["remote_image_upload"]["token_configured"],
         true
+    );
+    assert_eq!(
+        body["data"]["remote_image_upload"]["placement"],
+        "target_tree"
     );
     assert!(!body.to_string().contains(upload_token));
     assert!(!std::fs::read_to_string(&registry_path)
@@ -244,6 +249,7 @@ async fn crud_lifecycle_adds_uses_and_removes_a_database() {
     assert_eq!(dbs.len(), 1);
     assert_eq!(dbs[0]["id"], "renamed-rig");
     assert_eq!(dbs[0]["remote_image_upload"]["enabled"], true);
+    assert_eq!(dbs[0]["remote_image_upload"]["placement"], "target_tree");
 
     // 8) Remove it.
     let (status, body) = json_request(

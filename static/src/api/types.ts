@@ -1287,9 +1287,13 @@ export interface RemoteClientSummary {
   paired_at: number;
 }
 
+export type RemoteImageUploadPlacement = 'flat' | 'target_tree';
+
 export interface RemoteImageUploadSummary {
   enabled: boolean;
   image_directory?: string;
+  /** Server-owned layout below the configured receive directory. */
+  placement?: RemoteImageUploadPlacement;
   token_configured: boolean;
   /** Remote scheduler sync is a separate grant from image upload. */
   sync_enabled: boolean;

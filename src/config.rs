@@ -72,6 +72,9 @@ pub struct RemoteUploadConfig {
     pub database: String,
     /// Directory the received frames are written to. Created if absent.
     pub image_dir: String,
+    /// Layout below `image_dir`. Omitted keeps the compatibility flat layout.
+    #[serde(default)]
+    pub placement: crate::db_registry::RemoteImageUploadPlacement,
     /// Bearer token, in the clear. Prefer `token_file`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
@@ -148,6 +151,7 @@ pub fn apply_remote_access(
         let access = open(entries, &config.database, &token, &mut keyed)?;
         access.enabled = true;
         access.image_dir = config.image_dir.clone();
+        access.placement = config.placement;
         note(&mut opened, &config.database, "image upload");
     }
     Ok(opened
@@ -1212,6 +1216,7 @@ directory = "./cache"
             &[RemoteUploadConfig {
                 database: "telescope".into(),
                 image_dir: image_dir.to_string_lossy().into_owned(),
+                placement: crate::db_registry::RemoteImageUploadPlacement::TargetTree,
                 token: Some(TOKEN.into()),
                 token_file: None,
             }],
@@ -1223,6 +1228,10 @@ directory = "./cache"
         assert!(access.sync_enabled);
         assert!(access.enabled);
         assert_eq!(access.image_dir, image_dir.to_string_lossy());
+        assert_eq!(
+            access.placement,
+            crate::db_registry::RemoteImageUploadPlacement::TargetTree
+        );
         assert!(access.token_matches(TOKEN));
         // The receive directory is made ready at startup, not on the first
         // upload, so a bad path fails while the operator is still watching.
@@ -1244,6 +1253,7 @@ directory = "./cache"
             &[RemoteUploadConfig {
                 database: "telescope".into(),
                 image_dir: directory.path().to_string_lossy().into_owned(),
+                placement: crate::db_registry::RemoteImageUploadPlacement::Flat,
                 token: Some("a-different-token-long-enough".into()),
                 token_file: None,
             }],
@@ -1252,5 +1262,25 @@ directory = "./cache"
         .to_string();
 
         assert!(error.contains("one key"), "{error}");
+    }
+
+    #[test]
+    fn remote_upload_config_defaults_to_the_flat_layout() {
+        let config: Config = toml_edit::de::from_str(&format!(
+            r#"
+            [server]
+            [cache]
+            [[remote_upload]]
+            database = "telescope"
+            image_dir = "incoming"
+            token = "{TOKEN}"
+            "#
+        ))
+        .unwrap();
+
+        assert_eq!(
+            config.remote_upload[0].placement,
+            crate::db_registry::RemoteImageUploadPlacement::Flat
+        );
     }
 }

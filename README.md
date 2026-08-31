@@ -209,6 +209,7 @@ token_file = "/run/secrets/psf-guard-key"    # or token = "..."
 [[remote_upload]]
 database = "telescope"
 image_dir = "/data/incoming"
+placement = "target_tree"                       # optional; default is "flat"
 token_file = "/run/secrets/psf-guard-key"
 ```
 

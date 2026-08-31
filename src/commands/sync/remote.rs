@@ -16,6 +16,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::server::database_context::open_scheduler_connection_with_flags;
 use crate::server::remote_sync::SyncOperation;
 use crate::sync_client::{local_bundle, materialize, SyncClient};
 
@@ -126,8 +127,9 @@ async fn pull_from(
     materialize(&bundle, &staged_path, &options.local_path)
         .context("staging the peer's bundle as a scheduler database")?;
 
-    let source = Connection::open_with_flags(&staged_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .context("opening the staged bundle")?;
+    let source =
+        open_scheduler_connection_with_flags(&staged_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .context("opening the staged bundle")?;
     let destination = open_local(&options.local_path, options.dry_run)?;
     require_pull_capable(&source).context("the peer's catalog")?;
     require_pull_capable(&destination).context("the local database")?;
@@ -190,13 +192,15 @@ async fn push_to(
 /// merge engine runs the same statements inside a transaction it rolls back —
 /// better to fail here than halfway through.
 fn open_local(path: &Path, dry_run: bool) -> Result<Connection> {
-    Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE).with_context(|| {
-        format!(
-            "opening the local database {} for {}",
-            path.display(),
-            if dry_run { "a dry run" } else { "writing" }
-        )
-    })
+    open_scheduler_connection_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE).with_context(
+        || {
+            format!(
+                "opening the local database {} for {}",
+                path.display(),
+                if dry_run { "a dry run" } else { "writing" }
+            )
+        },
+    )
 }
 
 fn pull_summary(summary: &crate::commands::sync::PullSummary) -> BTreeMap<String, i64> {

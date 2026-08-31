@@ -6,6 +6,20 @@
 
 ## Added
 
+- Remote image receivers can optionally organize uploaded lights and flats by
+  target, frame type, and filter while keeping the existing flat layout as the
+  default.
+
 ## Changed
 
 ## Fixed
+
+- Remote scheduler sync and export now wait for transient SQLite locks instead
+  of failing immediately while N.I.N.A. or another server task is using the
+  catalog.
+- Remote uploads now retain a durable path and content identity, restore
+  missing files on an identical retry, and avoid attaching same-named frames
+  to the wrong scheduler target.
+- Replacing an uploaded image now invalidates its rendered, quality,
+  astrometry, and satellite evidence, including star and HFR values PSF Guard
+  previously wrote back, without scanning the full cache tree.

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { HttpResponse, http } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
@@ -257,6 +257,7 @@ describe('TauriSettings import state', () => {
   });
 
   it('edits the per-database remote image receiver without exposing its token', async () => {
+    let savedPlacement: string | undefined;
     server.use(
       http.get('/api/info', () =>
         HttpResponse.json({
@@ -283,6 +284,8 @@ describe('TauriSettings import state', () => {
                 enabled: true,
                 image_directory: '/images/remote',
                 token_configured: true,
+                sync_enabled: false,
+                placement: 'target_tree',
               },
             },
           ],
@@ -310,19 +313,48 @@ describe('TauriSettings import state', () => {
           error: null,
           status: 'ready',
         })
-      )
+      ),
+      http.put('/api/databases/remote', async ({ request }) => {
+        const body = await request.json() as {
+          remote_image_upload?: { placement?: string };
+        };
+        savedPlacement = body.remote_image_upload?.placement;
+        return HttpResponse.json({
+          success: true,
+          data: {
+            id: 'remote',
+            name: 'Remote catalog',
+            database_path: '/tmp/remote.sqlite',
+            image_directories: ['/images/remote'],
+            remote_image_upload: {
+              enabled: true,
+              image_directory: '/images/remote',
+              token_configured: true,
+              sync_enabled: false,
+              placement: savedPlacement,
+            },
+          },
+          error: null,
+          status: 'ready',
+        });
+      })
     );
 
     render(<TauriSettings isOpen onClose={() => undefined} />, {
       wrapper: createWrapper(),
     });
 
-    expect(await screen.findByText('Remote receive: /images/remote')).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        'Remote receive: /images/remote (target and frame type)'
+      )
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Edit Remote catalog' }));
     expect(
       screen.getByRole('checkbox', { name: 'Accept remote image uploads' })
     ).toBeChecked();
     expect(screen.getByLabelText('Receive directory:')).toHaveValue('/images/remote');
+    expect(screen.getByLabelText('Folder layout:')).toHaveValue('target_tree');
     expect(screen.getByLabelText('Remote API key:')).toHaveAttribute(
       'placeholder',
       'Unchanged'
@@ -336,6 +368,12 @@ describe('TauriSettings import state', () => {
       screen.getByText('Copy this key now. It will not be shown again after saving.')
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Copy' })).toBeEnabled();
+
+    fireEvent.change(screen.getByLabelText('Folder layout:'), {
+      target: { value: 'flat' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(savedPlacement).toBe('flat'));
   });
 
   it('keeps the editor with the selected database in a multi-database list', async () => {

@@ -361,6 +361,9 @@ server filesystem paths. A headless deployment therefore takes both grants from
 naming a registry slug and a key (inline, or `token_file` for systemd
 credentials and Docker secrets).
 
+An upload block may set `placement = "target_tree"` to use the target and frame
+type layout. Omitting it keeps the compatibility `flat` layout.
+
 They apply to the in-memory database list at startup and are never written back
 to the registry, so the config file stays the whole account of what a
 deployment allows and rotating a key is a restart. A database has one key,
@@ -428,11 +431,34 @@ image=@capture.fits
 ```
 
 The database settings select one of that database's registered image roots as
-the receive directory. The server requires the URL slug and echoed database ID
-to agree, authenticates with the selected database's salted token hash, streams
-at most 512 MiB to a sibling temporary file, verifies SHA-256 and the frame
-headers, and publishes without overwriting an existing basename. The filename
-must carry a frame extension: `.fits`, `.fit`, `.fts`, or `.xisf`.
+the receive directory and a placement policy. **Receive directory** keeps the
+compatibility layout with every upload at that root. **Target and frame type**
+uses PSF Guard's standard tree: `<target>/LIGHT/<filter>` for lights,
+`<target>/FLAT/<filter>` for flats, and top-level `BIAS`, `DARK`, or `DARKFLAT`
+folders for the other calibration kinds. A light with no resolvable catalog
+target or `OBJECT` header uses the importer's `Unknown Target`; a flat with no
+`OBJECT` uses `Unsorted`. All segments come from catalog rows or verified
+headers and are sanitized by the server. The upload client never supplies a
+path.
+
+For light frames, PSF Guard records the accepted local path and SHA-256 against
+the acquired-image identity in a PSF Guard-owned table. Identical retries keep
+using that registered file even if Target Scheduler later changes `FileName`,
+the target is renamed, the parent tree is deleted, or the selected receive root
+or layout changes. A database without acquired-image GUIDs also records a
+capture-row fingerprint so reuse of an integer row ID cannot inherit an old
+upload. Calibration uploads have separate provenance keyed by frame UUID with
+the accepted path and SHA-256. A missing calibration file is restored only
+when the retry matches that digest; different bytes return `409 Conflict`
+rather than silently reusing its UUID. Older flat uploads are discovered
+across the database's registered image roots and backfilled on their next
+retry.
+
+The server requires the URL slug and echoed database ID to agree,
+authenticates with the selected database's salted token hash, streams at most
+512 MiB to a sibling temporary file, verifies SHA-256 and the frame headers,
+and publishes without overwriting an existing basename. The filename must
+carry a frame extension: `.fits`, `.fit`, `.fts`, or `.xisf`.
 
 For a light, the normal one-frame importer resolves an existing target by
 object name or coordinates and reuses its exposure plan. If no target matches,
@@ -442,12 +468,24 @@ never creates a Target Scheduler `acquiredimage` row. This path therefore works
 with an existing Target Scheduler catalog and with a fresh PSF Guard catalog
 whose user never installed Target Scheduler.
 
+When scheduler sync creates the light row before its file arrives, capture
+time and filter normally establish the association. If either header is
+missing, the unique basename must also resolve by `OBJECT` or coordinates to
+that row's target. A supplied time, filter, object, or coordinate that resolves
+elsewhere remains a conflict.
+
 Identical retries are idempotent. The response returns the resolved database,
 frame kind, and either the project, target, and image IDs for a light or the
 calibration frame and rig UUIDs. If scheduler sync registered a unique light
 row first, the upload attaches the file to that row without importing a
 duplicate. An ambiguous registered basename or an existing receive file with
 different content returns `409 Conflict`.
+
+Before publish, PSF Guard creates only server-derived directories below a
+registered image root, rejects symlinks and Windows junctions in the parent
+tree, and canonicalizes the parent again immediately before writing. Cleanup
+after a failed import repeats the containment check and removes only the file
+whose SHA-256 matches the upload.
 
 ### Files copied after scheduler sync
 

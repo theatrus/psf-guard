@@ -65,6 +65,7 @@ export interface DbEntry {
     token_sha256?: string;
     token_configured?: boolean;
     sync_enabled?: boolean;
+    placement?: 'flat' | 'target_tree';
     /** Paired clients; each holds its own revocable credential. */
     clients?: { client_uuid: string; name: string; paired_at: number }[];
   };

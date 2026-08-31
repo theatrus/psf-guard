@@ -12,6 +12,7 @@
 //! would mean pinning a canonical JSON encoding, so reordering one struct
 //! field would reject every plugin already in the field.
 
+use anyhow::Context as _;
 use axum::{
     extract::{Path, State},
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
@@ -39,7 +40,10 @@ use crate::server::{
         ApiRefreshStatus, ApiResponse, SchedulerSyncKind, SchedulerSyncRequest,
         SchedulerSyncResponse, SchedulerSyncTableCounts,
     },
-    database_context::DatabaseContext,
+    database_context::{
+        error_has_sqlite_failure, error_is_sqlite_contention, error_is_sqlite_operational_failure,
+        open_scheduler_connection_with_flags, DatabaseContext,
+    },
     handlers::{execute_scheduler_sync_paths, AppError, SyncGuardMode},
     remote_audit::{AuditAction, AuditOutcome, AuditRecord},
     state::AppState,
@@ -585,7 +589,10 @@ async fn create_preview_inner(
     .map_err(|error| AppError::InternalError(format!("bundle task failed: {error}")))?
     {
         state.sync_previews.remove_source_snapshot(&snapshot_file);
-        return Err(refuse(format!("invalid catalog bundle: {error:#}")));
+        let (outcome, app_error) = classify_materialize_failure(&error);
+        let detail = detail_of(&app_error);
+        audit(outcome, Some(&detail), None, BTreeMap::new());
+        return Err(app_error);
     }
     let materialize_duration = started.elapsed();
     tracing::info!(
@@ -890,6 +897,7 @@ pub async fn create_export(
     require_protocol(request.protocol_version)?;
     require_catalog(&catalog, &request.catalog_id)?;
     let database_path = PathBuf::from(&catalog.database_path);
+    let database_path_for_error = database_path.clone();
     let catalog_id = catalog.id.clone();
     let operation = request.operation;
     let reviewed_only = request.reviewed_only;
@@ -921,9 +929,10 @@ pub async fn create_export(
     {
         Ok(bundle) => bundle,
         Err(error) => {
-            let message = format!("creating export: {error:#}");
-            audit(AuditOutcome::Failed, Some(&message), BTreeMap::new());
-            return Err(AppError::BadRequest(message));
+            let (outcome, app_error) = classify_export_failure(&database_path_for_error, &error);
+            let detail = detail_of(&app_error);
+            audit(outcome, Some(&detail), BTreeMap::new());
+            return Err(app_error);
         }
     };
     let summary = bundle
@@ -1129,18 +1138,110 @@ pub(crate) fn materialize_bundle(
             // engine to read, so borrow the destination's own DDL. One
             // connection serves every miss.
             if template.is_none() {
-                template = Some(Connection::open_with_flags(
-                    template_path,
-                    OpenFlags::SQLITE_OPEN_READ_ONLY,
-                )?);
+                template = Some(
+                    open_scheduler_connection_with_flags(
+                        template_path,
+                        OpenFlags::SQLITE_OPEN_READ_ONLY,
+                    )
+                    .with_context(|| LiveDestinationCatalogAccess {
+                        path: template_path.to_path_buf(),
+                        table: (*table_name).to_string(),
+                    })?,
+                );
             }
             let template = template.as_ref().expect("template connection is open");
-            create_empty_table_from_template(&transaction, template, table_name)?;
+            create_empty_table_from_template(&transaction, template, table_name).with_context(
+                || LiveDestinationCatalogAccess {
+                    path: template_path.to_path_buf(),
+                    table: (*table_name).to_string(),
+                },
+            )?;
         }
     }
     transaction.pragma_update(None, "user_version", bundle.source.schema_version)?;
     transaction.commit()?;
     Ok(())
+}
+
+#[derive(Debug)]
+struct LiveDestinationCatalogAccess {
+    path: PathBuf,
+    table: String,
+}
+
+impl std::fmt::Display for LiveDestinationCatalogAccess {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "reading omitted table {} from live destination scheduler database {}",
+            self.table,
+            self.path.display()
+        )
+    }
+}
+
+impl std::error::Error for LiveDestinationCatalogAccess {}
+
+fn error_has_live_destination_catalog_access(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<LiveDestinationCatalogAccess>()
+        .is_some()
+}
+
+fn classify_materialize_failure(error: &anyhow::Error) -> (AuditOutcome, AppError) {
+    if error_has_live_destination_catalog_access(error) {
+        let contention = if error_is_sqlite_contention(error) {
+            " because it remained busy or locked after the lock wait expired"
+        } else {
+            ""
+        };
+        (
+            AuditOutcome::Failed,
+            AppError::DatabaseError(format!(
+                "preparing remote sync could not access the live destination catalog{contention}: {error:#}"
+            )),
+        )
+    } else if error_is_sqlite_operational_failure(error) {
+        (
+            AuditOutcome::Failed,
+            AppError::DatabaseError(format!(
+                "preparing remote sync failed while writing its server-side snapshot: {error:#}"
+            )),
+        )
+    } else {
+        (
+            AuditOutcome::Refused,
+            AppError::BadRequest(format!("invalid catalog bundle: {error:#}")),
+        )
+    }
+}
+
+fn classify_export_failure(
+    database_path: &FsPath,
+    error: &anyhow::Error,
+) -> (AuditOutcome, AppError) {
+    if error_is_sqlite_contention(error) {
+        (
+            AuditOutcome::Failed,
+            AppError::DatabaseError(format!(
+                "creating remote sync export from scheduler database {} failed because it remained busy or locked after the lock wait expired: {error:#}",
+                database_path.display()
+            )),
+        )
+    } else if error_has_sqlite_failure(error) {
+        (
+            AuditOutcome::Failed,
+            AppError::DatabaseError(format!(
+                "creating remote sync export from scheduler database {} failed: {error:#}",
+                database_path.display()
+            )),
+        )
+    } else {
+        (
+            AuditOutcome::Failed,
+            AppError::BadRequest(format!("creating export: {error:#}")),
+        )
+    }
 }
 
 fn create_bundle_table(
@@ -1255,7 +1356,8 @@ pub(crate) fn export_bundle(
     reviewed_only: bool,
     include_thumbnails: bool,
 ) -> anyhow::Result<CatalogBundle> {
-    let connection = Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let connection =
+        open_scheduler_connection_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let schema_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     anyhow::ensure!(
         schema_version >= 22,
@@ -1698,6 +1800,145 @@ mod tests {
         assert_eq!(tables, 0, "rollback left tables in the snapshot");
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&template);
+    }
+
+    #[test]
+    fn destination_catalog_locks_are_operational_materialize_failures() {
+        use rusqlite::ffi::{Error as FfiError, SQLITE_BUSY, SQLITE_LOCKED};
+
+        for code in [SQLITE_BUSY, SQLITE_LOCKED] {
+            let error = anyhow::Error::new(rusqlite::Error::SqliteFailure(
+                FfiError::new(code),
+                Some("catalog is in use".to_string()),
+            ))
+            .context(LiveDestinationCatalogAccess {
+                path: PathBuf::from("locked-scheduler.sqlite"),
+                table: "imagedata".to_string(),
+            });
+
+            let (outcome, app_error) = classify_materialize_failure(&error);
+            assert_eq!(outcome, AuditOutcome::Failed);
+            match app_error {
+                AppError::DatabaseError(message) => {
+                    assert!(message.contains("live destination catalog"));
+                    assert!(message.contains("busy or locked"));
+                    assert!(message.contains("locked-scheduler.sqlite"));
+                    assert!(message.contains("imagedata"));
+                }
+                other => panic!("destination lock was misclassified: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn every_live_destination_access_failure_is_operational() {
+        let error = anyhow::anyhow!("template schema could not be read")
+            .context(LiveDestinationCatalogAccess {
+                path: PathBuf::from("destination-scheduler.sqlite"),
+                table: "exposureplan".to_string(),
+            })
+            .context("materializing bundle");
+
+        let (outcome, app_error) = classify_materialize_failure(&error);
+
+        assert_eq!(outcome, AuditOutcome::Failed);
+        match app_error {
+            AppError::DatabaseError(message) => {
+                assert!(message.contains("live destination catalog"));
+                assert!(message.contains("destination-scheduler.sqlite"));
+                assert!(message.contains("exposureplan"));
+                assert!(message.contains("template schema could not be read"));
+            }
+            other => panic!("destination access was misclassified: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn malformed_bundle_materialization_remains_a_refusal() {
+        let error = anyhow::anyhow!("duplicate primary key in acquiredimage");
+
+        let (outcome, app_error) = classify_materialize_failure(&error);
+
+        assert_eq!(outcome, AuditOutcome::Refused);
+        match app_error {
+            AppError::BadRequest(message) => {
+                assert!(message.contains("invalid catalog bundle"));
+                assert!(message.contains("duplicate primary key"));
+            }
+            other => panic!("invalid bundle was misclassified: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn materialize_disk_failures_are_operational() {
+        for code in [
+            rusqlite::ffi::SQLITE_FULL,
+            rusqlite::ffi::SQLITE_CORRUPT,
+            rusqlite::ffi::SQLITE_NOTADB,
+        ] {
+            let error = anyhow::Error::new(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(code),
+                Some("server snapshot failed".into()),
+            ));
+
+            let (outcome, app_error) = classify_materialize_failure(&error);
+
+            assert_eq!(outcome, AuditOutcome::Failed);
+            assert!(matches!(app_error, AppError::DatabaseError(_)));
+        }
+    }
+
+    #[test]
+    fn export_contention_is_a_database_failure() {
+        use rusqlite::ffi::{Error as FfiError, SQLITE_BUSY, SQLITE_LOCKED};
+
+        for code in [SQLITE_BUSY, SQLITE_LOCKED] {
+            let error =
+                anyhow::Error::new(rusqlite::Error::SqliteFailure(FfiError::new(code), None))
+                    .context("reading acquiredimage")
+                    .context("building catalog bundle");
+
+            let (outcome, app_error) =
+                classify_export_failure(FsPath::new("scheduler.sqlite"), &error);
+            assert_eq!(outcome, AuditOutcome::Failed);
+            match app_error {
+                AppError::DatabaseError(message) => {
+                    assert!(message.contains("scheduler.sqlite"));
+                    assert!(message.contains("busy or locked"));
+                    assert!(message.contains("reading acquiredimage"));
+                }
+                other => panic!("export contention was misclassified: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn export_validation_failures_remain_bad_requests() {
+        let error = anyhow::anyhow!("database schema version 21 is older than required version 22");
+
+        let (outcome, app_error) = classify_export_failure(FsPath::new("scheduler.sqlite"), &error);
+
+        assert_eq!(outcome, AuditOutcome::Failed);
+        match app_error {
+            AppError::BadRequest(message) => {
+                assert!(message.contains("creating export"));
+                assert!(message.contains("older than required"));
+            }
+            other => panic!("export validation was misclassified: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn export_io_failures_are_operational_database_errors() {
+        let error = anyhow::Error::new(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_IOERR),
+            Some("disk read failed".into()),
+        ));
+
+        let (outcome, app_error) = classify_export_failure(FsPath::new("scheduler.sqlite"), &error);
+
+        assert_eq!(outcome, AuditOutcome::Failed);
+        assert!(matches!(app_error, AppError::DatabaseError(_)));
     }
 
     #[test]

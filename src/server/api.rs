@@ -417,6 +417,7 @@ pub struct RemoteImageUploadSummary {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_directory: Option<String>,
+    pub placement: crate::db_registry::RemoteImageUploadPlacement,
     pub token_configured: bool,
     pub sync_enabled: bool,
     /// Paired clients, for the Settings list and per-client revocation.
@@ -445,6 +446,9 @@ pub struct RemoteImageUploadUpdate {
     /// or the reverse. Absent means "leave the stored setting alone".
     #[serde(default)]
     pub sync_enabled: Option<bool>,
+    /// Optional so older management clients leave the stored layout alone.
+    #[serde(default)]
+    pub placement: Option<crate::db_registry::RemoteImageUploadPlacement>,
 }
 
 #[derive(Debug, Serialize)]

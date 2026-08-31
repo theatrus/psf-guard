@@ -522,6 +522,19 @@ fn match_existing_target(
         .map(|(i, _)| (i, "coordinates"))
 }
 
+/// Resolve the target name the ordinary importer would attach one light to.
+/// Remote upload placement uses this before publishing the file so its
+/// server-owned directory layout agrees with the later catalog import.
+pub(crate) fn resolve_existing_target_name(
+    conn: &Connection,
+    frame: &FrameMeta,
+    radius_deg: f64,
+) -> Result<Option<String>> {
+    let targets = load_existing_targets(conn)?;
+    Ok(match_existing_target(frame, &targets, radius_deg)
+        .map(|(index, _)| targets[index].name.clone()))
+}
+
 /// Insert frames into an EXISTING target: reuse (or create) the profile's
 /// exposure template, reuse a matching exposure plan on the target (bumping
 /// its acquired count) or add one, and land the images under the target's

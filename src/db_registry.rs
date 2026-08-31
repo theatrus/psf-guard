@@ -67,6 +67,19 @@ pub struct RemoteClient {
     pub paired_at: i64,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteImageUploadPlacement {
+    /// Keep every received frame directly below the selected image root.
+    /// This is the compatibility default for registries written before
+    /// target-aware placement existed.
+    #[default]
+    Flat,
+    /// Group lights and flats by target, with the frame type and filter below
+    /// it. Other calibration kinds use their own top-level frame-type folder.
+    TargetTree,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct RemoteImageUploadConfig {
     #[serde(default)]
@@ -87,6 +100,10 @@ pub struct RemoteImageUploadConfig {
     /// sync protocol existed does not silently gain merge and apply rights.
     #[serde(default)]
     pub sync_enabled: bool,
+    /// Server-derived layout below `image_dir`. The client still supplies
+    /// only a basename; it can never choose a directory or relative path.
+    #[serde(default)]
+    pub placement: RemoteImageUploadPlacement,
 }
 
 impl RemoteImageUploadConfig {
@@ -841,6 +858,7 @@ mod tests {
         let mut config = RemoteImageUploadConfig {
             enabled: true,
             image_dir: images.to_string_lossy().into_owned(),
+            placement: RemoteImageUploadPlacement::TargetTree,
             ..Default::default()
         };
         config.set_token(token).unwrap();
@@ -874,6 +892,24 @@ mod tests {
             .as_ref()
             .unwrap()
             .token_matches(token));
+        assert_eq!(
+            loaded.databases[0]
+                .remote_image_upload
+                .as_ref()
+                .unwrap()
+                .placement,
+            RemoteImageUploadPlacement::TargetTree
+        );
+    }
+
+    #[test]
+    fn remote_upload_without_placement_keeps_the_flat_compatibility_layout() {
+        let config: RemoteImageUploadConfig = serde_json::from_value(serde_json::json!({
+            "enabled": false,
+            "image_dir": ""
+        }))
+        .unwrap();
+        assert_eq!(config.placement, RemoteImageUploadPlacement::Flat);
     }
 
     #[test]
