@@ -487,9 +487,6 @@ fn prepare_search(
     let reference_height = reference_height as usize;
     validate_region_bounds(request.region, reference_width, reference_height)?;
 
-    let conn = ctx.db();
-    let conn = conn.lock().map_err(AppError::db)?;
-    let db = Database::new(&conn);
     let mut groups = Vec::new();
     let mut notes = Vec::new();
     let mut hasher = Sha256::new();
@@ -525,12 +522,16 @@ fn prepare_search(
             .iter()
             .map(|frame| frame.image_id)
             .collect::<Vec<_>>();
-        let images = db
-            .get_images_by_ids(&ids)
-            .map_err(AppError::db)?
-            .into_iter()
-            .map(|image| (image.id, image))
-            .collect::<HashMap<_, _>>();
+        let images = {
+            let conn = ctx.db();
+            let conn = conn.lock().map_err(AppError::db)?;
+            Database::new(&conn)
+                .get_images_by_ids(&ids)
+                .map_err(AppError::db)?
+                .into_iter()
+                .map(|image| (image.id, image))
+                .collect::<HashMap<_, _>>()
+        };
         if images.len() != ids.len() {
             return Err(AppError::Conflict(
                 "One or more stack inputs are no longer in the database".into(),
@@ -1340,6 +1341,7 @@ fn persist_artifact_job(cache_root: &FsPath, job: &ArtifactSearchJob) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::stack_preview::StackFrameDecision;
     use seiza_stacking::LinearImage;
 
     fn crop(image_id: i32, values: Vec<f32>) -> LoadedCrop {
@@ -1367,6 +1369,137 @@ mod tests {
                 values,
             },
         }
+    }
+
+    #[test]
+    fn artifact_preparation_releases_the_database_lock_before_resolving_sources() {
+        let temp = tempfile::tempdir().unwrap();
+        let database_path = temp.path().join("scheduler.sqlite");
+        let connection = crate::ts_schema::create_fresh_db(&database_path).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO project (Id, profileId, name) VALUES (1, 'default', 'Project');
+                 INSERT INTO target (Id, name, active, epochcode, projectId)
+                    VALUES (1, 'Target', 1, 0, 1);",
+            )
+            .unwrap();
+
+        let image_root = temp.path().join("images");
+        std::fs::create_dir_all(&image_root).unwrap();
+        let mut frames = Vec::new();
+        for image_id in 1..=3 {
+            let filename = format!("frame-{image_id}.fits");
+            let path = image_root.join(&filename);
+            std::fs::write(&path, b"FITS placeholder").unwrap();
+            let metadata = serde_json::json!({ "FileName": filename }).to_string();
+            connection
+                .execute(
+                    "INSERT INTO acquiredimage
+                        (Id, projectId, targetId, filtername, gradingStatus, metadata, profileId)
+                     VALUES (?1, 1, 1, 'Ha', 0, ?2, 'default')",
+                    rusqlite::params![image_id, metadata],
+                )
+                .unwrap();
+            let mapping = RegisteredFrameMapping::identity(
+                &LinearImage::new(16, 16, 1, vec![0.0; 16 * 16]).unwrap(),
+            );
+            frames.push(StackFrameDecision {
+                image_id,
+                disposition: if image_id == 1 {
+                    "reference".into()
+                } else {
+                    "accepted".into()
+                },
+                reason: None,
+                quality_score: None,
+                matched_stars: None,
+                registration_rms_pixels: None,
+                registration_drift_pixels: None,
+                registered_mapping: Some(mapping),
+                normalization_mean_gain: None,
+                normalization_mean_offset: None,
+                source_fingerprint: Some(source_fingerprint(&path)),
+                overlap_fraction: None,
+                integrated_fraction: None,
+            });
+        }
+        drop(connection);
+
+        let ctx = Arc::new(
+            crate::server::database_context::DatabaseContext::new(
+                "test".into(),
+                "Test".into(),
+                database_path.to_string_lossy().into_owned(),
+                vec![image_root.to_string_lossy().into_owned()],
+                None,
+                None,
+                temp.path().join("cache").to_string_lossy().into_owned(),
+            )
+            .unwrap(),
+        );
+        let job_id = "a".repeat(64);
+        let preview_path = super::super::original_preview_path(&ctx.cache_dir_path, &job_id, 0);
+        std::fs::create_dir_all(preview_path.parent().unwrap()).unwrap();
+        image::GrayImage::new(16, 16).save(preview_path).unwrap();
+        let group = StackGroupStatus {
+            index: 0,
+            target_id: 1,
+            target_name: "Target".into(),
+            filter_name: "Ha".into(),
+            state: StackGroupState::Ready,
+            phase: "ready".into(),
+            total_candidates: 3,
+            eligible_frames: 3,
+            quality_excluded: 0,
+            missing_files: 0,
+            processed_frames: 3,
+            accepted_frames: 3,
+            rejected_frames: 0,
+            reused_frames: 0,
+            resume_note: None,
+            output_channels: 1,
+            sky_orientation: None,
+            reference_image_id: Some(1),
+            total_exposure_seconds: 3.0,
+            preview_url: None,
+            fits_url: None,
+            snr: None,
+            snr_url: None,
+            error: None,
+            calibration: Default::default(),
+            input_images: Vec::new(),
+            frames,
+        };
+        let request = ArtifactSearchRequest {
+            artifact_revision: "revision".into(),
+            region: ReferenceRegion {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 8,
+            },
+        };
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = prepare_search(
+                &ctx,
+                &job_id,
+                "mono",
+                Some(0),
+                &request,
+                vec![(group, None, None)],
+            )
+            .map(|prepared| prepared.groups[0].sources.len())
+            .map_err(|error| format!("{error:?}"));
+            let _ = sender.send(result);
+        });
+
+        let source_count = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("artifact preparation deadlocked while resolving a source")
+            .unwrap();
+        worker.join().unwrap();
+        assert_eq!(source_count, 3);
     }
 
     #[test]

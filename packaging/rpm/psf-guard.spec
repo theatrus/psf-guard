@@ -5,6 +5,7 @@
 # Rust release binaries carry no DWARF here (the release profile sets no
 # debug), so there is nothing for find-debuginfo to harvest.
 %global debug_package %{nil}
+%global rustflags_debuginfo 0
 
 Name:           psf-guard
 Version:        0.9.1
@@ -56,7 +57,9 @@ tar -xf %{SOURCE1}
 # build.rs not to invoke npm. Crates resolve from ./vendor, so build offline.
 export PSF_GUARD_SKIP_FRONTEND_BUILD=1
 export CARGO_NET_OFFLINE=true
-cargo build --release --locked
+# Build only the binary shipped by this package and cap concurrent rustc jobs
+# to keep linking within memory limits on standard RPM builders.
+cargo build --release --locked --bin psf-guard --jobs 1
 
 %install
 install -Dpm0755 target/release/%{name} %{buildroot}%{_bindir}/%{name}
