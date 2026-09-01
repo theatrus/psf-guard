@@ -66,7 +66,11 @@ PSF Guard only uses candidates that agree with every known hard setting:
 
 If the light records a hard setting and a candidate omits it, that candidate
 does not match. If the light itself omits a setting, PSF Guard cannot use that
-field as a gate. A match still needs a positive camera-name or sensor-size
+field as a gate. The readout mode counts whichever way the camera driver
+spelled it: N.I.N.A. writes a name such as `Extend Fullwell 2CMS` rather than
+a number, and PSF Guard keeps that name and compares it case-insensitively,
+so a High Gain dark never serves an Extend Fullwell light. Opening a library
+built before names were kept reads them off the frames' headers once. A match still needs a positive camera-name or sensor-size
 identity; wholly unknown sensors never match. It sorts safe candidates by
 distance from the light's capture time and uses at most 64 frames per master.
 

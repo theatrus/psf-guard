@@ -89,6 +89,7 @@ describe('CalibrationLibrarySummary', () => {
                 binning_x: 1,
                 binning_y: 1,
                 gain: 100,
+                readout_mode_name: 'Extend Fullwell 2CMS',
                 exposure_s: 300,
                 camera_temp: -10,
               },
@@ -115,7 +116,11 @@ describe('CalibrationLibrarySummary', () => {
     expect(screen.queryByText('dark-300s.fits')).toBeNull();
     fireEvent.click(nightToggle);
     expect(await screen.findByText('dark-300s.fits')).toBeInTheDocument();
-    expect(screen.getByText(/3000×2000 · 1×1 bin · gain 100/)).toBeInTheDocument();
+    // The readout mode's name sits with the other sensor settings, since it
+    // gates matching the same way gain and offset do.
+    expect(
+      screen.getByText(/3000×2000 · 1×1 bin · gain 100 · Extend Fullwell 2CMS · 300s/)
+    ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Forget' })).toBeInTheDocument();
   });
 });

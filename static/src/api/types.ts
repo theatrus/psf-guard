@@ -1484,6 +1484,8 @@ export interface CalibrationFrameSummary {
   gain?: number | null;
   offset?: number | null;
   readout_mode?: number | null;
+  /** The readout mode as N.I.N.A. names it, when the header spelled it that way. */
+  readout_mode_name?: string | null;
   bayer_pattern?: string | null;
   exposure_s?: number | null;
   camera_temp?: number | null;

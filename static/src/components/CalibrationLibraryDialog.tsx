@@ -104,6 +104,11 @@ function formatSettings(frame: CalibrationFrameSummary): string {
       : null,
     frame.gain !== null && frame.gain !== undefined ? `gain ${frame.gain}` : null,
     frame.offset !== null && frame.offset !== undefined ? `offset ${frame.offset}` : null,
+    frame.readout_mode_name
+      ? frame.readout_mode_name
+      : frame.readout_mode !== null && frame.readout_mode !== undefined
+        ? `readout ${frame.readout_mode}`
+        : null,
     frame.exposure_s !== null && frame.exposure_s !== undefined
       ? `${frame.exposure_s}s`
       : null,

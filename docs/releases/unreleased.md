@@ -22,6 +22,12 @@
 
 ## Fixed
 
+- Calibration matching now tells readout modes apart on cameras whose
+  driver names the mode (N.I.N.A. writes `READOUTM = 'High Gain Mode'` rather
+  than a number). Before, every frame from such a rig recorded no readout
+  mode and a High Gain dark could serve an Extend Fullwell light. The name is
+  kept on import, shown in the calibration library, and read off existing
+  frames' headers the first time an older library is opened.
 - Stack previews now remember the scoring settings used to admit their frames.
   Changing a penalty or absolute reject limit marks the preview out of date,
   gives the rebuild its own cache identity, and prevents it from resuming a
