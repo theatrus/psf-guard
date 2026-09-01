@@ -566,10 +566,12 @@ fn backfill_readout_mode_name(conn: &Connection) -> Result<bool> {
         return Ok(false);
     }
 
+    // A row with a numeric readout mode came from a header that spelled it
+    // as a number, which can never yield a name: leave those out.
     let pending: Vec<(i64, String)> = conn
         .prepare(
             "SELECT id, source_path FROM psf_guard_calibration_frame
-             WHERE readout_mode_name IS NULL",
+             WHERE readout_mode_name IS NULL AND readout_mode IS NULL",
         )?
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -577,23 +579,35 @@ fn backfill_readout_mode_name(conn: &Connection) -> Result<bool> {
         return Ok(false);
     }
 
-    let mut recovered = 0_usize;
-    for (id, source_path) in &pending {
-        let meta = crate::commands::import::headers::read_frame_meta(Path::new(source_path));
-        let Some(name) = meta.readout_mode_name else {
-            continue;
-        };
-        conn.execute(
-            "UPDATE psf_guard_calibration_frame SET readout_mode_name = ?1 WHERE id = ?2",
-            rusqlite::params![name, id],
-        )?;
-        recovered += 1;
+    // Read every header first, then write once: this runs while a catalog
+    // is being opened, and one fsync per recovered row on a file N.I.N.A.
+    // may be writing to is a cost with nothing to show for it.
+    let recovered: Vec<(i64, String)> = pending
+        .iter()
+        .filter_map(|(id, source_path)| {
+            crate::commands::import::headers::read_frame_meta(Path::new(source_path))
+                .readout_mode_name
+                .map(|name| (*id, name))
+        })
+        .collect();
+    if !recovered.is_empty() {
+        let tx = conn.unchecked_transaction()?;
+        {
+            let mut update = tx.prepare(
+                "UPDATE psf_guard_calibration_frame SET readout_mode_name = ?1 WHERE id = ?2",
+            )?;
+            for (id, name) in &recovered {
+                update.execute(rusqlite::params![name, id])?;
+            }
+        }
+        tx.commit()?;
     }
     tracing::info!(
-        "calibration upgrade: recovered a readout mode name for {recovered} of {} frame(s)",
+        "calibration upgrade: recovered a readout mode name for {} of {} frame(s)",
+        recovered.len(),
         pending.len()
     );
-    Ok(recovered > 0)
+    Ok(!recovered.is_empty())
 }
 
 fn add_column_if_missing(
@@ -2333,7 +2347,7 @@ fn resolve_or_build_masters_pinned(
     if !set_aside.is_empty() {
         let note = format!(
             "Built without frames the integrator would not accept — {}. Check the library for \
-             frames filed under the wrong filter or camera",
+             frames filed under the wrong filter, camera, or readout mode",
             set_aside
                 .iter()
                 .map(|(kind, count, example)| format!(
@@ -3106,25 +3120,34 @@ struct Signature {
     readout_mode_name: Option<String>,
 }
 
-/// Seiza's `sensor_matches`, plus the readout mode's name: a reference that
-/// names one is not matched by a candidate that names another or none.
+/// Seiza's `sensor_matches`, plus the readout mode's name.
+///
+/// Two named modes must agree. An unnamed side is tolerated on purpose, and
+/// this is where the name parts from gain or offset, which a candidate must
+/// positively prove. The name is a label the capture software chose:
+/// SharpCap and older N.I.N.A. write a number, ASIAIR nothing, and a
+/// library upgraded while its files were on an unmounted share has no
+/// names yet. Refusing every such frame would silently strip a rig of all
+/// its calibration; tolerating them is exactly what matching did before the
+/// name was kept, while two frames that both name a mode can no longer be
+/// crossed.
 fn signature_sensor_matches(reference: &Signature, candidate: &Signature) -> bool {
     seiza_calibration::sensor_matches(&reference.seiza, &candidate.seiza)
-        && match (&reference.readout_mode_name, &candidate.readout_mode_name) {
-            (Some(reference), Some(candidate)) => readout_names_equal(reference, candidate),
-            (Some(_), None) => false,
-            (None, _) => true,
-        }
+        && readout_names_agree(reference, candidate)
 }
 
-/// Seiza's `sensor_consistent`, plus the readout mode's name: two named
-/// modes must agree, an unnamed one on either side is tolerated.
+/// Seiza's `sensor_consistent`, plus the readout mode's name, under the
+/// same rule as [`signature_sensor_matches`].
 fn signature_sensor_consistent(left: &Signature, right: &Signature) -> bool {
     seiza_calibration::sensor_consistent(&left.seiza, &right.seiza)
-        && match (&left.readout_mode_name, &right.readout_mode_name) {
-            (Some(left), Some(right)) => readout_names_equal(left, right),
-            _ => true,
-        }
+        && readout_names_agree(left, right)
+}
+
+fn readout_names_agree(left: &Signature, right: &Signature) -> bool {
+    match (&left.readout_mode_name, &right.readout_mode_name) {
+        (Some(left), Some(right)) => readout_names_equal(left, right),
+        _ => true,
+    }
 }
 
 fn readout_names_equal(left: &str, right: &str) -> bool {
@@ -3302,6 +3325,42 @@ struct MasterSubset {
 /// both halves of the rule, and asking it the second question here means an odd
 /// frame is set aside rather than taken as grounds to abandon the master.
 fn master_subset_report(kind: CalibrationKind, frames: &[CalibrationFrame]) -> MasterSubset {
+    // Seiza clusters by temperature, session and angle, and knows nothing
+    // of the readout mode's name. Left to the anchor test below, a nearest
+    // stray in one mode would set aside a whole set in the other and blame
+    // the filter. So the name partitions first, the way Seiza's own session
+    // rule works: nearest-first, the first name group with enough frames
+    // wins, and frames that never named a mode ride along with any group.
+    let mut tried: Vec<&str> = Vec::new();
+    for frame in frames {
+        let Some(name) = frame.readout_mode_name.as_deref() else {
+            continue;
+        };
+        if tried.iter().any(|seen| readout_names_equal(seen, name)) {
+            continue;
+        }
+        tried.push(name);
+        let group: Vec<CalibrationFrame> = frames
+            .iter()
+            .filter(|candidate| {
+                candidate
+                    .readout_mode_name
+                    .as_deref()
+                    .is_none_or(|other| readout_names_equal(other, name))
+            })
+            .cloned()
+            .collect();
+        let subset = master_subset_of_one_mode(kind, &group);
+        if subset.kept.len() >= MIN_MASTER_FRAMES {
+            return subset;
+        }
+    }
+    master_subset_of_one_mode(kind, frames)
+}
+
+/// [`master_subset_report`] for frames already known to share a readout
+/// mode (or to name none).
+fn master_subset_of_one_mode(kind: CalibrationKind, frames: &[CalibrationFrame]) -> MasterSubset {
     let signatures: Vec<_> = frames.iter().map(frame_signature).collect();
     let seiza_signatures: Vec<_> = signatures
         .iter()
@@ -4070,15 +4129,23 @@ mod tests {
 
         let conn = Connection::open_in_memory().unwrap();
         ensure_schema(&conn).unwrap();
-        for (uuid, path) in [
-            ("u", dark.to_string_lossy().into_owned()),
-            ("gone", "/nowhere/missing.fits".to_string()),
+        for (uuid, path, readout_mode) in [
+            ("u", dark.to_string_lossy().into_owned(), None),
+            ("gone", "/nowhere/missing.fits".to_string(), None),
+            // A numeric readout mode came from a numeric header: no name to
+            // find, so the rung does not open the file.
+            (
+                "numeric",
+                dark.to_string_lossy().into_owned() + ".copy",
+                Some(3),
+            ),
         ] {
             conn.execute(
                 "INSERT INTO psf_guard_calibration_frame
-                   (frame_uuid, rig_uuid, kind, source_path, source_fingerprint, added_at, updated_at)
-                 VALUES (?1, 'r', 'dark', ?2, 'fp', 0, 0)",
-                rusqlite::params![uuid, path],
+                   (frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
+                    readout_mode, added_at, updated_at)
+                 VALUES (?1, 'r', 'dark', ?2, 'fp', ?3, 0, 0)",
+                rusqlite::params![uuid, path, readout_mode],
             )
             .unwrap();
         }
@@ -4104,6 +4171,7 @@ mod tests {
         );
         assert_eq!(name_of("u").as_deref(), Some("Extend Fullwell 2CMS"));
         assert_eq!(name_of("gone"), None, "a vanished file keeps its NULL");
+        assert_eq!(name_of("numeric"), None, "a numeric mode is not revisited");
 
         // Once the catalog records version 6 the rung is spent.
         conn.execute(
@@ -4527,12 +4595,17 @@ mod tests {
             names
         };
 
-        // A light that names its mode takes only that mode. A dark that
-        // recorded no name cannot prove it is the same mode, so it is
-        // refused too — Seiza's rule for every other known setting.
+        // A light that names its mode refuses a dark naming another. A dark
+        // that recorded no name is tolerated: the name is a label the capture
+        // software chose, and a library from SharpCap or an older N.I.N.A.
+        // would otherwise lose every frame the day the lights started naming
+        // one.
         let mut light = frame("/light.fits", "LIGHT");
         light.readout_mode_name = Some("extend fullwell 2cms".into());
-        assert_eq!(names(&light), vec![Some("Extend Fullwell 2CMS".into())]);
+        assert_eq!(
+            names(&light),
+            vec![None, Some("Extend Fullwell 2CMS".into())]
+        );
 
         // A light that names no mode cannot rule any dark out.
         light.readout_mode_name = None;
@@ -4599,6 +4672,30 @@ mod tests {
             coherent_master_subset(CalibrationKind::Dark, &frames).len(),
             5
         );
+
+        // Nearest-first, like Seiza's session rule: two High Gain darks from
+        // last night outrank twenty Extend Fullwell darks from last month
+        // when the light names no mode — and the twenty are another mode,
+        // not frames "the integrator would not accept", so none is reported
+        // as set aside.
+        let frames: Vec<CalibrationFrame> = (0..2)
+            .map(|id| dark(id, Some("High Gain Mode")))
+            .chain((2..22).map(|id| dark(id, Some("Extend Fullwell 2CMS"))))
+            .collect();
+        let report = master_subset_report(CalibrationKind::Dark, &frames);
+        assert_eq!(report.kept.len(), 2);
+        assert!(report.dropped.is_empty());
+
+        // A lone nearest stray does not make a master; the next mode does.
+        let frames: Vec<CalibrationFrame> = std::iter::once(dark(0, Some("High Gain Mode")))
+            .chain((1..6).map(|id| dark(id, Some("Extend Fullwell 2CMS"))))
+            .collect();
+        let report = master_subset_report(CalibrationKind::Dark, &frames);
+        assert_eq!(report.kept.len(), 5);
+        assert!(report
+            .kept
+            .iter()
+            .all(|frame| frame.readout_mode_name.as_deref() == Some("Extend Fullwell 2CMS")));
     }
 
     #[test]

@@ -27,7 +27,9 @@
   than a number). Before, every frame from such a rig recorded no readout
   mode and a High Gain dark could serve an Extend Fullwell light. The name is
   kept on import, shown in the calibration library, and read off existing
-  frames' headers the first time an older library is opened.
+  frames' headers the first time an older library is opened. Frames that
+  never named a mode keep matching as before, so mixed libraries lose
+  nothing.
 - Stack previews now remember the scoring settings used to admit their frames.
   Changing a penalty or absolute reject limit marks the preview out of date,
   gives the rebuild its own cache identity, and prevents it from resuming a

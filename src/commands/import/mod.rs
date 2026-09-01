@@ -1056,6 +1056,12 @@ fn frame_metadata_json(frame: &FrameMeta) -> String {
     if let Some(mode) = frame.readout_mode {
         put("ReadoutMode", mode.into());
     }
+    // Target Scheduler's DTO types `ReadoutMode` as a number, so a name goes
+    // under its own key, which the plugin ignores and sequence analysis reads
+    // to keep two modes of one camera in separate capture profiles.
+    if let Some(name) = &frame.readout_mode_name {
+        put("ReadoutModeName", name.clone().into());
+    }
     put("ROI", 100.0.into());
     if let Some(position) = frame.focuser_position {
         put("FocuserPosition", position.into());
@@ -1435,6 +1441,23 @@ mod tests {
             )
             .unwrap();
         assert_eq!(template, ("Ha".into(), 120, 25, 2, 3, 300.0));
+    }
+
+    #[test]
+    fn a_named_readout_mode_rides_beside_the_numeric_one_in_metadata() {
+        // Target Scheduler's DTO types `ReadoutMode` as a number, so the name
+        // N.I.N.A. writes goes under its own key rather than into that one.
+        let mut named = light("M31", "Ha", 1_000);
+        named.readout_mode_name = Some("Extend Fullwell 2CMS".into());
+        let json: serde_json::Value = serde_json::from_str(&frame_metadata_json(&named)).unwrap();
+        assert!(json.get("ReadoutMode").is_none());
+        assert_eq!(json["ReadoutModeName"], "Extend Fullwell 2CMS");
+
+        let mut numeric = light("M31", "Ha", 2_000);
+        numeric.readout_mode = Some(3);
+        let json: serde_json::Value = serde_json::from_str(&frame_metadata_json(&numeric)).unwrap();
+        assert_eq!(json["ReadoutMode"], 3);
+        assert!(json.get("ReadoutModeName").is_none());
     }
 
     #[test]

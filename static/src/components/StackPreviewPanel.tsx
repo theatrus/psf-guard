@@ -22,6 +22,7 @@ import { useAccess } from '../auth/access';
 import { STACK_ACTIVITY_QUERY_KEY, useStackActivity } from '../hooks/useStackActivity';
 import {
   penaltyParamsOf,
+  sameScoring,
   SCORING_DEFAULTS,
   useScoringPreferences,
   type ScoringPreferences,
@@ -75,6 +76,18 @@ function stackScoringSettings(preferences: ScoringPreferences): StackScoringSett
     penalty_temporal: preferences.temporal,
     hfr_reject_above: preferences.hfrRejectAbove,
     star_count_reject_below: preferences.starCountRejectBelow,
+  };
+}
+
+/** The inverse of `stackScoringSettings`, so an artifact's recorded policy
+ * can be compared with the shared `sameScoring`. */
+function scoringPreferencesOf(settings: StackScoringSettings): ScoringPreferences {
+  return {
+    satellite: settings.penalty_satellite,
+    pointing: settings.penalty_pointing,
+    temporal: settings.penalty_temporal,
+    hfrRejectAbove: settings.hfr_reject_above,
+    starCountRejectBelow: settings.star_count_reject_below,
   };
 }
 
@@ -223,13 +236,7 @@ function staleReason(
   if (builtOrder !== frameOrder) {
     return 'Out of date — frame order changed';
   }
-  if (
-    builtScoring.penalty_satellite !== scoring.penalty_satellite ||
-    builtScoring.penalty_pointing !== scoring.penalty_pointing ||
-    builtScoring.penalty_temporal !== scoring.penalty_temporal ||
-    builtScoring.hfr_reject_above !== scoring.hfr_reject_above ||
-    builtScoring.star_count_reject_below !== scoring.star_count_reject_below
-  ) {
+  if (!sameScoring(scoringPreferencesOf(builtScoring), scoringPreferencesOf(scoring))) {
     return 'Out of date — scoring settings changed';
   }
   return null;

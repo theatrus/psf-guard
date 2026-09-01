@@ -69,8 +69,14 @@ does not match. If the light itself omits a setting, PSF Guard cannot use that
 field as a gate. The readout mode counts whichever way the camera driver
 spelled it: N.I.N.A. writes a name such as `Extend Fullwell 2CMS` rather than
 a number, and PSF Guard keeps that name and compares it case-insensitively,
-so a High Gain dark never serves an Extend Fullwell light. Opening a library
-built before names were kept reads them off the frames' headers once. A match still needs a positive camera-name or sensor-size
+so a High Gain dark never serves an Extend Fullwell light. The name is the
+one setting where a candidate that recorded nothing is still accepted: it is
+a label the capture software chose, and frames from software that writes a
+number or nothing would otherwise stop matching lights that name a mode.
+Two frames that both name a mode must agree, and a master never mixes two
+names. Opening a library built before names were kept reads them off the
+frames' headers once; a frame whose file was unreachable then stays unnamed
+and matches as it did before. A match still needs a positive camera-name or sensor-size
 identity; wholly unknown sensors never match. It sorts safe candidates by
 distance from the light's capture time and uses at most 64 frames per master.
 

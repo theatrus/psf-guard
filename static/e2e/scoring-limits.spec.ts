@@ -106,4 +106,13 @@ test('a sub-1 HFR limit can be typed digit by digit, leading zero first', async 
   await expect(page.locator('.sequence-image-card.below-threshold')).toHaveCount(3, {
     timeout: 15_000,
   });
+
+  // A stray keystroke the number input cannot parse ("0.8e") must not
+  // clear the limit on blur: the browser reports '' for such text, which
+  // used to read as "turn the limit off".
+  await hfrInput.pressSequentially('e');
+  await hfrInput.blur();
+  await expect(hfrInput).toHaveValue('0.8');
+  await expect(page.locator('.sequence-image-card.below-threshold')).toHaveCount(3);
+  await expect(page.locator('.scoring-penalty-control summary')).toHaveText('Scoring (custom)');
 });

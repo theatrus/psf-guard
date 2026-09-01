@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   SCORING_DEFAULTS,
+  sameScoring,
   setScoringPreferences,
   useScoringPreferences,
 } from '../hooks/useScoringPreferences';
@@ -48,12 +49,7 @@ export default function ScoringPenaltyControl() {
     hfrRejectAbove: limitValue('hfrRejectAbove'),
     starCountRejectBelow: limitValue('starCountRejectBelow'),
   };
-  const isDefault =
-    effective.satellite === SCORING_DEFAULTS.satellite &&
-    effective.pointing === SCORING_DEFAULTS.pointing &&
-    effective.temporal === SCORING_DEFAULTS.temporal &&
-    effective.hfrRejectAbove === SCORING_DEFAULTS.hfrRejectAbove &&
-    effective.starCountRejectBelow === SCORING_DEFAULTS.starCountRejectBelow;
+  const isDefault = sameScoring(effective, SCORING_DEFAULTS);
 
   const hasPending = draft !== null || Object.keys(limitTexts).length > 0;
   const commit = () => {
@@ -105,9 +101,13 @@ export default function ScoringPenaltyControl() {
         step={step}
         placeholder="off"
         value={limitTexts[key] ?? preferences[key] ?? ''}
-        onChange={(event) =>
-          setLimitTexts((current) => ({ ...current, [key]: event.target.value }))
-        }
+        onChange={(event) => {
+          // A number input reports '' for text it cannot parse ("e", "3.")
+          // and flags it as badInput. Recording that '' would commit as
+          // "clear the limit" on blur, so keep the previous draft instead.
+          if (event.target.validity.badInput) return;
+          setLimitTexts((current) => ({ ...current, [key]: event.target.value }));
+        }}
         onBlur={commit}
         onKeyUp={(event) => {
           if (event.key === 'Enter') commit();

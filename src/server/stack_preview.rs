@@ -336,12 +336,15 @@ impl StackScoringSettings {
     fn from_overrides(overrides: &crate::server::api::ScoringOverrideQuery) -> Self {
         let mut config = SequenceAnalyzerConfig::default();
         overrides.apply_to(&mut config);
+        // The analyzer's own normalization, so the snapshot recorded on the
+        // artifact is exactly what scored its frames.
+        let config = config.normalized();
         Self {
-            penalty_satellite: normalize_penalty_scale(config.penalty_scales.satellite),
-            penalty_pointing: normalize_penalty_scale(config.penalty_scales.pointing),
-            penalty_temporal: normalize_penalty_scale(config.penalty_scales.temporal),
-            hfr_reject_above: normalize_reject_limit(config.hfr_reject_above),
-            star_count_reject_below: normalize_reject_limit(config.star_count_reject_below),
+            penalty_satellite: config.penalty_scales.satellite,
+            penalty_pointing: config.penalty_scales.pointing,
+            penalty_temporal: config.penalty_scales.temporal,
+            hfr_reject_above: config.hfr_reject_above,
+            star_count_reject_below: config.star_count_reject_below,
         }
     }
 
@@ -352,23 +355,6 @@ impl StackScoringSettings {
         config.hfr_reject_above = self.hfr_reject_above;
         config.star_count_reject_below = self.star_count_reject_below;
     }
-}
-
-fn normalize_penalty_scale(value: f64) -> f64 {
-    if !value.is_finite() {
-        return 1.0;
-    }
-    if value <= 0.0 {
-        return 0.0;
-    }
-    if value >= 2.0 {
-        return 2.0;
-    }
-    value
-}
-
-fn normalize_reject_limit(value: Option<f64>) -> Option<f64> {
-    value.filter(|limit| limit.is_finite() && *limit > 0.0)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1410,13 +1396,19 @@ fn prepare_job(
     hasher.update(PREVIEW_MAX_DIMENSION.to_le_bytes());
     hasher.update(stretch::SEIZA_STRETCH_VERSION.as_bytes());
     hasher.update(request.order.as_str().as_bytes());
-    hasher.update(scoring.penalty_satellite.to_le_bytes());
-    hasher.update(scoring.penalty_pointing.to_le_bytes());
-    hasher.update(scoring.penalty_temporal.to_le_bytes());
-    for limit in [scoring.hfr_reject_above, scoring.star_count_reject_below] {
-        hasher.update([limit.is_some() as u8]);
-        if let Some(limit) = limit {
-            hasher.update(limit.to_le_bytes());
+    // Only a non-default scoring policy enters the id. Artifacts built before
+    // the policy was recorded were built at the calibrated defaults, and this
+    // keeps their ids — and their caches — valid rather than forcing every
+    // user through one full re-integration on upgrade.
+    if scoring != StackScoringSettings::default() {
+        hasher.update(scoring.penalty_satellite.to_le_bytes());
+        hasher.update(scoring.penalty_pointing.to_le_bytes());
+        hasher.update(scoring.penalty_temporal.to_le_bytes());
+        for limit in [scoring.hfr_reject_above, scoring.star_count_reject_below] {
+            hasher.update([limit.is_some() as u8]);
+            if let Some(limit) = limit {
+                hasher.update(limit.to_le_bytes());
+            }
         }
     }
 

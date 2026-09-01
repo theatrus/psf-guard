@@ -122,6 +122,14 @@ export function penaltyKeyOf(preferences: ScoringPreferences): (number | null)[]
   ];
 }
 
+/** Whether two preferences score identically — the one comparison every
+ * "is this default?" and "is this stale?" check should share, so a new
+ * scoring knob added to `penaltyKeyOf` reaches all of them at once. */
+export function sameScoring(left: ScoringPreferences, right: ScoringPreferences): boolean {
+  const rightKey = penaltyKeyOf(right);
+  return penaltyKeyOf(left).every((value, index) => value === rightKey[index]);
+}
+
 function subscribe(listener: Listener): () => void {
   listeners.add(listener);
   return () => {

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   penaltyKeyOf,
   penaltyParamsOf,
+  sameScoring,
   SCORING_DEFAULTS as DEFAULTS,
   scoringPreferences,
   setScoringPreferences,
@@ -72,6 +73,14 @@ describe('scoring preferences', () => {
       hfrRejectAbove: null,
       starCountRejectBelow: null,
     });
+  });
+
+  it('compares two snapshots field by field, limits included', () => {
+    expect(sameScoring(DEFAULTS, { ...DEFAULTS })).toBe(true);
+    expect(sameScoring(DEFAULTS, { ...DEFAULTS, hfrRejectAbove: 3.5 })).toBe(false);
+    expect(sameScoring(DEFAULTS, { ...DEFAULTS, temporal: 0 })).toBe(false);
+    // A cleared limit is null on both sides, never undefined vs null.
+    expect(sameScoring({ ...DEFAULTS, hfrRejectAbove: null }, DEFAULTS)).toBe(true);
   });
 
   it('persists across a reload of the module state', () => {

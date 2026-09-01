@@ -702,11 +702,25 @@ impl Default for PenaltyScales {
 }
 
 impl PenaltyScales {
+    /// Every scale clamped to 0–2, a non-finite one replaced by the
+    /// calibrated 1 — the same rule the score arithmetic applies per use.
+    pub fn normalized(self) -> Self {
+        Self {
+            satellite: Self::sanitize(self.satellite),
+            pointing: Self::sanitize(self.pointing),
+            temporal: Self::sanitize(self.temporal),
+        }
+    }
+
     fn sanitize(scale: f64) -> f64 {
-        if scale.is_finite() {
-            scale.clamp(0.0, 2.0)
-        } else {
+        if !scale.is_finite() {
             1.0
+        } else if scale <= 0.0 {
+            // Not `clamp`: -0.0 would pass through, and its bytes differ
+            // from +0.0 in every cache key built from the scale.
+            0.0
+        } else {
+            scale.min(2.0)
         }
     }
 
@@ -1012,19 +1026,34 @@ pub struct SequenceAnalyzer {
     config: SequenceAnalyzerConfig,
 }
 
-impl SequenceAnalyzer {
-    pub fn new(mut config: SequenceAnalyzerConfig) -> Self {
-        config.quality_weights = config.quality_weights.normalized();
-        // A non-positive or non-finite limit means "off", matching the UI's
-        // 0-clears-it convention. Without this, an HFR ceiling of 0 or
-        // positive infinity would reject every measured frame.
-        config.hfr_reject_above = config
+impl SequenceAnalyzerConfig {
+    /// The configuration as the analyzer will actually use it.
+    ///
+    /// Every caller-supplied knob is brought into range here, once, so the
+    /// score arithmetic and the "is this evidence ignored?" gates read the
+    /// same value: a penalty scale is clamped to 0–2 (a non-finite one is the
+    /// calibrated 1), and a non-positive or non-finite reject limit means
+    /// "off", matching the UI's 0-clears-it convention. Without the clamp a
+    /// negative satellite scale gave no score hit yet still produced reject
+    /// reasons, because the gate compared the raw field against 0.
+    pub fn normalized(mut self) -> Self {
+        self.quality_weights = self.quality_weights.normalized();
+        self.penalty_scales = self.penalty_scales.normalized();
+        self.hfr_reject_above = self
             .hfr_reject_above
             .filter(|limit| limit.is_finite() && *limit > 0.0);
-        config.star_count_reject_below = config
+        self.star_count_reject_below = self
             .star_count_reject_below
             .filter(|limit| limit.is_finite() && *limit > 0.0);
-        Self { config }
+        self
+    }
+}
+
+impl SequenceAnalyzer {
+    pub fn new(config: SequenceAnalyzerConfig) -> Self {
+        Self {
+            config: config.normalized(),
+        }
     }
 
     /// Analyze a set of images, grouping them into sequences and scoring each.
@@ -3154,7 +3183,11 @@ fn capture_profile_from_metadata(metadata: &serde_json::Value) -> Option<String>
         let y = capture_value_text(&metadata["YBINNING"])?;
         Some(format!("{x}x{y}"))
     });
-    let readout = capture_value_text(&metadata["ReadoutMode"]);
+    // Target Scheduler's `ReadoutMode` is a number. N.I.N.A. spells the mode
+    // as a name, which import keeps under its own key so the two modes of
+    // one camera still fall into separate capture profiles.
+    let readout = capture_value_text(&metadata["ReadoutMode"])
+        .or_else(|| capture_value_text(&metadata["ReadoutModeName"]));
     let roi = capture_value_text(&metadata["ROI"]);
     if exposure.is_none()
         && gain.is_none()
@@ -3556,6 +3589,19 @@ mod tests {
         assert!(ignored
             .flags
             .contains(&IssueCategory::SatelliteTrailDetected));
+
+        // An out-of-range scale is brought into range once, up front, so the
+        // score arithmetic and the ignore gate agree. A raw -1 used to leave
+        // the score untouched while still writing the reject reason.
+        let negative = &analyzer_for(-1.0).analyze(&images, 1, "t", "L")[0].images[3];
+        assert!(
+            negative.regrade_reason.is_none(),
+            "a negative scale is scale 0 everywhere, gate included"
+        );
+        assert!(negative.quality_score > 0.9);
+        let overshoot = analyzer_for(f64::NAN);
+        assert_eq!(overshoot.config.penalty_scales.satellite, 1.0);
+        assert_eq!(analyzer_for(7.0).config.penalty_scales.satellite, 2.0);
     }
 
     #[test]
@@ -4931,6 +4977,19 @@ mod tests {
         assert!(metrics.eccentricity.is_none());
         assert!(metrics.snr.is_none());
         assert!(metrics.background.is_none());
+
+        // A named readout mode (import's `ReadoutModeName`) stands in when
+        // the numeric one is unknown, so two modes of one camera are two
+        // capture profiles rather than one comparable set.
+        let named = extract_metrics_from_metadata(
+            2,
+            r#"{"ExposureDuration": 60.0, "Gain": 16, "ReadoutModeName": "Extend Fullwell 2CMS"}"#,
+            None,
+        );
+        assert_eq!(
+            named.capture_profile.as_deref(),
+            Some("exposure=60|gain=16|offset=?|binning=?|readout=extend fullwell 2cms|roi=?")
+        );
     }
 
     #[test]
