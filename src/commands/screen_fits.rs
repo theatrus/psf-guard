@@ -1190,9 +1190,8 @@ mod tests {
         assert!(out.starts_with("..."));
     }
 
-    #[test]
-    fn verdict_thresholds() {
-        let options = ScreenOptions {
+    fn test_options() -> ScreenOptions {
+        ScreenOptions {
             detector: "hocusfocus".into(),
             format: "table".into(),
             min_score: 0.35,
@@ -1207,7 +1206,107 @@ mod tests {
             registry: None,
             cache_dir: "./cache".into(),
             annotate_dir: None,
+        }
+    }
+
+    fn make_record(idx: usize, ts: i64, stars: usize, hfr: f64) -> FrameRecord {
+        FrameRecord {
+            path: PathBuf::from(format!("frame{idx}.fits")),
+            filter: "L".into(),
+            exposure_s: Some(300.0),
+            timestamp: Some(ts),
+            star_count: stars,
+            avg_hfr: hfr,
+            median_adu: 1000.0,
+            dead_cell_fraction: None,
+            star_uniformity: None,
+            bg_cell_spread: 0.0,
+            bg_cell_max_dev: 0.0,
+            width: 100,
+            height: 100,
+            catalog: Default::default(),
+            star_cell_counts: Vec::new(),
+            star_dead_cells: Vec::new(),
+            bg_cell_medians: Vec::new(),
+            bg_glow_max: 0.0,
+            bg_glow_cells: Vec::new(),
+            astrometry: None,
+            satellite: None,
+        }
+    }
+
+    #[test]
+    fn ignore_satellites_keeps_trailed_frames_out_of_reject() {
+        // The flag's whole contract: a pixel-aligned bright trail rejects by
+        // default and must stop rejecting (score and reason both) when the
+        // operator asks to ignore satellite evidence. Exercised through
+        // score_records so a refactor of how the analyzer encodes "ignore"
+        // cannot silently strand the CLI flag.
+        let mut records: Vec<_> = (0..6)
+            .map(|i| make_record(i, i as i64 * 300, 500, 2.5))
+            .collect();
+        records[3].satellite = Some(crate::sequence_analysis::SatelliteFrameMetrics {
+            pixel_aligned_count: 1,
+            pixel_aligned_high_risk_count: 1,
+            reject_recommended: true,
+            ..Default::default()
+        });
+
+        let (checked, _) = score_records(&records, &test_options());
+        let trailed = checked.iter().find(|r| r.record_idx == 3).unwrap();
+        assert_eq!(trailed.verdict, Verdict::Reject);
+        assert!(trailed
+            .regrade_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("satellite trail")));
+
+        let options = ScreenOptions {
+            ignore_satellites: true,
+            ..test_options()
         };
+        let (ignored, _) = score_records(&records, &options);
+        let trailed = ignored.iter().find(|r| r.record_idx == 3).unwrap();
+        assert_ne!(trailed.verdict, Verdict::Reject);
+        assert!(trailed.regrade_reason.is_none());
+    }
+
+    #[test]
+    fn absolute_limit_options_reject_frames() {
+        let mut records: Vec<_> = (0..6)
+            .map(|i| make_record(i, i as i64 * 300, 500, 2.5))
+            .collect();
+        records[2].avg_hfr = 4.2;
+        records[4].star_count = 20;
+
+        // No limits: neither frame is rejected for its absolute values.
+        let (unlimited, _) = score_records(&records, &test_options());
+        for result in &unlimited {
+            assert!(result.regrade_reason.is_none(), "{}", result.file);
+        }
+
+        let options = ScreenOptions {
+            max_hfr: Some(3.5),
+            min_stars: Some(50),
+            ..test_options()
+        };
+        let (limited, _) = score_records(&records, &options);
+        let soft = limited.iter().find(|r| r.record_idx == 2).unwrap();
+        assert_eq!(soft.verdict, Verdict::Reject);
+        assert!(soft
+            .regrade_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("[Auto] HFR limit")));
+        let sparse = limited.iter().find(|r| r.record_idx == 4).unwrap();
+        assert_eq!(sparse.verdict, Verdict::Reject);
+        assert!(sparse
+            .regrade_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("[Auto] Star count limit")));
+    }
+
+    #[test]
+    fn verdict_thresholds() {
+        let options = test_options();
         assert_eq!(verdict_for(&0.9, &None, None, &options), Verdict::Ok);
         assert_eq!(verdict_for(&0.2, &None, None, &options), Verdict::Reject);
         assert_eq!(

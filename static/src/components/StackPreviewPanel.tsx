@@ -19,6 +19,7 @@ import StackStretchControls from './StackStretchControls';
 import { isSkyOriented } from './stackOrientation';
 import { useAccess } from '../auth/access';
 import { STACK_ACTIVITY_QUERY_KEY, useStackActivity } from '../hooks/useStackActivity';
+import { penaltyParamsOf, scoringPreferences } from '../hooks/useScoringPreferences';
 
 type StackCandidateImage = Pick<
   Image,
@@ -352,6 +353,10 @@ export default function StackPreviewPanel({
         accepted_only: acceptedOnly,
         force: variables.force,
         order: frameOrder,
+        // Frame exclusion keys off reject recommendations, so the stack
+        // must score with the same shared preferences as every other
+        // surface — a satellite penalty of 0 keeps trailed frames in.
+        scoring: penaltyParamsOf(scoringPreferences()),
         calibration: calibrationMode,
         calibration_overrides: [...currentChannels.values()]
           .filter((channel) => channelOverride(channel.key) !== undefined)

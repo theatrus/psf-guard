@@ -15,6 +15,7 @@ import {
   type QualityScoreScope,
 } from '../utils/qualityScore';
 import QualityReasonPopover from './QualityReasonPopover';
+import { formatCategory } from '../utils/issueCategory';
 import { LayersIcon, MoonIcon } from './ScoreChipIcons';
 
 export interface ImageCardProps {
@@ -265,15 +266,6 @@ export default function ImageCard({
       </div>
     </div>
   );
-}
-
-function formatCategory(category: string): string {
-  if (category === 'satellite_trail_risk') return 'Satellite Trail Detected';
-  if (category === 'hfr_above_limit') return 'HFR Above Limit';
-  return category
-    .split('_')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
 }
 
 function qualityColor(score: number): string {

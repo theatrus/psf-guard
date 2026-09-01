@@ -186,21 +186,24 @@ export default async function globalSetup() {
   const baseSeqTs = Math.floor(Date.UTC(2026, 3, 16, 22, 25, 0) / 1000); // 2026-04-16 22:25 UTC
   const betaTs = Math.floor(Date.UTC(2026, 3, 17, 0, 6, 0) / 1000);
 
+  // Star counts and HFR vary mildly (inside the analyzer's no-penalty
+  // tolerances) so relative scoring stays quiet, while the spread lets the
+  // scoring-limits spec place an absolute HFR ceiling between frames.
   insertImg.run(
     1, 1, 1, baseSeqTs + 0, 'B', 0,
-    JSON.stringify({ FileName: alpha1, ExposureDuration: 60 })
+    JSON.stringify({ FileName: alpha1, ExposureDuration: 60, DetectedStars: 520, HFR: 2.4 })
   );
   insertImg.run(
     2, 1, 1, baseSeqTs + 66, 'B', 1,
-    JSON.stringify({ FileName: alpha2, ExposureDuration: 60 })
+    JSON.stringify({ FileName: alpha2, ExposureDuration: 60, DetectedStars: 510, HFR: 2.5 })
   );
   insertImg.run(
     3, 1, 1, baseSeqTs + 132, 'B', 0,
-    JSON.stringify({ FileName: alpha3, ExposureDuration: 60 })
+    JSON.stringify({ FileName: alpha3, ExposureDuration: 60, DetectedStars: 500, HFR: 2.6 })
   );
   insertImg.run(
     4, 2, 2, betaTs, 'B', 0,
-    JSON.stringify({ FileName: beta1, ExposureDuration: 60 })
+    JSON.stringify({ FileName: beta1, ExposureDuration: 60, DetectedStars: 480, HFR: 2.8 })
   );
 
   db.close();

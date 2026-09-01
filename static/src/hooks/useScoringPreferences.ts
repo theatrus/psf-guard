@@ -23,13 +23,17 @@ export interface ScoringPreferences {
 }
 
 const STORAGE_KEY = 'psf-guard.penalty-scales';
-const DEFAULTS: ScoringPreferences = {
+
+/** The calibrated defaults. The single source for the store's fallback,
+ * the control's Reset button, and its "changed" indicator. */
+export const SCORING_DEFAULTS: ScoringPreferences = {
   satellite: 1,
   pointing: 1,
   temporal: 1,
   hfrRejectAbove: null,
   starCountRejectBelow: null,
 };
+const DEFAULTS = SCORING_DEFAULTS;
 
 type Listener = () => void;
 

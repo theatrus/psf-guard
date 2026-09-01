@@ -543,12 +543,13 @@ pub enum Commands {
         dead_cell_rise: f64,
 
         /// Reject any frame whose measured HFR exceeds this value (pixels),
-        /// like N.I.N.A. subframe selection. Off by default.
+        /// like N.I.N.A. subframe selection. Off by default; 0 also means
+        /// off.
         #[arg(long)]
         max_hfr: Option<f64>,
 
         /// Reject any frame with fewer detected stars than this. Off by
-        /// default.
+        /// default; 0 also means off.
         #[arg(long)]
         min_stars: Option<u32>,
 

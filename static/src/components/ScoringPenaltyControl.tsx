@@ -1,17 +1,21 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
+  SCORING_DEFAULTS,
   setScoringPreferences,
   useScoringPreferences,
 } from '../hooks/useScoringPreferences';
 import type { ScoringPreferences } from '../hooks/useScoringPreferences';
 
-const DEFAULT_PREFERENCES: ScoringPreferences = {
-  satellite: 1,
-  pointing: 1,
-  temporal: 1,
-  hfrRejectAbove: null,
-  starCountRejectBelow: null,
-};
+type LimitKey = 'hfrRejectAbove' | 'starCountRejectBelow';
+
+/** Parse a limit input's text: empty clears the limit, a positive finite
+ * number sets it, anything else is "not a value yet" (undefined). */
+function parseLimitText(text: string): number | null | undefined {
+  if (text.trim() === '') return null;
+  const parsed = parseFloat(text);
+  if (!Number.isFinite(parsed)) return undefined;
+  return parsed > 0 ? parsed : null;
+}
 
 /**
  * Compact control for the shared scoring preferences: how hard each kind of
@@ -23,25 +27,48 @@ const DEFAULT_PREFERENCES: ScoringPreferences = {
  * Inputs track locally while editing and commit on release/blur: every
  * commit changes the scoring query keys and refetches whole-scope analyses,
  * so per-step commits would fire one full analysis per 0.1 tick of a drag
- * or per typed digit.
+ * or per typed digit. The limit drafts stay raw text until commit so
+ * partial entries like "0" on the way to "0.8" survive; an unmount commits
+ * whatever was typed so navigating away cannot silently drop it.
  */
 export default function ScoringPenaltyControl() {
   const preferences = useScoringPreferences();
   const [draft, setDraft] = useState<ScoringPreferences | null>(null);
+  const [limitTexts, setLimitTexts] = useState<Partial<Record<LimitKey, string>>>({});
   const shown = draft ?? preferences;
-  const isDefault =
-    shown.satellite === 1 &&
-    shown.pointing === 1 &&
-    shown.temporal === 1 &&
-    shown.hfrRejectAbove == null &&
-    shown.starCountRejectBelow == null;
 
-  const commit = () => {
-    if (draft) {
-      setScoringPreferences(draft);
-      setDraft(null);
-    }
+  const limitValue = (key: LimitKey): number | null => {
+    const text = limitTexts[key];
+    if (text === undefined) return shown[key];
+    const parsed = parseLimitText(text);
+    return parsed === undefined ? shown[key] : parsed;
   };
+  const effective: ScoringPreferences = {
+    ...shown,
+    hfrRejectAbove: limitValue('hfrRejectAbove'),
+    starCountRejectBelow: limitValue('starCountRejectBelow'),
+  };
+  const isDefault =
+    effective.satellite === SCORING_DEFAULTS.satellite &&
+    effective.pointing === SCORING_DEFAULTS.pointing &&
+    effective.temporal === SCORING_DEFAULTS.temporal &&
+    effective.hfrRejectAbove === SCORING_DEFAULTS.hfrRejectAbove &&
+    effective.starCountRejectBelow === SCORING_DEFAULTS.starCountRejectBelow;
+
+  const hasPending = draft !== null || Object.keys(limitTexts).length > 0;
+  const commit = () => {
+    if (!hasPending) return;
+    setScoringPreferences(effective);
+    setDraft(null);
+    setLimitTexts({});
+  };
+
+  // Commit any pending edit when the control unmounts (route change,
+  // panel close): blur does not fire then, and a typed limit must not
+  // silently vanish.
+  const commitRef = useRef(commit);
+  commitRef.current = commit;
+  useEffect(() => () => commitRef.current(), []);
 
   const slider = (
     key: 'satellite' | 'pointing' | 'temporal',
@@ -69,12 +96,7 @@ export default function ScoringPenaltyControl() {
     </label>
   );
 
-  const limitInput = (
-    key: 'hfrRejectAbove' | 'starCountRejectBelow',
-    label: string,
-    title: string,
-    step: string
-  ) => (
+  const limitInput = (key: LimitKey, label: string, title: string, step: string) => (
     <label className="penalty-limit" title={title}>
       <span className="penalty-label">{label}</span>
       <input
@@ -82,14 +104,10 @@ export default function ScoringPenaltyControl() {
         min="0"
         step={step}
         placeholder="off"
-        value={shown[key] ?? ''}
-        onChange={(event) => {
-          const parsed = parseFloat(event.target.value);
-          setDraft({
-            ...shown,
-            [key]: Number.isFinite(parsed) && parsed > 0 ? parsed : null,
-          });
-        }}
+        value={limitTexts[key] ?? preferences[key] ?? ''}
+        onChange={(event) =>
+          setLimitTexts((current) => ({ ...current, [key]: event.target.value }))
+        }
         onBlur={commit}
         onKeyUp={(event) => {
           if (event.key === 'Enter') commit();
@@ -139,7 +157,8 @@ export default function ScoringPenaltyControl() {
           disabled={isDefault}
           onClick={() => {
             setDraft(null);
-            setScoringPreferences({ ...DEFAULT_PREFERENCES });
+            setLimitTexts({});
+            setScoringPreferences({ ...SCORING_DEFAULTS });
           }}
         >
           Reset to defaults

@@ -84,6 +84,15 @@ pub struct StackPreviewRequest {
     /// frames first and asks which of these frames are worth keeping.
     #[serde(default)]
     pub order: snr::StackFrameOrder,
+    /// The caller's scoring overrides (penalty scales, absolute reject
+    /// limits). Frame exclusion keys off the same reject recommendations
+    /// every other scoring surface shows, so the preview must score with
+    /// the same settings — otherwise a satellite penalty of 0 would stop
+    /// rejections everywhere while the stack still silently dropped the
+    /// trailed frames. Cache safety comes from the job fingerprint hashing
+    /// each frame's resulting score and reason, not the settings.
+    #[serde(default)]
+    pub scoring: crate::server::api::ScoringOverrideQuery,
 }
 
 /// One channel's calibration mode, overriding the request-wide choice.
@@ -1284,7 +1293,13 @@ fn prepare_job(
         (relevant, expected, mapped_sources)
     };
 
-    let quality = quality_results(ctx, &project_images, &expected_by_image, &mapped_sources);
+    let quality = quality_results(
+        ctx,
+        &project_images,
+        &expected_by_image,
+        &mapped_sources,
+        &request.scoring,
+    );
     let quality_by_id = quality
         .into_iter()
         .map(|result| (result.image_id, result))
@@ -1536,6 +1551,7 @@ fn quality_results(
     images: &[(AcquiredImage, String, String)],
     expected_by_image: &HashMap<i32, Option<(f64, f64)>>,
     mapped_sources: &crate::server::remote_upload::MappedLightSources,
+    scoring: &crate::server::api::ScoringOverrideQuery,
 ) -> Vec<ImageQualityResult> {
     crate::server::spatial_scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
     let mut grouped: BTreeMap<(i32, String, String), Vec<&AcquiredImage>> = BTreeMap::new();
@@ -1549,7 +1565,8 @@ fn quality_results(
             .or_default()
             .push(image);
     }
-    let config = SequenceAnalyzerConfig::default();
+    let mut config = SequenceAnalyzerConfig::default();
+    scoring.apply_to(&mut config);
     let session_gap = config.session_gap_minutes;
     let analyzer = SequenceAnalyzer::new(config);
     let mut output = Vec::new();
@@ -3255,6 +3272,7 @@ mod tests {
             calibration: crate::calibration::CalibrationMode::Auto,
             calibration_overrides: Vec::new(),
             order: snr::StackFrameOrder::Capture,
+            scoring: Default::default(),
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
@@ -3265,6 +3283,7 @@ mod tests {
             calibration: crate::calibration::CalibrationMode::Auto,
             calibration_overrides: Vec::new(),
             order: snr::StackFrameOrder::Capture,
+            scoring: Default::default(),
         })
         .is_err());
         assert!(validate_request(&StackPreviewRequest {
@@ -3275,6 +3294,7 @@ mod tests {
             calibration: crate::calibration::CalibrationMode::Auto,
             calibration_overrides: Vec::new(),
             order: snr::StackFrameOrder::Capture,
+            scoring: Default::default(),
         })
         .is_ok());
     }
@@ -3289,6 +3309,7 @@ mod tests {
             north_up: false,
             calibration: CalibrationMode::Auto,
             order: snr::StackFrameOrder::Capture,
+            scoring: Default::default(),
             calibration_overrides: vec![CalibrationOverride {
                 target_id: 7,
                 filter_name: "Ha".into(),

@@ -33,6 +33,7 @@ import {
   type GridNavigationDirection,
 } from '../utils/gridNavigation';
 import { thumbnailGridColumns } from '../utils/thumbnailSizing';
+import { formatCategory } from '../utils/issueCategory';
 import SecondaryScoreToggle from './SecondaryScoreToggle';
 import {
   type BasisScores,
@@ -46,15 +47,6 @@ interface SequenceChoice {
   sequence: ScoredSequence;
   scoreScope: QualityScoreScope;
   unavailableImageCount: number;
-}
-
-function formatCategory(category: string): string {
-  if (category === 'satellite_trail_risk') return 'Satellite Trail Detected';
-  if (category === 'hfr_above_limit') return 'HFR Above Limit';
-  return category
-    .split('_')
-    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(' ');
 }
 
 function formatSequenceLabel(sequence: ScoredSequence): string {

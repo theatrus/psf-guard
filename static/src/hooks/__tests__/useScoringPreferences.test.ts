@@ -2,18 +2,11 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   penaltyKeyOf,
   penaltyParamsOf,
+  SCORING_DEFAULTS as DEFAULTS,
   scoringPreferences,
   setScoringPreferences,
 } from '../useScoringPreferences';
 import type { ScoringPreferences } from '../useScoringPreferences';
-
-const DEFAULTS: ScoringPreferences = {
-  satellite: 1,
-  pointing: 1,
-  temporal: 1,
-  hfrRejectAbove: null,
-  starCountRejectBelow: null,
-};
 
 describe('scoring preferences', () => {
   beforeEach(() => {

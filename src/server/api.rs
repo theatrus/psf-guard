@@ -997,7 +997,7 @@ pub struct SequenceAnalysisQuery {
     pub penalty_temporal: Option<f64>,
     /// Absolute reject limits: recommend rejection when measured HFR
     /// exceeds this value or the star count falls below it. Absent (the
-    /// default) disables the check.
+    /// default) or non-positive disables the check.
     pub hfr_reject_above: Option<f64>,
     pub star_count_reject_below: Option<f64>,
 }
@@ -1034,7 +1034,7 @@ pub struct SpatialScanRequest {
 /// [`SequenceAnalysisQuery`], which converts into this via
 /// [`SequenceAnalysisQuery::scoring_overrides`] so both endpoints apply
 /// overrides through one method.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct ScoringOverrideQuery {
     pub penalty_satellite: Option<f64>,
     pub penalty_pointing: Option<f64>,

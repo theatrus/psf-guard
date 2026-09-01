@@ -400,6 +400,11 @@ Before handing frames to Seiza, PSF Guard excludes:
    including confirmed cloud/obstruction, off-target, tracking-loss, and
    corroborated no-solve decisions.
 
+That analysis runs with the caller's scoring preferences (penalty scales and
+absolute reject limits), so stack exclusion agrees with every other scoring
+surface: a satellite penalty of 0% keeps trailed frames in the stack, and a
+frame over an HFR ceiling stays out.
+
 The highest-scoring remaining frame becomes the immutable reference. The other
 eligible frames are offered to Seiza in acquisition order. Seiza decodes the
 linear FITS samples, debayers when required, performs global normalization,
