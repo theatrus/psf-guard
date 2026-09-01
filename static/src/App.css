@@ -7178,6 +7178,33 @@
   font-variant-numeric: tabular-nums;
 }
 
+.penalty-section {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+
+.penalty-section:not(:first-child) {
+  margin-top: 0.35rem;
+}
+
+.penalty-limit {
+  display: grid;
+  grid-template-columns: 1fr 90px;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.penalty-limit input[type="number"] {
+  width: 90px;
+  padding: 0.15rem 0.3rem;
+  font-size: 0.8rem;
+}
+
 .penalty-reset {
   align-self: flex-end;
   font-size: 0.75rem;

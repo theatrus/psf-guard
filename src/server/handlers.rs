@@ -5703,7 +5703,7 @@ pub async fn analyze_sequence(
     let weight_background = params.weight_background;
     let weight_spatial = params.weight_spatial;
     let weight_pointing = params.weight_pointing;
-    let penalty_overrides = params.penalty_scales();
+    let scoring_overrides = params.scoring_overrides();
 
     // Fetch images from the requested target, project, or database. Wider
     // scopes still score each target/filter group independently and only read
@@ -5812,9 +5812,9 @@ pub async fn analyze_sequence(
                 pointing: weight_pointing.unwrap_or(config.quality_weights.pointing),
             };
         }
-        // Penalty scaling: how hard event evidence (satellite trails,
-        // pointing failures, temporal anomalies) hits the score.
-        penalty_overrides.apply_to(&mut config.penalty_scales);
+        // Scoring overrides: penalty scales (how hard satellite, pointing,
+        // and temporal evidence hits the score) and absolute reject limits.
+        scoring_overrides.apply_to(&mut config);
 
         let session_gap_minutes = config.session_gap_minutes;
         let analyzer = SequenceAnalyzer::new(config);
@@ -5932,7 +5932,7 @@ pub async fn analyze_sequence(
 pub async fn get_image_quality(
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,
-    Query(penalties): Query<crate::server::api::PenaltyScaleQuery>,
+    Query(overrides): Query<crate::server::api::ScoringOverrideQuery>,
 ) -> Result<Json<ApiResponse<crate::server::api::ImageQualityContextResponse>>, AppError> {
     use crate::sequence_analysis::{
         extract_metrics_from_metadata, SequenceAnalyzer, SequenceAnalyzerConfig,
@@ -6017,7 +6017,7 @@ pub async fn get_image_quality(
 
     let result = tokio::task::spawn_blocking(move || {
         let mut config = SequenceAnalyzerConfig::default();
-        penalties.apply_to(&mut config.penalty_scales);
+        overrides.apply_to(&mut config);
         let session_gap_minutes = config.session_gap_minutes;
         let analyzer = SequenceAnalyzer::new(config);
 

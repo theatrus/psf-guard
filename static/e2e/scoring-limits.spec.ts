@@ -1,0 +1,118 @@
+import { expect, test } from '@playwright/test';
+import {
+  registerFixtureDb,
+  resetDatabases,
+  waitForCacheReady,
+} from './helpers';
+
+// The Scoring control's absolute reject limits, exercised against the real
+// server. The fixture's Alpha sequence has HFRs 2.4 / 2.5 / 2.6 and star
+// counts 520 / 510 / 500, so a ceiling of 2.55 or a floor of 505 trips
+// exactly the third frame.
+
+let dbId: string;
+
+test.beforeEach(async ({ request }) => {
+  await resetDatabases(request);
+  const entry = await registerFixtureDb(request, {
+    name: 'Imaging Rig e2e',
+    slug: 'imaging-rig-e2e',
+  });
+  dbId = entry.id;
+  await waitForCacheReady(request, dbId);
+});
+
+test('an HFR reject limit flags the soft frame, survives reload, and resets', async ({
+  page,
+}) => {
+  await page.goto(`/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`);
+  const cards = page.locator('.sequence-image-card');
+  await expect(cards).toHaveCount(3, { timeout: 15_000 });
+  await expect(page.locator('.sequence-image-card.below-threshold')).toHaveCount(0);
+
+  const scoring = page.locator('.scoring-penalty-control');
+  await expect(scoring.locator('summary')).toHaveText('Scoring');
+  await scoring.locator('summary').click();
+
+  const hfrInput = page.getByLabel('Max HFR');
+  await hfrInput.pressSequentially('2.55');
+  await expect(hfrInput).toHaveAttribute('step', 'any');
+  expect(
+    await hfrInput.evaluate((input: HTMLInputElement) => input.validity.stepMismatch)
+  ).toBe(false);
+  await hfrInput.press('Enter');
+
+  // The HFR 2.6 frame drops to the capped score and carries the limit reason.
+  const capped = page.locator('.sequence-image-card.below-threshold');
+  await expect(capped).toHaveCount(1, { timeout: 15_000 });
+  await expect(scoring.locator('summary')).toHaveText('Scoring (custom)');
+  await capped.getByRole('button', { name: 'Show quality reason' }).click();
+  const popover = page.getByRole('dialog', { name: 'Quality reason' });
+  await expect(popover).toContainText('[Auto] Max HFR');
+  await expect(popover).toContainText('over limit 2.55');
+  await popover.getByRole('button', { name: 'Close quality reason' }).click();
+
+  // The preference is remembered: a reload scores the same way.
+  await page.reload();
+  await expect(cards).toHaveCount(3, { timeout: 15_000 });
+  await expect(page.locator('.sequence-image-card.below-threshold')).toHaveCount(1);
+  await page.locator('.scoring-penalty-control summary').click();
+  await expect(page.getByLabel('Max HFR')).toHaveValue('2.55');
+
+  // Reset restores the calibrated behavior.
+  await page.getByRole('button', { name: 'Reset to defaults' }).click();
+  await expect(page.locator('.sequence-image-card.below-threshold')).toHaveCount(0, {
+    timeout: 15_000,
+  });
+  await expect(page.locator('.scoring-penalty-control summary')).toHaveText('Scoring');
+  await expect(page.getByLabel('Max HFR')).toHaveValue('');
+});
+
+test('a star-count floor flags the sparse frame', async ({ page }) => {
+  await page.goto(`/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`);
+  const cards = page.locator('.sequence-image-card');
+  await expect(cards).toHaveCount(3, { timeout: 15_000 });
+
+  await page.locator('.scoring-penalty-control summary').click();
+  const starsInput = page.getByLabel('Min stars');
+  await starsInput.pressSequentially('505');
+  await starsInput.press('Enter');
+
+  const capped = page.locator('.sequence-image-card.below-threshold');
+  await expect(capped).toHaveCount(1, { timeout: 15_000 });
+  await capped.getByRole('button', { name: 'Show quality reason' }).click();
+  const popover = page.getByRole('dialog', { name: 'Quality reason' });
+  await expect(popover).toContainText('[Auto] Min stars');
+  await expect(popover).toContainText('500 under limit 505');
+});
+
+test('a sub-1 HFR limit can be typed digit by digit, leading zero first', async ({
+  page,
+}) => {
+  await page.goto(`/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`);
+  await expect(page.locator('.sequence-image-card')).toHaveCount(3, {
+    timeout: 15_000,
+  });
+
+  await page.locator('.scoring-penalty-control summary').click();
+  const hfrInput = page.getByLabel('Max HFR');
+  // Regression: the first keystroke of "0.8" used to be coerced to "off"
+  // and wiped, making sub-1 limits impossible to type.
+  await hfrInput.pressSequentially('0.8');
+  await expect(hfrInput).toHaveValue('0.8');
+  await hfrInput.press('Enter');
+
+  // Every fixture frame has HFR above 0.8, so all three are capped.
+  await expect(page.locator('.sequence-image-card.below-threshold')).toHaveCount(3, {
+    timeout: 15_000,
+  });
+
+  // A stray keystroke the number input cannot parse ("0.8e") must not
+  // clear the limit on blur: the browser reports '' for such text, which
+  // used to read as "turn the limit off".
+  await hfrInput.pressSequentially('e');
+  await hfrInput.blur();
+  await expect(hfrInput).toHaveValue('0.8');
+  await expect(page.locator('.sequence-image-card.below-threshold')).toHaveCount(3);
+  await expect(page.locator('.scoring-penalty-control summary')).toHaveText('Scoring (custom)');
+});

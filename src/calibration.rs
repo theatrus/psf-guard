@@ -27,7 +27,11 @@ use std::time::UNIX_EPOCH;
 ///    marked usable only for lights captured after it (a set shot after an
 ///    optics change or cleaning) or only before it. NULL keeps the old
 ///    behavior: usable in both directions.
-pub const CALIBRATION_SCHEMA_VERSION: i64 = 4;
+/// 5: `psf_guard_calibration_frame.readout_mode_name`, the readout mode as
+///    N.I.N.A. spells it. The integer column stays empty on such rigs, so
+///    without the name two modes of one camera matched each other's frames.
+/// 6: that name read off the files for rows that predate the column.
+pub const CALIBRATION_SCHEMA_VERSION: i64 = 6;
 // 2: flat masters suppress defective pixels spatially after integration.
 /// Version 3: masters preserve sensor, optics, exposure and capture-time
 /// metadata (seiza-stacking 0.11.1). Masters written before that carry no
@@ -118,6 +122,9 @@ pub struct CalibrationFrame {
     pub gain: Option<i64>,
     pub offset: Option<i64>,
     pub readout_mode: Option<i64>,
+    /// The readout mode's name when the header spelled it that way; see
+    /// [`FrameMeta::readout_mode_name`].
+    pub readout_mode_name: Option<String>,
     pub bayer_pattern: Option<String>,
     pub exposure_s: Option<f64>,
     pub camera_temp: Option<f64>,
@@ -200,6 +207,7 @@ pub struct CalibrationFrameSummary {
     pub gain: Option<i64>,
     pub offset: Option<i64>,
     pub readout_mode: Option<i64>,
+    pub readout_mode_name: Option<String>,
     pub bayer_pattern: Option<String>,
     pub exposure_s: Option<f64>,
     pub camera_temp: Option<f64>,
@@ -390,6 +398,14 @@ const MIGRATIONS: &[Migration] = &[
         to_version: 4,
         apply: add_valid_direction_column,
     },
+    Migration {
+        to_version: 5,
+        apply: add_readout_mode_name_column,
+    },
+    Migration {
+        to_version: 6,
+        apply: backfill_readout_mode_name,
+    },
 ];
 
 /// Columns selected by the calibration matching and master-building paths.
@@ -423,6 +439,7 @@ const READABLE_FRAME_COLUMNS: &[&str] = &[
     "focal_length_mm",
     "rotation",
     "valid_direction",
+    "readout_mode_name",
 ];
 
 fn add_valid_direction_column(conn: &Connection) -> Result<bool> {
@@ -511,6 +528,86 @@ fn backfill_flat_rotation(conn: &Connection) -> Result<bool> {
         pending.len()
     );
     Ok(recovered > 0)
+}
+
+fn add_readout_mode_name_column(conn: &Connection) -> Result<bool> {
+    // NULL means "not recorded", which matching treats as compatible, so an
+    // upgraded catalog keeps matching what it matched before until
+    // [`backfill_readout_mode_name`] reads the names off the files.
+    add_column_if_missing(
+        conn,
+        "psf_guard_calibration_frame",
+        "readout_mode_name",
+        "TEXT",
+    )
+}
+
+/// Read the readout mode's name off the frames that predate the column.
+///
+/// N.I.N.A. writes READOUTM as a display name, and the integer column has no
+/// room for one, so every frame from such a rig recorded no readout mode at
+/// all. That let a "High Gain Mode" dark serve an "Extend Fullwell" light on
+/// the same camera. Every kind is affected, so unlike the rotation rung this
+/// visits every row with no name. Headers only, no pixels; a file that has
+/// moved away or names no mode keeps its NULL.
+fn backfill_readout_mode_name(conn: &Connection) -> Result<bool> {
+    // A data rung runs once; see `backfill_flat_rotation` for why re-reading
+    // every NULL row's header on each open is a cost paid to learn nothing.
+    if recorded_schema_version(conn)? >= 6 {
+        return Ok(false);
+    }
+    let columns = table_column_names(conn, "psf_guard_calibration_frame").unwrap_or_default();
+    let has = |wanted: &str| {
+        columns
+            .iter()
+            .any(|column| column.eq_ignore_ascii_case(wanted))
+    };
+    if !(has("source_path") && has("readout_mode_name")) {
+        return Ok(false);
+    }
+
+    // A row with a numeric readout mode came from a header that spelled it
+    // as a number, which can never yield a name: leave those out.
+    let pending: Vec<(i64, String)> = conn
+        .prepare(
+            "SELECT id, source_path FROM psf_guard_calibration_frame
+             WHERE readout_mode_name IS NULL AND readout_mode IS NULL",
+        )?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if pending.is_empty() {
+        return Ok(false);
+    }
+
+    // Read every header first, then write once: this runs while a catalog
+    // is being opened, and one fsync per recovered row on a file N.I.N.A.
+    // may be writing to is a cost with nothing to show for it.
+    let recovered: Vec<(i64, String)> = pending
+        .iter()
+        .filter_map(|(id, source_path)| {
+            crate::commands::import::headers::read_frame_meta(Path::new(source_path))
+                .readout_mode_name
+                .map(|name| (*id, name))
+        })
+        .collect();
+    if !recovered.is_empty() {
+        let tx = conn.unchecked_transaction()?;
+        {
+            let mut update = tx.prepare(
+                "UPDATE psf_guard_calibration_frame SET readout_mode_name = ?1 WHERE id = ?2",
+            )?;
+            for (id, name) in &recovered {
+                update.execute(rusqlite::params![name, id])?;
+            }
+        }
+        tx.commit()?;
+    }
+    tracing::info!(
+        "calibration upgrade: recovered a readout mode name for {} of {} frame(s)",
+        recovered.len(),
+        pending.len()
+    );
+    Ok(!recovered.is_empty())
 }
 
 fn add_column_if_missing(
@@ -709,6 +806,7 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
             gain               INTEGER,
             offset             INTEGER,
             readout_mode       INTEGER,
+            readout_mode_name  TEXT,
             bayer_pattern      TEXT,
             bayer_x_offset     INTEGER,
             bayer_y_offset     INTEGER,
@@ -832,11 +930,11 @@ pub fn import_calibration_frames(
                 channels, binning_x, binning_y, gain, offset, readout_mode,
                 bayer_pattern, bayer_x_offset, bayer_y_offset, exposure_s,
                 camera_temp, filter_name, focal_length_mm, file_size,
-                file_mtime_ns, added_at, updated_at, rotation
+                file_mtime_ns, added_at, updated_at, rotation, readout_mode_name
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
                 ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24,
-                ?25, ?26, ?27, ?27, ?28
+                ?25, ?26, ?27, ?27, ?28, ?29
             )
             ON CONFLICT(source_path) DO UPDATE SET
                 rig_uuid=excluded.rig_uuid, kind=excluded.kind,
@@ -852,7 +950,8 @@ pub fn import_calibration_frames(
                 exposure_s=excluded.exposure_s, camera_temp=excluded.camera_temp,
                 filter_name=excluded.filter_name, focal_length_mm=excluded.focal_length_mm,
                 file_size=excluded.file_size, file_mtime_ns=excluded.file_mtime_ns,
-                updated_at=excluded.updated_at, rotation=excluded.rotation
+                updated_at=excluded.updated_at, rotation=excluded.rotation,
+                readout_mode_name=excluded.readout_mode_name
             "#,
             params![
                 frame_uuid,
@@ -883,6 +982,7 @@ pub fn import_calibration_frames(
                 file_mtime_ns,
                 now,
                 frame.rotator_position,
+                frame.readout_mode_name,
             ],
         )?;
         if existing.is_some() {
@@ -969,13 +1069,17 @@ pub fn library_details(conn: &Connection) -> Result<CalibrationLibraryDetails> {
     }
     // The listing tolerates a catalog that could not be upgraded: an absent
     // column reads as NULL rather than failing the whole dialog.
-    let has_validity = table_column_names(conn, "psf_guard_calibration_frame")?
-        .iter()
-        .any(|name| name.eq_ignore_ascii_case("valid_direction"));
-    let validity_column = if has_validity {
+    let columns = table_column_names(conn, "psf_guard_calibration_frame")?;
+    let has = |wanted: &str| columns.iter().any(|name| name.eq_ignore_ascii_case(wanted));
+    let validity_column = if has("valid_direction") {
         "valid_direction"
     } else {
         "NULL AS valid_direction"
+    };
+    let readout_name_column = if has("readout_mode_name") {
+        "readout_mode_name"
+    } else {
+        "NULL AS readout_mode_name"
     };
     let mut statement = conn.prepare(&format!(
         r#"
@@ -983,7 +1087,7 @@ pub fn library_details(conn: &Connection) -> Result<CalibrationLibraryDetails> {
                captured_at, telescope, camera, width, height, channels,
                binning_x, binning_y, gain, offset, readout_mode, bayer_pattern,
                exposure_s, camera_temp, filter_name, focal_length_mm,
-               NULL AS rotation, {validity_column}
+               NULL AS rotation, {validity_column}, {readout_name_column}
         FROM psf_guard_calibration_frame
         ORDER BY kind, captured_at DESC, source_path COLLATE NOCASE
         "#
@@ -1008,6 +1112,7 @@ pub fn library_details(conn: &Connection) -> Result<CalibrationLibraryDetails> {
                 gain: frame.gain,
                 offset: frame.offset,
                 readout_mode: frame.readout_mode,
+                readout_mode_name: frame.readout_mode_name,
                 bayer_pattern: frame.bayer_pattern,
                 exposure_s: frame.exposure_s,
                 camera_temp: frame.camera_temp,
@@ -1336,7 +1441,7 @@ pub fn select_for_light(conn: &Connection, light: &FrameMeta) -> Result<Calibrat
                captured_at, telescope, camera, width, height, channels,
                binning_x, binning_y, gain, offset, readout_mode, bayer_pattern,
                exposure_s, camera_temp, filter_name, focal_length_mm, rotation,
-               valid_direction
+               valid_direction, readout_mode_name
         FROM psf_guard_calibration_frame
         ORDER BY captured_at DESC, id DESC
         "#,
@@ -2242,7 +2347,7 @@ fn resolve_or_build_masters_pinned(
     if !set_aside.is_empty() {
         let note = format!(
             "Built without frames the integrator would not accept — {}. Check the library for \
-             frames filed under the wrong filter or camera",
+             frames filed under the wrong filter, camera, or readout mode",
             set_aside
                 .iter()
                 .map(|(kind, count, example)| format!(
@@ -3002,13 +3107,60 @@ fn count_kind(outcome: &mut CalibrationImportOutcome, kind: CalibrationKind) {
     }
 }
 
+/// Seiza's signature plus the one setting it has no slot for: the readout
+/// mode's name.
+///
+/// `seiza-calibration` knows the readout mode as an integer. N.I.N.A. writes
+/// it as a display name, so on those rigs the integer is never known and
+/// Seiza alone would let a "High Gain Mode" dark serve an "Extend Fullwell"
+/// light. The name rides alongside and is compared with Seiza's own rules
+/// for a known-or-unknown setting.
+struct Signature {
+    seiza: seiza_calibration::FrameSignature,
+    readout_mode_name: Option<String>,
+}
+
+/// Seiza's `sensor_matches`, plus the readout mode's name.
+///
+/// Two named modes must agree. An unnamed side is tolerated on purpose, and
+/// this is where the name parts from gain or offset, which a candidate must
+/// positively prove. The name is a label the capture software chose:
+/// SharpCap and older N.I.N.A. write a number, ASIAIR nothing, and a
+/// library upgraded while its files were on an unmounted share has no
+/// names yet. Refusing every such frame would silently strip a rig of all
+/// its calibration; tolerating them is exactly what matching did before the
+/// name was kept, while two frames that both name a mode can no longer be
+/// crossed.
+fn signature_sensor_matches(reference: &Signature, candidate: &Signature) -> bool {
+    seiza_calibration::sensor_matches(&reference.seiza, &candidate.seiza)
+        && readout_names_agree(reference, candidate)
+}
+
+/// Seiza's `sensor_consistent`, plus the readout mode's name, under the
+/// same rule as [`signature_sensor_matches`].
+fn signature_sensor_consistent(left: &Signature, right: &Signature) -> bool {
+    seiza_calibration::sensor_consistent(&left.seiza, &right.seiza)
+        && readout_names_agree(left, right)
+}
+
+fn readout_names_agree(left: &Signature, right: &Signature) -> bool {
+    match (&left.readout_mode_name, &right.readout_mode_name) {
+        (Some(left), Some(right)) => readout_names_equal(left, right),
+        _ => true,
+    }
+}
+
+fn readout_names_equal(left: &str, right: &str) -> bool {
+    left.trim().eq_ignore_ascii_case(right.trim())
+}
+
 /// Everything Seiza's matcher needs from a light frame's headers.
 ///
 /// PSF Guard's own records carry more — catalog identity, paths, grades — and
 /// none of it decides whether two frames belong together. That question is
 /// `seiza-calibration`'s, and these two adapters are the whole of what it
 /// takes to ask it.
-fn light_signature(light: &FrameMeta) -> seiza_calibration::FrameSignature {
+fn light_signature(light: &FrameMeta) -> Signature {
     let mut signature = seiza_calibration::FrameSignature::default();
     signature.camera = light.camera.clone();
     signature.telescope = light.telescope.clone();
@@ -3027,11 +3179,14 @@ fn light_signature(light: &FrameMeta) -> seiza_calibration::FrameSignature {
     signature.exposure_seconds = light.exposure_s;
     signature.camera_temp_c = light.camera_temp;
     signature.captured_at_unix = light.timestamp;
-    signature
+    Signature {
+        seiza: signature,
+        readout_mode_name: light.readout_mode_name.clone(),
+    }
 }
 
 /// The same, for a calibration frame already in the catalog.
-fn frame_signature(frame: &CalibrationFrame) -> seiza_calibration::FrameSignature {
+fn frame_signature(frame: &CalibrationFrame) -> Signature {
     let mut signature = seiza_calibration::FrameSignature::default();
     signature.camera = frame.camera.clone();
     signature.telescope = frame.telescope.clone();
@@ -3050,7 +3205,10 @@ fn frame_signature(frame: &CalibrationFrame) -> seiza_calibration::FrameSignatur
     signature.exposure_seconds = frame.exposure_s;
     signature.camera_temp_c = frame.camera_temp;
     signature.captured_at_unix = frame.captured_at;
-    signature
+    Signature {
+        seiza: signature,
+        readout_mode_name: frame.readout_mode_name.clone(),
+    }
 }
 
 /// Configured rotation tolerance in f64 bits; zero means "not configured".
@@ -3085,19 +3243,19 @@ fn tolerances() -> seiza_calibration::MatchTolerances {
 }
 
 fn sensor_matches(light: &FrameMeta, candidate: &CalibrationFrame) -> bool {
-    seiza_calibration::sensor_matches(&light_signature(light), &frame_signature(candidate))
+    signature_sensor_matches(&light_signature(light), &frame_signature(candidate))
 }
 
 fn flat_matches(light: &FrameMeta, candidate: &CalibrationFrame) -> bool {
     seiza_calibration::optics_match(
-        &light_signature(light),
-        &frame_signature(candidate),
+        &light_signature(light).seiza,
+        &frame_signature(candidate).seiza,
         &tolerances(),
     )
 }
 
 fn frame_pair_matches(left: &CalibrationFrame, right: &CalibrationFrame) -> bool {
-    seiza_calibration::sensor_matches(&frame_signature(left), &frame_signature(right))
+    signature_sensor_matches(&frame_signature(left), &frame_signature(right))
 }
 
 /// Whether a dark's exposure suits what it would be subtracted from.
@@ -3167,14 +3325,54 @@ struct MasterSubset {
 /// both halves of the rule, and asking it the second question here means an odd
 /// frame is set aside rather than taken as grounds to abandon the master.
 fn master_subset_report(kind: CalibrationKind, frames: &[CalibrationFrame]) -> MasterSubset {
+    // Seiza clusters by temperature, session and angle, and knows nothing
+    // of the readout mode's name. Left to the anchor test below, a nearest
+    // stray in one mode would set aside a whole set in the other and blame
+    // the filter. So the name partitions first, the way Seiza's own session
+    // rule works: nearest-first, the first name group with enough frames
+    // wins, and frames that never named a mode ride along with any group.
+    let mut tried: Vec<&str> = Vec::new();
+    for frame in frames {
+        let Some(name) = frame.readout_mode_name.as_deref() else {
+            continue;
+        };
+        if tried.iter().any(|seen| readout_names_equal(seen, name)) {
+            continue;
+        }
+        tried.push(name);
+        let group: Vec<CalibrationFrame> = frames
+            .iter()
+            .filter(|candidate| {
+                candidate
+                    .readout_mode_name
+                    .as_deref()
+                    .is_none_or(|other| readout_names_equal(other, name))
+            })
+            .cloned()
+            .collect();
+        let subset = master_subset_of_one_mode(kind, &group);
+        if subset.kept.len() >= MIN_MASTER_FRAMES {
+            return subset;
+        }
+    }
+    master_subset_of_one_mode(kind, frames)
+}
+
+/// [`master_subset_report`] for frames already known to share a readout
+/// mode (or to name none).
+fn master_subset_of_one_mode(kind: CalibrationKind, frames: &[CalibrationFrame]) -> MasterSubset {
     let signatures: Vec<_> = frames.iter().map(frame_signature).collect();
+    let seiza_signatures: Vec<_> = signatures
+        .iter()
+        .map(|signature| signature.seiza.clone())
+        .collect();
     let role = if kind == CalibrationKind::Flat {
         seiza_calibration::FrameRole::Flat
     } else {
         seiza_calibration::FrameRole::Other
     };
     let clustered = seiza_calibration::coherent_subset_indices(
-        &signatures,
+        &seiza_signatures,
         role,
         MIN_MASTER_FRAMES,
         &tolerances(),
@@ -3204,18 +3402,14 @@ fn master_subset_report(kind: CalibrationKind, frames: &[CalibrationFrame]) -> M
 /// Whether the master builder would accept `candidate` into a set anchored on
 /// `reference`. This asks Seiza the same questions `seiza-stacking` asks while
 /// integrating, so selection and integration cannot disagree about one frame.
-fn integrates_with(
-    kind: CalibrationKind,
-    reference: &seiza_calibration::FrameSignature,
-    candidate: &seiza_calibration::FrameSignature,
-) -> bool {
-    if !seiza_calibration::sensor_consistent(reference, candidate) {
+fn integrates_with(kind: CalibrationKind, reference: &Signature, candidate: &Signature) -> bool {
+    if !signature_sensor_consistent(reference, candidate) {
         return false;
     }
     // Only a flat records an optical path; a bias or a dark does not care
     // which filter was in the way.
     kind != CalibrationKind::Flat
-        || seiza_calibration::optics_consistent(reference, candidate, &tolerances())
+        || seiza_calibration::optics_consistent(&reference.seiza, &candidate.seiza, &tolerances())
 }
 
 fn sort_candidates(frames: &mut [CalibrationFrame], reference_at: Option<i64>) {
@@ -3237,7 +3431,7 @@ fn query_kind(conn: &Connection, kind: CalibrationKind) -> Result<Vec<Calibratio
                captured_at, telescope, camera, width, height, channels,
                binning_x, binning_y, gain, offset, readout_mode, bayer_pattern,
                exposure_s, camera_temp, filter_name, focal_length_mm, rotation,
-               valid_direction
+               valid_direction, readout_mode_name
         FROM psf_guard_calibration_frame WHERE kind = ?1
         ORDER BY captured_at DESC, id DESC
         "#,
@@ -3281,6 +3475,7 @@ fn row_to_frame(row: &rusqlite::Row<'_>) -> rusqlite::Result<CalibrationFrame> {
         focal_length_mm: row.get(21)?,
         rotation: row.get(22)?,
         valid_direction: ValidDirection::from_db(row.get(23)?),
+        readout_mode_name: row.get(24)?,
         source_verified: false,
     })
 }
@@ -3477,8 +3672,7 @@ fn calibration_file_matches(frame: &CalibrationFrame, path: &Path) -> bool {
     }
     // The catalog row is the reference and the file on disk the candidate:
     // a file that does not record a setting cannot prove it is this frame.
-    let hard_matches =
-        seiza_calibration::sensor_matches(&frame_signature(frame), &light_signature(&meta));
+    let hard_matches = signature_sensor_matches(&frame_signature(frame), &light_signature(&meta));
     if !hard_matches {
         return false;
     }
@@ -3493,8 +3687,8 @@ fn calibration_file_matches(frame: &CalibrationFrame, path: &Path) -> bool {
         // flat shot at a different angle is not the frame this row describes,
         // and an angle neither side recorded still matches.
         CalibrationKind::Flat => seiza_calibration::optics_match(
-            &frame_signature(frame),
-            &light_signature(&meta),
+            &frame_signature(frame).seiza,
+            &light_signature(&meta).seiza,
             &tolerances(),
         ),
     }
@@ -3648,7 +3842,8 @@ mod tests {
         let conn = version_one_catalog();
         conn.execute_batch(
             "ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;
-             ALTER TABLE psf_guard_calibration_frame ADD COLUMN valid_direction TEXT;",
+             ALTER TABLE psf_guard_calibration_frame ADD COLUMN valid_direction TEXT;
+             ALTER TABLE psf_guard_calibration_frame ADD COLUMN readout_mode_name TEXT;",
         )
         .unwrap();
         assert!(
@@ -3743,7 +3938,8 @@ mod tests {
         let conn = version_one_catalog();
         conn.execute_batch(
             "ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;
-             ALTER TABLE psf_guard_calibration_frame ADD COLUMN valid_direction TEXT;",
+             ALTER TABLE psf_guard_calibration_frame ADD COLUMN valid_direction TEXT;
+             ALTER TABLE psf_guard_calibration_frame ADD COLUMN readout_mode_name TEXT;",
         )
         .unwrap();
         assert!(
@@ -3783,7 +3979,8 @@ mod tests {
         // columns are there; it simply also knows steps this build does not.
         conn.execute_batch(
             "ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;
-             ALTER TABLE psf_guard_calibration_frame ADD COLUMN valid_direction TEXT;",
+             ALTER TABLE psf_guard_calibration_frame ADD COLUMN valid_direction TEXT;
+             ALTER TABLE psf_guard_calibration_frame ADD COLUMN readout_mode_name TEXT;",
         )
         .unwrap();
         conn.execute(
@@ -3902,6 +4099,87 @@ mod tests {
         )
         .unwrap();
         assert!(!backfill_flat_rotation(&conn).unwrap());
+    }
+
+    #[test]
+    fn upgrading_recovers_the_readout_mode_name_the_catalog_never_recorded() {
+        // Every frame from a N.I.N.A. rig sat in the catalog with no readout
+        // mode at all, because the header spells it as a name and the
+        // integer column had no room for one. The files knew all along.
+        let temp = tempfile::tempdir().unwrap();
+        let dark = temp.path().join("dark.fits");
+        let mut header = Vec::new();
+        fits_card(&mut header, "SIMPLE  =                    T");
+        fits_card(&mut header, "BITPIX  =                   16");
+        fits_card(&mut header, "NAXIS   =                    2");
+        fits_card(&mut header, "NAXIS1  =                    4");
+        fits_card(&mut header, "NAXIS2  =                    4");
+        fits_card(&mut header, "IMAGETYP= 'DARK'");
+        fits_card(
+            &mut header,
+            "READOUTM= 'Extend Fullwell 2CMS' / Sensor readout mode",
+        );
+        fits_card(&mut header, "END");
+        header.resize(header.len().div_ceil(2880) * 2880, b' ');
+        let mut payload = vec![0_u8; 2880];
+        payload[0] = 1;
+        let mut file = std::fs::File::create(&dark).unwrap();
+        file.write_all(&header).unwrap();
+        file.write_all(&payload).unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        for (uuid, path, readout_mode) in [
+            ("u", dark.to_string_lossy().into_owned(), None),
+            ("gone", "/nowhere/missing.fits".to_string(), None),
+            // A numeric readout mode came from a numeric header: no name to
+            // find, so the rung does not open the file.
+            (
+                "numeric",
+                dark.to_string_lossy().into_owned() + ".copy",
+                Some(3),
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO psf_guard_calibration_frame
+                   (frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
+                    readout_mode, added_at, updated_at)
+                 VALUES (?1, 'r', 'dark', ?2, 'fp', ?3, 0, 0)",
+                rusqlite::params![uuid, path, readout_mode],
+            )
+            .unwrap();
+        }
+        let name_of = |uuid: &str| -> Option<String> {
+            conn.query_row(
+                "SELECT readout_mode_name FROM psf_guard_calibration_frame WHERE frame_uuid = ?1",
+                [uuid],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+
+        // The rung runs only while the catalog still claims a version that
+        // predates it.
+        conn.execute(
+            "UPDATE psf_guard_calibration_schema SET version = 5 WHERE singleton = 1",
+            [],
+        )
+        .unwrap();
+        assert!(
+            backfill_readout_mode_name(&conn).unwrap(),
+            "a name was found"
+        );
+        assert_eq!(name_of("u").as_deref(), Some("Extend Fullwell 2CMS"));
+        assert_eq!(name_of("gone"), None, "a vanished file keeps its NULL");
+        assert_eq!(name_of("numeric"), None, "a numeric mode is not revisited");
+
+        // Once the catalog records version 6 the rung is spent.
+        conn.execute(
+            "UPDATE psf_guard_calibration_schema SET version = 6 WHERE singleton = 1",
+            [],
+        )
+        .unwrap();
+        assert!(!backfill_readout_mode_name(&conn).unwrap());
     }
 
     fn write_test_fits(path: &Path, kind: &str, value: i16) {
@@ -4082,6 +4360,7 @@ mod tests {
             gain: Some(100),
             offset: Some(30),
             readout_mode: None,
+            readout_mode_name: None,
             bayer_pattern: None,
             exposure_s: Some(5.0),
             camera_temp: Some(-9.8),
@@ -4138,6 +4417,7 @@ mod tests {
             gain: Some(100),
             offset: Some(30),
             readout_mode: None,
+            readout_mode_name: None,
             bayer_pattern: None,
             exposure_s: Some(0.0),
             camera_temp: Some(-10.0),
@@ -4175,6 +4455,7 @@ mod tests {
             gain: Some(gain),
             offset: Some(30),
             readout_mode: None,
+            readout_mode_name: None,
             bayer_pattern: None,
             exposure_s: Some(300.0),
             camera_temp: Some(-10.0),
@@ -4219,6 +4500,7 @@ mod tests {
             gain: Some(100),
             offset: Some(20),
             readout_mode: None,
+            readout_mode_name: None,
             bayer_pattern: None,
             exposure_s: Some(3.0),
             camera_temp: Some(-10.0),
@@ -4261,6 +4543,7 @@ mod tests {
             gain: Some(100),
             offset: Some(20),
             readout_mode: None,
+            readout_mode_name: None,
             bayer_pattern: None,
             exposure_s: Some(300.0),
             camera_temp: Some(0.0),
@@ -4275,6 +4558,144 @@ mod tests {
             light.camera_temp,
             candidate.camera_temp
         ));
+    }
+
+    #[test]
+    fn a_named_readout_mode_separates_the_modes_of_one_camera() {
+        // N.I.N.A. writes READOUTM as a name, so the integer is unknown on
+        // both sides and Seiza alone calls every mode of the camera the same.
+        // The name round-trips through import and decides the match.
+        let temp = tempfile::tempdir().unwrap();
+        let mut darks = Vec::new();
+        for (file, name) in [
+            ("extend.fits", Some("Extend Fullwell 2CMS")),
+            ("highgain.fits", Some("High Gain Mode")),
+            ("unnamed.fits", None),
+        ] {
+            let path = temp.path().join(file);
+            std::fs::write(&path, b"dark").unwrap();
+            let mut dark = frame(path.to_str().unwrap(), "DARK");
+            dark.readout_mode_name = name.map(str::to_string);
+            darks.push(dark);
+        }
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &darks, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        let names = |light: &FrameMeta| {
+            let mut names: Vec<Option<String>> = select_for_light(&conn, light)
+                .unwrap()
+                .dark
+                .into_iter()
+                .map(|dark| dark.readout_mode_name)
+                .collect();
+            names.sort();
+            names
+        };
+
+        // A light that names its mode refuses a dark naming another. A dark
+        // that recorded no name is tolerated: the name is a label the capture
+        // software chose, and a library from SharpCap or an older N.I.N.A.
+        // would otherwise lose every frame the day the lights started naming
+        // one.
+        let mut light = frame("/light.fits", "LIGHT");
+        light.readout_mode_name = Some("extend fullwell 2cms".into());
+        assert_eq!(
+            names(&light),
+            vec![None, Some("Extend Fullwell 2CMS".into())]
+        );
+
+        // A light that names no mode cannot rule any dark out.
+        light.readout_mode_name = None;
+        assert_eq!(names(&light).len(), 3);
+
+        // The listing shows the name so the operator can see why.
+        let details = library_details(&conn).unwrap();
+        assert!(details
+            .frames
+            .iter()
+            .any(|frame| frame.readout_mode_name.as_deref() == Some("High Gain Mode")));
+    }
+
+    #[test]
+    fn a_master_never_mixes_readout_mode_names() {
+        let dark = |id: i64, name: Option<&str>| CalibrationFrame {
+            id,
+            frame_uuid: format!("d{id}"),
+            rig_uuid: "r".into(),
+            kind: CalibrationKind::Dark,
+            source_path: format!("/dark-{id}.fits").into(),
+            source_fingerprint: "x".into(),
+            captured_at: Some(1_000_000_000 + id),
+            telescope: None,
+            camera: Some("Camera".into()),
+            width: Some(3000),
+            height: Some(2000),
+            channels: Some(1),
+            binning_x: Some(1),
+            binning_y: Some(1),
+            gain: Some(100),
+            offset: Some(20),
+            readout_mode: None,
+            readout_mode_name: name.map(str::to_string),
+            bayer_pattern: None,
+            exposure_s: Some(300.0),
+            camera_temp: Some(-10.0),
+            filter: None,
+            focal_length_mm: None,
+            rotation: None,
+            valid_direction: None,
+            source_verified: false,
+        };
+        // Five darks in one mode and two strays in another: the two strays
+        // are set aside rather than averaged into a master whose read noise
+        // and bias level describe neither mode.
+        let frames: Vec<CalibrationFrame> = (0..5)
+            .map(|id| dark(id, Some("Extend Fullwell 2CMS")))
+            .chain((5..7).map(|id| dark(id, Some("High Gain Mode"))))
+            .collect();
+        let subset = coherent_master_subset(CalibrationKind::Dark, &frames);
+        assert_eq!(subset.len(), 5);
+        assert!(subset
+            .iter()
+            .all(|frame| frame.readout_mode_name.as_deref() == Some("Extend Fullwell 2CMS")));
+
+        // A frame that never named its mode is tolerated in either set: two
+        // calibration frames are only apart when both say something different.
+        let frames: Vec<CalibrationFrame> = (0..4)
+            .map(|id| dark(id, Some("Extend Fullwell 2CMS")))
+            .chain(std::iter::once(dark(4, None)))
+            .collect();
+        assert_eq!(
+            coherent_master_subset(CalibrationKind::Dark, &frames).len(),
+            5
+        );
+
+        // Nearest-first, like Seiza's session rule: two High Gain darks from
+        // last night outrank twenty Extend Fullwell darks from last month
+        // when the light names no mode — and the twenty are another mode,
+        // not frames "the integrator would not accept", so none is reported
+        // as set aside.
+        let frames: Vec<CalibrationFrame> = (0..2)
+            .map(|id| dark(id, Some("High Gain Mode")))
+            .chain((2..22).map(|id| dark(id, Some("Extend Fullwell 2CMS"))))
+            .collect();
+        let report = master_subset_report(CalibrationKind::Dark, &frames);
+        assert_eq!(report.kept.len(), 2);
+        assert!(report.dropped.is_empty());
+
+        // A lone nearest stray does not make a master; the next mode does.
+        let frames: Vec<CalibrationFrame> = std::iter::once(dark(0, Some("High Gain Mode")))
+            .chain((1..6).map(|id| dark(id, Some("Extend Fullwell 2CMS"))))
+            .collect();
+        let report = master_subset_report(CalibrationKind::Dark, &frames);
+        assert_eq!(report.kept.len(), 5);
+        assert!(report
+            .kept
+            .iter()
+            .all(|frame| frame.readout_mode_name.as_deref() == Some("Extend Fullwell 2CMS")));
     }
 
     #[test]
@@ -4560,6 +4981,7 @@ mod tests {
             gain: Some(100),
             offset: Some(20),
             readout_mode: None,
+            readout_mode_name: None,
             bayer_pattern: None,
             exposure_s: Some(3.0),
             camera_temp: temp,

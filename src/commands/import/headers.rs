@@ -37,6 +37,11 @@ pub struct FrameMeta {
     pub binning_x: Option<i64>,
     pub binning_y: Option<i64>,
     pub readout_mode: Option<i64>,
+    /// The readout mode as a name ("High Gain Mode", "Extend Fullwell 2CMS")
+    /// when the header spelled it that way. N.I.N.A. writes READOUTM as the
+    /// mode's display name, so on those rigs `readout_mode` is never known
+    /// and this is the only thing that tells two modes of one camera apart.
+    pub readout_mode_name: Option<String>,
     pub width: Option<i64>,
     pub height: Option<i64>,
     pub channels: Option<i64>,
@@ -154,8 +159,11 @@ pub fn read_frame_meta_named(path: &Path, declared: &Path) -> FrameMeta {
     meta.binning_x = i64_of(&["XBINNING"]).filter(|v| *v > 0);
     meta.binning_y = i64_of(&["YBINNING"]).filter(|v| *v > 0);
     // N.I.N.A. writes READOUTM as the mode's display *name*; only a numeric
-    // value can round-trip into TS's integer column.
-    meta.readout_mode = i64_of(&["READOUTM", "READOUT", "READMODE"]);
+    // value can round-trip into TS's integer column. The name is kept
+    // alongside so calibration matching can still tell modes apart.
+    let readout_keys = ["READOUTM", "READOUT", "READMODE"];
+    meta.readout_mode = i64_of(&readout_keys);
+    meta.readout_mode_name = text(&readout_keys).filter(|name| name.parse::<f64>().is_err());
     meta.width = i64_of(&["NAXIS1"]).filter(|v| *v > 0);
     meta.height = i64_of(&["NAXIS2"]).filter(|v| *v > 0);
     meta.channels = i64_of(&["NAXIS3"]).filter(|v| *v > 0).or(Some(1));
@@ -213,6 +221,65 @@ mod tests {
             meta.image_type = Some(cal.into());
             assert!(!meta.is_light(), "{cal} must not import");
         }
+    }
+
+    /// A minimal 4×4 FITS file with the given header cards after the axes.
+    fn write_fits(path: &Path, cards: &[&str]) {
+        let mut header = Vec::new();
+        for card in [
+            "SIMPLE  =                    T",
+            "BITPIX  =                   16",
+            "NAXIS   =                    2",
+            "NAXIS1  =                    4",
+            "NAXIS2  =                    4",
+        ]
+        .iter()
+        .chain(cards)
+        .chain(["END"].iter())
+        {
+            let mut bytes = card.as_bytes().to_vec();
+            bytes.resize(80, b' ');
+            header.extend(bytes);
+        }
+        header.resize(header.len().div_ceil(2880) * 2880, b' ');
+        let mut contents = header;
+        contents.extend(vec![0_u8; 2880]);
+        std::fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn a_named_readout_mode_is_kept_as_a_name() {
+        // N.I.N.A. writes the mode's display name. The integer stays unknown
+        // (nothing to put in the Target Scheduler column) but the name
+        // survives so calibration matching can still separate modes.
+        let temp = tempfile::tempdir().unwrap();
+        let named = temp.path().join("named.fits");
+        write_fits(
+            &named,
+            &["READOUTM= 'Extend Fullwell 2CMS' / Sensor readout mode"],
+        );
+        let meta = read_frame_meta(&named);
+        assert_eq!(meta.readout_mode, None);
+        assert_eq!(
+            meta.readout_mode_name.as_deref(),
+            Some("Extend Fullwell 2CMS")
+        );
+
+        // A numeric mode is an integer and nothing else: a number is not a
+        // name, and recording it as one would make "3" fail to match 3.
+        let numeric = temp.path().join("numeric.fits");
+        write_fits(&numeric, &["READOUTM=                    3"]);
+        let meta = read_frame_meta(&numeric);
+        assert_eq!(meta.readout_mode, Some(3));
+        assert_eq!(meta.readout_mode_name, None);
+
+        let quoted = temp.path().join("quoted.fits");
+        write_fits(&quoted, &["READOUTM= '3'"]);
+        let meta = read_frame_meta(&quoted);
+        assert_eq!(
+            meta.readout_mode_name, None,
+            "a quoted number is still no name"
+        );
     }
 
     #[test]

@@ -995,6 +995,11 @@ pub struct SequenceAnalysisQuery {
     pub penalty_satellite: Option<f64>,
     pub penalty_pointing: Option<f64>,
     pub penalty_temporal: Option<f64>,
+    /// Absolute reject limits: recommend rejection when measured HFR
+    /// exceeds this value or the star count falls below it. Absent (the
+    /// default) or non-positive disables the check.
+    pub hfr_reject_above: Option<f64>,
+    pub star_count_reject_below: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1023,42 +1028,53 @@ pub struct SpatialScanRequest {
     pub fill_metadata: Option<bool>,
 }
 
-/// Penalty-scale overrides for endpoints that score without the full
-/// sequence query (the per-image quality context). Same semantics as the
-/// `penalty_*` fields on [`SequenceAnalysisQuery`], which converts into
-/// this via [`SequenceAnalysisQuery::penalty_scales`] so both endpoints
-/// apply overrides through one method.
-#[derive(Debug, Deserialize, Default)]
-pub struct PenaltyScaleQuery {
+/// Scoring overrides (penalty scales and absolute reject limits) for
+/// endpoints that score without the full sequence query (the per-image
+/// quality context). Same semantics as the matching fields on
+/// [`SequenceAnalysisQuery`], which converts into this via
+/// [`SequenceAnalysisQuery::scoring_overrides`] so both endpoints apply
+/// overrides through one method.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ScoringOverrideQuery {
     pub penalty_satellite: Option<f64>,
     pub penalty_pointing: Option<f64>,
     pub penalty_temporal: Option<f64>,
+    pub hfr_reject_above: Option<f64>,
+    pub star_count_reject_below: Option<f64>,
 }
 
-impl PenaltyScaleQuery {
-    /// Apply the supplied overrides onto a config's scales; absent fields
-    /// keep the calibrated defaults.
-    pub fn apply_to(&self, scales: &mut crate::sequence_analysis::PenaltyScales) {
+impl ScoringOverrideQuery {
+    /// Apply the supplied overrides onto a config; absent fields keep the
+    /// calibrated defaults.
+    pub fn apply_to(&self, config: &mut crate::sequence_analysis::SequenceAnalyzerConfig) {
         if let Some(scale) = self.penalty_satellite {
-            scales.satellite = scale;
+            config.penalty_scales.satellite = scale;
         }
         if let Some(scale) = self.penalty_pointing {
-            scales.pointing = scale;
+            config.penalty_scales.pointing = scale;
         }
         if let Some(scale) = self.penalty_temporal {
-            scales.temporal = scale;
+            config.penalty_scales.temporal = scale;
+        }
+        if self.hfr_reject_above.is_some() {
+            config.hfr_reject_above = self.hfr_reject_above;
+        }
+        if self.star_count_reject_below.is_some() {
+            config.star_count_reject_below = self.star_count_reject_below;
         }
     }
 }
 
 impl SequenceAnalysisQuery {
-    /// The query's penalty overrides as the shared application type, so a
+    /// The query's scoring overrides as the shared application type, so a
     /// field added to one struct without the other fails to compile here.
-    pub fn penalty_scales(&self) -> PenaltyScaleQuery {
-        PenaltyScaleQuery {
+    pub fn scoring_overrides(&self) -> ScoringOverrideQuery {
+        ScoringOverrideQuery {
             penalty_satellite: self.penalty_satellite,
             penalty_pointing: self.penalty_pointing,
             penalty_temporal: self.penalty_temporal,
+            hfr_reject_above: self.hfr_reject_above,
+            star_count_reject_below: self.star_count_reject_below,
         }
     }
 }

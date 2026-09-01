@@ -58,14 +58,15 @@ Seiza's checkpoint round trip is bit-for-bit and validates the format version,
 dimensions, configuration, and payload checksum before continuing. The
 checkpoint is only reused when it is provably an ancestor of the request:
 every recorded frame must still be requested with an identical source
-fingerprint, and the calibration set, Accepted-only policy, and stacking
-pipeline version must match. Removing a frame, regrading one in place,
-changing calibration, or upgrading Seiza rebuilds from scratch — and when a
-checkpoint existed but could not be extended, the card says why (`Full
-restack: calibration changed`), so a slow rebuild is never a mystery. A
-stopped build checkpoints the frames it finished, so building again continues
-where the stop landed instead of starting over. Checkpoints live in the
-project cache and cost one full-frame state file per target/channel.
+fingerprint, and the calibration set, Accepted-only policy, scoring policy,
+stacking order, and pipeline version must match. Removing a frame, regrading
+one in place, changing calibration or scoring, or upgrading Seiza rebuilds
+from scratch — and when a checkpoint existed but could not be extended, the
+card says why (`Full restack: the scoring policy changed`), so a slow rebuild
+is never a mystery. A stopped build checkpoints the frames it finished, so
+building again continues where the stop landed instead of starting over.
+Checkpoints live in the project cache and cost one full-frame state file per
+target/channel.
 
 ### Cache housekeeping
 
@@ -399,6 +400,13 @@ Before handing frames to Seiza, PSF Guard excludes:
 3. images for which the current sequence analysis has a `regrade_reason`,
    including confirmed cloud/obstruction, off-target, tracking-loss, and
    corroborated no-solve decisions.
+
+That analysis runs with the caller's scoring preferences (penalty scales and
+reject limits), so stack exclusion agrees with every other scoring surface:
+a satellite penalty of 0% keeps trailed frames in the stack, and a frame
+over Max HFR stays out. Each artifact records those preferences;
+changing them marks the existing preview out of date and gives the rebuild a
+separate cache identity.
 
 The highest-scoring remaining frame becomes the immutable reference. The other
 eligible frames are offered to Seiza in acquisition order. Seiza decodes the

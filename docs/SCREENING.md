@@ -88,15 +88,30 @@ evidence of clouds, trailing, or an obstructed aperture, not a normalization
 artifact. A frame with no star measurement at all is never capped; grading
 does not punish an image because an optional scan has not run.
 
-How hard event evidence hits the score is adjustable. The **Penalties**
+How hard event evidence hits the score is adjustable. The **Scoring**
 control in the Sequence view scales the score hit from satellite trails,
 pointing failures, and temporal anomalies between 0% (ignore that evidence),
-100% (the calibrated default), and 200% (double the hit). The preference is
-remembered and applies to every scoring surface — Sequence view, grid
-badges, and the detail panel — so one frame cannot wear two different
-scores. The zero-star cap does not scale: a frame measured to have no stars
-is ruined whatever the preference. API callers pass `penalty_satellite`,
-`penalty_pointing`, or `penalty_temporal` on the analysis endpoints.
+100% (the calibrated default), and 200% (double the hit). Setting the
+satellite penalty to 0% turns satellite-trail checking off: trails neither
+lower the score nor drive reject recommendations, though a pixel-confirmed
+trail still shows as a warning — useful when trails are removed during
+stacking anyway. The CLI equivalent is `screen-fits --ignore-satellites`.
+
+The same control sets optional **reject limits**, fixed cut-offs like
+N.I.N.A. subframe selection: **Max HFR** rejects any frame whose measured
+HFR is over it, and **Min stars** rejects any frame with fewer detected
+stars. Both are off by default. Limits judge each frame on its own, whatever
+the rest of the sequence looks like: a frame past a limit is capped at a
+condemned score and gets an `[Auto]` reject recommendation. A frame missing
+the measurement is exempt. The CLI equivalents are `screen-fits --max-hfr`
+and `--min-stars`.
+
+The preference is remembered and applies to every scoring surface —
+Sequence view, grid badges, and the detail panel — so a frame scores the
+same everywhere. The zero-star cap does not scale: a frame measured to
+have no stars is ruined whatever the preference. API callers pass
+`penalty_satellite`, `penalty_pointing`, `penalty_temporal`,
+`hfr_reject_above`, or `star_count_reject_below` on the analysis endpoints.
 
 Capture sessions split at a Target Scheduler session change, a capture-profile
 change, or a 60-minute gap. CLI screening still reports **OK**, **WARN**, and
@@ -242,6 +257,9 @@ Defaults were calibrated against measured clean-frame envelopes (42+ frames,
 | `--min-score` | 0.35 | Composite score below which a frame is rejected |
 | `--dead-cell-rise` | 0.08 | Occlusion onset sensitivity; clean-frame jitter is ≤0.04, so 0.08 is a 2× margin |
 | `--session-gap` | 60 min | Splits sequences into sessions |
+| `--max-hfr` | off | Reject any frame whose HFR (pixels) is over this, like N.I.N.A. subframe selection |
+| `--min-stars` | off | Reject any frame with fewer detected stars than this |
+| `--ignore-satellites` | off | Ignore satellite-trail evidence in scoring and rejection; trails still show as warnings |
 | glow threshold | 2.5% of sky **and** >30 ADU | The ADU floor rejects weak structure. Fresh solved catalog geometry handles bright, large emission regions that exceed the floor. True haze measured 48–103 ADU. Rig-specific — tune `glow_min_adu` for your camera/exposures |
 | transparency threshold | 0.80 | Global veil rejection level |
 

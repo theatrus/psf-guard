@@ -136,6 +136,13 @@ The Sequence view still requires the normal per-image review and explicit
 confirmation before writing a rejection. Existing rejected grades are not
 overwritten.
 
+Satellite-trail checking can be turned off for grading: set the satellite
+penalty to 0% in the Sequence view's **Scoring** control, or pass
+`--ignore-satellites` to `screen-fits`. Trails then neither lower the score
+nor drive reject recommendations — useful when trails are removed during
+stacking — but a pixel-confirmed trail still shows as a warning and in the
+overlay.
+
 ## Real California Nebula exposures
 
 The screenshots and thresholds were validated on two unmodified 60-second

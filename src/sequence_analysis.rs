@@ -28,6 +28,10 @@ pub enum IssueCategory {
     /// (clouds, trailing, an obstructed aperture), so the score is capped
     /// even when the frame has no sequence peers to compare against.
     NoStarsDetected,
+    /// Measured HFR exceeded the operator's absolute reject limit.
+    HfrAboveLimit,
+    /// Measured star count fell below the operator's absolute reject limit.
+    StarCountBelowLimit,
     UnknownDegradation,
 }
 
@@ -698,11 +702,25 @@ impl Default for PenaltyScales {
 }
 
 impl PenaltyScales {
+    /// Every scale clamped to 0–2, a non-finite one replaced by the
+    /// calibrated 1 — the same rule the score arithmetic applies per use.
+    pub fn normalized(self) -> Self {
+        Self {
+            satellite: Self::sanitize(self.satellite),
+            pointing: Self::sanitize(self.pointing),
+            temporal: Self::sanitize(self.temporal),
+        }
+    }
+
     fn sanitize(scale: f64) -> f64 {
-        if scale.is_finite() {
-            scale.clamp(0.0, 2.0)
-        } else {
+        if !scale.is_finite() {
             1.0
+        } else if scale <= 0.0 {
+            // Not `clamp`: -0.0 would pass through, and its bytes differ
+            // from +0.0 in every cache key built from the scale.
+            0.0
+        } else {
+            scale.min(2.0)
         }
     }
 
@@ -919,6 +937,19 @@ pub struct SequenceAnalyzerConfig {
     /// the absolute spatial-coverage term.
     #[serde(default = "default_baseline_freeze_max_frames")]
     pub baseline_freeze_max_frames: usize,
+    /// Absolute HFR ceiling, in the same units the frames report (pixels).
+    /// A frame whose measured HFR exceeds this is recommended for rejection
+    /// regardless of sequence context, like N.I.N.A. subframe selection.
+    /// `None` (the default) disables the check. A frame without an HFR
+    /// measurement is exempt: grading must not punish an image because an
+    /// optional scan has not run.
+    #[serde(default)]
+    pub hfr_reject_above: Option<f64>,
+    /// Absolute star-count floor. A frame with fewer measured stars than
+    /// this is recommended for rejection regardless of sequence context.
+    /// `None` (the default) disables the check; unmeasured frames are exempt.
+    #[serde(default)]
+    pub star_count_reject_below: Option<f64>,
 }
 
 fn default_dead_cell_rise_threshold() -> f64 {
@@ -984,6 +1015,8 @@ impl Default for SequenceAnalyzerConfig {
             star_drop_cells_threshold: default_star_drop_cells_threshold(),
             bg_rise_cells_threshold: default_bg_rise_cells_threshold(),
             bg_glow_threshold: default_bg_glow_threshold(),
+            hfr_reject_above: None,
+            star_count_reject_below: None,
         }
     }
 }
@@ -993,10 +1026,34 @@ pub struct SequenceAnalyzer {
     config: SequenceAnalyzerConfig,
 }
 
+impl SequenceAnalyzerConfig {
+    /// The configuration as the analyzer will actually use it.
+    ///
+    /// Every caller-supplied knob is brought into range here, once, so the
+    /// score arithmetic and the "is this evidence ignored?" gates read the
+    /// same value: a penalty scale is clamped to 0–2 (a non-finite one is the
+    /// calibrated 1), and a non-positive or non-finite reject limit means
+    /// "off", matching the UI's 0-clears-it convention. Without the clamp a
+    /// negative satellite scale gave no score hit yet still produced reject
+    /// reasons, because the gate compared the raw field against 0.
+    pub fn normalized(mut self) -> Self {
+        self.quality_weights = self.quality_weights.normalized();
+        self.penalty_scales = self.penalty_scales.normalized();
+        self.hfr_reject_above = self
+            .hfr_reject_above
+            .filter(|limit| limit.is_finite() && *limit > 0.0);
+        self.star_count_reject_below = self
+            .star_count_reject_below
+            .filter(|limit| limit.is_finite() && *limit > 0.0);
+        self
+    }
+}
+
 impl SequenceAnalyzer {
-    pub fn new(mut config: SequenceAnalyzerConfig) -> Self {
-        config.quality_weights = config.quality_weights.normalized();
-        Self { config }
+    pub fn new(config: SequenceAnalyzerConfig) -> Self {
+        Self {
+            config: config.normalized(),
+        }
     }
 
     /// Analyze a set of images, grouping them into sequences and scoring each.
@@ -1121,16 +1178,15 @@ impl SequenceAnalyzer {
         }
         // The session-evidence overwrite above recomputes quality_score from
         // the rollup's normalized metrics, which would silently undo the
-        // zero-star cap (category, flags, and details survive via the copied
-        // session evidence). Re-clamp by measurement.
-        let zero_star_images: std::collections::HashSet<i32> = images
-            .iter()
-            .filter(|image| image.star_count == Some(0.0))
-            .map(|image| image.image_id)
-            .collect();
+        // absolute caps (zero stars, operator reject limits). Their flags
+        // survive — copied session evidence for scored frames, the rollup's
+        // own scoring pass otherwise — so re-clamp from the flags rather
+        // than keeping a second per-cap re-derivation in sync here.
         for result in &mut rollup_images {
-            if zero_star_images.contains(&result.image_id) {
-                result.quality_score = result.quality_score.min(ZERO_STAR_SCORE_CAP);
+            for flag in &result.flags {
+                if let Some(cap) = absolute_cap_for(flag) {
+                    result.quality_score = result.quality_score.min(cap);
+                }
             }
         }
 
@@ -1308,6 +1364,7 @@ impl SequenceAnalyzer {
             self.merge_pointing_issues(&mut results);
             self.merge_satellite_issues(&mut results, &images);
             apply_zero_star_cap(&mut results, &images);
+            self.apply_absolute_metric_limits(&mut results, &images);
             let summary = self.build_summary(&results);
 
             return ScoredSequence {
@@ -1458,6 +1515,7 @@ impl SequenceAnalyzer {
         }
 
         apply_zero_star_cap(&mut results, &images);
+        self.apply_absolute_metric_limits(&mut results, &images);
 
         // Build reference values
         let reference_values = ReferenceValues {
@@ -1540,10 +1598,7 @@ impl SequenceAnalyzer {
                 satellite.maximum_bright_trail_risk,
                 pixel_evidence,
             );
-            result.details = Some(match result.details.take() {
-                Some(existing) => format!("{detail} {existing}"),
-                None => detail,
-            });
+            prepend_detail(&mut result.details, &detail);
 
             result.quality_score = apply_satellite_score(
                 result.quality_score,
@@ -1567,12 +1622,76 @@ impl SequenceAnalyzer {
                     satellite.pixel_aligned_high_risk_count,
                     satellite.maximum_bright_trail_risk,
                 );
-                result.regrade_reason = Some(match result.regrade_reason.take() {
-                    Some(existing) => format!("{existing}; {reason}"),
-                    None => reason,
-                });
+                append_regrade_reason(&mut result.regrade_reason, reason);
             }
         }
+    }
+
+    /// Enforce the operator's absolute reject limits (HFR ceiling and
+    /// star-count floor). Unlike the sequence-relative metrics these are
+    /// explicit operator thresholds, so a violation both caps the score
+    /// and proposes an `[Auto]` rejection. A frame without the measurement
+    /// is exempt: grading must not punish an image because an optional
+    /// scan has not run.
+    fn apply_absolute_metric_limits(
+        &self,
+        results: &mut [ImageQualityResult],
+        images: &[ImageMetrics],
+    ) {
+        if self.config.hfr_reject_above.is_none() && self.config.star_count_reject_below.is_none() {
+            return;
+        }
+        for (result, image) in results.iter_mut().zip(images) {
+            for (category, detail, reason) in self.absolute_limit_violations(image) {
+                result.quality_score = result.quality_score.min(ABSOLUTE_LIMIT_SCORE_CAP);
+                if !result.flags.contains(&category) {
+                    result.flags.push(category.clone());
+                }
+                result.category.get_or_insert(category);
+                prepend_detail(&mut result.details, &detail);
+                append_regrade_reason(&mut result.regrade_reason, reason);
+            }
+        }
+    }
+
+    /// The operator limits this frame's measurements violate, as
+    /// (category, details text, `[Auto]` reason). Empty when no limit is
+    /// configured or the measurement is missing.
+    fn absolute_limit_violations(
+        &self,
+        image: &ImageMetrics,
+    ) -> Vec<(IssueCategory, String, String)> {
+        let mut violations = Vec::new();
+        if let (Some(limit), Some(hfr)) = (self.config.hfr_reject_above, image.hfr)
+            && hfr > limit
+        {
+            // Use the shortest round-trippable representation for both
+            // operands so the displayed comparison preserves the one made
+            // above, even when the values differ beyond a fixed precision.
+            violations.push((
+                IssueCategory::HfrAboveLimit,
+                format!(
+                    "HFR {hfr} px is over the Max HFR limit of {limit}. \
+                     Limits judge each frame on its own, whatever the rest of \
+                     the sequence looks like."
+                ),
+                format!("[Auto] Max HFR - {hfr} px over limit {limit}"),
+            ));
+        }
+        if let (Some(limit), Some(stars)) = (self.config.star_count_reject_below, image.star_count)
+            && stars < limit
+        {
+            violations.push((
+                IssueCategory::StarCountBelowLimit,
+                format!(
+                    "{stars:.0} stars is under the Min stars limit of {limit}. \
+                     Limits judge each frame on its own, whatever the rest of \
+                     the sequence looks like."
+                ),
+                format!("[Auto] Min stars - {stars:.0} under limit {limit}"),
+            ));
+        }
+        violations
     }
 
     /// Compute EWMA-based temporal deviation scores for the sequence.
@@ -2153,10 +2272,7 @@ impl SequenceAnalyzer {
                 reason
             };
             if let Some(astrometry_detail) = astrometry_detail {
-                result.details = Some(match result.details.take() {
-                    Some(existing) => format!("{astrometry_detail} {existing}"),
-                    None => astrometry_detail,
-                });
+                prepend_detail(&mut result.details, &astrometry_detail);
             }
         }
     }
@@ -2777,6 +2893,37 @@ impl RelativeMetricTolerance {
 /// and pointing evidence can still rank multiple ruined frames.
 const ZERO_STAR_SCORE_CAP: f64 = 0.05;
 
+/// Prepend new evidence text to a result's details, keeping existing text.
+/// One helper so every cap and merge presents its evidence the same way.
+fn prepend_detail(details: &mut Option<String>, text: &str) {
+    *details = Some(match details.take() {
+        Some(existing) => format!("{text} {existing}"),
+        None => text.to_string(),
+    });
+}
+
+/// Append an `[Auto]` reason onto a result's reject recommendation;
+/// multiple reasons join with "; ".
+fn append_regrade_reason(slot: &mut Option<String>, reason: String) {
+    *slot = Some(match slot.take() {
+        Some(existing) => format!("{existing}; {reason}"),
+        None => reason,
+    });
+}
+
+/// The score ceiling a flag carries. The target/filter rollup recomputes
+/// scores from rollup-normalized metrics and uses this to re-apply every
+/// absolute cap from the flags, so a new cap cannot silently escape there.
+fn absolute_cap_for(flag: &IssueCategory) -> Option<f64> {
+    match flag {
+        IssueCategory::NoStarsDetected => Some(ZERO_STAR_SCORE_CAP),
+        IssueCategory::HfrAboveLimit | IssueCategory::StarCountBelowLimit => {
+            Some(ABSOLUTE_LIMIT_SCORE_CAP)
+        }
+        _ => None,
+    }
+}
+
 /// Cap frames whose star measurement found zero stars. Runs after issue
 /// classification so a more specific cause (a detected cloud event, say)
 /// keeps the category while the score still drops. A MEASURED zero is
@@ -2796,16 +2943,21 @@ fn apply_zero_star_cap(results: &mut [ImageQualityResult], images: &[ImageMetric
         result
             .category
             .get_or_insert(IssueCategory::NoStarsDetected);
-        let text = "No stars detected: this frame was measured and zero stars were found, \
-                    which is direct pixel evidence of a ruined exposure (clouds, trailing, \
-                    or an obstructed aperture). The score is capped regardless of sequence \
-                    context.";
-        result.details = Some(match result.details.take() {
-            Some(existing) => format!("{text} {existing}"),
-            None => text.to_string(),
-        });
+        prepend_detail(
+            &mut result.details,
+            "No stars detected: this frame was measured and zero stars were found, \
+             which is direct pixel evidence of a ruined exposure (clouds, trailing, \
+             or an obstructed aperture). The score is capped regardless of sequence \
+             context.",
+        );
     }
 }
+
+/// Score ceiling for a frame that violated an operator-set absolute limit
+/// (HFR ceiling or star-count floor). Low enough to read as rejected in
+/// every view (below the 0.35 screening default), above the zero-star cap
+/// so a merely soft frame still outranks a ruined one.
+const ABSOLUTE_LIMIT_SCORE_CAP: f64 = 0.25;
 
 const STAR_COUNT_TOLERANCE: RelativeMetricTolerance = RelativeMetricTolerance::new(0.10, 0.40);
 const HFR_TOLERANCE: RelativeMetricTolerance = RelativeMetricTolerance::new(0.05, 0.30);
@@ -3031,7 +3183,11 @@ fn capture_profile_from_metadata(metadata: &serde_json::Value) -> Option<String>
         let y = capture_value_text(&metadata["YBINNING"])?;
         Some(format!("{x}x{y}"))
     });
-    let readout = capture_value_text(&metadata["ReadoutMode"]);
+    // Target Scheduler's `ReadoutMode` is a number. N.I.N.A. spells the mode
+    // as a name, which import keeps under its own key so the two modes of
+    // one camera still fall into separate capture profiles.
+    let readout = capture_value_text(&metadata["ReadoutMode"])
+        .or_else(|| capture_value_text(&metadata["ReadoutModeName"]));
     let roi = capture_value_text(&metadata["ROI"]);
     if exposure.is_none()
         && gain.is_none()
@@ -3433,6 +3589,19 @@ mod tests {
         assert!(ignored
             .flags
             .contains(&IssueCategory::SatelliteTrailDetected));
+
+        // An out-of-range scale is brought into range once, up front, so the
+        // score arithmetic and the ignore gate agree. A raw -1 used to leave
+        // the score untouched while still writing the reject reason.
+        let negative = &analyzer_for(-1.0).analyze(&images, 1, "t", "L")[0].images[3];
+        assert!(
+            negative.regrade_reason.is_none(),
+            "a negative scale is scale 0 everywhere, gate included"
+        );
+        assert!(negative.quality_score > 0.9);
+        let overshoot = analyzer_for(f64::NAN);
+        assert_eq!(overshoot.config.penalty_scales.satellite, 1.0);
+        assert_eq!(analyzer_for(7.0).config.penalty_scales.satellite, 2.0);
     }
 
     #[test]
@@ -3519,6 +3688,208 @@ mod tests {
                 assert!(!result.flags.contains(&IssueCategory::NoStarsDetected));
             }
         }
+    }
+
+    #[test]
+    fn hfr_over_limit_is_rejected_and_capped() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            hfr_reject_above: Some(3.5),
+            ..Default::default()
+        });
+        let mut images: Vec<_> = (0..6)
+            .map(|i| make_image(i, i as i64 * 300, 500.0, 2.5))
+            .collect();
+        images[3].hfr = Some(4.2);
+
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        let soft = &sequence.images[3];
+        assert!(
+            soft.quality_score <= ABSOLUTE_LIMIT_SCORE_CAP,
+            "score {} must be capped",
+            soft.quality_score
+        );
+        assert!(soft.flags.contains(&IssueCategory::HfrAboveLimit));
+        // A more specific classification (focus drift, say) may own the
+        // category; the limit only fills it when nothing else did.
+        assert!(soft.category.is_some());
+        assert!(soft
+            .regrade_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("[Auto] Max HFR")));
+        for (index, result) in sequence.images.iter().enumerate() {
+            if index != 3 {
+                assert!(!result.flags.contains(&IssueCategory::HfrAboveLimit));
+                assert!(result.regrade_reason.is_none(), "frame {index} rejected");
+            }
+        }
+    }
+
+    #[test]
+    fn star_count_under_limit_is_rejected_and_capped() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            star_count_reject_below: Some(50.0),
+            ..Default::default()
+        });
+        let mut images: Vec<_> = (0..6)
+            .map(|i| make_image(i, i as i64 * 300, 500.0, 2.5))
+            .collect();
+        images[2].star_count = Some(20.0);
+
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        let sparse = &sequence.images[2];
+        assert!(sparse.quality_score <= ABSOLUTE_LIMIT_SCORE_CAP);
+        assert!(sparse.flags.contains(&IssueCategory::StarCountBelowLimit));
+        assert!(sparse
+            .regrade_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("[Auto] Min stars")));
+        for (index, result) in sequence.images.iter().enumerate() {
+            if index != 2 {
+                assert!(!result.flags.contains(&IssueCategory::StarCountBelowLimit));
+                assert!(result.regrade_reason.is_none(), "frame {index} rejected");
+            }
+        }
+    }
+
+    #[test]
+    fn absolute_limits_exempt_missing_measurements() {
+        // No measurement is missing evidence, not a violation: the scan may
+        // simply not have run. Grading must not punish that.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            hfr_reject_above: Some(3.5),
+            star_count_reject_below: Some(50.0),
+            ..Default::default()
+        });
+        let mut images: Vec<_> = (0..6)
+            .map(|i| make_image(i, i as i64 * 300, 500.0, 2.5))
+            .collect();
+        images[3].hfr = None;
+        images[3].star_count = None;
+
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        let unmeasured = &sequence.images[3];
+        assert!(!unmeasured.flags.contains(&IssueCategory::HfrAboveLimit));
+        assert!(!unmeasured
+            .flags
+            .contains(&IssueCategory::StarCountBelowLimit));
+        assert!(unmeasured.regrade_reason.is_none());
+    }
+
+    #[test]
+    fn absolute_limits_are_off_by_default() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..6)
+            .map(|i| make_image(i, i as i64 * 300, 500.0, 2.5))
+            .collect();
+        images[3].hfr = Some(9.0);
+        images[3].star_count = Some(5.0);
+
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        let soft = &sequence.images[3];
+        assert!(!soft.flags.contains(&IssueCategory::HfrAboveLimit));
+        assert!(!soft.flags.contains(&IssueCategory::StarCountBelowLimit));
+    }
+
+    #[test]
+    fn non_positive_limits_mean_off() {
+        // The UI clears a limit by writing 0; the analyzer must read that
+        // (and any negative value) as "off", not as "reject everything".
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            hfr_reject_above: Some(0.0),
+            star_count_reject_below: Some(-5.0),
+            ..Default::default()
+        });
+        let images: Vec<_> = (0..6)
+            .map(|i| make_image(i, i as i64 * 300, 500.0, 2.5))
+            .collect();
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        for result in &sequence.images {
+            assert!(result.regrade_reason.is_none());
+            assert!(!result.flags.contains(&IssueCategory::HfrAboveLimit));
+            assert!(!result.flags.contains(&IssueCategory::StarCountBelowLimit));
+        }
+    }
+
+    #[test]
+    fn non_finite_limits_mean_off() {
+        for limit in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+                hfr_reject_above: Some(limit),
+                star_count_reject_below: Some(limit),
+                ..Default::default()
+            });
+            assert!(analyzer.config.hfr_reject_above.is_none());
+            assert!(analyzer.config.star_count_reject_below.is_none());
+        }
+    }
+
+    #[test]
+    fn near_threshold_hfr_reason_preserves_the_comparison() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            hfr_reject_above: Some(2.5504),
+            ..Default::default()
+        });
+        let mut image = make_image(1, 0, 500.0, 2.55041);
+        image.hfr = Some(2.55041);
+
+        let violations = analyzer.absolute_limit_violations(&image);
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0]
+            .1
+            .contains("HFR 2.55041 px is over the Max HFR limit of 2.5504"));
+        assert_eq!(
+            violations[0].2,
+            "[Auto] Max HFR - 2.55041 px over limit 2.5504"
+        );
+    }
+
+    #[test]
+    fn lone_frame_still_trips_absolute_limits() {
+        // Sequences below the minimum length skip relative scoring, but an
+        // operator's absolute limit is meaningful for a single frame.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            hfr_reject_above: Some(3.0),
+            ..Default::default()
+        });
+        let image = make_image(1, 0, 400.0, 5.0);
+
+        let sequence = &analyzer.analyze(&[image], 1, "target", "L")[0];
+        let result = &sequence.images[0];
+        assert!(result.quality_score <= ABSOLUTE_LIMIT_SCORE_CAP);
+        assert!(result.flags.contains(&IssueCategory::HfrAboveLimit));
+        assert!(result
+            .regrade_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("[Auto] Max HFR")));
+    }
+
+    #[test]
+    fn target_filter_rollup_preserves_absolute_limit_cap() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            hfr_reject_above: Some(3.5),
+            ..Default::default()
+        });
+        let mut images: Vec<ImageMetrics> = (0..5)
+            .map(|i| make_image(i, 1000 + i as i64 * 60, 1000.0, 2.5))
+            .collect();
+        images.extend((5..10).map(|i| make_image(i, 10_000 + (i as i64 - 5) * 60, 1000.0, 2.5)));
+        for image in &mut images {
+            image.capture_profile = Some("exposure=300|gain=100|binning=1x1|readout=0".into());
+        }
+        images[7].hfr = Some(4.2);
+
+        let (_, rollup) = analyzer.analyze_with_target_filter_rollup(&images, 1, "M42", "Ha");
+        let rollup = rollup.expect("two comparable sessions should produce a rollup");
+        let capped = &rollup.sequence.images[7];
+        assert!(
+            capped.quality_score <= ABSOLUTE_LIMIT_SCORE_CAP,
+            "rollup rescoring must not undo the limit cap, got {}",
+            capped.quality_score
+        );
+        assert!(capped
+            .regrade_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("[Auto] Max HFR")));
     }
 
     #[test]
@@ -4606,6 +4977,19 @@ mod tests {
         assert!(metrics.eccentricity.is_none());
         assert!(metrics.snr.is_none());
         assert!(metrics.background.is_none());
+
+        // A named readout mode (import's `ReadoutModeName`) stands in when
+        // the numeric one is unknown, so two modes of one camera are two
+        // capture profiles rather than one comparable set.
+        let named = extract_metrics_from_metadata(
+            2,
+            r#"{"ExposureDuration": 60.0, "Gain": 16, "ReadoutModeName": "Extend Fullwell 2CMS"}"#,
+            None,
+        );
+        assert_eq!(
+            named.capture_profile.as_deref(),
+            Some("exposure=60|gain=16|offset=?|binning=?|readout=extend fullwell 2cms|roi=?")
+        );
     }
 
     #[test]

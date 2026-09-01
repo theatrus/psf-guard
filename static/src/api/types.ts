@@ -624,8 +624,18 @@ export interface StackPreviewJob {
   stacking_version: string;
   /** The order every group integrated its frames in. */
   order?: StackFrameOrder;
+  /** Normalized scoring policy used for frame admission. */
+  scoring?: StackScoringSettings;
   groups: StackGroupStatus[];
   error: string | null;
+}
+
+export interface StackScoringSettings {
+  penalty_satellite: number;
+  penalty_pointing: number;
+  penalty_temporal: number;
+  hfr_reject_above: number | null;
+  star_count_reject_below: number | null;
 }
 
 export interface LatestStackPreviewGroup {
@@ -636,6 +646,8 @@ export interface LatestStackPreviewGroup {
   cache_version: number;
   /** The order this artifact integrated its frames in; old artifacts used capture order. */
   order?: StackFrameOrder;
+  /** Scoring policy used by this artifact; old artifacts used calibrated defaults. */
+  scoring?: StackScoringSettings;
   group: StackGroupStatus;
 }
 
@@ -1472,6 +1484,8 @@ export interface CalibrationFrameSummary {
   gain?: number | null;
   offset?: number | null;
   readout_mode?: number | null;
+  /** The readout mode as N.I.N.A. names it, when the header spelled it that way. */
+  readout_mode_name?: string | null;
   bayer_pattern?: string | null;
   exposure_s?: number | null;
   camera_temp?: number | null;
@@ -1849,13 +1863,17 @@ export interface CacheRefreshProgress {
 
 // Sequence analysis types
 
-/** How hard event evidence hits the quality score: a multiplier on the
- * built-in penalty. 0 ignores the evidence, 1 (default) keeps calibrated
- * behavior, up to 2 deepens it. */
+/** Scoring overrides. The penalty scales say how hard event evidence hits
+ * the quality score: a multiplier on the built-in penalty, where 0 ignores
+ * the evidence, 1 (default) keeps calibrated behavior, and 2 deepens it.
+ * The reject limits are absolute operator thresholds: recommend rejection
+ * when measured HFR exceeds the limit or star count falls below it. */
 export interface PenaltyScaleParams {
   penalty_satellite?: number;
   penalty_pointing?: number;
   penalty_temporal?: number;
+  hfr_reject_above?: number;
+  star_count_reject_below?: number;
 }
 
 export interface SequenceAnalysisRequest extends PenaltyScaleParams {

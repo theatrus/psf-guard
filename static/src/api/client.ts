@@ -925,6 +925,11 @@ export const apiClient = {
        * signal-to-noise curve a reading of which frames are worth keeping.
        */
       order?: StackFrameOrder;
+      /**
+       * Scoring overrides (penalty scales, absolute reject limits) so stack
+       * frame exclusion agrees with every other scoring surface.
+       */
+      scoring?: PenaltyScaleParams;
       /** How to calibrate the lights: auto (default), on (forced), or off. */
       calibration?: CalibrationMode;
       /** Per-channel exceptions to `calibration`, by target and filter. */
