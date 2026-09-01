@@ -18,6 +18,7 @@ pub mod quality_backfill;
 pub mod remote_audit;
 pub mod remote_sync;
 pub mod remote_upload;
+pub mod remote_upload_layout;
 pub mod scheduler;
 pub mod slug;
 pub mod spatial_scan;
@@ -1084,6 +1085,14 @@ async fn pregenerate_preview(
             .next()
             .ok_or_else(|| anyhow::anyhow!("Image not found: {}", image_id))?
     };
+    let mapping_revision =
+        handlers::rendered_artifact_mapping_revision(ctx, &image_data).map_err(|error| {
+            anyhow::anyhow!(
+                "Resolving rendered-artifact mapping for image {} failed: {:?}",
+                image_id,
+                error
+            )
+        })?;
 
     // The same key the request path builds. This used to be a second
     // `format!` kept in step by a comment, which is how pre-generation came to
@@ -1099,6 +1108,7 @@ async fn pregenerate_preview(
         // Warm whichever rendition this server serves by default, so the
         // warmed artifact is the one the viewer will ask for.
         state.preview_color_default(),
+        mapping_revision.as_deref(),
     );
 
     let cache_manager = CacheManager::new(std::path::PathBuf::from(&ctx.cache_dir));
@@ -1123,19 +1133,18 @@ async fn pregenerate_preview(
     tracing::debug!("🎨 Pre-generating {} preview for image {}", size, image_id);
 
     // Find FITS file using existing function
-    let fits_path =
-        handlers::find_fits_file(ctx, &image_data, target_name, file_only).map_err(|error| {
-            match error {
-                handlers::AppError::Conflict(message) => anyhow::anyhow!(message),
-                handlers::AppError::NotFound => {
-                    anyhow::anyhow!("FITS file not found for image {}", image_id)
-                }
-                other => anyhow::anyhow!(
-                    "Source resolution failed for image {}: {:?}",
-                    image_id,
-                    other
-                ),
+    let fits_path = handlers::find_fits_file_async(ctx, &image_data, target_name, file_only)
+        .await
+        .map_err(|error| match error {
+            handlers::AppError::Conflict(message) => anyhow::anyhow!(message),
+            handlers::AppError::NotFound => {
+                anyhow::anyhow!("FITS file not found for image {}", image_id)
             }
+            other => anyhow::anyhow!(
+                "Source resolution failed for image {}: {:?}",
+                image_id,
+                other
+            ),
         })?;
 
     // Determine target dimensions
@@ -1193,11 +1202,25 @@ async fn pregenerate_annotated(
             .next()
             .ok_or_else(|| anyhow::anyhow!("Image not found: {}", image_id))?
     };
+    let mapping_revision =
+        handlers::rendered_artifact_mapping_revision(ctx, &image_data).map_err(|error| {
+            anyhow::anyhow!(
+                "Resolving rendered-artifact mapping for image {} failed: {:?}",
+                image_id,
+                error
+            )
+        })?;
 
     // Create cache key matching the on-demand annotated format for consistency
     let size = "screen"; // Pre-generation uses screen size for annotated images
     let max_stars = 1000; // Pre-generation uses default max_stars
-    let cache_key = handlers::annotated_cache_key(&image_data, file_only, size, max_stars);
+    let cache_key = handlers::annotated_cache_key(
+        &image_data,
+        file_only,
+        size,
+        max_stars,
+        mapping_revision.as_deref(),
+    );
 
     let cache_manager = CacheManager::new(std::path::PathBuf::from(&ctx.cache_dir));
     cache_manager.ensure_category_dir("annotated")?;
@@ -1220,19 +1243,18 @@ async fn pregenerate_annotated(
     tracing::debug!("🎨 Pre-generating annotated image for image {}", image_id);
 
     // Find FITS file
-    let fits_path =
-        handlers::find_fits_file(ctx, &image_data, target_name, file_only).map_err(|error| {
-            match error {
-                handlers::AppError::Conflict(message) => anyhow::anyhow!(message),
-                handlers::AppError::NotFound => {
-                    anyhow::anyhow!("FITS file not found for image {}", image_id)
-                }
-                other => anyhow::anyhow!(
-                    "Source resolution failed for image {}: {:?}",
-                    image_id,
-                    other
-                ),
+    let fits_path = handlers::find_fits_file_async(ctx, &image_data, target_name, file_only)
+        .await
+        .map_err(|error| match error {
+            handlers::AppError::Conflict(message) => anyhow::anyhow!(message),
+            handlers::AppError::NotFound => {
+                anyhow::anyhow!("FITS file not found for image {}", image_id)
             }
+            other => anyhow::anyhow!(
+                "Source resolution failed for image {}: {:?}",
+                image_id,
+                other
+            ),
         })?;
 
     // Generate atomically via the shared queue helper — consistent sizing with

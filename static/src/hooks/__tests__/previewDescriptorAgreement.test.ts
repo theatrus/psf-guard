@@ -54,4 +54,12 @@ describe('preview URL and poll descriptor agreement', () => {
       apiClient.getPreviewUrl('db', 7, { size: 'large', color: false })
     );
   });
+
+  it('moves rendered images away from legacy long-lived browser cache entries', () => {
+    const preview = new URL(apiClient.getPreviewUrl('db', 7), 'http://localhost');
+    const annotated = new URL(apiClient.getAnnotatedUrl('db', 7), 'http://localhost');
+
+    expect(preview.searchParams.get('rv')).toBe('2');
+    expect(annotated.searchParams.get('rv')).toBe('2');
+  });
 });

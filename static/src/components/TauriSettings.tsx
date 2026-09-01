@@ -6,7 +6,11 @@ import {
 } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
-import type { ImportFolder, ImportScope } from '../api/types';
+import type {
+  ImportFolder,
+  ImportScope,
+  RemoteImageUploadPlacement,
+} from '../api/types';
 import type { DbEntry, DbRegistry } from '../utils/tauri';
 import { apiClient } from '../api/client';
 import { useAccess } from '../auth/access';
@@ -31,6 +35,19 @@ import './TauriSettings.css';
  * Settings groups unrelated jobs into named tabs so each stays easy to find.
  */
 type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'review' | 'users';
+
+const DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE =
+  '%YEAR%/%TARGET%/%NIGHT%/%TYPE%';
+const REMOTE_UPLOAD_DIRECTORY_TEMPLATE_PRESETS = [
+  '%YEAR%/%TARGET%/%NIGHT%/%TYPE%',
+  '%TARGET%/%NIGHT%/%TYPE%',
+  '%TARGET%/%DATE%/%TYPE%',
+  '%TARGET%/%TYPE%/%FILTER%',
+  '%NIGHT%/%TARGET%/%TYPE%',
+] as const;
+
+const isRemoteUploadDirectoryTemplatePreset = (value: string) =>
+  REMOTE_UPLOAD_DIRECTORY_TEMPLATE_PRESETS.some((preset) => preset === value);
 
 interface TauriSettingsProps {
   isOpen: boolean;
@@ -89,6 +106,14 @@ export default function TauriSettings({
   const [formRemoteUploadEnabled, setFormRemoteUploadEnabled] = useState(false);
   const [formRemoteSyncEnabled, setFormRemoteSyncEnabled] = useState(false);
   const [formRemoteUploadDir, setFormRemoteUploadDir] = useState('');
+  const [formRemoteUploadPlacement, setFormRemoteUploadPlacement] =
+    useState<RemoteImageUploadPlacement>('flat');
+  const [formRemoteUploadDirectoryTemplate, setFormRemoteUploadDirectoryTemplate] =
+    useState(DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE);
+  const [formRemoteUploadCatalogMatch, setFormRemoteUploadCatalogMatch] =
+    useState<{ template: string; samples: number } | null>(null);
+  const [formRemoteUploadRescanRequested, setFormRemoteUploadRescanRequested] =
+    useState(false);
   const [formExportDir, setFormExportDir] = useState('');
   const [formRemoteUploadToken, setFormRemoteUploadToken] = useState('');
   const [formRemoteUploadTokenConfigured, setFormRemoteUploadTokenConfigured] =
@@ -146,6 +171,16 @@ export default function TauriSettings({
                 remote_image_upload: {
                   enabled: summary.remote_image_upload?.enabled ?? false,
                   image_dir: summary.remote_image_upload?.image_directory,
+                  placement: summary.remote_image_upload?.placement ?? 'flat',
+                  directory_template:
+                    summary.remote_image_upload?.directory_template ??
+                    DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE,
+                  catalog_directory_template:
+                    summary.remote_image_upload?.catalog_directory_template,
+                  directory_template_source:
+                    summary.remote_image_upload?.directory_template_source ?? 'preset',
+                  directory_template_samples:
+                    summary.remote_image_upload?.directory_template_samples ?? 0,
                   token_configured:
                     summary.remote_image_upload?.token_configured ?? false,
                   sync_enabled:
@@ -169,6 +204,16 @@ export default function TauriSettings({
             remote_image_upload: {
               enabled: s.remote_image_upload?.enabled ?? false,
               image_dir: s.remote_image_upload?.image_directory,
+              placement: s.remote_image_upload?.placement ?? 'flat',
+              directory_template:
+                s.remote_image_upload?.directory_template ??
+                DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE,
+              catalog_directory_template:
+                s.remote_image_upload?.catalog_directory_template,
+              directory_template_source:
+                s.remote_image_upload?.directory_template_source ?? 'preset',
+              directory_template_samples:
+                s.remote_image_upload?.directory_template_samples ?? 0,
               token_configured: s.remote_image_upload?.token_configured ?? false,
               sync_enabled: s.remote_image_upload?.sync_enabled ?? false,
               clients: s.remote_image_upload?.clients ?? [],
@@ -225,6 +270,12 @@ export default function TauriSettings({
     setFormImageDirs([]);
     setFormRemoteUploadEnabled(false);
     setFormRemoteUploadDir('');
+    setFormRemoteUploadPlacement('flat');
+    setFormRemoteUploadDirectoryTemplate(
+      DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE
+    );
+    setFormRemoteUploadCatalogMatch(null);
+    setFormRemoteUploadRescanRequested(false);
     setFormRemoteUploadToken('');
     setFormRemoteUploadTokenConfigured(false);
     setFormRemoteUploadTokenRevealed(false);
@@ -249,6 +300,24 @@ export default function TauriSettings({
     setFormRemoteUploadDir(
       entry.remote_image_upload?.image_dir ?? entry.image_dirs[0] ?? ''
     );
+    setFormRemoteUploadPlacement(
+      entry.remote_image_upload?.placement ?? 'flat'
+    );
+    const directoryTemplate =
+      entry.remote_image_upload?.directory_template ??
+      DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE;
+    setFormRemoteUploadDirectoryTemplate(directoryTemplate);
+    setFormRemoteUploadCatalogMatch(
+      entry.remote_image_upload?.directory_template_source === 'catalog'
+        ? {
+            template:
+              entry.remote_image_upload.catalog_directory_template ??
+              directoryTemplate,
+            samples: entry.remote_image_upload.directory_template_samples ?? 0,
+          }
+        : null
+    );
+    setFormRemoteUploadRescanRequested(false);
     setFormRemoteUploadToken('');
     setFormRemoteUploadTokenConfigured(
       entry.remote_image_upload?.token_configured ??
@@ -267,6 +336,12 @@ export default function TauriSettings({
     setFormImageDirs([]);
     setFormRemoteUploadEnabled(false);
     setFormRemoteUploadDir('');
+    setFormRemoteUploadPlacement('flat');
+    setFormRemoteUploadDirectoryTemplate(
+      DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE
+    );
+    setFormRemoteUploadCatalogMatch(null);
+    setFormRemoteUploadRescanRequested(false);
     setFormRemoteUploadToken('');
     setFormRemoteUploadTokenConfigured(false);
     setFormRemoteUploadTokenRevealed(false);
@@ -282,6 +357,12 @@ export default function TauriSettings({
     setFormImageDirs([]);
     setFormRemoteUploadEnabled(false);
     setFormRemoteUploadDir('');
+    setFormRemoteUploadPlacement('flat');
+    setFormRemoteUploadDirectoryTemplate(
+      DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE
+    );
+    setFormRemoteUploadCatalogMatch(null);
+    setFormRemoteUploadRescanRequested(false);
     setFormRemoteUploadToken('');
     setFormRemoteUploadTokenConfigured(false);
     setFormRemoteUploadTokenRevealed(false);
@@ -481,6 +562,15 @@ export default function TauriSettings({
           return;
         }
         if (
+          formRemoteUploadEnabled &&
+          formRemoteUploadPlacement === 'target_tree' &&
+          !formRemoteUploadDirectoryTemplate.trim()
+        ) {
+          setStatusMessage('Enter a layout for new catalog images');
+          setIsApplying(false);
+          return;
+        }
+        if (
           formRemoteUploadToken.length > 0 &&
           formRemoteUploadToken.length < 24
         ) {
@@ -516,6 +606,18 @@ export default function TauriSettings({
             image_directory: formRemoteUploadDir || undefined,
             token: formRemoteUploadToken || undefined,
             sync_enabled: formRemoteSyncEnabled,
+            placement: formRemoteUploadPlacement,
+            directory_template:
+              formRemoteUploadEnabled &&
+              formRemoteUploadPlacement === 'target_tree'
+                ? formRemoteUploadDirectoryTemplate.trim()
+                : undefined,
+            rescan_directory_layout:
+              formRemoteUploadEnabled &&
+              formRemoteUploadPlacement === 'target_tree' &&
+              formRemoteUploadRescanRequested
+                ? true
+                : undefined,
           },
         });
       } else {
@@ -990,18 +1092,6 @@ export default function TauriSettings({
                 <strong>Accept remote image uploads</strong>
               </span>
             </label>
-            <label htmlFor="server-export-directory">
-              Server export directory:
-            </label>
-            <input
-              id="server-export-directory"
-              type="text"
-              className="file-path-input"
-              placeholder="Absolute server path; empty disables server export"
-              title="Exports triggered from the Overview land here (reflinked where the filesystem supports it). Leave empty to offer the archive download instead."
-              value={formExportDir}
-              onChange={(event) => setFormExportDir(event.target.value)}
-            />
             {formRemoteUploadEnabled && (
               <>
                 <label htmlFor="remote-upload-directory">Receive directory:</label>
@@ -1018,8 +1108,107 @@ export default function TauriSettings({
                     </option>
                   ))}
                 </select>
+                <label htmlFor="remote-upload-placement">Folder layout:</label>
+                <select
+                  id="remote-upload-placement"
+                  value={formRemoteUploadPlacement}
+                  onChange={(event) =>
+                    setFormRemoteUploadPlacement(
+                      event.target.value as RemoteImageUploadPlacement
+                    )
+                  }
+                  className="file-path-input"
+                >
+                  <option value="flat">Receive directory</option>
+                  <option value="target_tree">Match catalog</option>
+                </select>
+                {formRemoteUploadPlacement === 'target_tree' && (
+                  <>
+                    {formRemoteUploadCatalogMatch && (
+                      <small className="remote-upload-token-notice" role="status">
+                        Detected from {formRemoteUploadCatalogMatch.samples}{' '}
+                        catalog {formRemoteUploadCatalogMatch.samples === 1
+                          ? 'image'
+                          : 'images'}:{' '}
+                        <code>{formRemoteUploadCatalogMatch.template}</code>
+                      </small>
+                    )}
+                    <label htmlFor="remote-upload-directory-template">
+                      New catalog layout:
+                    </label>
+                    <div className="file-input-group">
+                      <select
+                        id="remote-upload-directory-template"
+                        value={
+                          isRemoteUploadDirectoryTemplatePreset(
+                            formRemoteUploadDirectoryTemplate
+                          )
+                            ? formRemoteUploadDirectoryTemplate
+                            : 'custom'
+                        }
+                        onChange={(event) =>
+                          setFormRemoteUploadDirectoryTemplate(
+                            event.target.value === 'custom'
+                              ? ''
+                              : event.target.value
+                          )
+                        }
+                        className="file-path-input"
+                      >
+                        {REMOTE_UPLOAD_DIRECTORY_TEMPLATE_PRESETS.map((template) => (
+                          <option key={template} value={template}>
+                            {template}
+                          </option>
+                        ))}
+                        <option value="custom">Custom</option>
+                      </select>
+                      <button
+                        type="button"
+                        className="browse-button"
+                        aria-label="Rescan catalog layout"
+                        aria-pressed={formRemoteUploadRescanRequested}
+                        title={
+                          formRemoteUploadRescanRequested
+                            ? 'Catalog layout rescan queued for Save Changes'
+                            : 'Rescan catalog paths when changes are saved'
+                        }
+                        disabled={formRemoteUploadRescanRequested}
+                        onClick={() => setFormRemoteUploadRescanRequested(true)}
+                      >
+                        ↻ {formRemoteUploadRescanRequested ? 'Rescan queued' : 'Rescan'}
+                      </button>
+                    </div>
+                    {!isRemoteUploadDirectoryTemplatePreset(
+                      formRemoteUploadDirectoryTemplate
+                    ) && (
+                      <input
+                        type="text"
+                        aria-label="Custom catalog layout:"
+                        className="file-path-input"
+                        value={formRemoteUploadDirectoryTemplate}
+                        onChange={(event) =>
+                          setFormRemoteUploadDirectoryTemplate(event.target.value)
+                        }
+                        placeholder="%TARGET%/%NIGHT%/%TYPE%"
+                        maxLength={240}
+                      />
+                    )}
+                  </>
+                )}
               </>
             )}
+            <label htmlFor="server-export-directory">
+              Server export directory:
+            </label>
+            <input
+              id="server-export-directory"
+              type="text"
+              className="file-path-input"
+              placeholder="Absolute server path; empty disables server export"
+              title="Exports triggered from the Overview land here (reflinked where the filesystem supports it). Leave empty to offer the archive download instead."
+              value={formExportDir}
+              onChange={(event) => setFormExportDir(event.target.value)}
+            />
           </div>
         )}
 
@@ -1200,7 +1389,14 @@ export default function TauriSettings({
                       )}
                       {entry.remote_image_upload?.enabled && (
                         <div className="path-info muted">
-                          Remote receive: {entry.remote_image_upload.image_dir}
+                          Remote receive: {entry.remote_image_upload.image_dir} (
+                          {entry.remote_image_upload.placement === 'target_tree'
+                            ? entry.remote_image_upload.directory_template_source ===
+                              'catalog'
+                              ? `match catalog, ${entry.remote_image_upload.directory_template_samples ?? 0} ${entry.remote_image_upload.directory_template_samples === 1 ? 'sample' : 'samples'}`
+                              : 'match catalog'
+                            : 'receive directory'}
+                          )
                         </div>
                       )}
                       <CalibrationLibrarySummary

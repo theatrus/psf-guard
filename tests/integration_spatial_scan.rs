@@ -144,6 +144,7 @@ fn stored_entry(image_id: i32, filename: &str, dead: f64, bg_spread: f64) -> Sto
     StoredSpatialMetrics {
         image_id,
         filename: filename.to_string(),
+        source_revision: None,
         detector: psf_guard::server::spatial_scan::QUALITY_DETECTOR.to_string(),
         detector_version: psf_guard::server::spatial_scan::QUALITY_DETECTOR_VERSION,
         star_count: 4000,

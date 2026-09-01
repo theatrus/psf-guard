@@ -163,6 +163,33 @@ async fn crud_lifecycle_adds_uses_and_removes_a_database() {
     assert_eq!(body["data"].as_array().unwrap().len(), 1);
     assert_eq!(body["data"][0]["id"], slug);
 
+    // A real catalog path teaches the receiver its existing tree while the
+    // operator's preset remains available for an empty/new catalog.
+    let known_directory = image_dir
+        .join("2026")
+        .join("M 31")
+        .join("2026-08-30")
+        .join("LIGHT");
+    std::fs::create_dir_all(&known_directory).unwrap();
+    std::fs::write(known_directory.join("known.fits"), b"fixture").unwrap();
+    let connection = rusqlite::Connection::open(&db_path).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO project (Id, name, profileId) VALUES (1, 'Andromeda', 'profile');
+             INSERT INTO target (Id, name, projectId, active, ra, dec)
+                 VALUES (1, 'M 31', 1, 1, 10, 20);",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO acquiredimage
+                 (Id, projectId, targetId, gradingStatus, metadata, acquireddate, filtername)
+             VALUES (1, 1, 1, 0, ?1, 1788150600, 'Ha')",
+            [serde_json::json!({ "FileName": r"D:\remote\known.fits" }).to_string()],
+        )
+        .unwrap();
+    drop(connection);
+
     let upload_token = "test-remote-upload-token-123456";
     let (status, body) = json_request(
         build_app(state.clone()),
@@ -173,6 +200,8 @@ async fn crud_lifecycle_adds_uses_and_removes_a_database() {
                 "enabled": true,
                 "image_directory": image_dir.to_string_lossy(),
                 "token": upload_token,
+                "placement": "target_tree",
+                "directory_template": "%TARGET%/%DATE%/%TYPE%",
             }
         })),
     )
@@ -186,6 +215,26 @@ async fn crud_lifecycle_adds_uses_and_removes_a_database() {
     assert_eq!(
         body["data"]["remote_image_upload"]["token_configured"],
         true
+    );
+    assert_eq!(
+        body["data"]["remote_image_upload"]["placement"],
+        "target_tree"
+    );
+    assert_eq!(
+        body["data"]["remote_image_upload"]["directory_template"],
+        "%TARGET%/%DATE%/%TYPE%"
+    );
+    assert_eq!(
+        body["data"]["remote_image_upload"]["catalog_directory_template"],
+        "%YEAR%/%TARGET%/%NIGHT%/%TYPE%"
+    );
+    assert_eq!(
+        body["data"]["remote_image_upload"]["directory_template_source"],
+        "catalog"
+    );
+    assert_eq!(
+        body["data"]["remote_image_upload"]["directory_template_samples"],
+        1
     );
     assert!(!body.to_string().contains(upload_token));
     assert!(!std::fs::read_to_string(&registry_path)
@@ -244,6 +293,7 @@ async fn crud_lifecycle_adds_uses_and_removes_a_database() {
     assert_eq!(dbs.len(), 1);
     assert_eq!(dbs[0]["id"], "renamed-rig");
     assert_eq!(dbs[0]["remote_image_upload"]["enabled"], true);
+    assert_eq!(dbs[0]["remote_image_upload"]["placement"], "target_tree");
 
     // 8) Remove it.
     let (status, body) = json_request(

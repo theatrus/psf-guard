@@ -1234,7 +1234,7 @@ fn prepare_job(
     request: &StackPreviewRequest,
 ) -> Result<PreparedJob, AppError> {
     let requested = request.image_ids.iter().copied().collect::<HashSet<_>>();
-    let (project_images, expected_by_image) = {
+    let (project_images, expected_by_image, mapped_sources) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
@@ -1276,10 +1276,15 @@ fn prepare_job(
             })
             .collect::<Result<HashMap<_, _>, _>>()
             .map_err(AppError::db)?;
-        (relevant, expected)
+        let mapped_sources = crate::server::remote_upload::mapped_light_sources(
+            &conn,
+            &ctx.image_dir_paths,
+            relevant.iter().map(|(image, _, _)| image),
+        )?;
+        (relevant, expected, mapped_sources)
     };
 
-    let quality = quality_results(ctx, &project_images, &expected_by_image);
+    let quality = quality_results(ctx, &project_images, &expected_by_image, &mapped_sources);
     let quality_by_id = quality
         .into_iter()
         .map(|result| (result.image_id, result))
@@ -1530,6 +1535,7 @@ fn quality_results(
     ctx: &DatabaseContext,
     images: &[(AcquiredImage, String, String)],
     expected_by_image: &HashMap<i32, Option<(f64, f64)>>,
+    mapped_sources: &crate::server::remote_upload::MappedLightSources,
 ) -> Vec<ImageQualityResult> {
     crate::server::spatial_scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
     let mut grouped: BTreeMap<(i32, String, String), Vec<&AcquiredImage>> = BTreeMap::new();
@@ -1553,10 +1559,13 @@ fn quality_results(
         for image in group {
             let mut value =
                 extract_metrics_from_metadata(image.id, &image.metadata, image.acquired_date);
+            let mapped_source = mapped_sources.get(&image.id);
+            let mapped_source_revision = mapped_sources.quality_revision(image.id);
             super::handlers::merge_spatial_metrics(
                 &mut value,
                 &ctx.spatial_metrics,
                 &image.metadata,
+                mapped_source_revision,
             );
             super::handlers::merge_astrometry_metrics(
                 &mut value,
@@ -1564,11 +1573,14 @@ fn quality_results(
                 &image.metadata,
                 &ctx.astrometry_evidence,
                 expected_by_image.get(&image.id).copied().flatten(),
+                mapped_source.map(|source| source.path.as_path()),
+                mapped_sources.is_invalid(image.id),
             );
             entries.push(super::handlers::stored_entry_for(
                 &ctx.spatial_metrics,
                 image.id,
                 &image.metadata,
+                mapped_source_revision,
             ));
             metrics.push(value);
         }

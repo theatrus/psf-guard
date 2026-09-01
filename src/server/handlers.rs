@@ -1,8 +1,9 @@
+use anyhow::Context as _;
 use axum::{
     extract::{Extension, Path, Query, State},
     http::{
-        header::{CACHE_CONTROL, CONTENT_TYPE},
-        StatusCode,
+        header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH},
+        HeaderMap, HeaderValue, StatusCode,
     },
     response::{IntoResponse, Response},
     Json,
@@ -11,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::io::Read as _;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use tokio::fs::File;
@@ -19,7 +21,10 @@ use tokio::io::AsyncReadExt;
 use crate::db::Database;
 use crate::models::{GradingStatus, OverallDesiredStats, ProjectDesiredStats};
 use crate::server::api::*;
-use crate::server::database_context::DatabaseContext;
+use crate::server::database_context::{
+    error_has_sqlite_failure, error_is_sqlite_contention, open_scheduler_connection_with_flags,
+    remote_image_file_identity, DatabaseContext,
+};
 use crate::server::extract::DbContext;
 use crate::server::state::AppState;
 
@@ -296,7 +301,7 @@ pub async fn get_image_astrometry(
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,
 ) -> Result<Json<ApiResponse<crate::astrometry::AstrometryAnalysis>>, AppError> {
-    let (fits_path, expected_target) = resolve_astrometry_input(&ctx, image_id)?;
+    let (fits_path, expected_target) = resolve_astrometry_input(&ctx.0, image_id).await?;
     let cache_dir = ctx.cache_dir_path.clone();
     let astrometry = Arc::clone(&state.astrometry);
     let guard = state.begin_interactive_job();
@@ -321,7 +326,7 @@ pub async fn solve_image_astrometry(
     Path((_db_id, image_id)): Path<(String, i32)>,
 ) -> Result<Json<ApiResponse<crate::astrometry::AstrometryAnalysis>>, AppError> {
     let _solve_guard = ctx.astrometry_solve_mutex.lock().await;
-    let (fits_path, expected_target) = resolve_astrometry_input(&ctx, image_id)?;
+    let (fits_path, expected_target) = resolve_astrometry_input(&ctx.0, image_id).await?;
     let cache_dir = ctx.cache_dir_path.clone();
     let astrometry = Arc::clone(&state.astrometry);
     let guard = state.begin_interactive_job();
@@ -360,7 +365,7 @@ pub async fn get_image_satellites(
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,
 ) -> Result<Json<ApiResponse<crate::satellites::SatelliteAnalysisStatus>>, AppError> {
-    let (fits_path, expected_target) = resolve_astrometry_input(&ctx, image_id)?;
+    let (fits_path, expected_target) = resolve_astrometry_input(&ctx.0, image_id).await?;
     let cache_dir = ctx.cache_dir_path.clone();
     let astrometry = Arc::clone(&state.astrometry);
     let guard = state.begin_interactive_job();
@@ -395,7 +400,7 @@ pub async fn predict_image_satellites(
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,
 ) -> Result<Json<ApiResponse<crate::satellites::SatelliteAnalysis>>, AppError> {
-    let (fits_path, expected_target) = resolve_astrometry_input(&ctx, image_id)?;
+    let (fits_path, expected_target) = resolve_astrometry_input(&ctx.0, image_id).await?;
     let cache_dir = ctx.cache_dir_path.clone();
     let astrometry = Arc::clone(&state.astrometry);
     let guard = state.begin_interactive_job();
@@ -466,8 +471,8 @@ pub async fn predict_image_satellites(
     Ok(Json(ApiResponse::success(prediction)))
 }
 
-fn resolve_astrometry_input(
-    ctx: &DatabaseContext,
+async fn resolve_astrometry_input(
+    ctx: &Arc<DatabaseContext>,
     image_id: i32,
 ) -> Result<(PathBuf, Option<(f64, f64)>), AppError> {
     let (image, file_only, target_name) = resolve_image_meta(ctx, image_id)?;
@@ -478,7 +483,7 @@ fn resolve_astrometry_input(
             .map_err(AppError::db)?
             .expected_for_grading()
     };
-    let fits_path = find_fits_file(ctx, &image, &target_name, &file_only)?;
+    let fits_path = find_fits_file_async(ctx, &image, &target_name, &file_only).await?;
     Ok((fits_path, expected_target))
 }
 
@@ -562,11 +567,27 @@ fn remote_image_upload_summary(
     ctx: &crate::server::database_context::DatabaseContext,
 ) -> RemoteImageUploadSummary {
     let config = ctx.remote_image_upload.as_ref();
+    let directory_layout = config.and_then(|config| config.directory_layout.as_ref());
     RemoteImageUploadSummary {
         enabled: ctx.remote_image_upload_dir.is_some(),
         image_directory: config
             .map(|config| config.image_dir.clone())
             .filter(|directory| !directory.is_empty()),
+        placement: config.map(|config| config.placement).unwrap_or_default(),
+        directory_template: config
+            .map(|config| config.fallback_directory_template().to_string())
+            .unwrap_or_else(|| {
+                crate::db_registry::DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE.to_string()
+            }),
+        catalog_directory_template: directory_layout
+            .filter(|layout| {
+                layout.source == crate::db_registry::RemoteImageUploadTemplateSource::Catalog
+            })
+            .map(|layout| layout.template.clone()),
+        directory_template_source: directory_layout
+            .map(|layout| layout.source)
+            .unwrap_or_default(),
+        directory_template_samples: directory_layout.map(|layout| layout.samples).unwrap_or(0),
         token_configured: config.is_some_and(|config| config.token_is_configured()),
         sync_enabled: config.is_some_and(|config| config.sync_enabled),
         clients: config
@@ -686,6 +707,155 @@ fn grade_label(status: i32) -> &'static str {
     }
 }
 
+fn open_scheduler_sync_connections(
+    source_path: &FsPath,
+    destination_path: &FsPath,
+) -> anyhow::Result<(rusqlite::Connection, rusqlite::Connection)> {
+    use rusqlite::OpenFlags;
+
+    let source =
+        open_scheduler_connection_with_flags(source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| {
+                format!(
+                    "opening source scheduler database {}",
+                    source_path.display()
+                )
+            })?;
+    let destination =
+        open_scheduler_connection_with_flags(destination_path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .with_context(|| {
+            format!(
+                "opening destination scheduler database {}",
+                destination_path.display()
+            )
+        })?;
+
+    Ok((source, destination))
+}
+
+fn classify_scheduler_sync_failure(
+    error: &anyhow::Error,
+    source_path: &str,
+    destination_path: &str,
+) -> AppError {
+    if error.downcast_ref::<StaleSyncPreview>().is_some() {
+        return AppError::Conflict(
+            "This preview is stale because the destination database changed. Preview again.".into(),
+        );
+    }
+
+    let message = format!(
+        "syncing source scheduler database {source_path} into destination scheduler database {destination_path}: {error:#}"
+    );
+    if error_is_sqlite_contention(error) {
+        AppError::DatabaseError(format!(
+            "{message}; a scheduler database remained busy or locked after the lock wait expired"
+        ))
+    } else if error_has_sqlite_failure(error) {
+        AppError::DatabaseError(message)
+    } else {
+        AppError::BadRequest(message)
+    }
+}
+
+fn classify_sync_snapshot_failure(error: anyhow::Error, source_path: &str) -> AppError {
+    let message =
+        format!("creating a scheduler sync snapshot from source database {source_path}: {error:#}");
+    let contention = if error_is_sqlite_contention(&error)
+        || crate::server::sync_preview::error_is_sync_snapshot_contention(&error)
+    {
+        "; the source scheduler database remained busy or locked after the lock wait expired"
+    } else {
+        ""
+    };
+    // The peer path comes from the server's registry and the snapshot path is
+    // server-owned. Open, backup, mkdir, and rename failures are operational;
+    // none are malformed request data.
+    AppError::DatabaseError(format!("{message}{contention}"))
+}
+
+#[cfg(test)]
+mod scheduler_sync_error_tests {
+    use super::*;
+    use rusqlite::ffi::{Error as FfiError, SQLITE_BUSY, SQLITE_LOCKED};
+
+    #[test]
+    fn sync_database_failures_keep_both_catalog_paths() {
+        for code in [SQLITE_BUSY, SQLITE_LOCKED] {
+            let error =
+                anyhow::Error::new(rusqlite::Error::SqliteFailure(FfiError::new(code), None))
+                    .context("applying scheduler rows")
+                    .context("sync operation");
+
+            match classify_scheduler_sync_failure(
+                &error,
+                "source-scheduler.sqlite",
+                "destination-scheduler.sqlite",
+            ) {
+                AppError::DatabaseError(message) => {
+                    assert!(message.contains("source-scheduler.sqlite"));
+                    assert!(message.contains("destination-scheduler.sqlite"));
+                    assert!(message.contains("busy or locked"));
+                }
+                other => panic!("contention was misclassified: {other:?}"),
+            }
+        }
+
+        match classify_scheduler_sync_failure(
+            &anyhow::anyhow!("disk read failed"),
+            "source-scheduler.sqlite",
+            "destination-scheduler.sqlite",
+        ) {
+            AppError::BadRequest(message) => {
+                assert!(message.contains("source-scheduler.sqlite"));
+                assert!(message.contains("destination-scheduler.sqlite"));
+                assert!(message.contains("disk read failed"));
+            }
+            other => panic!("non-contention sync failure was misclassified: {other:?}"),
+        }
+
+        let io_error = anyhow::Error::new(rusqlite::Error::SqliteFailure(
+            FfiError::new(rusqlite::ffi::SQLITE_IOERR),
+            Some("disk read failed".into()),
+        ));
+        assert!(matches!(
+            classify_scheduler_sync_failure(&io_error, "source.sqlite", "destination.sqlite"),
+            AppError::DatabaseError(_)
+        ));
+    }
+
+    #[test]
+    fn stale_sync_preview_remains_a_conflict() {
+        let error = anyhow::Error::new(StaleSyncPreview).context("applying preview");
+        let app_error = classify_scheduler_sync_failure(&error, "source.sqlite", "dest.sqlite");
+        assert!(matches!(&app_error, AppError::Conflict(_)));
+        assert_eq!(app_error.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn exhausted_snapshot_wait_is_an_operational_database_failure() {
+        let error = anyhow::Error::new(crate::server::sync_preview::SyncSnapshotContention {
+            message: "source remained busy".into(),
+        });
+        match classify_sync_snapshot_failure(error, "source.sqlite") {
+            AppError::DatabaseError(message) => {
+                assert!(message.contains("source.sqlite"));
+                assert!(message.contains("busy or locked"));
+            }
+            other => panic!("snapshot contention was misclassified: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn snapshot_filesystem_failures_are_operational() {
+        let error = anyhow::anyhow!("renaming server-owned snapshot failed: access denied");
+        assert!(matches!(
+            classify_sync_snapshot_failure(error, "source.sqlite"),
+            AppError::DatabaseError(_)
+        ));
+    }
+}
+
 pub(crate) async fn execute_scheduler_sync_paths(
     state: &Arc<AppState>,
     source_path: PathBuf,
@@ -700,7 +870,7 @@ pub(crate) async fn execute_scheduler_sync_paths(
         sync_planning_in_transaction, sync_pull, sync_pull_in_transaction, PlanningOptions,
         PullOptions, SyncGradesOptions,
     };
-    use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
+    use rusqlite::{Transaction, TransactionBehavior};
 
     let fingerprint_queries = crate::server::sync_preview::fingerprint_queries(&req);
     let kind = req.kind;
@@ -719,6 +889,8 @@ pub(crate) async fn execute_scheduler_sync_paths(
     let reviewed_only = req.reviewed_only;
     let with_image_data = req.with_image_data.unwrap_or(true);
     let destination_id_for_cache = destination_id.clone();
+    let source_path_for_error = source_path.display().to_string();
+    let destination_path_for_error = destination_path.display().to_string();
 
     let response = tokio::task::spawn_blocking(
         move || -> anyhow::Result<(
@@ -735,10 +907,8 @@ pub(crate) async fn execute_scheduler_sync_paths(
                 "The two configured entries point to the same database file."
             );
 
-            let source =
-                Connection::open_with_flags(&source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-            let destination =
-                Connection::open_with_flags(&destination_path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+            let (source, destination) =
+                open_scheduler_sync_connections(&source_path, &destination_path)?;
 
             let run = |transaction: Option<&Transaction<'_>>| -> anyhow::Result<(
                 SchedulerSyncResponse,
@@ -919,14 +1089,11 @@ pub(crate) async fn execute_scheduler_sync_paths(
     .await
     .map_err(|error| AppError::InternalError(format!("scheduler sync task failed: {error}")))?
     .map_err(|error| {
-        if error.downcast_ref::<StaleSyncPreview>().is_some() {
-            AppError::Conflict(
-                "This preview is stale because the destination database changed. Preview again."
-                    .into(),
-            )
-        } else {
-            AppError::BadRequest(format!("{error:#}"))
-        }
+        classify_scheduler_sync_failure(
+            &error,
+            &source_path_for_error,
+            &destination_path_for_error,
+        )
     })?;
 
     let (response, fingerprint, changed_images) = response;
@@ -983,10 +1150,16 @@ pub async fn preview_sync_database_route(
 ) -> Result<Json<ApiResponse<SchedulerSyncPreviewResponse>>, AppError> {
     request.dry_run = true;
     let (source_path, _destination_path) = sync_endpoint_paths(&state, &db_id, &request)?;
-    let source_snapshot_file = state
-        .sync_previews
-        .create_source_snapshot(&source_path)
-        .map_err(|error| AppError::BadRequest(format!("{error:#}")))?;
+    let source_path_for_error = source_path.display().to_string();
+    let snapshot_state = state.clone();
+    let source_snapshot_file = tokio::task::spawn_blocking(move || {
+        snapshot_state
+            .sync_previews
+            .create_source_snapshot(&source_path)
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("sync snapshot task failed: {error}")))?
+    .map_err(|error| classify_sync_snapshot_failure(error, &source_path_for_error))?;
     let source_snapshot_path = state
         .sync_previews
         .source_snapshot_path_for_file(&source_snapshot_file)
@@ -1247,9 +1420,7 @@ pub async fn update_database_route(
     let mut reg = DbRegistry::load_or_init(&registry_path)
         .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
 
-    if reg.find(&db_id).is_none() {
-        return Err(AppError::NotFound);
-    }
+    let previous_entry = reg.find(&db_id).cloned().ok_or(AppError::NotFound)?;
 
     reg.update(
         &db_id,
@@ -1271,6 +1442,94 @@ pub async fn update_database_route(
                 "registry update lost the entry".into(),
             ))?;
         apply_remote_image_upload_update(entry, update)?;
+    }
+    let updated_entry = reg.find(&new_id).ok_or(AppError::InternalError(
+        "registry update lost the entry".into(),
+    ))?;
+    let remote_layout_scan = updated_entry
+        .remote_image_upload
+        .as_ref()
+        .filter(|config| {
+            config.enabled
+                && config.placement == crate::db_registry::RemoteImageUploadPlacement::TargetTree
+                && remote_image_layout_needs_scan(
+                    &previous_entry,
+                    updated_entry,
+                    req.remote_image_upload.as_ref(),
+                )
+        })
+        .map(|config| {
+            config
+                .validated_image_dir(&updated_entry.image_dirs)
+                .map(|receive_root| (updated_entry.db_path.clone(), receive_root))
+                .map_err(|error| AppError::BadRequest(error.to_string()))
+        })
+        .transpose()?;
+    if let Some((database_path, receive_root)) = remote_layout_scan {
+        let detected = tokio::task::spawn_blocking(move || {
+            crate::server::remote_upload_layout::detect_catalog_directory_layout(
+                &database_path,
+                &receive_root,
+            )
+        })
+        .await
+        .map_err(|error| {
+            AppError::InternalError(format!("remote upload layout scan failed: {error}"))
+        })?;
+        match detected {
+            Ok(Some(detected)) => {
+                let entry = reg
+                    .databases
+                    .iter_mut()
+                    .find(|entry| entry.id == new_id)
+                    .ok_or(AppError::InternalError(
+                        "registry update lost the entry".into(),
+                    ))?;
+                let config = entry
+                    .remote_image_upload
+                    .as_mut()
+                    .expect("layout scanning requires remote upload configuration");
+                config.directory_layout =
+                    Some(crate::db_registry::RemoteImageUploadDirectoryLayout {
+                        template: detected.template,
+                        fallback_template: config.fallback_directory_template().to_string(),
+                        source: crate::db_registry::RemoteImageUploadTemplateSource::Catalog,
+                        samples: detected.samples,
+                    });
+            }
+            Ok(None) => {
+                let entry = reg
+                    .databases
+                    .iter_mut()
+                    .find(|entry| entry.id == new_id)
+                    .ok_or(AppError::InternalError(
+                        "registry update lost the entry".into(),
+                    ))?;
+                let config = entry
+                    .remote_image_upload
+                    .as_mut()
+                    .expect("layout scanning requires remote upload configuration");
+                reset_catalog_directory_layout(config);
+            }
+            Err(error) => {
+                let entry = reg
+                    .databases
+                    .iter_mut()
+                    .find(|entry| entry.id == new_id)
+                    .ok_or(AppError::InternalError(
+                        "registry update lost the entry".into(),
+                    ))?;
+                let config = entry
+                    .remote_image_upload
+                    .as_mut()
+                    .expect("layout scanning requires remote upload configuration");
+                reset_catalog_directory_layout(config);
+                tracing::warn!(
+                    database = %new_id,
+                    "Could not detect remote upload catalog layout; using preset: {error:#}"
+                );
+            }
+        }
     }
     if let Some(export_dir) = req.export_dir.as_ref() {
         let entry = reg
@@ -1370,6 +1629,26 @@ fn apply_remote_image_upload_update(
     if let Some(sync_enabled) = update.sync_enabled {
         config.sync_enabled = sync_enabled;
     }
+    let target_tree_was_selected = update.placement.is_some_and(|placement| {
+        placement == crate::db_registry::RemoteImageUploadPlacement::TargetTree
+            && config.placement != crate::db_registry::RemoteImageUploadPlacement::TargetTree
+    });
+    if let Some(placement) = update.placement {
+        config.placement = placement;
+    }
+    if let Some(template) = update.directory_template.as_deref() {
+        crate::server::remote_upload_layout::validate_directory_template(template)
+            .map_err(|error| AppError::BadRequest(error.to_string()))?;
+        let template = template.trim().replace('\\', "/");
+        if target_tree_was_selected || template != config.fallback_directory_template() {
+            config.directory_layout = Some(crate::db_registry::RemoteImageUploadDirectoryLayout {
+                template: template.clone(),
+                fallback_template: template,
+                source: crate::db_registry::RemoteImageUploadTemplateSource::Preset,
+                samples: 0,
+            });
+        }
+    }
     if config.sync_enabled && !config.token_is_configured() {
         return Err(AppError::BadRequest(
             "generate a remote API key before enabling remote scheduler sync".into(),
@@ -1382,6 +1661,125 @@ fn apply_remote_image_upload_update(
     }
     entry.remote_image_upload = Some(config);
     Ok(())
+}
+
+fn remote_image_layout_needs_scan(
+    previous: &crate::db_registry::DbEntry,
+    updated: &crate::db_registry::DbEntry,
+    request: Option<&RemoteImageUploadUpdate>,
+) -> bool {
+    if request.is_some_and(|request| request.rescan_directory_layout) {
+        return true;
+    }
+    let previous_config = previous.remote_image_upload.as_ref();
+    let updated_config = updated.remote_image_upload.as_ref();
+    previous.db_path != updated.db_path
+        || previous.image_dirs != updated.image_dirs
+        || previous_config.map(|config| config.enabled)
+            != updated_config.map(|config| config.enabled)
+        || previous_config.map(|config| config.image_dir.trim())
+            != updated_config.map(|config| config.image_dir.trim())
+        || previous_config.map(|config| config.placement)
+            != updated_config.map(|config| config.placement)
+        || previous_config.map(|config| config.fallback_directory_template())
+            != updated_config.map(|config| config.fallback_directory_template())
+}
+
+fn reset_catalog_directory_layout(config: &mut crate::db_registry::RemoteImageUploadConfig) {
+    if config.directory_layout.as_ref().is_some_and(|layout| {
+        layout.source == crate::db_registry::RemoteImageUploadTemplateSource::Catalog
+    }) {
+        let fallback = config.fallback_directory_template().to_string();
+        config.directory_layout = Some(crate::db_registry::RemoteImageUploadDirectoryLayout {
+            template: fallback.clone(),
+            fallback_template: fallback,
+            source: crate::db_registry::RemoteImageUploadTemplateSource::Preset,
+            samples: 0,
+        });
+    }
+}
+
+#[cfg(test)]
+mod remote_image_layout_settings_tests {
+    use super::*;
+
+    fn legacy_target_tree_entry() -> crate::db_registry::DbEntry {
+        crate::db_registry::DbEntry {
+            id: "catalog".into(),
+            name: "Catalog".into(),
+            db_path: "catalog.sqlite".into(),
+            image_dirs: vec!["images".into()],
+            reject_archive: None,
+            remote_image_upload: Some(crate::db_registry::RemoteImageUploadConfig {
+                placement: crate::db_registry::RemoteImageUploadPlacement::TargetTree,
+                ..Default::default()
+            }),
+            export_dir: None,
+        }
+    }
+
+    fn update() -> RemoteImageUploadUpdate {
+        RemoteImageUploadUpdate {
+            enabled: false,
+            image_directory: None,
+            token: None,
+            sync_enabled: None,
+            placement: Some(crate::db_registry::RemoteImageUploadPlacement::TargetTree),
+            directory_template: None,
+            rescan_directory_layout: false,
+        }
+    }
+
+    #[test]
+    fn unrelated_save_preserves_legacy_layout_and_skips_the_tree_scan() {
+        let previous = legacy_target_tree_entry();
+        let mut updated = previous.clone();
+        apply_remote_image_upload_update(&mut updated, &update()).unwrap();
+
+        assert!(updated
+            .remote_image_upload
+            .as_ref()
+            .unwrap()
+            .directory_layout
+            .is_none());
+        assert!(!remote_image_layout_needs_scan(
+            &previous,
+            &updated,
+            Some(&update())
+        ));
+
+        let mut rescan = update();
+        rescan.rescan_directory_layout = true;
+        assert!(remote_image_layout_needs_scan(
+            &previous,
+            &updated,
+            Some(&rescan)
+        ));
+    }
+
+    #[test]
+    fn a_failed_or_empty_scan_returns_a_catalog_layout_to_its_preset() {
+        let mut config = crate::db_registry::RemoteImageUploadConfig {
+            directory_layout: Some(crate::db_registry::RemoteImageUploadDirectoryLayout {
+                template: "%YEAR%/%TARGET%/%NIGHT%/%TYPE%".into(),
+                fallback_template: "%TARGET%/%DATE%/%TYPE%".into(),
+                source: crate::db_registry::RemoteImageUploadTemplateSource::Catalog,
+                samples: 42,
+            }),
+            ..Default::default()
+        };
+
+        reset_catalog_directory_layout(&mut config);
+
+        let layout = config.directory_layout.unwrap();
+        assert_eq!(layout.template, "%TARGET%/%DATE%/%TYPE%");
+        assert_eq!(layout.fallback_template, "%TARGET%/%DATE%/%TYPE%");
+        assert_eq!(
+            layout.source,
+            crate::db_registry::RemoteImageUploadTemplateSource::Preset
+        );
+        assert_eq!(layout.samples, 0);
+    }
 }
 
 /// `DELETE /api/databases/{db_id}` — drop the registered database. Returns
@@ -1439,7 +1837,7 @@ pub async fn export_archive_route(
     // (same rule as the import job and the background file-check refresh).
     let plan_ctx = ctx.0.clone();
     let plan = tokio::task::spawn_blocking(move || {
-        let conn = rusqlite::Connection::open_with_flags(
+        let conn = open_scheduler_connection_with_flags(
             &plan_ctx.database_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
         )
@@ -1574,7 +1972,7 @@ pub async fn export_local_route(
     // request-connection mutex through a directory walk).
     let plan_ctx = ctx.0.clone();
     let summary = tokio::task::spawn_blocking(move || {
-        let conn = rusqlite::Connection::open_with_flags(
+        let conn = open_scheduler_connection_with_flags(
             &plan_ctx.database_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
         )
@@ -1667,7 +2065,7 @@ pub async fn start_server_export_route(
     let job_store = store.clone();
     tokio::task::spawn_blocking(move || {
         let run = || -> anyhow::Result<()> {
-            let conn = rusqlite::Connection::open_with_flags(
+            let conn = open_scheduler_connection_with_flags(
                 &job_ctx.database_path,
                 rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
             )
@@ -1748,7 +2146,7 @@ pub async fn get_project_calibration_report(
         .map_err(|error| AppError::InternalError(format!("indexing image folders: {error}")))?;
     let database_path = ctx.database_path.clone();
     let report = tokio::task::spawn_blocking(move || {
-        let conn = rusqlite::Connection::open_with_flags(
+        let conn = open_scheduler_connection_with_flags(
             &database_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
         )
@@ -2253,7 +2651,7 @@ fn run_import_blocking(
         .collect();
 
     job::set_stage(&ctx.import_job, "importing");
-    let mut conn = rusqlite::Connection::open_with_flags(
+    let mut conn = open_scheduler_connection_with_flags(
         &ctx.database_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_URI,
     )
@@ -2327,18 +2725,31 @@ async fn run_quality_scan_for_target(
 /// Write scan-measured star count and HFR into `acquiredimage.metadata` for
 /// frames that imported without them, so an imported catalog carries the same
 /// star metadata a N.I.N.A. catalog does. `pending` is `(image id, filename,
-/// metadata JSON as read)`. The patch fills only missing keys — a measured
+/// metadata JSON as read, mapped source revision)`. The patch fills only missing keys — a measured
 /// N.I.N.A. value is never overwritten — and a row that changed since it was
 /// read is left alone.
-fn fill_missing_star_metadata(ctx: &DatabaseContext, pending: &[(i32, String, String)]) -> usize {
+fn fill_missing_star_metadata(
+    ctx: &DatabaseContext,
+    pending: &[(i32, String, String, Option<String>)],
+) -> usize {
     use crate::server::spatial_scan as scan;
 
-    let patches: Vec<(i32, &String, String)> = pending
+    let patches: Vec<(i32, &String, String, Option<String>)> = pending
         .iter()
-        .filter_map(|(image_id, filename, metadata)| {
-            let entry = scan::valid_quality_entry(&ctx.spatial_metrics, *image_id, filename)?;
-            scan::star_metrics_metadata_patch(metadata, entry.star_count, entry.avg_hfr)
-                .map(|updated| (*image_id, metadata, updated))
+        .filter_map(|(image_id, filename, metadata, mapped_source_revision)| {
+            let entry = scan::valid_quality_entry_for_source(
+                &ctx.spatial_metrics,
+                *image_id,
+                filename,
+                mapped_source_revision.as_deref(),
+            )?;
+            scan::star_metrics_metadata_patch(
+                metadata,
+                entry.star_count,
+                entry.avg_hfr,
+                entry.source_revision.as_deref(),
+            )
+            .map(|updated| (*image_id, metadata, updated, mapped_source_revision.clone()))
         })
         .collect();
     if patches.is_empty() {
@@ -2347,24 +2758,75 @@ fn fill_missing_star_metadata(ctx: &DatabaseContext, pending: &[(i32, String, St
 
     // A dedicated connection: this runs on a blocking scan thread and must
     // not tie up the shared request connection.
-    let conn = match crate::server::database_context::open_scheduler_connection(&ctx.database_path)
+    let mut conn =
+        match crate::server::database_context::open_scheduler_connection(&ctx.database_path) {
+            Ok(conn) => conn,
+            Err(e) => {
+                tracing::warn!("📐 Star-metadata fill skipped for db={}: {}", ctx.id, e);
+                return 0;
+            }
+        };
+    // Reserve the writer before re-reading upload provenance. This makes the
+    // source check and metadata CAS one serializable operation with a remote
+    // upload's mapping update and stale-metadata cleanup.
+    let transaction = match conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
     {
-        Ok(conn) => conn,
+        Ok(transaction) => transaction,
         Err(e) => {
             tracing::warn!("📐 Star-metadata fill skipped for db={}: {}", ctx.id, e);
             return 0;
         }
     };
-    let db = Database::new(&conn);
-    let mut filled = 0usize;
-    for (image_id, expected, updated) in &patches {
-        match db.update_image_metadata_if_unchanged(*image_id, expected, updated) {
-            Ok(true) => filled += 1,
-            Ok(false) => {} // concurrent writer wins; skip quietly
-            Err(e) => {
-                tracing::warn!("📐 Star-metadata fill failed for image {}: {}", image_id, e)
+    let image_ids = patches
+        .iter()
+        .map(|(image_id, _, _, _)| *image_id)
+        .collect::<Vec<_>>();
+    let images = match Database::new(&transaction).get_images_by_ids(&image_ids) {
+        Ok(images) => images,
+        Err(e) => {
+            tracing::warn!("📐 Star-metadata fill skipped for db={}: {}", ctx.id, e);
+            return 0;
+        }
+    };
+    let mapped_sources = match crate::server::remote_upload::mapped_light_sources(
+        &transaction,
+        &ctx.image_dir_paths,
+        images.iter(),
+    ) {
+        Ok(sources) => sources,
+        Err(e) => {
+            tracing::warn!(
+                "📐 Star-metadata provenance check skipped for db={}: {:?}",
+                ctx.id,
+                e
+            );
+            return 0;
+        }
+    };
+    let filled = {
+        let db = Database::new(&transaction);
+        let mut filled = 0usize;
+        for (image_id, expected, updated, expected_mapped_source) in &patches {
+            if mapped_sources.quality_revision(*image_id) != expected_mapped_source.as_deref() {
+                continue;
+            }
+            match db.update_image_metadata_if_unchanged(*image_id, expected, updated) {
+                Ok(true) => filled += 1,
+                Ok(false) => {} // concurrent writer wins; skip quietly
+                Err(e) => {
+                    tracing::warn!("📐 Star-metadata fill failed for image {}: {}", image_id, e)
+                }
             }
         }
+        filled
+    };
+    if let Err(e) = transaction.commit() {
+        tracing::warn!(
+            "📐 Star-metadata fill commit failed for db={}: {}",
+            ctx.id,
+            e
+        );
+        return 0;
     }
     if filled > 0 {
         tracing::info!(
@@ -2949,24 +3411,29 @@ pub async fn get_image(
 
     // Try to resolve the filesystem path for the FITS file
     let delayed_probe = ctx.delayed_file_probe(image.id);
-    let resolved_fits_path = metadata["FileName"].as_str().and_then(|filename| {
-        let file_only = filename.split(&['\\', '/'][..]).next_back()?;
+    let resolved_fits_path = if let Some(filename) = metadata["FileName"].as_str() {
+        let file_only = filename.split(&['\\', '/'][..]).next_back();
         if delayed_probe == crate::server::database_context::DelayedFileProbe::Wait {
-            return None;
-        }
-        let resolved = if delayed_probe == crate::server::database_context::DelayedFileProbe::Probe
-        {
-            find_fits_file_cached(&ctx, &image, &target_name, file_only)
+            None
+        } else if let Some(file_only) = file_only {
+            let resolved =
+                if delayed_probe == crate::server::database_context::DelayedFileProbe::Probe {
+                    find_fits_file_cached_async(&ctx.0, &image, &target_name, file_only).await
+                } else {
+                    find_fits_file_async(&ctx.0, &image, &target_name, file_only).await
+                };
+            // Detail metadata remains usable for a missing or ambiguous
+            // source; preview generation-status carries the terminal message.
+            resolved.ok().filter(|path| {
+                delayed_probe != crate::server::database_context::DelayedFileProbe::Probe
+                    || ctx.delayed_source_is_stable(image.id, path)
+            })
         } else {
-            find_fits_file(&ctx, &image, &target_name, file_only)
-        };
-        // Detail metadata remains usable for a missing or ambiguous source;
-        // preview generation-status carries the specific terminal message.
-        resolved.ok().filter(|path| {
-            delayed_probe != crate::server::database_context::DelayedFileProbe::Probe
-                || ctx.delayed_source_is_stable(image.id, path)
-        })
-    });
+            None
+        }
+    } else {
+        None
+    };
 
     let filesystem_path_string = resolved_fits_path
         .as_ref()
@@ -3255,11 +3722,10 @@ pub(crate) fn preview_cache_key(
     midtone: f64,
     shadow: f64,
     color: bool,
+    mapping_revision: Option<&str>,
 ) -> String {
-    // The colour marker only appears when colour was asked for, so every
-    // greyscale preview already on disk keeps its key and stays valid.
-    format!(
-        "{}_{}_{}_{}_{}_{}_{}_{}_{}_{}{}",
+    let mut key = format!(
+        "{}_{}_{}_{}_{}_{}_{}_{}_{}_{}",
         image.id,
         image.project_id,
         image.target_id,
@@ -3270,8 +3736,15 @@ pub(crate) fn preview_cache_key(
         (midtone * 10000.0) as i32,
         (shadow * 10000.0) as i32,
         image_file_identity_cache_token(image),
-        if color { "_color" } else { "" },
-    )
+    );
+    if let Some(revision) = mapping_revision {
+        let _ = write!(&mut key, "_mapping_{revision}");
+    }
+    // The colour marker remains last, so existing unmapped keys do not move.
+    if color {
+        key.push_str("_color");
+    }
+    key
 }
 
 fn image_file_identity_cache_token(image: &crate::models::AcquiredImage) -> String {
@@ -3344,10 +3817,11 @@ pub(crate) fn annotated_cache_key(
     file_only: &str,
     size: &str,
     max_stars: usize,
+    mapping_revision: Option<&str>,
 ) -> String {
     // v3: stars now carry HFR labels (v2: telescope-class presets), so
     // earlier renders are stale.
-    format!(
+    let mut key = format!(
         "annotated_v4_{}_{}_{}_{}_{}_{}_{}_{}",
         image.id,
         image.project_id,
@@ -3357,7 +3831,37 @@ pub(crate) fn annotated_cache_key(
         size,
         max_stars,
         image_file_identity_cache_token(image),
-    )
+    );
+    if let Some(revision) = mapping_revision {
+        let _ = write!(&mut key, "_mapping_{revision}");
+    }
+    key
+}
+
+/// The durable upload mapping is part of rendered-artifact identity. A worker
+/// that started before a remap keeps writing its old key, while new requests
+/// immediately address the new mapping's key.
+pub(crate) fn rendered_artifact_mapping_revision(
+    ctx: &DatabaseContext,
+    image: &crate::models::AcquiredImage,
+) -> Result<Option<String>, AppError> {
+    use crate::server::remote_upload::{resolve_mapped_light_file, MappedLightFile};
+
+    let mapping = {
+        let connection = ctx.db();
+        let connection = connection.lock().map_err(AppError::db)?;
+        resolve_mapped_light_file(&connection, &ctx.image_dir_paths, image)?
+    };
+    match mapping {
+        MappedLightFile::Absent => Ok(None),
+        MappedLightFile::Invalid => Err(AppError::Conflict(
+            "remote image provenance no longer matches this scheduler row".into(),
+        )),
+        MappedLightFile::Missing { artifact_revision }
+        | MappedLightFile::Ready {
+            artifact_revision, ..
+        } => Ok(Some(artifact_revision)),
+    }
 }
 
 /// Resolve the on-disk cache path for a preview/annotated artifact, creating
@@ -3381,22 +3885,66 @@ fn artifact_cache_path(
 
 /// Serve a cached image, labelled as whatever it was written as rather than as
 /// whatever the setting says now.
-async fn serve_cached_png(cache_path: &std::path::Path) -> Result<Response, AppError> {
-    let buffer = tokio::fs::read(cache_path)
+async fn serve_cached_png(
+    cache_path: &std::path::Path,
+    request_headers: &HeaderMap,
+) -> Result<Response, AppError> {
+    let metadata = tokio::fs::metadata(cache_path)
         .await
         .map_err(|_| AppError::InternalError("Failed to read cache".to_string()))?;
-    Ok((
-        StatusCode::OK,
-        [
-            (
+    let mut etag_hash = Sha256::new();
+    etag_hash.update(cache_path.to_string_lossy().as_bytes());
+    etag_hash.update(metadata.len().to_le_bytes());
+    if let Ok(modified) = metadata.modified()
+        && let Ok(elapsed) = modified.duration_since(std::time::UNIX_EPOCH)
+    {
+        etag_hash.update(elapsed.as_secs().to_le_bytes());
+        etag_hash.update(elapsed.subsec_nanos().to_le_bytes());
+    }
+    let digest = etag_hash.finalize();
+    let mut etag = String::with_capacity(26);
+    etag.push('"');
+    for byte in digest.iter().take(12) {
+        let _ = write!(&mut etag, "{byte:02x}");
+    }
+    etag.push('"');
+    let not_modified = request_headers
+        .get(IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|values| {
+            values.split(',').any(|value| {
+                let value = value.trim();
+                value == etag || value.strip_prefix("W/") == Some(etag.as_str())
+            })
+        });
+
+    let mut response = if not_modified {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        let buffer = tokio::fs::read(cache_path)
+            .await
+            .map_err(|_| AppError::InternalError("Failed to read cache".to_string()))?;
+        (
+            StatusCode::OK,
+            [(
                 CONTENT_TYPE,
                 crate::preview_format::PreviewFormat::of_path(cache_path).content_type(),
-            ),
-            (CACHE_CONTROL, "max-age=86400"),
-        ],
-        buffer,
-    )
-        .into_response())
+            )],
+            buffer,
+        )
+            .into_response()
+    };
+    // The URL names a scheduler row, not the current upload mapping. Require
+    // revalidation, then let unchanged artifacts complete with a bodyless 304.
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    response.headers_mut().insert(
+        ETAG,
+        HeaderValue::from_str(&etag)
+            .map_err(|_| AppError::InternalError("Invalid cache ETag".to_string()))?,
+    );
+    Ok(response)
 }
 
 async fn write_cache_atomic(path: &FsPath, contents: &[u8]) -> std::io::Result<()> {
@@ -3471,6 +4019,7 @@ pub async fn get_image_preview(
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,
     Query(options): Query<PreviewOptions>,
+    headers: HeaderMap,
 ) -> Result<Response, AppError> {
     let size = options.size.as_deref().unwrap_or("screen");
     let stretch = options.stretch.unwrap_or(true);
@@ -3481,14 +4030,24 @@ pub async fn get_image_preview(
         .unwrap_or_else(|| state.preview_color_default());
 
     let (image, file_only, target_name) = resolve_image_meta(&ctx, image_id)?;
-    let cache_key = preview_cache_key(&image, &file_only, size, stretch, midtone, shadow, color);
+    let mapping_revision = rendered_artifact_mapping_revision(&ctx, &image)?;
+    let cache_key = preview_cache_key(
+        &image,
+        &file_only,
+        size,
+        stretch,
+        midtone,
+        shadow,
+        color,
+        mapping_revision.as_deref(),
+    );
     let cache_path = artifact_cache_path(&ctx, "previews", &cache_key, state.preview_encoding())?;
 
     let delayed_probe = ctx.delayed_file_probe(image.id);
     if delayed_probe == crate::server::database_context::DelayedFileProbe::NotPending
         && cache_path.exists()
     {
-        return serve_cached_png(&cache_path).await;
+        return serve_cached_png(&cache_path, &headers).await;
     }
 
     // Miss: resolve the source (404 if truly missing), hand generation to the
@@ -3497,9 +4056,9 @@ pub async fn get_image_preview(
         return Ok(generating_response());
     }
     let source = if delayed_probe == crate::server::database_context::DelayedFileProbe::Probe {
-        find_fits_file_cached(&ctx, &image, &target_name, &file_only)
+        find_fits_file_cached_async(&ctx.0, &image, &target_name, &file_only).await
     } else {
-        find_fits_file(&ctx, &image, &target_name, &file_only)
+        find_fits_file_async(&ctx.0, &image, &target_name, &file_only).await
     };
     let fits_path = match source {
         Ok(path) => path,
@@ -3517,7 +4076,7 @@ pub async fn get_image_preview(
         && tracked_cache_matches_source(&state, &cache_path, &fits_path)?
     {
         if ctx.complete_delayed_file_probe(image.id, &fits_path) {
-            return serve_cached_png(&cache_path).await;
+            return serve_cached_png(&cache_path, &headers).await;
         }
         return Ok(generating_response());
     }
@@ -3548,6 +4107,51 @@ pub fn find_fits_file(
         FileResolutionPolicy::Ordinary
     };
     find_fits_file_inner(ctx, image, target_name, filename, policy, true, None)
+}
+
+/// Resolve a source on Tokio's blocking pool. A durable remote-upload mapping
+/// can require one full-file SHA-256 on a cold process, which must not run on
+/// an async request worker.
+pub(crate) async fn find_fits_file_async(
+    ctx: &Arc<DatabaseContext>,
+    image: &crate::models::AcquiredImage,
+    target_name: &str,
+    filename: &str,
+) -> Result<std::path::PathBuf, AppError> {
+    find_fits_file_on_blocking_pool(ctx, image, target_name, filename, false).await
+}
+
+async fn find_fits_file_cached_async(
+    ctx: &Arc<DatabaseContext>,
+    image: &crate::models::AcquiredImage,
+    target_name: &str,
+    filename: &str,
+) -> Result<std::path::PathBuf, AppError> {
+    find_fits_file_on_blocking_pool(ctx, image, target_name, filename, true).await
+}
+
+async fn find_fits_file_on_blocking_pool(
+    ctx: &Arc<DatabaseContext>,
+    image: &crate::models::AcquiredImage,
+    target_name: &str,
+    filename: &str,
+    cached_only: bool,
+) -> Result<std::path::PathBuf, AppError> {
+    let ctx = Arc::clone(ctx);
+    let image = image.clone();
+    let target_name = target_name.to_string();
+    let filename = filename.to_string();
+    tokio::task::spawn_blocking(move || {
+        if cached_only {
+            find_fits_file_cached(&ctx, &image, &target_name, &filename)
+        } else {
+            find_fits_file(&ctx, &image, &target_name, &filename)
+        }
+    })
+    .await
+    .map_err(|error| {
+        AppError::InternalError(format!("FITS source resolution task failed: {error}"))
+    })?
 }
 
 /// A delayed remote row needs stronger identity proof than an ordinary local
@@ -3618,6 +4222,16 @@ fn find_fits_file_inner(
     let canonical_roots = shared_canonical_roots
         .or(owned_canonical_roots.as_deref())
         .unwrap_or_default();
+
+    if let Some(path) = resolve_mapped_remote_image(ctx, image, canonical_roots)? {
+        tracing::debug!(
+            image_id = image.id,
+            path = %path.display(),
+            "Resolved image through durable remote-upload provenance"
+        );
+        ctx.record_resolved_image_file(image, &path);
+        return Ok(path);
+    }
 
     // Date-based layouts are a fast path, not a prerequisite. A remote sync
     // can legitimately carry no acquireddate while retaining the original
@@ -3748,6 +4362,127 @@ fn find_fits_file_inner(
         filename
     );
     Err(AppError::NotFound)
+}
+
+fn resolve_mapped_remote_image(
+    ctx: &DatabaseContext,
+    image: &crate::models::AcquiredImage,
+    canonical_roots: &[PathBuf],
+) -> Result<Option<PathBuf>, AppError> {
+    resolve_mapped_remote_image_with(ctx, image, canonical_roots, mapped_file_sha256)
+}
+
+fn resolve_mapped_remote_image_with(
+    ctx: &DatabaseContext,
+    image: &crate::models::AcquiredImage,
+    canonical_roots: &[PathBuf],
+    hash_file: impl FnOnce(&FsPath) -> Result<String, AppError>,
+) -> Result<Option<PathBuf>, AppError> {
+    use crate::server::remote_upload::{resolve_mapped_light_file, MappedLightFile};
+
+    let mapping = {
+        let connection = ctx.db();
+        let connection = connection.lock().map_err(AppError::db)?;
+        resolve_mapped_light_file(&connection, canonical_roots, image)?
+    };
+    let MappedLightFile::Ready {
+        path,
+        sha256: expected_sha256,
+        ..
+    } = mapping
+    else {
+        return match mapping {
+            MappedLightFile::Absent => Ok(None),
+            MappedLightFile::Invalid => Err(AppError::Conflict(
+                "remote image provenance no longer matches this scheduler row".into(),
+            )),
+            MappedLightFile::Missing { .. } => Err(AppError::NotFound),
+            MappedLightFile::Ready { .. } => unreachable!(),
+        };
+    };
+
+    let observed_identity = remote_image_file_identity(&path).ok_or(AppError::NotFound)?;
+    if ctx.remote_image_verification_is_current(image.id, &observed_identity, &expected_sha256) {
+        return Ok(Some(path));
+    }
+
+    let verification_lock =
+        ctx.remote_image_verification_lock(&observed_identity, &expected_sha256);
+    let _verification_guard = verification_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    // A concurrent resolver may have completed while this one waited. Re-stat
+    // before trusting its result so a replace cannot move this request onto a
+    // lock keyed for different bytes.
+    let before = remote_image_file_identity(&path).ok_or(AppError::NotFound)?;
+    if before != observed_identity {
+        ctx.clear_remote_image_verification(image.id);
+        return Err(AppError::Conflict(format!(
+            "mapped remote image {} changed while its upload identity was being verified",
+            path.display()
+        )));
+    }
+    if ctx.remote_image_verification_is_current(image.id, &before, &expected_sha256) {
+        return Ok(Some(path));
+    }
+    if ctx.remote_image_verification_is_known(&before, &expected_sha256) {
+        ctx.record_remote_image_verification(image.id, before, &expected_sha256);
+        return Ok(Some(path));
+    }
+
+    let actual_sha256 = hash_file(&path)?;
+    let after = remote_image_file_identity(&path).ok_or(AppError::NotFound)?;
+    if before != after {
+        ctx.clear_remote_image_verification(image.id);
+        return Err(AppError::Conflict(format!(
+            "mapped remote image {} changed while its upload identity was being verified",
+            path.display()
+        )));
+    }
+    if !actual_sha256.eq_ignore_ascii_case(&expected_sha256) {
+        ctx.clear_remote_image_verification(image.id);
+        return Err(AppError::Conflict(format!(
+            "mapped remote image {} no longer matches the content accepted during upload",
+            path.display()
+        )));
+    }
+
+    ctx.record_remote_image_verification(image.id, after, &expected_sha256);
+    Ok(Some(path))
+}
+
+fn mapped_file_sha256(path: &FsPath) -> Result<String, AppError> {
+    let mut file = std::fs::File::open(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            AppError::NotFound
+        } else {
+            AppError::InternalError(format!(
+                "opening mapped remote image {}: {error}",
+                path.display()
+            ))
+        }
+    })?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| {
+            AppError::InternalError(format!(
+                "reading mapped remote image {}: {error}",
+                path.display()
+            ))
+        })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let digest = hasher.finalize();
+    let mut encoded = String::with_capacity(64);
+    for byte in digest {
+        let _ = write!(&mut encoded, "{byte:02x}");
+    }
+    Ok(encoded)
 }
 
 const CAPTURE_IDENTITY_TIME_TOLERANCE_SECS: u64 = 2;
@@ -3998,7 +4733,7 @@ pub async fn get_image_stars(
         (image, file_only, target_name)
     };
 
-    let fits_path = find_fits_file(&ctx, &image, &target_name, &file_only)?;
+    let fits_path = find_fits_file_async(&ctx.0, &image, &target_name, &file_only).await?;
     let source_token = source_file_cache_token(&fits_path)
         .ok_or_else(|| AppError::Conflict("Source file is not ready".to_string()))?;
 
@@ -4123,28 +4858,36 @@ pub async fn get_annotated_image(
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,
     Query(options): Query<PreviewOptions>,
+    headers: HeaderMap,
 ) -> Result<Response, AppError> {
     let size = options.size.as_deref().unwrap_or("screen");
     let max_stars = options.max_stars.unwrap_or(1000) as usize;
 
     let (image, file_only, target_name) = resolve_image_meta(&ctx, image_id)?;
-    let cache_key = annotated_cache_key(&image, &file_only, size, max_stars);
+    let mapping_revision = rendered_artifact_mapping_revision(&ctx, &image)?;
+    let cache_key = annotated_cache_key(
+        &image,
+        &file_only,
+        size,
+        max_stars,
+        mapping_revision.as_deref(),
+    );
     let cache_path = artifact_cache_path(&ctx, "annotated", &cache_key, state.preview_encoding())?;
 
     let delayed_probe = ctx.delayed_file_probe(image.id);
     if delayed_probe == crate::server::database_context::DelayedFileProbe::NotPending
         && cache_path.exists()
     {
-        return serve_cached_png(&cache_path).await;
+        return serve_cached_png(&cache_path, &headers).await;
     }
 
     if delayed_probe == crate::server::database_context::DelayedFileProbe::Wait {
         return Ok(generating_response());
     }
     let source = if delayed_probe == crate::server::database_context::DelayedFileProbe::Probe {
-        find_fits_file_cached(&ctx, &image, &target_name, &file_only)
+        find_fits_file_cached_async(&ctx.0, &image, &target_name, &file_only).await
     } else {
-        find_fits_file(&ctx, &image, &target_name, &file_only)
+        find_fits_file_async(&ctx.0, &image, &target_name, &file_only).await
     };
     let fits_path = match source {
         Ok(path) => path,
@@ -4162,7 +4905,7 @@ pub async fn get_annotated_image(
         && tracked_cache_matches_source(&state, &cache_path, &fits_path)?
     {
         if ctx.complete_delayed_file_probe(image.id, &fits_path) {
-            return serve_cached_png(&cache_path).await;
+            return serve_cached_png(&cache_path, &headers).await;
         }
         return Ok(generating_response());
     }
@@ -4215,6 +4958,12 @@ pub struct GenerationStatusBatch {
 
 const MAX_DELAYED_FILE_PROBES_PER_STATUS_BATCH: usize = 8;
 
+struct GenerationStatusLookup<'a> {
+    images: &'a HashMap<i32, crate::models::AcquiredImage>,
+    target_names: &'a HashMap<i32, String>,
+    mapped_sources: &'a crate::server::remote_upload::MappedLightSources,
+}
+
 fn consume_delayed_batch_probe(
     probes: &HashMap<i32, crate::server::database_context::DelayedFileProbe>,
     image_id: i32,
@@ -4251,9 +5000,10 @@ pub async fn post_generation_status(
     // per-tile "error"; only an id genuinely absent from the results is
     // terminal.
     let ids: Vec<i32> = req.requests.iter().map(|r| r.image_id).collect();
-    let (images_by_id, target_names): (
+    let (images_by_id, target_names, mapped_sources): (
         HashMap<i32, crate::models::AcquiredImage>,
         HashMap<i32, String>,
+        crate::server::remote_upload::MappedLightSources,
     ) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
@@ -4261,9 +5011,15 @@ pub async fn post_generation_status(
         let images = db.get_images_by_ids(&ids).map_err(AppError::db)?;
         let target_ids: Vec<i32> = images.iter().map(|i| i.target_id).collect();
         let targets = db.get_targets_by_ids(&target_ids).map_err(AppError::db)?;
+        let mapped_sources = crate::server::remote_upload::mapped_light_sources(
+            &conn,
+            &ctx.image_dir_paths,
+            images.iter(),
+        )?;
         (
             images.into_iter().map(|i| (i.id, i)).collect(),
             targets.into_iter().map(|t| (t.id, t.name)).collect(),
+            mapped_sources,
         )
     };
 
@@ -4274,6 +5030,11 @@ pub async fn post_generation_status(
     let statuses = tokio::task::spawn_blocking(move || {
         let mut canonical_roots = None;
         let mut consumed_probe_ids = std::collections::HashSet::new();
+        let lookup = GenerationStatusLookup {
+            images: &images_by_id,
+            target_names: &target_names,
+            mapped_sources: &mapped_sources,
+        };
         requests
             .iter()
             .map(|item| {
@@ -4286,8 +5047,7 @@ pub async fn post_generation_status(
                     &state,
                     &ctx,
                     item,
-                    &images_by_id,
-                    &target_names,
+                    &lookup,
                     delayed_probe,
                     &mut canonical_roots,
                 )
@@ -4313,8 +5073,7 @@ fn status_for_item(
     state: &Arc<AppState>,
     ctx: &DatabaseContext,
     item: &GenStatusItem,
-    images_by_id: &HashMap<i32, crate::models::AcquiredImage>,
-    target_names: &HashMap<i32, String>,
+    lookup: &GenerationStatusLookup<'_>,
     delayed_probe: crate::server::database_context::DelayedFileProbe,
     canonical_roots: &mut Option<Vec<PathBuf>>,
 ) -> crate::server::preview_queue::GenerationStatus {
@@ -4333,21 +5092,34 @@ fn status_for_item(
     let encoding = state.preview_encoding();
     let color_default = state.preview_color_default();
 
-    let Some(image) = images_by_id.get(&item.image_id) else {
+    let Some(image) = lookup.images.get(&item.image_id) else {
         return err("image not found");
     };
-    let Some(target_name) = target_names.get(&image.target_id) else {
+    let Some(target_name) = lookup.target_names.get(&image.target_id) else {
         return err("target not found");
     };
     let Some(file_only) = filename_from_metadata(&image.metadata) else {
         return err("no filename in metadata");
     };
+    if lookup.mapped_sources.is_invalid(image.id) {
+        return err("remote image provenance is invalid");
+    }
+    let mapping_revision = lookup
+        .mapped_sources
+        .get(&image.id)
+        .and_then(|source| source.revision.strip_prefix("mapping:").map(str::to_owned));
 
     let size = item.size.clone().unwrap_or_else(|| "screen".to_string());
     let (cache_path, kind) = match item.kind.as_deref() {
         Some("annotated") => {
             let max_stars = item.max_stars.unwrap_or(1000) as usize;
-            let key = annotated_cache_key(image, &file_only, &size, max_stars);
+            let key = annotated_cache_key(
+                image,
+                &file_only,
+                &size,
+                max_stars,
+                mapping_revision.as_deref(),
+            );
             match artifact_cache_path(ctx, "annotated", &key, encoding) {
                 Ok(p) => (
                     p,
@@ -4364,7 +5136,16 @@ fn status_for_item(
             let midtone = item.midtone.unwrap_or(0.2);
             let shadow = item.shadow.unwrap_or(-2.8);
             let color = item.color.unwrap_or(color_default);
-            let key = preview_cache_key(image, &file_only, &size, stretch, midtone, shadow, color);
+            let key = preview_cache_key(
+                image,
+                &file_only,
+                &size,
+                stretch,
+                midtone,
+                shadow,
+                color,
+                mapping_revision.as_deref(),
+            );
             match artifact_cache_path(ctx, "previews", &key, encoding) {
                 Ok(p) => (
                     p,
@@ -4522,7 +5303,7 @@ pub async fn get_psf_visualization(
 
     let psf_type: PSFType = psf_type_str.parse().unwrap_or(PSFType::Moffat4);
 
-    let fits_path = find_fits_file(&ctx, &image, &target_name, &file_only)?;
+    let fits_path = find_fits_file_async(&ctx.0, &image, &target_name, &file_only).await?;
     let source_token = source_file_cache_token(&fits_path)
         .ok_or_else(|| AppError::Conflict("Source file is not ready".to_string()))?;
 
@@ -4927,7 +5708,7 @@ pub async fn analyze_sequence(
     // Fetch images from the requested target, project, or database. Wider
     // scopes still score each target/filter group independently and only read
     // evidence already stored in metadata or caches.
-    let (images_data, expected_by_image) = {
+    let (images_data, expected_by_image, mapped_sources) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
@@ -4983,7 +5764,12 @@ pub async fn analyze_sequence(
             images_data.push(image);
         }
 
-        (images_data, expected_by_image)
+        let mapped_sources = crate::server::remote_upload::mapped_light_sources(
+            &conn,
+            &ctx.image_dir_paths,
+            images_data.iter().map(|(image, _, _)| image),
+        )?;
+        (images_data, expected_by_image, mapped_sources)
     };
 
     if images_data.is_empty() {
@@ -5044,13 +5830,22 @@ pub async fn analyze_sequence(
         for (img, _project_name, target_name) in &images_data {
             let mut metrics =
                 extract_metrics_from_metadata(img.id, &img.metadata, img.acquired_date);
-            merge_spatial_metrics(&mut metrics, &spatial_store, &img.metadata);
+            let mapped_source = mapped_sources.get(&img.id);
+            let mapped_source_revision = mapped_sources.quality_revision(img.id);
+            merge_spatial_metrics(
+                &mut metrics,
+                &spatial_store,
+                &img.metadata,
+                mapped_source_revision,
+            );
             merge_astrometry_metrics(
                 &mut metrics,
                 &astrometry_cache_dir,
                 &img.metadata,
                 &astrometry_evidence,
                 expected_by_image.get(&img.id).copied().flatten(),
+                mapped_source.map(|source| source.path.as_path()),
+                mapped_sources.is_invalid(img.id),
             );
             // Key on the normalized filter so case or whitespace variants of
             // one physical filter form ONE comparison cohort; the raw name
@@ -5066,7 +5861,12 @@ pub async fn analyze_sequence(
             entries_by_group
                 .entry(group.clone())
                 .or_default()
-                .push(stored_entry_for(&spatial_store, img.id, &img.metadata));
+                .push(stored_entry_for(
+                    &spatial_store,
+                    img.id,
+                    &img.metadata,
+                    mapped_source_revision,
+                ));
             by_group.entry(group).or_default().push(metrics);
         }
 
@@ -5139,7 +5939,7 @@ pub async fn get_image_quality(
     };
 
     // Get the target image and its context from database
-    let (target_image, all_filter_images, target_name, expected_by_image) = {
+    let (target_image, all_filter_images, target_name, expected_by_image, mapped_sources) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
@@ -5178,7 +5978,19 @@ pub async fn get_image_quality(
             .collect::<Result<std::collections::HashMap<_, _>, _>>()
             .map_err(AppError::db)?;
 
-        (target_image, filter_images, target_name, expected_by_image)
+        let mapped_sources = crate::server::remote_upload::mapped_light_sources(
+            &conn,
+            &ctx.image_dir_paths,
+            filter_images.iter().map(|(image, _, _)| image),
+        )?;
+
+        (
+            target_image,
+            filter_images,
+            target_name,
+            expected_by_image,
+            mapped_sources,
+        )
     };
 
     if all_filter_images.is_empty() {
@@ -5213,15 +6025,29 @@ pub async fn get_image_quality(
         let mut entries = Vec::with_capacity(all_filter_images.len());
         for (img, _, _) in &all_filter_images {
             let mut m = extract_metrics_from_metadata(img.id, &img.metadata, img.acquired_date);
-            merge_spatial_metrics(&mut m, &spatial_store, &img.metadata);
+            let mapped_source = mapped_sources.get(&img.id);
+            let mapped_source_revision = mapped_sources.quality_revision(img.id);
+            merge_spatial_metrics(
+                &mut m,
+                &spatial_store,
+                &img.metadata,
+                mapped_source_revision,
+            );
             merge_astrometry_metrics(
                 &mut m,
                 &astrometry_cache_dir,
                 &img.metadata,
                 &astrometry_evidence,
                 expected_by_image.get(&img.id).copied().flatten(),
+                mapped_source.map(|source| source.path.as_path()),
+                mapped_sources.is_invalid(img.id),
             );
-            entries.push(stored_entry_for(&spatial_store, img.id, &img.metadata));
+            entries.push(stored_entry_for(
+                &spatial_store,
+                img.id,
+                &img.metadata,
+                mapped_source_revision,
+            ));
             metrics.push(m);
         }
         merge_photometric_signals(&mut metrics, &entries, session_gap_minutes);
@@ -5282,9 +6108,15 @@ pub(crate) fn stored_entry_for(
     store: &crate::server::spatial_scan::SharedSpatialStore,
     image_id: i32,
     metadata_json: &str,
+    mapped_source_revision: Option<&str>,
 ) -> Option<crate::server::spatial_scan::StoredSpatialMetrics> {
     let file_only = filename_from_metadata(metadata_json)?;
-    crate::server::spatial_scan::valid_quality_entry(store, image_id, &file_only)
+    crate::server::spatial_scan::valid_quality_entry_for_source(
+        store,
+        image_id,
+        &file_only,
+        mapped_source_revision,
+    )
 }
 
 /// Run the cross-frame photometric pass (transparency, localized extinction,
@@ -5403,13 +6235,17 @@ pub(crate) fn merge_spatial_metrics(
     metrics: &mut crate::sequence_analysis::ImageMetrics,
     store: &crate::server::spatial_scan::SharedSpatialStore,
     metadata_json: &str,
+    mapped_source_revision: Option<&str>,
 ) {
     let Some(file_only) = filename_from_metadata(metadata_json) else {
         return;
     };
-    if let Some(entry) =
-        crate::server::spatial_scan::valid_entry(store, metrics.image_id, &file_only)
-    {
+    if let Some(entry) = crate::server::spatial_scan::valid_entry_for_source(
+        store,
+        metrics.image_id,
+        &file_only,
+        mapped_source_revision,
+    ) {
         if entry.detector == crate::server::spatial_scan::QUALITY_DETECTOR
             && entry.detector_version == crate::server::spatial_scan::QUALITY_DETECTOR_VERSION
         {
@@ -5434,7 +6270,12 @@ pub(crate) fn merge_astrometry_metrics(
     metadata_json: &str,
     evidence: &crate::astrometry::AstrometryEvidenceCache,
     expected_target: Option<(f64, f64)>,
+    mapped_source_path: Option<&std::path::Path>,
+    mapped_source_invalid: bool,
 ) {
+    if mapped_source_invalid {
+        return;
+    }
     let Some(file_only) = filename_from_metadata(metadata_json) else {
         return;
     };
@@ -5442,10 +6283,11 @@ pub(crate) fn merge_astrometry_metrics(
     else {
         return;
     };
-    let cached_file = std::path::Path::new(&analysis.source_fingerprint.canonical_path)
-        .file_name()
-        .and_then(|name| name.to_str());
-    if cached_file != Some(file_only.as_str()) {
+    if !cached_pixel_source_matches(
+        &analysis.source_fingerprint.canonical_path,
+        &file_only,
+        mapped_source_path,
+    ) {
         return;
     }
     metrics.astrometry = crate::sequence_analysis::astrometry_metrics_from_analysis(&analysis);
@@ -5453,6 +6295,55 @@ pub(crate) fn merge_astrometry_metrics(
         crate::satellites::persisted_analysis(cache_dir, metrics.image_id, &analysis)
             .as_ref()
             .map(crate::sequence_analysis::SatelliteFrameMetrics::from);
+}
+
+fn cached_pixel_source_matches(
+    cached_path: &str,
+    filename: &str,
+    mapped_source_path: Option<&std::path::Path>,
+) -> bool {
+    let cached_path = std::path::Path::new(cached_path);
+    if let Some(mapped_source_path) = mapped_source_path {
+        #[cfg(windows)]
+        {
+            return dunce::simplified(cached_path)
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&dunce::simplified(mapped_source_path).to_string_lossy());
+        }
+        #[cfg(not(windows))]
+        {
+            return cached_path == mapped_source_path;
+        }
+    }
+    cached_path.file_name().and_then(|name| name.to_str()) == Some(filename)
+}
+
+#[cfg(test)]
+mod cached_pixel_source_tests {
+    use super::cached_pixel_source_matches;
+
+    #[test]
+    fn mapped_evidence_requires_the_exact_registered_source_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let current = directory.path().join("current").join("frame.fits");
+        let old = directory.path().join("old").join("frame.fits");
+
+        assert!(cached_pixel_source_matches(
+            &current.to_string_lossy(),
+            "frame.fits",
+            Some(&current)
+        ));
+        assert!(!cached_pixel_source_matches(
+            &old.to_string_lossy(),
+            "frame.fits",
+            Some(&current)
+        ));
+        assert!(cached_pixel_source_matches(
+            &old.to_string_lossy(),
+            "frame.fits",
+            None
+        ));
+    }
 }
 
 /// POST /api/db/{db_id}/analysis/spatial-scan
@@ -5495,7 +6386,7 @@ async fn start_spatial_scan_with_priority(
     // Collect this target's images together with schema-adaptive intended
     // framing. Unsupported coordinate epochs are deliberately omitted from
     // absolute grading, though the solver may still use FITS hints.
-    let candidates = {
+    let (candidates, mapped_sources) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
@@ -5528,7 +6419,12 @@ async fn start_spatial_scan_with_priority(
                 .map_err(AppError::db)?;
             candidates.push((img, target_name.clone(), expected));
         }
-        candidates
+        let mapped_sources = crate::server::remote_upload::mapped_light_sources(
+            &conn,
+            &ctx.image_dir_paths,
+            candidates.iter().map(|(image, _, _)| image),
+        )?;
+        (candidates, mapped_sources)
     };
 
     // Keep the union of spatial, astrometry, and satellite work. One side may
@@ -5538,7 +6434,7 @@ async fn start_spatial_scan_with_priority(
     // once the scan has measurements, they are written back to the DB —
     // unless the caller opted out of metadata writes.
     let fill_metadata = req.fill_metadata.unwrap_or(true);
-    let mut star_fill: Vec<(i32, String, String)> = Vec::new();
+    let mut star_fill: Vec<(i32, String, String, Option<String>)> = Vec::new();
     let mut skipped_cached = 0usize;
     let force_spatial = req.force || req.force_spatial;
     let force_astrometry = req.force || req.force_astrometry;
@@ -5549,10 +6445,21 @@ async fn start_spatial_scan_with_priority(
         };
         if fill_metadata && crate::server::spatial_scan::metadata_lacks_star_metrics(&img.metadata)
         {
-            star_fill.push((img.id, file_only.clone(), img.metadata.clone()));
+            star_fill.push((
+                img.id,
+                file_only.clone(),
+                img.metadata.clone(),
+                mapped_sources.quality_revision(img.id).map(str::to_owned),
+            ));
         }
         let spatial_cached = !force_spatial
-            && scan::valid_quality_entry(&ctx.spatial_metrics, img.id, &file_only).is_some();
+            && scan::valid_quality_entry_for_source(
+                &ctx.spatial_metrics,
+                img.id,
+                &file_only,
+                mapped_sources.quality_revision(img.id),
+            )
+            .is_some();
         if spatial_cached {
             skipped_cached += 1;
         }
@@ -5566,10 +6473,14 @@ async fn start_spatial_scan_with_priority(
             })
             .flatten()
             .filter(|analysis| {
-                std::path::Path::new(&analysis.source_fingerprint.canonical_path)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    == Some(file_only.as_str())
+                !mapped_sources.is_invalid(img.id)
+                    && cached_pixel_source_matches(
+                        &analysis.source_fingerprint.canonical_path,
+                        &file_only,
+                        mapped_sources
+                            .get(&img.id)
+                            .map(|source| source.path.as_path()),
+                    )
             });
         let astrometry_cached = cached_astrometry.is_some();
         let satellite_cached = !include_satellites
@@ -5664,12 +6575,38 @@ async fn start_spatial_scan_with_priority(
                 need_satellite,
             ) in &work
             {
-                match find_fits_file(&ctx_arc, img, target_name, file_only) {
-                    Ok(path) => items.push((
+                let source_generation = crate::server::spatial_scan::source_generation(
+                    &ctx_arc.spatial_metrics,
+                    img.id,
+                );
+                let resolved =
+                    find_fits_file(&ctx_arc, img, target_name, file_only).and_then(|path| {
+                        let source_revision = rendered_artifact_mapping_revision(&ctx_arc, img)?
+                            .map(|revision| format!("mapping:{revision}"))
+                            .or_else(|| {
+                                source_file_cache_token(&path)
+                                    .map(|revision| format!("file:{revision}"))
+                            });
+                        if source_generation
+                            != crate::server::spatial_scan::source_generation(
+                                &ctx_arc.spatial_metrics,
+                                img.id,
+                            )
+                        {
+                            return Err(AppError::Conflict(
+                                "image source changed while preparing the quality scan".into(),
+                            ));
+                        }
+                        Ok((path, source_revision))
+                    });
+                match resolved {
+                    Ok((path, source_revision)) => items.push((
                         crate::server::spatial_scan::ScanWorkItem {
                             image_id: img.id,
                             filename: file_only.clone(),
                             fits_path: path,
+                            source_generation,
+                            source_revision,
                         },
                         *expected,
                         *need_spatial,
@@ -6142,7 +7079,7 @@ mod delayed_ready_tests {
                 artifact_cache_path(
                     &ctx,
                     "annotated",
-                    &annotated_cache_key(&image, "arrived.fits", "screen", 1000),
+                    &annotated_cache_key(&image, "arrived.fits", "screen", 1000, None),
                     state.preview_encoding(),
                 )
                 .unwrap()
@@ -6158,6 +7095,7 @@ mod delayed_ready_tests {
                         0.2,
                         -2.8,
                         state.preview_color_default(),
+                        None,
                     ),
                     state.preview_encoding(),
                 )
@@ -6174,6 +7112,12 @@ mod delayed_ready_tests {
                 MAX_DELAYED_FILE_PROBES_PER_STATUS_BATCH,
             )[&IMAGE_ID];
             let mut canonical_roots = None;
+            let mapped_sources = crate::server::remote_upload::MappedLightSources::default();
+            let lookup = GenerationStatusLookup {
+                images: &images,
+                target_names: &targets,
+                mapped_sources: &mapped_sources,
+            };
             let status = status_for_item(
                 &state,
                 &ctx,
@@ -6187,8 +7131,7 @@ mod delayed_ready_tests {
                     max_stars: None,
                     color: None,
                 },
-                &images,
-                &targets,
+                &lookup,
                 delayed_probe,
                 &mut canonical_roots,
             );
@@ -6213,6 +7156,7 @@ mod delayed_ready_tests {
                     DbContext(Arc::clone(&ctx)),
                     Path(("test".into(), IMAGE_ID)),
                     Query(options),
+                    HeaderMap::new(),
                 )
                 .await
                 .unwrap()
@@ -6222,6 +7166,7 @@ mod delayed_ready_tests {
                     DbContext(Arc::clone(&ctx)),
                     Path(("test".into(), IMAGE_ID)),
                     Query(options),
+                    HeaderMap::new(),
                 )
                 .await
                 .unwrap()
@@ -6251,7 +7196,7 @@ mod delayed_ready_tests {
 mod preview_cache_key_tests {
     use super::{
         annotated_cache_key, image_file_identity_cache_token, preview_cache_key,
-        psf_multi_cache_key, star_detection_cache_key,
+        psf_multi_cache_key, serve_cached_png, star_detection_cache_key,
     };
     use crate::models::AcquiredImage;
 
@@ -6274,8 +7219,8 @@ mod preview_cache_key_tests {
     fn colour_and_greyscale_are_different_artifacts() {
         // They are rendered differently, so serving one for the other shows
         // the wrong pixels rather than a stale copy of the right ones.
-        let mono = preview_cache_key(&image(), "one.fits", "screen", true, 0.2, -2.8, false);
-        let color = preview_cache_key(&image(), "one.fits", "screen", true, 0.2, -2.8, true);
+        let mono = preview_cache_key(&image(), "one.fits", "screen", true, 0.2, -2.8, false, None);
+        let color = preview_cache_key(&image(), "one.fits", "screen", true, 0.2, -2.8, true, None);
         assert_ne!(mono, color);
         assert!(color.ends_with("_color"), "{color}");
     }
@@ -6285,7 +7230,7 @@ mod preview_cache_key_tests {
         // Previews already on disk were written before colour existed. The
         // marker only appears on the colour variant so those stay valid.
         assert!(
-            !preview_cache_key(&image(), "one.fits", "screen", true, 0.2, -2.8, false)
+            !preview_cache_key(&image(), "one.fits", "screen", true, 0.2, -2.8, false, None,)
                 .contains("color"),
         );
     }
@@ -6309,13 +7254,68 @@ mod preview_cache_key_tests {
                 crate::server::PREGENERATE_MIDTONE,
                 crate::server::PREGENERATE_SHADOW,
                 color,
+                None,
             );
             // What `get_image_preview` computes for a caller taking every
             // default on a server configured that way.
             let requested =
-                preview_cache_key(&image(), "one.fits", "screen", true, 0.2, -2.8, color);
+                preview_cache_key(&image(), "one.fits", "screen", true, 0.2, -2.8, color, None);
             assert_eq!(warmed, requested);
         }
+    }
+
+    #[test]
+    fn remote_mapping_changes_move_inflight_jobs_to_a_new_artifact() {
+        let first_preview = preview_cache_key(
+            &image(),
+            "one.fits",
+            "screen",
+            true,
+            0.2,
+            -2.8,
+            false,
+            Some("mapping-a"),
+        );
+        let remapped_preview = preview_cache_key(
+            &image(),
+            "one.fits",
+            "screen",
+            true,
+            0.2,
+            -2.8,
+            false,
+            Some("mapping-b"),
+        );
+        let first_annotated =
+            annotated_cache_key(&image(), "one.fits", "screen", 1000, Some("mapping-a"));
+        let remapped_annotated =
+            annotated_cache_key(&image(), "one.fits", "screen", 1000, Some("mapping-b"));
+
+        assert_ne!(first_preview, remapped_preview);
+        assert_ne!(first_annotated, remapped_annotated);
+        assert!(first_preview.contains("_mapping_mapping-a"));
+        assert!(remapped_preview.contains("_mapping_mapping-b"));
+    }
+
+    #[tokio::test]
+    async fn rendered_artifacts_require_browser_revalidation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("preview.png");
+        tokio::fs::write(&path, b"cached pixels").await.unwrap();
+
+        let response = serve_cached_png(&path, &axum::http::HeaderMap::new())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response.headers()[axum::http::header::CACHE_CONTROL],
+            "no-cache"
+        );
+        let etag = response.headers()[axum::http::header::ETAG].clone();
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(axum::http::header::IF_NONE_MATCH, etag);
+        let response = serve_cached_png(&path, &headers).await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_MODIFIED);
     }
 
     #[test]
@@ -6332,12 +7332,12 @@ mod preview_cache_key_tests {
             image_file_identity_cache_token(&moved)
         );
         assert_ne!(
-            preview_cache_key(&first, "one.fits", "screen", true, 0.2, -2.8, false),
-            preview_cache_key(&moved, "one.fits", "screen", true, 0.2, -2.8, false)
+            preview_cache_key(&first, "one.fits", "screen", true, 0.2, -2.8, false, None,),
+            preview_cache_key(&moved, "one.fits", "screen", true, 0.2, -2.8, false, None,)
         );
         assert_ne!(
-            annotated_cache_key(&first, "one.fits", "screen", 1000),
-            annotated_cache_key(&moved, "one.fits", "screen", 1000)
+            annotated_cache_key(&first, "one.fits", "screen", 1000, None),
+            annotated_cache_key(&moved, "one.fits", "screen", 1000, None)
         );
         assert_ne!(
             star_detection_cache_key(&first, "one.fits", "source-a"),
@@ -6353,13 +7353,16 @@ mod preview_cache_key_tests {
 #[cfg(test)]
 mod file_resolution_tests {
     use super::{
-        find_fits_file, find_fits_file_cached, metadata_suffix_candidates, AppError,
+        canonical_image_roots, fill_missing_star_metadata, find_fits_file, find_fits_file_cached,
+        mapped_file_sha256, metadata_suffix_candidates, resolve_mapped_remote_image_with, AppError,
         DatabaseContext,
     };
     use crate::commands::sync::ChangedAcquiredImage;
     use crate::models::AcquiredImage;
     use std::io::Write;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
     use std::time::Duration;
 
     const CAPTURE_TIME: i64 = 1_784_869_200;
@@ -6439,6 +7442,311 @@ mod file_resolution_tests {
         let mut file = std::fs::File::create(path).unwrap();
         file.write_all(&header).unwrap();
         file.write_all(&[0u8; 2880]).unwrap();
+    }
+
+    #[test]
+    fn remapped_upload_cannot_commit_stale_star_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let (ctx, image_root) = context(&temp);
+        let metadata = serde_json::json!({ "FileName": "remote/repeated.fits" }).to_string();
+        let old_path = image_root.join("old/repeated.fits");
+        let new_path = image_root.join("new/repeated.fits");
+
+        let old_revision = {
+            let connection = ctx.db();
+            let connection = connection.lock().unwrap();
+            connection
+                .execute_batch(
+                    "INSERT INTO project (Id, profileId, name, isMosaic, flatsHandling, guid)
+                         VALUES (7, 'profile', 'Project', 0, 0, 'project-guid');
+                     INSERT INTO target (Id, name, active, epochcode, projectId, guid)
+                         VALUES (3, 'Target', 1, 0, 7, 'target-guid');
+                     CREATE TABLE psf_guard_remote_image_file (
+                         acquiredimage_id INTEGER PRIMARY KEY,
+                         acquiredimage_guid TEXT,
+                         acquiredimage_identity TEXT,
+                         source_path TEXT NOT NULL,
+                         source_sha256 TEXT NOT NULL,
+                         updated_at INTEGER NOT NULL
+                     );",
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO acquiredimage
+                        (Id, projectId, targetId, acquireddate, filtername, gradingStatus,
+                         metadata, profileId, guid)
+                     VALUES (42, 7, 3, ?1, 'Ha', 0, ?2, 'profile', 'image-guid')",
+                    rusqlite::params![CAPTURE_TIME, metadata],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO psf_guard_remote_image_file
+                        (acquiredimage_id, acquiredimage_guid, acquiredimage_identity,
+                         source_path, source_sha256, updated_at)
+                     VALUES (42, 'image-guid', NULL, ?1, 'old-sha', 1)",
+                    [old_path.to_string_lossy().as_ref()],
+                )
+                .unwrap();
+            let images = crate::db::Database::new(&connection)
+                .get_images_by_ids(&[42])
+                .unwrap();
+            crate::server::remote_upload::mapped_light_sources(
+                &connection,
+                &ctx.image_dir_paths,
+                images.iter(),
+            )
+            .unwrap()
+            .quality_revision(42)
+            .unwrap()
+            .to_string()
+        };
+
+        ctx.spatial_metrics.write().unwrap().metrics.insert(
+            42,
+            crate::server::spatial_scan::StoredSpatialMetrics {
+                image_id: 42,
+                filename: "repeated.fits".into(),
+                source_revision: Some(old_revision.clone()),
+                detector: crate::server::spatial_scan::QUALITY_DETECTOR.into(),
+                detector_version: crate::server::spatial_scan::QUALITY_DETECTOR_VERSION,
+                star_count: 123,
+                avg_hfr: 2.4,
+                dead_cell_fraction: None,
+                star_uniformity: None,
+                bg_cell_spread: 0.0,
+                bg_cell_max_dev: 0.0,
+                median_adu: 1000.0,
+                computed_at: 0,
+                catalog: Default::default(),
+                star_cell_counts: vec![1.0],
+                star_dead_cells: vec![false],
+                bg_cell_medians: vec![1000.0],
+                grid_cols: 1,
+                grid_rows: 1,
+                width: 10,
+                height: 10,
+                exposure_s: Some(300.0),
+                bg_glow_max: 0.0,
+                bg_glow_cells: vec![false],
+            },
+        );
+        let pending = vec![(
+            42,
+            "repeated.fits".to_string(),
+            metadata.clone(),
+            Some(old_revision),
+        )];
+
+        assert_eq!(fill_missing_star_metadata(&ctx, &pending), 1);
+        {
+            let connection = ctx.db();
+            let connection = connection.lock().unwrap();
+            connection
+                .execute(
+                    "UPDATE acquiredimage SET metadata = ?1 WHERE Id = 42",
+                    [&metadata],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "UPDATE psf_guard_remote_image_file
+                     SET source_path = ?1, source_sha256 = 'new-sha', updated_at = 2
+                     WHERE acquiredimage_id = 42",
+                    [new_path.to_string_lossy().as_ref()],
+                )
+                .unwrap();
+        }
+
+        assert_eq!(fill_missing_star_metadata(&ctx, &pending), 0);
+        let stored: String = {
+            let connection = ctx.db();
+            let connection = connection.lock().unwrap();
+            connection
+                .query_row(
+                    "SELECT metadata FROM acquiredimage WHERE Id = 42",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(stored, metadata);
+    }
+
+    #[test]
+    fn durable_upload_mapping_wins_after_restart_and_rejects_changed_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let (ctx, image_root) = context(&temp);
+        let database_path = PathBuf::from(&ctx.database_path);
+        let mapped = image_root.join("M 31/LIGHT/Ha/repeated.fits");
+        let duplicate = image_root.join("M 42/LIGHT/Ha/repeated.fits");
+        std::fs::create_dir_all(mapped.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(duplicate.parent().unwrap()).unwrap();
+        std::fs::write(&mapped, b"mapped upload without identity headers").unwrap();
+        std::fs::write(&duplicate, b"different file with the same basename").unwrap();
+        let sha256 = mapped_file_sha256(&mapped).unwrap();
+        let mapped_path = std::fs::canonicalize(&mapped)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let metadata = serde_json::json!({ "FileName": r"C:\remote\repeated.fits" });
+
+        {
+            let connection = ctx.db();
+            let connection = connection.lock().unwrap();
+            connection
+                .execute_batch(
+                    "INSERT INTO project (Id, profileId, name, isMosaic, flatsHandling, guid)
+                         VALUES (7, 'profile', 'Project', 0, 0, 'project-guid');
+                     INSERT INTO target (Id, name, active, epochcode, projectId, guid)
+                         VALUES (3, 'M 31', 1, 0, 7, 'target-guid');
+                     CREATE TABLE psf_guard_remote_image_file (
+                         acquiredimage_id INTEGER PRIMARY KEY,
+                         acquiredimage_guid TEXT,
+                         acquiredimage_identity TEXT,
+                         source_path TEXT NOT NULL,
+                         source_sha256 TEXT NOT NULL,
+                         updated_at INTEGER NOT NULL
+                     );",
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO acquiredimage
+                        (Id, projectId, targetId, acquireddate, filtername, gradingStatus,
+                         metadata, profileId, guid)
+                     VALUES (42, 7, 3, NULL, '', 0, ?1, 'profile', 'image-guid')",
+                    [metadata.to_string()],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO psf_guard_remote_image_file
+                        (acquiredimage_id, acquiredimage_guid, acquiredimage_identity,
+                         source_path, source_sha256, updated_at)
+                     VALUES (42, 'image-guid', NULL, ?1, ?2, 1)",
+                    rusqlite::params![mapped_path, sha256],
+                )
+                .unwrap();
+        }
+        drop(ctx);
+
+        let restarted = Arc::new(
+            DatabaseContext::new(
+                "test".into(),
+                "Test".into(),
+                database_path.to_string_lossy().into_owned(),
+                vec![image_root.to_string_lossy().into_owned()],
+                None,
+                None,
+                temp.path()
+                    .join("cache-restarted")
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+            .unwrap(),
+        );
+        let mut scheduler_image = image(r"C:\remote\repeated.fits", "");
+        scheduler_image.acquired_date = None;
+        scheduler_image.metadata = metadata.to_string();
+        scheduler_image.guid = Some("image-guid".into());
+
+        let worker_count = 4;
+        let start = Arc::new(Barrier::new(worker_count));
+        let hash_calls = Arc::new(AtomicUsize::new(0));
+        let canonical_roots = Arc::new(canonical_image_roots(&restarted));
+        let workers: Vec<_> = (0..worker_count)
+            .map(|_| {
+                let restarted = Arc::clone(&restarted);
+                let scheduler_image = scheduler_image.clone();
+                let start = Arc::clone(&start);
+                let hash_calls = Arc::clone(&hash_calls);
+                let canonical_roots = Arc::clone(&canonical_roots);
+                std::thread::spawn(move || {
+                    start.wait();
+                    resolve_mapped_remote_image_with(
+                        &restarted,
+                        &scheduler_image,
+                        canonical_roots.as_slice(),
+                        |path| {
+                            hash_calls.fetch_add(1, Ordering::SeqCst);
+                            std::thread::sleep(Duration::from_millis(50));
+                            mapped_file_sha256(path)
+                        },
+                    )
+                    .unwrap()
+                    .unwrap()
+                })
+            })
+            .collect();
+        for worker in workers {
+            assert_eq!(
+                worker.join().unwrap(),
+                dunce::canonicalize(&mapped).unwrap()
+            );
+        }
+        assert_eq!(
+            hash_calls.load(Ordering::SeqCst),
+            1,
+            "concurrent cold resolvers share one full-file hash"
+        );
+
+        assert_eq!(
+            find_fits_file(&restarted, &scheduler_image, "M 31", "repeated.fits").unwrap(),
+            dunce::canonicalize(&mapped).unwrap()
+        );
+        assert_eq!(
+            find_fits_file(&restarted, &scheduler_image, "M 31", "repeated.fits").unwrap(),
+            dunce::canonicalize(&mapped).unwrap(),
+            "the verified mapping remains a cheap cache hit"
+        );
+
+        std::fs::write(&mapped, b"mapped upload was changed after verification").unwrap();
+        match find_fits_file(&restarted, &scheduler_image, "M 31", "repeated.fits") {
+            Err(AppError::Conflict(message)) => {
+                assert!(message.contains("no longer matches"), "{message}");
+            }
+            other => panic!("changed mapped bytes were not refused: {other:?}"),
+        }
+
+        std::fs::write(&mapped, b"mapped upload without identity headers").unwrap();
+        {
+            let connection = restarted.db();
+            connection
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE acquiredimage SET guid = 'replacement-guid' WHERE Id = 42",
+                    [],
+                )
+                .unwrap();
+        }
+        scheduler_image.guid = Some("replacement-guid".into());
+        match find_fits_file(&restarted, &scheduler_image, "M 31", "repeated.fits") {
+            Err(AppError::Conflict(message)) => {
+                assert!(
+                    message.contains("provenance no longer matches"),
+                    "{message}"
+                );
+            }
+            other => panic!("stale provenance allowed basename fallback: {other:?}"),
+        }
+        let mapping_count: i64 = {
+            let connection = restarted.db();
+            let connection = connection.lock().unwrap();
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM psf_guard_remote_image_file WHERE acquiredimage_id = 42",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(
+            mapping_count, 1,
+            "read-side resolution preserves provenance"
+        );
     }
 
     #[test]

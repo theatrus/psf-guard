@@ -153,6 +153,11 @@ const dbPath = (dbId: string, path: string) => `/db/${encodeURIComponent(dbId)}$
 
 const withServerUrl = (path: string): string => `${getCachedServerUrl()}${path}`;
 
+// Bump when response cache semantics change. Version 2 moves rendered images
+// from a 24-hour freshness lifetime to mandatory revalidation; changing the
+// URL prevents an older browser entry from hiding that new policy.
+const RENDERED_ARTIFACT_URL_VERSION = '2';
+
 const normalizeStretchPreview = (preview: StackStretchPreview): StackStretchPreview => ({
   ...preview,
   deconvolution_version: preview.deconvolution_version ?? null,
@@ -361,6 +366,9 @@ export const apiClient = {
         image_directory?: string;
         token?: string;
         sync_enabled?: boolean;
+        placement?: 'flat' | 'target_tree';
+        directory_template?: string;
+        rescan_directory_layout?: boolean;
       };
       /** New export directory; empty string clears it. */
       export_dir?: string;
@@ -1308,6 +1316,7 @@ export const apiClient = {
   getPreviewUrl: (dbId: string, imageId: number, options?: PreviewOptions): string => {
     const serverUrl = getCachedServerUrl();
     const params = new URLSearchParams();
+    params.set('rv', RENDERED_ARTIFACT_URL_VERSION);
     if (options?.size) params.append('size', options.size);
     if (options?.stretch !== undefined) params.append('stretch', String(options.stretch));
     if (options?.midtone !== undefined) params.append('midtone', String(options.midtone));
@@ -1331,6 +1340,7 @@ export const apiClient = {
   ): string => {
     const serverUrl = getCachedServerUrl();
     const params = new URLSearchParams();
+    params.set('rv', RENDERED_ARTIFACT_URL_VERSION);
     params.append('size', size);
     if (maxStars !== undefined) {
       params.append('max_stars', String(maxStars));

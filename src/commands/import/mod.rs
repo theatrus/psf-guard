@@ -522,6 +522,36 @@ fn match_existing_target(
         .map(|(i, _)| (i, "coordinates"))
 }
 
+/// Resolve the target name the ordinary importer would attach one light to.
+/// Remote upload placement uses this before publishing the file so its
+/// server-owned directory layout agrees with the later catalog import.
+pub(crate) fn resolve_existing_target_name(
+    conn: &Connection,
+    frame: &FrameMeta,
+    radius_deg: f64,
+) -> Result<Option<String>> {
+    Ok(resolve_existing_target_identity(conn, frame, radius_deg)?.map(|identity| identity.0))
+}
+
+/// Resolve the target and its owning project together. Directory templates
+/// need both values from the same coordinate-aware match when mosaic panels or
+/// separate projects reuse a target name.
+pub(crate) fn resolve_existing_target_identity(
+    conn: &Connection,
+    frame: &FrameMeta,
+    radius_deg: f64,
+) -> Result<Option<(String, String)>> {
+    let targets = load_existing_targets(conn)?;
+    Ok(
+        match_existing_target(frame, &targets, radius_deg).map(|(index, _)| {
+            (
+                targets[index].name.clone(),
+                targets[index].project_name.clone(),
+            )
+        }),
+    )
+}
+
 /// Insert frames into an EXISTING target: reuse (or create) the profile's
 /// exposure template, reuse a matching exposure plan on the target (bumping
 /// its acquired count) or add one, and land the images under the target's

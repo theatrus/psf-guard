@@ -17,7 +17,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex as TokioMutex;
 
@@ -44,11 +44,39 @@ fn db_read_only_flags() -> OpenFlags {
 /// out the current refresh statement and wins the gap between statements.
 /// Sized to cover the worst observed single-query duration. (External writers
 /// like N.I.N.A. on a network share get the same courtesy.)
-const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const SCHEDULER_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_REMOTE_IMAGE_VERIFICATIONS: usize = 4096;
+const MAX_REMOTE_FILE_VERIFICATIONS: usize = 4096;
 
-/// The one way to open a scheduler DB connection in the server: flags above +
-/// busy timeout. Every open site (initial, both reopen paths, the refresh
-/// connection) must go through here so none silently loses the busy handler.
+/// Apply the server's lock-wait policy to a scheduler database connection.
+///
+/// Most connections come from [`open_scheduler_connection`]. Short-lived
+/// connections that need different flags, such as the read-only source and
+/// writable destination used by scheduler sync, must call this immediately
+/// after opening so they do not fail instantly on ordinary SQLite contention.
+pub(crate) fn configure_scheduler_busy_timeout(conn: &Connection) -> rusqlite::Result<()> {
+    conn.busy_timeout(SCHEDULER_BUSY_TIMEOUT)
+}
+
+/// Open a scheduler connection with caller-selected access flags and the
+/// server's shared lock-wait policy.
+///
+/// Use this for short-lived catalog connections that cannot use
+/// [`open_scheduler_connection`], which chooses writable access with a
+/// read-only fallback and runs PSF Guard schema upgrades.
+pub(crate) fn open_scheduler_connection_with_flags(
+    path: impl AsRef<Path>,
+    flags: OpenFlags,
+) -> rusqlite::Result<Connection> {
+    let conn = Connection::open_with_flags(path, flags)?;
+    configure_scheduler_busy_timeout(&conn)?;
+    Ok(conn)
+}
+
+/// The usual way to open a scheduler DB connection in the server: flags above
+/// plus the shared busy timeout. Every long-lived open site (initial, both
+/// reopen paths, the refresh connection) must go through here so none silently
+/// loses the busy handler.
 pub(crate) fn open_scheduler_connection(path: &str) -> rusqlite::Result<Connection> {
     let conn = match Connection::open_with_flags(path, db_open_flags()) {
         Ok(conn) => conn,
@@ -68,7 +96,7 @@ pub(crate) fn open_scheduler_connection(path: &str) -> rusqlite::Result<Connecti
             }
         }
     };
-    conn.busy_timeout(DB_BUSY_TIMEOUT)?;
+    configure_scheduler_busy_timeout(&conn)?;
     upgrade_psf_guard_tables(&conn, path);
     Ok(conn)
 }
@@ -238,6 +266,62 @@ fn error_is_corruption(err: &anyhow::Error) -> bool {
     })
 }
 
+/// Whether an operation exhausted SQLite's configured lock wait.
+///
+/// Database helpers add context before returning errors, so inspect the full
+/// chain rather than only the outermost cause. This classification belongs at
+/// the HTTP boundary: busy/locked is an operational database failure, not bad
+/// client input.
+pub(crate) fn error_is_sqlite_contention(err: &anyhow::Error) -> bool {
+    use rusqlite::ffi::ErrorCode;
+
+    err.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<rusqlite::Error>(),
+            Some(rusqlite::Error::SqliteFailure(sqlite, _))
+                if matches!(sqlite.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+        )
+    })
+}
+
+/// Whether an anyhow chain contains a SQLite engine failure. Callers use
+/// this to keep filesystem, I/O, corruption, and lock failures from being
+/// reported as malformed HTTP input while still classifying their own
+/// preflight validation errors separately.
+pub(crate) fn error_has_sqlite_failure(err: &anyhow::Error) -> bool {
+    err.chain()
+        .any(|cause| cause.downcast_ref::<rusqlite::Error>().is_some())
+}
+
+/// SQLite failures caused by the running host rather than invalid row data.
+/// Constraint/type/schema failures are deliberately excluded because remote
+/// bundle materialization uses those to reject malformed client input.
+pub(crate) fn error_is_sqlite_operational_failure(err: &anyhow::Error) -> bool {
+    use rusqlite::ffi::ErrorCode;
+
+    err.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<rusqlite::Error>(),
+            Some(rusqlite::Error::SqliteFailure(sqlite, _))
+                if matches!(
+                    sqlite.code,
+                    ErrorCode::DatabaseBusy
+                        | ErrorCode::DatabaseLocked
+                        | ErrorCode::PermissionDenied
+                        | ErrorCode::OutOfMemory
+                        | ErrorCode::ReadOnly
+                        | ErrorCode::OperationInterrupted
+                        | ErrorCode::SystemIoFailure
+                        | ErrorCode::DatabaseCorrupt
+                        | ErrorCode::DiskFull
+                        | ErrorCode::CannotOpen
+                        | ErrorCode::FileLockingProtocolFailed
+                        | ErrorCode::NotADatabase
+                )
+        )
+    })
+}
+
 /// All per-database state for the running server.
 pub struct DatabaseContext {
     /// Canonical id used in URLs and on disk. URL-safe slug, e.g. `imaging-rig`
@@ -279,6 +363,19 @@ pub struct DatabaseContext {
     /// bounded, nonblocking probe schedule; expired entries remain as strict
     /// identity markers until displaced by the bounded-cap policy.
     delayed_remote_images: Arc<Mutex<HashMap<i32, DelayedRemoteImage>>>,
+    /// Content checks for files accepted through remote-upload provenance.
+    /// The first resolver call hashes the file; later calls only compare its
+    /// canonical path, size, modification time, and expected upload digest.
+    remote_image_verifications: Arc<Mutex<HashMap<i32, RemoteImageVerification>>>,
+    /// File-level index of the same completed checks. This lets two scheduler
+    /// rows mapped to one file reuse the result without scanning every image.
+    remote_file_verifications: Arc<Mutex<HashSet<RemoteImageVerificationKey>>>,
+    /// Rendezvous locks for cold mapped-image content checks. Keys include the
+    /// observed file identity and accepted digest so concurrent resolvers for
+    /// the same large file share one hash, even if different scheduler rows
+    /// refer to it. Weak values keep completed keys from accumulating.
+    remote_image_verification_locks:
+        Arc<Mutex<HashMap<RemoteImageVerificationKey, Weak<Mutex<()>>>>>,
     /// Serializes cold directory-tree builds so N concurrent requests on an
     /// empty cache share one filesystem scan instead of starting N.
     tree_build_lock: Arc<Mutex<()>>,
@@ -323,6 +420,110 @@ struct ArrivalSourceFingerprint {
     canonical_path: PathBuf,
     len: u64,
     modified: Option<std::time::SystemTime>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct RemoteImageFileIdentity {
+    canonical_path: PathBuf,
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(unix)]
+    changed_seconds: i64,
+    #[cfg(unix)]
+    changed_nanoseconds: i64,
+    #[cfg(windows)]
+    volume_serial_number: Option<u32>,
+    #[cfg(windows)]
+    file_index: Option<u64>,
+    #[cfg(windows)]
+    creation_time: u64,
+    #[cfg(windows)]
+    change_time: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RemoteImageVerification {
+    identity: RemoteImageFileIdentity,
+    expected_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct RemoteImageVerificationKey {
+    identity: RemoteImageFileIdentity,
+    expected_sha256: String,
+}
+
+pub(crate) fn remote_image_file_identity(path: &Path) -> Option<RemoteImageFileIdentity> {
+    let metadata = std::fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt as _;
+    #[cfg(windows)]
+    let (volume_serial_number, file_index, change_time) = windows_file_identity(path)?;
+    Some(RemoteImageFileIdentity {
+        canonical_path: std::fs::canonicalize(path).ok()?,
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+        #[cfg(unix)]
+        device: metadata.dev(),
+        #[cfg(unix)]
+        inode: metadata.ino(),
+        #[cfg(unix)]
+        changed_seconds: metadata.ctime(),
+        #[cfg(unix)]
+        changed_nanoseconds: metadata.ctime_nsec(),
+        #[cfg(windows)]
+        volume_serial_number: Some(volume_serial_number),
+        #[cfg(windows)]
+        file_index: Some(file_index),
+        #[cfg(windows)]
+        creation_time: {
+            use std::os::windows::fs::MetadataExt as _;
+            metadata.creation_time()
+        },
+        #[cfg(windows)]
+        change_time,
+    })
+}
+
+#[cfg(windows)]
+fn windows_file_identity(path: &Path) -> Option<(u32, u64, i64)> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileBasicInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
+        BY_HANDLE_FILE_INFORMATION, FILE_BASIC_INFO,
+    };
+
+    let file = std::fs::File::open(path).ok()?;
+    let handle = file.as_raw_handle() as HANDLE;
+    let mut information = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
+    let success = unsafe { GetFileInformationByHandle(handle, &mut information) };
+    if success == 0 {
+        return None;
+    }
+    let file_index =
+        (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow);
+    let mut basic_information = FILE_BASIC_INFO::default();
+    let basic_success = unsafe {
+        GetFileInformationByHandleEx(
+            handle,
+            FileBasicInfo,
+            std::ptr::addr_of_mut!(basic_information).cast::<std::ffi::c_void>(),
+            std::mem::size_of::<FILE_BASIC_INFO>() as u32,
+        )
+    };
+    if basic_success == 0 {
+        return None;
+    }
+    Some((
+        information.dwVolumeSerialNumber,
+        file_index,
+        basic_information.ChangeTime,
+    ))
 }
 
 fn arrival_source_fingerprint(path: &Path) -> Option<ArrivalSourceFingerprint> {
@@ -505,6 +706,9 @@ impl DatabaseContext {
             directory_tree_additions: Arc::new(RwLock::new(HashSet::new())),
             file_check_additions: Arc::new(RwLock::new(HashMap::new())),
             delayed_remote_images: Arc::new(Mutex::new(HashMap::new())),
+            remote_image_verifications: Arc::new(Mutex::new(HashMap::new())),
+            remote_file_verifications: Arc::new(Mutex::new(HashSet::new())),
+            remote_image_verification_locks: Arc::new(Mutex::new(HashMap::new())),
             tree_build_lock: Arc::new(Mutex::new(())),
             tree_rebuild_inflight: Arc::new(AtomicBool::new(false)),
             refresh_mutex: Arc::new(TokioMutex::new(())),
@@ -601,6 +805,8 @@ impl DatabaseContext {
             Ok(new_conn) => {
                 *lock_recover(&self.db_connection) = new_conn;
                 *lock_recover(&self.db_fingerprint) = Some(new_fp);
+                lock_recover(&self.remote_image_verifications).clear();
+                lock_recover(&self.remote_file_verifications).clear();
                 tracing::info!(
                     "🔁 Database file for db={} was replaced on disk ({}); reopened connection",
                     self.id,
@@ -628,6 +834,8 @@ impl DatabaseContext {
             Ok(new_conn) => {
                 *lock_recover(&self.db_connection) = new_conn;
                 *lock_recover(&self.db_fingerprint) = fingerprint_path(&self.database_path);
+                lock_recover(&self.remote_image_verifications).clear();
+                lock_recover(&self.remote_file_verifications).clear();
                 tracing::info!(
                     "🔁 Reopened connection for db={} after a corruption-class error",
                     self.id
@@ -797,6 +1005,98 @@ impl DatabaseContext {
         let mut cache = self.directory_tree_cache.write().unwrap();
         *cache = None;
         tracing::info!("🗑️  Directory tree cache cleared for db={}", self.id);
+    }
+
+    pub(crate) fn remote_image_verification_is_current(
+        &self,
+        image_id: i32,
+        identity: &RemoteImageFileIdentity,
+        expected_sha256: &str,
+    ) -> bool {
+        lock_recover(&self.remote_image_verifications)
+            .get(&image_id)
+            .is_some_and(|verification| {
+                verification.identity == *identity
+                    && verification.expected_sha256 == expected_sha256
+            })
+    }
+
+    pub(crate) fn remote_image_verification_is_known(
+        &self,
+        identity: &RemoteImageFileIdentity,
+        expected_sha256: &str,
+    ) -> bool {
+        lock_recover(&self.remote_file_verifications).contains(&RemoteImageVerificationKey {
+            identity: identity.clone(),
+            expected_sha256: expected_sha256.to_ascii_lowercase(),
+        })
+    }
+
+    pub(crate) fn remote_image_verification_lock(
+        &self,
+        identity: &RemoteImageFileIdentity,
+        expected_sha256: &str,
+    ) -> Arc<Mutex<()>> {
+        let key = RemoteImageVerificationKey {
+            identity: identity.clone(),
+            expected_sha256: expected_sha256.to_ascii_lowercase(),
+        };
+        let mut locks = lock_recover(&self.remote_image_verification_locks);
+        if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+            return lock;
+        }
+
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        let lock = Arc::new(Mutex::new(()));
+        locks.insert(key, Arc::downgrade(&lock));
+        lock
+    }
+
+    pub(crate) fn record_remote_image_verification(
+        &self,
+        image_id: i32,
+        identity: RemoteImageFileIdentity,
+        expected_sha256: &str,
+    ) {
+        let expected_sha256 = expected_sha256.to_ascii_lowercase();
+        let mut image_verifications = lock_recover(&self.remote_image_verifications);
+        let evicted = if !image_verifications.contains_key(&image_id)
+            && image_verifications.len() >= MAX_REMOTE_IMAGE_VERIFICATIONS
+            && let Some(image_to_evict) = image_verifications.keys().next().copied()
+        {
+            image_verifications.remove(&image_to_evict)
+        } else {
+            None
+        };
+        let previous = image_verifications.insert(
+            image_id,
+            RemoteImageVerification {
+                identity: identity.clone(),
+                expected_sha256: expected_sha256.clone(),
+            },
+        );
+        drop(image_verifications);
+
+        let mut file_verifications = lock_recover(&self.remote_file_verifications);
+        for stale in [evicted, previous].into_iter().flatten() {
+            file_verifications.remove(&RemoteImageVerificationKey {
+                identity: stale.identity,
+                expected_sha256: stale.expected_sha256,
+            });
+        }
+        if file_verifications.len() >= MAX_REMOTE_FILE_VERIFICATIONS
+            && let Some(entry_to_evict) = file_verifications.iter().next().cloned()
+        {
+            file_verifications.remove(&entry_to_evict);
+        }
+        file_verifications.insert(RemoteImageVerificationKey {
+            identity,
+            expected_sha256,
+        });
+    }
+
+    pub(crate) fn clear_remote_image_verification(&self, image_id: i32) {
+        lock_recover(&self.remote_image_verifications).remove(&image_id);
     }
 
     pub fn get_directory_tree_stats(&self) -> Option<crate::directory_tree::DirectoryTreeStats> {
@@ -1528,6 +1828,9 @@ impl DatabaseContext {
             directory_tree_additions: Arc::new(RwLock::new(HashSet::new())),
             file_check_additions: Arc::new(RwLock::new(HashMap::new())),
             delayed_remote_images: Arc::new(Mutex::new(HashMap::new())),
+            remote_image_verifications: Arc::new(Mutex::new(HashMap::new())),
+            remote_file_verifications: Arc::new(Mutex::new(HashSet::new())),
+            remote_image_verification_locks: Arc::new(Mutex::new(HashMap::new())),
             tree_build_lock: Arc::new(Mutex::new(())),
             tree_rebuild_inflight: Arc::new(AtomicBool::new(false)),
             refresh_mutex: Arc::new(TokioMutex::new(())),
@@ -1563,6 +1866,9 @@ impl Clone for DatabaseContext {
             directory_tree_additions: self.directory_tree_additions.clone(),
             file_check_additions: self.file_check_additions.clone(),
             delayed_remote_images: self.delayed_remote_images.clone(),
+            remote_image_verifications: self.remote_image_verifications.clone(),
+            remote_file_verifications: self.remote_file_verifications.clone(),
+            remote_image_verification_locks: self.remote_image_verification_locks.clone(),
             tree_build_lock: self.tree_build_lock.clone(),
             tree_rebuild_inflight: self.tree_rebuild_inflight.clone(),
             refresh_mutex: self.refresh_mutex.clone(),
@@ -1637,6 +1943,21 @@ mod tests {
                     (300, 1, 30, 3000, 'L', 0, 'not json', NULL, 'default');",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn scheduler_connection_with_flags_uses_busy_timeout() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("scheduler.sqlite");
+        drop(Connection::open(&path).unwrap());
+
+        for flags in [db_read_only_flags(), db_open_flags()] {
+            let connection = open_scheduler_connection_with_flags(&path, flags).unwrap();
+            let timeout_ms: i64 = connection
+                .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(timeout_ms, 60_000);
+        }
     }
 
     #[test]
@@ -2054,8 +2375,8 @@ mod tests {
     #[test]
     fn corruption_errors_are_classified() {
         use rusqlite::ffi::{
-            Error as FfiError, SQLITE_BUSY, SQLITE_CORRUPT, SQLITE_IOERR, SQLITE_NOTADB,
-            SQLITE_SCHEMA,
+            Error as FfiError, SQLITE_BUSY, SQLITE_CORRUPT, SQLITE_IOERR, SQLITE_LOCKED,
+            SQLITE_NOTADB, SQLITE_SCHEMA,
         };
 
         let corrupt = rusqlite::Error::SqliteFailure(
@@ -2072,7 +2393,7 @@ mod tests {
 
         // Transient / benign codes must NOT be treated as a file swap, or a
         // passing hiccup would needlessly reopen the connection.
-        for transient in [SQLITE_BUSY, SQLITE_IOERR, SQLITE_SCHEMA] {
+        for transient in [SQLITE_BUSY, SQLITE_LOCKED, SQLITE_IOERR, SQLITE_SCHEMA] {
             let e = rusqlite::Error::SqliteFailure(FfiError::new(transient), None);
             assert!(
                 !is_corruption_error(&e),
@@ -2086,5 +2407,125 @@ mod tests {
         assert!(!error_is_corruption(&anyhow::anyhow!(
             "some unrelated failure"
         )));
+    }
+
+    #[test]
+    fn sqlite_contention_is_classified_through_context() {
+        use rusqlite::ffi::{Error as FfiError, SQLITE_BUSY, SQLITE_LOCKED};
+
+        for code in [SQLITE_BUSY, SQLITE_LOCKED] {
+            let contention = rusqlite::Error::SqliteFailure(FfiError::new(code), None);
+            let wrapped = anyhow::Error::new(contention)
+                .context("querying scheduler rows")
+                .context("creating remote export");
+            assert!(error_is_sqlite_contention(&wrapped));
+        }
+        assert!(!error_is_sqlite_contention(&anyhow::anyhow!(
+            "validation failed"
+        )));
+    }
+
+    #[test]
+    fn remote_file_identity_changes_for_same_size_preserved_mtime_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mapped.fits");
+        let replacement = directory.path().join("replacement.fits");
+        std::fs::write(&path, b"original").unwrap();
+        let original_metadata = std::fs::metadata(&path).unwrap();
+        let original_mtime = filetime::FileTime::from_last_modification_time(&original_metadata);
+        let before = remote_image_file_identity(&path).unwrap();
+
+        std::fs::write(&replacement, b"replaced").unwrap();
+        filetime::set_file_mtime(&replacement, original_mtime).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+
+        let after_metadata = std::fs::metadata(&path).unwrap();
+        assert_eq!(
+            filetime::FileTime::from_last_modification_time(&after_metadata),
+            original_mtime
+        );
+        let after = remote_image_file_identity(&path).unwrap();
+        assert_ne!(before, after);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn remote_file_identity_changes_for_in_place_write_with_preserved_mtime() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mapped.fits");
+        std::fs::write(&path, b"original").unwrap();
+        let original_metadata = std::fs::metadata(&path).unwrap();
+        let original_mtime = filetime::FileTime::from_last_modification_time(&original_metadata);
+        let before = remote_image_file_identity(&path).unwrap();
+
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(&path, b"replaced").unwrap();
+        filetime::set_file_mtime(&path, original_mtime).unwrap();
+
+        let after_metadata = std::fs::metadata(&path).unwrap();
+        assert_eq!(
+            filetime::FileTime::from_last_modification_time(&after_metadata),
+            original_mtime
+        );
+        let after = remote_image_file_identity(&path).unwrap();
+        assert_eq!(before.file_index, after.file_index);
+        assert_eq!(before.creation_time, after.creation_time);
+        assert_ne!(before.change_time, after.change_time);
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn remote_image_verifications_are_bounded() {
+        let context = DatabaseContext::new_for_test(Connection::open_in_memory().unwrap());
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mapped.fits");
+        std::fs::write(&path, b"fixture").unwrap();
+        let identity = remote_image_file_identity(&path).unwrap();
+
+        for image_id in 0..=MAX_REMOTE_IMAGE_VERIFICATIONS {
+            let mut image_identity = identity.clone();
+            image_identity.len = image_id as u64;
+            context.record_remote_image_verification(
+                image_id as i32,
+                image_identity,
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            );
+        }
+
+        let newest_image_id = MAX_REMOTE_IMAGE_VERIFICATIONS as i32;
+        let stale_key = {
+            let verifications = lock_recover(&context.remote_image_verifications);
+            assert_eq!(verifications.len(), MAX_REMOTE_IMAGE_VERIFICATIONS);
+            let newest = verifications.get(&newest_image_id).unwrap();
+            let file_verifications = lock_recover(&context.remote_file_verifications);
+            assert_eq!(file_verifications.len(), MAX_REMOTE_FILE_VERIFICATIONS);
+            assert!(verifications.values().all(|verification| {
+                file_verifications.contains(&RemoteImageVerificationKey {
+                    identity: verification.identity.clone(),
+                    expected_sha256: verification.expected_sha256.clone(),
+                })
+            }));
+            RemoteImageVerificationKey {
+                identity: newest.identity.clone(),
+                expected_sha256: newest.expected_sha256.clone(),
+            }
+        };
+
+        let mut replacement_identity = identity;
+        replacement_identity.len = (MAX_REMOTE_IMAGE_VERIFICATIONS + 1) as u64;
+        let replacement_sha = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        context.record_remote_image_verification(
+            newest_image_id,
+            replacement_identity.clone(),
+            replacement_sha,
+        );
+
+        let file_verifications = lock_recover(&context.remote_file_verifications);
+        assert!(!file_verifications.contains(&stale_key));
+        assert!(file_verifications.contains(&RemoteImageVerificationKey {
+            identity: replacement_identity,
+            expected_sha256: replacement_sha.to_string(),
+        }));
     }
 }

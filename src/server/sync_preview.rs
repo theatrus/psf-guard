@@ -6,8 +6,11 @@
 //! data the user reviewed or refuses a stale destination.
 
 use crate::server::api::{SchedulerSyncKind, SchedulerSyncRequest, SchedulerSyncResponse};
+use crate::server::database_context::{
+    open_scheduler_connection_with_flags, SCHEDULER_BUSY_TIMEOUT,
+};
 use anyhow::{Context, Result};
-use rusqlite::backup::Backup;
+use rusqlite::backup::{Backup, StepResult};
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
@@ -17,10 +20,36 @@ use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 const PREVIEW_LIFETIME: Duration = Duration::from_secs(30 * 60);
+/// A busy source gets the normal scheduler lock grace period, but even a
+/// source that changes often enough to keep restarting SQLite's online backup
+/// must eventually yield a result or an actionable failure.
+const SNAPSHOT_OVERALL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+/// The online backup API reports Busy/Locked as retry states rather than
+/// errors. Preserve exhausted retry deadlines as a typed operational failure
+/// so the HTTP layer does not mislabel source contention as bad input.
+#[derive(Debug)]
+pub(crate) struct SyncSnapshotContention {
+    pub(crate) message: String,
+}
+
+impl std::fmt::Display for SyncSnapshotContention {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SyncSnapshotContention {}
+
+pub(crate) fn error_is_sync_snapshot_contention(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.downcast_ref::<SyncSnapshotContention>().is_some())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncPreviewRecord {
@@ -94,20 +123,12 @@ impl SyncPreviewManager {
         let published = self.directory.join(&filename);
         let temporary = self.directory.join(format!("{filename}.tmp"));
         let copy = || -> Result<()> {
-            let source = Connection::open_with_flags(source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-                .with_context(|| {
-                    format!("opening {} for transfer snapshot", source_path.display())
-                })?;
-            let mut destination = Connection::open(&temporary)
-                .with_context(|| format!("creating transfer snapshot {}", temporary.display()))?;
-            {
-                let backup = Backup::new(&source, &mut destination)
-                    .context("starting transfer source snapshot")?;
-                backup
-                    .run_to_completion(256, Duration::from_millis(10), None)
-                    .context("copying transfer source snapshot")?;
-            }
-            drop(destination);
+            copy_source_snapshot(
+                source_path,
+                &temporary,
+                SCHEDULER_BUSY_TIMEOUT,
+                SNAPSHOT_OVERALL_TIMEOUT,
+            )?;
             fs::rename(&temporary, &published)
                 .with_context(|| format!("publishing transfer snapshot {}", published.display()))?;
             Ok(())
@@ -290,6 +311,99 @@ impl SyncPreviewManager {
     }
 }
 
+fn copy_source_snapshot(
+    source_path: &Path,
+    temporary: &Path,
+    stall_timeout: Duration,
+    overall_timeout: Duration,
+) -> Result<()> {
+    let source =
+        open_scheduler_connection_with_flags(source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| {
+                format!(
+                    "opening source scheduler database {}",
+                    source_path.display()
+                )
+            })?;
+    // sqlite3_backup_step reports Busy/Locked as successful retry states. Its
+    // own loop below owns the deadline, so disable the connection handler that
+    // would otherwise wait a full minute inside one step before we can check it.
+    source
+        .busy_timeout(Duration::ZERO)
+        .context("configuring bounded transfer snapshot lock handling")?;
+    let mut destination = Connection::open(temporary)
+        .with_context(|| format!("creating transfer snapshot {}", temporary.display()))?;
+    let backup =
+        Backup::new(&source, &mut destination).context("starting transfer source snapshot")?;
+    let pause = Duration::from_millis(10);
+    let started = Instant::now();
+    let mut last_net_progress = started;
+    let mut lowest_remaining = None;
+    loop {
+        let step = backup
+            .step(256)
+            .context("copying transfer source snapshot")?;
+        let now = Instant::now();
+        let done = matches!(step, StepResult::Done);
+        match step {
+            StepResult::Done => {}
+            StepResult::More => {
+                let remaining = backup.progress().remaining;
+                if record_snapshot_progress(&mut lowest_remaining, remaining) {
+                    last_net_progress = now;
+                }
+            }
+            StepResult::Busy | StepResult::Locked => {}
+            _ => {}
+        }
+
+        let progress = backup.progress();
+        if now.duration_since(started) >= overall_timeout {
+            return Err(SyncSnapshotContention {
+                message: format!(
+                    "source scheduler database {} did not finish a sync preview snapshot within {} seconds ({} of {} pages remain)",
+                    source_path.display(),
+                    overall_timeout.as_secs_f64(),
+                    progress.remaining,
+                    progress.pagecount,
+                ),
+            }
+            .into());
+        }
+        if done {
+            break;
+        }
+        if now.duration_since(last_net_progress) >= stall_timeout {
+            return Err(SyncSnapshotContention {
+                message: format!(
+                    "source scheduler database {} made no snapshot progress for {} seconds while creating a sync preview ({} of {} pages remain; the database may be locked or changing continuously)",
+                    source_path.display(),
+                    stall_timeout.as_secs_f64(),
+                    progress.remaining,
+                    progress.pagecount,
+                ),
+            }
+            .into());
+        }
+        std::thread::sleep(pause);
+    }
+    Ok(())
+}
+
+/// SQLite restarts an online backup when another connection changes the
+/// source. A successful step after that restart is not net progress if it only
+/// reaches a page count we already copied, so retain the lowest remaining-page
+/// count instead of treating every `StepResult::More` as progress.
+fn record_snapshot_progress(lowest_remaining: &mut Option<i32>, remaining: i32) -> bool {
+    match lowest_remaining {
+        Some(lowest) if remaining >= *lowest => false,
+        slot => {
+            *slot = Some(remaining);
+            true
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct FingerprintQuery {
     label: &'static str,
@@ -358,7 +472,7 @@ pub fn fingerprint_queries(request: &SchedulerSyncRequest) -> Vec<FingerprintQue
 }
 
 pub fn database_fingerprint(path: &Path, queries: &[FingerprintQuery]) -> Result<String> {
-    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let connection = open_scheduler_connection_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .with_context(|| format!("opening {} for sync fingerprint", path.display()))?;
     connection_fingerprint(&connection, queries)
 }
@@ -688,6 +802,64 @@ mod tests {
             .query_row("SELECT value FROM sample", [], |row| row.get(0))
             .unwrap();
         assert_eq!(value, "previewed");
+    }
+
+    #[test]
+    fn source_snapshot_stops_waiting_for_a_persistent_lock() {
+        let directory = tempdir().unwrap();
+        let source_path = directory.path().join("source.sqlite");
+        let temporary = directory.path().join("snapshot.tmp");
+        let locker = Connection::open(&source_path).unwrap();
+        locker
+            .execute_batch("CREATE TABLE sample (value TEXT); BEGIN EXCLUSIVE;")
+            .unwrap();
+
+        let started = Instant::now();
+        let error = copy_source_snapshot(
+            &source_path,
+            &temporary,
+            Duration::from_millis(25),
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
+
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(format!("{error:#}").contains("made no snapshot progress"));
+        locker.execute_batch("ROLLBACK").unwrap();
+    }
+
+    #[test]
+    fn source_snapshot_has_a_hard_overall_deadline() {
+        let directory = tempdir().unwrap();
+        let source_path = directory.path().join("source.sqlite");
+        let temporary = directory.path().join("snapshot.tmp");
+        let locker = Connection::open(&source_path).unwrap();
+        locker
+            .execute_batch("CREATE TABLE sample (value TEXT); BEGIN EXCLUSIVE;")
+            .unwrap();
+
+        let started = Instant::now();
+        let error = copy_source_snapshot(
+            &source_path,
+            &temporary,
+            Duration::from_secs(1),
+            Duration::from_millis(25),
+        )
+        .unwrap_err();
+
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(format!("{error:#}").contains("did not finish"));
+        locker.execute_batch("ROLLBACK").unwrap();
+    }
+
+    #[test]
+    fn backup_restarts_do_not_count_as_net_progress() {
+        let mut lowest_remaining = None;
+        assert!(record_snapshot_progress(&mut lowest_remaining, 744));
+        assert!(!record_snapshot_progress(&mut lowest_remaining, 1_000));
+        assert!(!record_snapshot_progress(&mut lowest_remaining, 744));
+        assert!(record_snapshot_progress(&mut lowest_remaining, 743));
+        assert_eq!(lowest_remaining, Some(743));
     }
 
     #[test]

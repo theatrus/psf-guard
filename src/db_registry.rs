@@ -67,6 +67,50 @@ pub struct RemoteClient {
     pub paired_at: i64,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteImageUploadPlacement {
+    /// Keep every received frame directly below the selected image root.
+    /// This is the compatibility default for registries written before
+    /// target-aware placement existed.
+    #[default]
+    Flat,
+    /// Group lights and flats by target, with the frame type and filter below
+    /// it. Other calibration kinds use their own top-level frame-type folder.
+    TargetTree,
+}
+
+pub const DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE: &str = "%TARGET%/%TYPE%/%FILTER%";
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteImageUploadTemplateSource {
+    #[default]
+    Preset,
+    Catalog,
+}
+
+/// A validated server-owned directory layout below the configured receive
+/// root. The client still supplies only the image basename.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoteImageUploadDirectoryLayout {
+    /// Effective template rendered for new uploads.
+    pub template: String,
+    /// Operator-selected template retained when catalog detection succeeds, so
+    /// an empty or ambiguous later scan does not silently change the fallback.
+    #[serde(default = "default_remote_upload_directory_template")]
+    pub fallback_template: String,
+    #[serde(default)]
+    pub source: RemoteImageUploadTemplateSource,
+    /// Catalog files which supported a detected layout. Zero for a preset.
+    #[serde(default)]
+    pub samples: usize,
+}
+
+fn default_remote_upload_directory_template() -> String {
+    DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE.to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct RemoteImageUploadConfig {
     #[serde(default)]
@@ -87,11 +131,33 @@ pub struct RemoteImageUploadConfig {
     /// sync protocol existed does not silently gain merge and apply rights.
     #[serde(default)]
     pub sync_enabled: bool,
+    /// Server-derived layout below `image_dir`. The client still supplies
+    /// only a basename; it can never choose a directory or relative path.
+    #[serde(default)]
+    pub placement: RemoteImageUploadPlacement,
+    /// Persisted preset or catalog-derived template for `TargetTree`.
+    /// Missing in older registries means the original target/type/filter tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directory_layout: Option<RemoteImageUploadDirectoryLayout>,
 }
 
 impl RemoteImageUploadConfig {
     pub const MIN_TOKEN_LENGTH: usize = 24;
     pub const MAX_TOKEN_LENGTH: usize = 256;
+
+    pub fn directory_template(&self) -> &str {
+        self.directory_layout
+            .as_ref()
+            .map(|layout| layout.template.as_str())
+            .unwrap_or(DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE)
+    }
+
+    pub fn fallback_directory_template(&self) -> &str {
+        self.directory_layout
+            .as_ref()
+            .map(|layout| layout.fallback_template.as_str())
+            .unwrap_or(DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE)
+    }
 
     pub fn set_token(&mut self, token: &str) -> Result<()> {
         if token.len() < Self::MIN_TOKEN_LENGTH || token.len() > Self::MAX_TOKEN_LENGTH {
@@ -841,6 +907,7 @@ mod tests {
         let mut config = RemoteImageUploadConfig {
             enabled: true,
             image_dir: images.to_string_lossy().into_owned(),
+            placement: RemoteImageUploadPlacement::TargetTree,
             ..Default::default()
         };
         config.set_token(token).unwrap();
@@ -874,6 +941,24 @@ mod tests {
             .as_ref()
             .unwrap()
             .token_matches(token));
+        assert_eq!(
+            loaded.databases[0]
+                .remote_image_upload
+                .as_ref()
+                .unwrap()
+                .placement,
+            RemoteImageUploadPlacement::TargetTree
+        );
+    }
+
+    #[test]
+    fn remote_upload_without_placement_keeps_the_flat_compatibility_layout() {
+        let config: RemoteImageUploadConfig = serde_json::from_value(serde_json::json!({
+            "enabled": false,
+            "image_dir": ""
+        }))
+        .unwrap();
+        assert_eq!(config.placement, RemoteImageUploadPlacement::Flat);
     }
 
     #[test]
