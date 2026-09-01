@@ -143,7 +143,7 @@ export default function ScoringPenaltyControl() {
           'hfrRejectAbove',
           'HFR above',
           'Recommend rejecting any frame whose measured HFR exceeds this value (pixels), regardless of sequence context. Empty turns the limit off.',
-          '0.1'
+          'any'
         )}
         {limitInput(
           'starCountRejectBelow',

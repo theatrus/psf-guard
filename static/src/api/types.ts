@@ -624,8 +624,18 @@ export interface StackPreviewJob {
   stacking_version: string;
   /** The order every group integrated its frames in. */
   order?: StackFrameOrder;
+  /** Normalized scoring policy used for frame admission. */
+  scoring?: StackScoringSettings;
   groups: StackGroupStatus[];
   error: string | null;
+}
+
+export interface StackScoringSettings {
+  penalty_satellite: number;
+  penalty_pointing: number;
+  penalty_temporal: number;
+  hfr_reject_above: number | null;
+  star_count_reject_below: number | null;
 }
 
 export interface LatestStackPreviewGroup {
@@ -636,6 +646,8 @@ export interface LatestStackPreviewGroup {
   cache_version: number;
   /** The order this artifact integrated its frames in; old artifacts used capture order. */
   order?: StackFrameOrder;
+  /** Scoring policy used by this artifact; old artifacts used calibrated defaults. */
+  scoring?: StackScoringSettings;
   group: StackGroupStatus;
 }
 

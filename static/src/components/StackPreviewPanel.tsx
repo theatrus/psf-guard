@@ -10,6 +10,7 @@ import type {
   StackInputImage,
   StackFrameOrder,
   StackPreviewJob,
+  StackScoringSettings,
   StackStretchPreview,
 } from '../api/types';
 import StackPreviewInspector from './StackPreviewInspector';
@@ -19,7 +20,12 @@ import StackStretchControls from './StackStretchControls';
 import { isSkyOriented } from './stackOrientation';
 import { useAccess } from '../auth/access';
 import { STACK_ACTIVITY_QUERY_KEY, useStackActivity } from '../hooks/useStackActivity';
-import { penaltyParamsOf, scoringPreferences } from '../hooks/useScoringPreferences';
+import {
+  penaltyParamsOf,
+  SCORING_DEFAULTS,
+  useScoringPreferences,
+  type ScoringPreferences,
+} from '../hooks/useScoringPreferences';
 
 type StackCandidateImage = Pick<
   Image,
@@ -58,7 +64,27 @@ interface StackArtifact {
   artifactRevision: string;
   acceptedOnly: boolean;
   order: StackFrameOrder;
+  scoring: StackScoringSettings;
   group: StackGroupStatus;
+}
+
+function stackScoringSettings(preferences: ScoringPreferences): StackScoringSettings {
+  return {
+    penalty_satellite: preferences.satellite,
+    penalty_pointing: preferences.pointing,
+    penalty_temporal: preferences.temporal,
+    hfr_reject_above: preferences.hfrRejectAbove,
+    star_count_reject_below: preferences.starCountRejectBelow,
+  };
+}
+
+const CALIBRATED_SCORING = stackScoringSettings(SCORING_DEFAULTS);
+
+/** Artifacts created before scoring metadata used the calibrated policy. */
+function builtScoringSettings(
+  settings: StackScoringSettings | undefined
+): StackScoringSettings {
+  return settings ?? CALIBRATED_SCORING;
 }
 
 /**
@@ -170,7 +196,9 @@ function staleReason(
   builtCalibration: CalibrationMode,
   calibrationMode: CalibrationMode,
   builtOrder: StackFrameOrder,
-  frameOrder: StackFrameOrder
+  frameOrder: StackFrameOrder,
+  builtScoring: StackScoringSettings,
+  scoring: StackScoringSettings
 ): string | null {
   if (!current) return 'Out of date — this channel is not in the current input';
   if (inputImages.length === 0) return 'Out of date — rebuild required';
@@ -195,6 +223,15 @@ function staleReason(
   if (builtOrder !== frameOrder) {
     return 'Out of date — frame order changed';
   }
+  if (
+    builtScoring.penalty_satellite !== scoring.penalty_satellite ||
+    builtScoring.penalty_pointing !== scoring.penalty_pointing ||
+    builtScoring.penalty_temporal !== scoring.penalty_temporal ||
+    builtScoring.hfr_reject_above !== scoring.hfr_reject_above ||
+    builtScoring.star_count_reject_below !== scoring.star_count_reject_below
+  ) {
+    return 'Out of date — scoring settings changed';
+  }
   return null;
 }
 // `calibrationMode` above is the channel's EFFECTIVE mode — its override
@@ -207,6 +244,7 @@ function artifactFromLatest(latest: LatestStackPreviewGroup | undefined): StackA
     artifactRevision: latest.artifact_revision,
     acceptedOnly: latest.accepted_only,
     order: latest.order ?? 'capture',
+    scoring: builtScoringSettings(latest.scoring),
     group: latest.group,
   };
 }
@@ -237,6 +275,11 @@ export default function StackPreviewPanel({
 }: StackPreviewPanelProps) {
   const queryClient = useQueryClient();
   const { canCompute } = useAccess();
+  const scoringPreferences = useScoringPreferences();
+  const currentScoring = useMemo(
+    () => stackScoringSettings(scoringPreferences),
+    [scoringPreferences]
+  );
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const toggleCollapsed = () => setCollapsed((current) => {
     const next = !current;
@@ -356,7 +399,7 @@ export default function StackPreviewPanel({
         // Frame exclusion keys off reject recommendations, so the stack
         // must score with the same shared preferences as every other
         // surface — a satellite penalty of 0 keeps trailed frames in.
-        scoring: penaltyParamsOf(scoringPreferences()),
+        scoring: penaltyParamsOf(scoringPreferences),
         calibration: calibrationMode,
         calibration_overrides: [...currentChannels.values()]
           .filter((channel) => channelOverride(channel.key) !== undefined)
@@ -529,12 +572,14 @@ export default function StackPreviewPanel({
         ? {
             acceptedOnly: activeEntry.job.accepted_only,
             order: activeEntry.job.order ?? 'capture',
+            scoring: builtScoringSettings(activeEntry.job.scoring),
             group: activeEntry.group,
           }
         : latestEntry
           ? {
               acceptedOnly: latestEntry.accepted_only,
               order: latestEntry.order ?? 'capture',
+              scoring: builtScoringSettings(latestEntry.scoring),
               group: latestEntry.group,
             }
           : undefined;
@@ -547,7 +592,9 @@ export default function StackPreviewPanel({
           builtCalibrationMode(artifact.group),
           effectiveCalibration(key),
           artifact.order,
-          frameOrder
+          frameOrder,
+          artifact.scoring,
+          currentScoring
         ) !== null
       : false;
   }).length;
@@ -564,7 +611,9 @@ export default function StackPreviewPanel({
           builtCalibrationMode(entry.group),
           effectiveCalibration(key),
           entry.order ?? 'capture',
-          frameOrder
+          frameOrder,
+          builtScoringSettings(entry.scoring),
+          currentScoring
         )
       ) {
         targetIds.add(entry.group.target_id);
@@ -572,7 +621,15 @@ export default function StackPreviewPanel({
     }
     return targetIds;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- effectiveCalibration reads calibrationMode and overrides, listed below.
-  }, [acceptedOnly, calibrationMode, overrides, currentChannels, frameOrder, latest.data]);
+  }, [
+    acceptedOnly,
+    calibrationMode,
+    overrides,
+    currentChannels,
+    frameOrder,
+    currentScoring,
+    latest.data,
+  ]);
   const colorSourceRevision = useMemo(
     () => (latest.data?.groups ?? [])
       .map((entry) => `${entry.job_id}:${entry.group.index}:${entry.artifact_revision}`)
@@ -770,6 +827,7 @@ export default function StackPreviewPanel({
                         artifactRevision: activeEntry.job.artifact_revision,
                         acceptedOnly: activeEntry.job.accepted_only,
                         order: activeEntry.job.order ?? 'capture',
+                        scoring: builtScoringSettings(activeEntry.job.scoring),
                         group: activeEntry.group,
                       }
                     : undefined;
@@ -788,7 +846,9 @@ export default function StackPreviewPanel({
                       builtCalibrationMode(artifact.group),
                       effectiveCalibration(key),
                       artifact.order,
-                      frameOrder
+                      frameOrder,
+                      artifact.scoring,
+                      currentScoring
                     )
                   : null;
                 const groupBusy =

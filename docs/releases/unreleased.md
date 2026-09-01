@@ -21,6 +21,10 @@
 
 ## Fixed
 
+- Stack previews now remember the scoring settings used to admit their frames.
+  Changing a penalty or absolute reject limit marks the preview out of date,
+  gives the rebuild its own cache identity, and prevents it from resuming a
+  checkpoint whose frame decisions came from the old settings.
 - Remote scheduler sync and export now wait for transient SQLite locks instead
   of failing immediately while N.I.N.A. or another server task is using the
   catalog.

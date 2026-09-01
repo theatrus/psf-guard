@@ -757,6 +757,25 @@ async fn test_image_quality_context() {
     assert!(refs["best_hfr"].is_number());
 }
 
+#[tokio::test]
+async fn test_image_quality_context_applies_absolute_reject_limits() {
+    let conn = Connection::open_in_memory().unwrap();
+    create_test_schema(&conn);
+    load_normal_sequence(&conn);
+    let app = create_test_app(conn);
+
+    let (status, json) =
+        get_json(app, "/api/db/test/analysis/image/10?hfr_reject_above=2.65").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let quality = &json["data"]["quality"];
+    assert!(quality["quality_score"].as_f64().unwrap() <= 0.25);
+    assert!(quality["regrade_reason"]
+        .as_str()
+        .expect("HFR 2.7 must trip the 2.65 ceiling")
+        .contains("[Auto] HFR limit"));
+}
+
 /// Test 9: Nonexistent image returns 404
 #[tokio::test]
 async fn test_image_quality_nonexistent_image() {

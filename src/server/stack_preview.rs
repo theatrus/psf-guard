@@ -89,8 +89,8 @@ pub struct StackPreviewRequest {
     /// every other scoring surface shows, so the preview must score with
     /// the same settings — otherwise a satellite penalty of 0 would stop
     /// rejections everywhere while the stack still silently dropped the
-    /// trailed frames. Cache safety comes from the job fingerprint hashing
-    /// each frame's resulting score and reason, not the settings.
+    /// trailed frames. The job records and hashes the normalized settings so
+    /// callers can tell whether a remembered result matches their policy.
     #[serde(default)]
     pub scoring: crate::server::api::ScoringOverrideQuery,
 }
@@ -298,8 +298,77 @@ pub struct StackPreviewJob {
     /// The order every group integrated its frames in.
     #[serde(default)]
     pub order: snr::StackFrameOrder,
+    /// Fully populated scoring settings used for frame admission. Manifests
+    /// written before this field existed used the calibrated defaults.
+    #[serde(default)]
+    pub scoring: StackScoringSettings,
     pub groups: Vec<StackGroupStatus>,
     pub error: Option<String>,
+}
+
+/// A concrete scoring-policy snapshot attached to every stack artifact.
+/// Unlike the request overrides, every penalty has a value and disabled
+/// absolute limits are explicit, making persisted artifacts comparable.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StackScoringSettings {
+    pub penalty_satellite: f64,
+    pub penalty_pointing: f64,
+    pub penalty_temporal: f64,
+    pub hfr_reject_above: Option<f64>,
+    pub star_count_reject_below: Option<f64>,
+}
+
+impl Default for StackScoringSettings {
+    fn default() -> Self {
+        let config = SequenceAnalyzerConfig::default();
+        Self {
+            penalty_satellite: config.penalty_scales.satellite,
+            penalty_pointing: config.penalty_scales.pointing,
+            penalty_temporal: config.penalty_scales.temporal,
+            hfr_reject_above: config.hfr_reject_above,
+            star_count_reject_below: config.star_count_reject_below,
+        }
+    }
+}
+
+impl StackScoringSettings {
+    fn from_overrides(overrides: &crate::server::api::ScoringOverrideQuery) -> Self {
+        let mut config = SequenceAnalyzerConfig::default();
+        overrides.apply_to(&mut config);
+        Self {
+            penalty_satellite: normalize_penalty_scale(config.penalty_scales.satellite),
+            penalty_pointing: normalize_penalty_scale(config.penalty_scales.pointing),
+            penalty_temporal: normalize_penalty_scale(config.penalty_scales.temporal),
+            hfr_reject_above: normalize_reject_limit(config.hfr_reject_above),
+            star_count_reject_below: normalize_reject_limit(config.star_count_reject_below),
+        }
+    }
+
+    fn apply_to(self, config: &mut SequenceAnalyzerConfig) {
+        config.penalty_scales.satellite = self.penalty_satellite;
+        config.penalty_scales.pointing = self.penalty_pointing;
+        config.penalty_scales.temporal = self.penalty_temporal;
+        config.hfr_reject_above = self.hfr_reject_above;
+        config.star_count_reject_below = self.star_count_reject_below;
+    }
+}
+
+fn normalize_penalty_scale(value: f64) -> f64 {
+    if !value.is_finite() {
+        return 1.0;
+    }
+    if value <= 0.0 {
+        return 0.0;
+    }
+    if value >= 2.0 {
+        return 2.0;
+    }
+    value
+}
+
+fn normalize_reject_limit(value: Option<f64>) -> Option<f64> {
+    value.filter(|limit| limit.is_finite() && *limit > 0.0)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -314,6 +383,10 @@ pub struct LatestStackPreviewGroup {
     /// to capture order, which was the only order available before this field.
     #[serde(default)]
     pub order: snr::StackFrameOrder,
+    /// Scoring settings used for this artifact. Old indices used calibrated
+    /// defaults, represented by the type's default value.
+    #[serde(default)]
+    pub scoring: StackScoringSettings,
     pub group: StackGroupStatus,
 }
 
@@ -1242,6 +1315,7 @@ fn prepare_job(
     project_id: i32,
     request: &StackPreviewRequest,
 ) -> Result<PreparedJob, AppError> {
+    let scoring = StackScoringSettings::from_overrides(&request.scoring);
     let requested = request.image_ids.iter().copied().collect::<HashSet<_>>();
     let (project_images, expected_by_image, mapped_sources) = {
         let conn = ctx.db();
@@ -1298,7 +1372,7 @@ fn prepare_job(
         &project_images,
         &expected_by_image,
         &mapped_sources,
-        &request.scoring,
+        &scoring,
     );
     let quality_by_id = quality
         .into_iter()
@@ -1336,6 +1410,15 @@ fn prepare_job(
     hasher.update(PREVIEW_MAX_DIMENSION.to_le_bytes());
     hasher.update(stretch::SEIZA_STRETCH_VERSION.as_bytes());
     hasher.update(request.order.as_str().as_bytes());
+    hasher.update(scoring.penalty_satellite.to_le_bytes());
+    hasher.update(scoring.penalty_pointing.to_le_bytes());
+    hasher.update(scoring.penalty_temporal.to_le_bytes());
+    for limit in [scoring.hfr_reject_above, scoring.star_count_reject_below] {
+        hasher.update([limit.is_some() as u8]);
+        if let Some(limit) = limit {
+            hasher.update(limit.to_le_bytes());
+        }
+    }
 
     for (index, ((target_id, target_name, filter_name), mut entries)) in
         grouped.into_iter().enumerate()
@@ -1522,6 +1605,7 @@ fn prepare_job(
             cache_version: STACK_PREVIEW_CACHE_VERSION,
             stacking_version: SEIZA_STACKING_VERSION.into(),
             order: request.order,
+            scoring,
             groups: public_groups,
             error: None,
         },
@@ -1551,7 +1635,7 @@ fn quality_results(
     images: &[(AcquiredImage, String, String)],
     expected_by_image: &HashMap<i32, Option<(f64, f64)>>,
     mapped_sources: &crate::server::remote_upload::MappedLightSources,
-    scoring: &crate::server::api::ScoringOverrideQuery,
+    scoring: &StackScoringSettings,
 ) -> Vec<ImageQualityResult> {
     crate::server::spatial_scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
     let mut grouped: BTreeMap<(i32, String, String), Vec<&AcquiredImage>> = BTreeMap::new();
@@ -1811,6 +1895,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
     let job_id = prepared.public.job_id.clone();
     let database_id = prepared.public.database_id.clone();
     let accepted_only = prepared.public.accepted_only;
+    let scoring = prepared.public.scoring;
     let PreparedJob {
         public: _,
         groups,
@@ -1833,6 +1918,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
         cache_root: &cache_root,
         north_up,
         accepted_only,
+        scoring,
         order,
         worker_policy: &worker_policy,
         cancel,
@@ -1917,6 +2003,7 @@ struct GroupJob<'a> {
     cache_root: &'a FsPath,
     north_up: bool,
     accepted_only: bool,
+    scoring: StackScoringSettings,
     order: snr::StackFrameOrder,
     worker_policy: &'a crate::concurrency::WorkerPolicy,
     cancel: &'a Arc<AtomicBool>,
@@ -1936,6 +2023,7 @@ fn run_group(
         cache_root,
         north_up,
         accepted_only,
+        scoring,
         order,
         worker_policy,
         cancel,
@@ -2054,6 +2142,7 @@ fn run_group(
         group_target_id,
         &group_filter_name,
         accepted_only,
+        scoring,
         SEIZA_STACKING_VERSION,
         &calibration_fingerprint,
         order,
@@ -2317,6 +2406,7 @@ fn run_group(
                 target_id: group_target_id,
                 filter_name: group_filter_name.clone(),
                 accepted_only,
+                scoring,
                 calibration_fingerprint: calibration_fingerprint.clone(),
                 order,
                 snr_points: points.to_vec(),
@@ -2872,6 +2962,7 @@ fn persist_latest_groups(cache_root: &FsPath, job: &StackPreviewJob) -> Result<(
             created_unix_seconds: job.created_unix_seconds,
             cache_version: job.cache_version,
             order: job.order,
+            scoring: job.scoring,
             group,
         };
         if let Some(existing) = latest.groups.iter_mut().find(|existing| {
@@ -3110,6 +3201,7 @@ mod tests {
             cache_version: STACK_PREVIEW_CACHE_VERSION,
             stacking_version: SEIZA_STACKING_VERSION.into(),
             order: snr::StackFrameOrder::Capture,
+            scoring: StackScoringSettings::default(),
             groups,
             error: None,
         }
@@ -3379,6 +3471,10 @@ mod tests {
         rebuilt_blue.index = 4;
         let mut second = completed_job("second", vec![rebuilt_blue]);
         second.order = snr::StackFrameOrder::Quality;
+        second.scoring = StackScoringSettings {
+            hfr_reject_above: Some(2.5),
+            ..StackScoringSettings::default()
+        };
         persist_latest_groups(cache.path(), &second).unwrap();
 
         let bytes = std::fs::read(latest_path(cache.path(), 7)).unwrap();
@@ -3397,9 +3493,11 @@ mod tests {
         assert_eq!(blue.job_id, "second");
         assert_eq!(blue.group.reference_image_id, Some(3));
         assert_eq!(blue.order, snr::StackFrameOrder::Quality);
+        assert_eq!(blue.scoring, second.scoring);
         assert_eq!(red.job_id, "first");
         assert_eq!(red.group.reference_image_id, Some(2));
         assert_eq!(red.order, snr::StackFrameOrder::Capture);
+        assert_eq!(red.scoring, StackScoringSettings::default());
     }
 
     #[test]
@@ -3411,6 +3509,7 @@ mod tests {
             created_unix_seconds: 100,
             cache_version: STACK_PREVIEW_CACHE_VERSION,
             order: snr::StackFrameOrder::Capture,
+            scoring: StackScoringSettings::default(),
             group: ready_group(10, "B", 1),
         };
         let mut legacy = current.clone();
@@ -3430,7 +3529,7 @@ mod tests {
     }
 
     #[test]
-    fn an_old_latest_entry_defaults_to_capture_order() {
+    fn an_old_latest_entry_defaults_to_capture_order_and_calibrated_scoring() {
         let current = LatestStackPreviewGroup {
             job_id: "legacy".into(),
             artifact_revision: "legacy-revision".into(),
@@ -3438,14 +3537,51 @@ mod tests {
             created_unix_seconds: 100,
             cache_version: STACK_PREVIEW_CACHE_VERSION,
             order: snr::StackFrameOrder::Capture,
+            scoring: StackScoringSettings::default(),
             group: ready_group(10, "B", 1),
         };
         let mut serialized = serde_json::to_value(current).unwrap();
         serialized.as_object_mut().unwrap().remove("order");
+        serialized.as_object_mut().unwrap().remove("scoring");
 
         let restored: LatestStackPreviewGroup = serde_json::from_value(serialized).unwrap();
 
         assert_eq!(restored.order, snr::StackFrameOrder::Capture);
+        assert_eq!(restored.scoring, StackScoringSettings::default());
+    }
+
+    #[test]
+    fn an_old_job_defaults_to_calibrated_scoring() {
+        let mut serialized = serde_json::to_value(completed_job("legacy", Vec::new())).unwrap();
+        serialized.as_object_mut().unwrap().remove("scoring");
+
+        let restored: StackPreviewJob = serde_json::from_value(serialized).unwrap();
+
+        assert_eq!(restored.scoring, StackScoringSettings::default());
+    }
+
+    #[test]
+    fn scoring_snapshot_normalizes_request_overrides() {
+        let overrides = crate::server::api::ScoringOverrideQuery {
+            penalty_satellite: Some(3.0),
+            penalty_pointing: Some(-0.0),
+            penalty_temporal: Some(f64::NAN),
+            hfr_reject_above: Some(0.0),
+            star_count_reject_below: Some(35.0),
+        };
+
+        let normalized = StackScoringSettings::from_overrides(&overrides);
+        assert_eq!(
+            normalized,
+            StackScoringSettings {
+                penalty_satellite: 2.0,
+                penalty_pointing: 0.0,
+                penalty_temporal: 1.0,
+                hfr_reject_above: None,
+                star_count_reject_below: Some(35.0),
+            }
+        );
+        assert_eq!(normalized.penalty_pointing.to_bits(), 0.0_f64.to_bits());
     }
 
     #[test]
@@ -3457,6 +3593,7 @@ mod tests {
             created_unix_seconds: 100,
             cache_version: STACK_PREVIEW_CACHE_VERSION,
             order: snr::StackFrameOrder::Capture,
+            scoring: StackScoringSettings::default(),
             group: ready_group(10, "B", 1),
         };
         let mut north_up = source_frame.clone();

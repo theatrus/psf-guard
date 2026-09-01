@@ -15,7 +15,7 @@
 //! dimensions, configuration, checksum — when it reopens it.
 
 use super::snr;
-use super::StackFrameDecision;
+use super::{StackFrameDecision, StackScoringSettings};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
@@ -47,6 +47,10 @@ pub(super) struct ResumeManifest {
     pub target_id: i32,
     pub filter_name: String,
     pub accepted_only: bool,
+    /// The scoring policy that decided which frames reached this accumulator.
+    /// Checkpoints from before this field existed used calibrated defaults.
+    #[serde(default)]
+    pub scoring: StackScoringSettings,
     pub calibration_fingerprint: String,
     /// The order the frames were pushed in. Only a capture-order stack is
     /// ever resumed, but the checkpoint records what it was so an older one
@@ -161,6 +165,7 @@ pub(super) fn load(
     target_id: i32,
     filter_name: &str,
     accepted_only: bool,
+    scoring: StackScoringSettings,
     stacking_version: &str,
     calibration_fingerprint: &str,
     order: snr::StackFrameOrder,
@@ -192,6 +197,9 @@ pub(super) fn load(
     }
     if manifest.accepted_only != accepted_only {
         return ResumeDecision::Fresh(Some("the Accepted-only policy changed"));
+    }
+    if manifest.scoring != scoring {
+        return ResumeDecision::Fresh(Some("the scoring policy changed"));
     }
     if manifest.calibration_fingerprint != calibration_fingerprint {
         return ResumeDecision::Fresh(Some("calibration changed"));
@@ -284,6 +292,7 @@ mod tests {
             target_id: 7,
             filter_name: "Ha".into(),
             accepted_only: false,
+            scoring: StackScoringSettings::default(),
             calibration_fingerprint: "cal-1".into(),
             frames,
         }
@@ -330,6 +339,7 @@ mod tests {
             7,
             "Ha",
             false,
+            StackScoringSettings::default(),
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -408,6 +418,7 @@ mod tests {
             7,
             "Ha",
             false,
+            StackScoringSettings::default(),
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -475,6 +486,7 @@ mod tests {
             7,
             "Ha",
             false,
+            StackScoringSettings::default(),
             "test",
             "cal-1",
             snr::StackFrameOrder::Quality,
@@ -498,6 +510,7 @@ mod tests {
             7,
             "Ha",
             false,
+            StackScoringSettings::default(),
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -536,12 +549,65 @@ mod tests {
             7,
             "Ha",
             false,
+            StackScoringSettings::default(),
             "test",
             "cal-2",
             snr::StackFrameOrder::Capture,
             &[(1, "f1", 300.0), (2, "f2", 300.0)],
         );
         assert_eq!(decision.fresh_reason(), Some("calibration changed"));
+    }
+
+    #[test]
+    fn changed_scoring_policy_rebuilds_from_scratch() {
+        let cache = tempfile::tempdir().unwrap();
+        store(cache.path(), &manifest(vec![frame(1, "f1")]));
+        let changed = StackScoringSettings {
+            penalty_satellite: 0.0,
+            ..StackScoringSettings::default()
+        };
+        let decision = load(
+            cache.path(),
+            "db",
+            7,
+            "Ha",
+            false,
+            changed,
+            "test",
+            "cal-1",
+            snr::StackFrameOrder::Capture,
+            &[(1, "f1", 300.0), (2, "f2", 300.0)],
+        );
+
+        assert_eq!(decision.fresh_reason(), Some("the scoring policy changed"));
+    }
+
+    #[test]
+    fn checkpoint_without_scoring_uses_calibrated_defaults() {
+        let cache = tempfile::tempdir().unwrap();
+        let recorded = manifest(vec![frame(1, "f1")]);
+        let path = manifest_path(
+            cache.path(),
+            "db",
+            recorded.target_id,
+            &recorded.filter_name,
+        );
+        let mut legacy = serde_json::to_value(&recorded).unwrap();
+        legacy.as_object_mut().unwrap().remove("scoring");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+        std::fs::write(
+            context_path(
+                cache.path(),
+                "db",
+                recorded.target_id,
+                &recorded.filter_name,
+            ),
+            b"legacy context",
+        )
+        .unwrap();
+
+        assert!(try_load(cache.path(), &[(1, "f1"), (2, "f2")]).is_some());
     }
 
     #[test]
@@ -554,6 +620,7 @@ mod tests {
             7,
             "Ha",
             false,
+            StackScoringSettings::default(),
             "newer",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -597,6 +664,7 @@ mod tests {
             7,
             "Ha",
             false,
+            StackScoringSettings::default(),
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,
@@ -618,6 +686,7 @@ mod tests {
             7,
             "Ha",
             true,
+            StackScoringSettings::default(),
             "test",
             "cal-1",
             snr::StackFrameOrder::Capture,

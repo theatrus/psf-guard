@@ -36,6 +36,10 @@ test('an HFR reject limit flags the soft frame, survives reload, and resets', as
 
   const hfrInput = page.getByLabel('HFR above');
   await hfrInput.pressSequentially('2.55');
+  await expect(hfrInput).toHaveAttribute('step', 'any');
+  expect(
+    await hfrInput.evaluate((input: HTMLInputElement) => input.validity.stepMismatch)
+  ).toBe(false);
   await hfrInput.press('Enter');
 
   // The HFR 2.6 frame drops to the capped score and carries the limit reason.

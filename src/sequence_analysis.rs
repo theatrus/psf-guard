@@ -1015,12 +1015,15 @@ pub struct SequenceAnalyzer {
 impl SequenceAnalyzer {
     pub fn new(mut config: SequenceAnalyzerConfig) -> Self {
         config.quality_weights = config.quality_weights.normalized();
-        // A non-positive limit means "off", matching the UI's 0-clears-it
-        // convention. Without this, an HFR ceiling of 0 would reject every
-        // measured frame, and a star floor of 0 would be a silent no-op.
-        config.hfr_reject_above = config.hfr_reject_above.filter(|limit| *limit > 0.0);
-        config.star_count_reject_below =
-            config.star_count_reject_below.filter(|limit| *limit > 0.0);
+        // A non-positive or non-finite limit means "off", matching the UI's
+        // 0-clears-it convention. Without this, an HFR ceiling of 0 or
+        // positive infinity would reject every measured frame.
+        config.hfr_reject_above = config
+            .hfr_reject_above
+            .filter(|limit| limit.is_finite() && *limit > 0.0);
+        config.star_count_reject_below = config
+            .star_count_reject_below
+            .filter(|limit| limit.is_finite() && *limit > 0.0);
         Self { config }
     }
 
@@ -1633,16 +1636,16 @@ impl SequenceAnalyzer {
         if let (Some(limit), Some(hfr)) = (self.config.hfr_reject_above, image.hfr)
             && hfr > limit
         {
-            // The measured value carries an extra digit so a near-threshold
-            // frame never renders as an equal value being rejected; the
-            // limit prints as the operator typed it.
+            // Use the shortest round-trippable representation for both
+            // operands so the displayed comparison preserves the one made
+            // above, even when the values differ beyond a fixed precision.
             violations.push((
                 IssueCategory::HfrAboveLimit,
                 format!(
-                    "HFR {hfr:.3} exceeds the configured reject limit of {limit}, \
+                    "HFR {hfr} exceeds the configured reject limit of {limit}, \
                      an absolute operator threshold applied regardless of sequence context."
                 ),
-                format!("[Auto] HFR limit - HFR {hfr:.3} above limit {limit}"),
+                format!("[Auto] HFR limit - HFR {hfr} above limit {limit}"),
             ));
         }
         if let (Some(limit), Some(stars)) = (self.config.star_count_reject_below, image.star_count)
@@ -3757,6 +3760,39 @@ mod tests {
             assert!(!result.flags.contains(&IssueCategory::HfrAboveLimit));
             assert!(!result.flags.contains(&IssueCategory::StarCountBelowLimit));
         }
+    }
+
+    #[test]
+    fn non_finite_limits_mean_off() {
+        for limit in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+                hfr_reject_above: Some(limit),
+                star_count_reject_below: Some(limit),
+                ..Default::default()
+            });
+            assert!(analyzer.config.hfr_reject_above.is_none());
+            assert!(analyzer.config.star_count_reject_below.is_none());
+        }
+    }
+
+    #[test]
+    fn near_threshold_hfr_reason_preserves_the_comparison() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            hfr_reject_above: Some(2.5504),
+            ..Default::default()
+        });
+        let mut image = make_image(1, 0, 500.0, 2.55041);
+        image.hfr = Some(2.55041);
+
+        let violations = analyzer.absolute_limit_violations(&image);
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0]
+            .1
+            .contains("HFR 2.55041 exceeds the configured reject limit of 2.5504"));
+        assert_eq!(
+            violations[0].2,
+            "[Auto] HFR limit - HFR 2.55041 above limit 2.5504"
+        );
     }
 
     #[test]
