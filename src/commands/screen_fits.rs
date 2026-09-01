@@ -1295,13 +1295,13 @@ mod tests {
         assert!(soft
             .regrade_reason
             .as_deref()
-            .is_some_and(|reason| reason.contains("[Auto] HFR limit")));
+            .is_some_and(|reason| reason.contains("[Auto] Max HFR")));
         let sparse = limited.iter().find(|r| r.record_idx == 4).unwrap();
         assert_eq!(sparse.verdict, Verdict::Reject);
         assert!(sparse
             .regrade_reason
             .as_deref()
-            .is_some_and(|reason| reason.contains("[Auto] Star count limit")));
+            .is_some_and(|reason| reason.contains("[Auto] Min stars")));
     }
 
     #[test]

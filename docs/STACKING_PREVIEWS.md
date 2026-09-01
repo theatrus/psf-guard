@@ -402,9 +402,9 @@ Before handing frames to Seiza, PSF Guard excludes:
    corroborated no-solve decisions.
 
 That analysis runs with the caller's scoring preferences (penalty scales and
-absolute reject limits), so stack exclusion agrees with every other scoring
-surface: a satellite penalty of 0% keeps trailed frames in the stack, and a
-frame over an HFR ceiling stays out. Each artifact records those preferences;
+reject limits), so stack exclusion agrees with every other scoring surface:
+a satellite penalty of 0% keeps trailed frames in the stack, and a frame
+over Max HFR stays out. Each artifact records those preferences;
 changing them marks the existing preview out of date and gives the rebuild a
 separate cache identity.
 

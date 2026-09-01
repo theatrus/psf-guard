@@ -773,7 +773,7 @@ async fn test_image_quality_context_applies_absolute_reject_limits() {
     assert!(quality["regrade_reason"]
         .as_str()
         .expect("HFR 2.7 must trip the 2.65 ceiling")
-        .contains("[Auto] HFR limit"));
+        .contains("[Auto] Max HFR"));
 }
 
 /// Test 9: Nonexistent image returns 404
@@ -881,12 +881,12 @@ async fn test_analyze_sequence_absolute_reject_limits() {
         match id {
             10 => {
                 let reason = reason.expect("HFR 2.7 must trip the 2.65 ceiling");
-                assert!(reason.contains("[Auto] HFR limit"), "got {reason}");
+                assert!(reason.contains("[Auto] Max HFR"), "got {reason}");
                 assert!(score <= 0.25, "capped score expected, got {score}");
             }
             5 => {
                 let reason = reason.expect("300 stars must trip the 305 floor");
-                assert!(reason.contains("[Auto] Star count limit"), "got {reason}");
+                assert!(reason.contains("[Auto] Min stars"), "got {reason}");
                 assert!(score <= 0.25, "capped score expected, got {score}");
             }
             _ => assert!(reason.is_none(), "image {id} wrongly rejected: {reason:?}"),

@@ -118,8 +118,8 @@ export default function ScoringPenaltyControl() {
 
   return (
     <details className="scoring-penalty-control">
-      <summary title="How evidence and limits affect the quality score and reject recommendations. Penalties: 100% is the calibrated default, 0% ignores that evidence, 200% doubles the hit. Reject limits are absolute thresholds like N.I.N.A. subframe selection.">
-        Scoring{isDefault ? '' : ' *'}
+      <summary title="How evidence and limits affect the quality score and reject recommendations. Penalties: 100% is the calibrated default, 0% ignores that evidence, 200% doubles the hit. Reject limits are fixed cut-offs like N.I.N.A. subframe selection.">
+        Scoring{isDefault ? '' : ' (custom)'}
       </summary>
       <div className="scoring-penalty-panel">
         <span className="penalty-section">Penalties</span>
@@ -141,14 +141,14 @@ export default function ScoringPenaltyControl() {
         <span className="penalty-section">Reject limits</span>
         {limitInput(
           'hfrRejectAbove',
-          'HFR above',
-          'Recommend rejecting any frame whose measured HFR exceeds this value (pixels), regardless of sequence context. Empty turns the limit off.',
+          'Max HFR',
+          'Recommend rejecting any frame whose measured HFR (pixels) is over this value, however the rest of the sequence looks. Empty turns the limit off.',
           'any'
         )}
         {limitInput(
           'starCountRejectBelow',
-          'Stars below',
-          'Recommend rejecting any frame with fewer detected stars than this, regardless of sequence context. Empty turns the limit off.',
+          'Min stars',
+          'Recommend rejecting any frame with fewer detected stars than this, however the rest of the sequence looks. Empty turns the limit off.',
           '1'
         )}
         <button

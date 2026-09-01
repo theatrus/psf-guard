@@ -1642,10 +1642,11 @@ impl SequenceAnalyzer {
             violations.push((
                 IssueCategory::HfrAboveLimit,
                 format!(
-                    "HFR {hfr} exceeds the configured reject limit of {limit}, \
-                     an absolute operator threshold applied regardless of sequence context."
+                    "HFR {hfr} px is over the Max HFR limit of {limit}. \
+                     Limits judge each frame on its own, whatever the rest of \
+                     the sequence looks like."
                 ),
-                format!("[Auto] HFR limit - HFR {hfr} above limit {limit}"),
+                format!("[Auto] Max HFR - {hfr} px over limit {limit}"),
             ));
         }
         if let (Some(limit), Some(stars)) = (self.config.star_count_reject_below, image.star_count)
@@ -1654,10 +1655,11 @@ impl SequenceAnalyzer {
             violations.push((
                 IssueCategory::StarCountBelowLimit,
                 format!(
-                    "{stars:.0} detected star(s) is below the configured reject limit of {limit}, \
-                     an absolute operator threshold applied regardless of sequence context."
+                    "{stars:.0} stars is under the Min stars limit of {limit}. \
+                     Limits judge each frame on its own, whatever the rest of \
+                     the sequence looks like."
                 ),
-                format!("[Auto] Star count limit - {stars:.0} star(s) below limit {limit}"),
+                format!("[Auto] Min stars - {stars:.0} under limit {limit}"),
             ));
         }
         violations
@@ -3667,7 +3669,7 @@ mod tests {
         assert!(soft
             .regrade_reason
             .as_deref()
-            .is_some_and(|reason| reason.contains("[Auto] HFR limit")));
+            .is_some_and(|reason| reason.contains("[Auto] Max HFR")));
         for (index, result) in sequence.images.iter().enumerate() {
             if index != 3 {
                 assert!(!result.flags.contains(&IssueCategory::HfrAboveLimit));
@@ -3694,7 +3696,7 @@ mod tests {
         assert!(sparse
             .regrade_reason
             .as_deref()
-            .is_some_and(|reason| reason.contains("[Auto] Star count limit")));
+            .is_some_and(|reason| reason.contains("[Auto] Min stars")));
         for (index, result) in sequence.images.iter().enumerate() {
             if index != 2 {
                 assert!(!result.flags.contains(&IssueCategory::StarCountBelowLimit));
@@ -3788,10 +3790,10 @@ mod tests {
         assert_eq!(violations.len(), 1);
         assert!(violations[0]
             .1
-            .contains("HFR 2.55041 exceeds the configured reject limit of 2.5504"));
+            .contains("HFR 2.55041 px is over the Max HFR limit of 2.5504"));
         assert_eq!(
             violations[0].2,
-            "[Auto] HFR limit - HFR 2.55041 above limit 2.5504"
+            "[Auto] Max HFR - 2.55041 px over limit 2.5504"
         );
     }
 
@@ -3812,7 +3814,7 @@ mod tests {
         assert!(result
             .regrade_reason
             .as_deref()
-            .is_some_and(|reason| reason.contains("[Auto] HFR limit")));
+            .is_some_and(|reason| reason.contains("[Auto] Max HFR")));
     }
 
     #[test]
@@ -3841,7 +3843,7 @@ mod tests {
         assert!(capped
             .regrade_reason
             .as_deref()
-            .is_some_and(|reason| reason.contains("[Auto] HFR limit")));
+            .is_some_and(|reason| reason.contains("[Auto] Max HFR")));
     }
 
     #[test]

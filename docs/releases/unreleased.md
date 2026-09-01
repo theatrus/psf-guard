@@ -9,10 +9,11 @@
 - Remote image receivers can match an existing catalog folder tree or use a
   preset/custom target, date, frame type, filter, camera, and exposure layout,
   while keeping the existing flat layout as the default.
-- Absolute reject limits like N.I.N.A. subframe selection: set an HFR
-  ceiling and a star-count floor in the Sequence view's Scoring control (or
-  `screen-fits --max-hfr` / `--min-stars`) to reject frames past them
-  regardless of sequence context.
+- Reject limits like N.I.N.A. subframe selection: set Max HFR and Min stars
+  in the Sequence view's Scoring control (or `screen-fits --max-hfr` /
+  `--min-stars`) and any frame over the HFR limit or under the star limit
+  is recommended for rejection, whatever the rest of the sequence looks
+  like.
 - Satellite-trail checking can be turned off: set the satellite penalty to
   0% (or pass `screen-fits --ignore-satellites`) and trails no longer lower
   scores or drive reject recommendations, while still showing as warnings.

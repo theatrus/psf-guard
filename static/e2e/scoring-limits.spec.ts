@@ -34,7 +34,7 @@ test('an HFR reject limit flags the soft frame, survives reload, and resets', as
   await expect(scoring.locator('summary')).toHaveText('Scoring');
   await scoring.locator('summary').click();
 
-  const hfrInput = page.getByLabel('HFR above');
+  const hfrInput = page.getByLabel('Max HFR');
   await hfrInput.pressSequentially('2.55');
   await expect(hfrInput).toHaveAttribute('step', 'any');
   expect(
@@ -45,11 +45,11 @@ test('an HFR reject limit flags the soft frame, survives reload, and resets', as
   // The HFR 2.6 frame drops to the capped score and carries the limit reason.
   const capped = page.locator('.sequence-image-card.below-threshold');
   await expect(capped).toHaveCount(1, { timeout: 15_000 });
-  await expect(scoring.locator('summary')).toHaveText('Scoring *');
+  await expect(scoring.locator('summary')).toHaveText('Scoring (custom)');
   await capped.getByRole('button', { name: 'Show quality reason' }).click();
   const popover = page.getByRole('dialog', { name: 'Quality reason' });
-  await expect(popover).toContainText('[Auto] HFR limit');
-  await expect(popover).toContainText('above limit 2.55');
+  await expect(popover).toContainText('[Auto] Max HFR');
+  await expect(popover).toContainText('over limit 2.55');
   await popover.getByRole('button', { name: 'Close quality reason' }).click();
 
   // The preference is remembered: a reload scores the same way.
@@ -57,7 +57,7 @@ test('an HFR reject limit flags the soft frame, survives reload, and resets', as
   await expect(cards).toHaveCount(3, { timeout: 15_000 });
   await expect(page.locator('.sequence-image-card.below-threshold')).toHaveCount(1);
   await page.locator('.scoring-penalty-control summary').click();
-  await expect(page.getByLabel('HFR above')).toHaveValue('2.55');
+  await expect(page.getByLabel('Max HFR')).toHaveValue('2.55');
 
   // Reset restores the calibrated behavior.
   await page.getByRole('button', { name: 'Reset to defaults' }).click();
@@ -65,7 +65,7 @@ test('an HFR reject limit flags the soft frame, survives reload, and resets', as
     timeout: 15_000,
   });
   await expect(page.locator('.scoring-penalty-control summary')).toHaveText('Scoring');
-  await expect(page.getByLabel('HFR above')).toHaveValue('');
+  await expect(page.getByLabel('Max HFR')).toHaveValue('');
 });
 
 test('a star-count floor flags the sparse frame', async ({ page }) => {
@@ -74,7 +74,7 @@ test('a star-count floor flags the sparse frame', async ({ page }) => {
   await expect(cards).toHaveCount(3, { timeout: 15_000 });
 
   await page.locator('.scoring-penalty-control summary').click();
-  const starsInput = page.getByLabel('Stars below');
+  const starsInput = page.getByLabel('Min stars');
   await starsInput.pressSequentially('505');
   await starsInput.press('Enter');
 
@@ -82,8 +82,8 @@ test('a star-count floor flags the sparse frame', async ({ page }) => {
   await expect(capped).toHaveCount(1, { timeout: 15_000 });
   await capped.getByRole('button', { name: 'Show quality reason' }).click();
   const popover = page.getByRole('dialog', { name: 'Quality reason' });
-  await expect(popover).toContainText('[Auto] Star count limit');
-  await expect(popover).toContainText('500 star(s) below limit 505');
+  await expect(popover).toContainText('[Auto] Min stars');
+  await expect(popover).toContainText('500 under limit 505');
 });
 
 test('a sub-1 HFR limit can be typed digit by digit, leading zero first', async ({
@@ -95,7 +95,7 @@ test('a sub-1 HFR limit can be typed digit by digit, leading zero first', async 
   });
 
   await page.locator('.scoring-penalty-control summary').click();
-  const hfrInput = page.getByLabel('HFR above');
+  const hfrInput = page.getByLabel('Max HFR');
   // Regression: the first keystroke of "0.8" used to be coerced to "off"
   // and wiped, making sub-1 limits impossible to type.
   await hfrInput.pressSequentially('0.8');
