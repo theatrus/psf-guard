@@ -377,10 +377,12 @@ a pattern that still carries a literal date is refused, since it would file
 every upload under one night. Empty or mixed catalogs keep the selected preset,
 so placement never requires a filesystem scan during an image upload. Choosing
 a preset or custom layout in Settings replaces a catalog match rather than
-becoming its fallback, and a scan in the same save cannot override it; the
-save says which it means with `directory_template_source`. In catalog mode
-the save sends no template. A registry that still holds a 0.9.2 match with a
-fixed date is returned to its fallback when it is loaded. Headless servers have no Settings scanner and use their explicit
+becoming its fallback, and a scan in the same save cannot override it unless
+the person also asked for a rescan, the later wish; the save says which it
+means with `directory_template_source`, sent only for a layout the person
+touched. In catalog mode the save sends no template. A registry that still
+holds a 0.9.2 match with a fixed date is returned to its fallback, and saved,
+when it is loaded. Headless servers have no Settings scanner and use their explicit
 `directory_template` (or the legacy target/type/filter default).
 
 They apply to the in-memory database list at startup and are never written back

@@ -1447,12 +1447,20 @@ pub async fn update_database_route(
     let updated_entry = reg.find(&new_id).ok_or(AppError::InternalError(
         "registry update lost the entry".into(),
     ))?;
+    let rescan_requested = req
+        .remote_image_upload
+        .as_ref()
+        .is_some_and(|update| update.rescan_directory_layout);
     let remote_layout_scan = updated_entry
         .remote_image_upload
         .as_ref()
         .filter(|config| {
             config.enabled
                 && config.placement == crate::db_registry::RemoteImageUploadPlacement::TargetTree
+                // A scan whose result a layout chosen in this save would
+                // discard is not run: it walks the receive root under the
+                // registry write lock. An explicit rescan is run and wins.
+                && (!layout_chosen || rescan_requested)
                 && remote_image_layout_needs_scan(
                     &previous_entry,
                     updated_entry,
@@ -1498,7 +1506,7 @@ pub async fn update_database_route(
             .remote_image_upload
             .as_mut()
             .expect("layout scanning requires remote upload configuration");
-        adopt_detected_layout(config, detected, layout_chosen);
+        adopt_detected_layout(config, detected, layout_chosen && !rescan_requested);
     }
     if let Some(export_dir) = req.export_dir.as_ref() {
         let entry = reg
@@ -1609,23 +1617,52 @@ fn apply_remote_image_upload_update(
         config.placement = placement;
     }
     let mut layout_chosen = false;
-    if let Some(template) = update.directory_template.as_deref() {
+    if let Some(template) = update
+        .directory_template
+        .as_deref()
+        // In catalog mode a template, if a client sends one anyway, is not
+        // used for anything, so it is neither validated nor stored.
+        .filter(|_| {
+            update.directory_template_source
+                != Some(crate::db_registry::RemoteImageUploadTemplateSource::Catalog)
+        })
+    {
         use crate::db_registry::{
             RemoteImageUploadDirectoryLayout, RemoteImageUploadTemplateSource,
         };
         crate::server::remote_upload_layout::validate_directory_template(template)
             .map_err(|error| AppError::BadRequest(error.to_string()))?;
         let template = template.trim().replace('\\', "/");
-        // Is this template a choice? A client that says `preset` chose it. A
-        // client that says `catalog` is keeping the catalog match and the
-        // template rides along unused. A client that says nothing is older
-        // than the field; for it, as before 0.9.3, a template that merely
-        // echoes the stored fallback (the summary hands the fallback back)
-        // is not a choice, while a different one is.
-        let chosen = match update.directory_template_source {
-            Some(RemoteImageUploadTemplateSource::Preset) => true,
-            Some(RemoteImageUploadTemplateSource::Catalog) => false,
-            None => target_tree_was_selected || template != config.fallback_directory_template(),
+        // Is this template a choice, and does it hold against a catalog scan
+        // in the same save?
+        //
+        // A client that says `preset` chose it — when it changes what is in
+        // force. The form echoes the summary's template on every save, and
+        // an echo must not turn a legacy entry with no layout into an
+        // explicit one (that moves where calibration frames land). A real
+        // choice holds against a scan even on the save that first switches
+        // to the catalog tree: the form only says `preset` for a layout the
+        // person touched.
+        //
+        // A client that says nothing is older than the field: as before
+        // 0.9.3 a template counts when it differs from the stored fallback
+        // (or the tree was just selected), and on that first-tree save the
+        // first detection still decides, because such a client cannot tell
+        // an untouched default from a pick.
+        let (chosen, holds) = match update.directory_template_source {
+            Some(RemoteImageUploadTemplateSource::Preset) => {
+                let changes = template != config.directory_template()
+                    || config.directory_layout.is_none() && target_tree_was_selected
+                    || config.directory_layout.as_ref().is_some_and(|layout| {
+                        layout.source == RemoteImageUploadTemplateSource::Catalog
+                    });
+                (changes, true)
+            }
+            Some(RemoteImageUploadTemplateSource::Catalog) => (false, false),
+            None => (
+                target_tree_was_selected || template != config.fallback_directory_template(),
+                !target_tree_was_selected,
+            ),
         };
         if chosen {
             // The chosen layout is the layout: it replaces a catalog match
@@ -1636,12 +1673,7 @@ fn apply_remote_image_upload_update(
                 source: RemoteImageUploadTemplateSource::Preset,
                 samples: 0,
             });
-            // On the save that first switches to the catalog tree there is
-            // no match yet to choose against: the template is what the form
-            // showed by default, and the first detection still decides. Only
-            // a choice made while the tree was already in force holds against
-            // a scan in the same save.
-            layout_chosen = !target_tree_was_selected;
+            layout_chosen = holds;
         }
     }
     if config.sync_enabled && !config.token_is_configured() {
@@ -1668,6 +1700,8 @@ fn adopt_detected_layout(
     detected: Option<crate::server::remote_upload_layout::DetectedDirectoryLayout>,
     layout_chosen: bool,
 ) {
+    // The caller passes `layout_chosen = false` for an explicit rescan: the
+    // person asked to match the catalog again, and that is the later wish.
     if layout_chosen {
         return;
     }
@@ -1800,10 +1834,33 @@ mod remote_image_layout_settings_tests {
         request.directory_template = Some("%TARGET%/%TYPE%/%FILTER%".into());
         request.directory_template_source =
             Some(crate::db_registry::RemoteImageUploadTemplateSource::Preset);
+        // The form only says `preset` for a layout the person touched, so on
+        // this first switch the pick holds against the scan.
+        let chosen = apply_remote_image_upload_update(&mut entry, &request).unwrap();
+        assert!(chosen, "a touched pick holds even on the first switch");
+        adopt_detected_layout(
+            entry.remote_image_upload.as_mut().unwrap(),
+            Some(detected("%YEAR%/%TARGET%/%NIGHT%/%TYPE%", 40)),
+            chosen,
+        );
+        assert_eq!(
+            entry
+                .remote_image_upload
+                .as_ref()
+                .unwrap()
+                .directory_template(),
+            "%TARGET%/%TYPE%/%FILTER%"
+        );
+
+        // An older client, or an untouched form, sends no source: on the
+        // first switch the detection still decides.
+        let mut entry = previous_flat.clone();
+        let mut request = update();
+        request.directory_template = Some("%TARGET%/%TYPE%/%FILTER%".into());
         let chosen = apply_remote_image_upload_update(&mut entry, &request).unwrap();
         assert!(
             !chosen,
-            "with no match yet, the form's default is not a choice against one"
+            "without a source there is no way to tell a pick from the default"
         );
         assert_eq!(
             entry
@@ -1836,6 +1893,63 @@ mod remote_image_layout_settings_tests {
         // An empty scan returns a catalog match to its fallback.
         adopt_detected_layout(config, None, false);
         assert_eq!(config.directory_template(), "%TARGET%/%TYPE%/%FILTER%");
+    }
+
+    #[test]
+    fn the_form_echoing_a_legacy_entry_leaves_it_legacy() {
+        // A target_tree entry with no layout at all is summarized as the
+        // default template with source `preset`, which the form echoes on
+        // every save. That echo must not create an explicit layout: one
+        // moves calibration frames from BIAS/ to the template's tree.
+        let mut entry = legacy_target_tree_entry();
+        let mut request = update();
+        request.directory_template =
+            Some(crate::db_registry::DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE.into());
+        request.directory_template_source =
+            Some(crate::db_registry::RemoteImageUploadTemplateSource::Preset);
+        let chosen = apply_remote_image_upload_update(&mut entry, &request).unwrap();
+        assert!(!chosen);
+        assert!(entry
+            .remote_image_upload
+            .unwrap()
+            .directory_layout
+            .is_none());
+    }
+
+    #[test]
+    fn an_explicit_rescan_beats_a_layout_in_force() {
+        // A Preset layout is in force and the form is in preset mode, so the
+        // save says `preset` with the same template; the person also clicked
+        // Rescan. The rescan is the later wish and its result is adopted.
+        let mut entry = legacy_target_tree_entry();
+        entry.remote_image_upload.as_mut().unwrap().directory_layout =
+            Some(crate::db_registry::RemoteImageUploadDirectoryLayout {
+                template: "%TARGET%/%DATE%/%TYPE%".into(),
+                fallback_template: "%TARGET%/%DATE%/%TYPE%".into(),
+                source: crate::db_registry::RemoteImageUploadTemplateSource::Preset,
+                samples: 0,
+            });
+        let mut request = update();
+        request.directory_template = Some("%TARGET%/%DATE%/%TYPE%".into());
+        request.directory_template_source =
+            Some(crate::db_registry::RemoteImageUploadTemplateSource::Preset);
+        request.rescan_directory_layout = true;
+        let chosen = apply_remote_image_upload_update(&mut entry, &request).unwrap();
+        assert!(!chosen, "the same template is no new choice");
+        let config = entry.remote_image_upload.as_mut().unwrap();
+        adopt_detected_layout(
+            config,
+            Some(detected("%YEAR%/%TARGET%/%NIGHT%/%TYPE%", 12)),
+            chosen && !request.rescan_directory_layout,
+        );
+        assert_eq!(
+            config.directory_template(),
+            "%YEAR%/%TARGET%/%NIGHT%/%TYPE%"
+        );
+        assert_eq!(
+            config.directory_layout.as_ref().unwrap().fallback_template,
+            "%TARGET%/%DATE%/%TYPE%"
+        );
     }
 
     #[test]

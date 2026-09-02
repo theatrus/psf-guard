@@ -472,7 +472,18 @@ impl DbRegistry {
             Ok(mut reg) if reg.schema_version >= 1 => {
                 // Dedup any duplicate slugs introduced by hand-editing.
                 reg.dedup_and_validate()?;
-                reg.retire_dated_catalog_layouts();
+                if reg.retire_dated_catalog_layouts() {
+                    // Persist the repair now: this loader serves read paths
+                    // that never save, and a file left as it was would warn
+                    // on every load and resume filing under one night for any
+                    // other reader.
+                    if let Err(error) = reg.save(path) {
+                        tracing::warn!(
+                            "Could not persist the repaired remote upload layout to {}: {error:#}",
+                            path.display()
+                        );
+                    }
+                }
                 Ok(reg)
             }
             _ => {
@@ -491,7 +502,8 @@ impl DbRegistry {
     /// stored one is only replaced by a rescan, so a catalog match that
     /// carries a date below the target is returned to its fallback here, at
     /// load, and logged. The next save persists the repair.
-    fn retire_dated_catalog_layouts(&mut self) {
+    fn retire_dated_catalog_layouts(&mut self) -> bool {
+        let mut changed = false;
         for entry in &mut self.databases {
             let Some(config) = entry.remote_image_upload.as_mut() else {
                 continue;
@@ -516,7 +528,9 @@ impl DbRegistry {
                 source: RemoteImageUploadTemplateSource::Preset,
                 samples: 0,
             });
+            changed = true;
         }
+        changed
     }
 
     fn migrate_from_v1(v1: LegacyConfigV1, path: &Path) -> Result<Self> {
@@ -867,6 +881,9 @@ mod tests {
             "%CAMERA%/%TARGET%/NIGHT_%NIGHT%/%FILTER%/%TYPE%"
         );
         assert_eq!(layout.source, RemoteImageUploadTemplateSource::Preset);
+        // Persisted, so the file itself no longer carries the fixed date.
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(!on_disk.contains("NIGHT_2025-12-14"), "{on_disk}");
 
         assert!(template_carries_a_date("%TARGET%/NIGHT_2025-12-14/%TYPE%"));
         assert!(!template_carries_a_date(
