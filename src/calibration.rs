@@ -31,7 +31,8 @@ use std::time::UNIX_EPOCH;
 /// 5: `psf_guard_calibration_frame.readout_mode_name`, the readout mode as
 ///    N.I.N.A. spells it. The integer column stays empty on such rigs, so
 ///    without the name two modes of one camera matched each other's frames.
-/// 6: that name read off the files for rows that predate the column.
+/// 6: formerly read that name off the files at open; now a no-op, the
+///    names are filled after startup by [`backfill_readout_mode_names`].
 /// 7: `psf_guard_calibration_frame.is_master`, so a master built by other
 ///    software (PixInsight's WBPP, Siril) is used as a master rather than
 ///    integrated as if it were one raw frame.
@@ -384,6 +385,11 @@ pub fn kind_from_meta(meta: &FrameMeta) -> Option<CalibrationKind> {
 /// recording a version — and the version row is written after the step, so a
 /// crash in between leaves the step to run again.
 ///
+/// It must never read a frame file. A library holds thousands of frames on
+/// slow storage, and a rung runs on the open path before the server has bound
+/// its port or logged a line. Anything that needs the files runs after
+/// startup, in the background, resumably — see [`backfill_readout_mode_names`].
+///
 /// It must only add. Someone runs PSF Guard on two machines and one upgrades
 /// first; the older build still has to read that catalog. Adding a column
 /// leaves every older query working, which is why
@@ -414,7 +420,7 @@ const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         to_version: 6,
-        apply: backfill_readout_mode_name,
+        apply: defer_readout_mode_name_backfill,
     },
     Migration {
         to_version: 7,
@@ -561,72 +567,103 @@ fn add_readout_mode_name_column(conn: &Connection) -> Result<bool> {
     )
 }
 
-/// Read the readout mode's name off the frames that predate the column.
-///
-/// N.I.N.A. writes READOUTM as a display name, and the integer column has no
-/// room for one, so every frame from such a rig recorded no readout mode at
-/// all. That let a "High Gain Mode" dark serve an "Extend Fullwell" light on
-/// the same camera. Every kind is affected, so unlike the rotation rung this
-/// visits every row with no name. Headers only, no pixels; a file that has
-/// moved away or names no mode keeps its NULL.
-fn backfill_readout_mode_name(conn: &Connection) -> Result<bool> {
-    // A data rung runs once; see `backfill_flat_rotation` for why re-reading
-    // every NULL row's header on each open is a cost paid to learn nothing.
-    if recorded_schema_version(conn)? >= 6 {
-        return Ok(false);
-    }
-    let columns = table_column_names(conn, "psf_guard_calibration_frame").unwrap_or_default();
-    let has = |wanted: &str| {
-        columns
-            .iter()
-            .any(|column| column.eq_ignore_ascii_case(wanted))
-    };
-    if !(has("source_path") && has("readout_mode_name")) {
-        return Ok(false);
-    }
+/// Rung 6 used to read the readout mode's name off every calibration frame
+/// here, on the open path. A N.I.N.A. library names its mode on every frame,
+/// so that meant opening thousands of FITS headers serially, on a NAS, before
+/// the server had bound its port or logged a word — and a 0.9.2 upgrade that
+/// "did not start" for minutes. The rung now does nothing; the names are
+/// filled by [`backfill_readout_mode_names`], which the server runs after it
+/// is up, in chunks, resumably. A rung must never read a frame file.
+fn defer_readout_mode_name_backfill(_conn: &Connection) -> Result<bool> {
+    Ok(false)
+}
 
-    // A row with a numeric readout mode came from a header that spelled it
-    // as a number, which can never yield a name: leave those out.
+/// How many frames one background pass writes per transaction. Small enough
+/// that a lock held by N.I.N.A. costs one short retry, large enough that a
+/// library of thousands finishes in a few dozen commits.
+const HEADER_BACKFILL_CHUNK: usize = 100;
+
+/// What one pass of [`backfill_readout_mode_names`] did.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct HeaderBackfillOutcome {
+    /// Rows that still had no readout-mode verdict when the pass began.
+    pub pending: usize,
+    /// Frames whose header named a mode, now recorded.
+    pub named: usize,
+    /// Frames read fine but name no mode; marked so they are not read again.
+    pub nameless: usize,
+    /// Files that could not be read this time; left for a later pass.
+    pub unreadable: usize,
+}
+
+/// Fill in the readout mode's name for frames imported before the catalog
+/// kept it, off the open path.
+///
+/// Reads headers only. Each frame gets one of three verdicts: the name its
+/// header spells, an empty string meaning "read it, names none" so it is
+/// never opened again, or — when the file could not be read at all, as with
+/// an unmounted share — nothing, so a later pass tries again. Work is
+/// committed every [`HEADER_BACKFILL_CHUNK`] frames, so a restart or a lock
+/// held by the capture software loses at most one chunk. `progress` is told
+/// how many of the pending frames have been handled after each chunk.
+pub fn backfill_readout_mode_names(
+    conn: &Connection,
+    mut progress: impl FnMut(usize, usize),
+) -> Result<HeaderBackfillOutcome> {
+    if !schema_supports_current_reads(conn) {
+        return Ok(HeaderBackfillOutcome::default());
+    }
+    // A row with a numeric readout mode came from a numeric header, which
+    // can never yield a name; a row already given a verdict is done.
     let pending: Vec<(i64, String)> = conn
         .prepare(
             "SELECT id, source_path FROM psf_guard_calibration_frame
-             WHERE readout_mode_name IS NULL AND readout_mode IS NULL",
+             WHERE readout_mode_name IS NULL AND readout_mode IS NULL
+             ORDER BY id",
         )?
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    if pending.is_empty() {
-        return Ok(false);
-    }
-
-    // Read every header first, then write once: this runs while a catalog
-    // is being opened, and one fsync per recovered row on a file N.I.N.A.
-    // may be writing to is a cost with nothing to show for it.
-    let recovered: Vec<(i64, String)> = pending
-        .iter()
-        .filter_map(|(id, source_path)| {
-            crate::commands::import::headers::read_frame_meta(Path::new(source_path))
-                .readout_mode_name
-                .map(|name| (*id, name))
-        })
-        .collect();
-    if !recovered.is_empty() {
+    let mut outcome = HeaderBackfillOutcome {
+        pending: pending.len(),
+        ..Default::default()
+    };
+    let mut handled = 0_usize;
+    for chunk in pending.chunks(HEADER_BACKFILL_CHUNK) {
+        let verdicts: Vec<(i64, Option<String>)> = chunk
+            .iter()
+            .map(|(id, source_path)| {
+                let meta =
+                    crate::commands::import::headers::read_frame_meta(Path::new(source_path));
+                if !meta.readable {
+                    return (*id, None);
+                }
+                (*id, Some(meta.readout_mode_name.unwrap_or_default()))
+            })
+            .collect();
         let tx = conn.unchecked_transaction()?;
         {
             let mut update = tx.prepare(
                 "UPDATE psf_guard_calibration_frame SET readout_mode_name = ?1 WHERE id = ?2",
             )?;
-            for (id, name) in &recovered {
-                update.execute(rusqlite::params![name, id])?;
+            for (id, verdict) in &verdicts {
+                match verdict {
+                    Some(name) => {
+                        update.execute(rusqlite::params![name, id])?;
+                        if name.is_empty() {
+                            outcome.nameless += 1;
+                        } else {
+                            outcome.named += 1;
+                        }
+                    }
+                    None => outcome.unreadable += 1,
+                }
             }
         }
         tx.commit()?;
+        handled += chunk.len();
+        progress(handled, pending.len());
     }
-    tracing::info!(
-        "calibration upgrade: recovered a readout mode name for {} of {} frame(s)",
-        recovered.len(),
-        pending.len()
-    );
-    Ok(!recovered.is_empty())
+    Ok(outcome)
 }
 
 fn add_is_master_column(conn: &Connection) -> Result<bool> {
@@ -786,7 +823,102 @@ pub fn migrate_existing(conn: &Connection) -> Result<bool> {
     if !schema_exists(conn) {
         return Ok(false);
     }
+    if recorded_schema_version(conn)? < CALIBRATION_SCHEMA_VERSION {
+        backup_before_upgrade(conn)?;
+    }
     run_migrations(conn)
+}
+
+/// How many upgrade backups of one catalog are kept; the oldest go as new
+/// ones arrive, so a catalog that has crossed many versions does not carry
+/// one full copy per version forever.
+const UPGRADE_BACKUPS_KEPT: usize = 3;
+
+/// Snapshot the catalog file beside itself before the schema ladder changes
+/// it. `VACUUM INTO` takes a consistent copy through SQLite, so a capture
+/// program mid-write cannot tear it and a WAL is folded in. Only a real,
+/// writable file outside a transaction is backed up; an in-memory or
+/// read-only catalog has nothing to lose or cannot be upgraded anyway. A
+/// backup that cannot be written stops the upgrade: the catalog stays as it
+/// is and readable, and the warning names the path to clear.
+fn backup_before_upgrade(conn: &Connection) -> Result<()> {
+    let Some(path) = conn.path().filter(|path| !path.is_empty()) else {
+        return Ok(());
+    };
+    let path = Path::new(path);
+    if !path.is_file() || conn.is_readonly(rusqlite::MAIN_DB)? {
+        return Ok(());
+    }
+    if !conn.is_autocommit() {
+        // Inside someone else's transaction there is no consistent moment to
+        // copy from; the entry points upgrade before they begin one.
+        tracing::debug!(
+            "skipping the upgrade backup of {}: called inside a transaction",
+            path.display()
+        );
+        return Ok(());
+    }
+    let version = recorded_schema_version(conn)?;
+    let backup = upgrade_backup_path(path, version);
+    conn.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])
+        .with_context(|| format!("backing up {} to {}", path.display(), backup.display()))?;
+    tracing::info!(
+        "Backed up {} to {} before upgrading its PSF Guard tables from schema {version} to {}",
+        path.display(),
+        backup.display(),
+        CALIBRATION_SCHEMA_VERSION
+    );
+    prune_upgrade_backups(path);
+    Ok(())
+}
+
+/// `<catalog>.psf-guard-backup-v<schema>-<UTC stamp>.sqlite`, beside the
+/// catalog so it is found where the catalog is looked for.
+fn upgrade_backup_path(catalog: &Path, version: i64) -> PathBuf {
+    let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+    let name = catalog
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "catalog".into());
+    catalog.with_file_name(format!("{name}.psf-guard-backup-v{version}-{stamp}.sqlite"))
+}
+
+fn upgrade_backup_prefix(catalog: &Path) -> String {
+    format!(
+        "{}.psf-guard-backup-v",
+        catalog
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "catalog".into())
+    )
+}
+
+/// Keep the newest [`UPGRADE_BACKUPS_KEPT`] backups of this catalog. Names
+/// sort by version then UTC stamp, so lexical order is age order.
+fn prune_upgrade_backups(catalog: &Path) {
+    let Some(directory) = catalog.parent() else {
+        return;
+    };
+    let prefix = upgrade_backup_prefix(catalog);
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    let mut backups: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".sqlite"))
+        })
+        .collect();
+    backups.sort();
+    let excess = backups.len().saturating_sub(UPGRADE_BACKUPS_KEPT);
+    for old in backups.into_iter().take(excess) {
+        match std::fs::remove_file(&old) {
+            Ok(()) => tracing::info!("Removed old upgrade backup {}", old.display()),
+            Err(error) => tracing::warn!("Could not remove old backup {}: {error}", old.display()),
+        }
+    }
 }
 
 /// Whether this catalog's PSF Guard tables carry every frame column this build
@@ -1041,7 +1173,13 @@ pub fn import_calibration_frames(
                 file_mtime_ns,
                 now,
                 frame.rotator_position,
-                frame.readout_mode_name,
+                // Empty means "the header was read and names no mode", so the
+                // background name pass never opens this file. NULL is left
+                // for frames whose header could not be read.
+                frame
+                    .readout_mode_name
+                    .clone()
+                    .or_else(|| frame.readable.then(String::new)),
                 // Integration masters and other processing outputs are what
                 // `processed` marks; among calibration kinds that is a master.
                 frame.processed,
@@ -3923,7 +4061,11 @@ fn row_to_frame(row: &rusqlite::Row<'_>) -> rusqlite::Result<CalibrationFrame> {
         focal_length_mm: row.get(21)?,
         rotation: row.get(22)?,
         valid_direction: ValidDirection::from_db(row.get(23)?),
-        readout_mode_name: row.get(24)?,
+        // An empty string is the background pass's "read it, names none";
+        // to matching that is the same as never recorded.
+        readout_mode_name: row
+            .get::<_, Option<String>>(24)?
+            .filter(|name| !name.trim().is_empty()),
         is_master: row.get::<_, Option<i64>>(25)?.unwrap_or(0) != 0,
         source_verified: false,
     })
@@ -4554,12 +4696,13 @@ mod tests {
     }
 
     #[test]
-    fn upgrading_recovers_the_readout_mode_name_the_catalog_never_recorded() {
-        // Every frame from a N.I.N.A. rig sat in the catalog with no readout
-        // mode at all, because the header spells it as a name and the
-        // integer column had no room for one. The files knew all along.
+    fn upgrading_opens_no_frame_files_and_the_background_pass_fills_names() {
+        // Rung 6 used to read every calibration frame's header on the open
+        // path. A frame on an unmounted share must not stall the upgrade:
+        // the ladder completes without touching files, and the background
+        // pass gives every frame a verdict later.
         let temp = tempfile::tempdir().unwrap();
-        let dark = temp.path().join("dark.fits");
+        let named = temp.path().join("named.fits");
         let mut header = Vec::new();
         fits_card(&mut header, "SIMPLE  =                    T");
         fits_card(&mut header, "BITPIX  =                   16");
@@ -4575,20 +4718,30 @@ mod tests {
         header.resize(header.len().div_ceil(2880) * 2880, b' ');
         let mut payload = vec![0_u8; 2880];
         payload[0] = 1;
-        let mut file = std::fs::File::create(&dark).unwrap();
+        let mut file = std::fs::File::create(&named).unwrap();
         file.write_all(&header).unwrap();
         file.write_all(&payload).unwrap();
+        let nameless = temp.path().join("nameless.fits");
+        write_test_fits(&nameless, "DARK", 100);
 
-        let conn = Connection::open_in_memory().unwrap();
-        ensure_schema(&conn).unwrap();
+        let conn = version_one_catalog();
+        conn.execute_batch(
+            "ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;
+             ALTER TABLE psf_guard_calibration_frame ADD COLUMN valid_direction TEXT;
+             UPDATE psf_guard_calibration_schema SET version = 4;",
+        )
+        .unwrap();
         for (uuid, path, readout_mode) in [
-            ("u", dark.to_string_lossy().into_owned(), None),
-            ("gone", "/nowhere/missing.fits".to_string(), None),
-            // A numeric readout mode came from a numeric header: no name to
-            // find, so the rung does not open the file.
+            ("named", named.to_string_lossy().into_owned(), None),
+            ("nameless", nameless.to_string_lossy().into_owned(), None),
+            (
+                "gone",
+                "/nowhere/unmounted-share/dark.fits".to_string(),
+                None,
+            ),
             (
                 "numeric",
-                dark.to_string_lossy().into_owned() + ".copy",
+                nameless.to_string_lossy().into_owned() + ".copy",
                 Some(3),
             ),
         ] {
@@ -4610,67 +4763,161 @@ mod tests {
             .unwrap()
         };
 
-        // The rung runs only while the catalog still claims a version that
-        // predates it.
-        conn.execute(
-            "UPDATE psf_guard_calibration_schema SET version = 5 WHERE singleton = 1",
-            [],
-        )
-        .unwrap();
-        assert!(
-            backfill_readout_mode_name(&conn).unwrap(),
-            "a name was found"
+        // The upgrade itself: every rung runs, nothing is read, no name is
+        // written. (An in-memory catalog also takes no backup.)
+        assert!(migrate_existing(&conn).unwrap());
+        assert_eq!(
+            recorded_schema_version(&conn).unwrap(),
+            CALIBRATION_SCHEMA_VERSION
         );
-        assert_eq!(name_of("u").as_deref(), Some("Extend Fullwell 2CMS"));
-        assert_eq!(name_of("gone"), None, "a vanished file keeps its NULL");
-        assert_eq!(name_of("numeric"), None, "a numeric mode is not revisited");
+        for uuid in ["named", "nameless", "gone", "numeric"] {
+            assert_eq!(name_of(uuid), None, "{uuid} untouched by the ladder");
+        }
 
-        // Once the catalog records version 6 the rung is spent.
-        conn.execute(
-            "UPDATE psf_guard_calibration_schema SET version = 6 WHERE singleton = 1",
-            [],
-        )
-        .unwrap();
-        assert!(!backfill_readout_mode_name(&conn).unwrap());
+        // The background pass gives each frame its verdict.
+        let mut reported = Vec::new();
+        let outcome =
+            backfill_readout_mode_names(&conn, |done, total| reported.push((done, total))).unwrap();
+        assert_eq!(
+            outcome,
+            HeaderBackfillOutcome {
+                pending: 3,
+                named: 1,
+                nameless: 1,
+                unreadable: 1,
+            }
+        );
+        assert_eq!(reported, vec![(3, 3)]);
+        assert_eq!(name_of("named").as_deref(), Some("Extend Fullwell 2CMS"));
+        assert_eq!(name_of("nameless").as_deref(), Some(""), "read, names none");
+        assert_eq!(
+            name_of("gone"),
+            None,
+            "unreadable stays open for a later pass"
+        );
+        assert_eq!(
+            name_of("numeric"),
+            None,
+            "a numeric mode is never a candidate"
+        );
+
+        // A later pass revisits only the unreadable file.
+        let again = backfill_readout_mode_names(&conn, |_, _| {}).unwrap();
+        assert_eq!(again.pending, 1);
+        assert_eq!(again.unreadable, 1);
+
+        // The empty verdict reads back as "unknown" to matching.
+        let frames = query_kind(&conn, CalibrationKind::Dark).unwrap();
+        let read_back = frames
+            .iter()
+            .find(|frame| frame.frame_uuid == "nameless")
+            .unwrap();
+        assert_eq!(read_back.readout_mode_name, None);
     }
 
-    /// Serializes the tests that change the process-wide external-master
-    /// policy, which every selection in the process reads.
-    static POLICY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[test]
+    fn an_upgrade_backs_the_catalog_up_beside_itself_first() {
+        let temp = tempfile::tempdir().unwrap();
+        let catalog = temp.path().join("scheduler.sqlite");
+        {
+            let conn = Connection::open(&catalog).unwrap();
+            ensure_schema(&conn).unwrap();
+            conn.execute(
+                "UPDATE psf_guard_calibration_schema SET version = 4 WHERE singleton = 1",
+                [],
+            )
+            .unwrap();
+        }
+        let backups = || -> Vec<PathBuf> {
+            let mut found: Vec<PathBuf> = std::fs::read_dir(temp.path())
+                .unwrap()
+                .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.contains(".psf-guard-backup-v"))
+                })
+                .collect();
+            found.sort();
+            found
+        };
 
-    /// A master as PixInsight's WBPP writes one: 32-bit float samples
-    /// normalized to 0..1, `IMAGETYP` naming the master, exposure, camera,
-    /// binning and optics kept — and no GAIN, OFFSET or CCD-TEMP.
-    fn write_pixinsight_master(path: &Path, image_type: &str, value: f32, filter: Option<&str>) {
-        let mut header = Vec::new();
-        fits_card(&mut header, "SIMPLE  =                    T");
-        fits_card(&mut header, "BITPIX  =                  -32");
-        fits_card(&mut header, "NAXIS   =                    2");
-        fits_card(&mut header, "NAXIS1  =                    4");
-        fits_card(&mut header, "NAXIS2  =                    4");
-        fits_card(&mut header, &format!("IMAGETYP= '{image_type}'"));
-        fits_card(&mut header, "XBINNING=                    1");
-        fits_card(&mut header, "YBINNING=                    1");
-        if let Some(filter) = filter {
-            fits_card(&mut header, &format!("FILTER  = '{filter}'"));
-        } else {
-            fits_card(&mut header, "FILTER  = ''");
+        let conn = Connection::open(&catalog).unwrap();
+        assert!(migrate_existing(&conn).unwrap());
+        let made = backups();
+        assert_eq!(made.len(), 1, "one backup for one upgrade: {made:?}");
+        let name = made[0].file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with("scheduler.sqlite.psf-guard-backup-v4-"),
+            "{name}"
+        );
+        // The copy is the catalog as it was: still at schema 4, and a working
+        // SQLite file.
+        let copy =
+            Connection::open_with_flags(&made[0], rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap();
+        assert_eq!(recorded_schema_version(&copy).unwrap(), 4);
+
+        // A catalog already current is not copied again.
+        assert!(!migrate_existing(&conn).unwrap());
+        assert_eq!(backups().len(), 1);
+
+        // Older backups beyond the newest three are removed.
+        for stamp in ["20240101-000000", "20240102-000000", "20240103-000000"] {
+            std::fs::write(
+                temp.path().join(format!(
+                    "scheduler.sqlite.psf-guard-backup-v2-{stamp}.sqlite"
+                )),
+                b"old",
+            )
+            .unwrap();
         }
-        fits_card(&mut header, "EXPTIME =              300.000");
-        fits_card(&mut header, "INSTRUME= 'Camera'");
-        fits_card(&mut header, "TELESCOP= 'Scope'");
-        fits_card(&mut header, "FOCALLEN=                  530");
-        fits_card(&mut header, "DATE-OBS= '2025-11-11T08:52:21.616'");
-        fits_card(&mut header, "END");
-        header.resize(header.len().div_ceil(2880) * 2880, b' ');
-        let mut payload = Vec::new();
-        for _ in 0..16 {
-            payload.extend(value.to_be_bytes());
-        }
-        payload.resize(2880, 0);
-        let mut file = std::fs::File::create(path).unwrap();
-        file.write_all(&header).unwrap();
-        file.write_all(&payload).unwrap();
+        conn.execute(
+            "UPDATE psf_guard_calibration_schema SET version = 7 WHERE singleton = 1",
+            [],
+        )
+        .unwrap();
+        assert!(migrate_existing(&conn).unwrap());
+        let kept = backups();
+        assert_eq!(kept.len(), UPGRADE_BACKUPS_KEPT, "{kept:?}");
+        assert!(kept
+            .iter()
+            .all(|path| !path.to_string_lossy().contains("-v2-20240101")));
+    }
+
+    #[test]
+    fn an_upgrade_inside_a_transaction_still_runs_but_takes_no_backup() {
+        // The import path used to be the only place a CLI-opened catalog was
+        // upgraded, inside its transaction. Entry points now upgrade first;
+        // if one is missed the ladder must still work, just unbacked.
+        let temp = tempfile::tempdir().unwrap();
+        let catalog = temp.path().join("scheduler.sqlite");
+        let mut conn = Connection::open(&catalog).unwrap();
+        ensure_schema(&conn).unwrap();
+        conn.execute(
+            "UPDATE psf_guard_calibration_schema SET version = 4 WHERE singleton = 1",
+            [],
+        )
+        .unwrap();
+        let tx = conn.transaction().unwrap();
+        assert!(migrate_existing(&tx).unwrap());
+        tx.commit().unwrap();
+        assert_eq!(
+            recorded_schema_version(&conn).unwrap(),
+            CALIBRATION_SCHEMA_VERSION
+        );
+        let backups = std::fs::read_dir(temp.path())
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("psf-guard-backup")
+            })
+            .count();
+        assert_eq!(backups, 0);
     }
 
     #[test]
@@ -4910,6 +5157,45 @@ mod tests {
         )
         .unwrap();
         assert!(!backfill_is_master(&conn).unwrap(), "the rung is spent");
+    }
+
+    /// Serializes the tests that change the process-wide external-master
+    /// policy, which every selection in the process reads.
+    static POLICY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A master as PixInsight's WBPP writes one: 32-bit float samples
+    /// normalized to 0..1, `IMAGETYP` naming the master, exposure, camera,
+    /// binning and optics kept — and no GAIN, OFFSET or CCD-TEMP.
+    fn write_pixinsight_master(path: &Path, image_type: &str, value: f32, filter: Option<&str>) {
+        let mut header = Vec::new();
+        fits_card(&mut header, "SIMPLE  =                    T");
+        fits_card(&mut header, "BITPIX  =                  -32");
+        fits_card(&mut header, "NAXIS   =                    2");
+        fits_card(&mut header, "NAXIS1  =                    4");
+        fits_card(&mut header, "NAXIS2  =                    4");
+        fits_card(&mut header, &format!("IMAGETYP= '{image_type}'"));
+        fits_card(&mut header, "XBINNING=                    1");
+        fits_card(&mut header, "YBINNING=                    1");
+        if let Some(filter) = filter {
+            fits_card(&mut header, &format!("FILTER  = '{filter}'"));
+        } else {
+            fits_card(&mut header, "FILTER  = ''");
+        }
+        fits_card(&mut header, "EXPTIME =              300.000");
+        fits_card(&mut header, "INSTRUME= 'Camera'");
+        fits_card(&mut header, "TELESCOP= 'Scope'");
+        fits_card(&mut header, "FOCALLEN=                  530");
+        fits_card(&mut header, "DATE-OBS= '2025-11-11T08:52:21.616'");
+        fits_card(&mut header, "END");
+        header.resize(header.len().div_ceil(2880) * 2880, b' ');
+        let mut payload = Vec::new();
+        for _ in 0..16 {
+            payload.extend(value.to_be_bytes());
+        }
+        payload.resize(2880, 0);
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(&header).unwrap();
+        file.write_all(&payload).unwrap();
     }
 
     fn write_test_fits(path: &Path, kind: &str, value: i16) {

@@ -317,7 +317,8 @@ async fn run_server_internal(
             })
             .unwrap_or_default();
         for path in paths {
-            crate::server::database_context::spawn_query_index_build(path);
+            crate::server::database_context::spawn_query_index_build(path.clone());
+            crate::server::database_context::spawn_calibration_header_backfill(path);
         }
     }
 
