@@ -52,6 +52,10 @@ fn open_sync_pair(from: &str, to: &str, registry: Option<&str>) -> Result<SyncPa
         .with_context(|| format!("opening source database {}", from_path.display()))?;
     let destination = Connection::open_with_flags(&to_path, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .with_context(|| format!("opening destination database {}", to_path.display()))?;
+    // Upgrade (and back up) the destination before the sync transaction, where
+    // a mid-transaction upgrade could not take a backup first.
+    crate::calibration::migrate_existing(&destination)
+        .with_context(|| format!("upgrading PSF Guard tables in {}", to_path.display()))?;
 
     Ok(SyncPair {
         from_path,

@@ -174,6 +174,55 @@ pub(crate) fn spawn_query_index_build(path: String) {
     });
 }
 
+/// Fill in readout-mode names for calibration frames imported before the
+/// catalog kept them, after startup and off every request path.
+///
+/// This is what schema rung 6 used to do while the server was still starting,
+/// which on a large library on a NAS meant minutes with no port bound and
+/// nothing logged. It runs here instead: its own connection with a short busy
+/// timeout, one commit per hundred frames, a progress line every chunk, and a
+/// clean stop if the capture software holds the catalog — the next start
+/// picks up where it left off.
+pub(crate) fn spawn_calibration_header_backfill(path: String) {
+    std::thread::spawn(move || {
+        let outcome = Connection::open_with_flags(&path, db_open_flags())
+            .and_then(|conn| {
+                conn.busy_timeout(INDEX_BUILD_BUSY_TIMEOUT)?;
+                Ok(conn)
+            })
+            .map_err(anyhow::Error::from)
+            .and_then(|conn| {
+                let mut announced = false;
+                crate::calibration::backfill_readout_mode_names(&conn, |done, total| {
+                    if !announced {
+                        tracing::info!(
+                            "Reading the headers of {total} calibration frame(s) in {path} to \
+                             record their readout modes; the server is already up"
+                        );
+                        announced = true;
+                    }
+                    if done < total {
+                        tracing::info!("Readout modes: {done} of {total} frames in {path}");
+                    }
+                })
+            });
+        match outcome {
+            Ok(outcome) if outcome.pending == 0 => {}
+            Ok(outcome) => tracing::info!(
+                "Recorded readout modes in {path}: {} named, {} name none, {} unreadable \
+                 (left for the next start)",
+                outcome.named,
+                outcome.nameless,
+                outcome.unreadable
+            ),
+            Err(error) => tracing::info!(
+                "Paused recording readout modes in {path}: {error:#}. \
+                 The next server start continues where this left off."
+            ),
+        }
+    });
+}
+
 /// Identity of the on-disk database file: the `(device, inode)` pair on unix.
 ///
 /// This is deliberately file *identity*, not file *content*. When another
