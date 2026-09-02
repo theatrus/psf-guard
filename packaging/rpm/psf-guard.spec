@@ -8,7 +8,7 @@
 %global rustflags_debuginfo 0
 
 Name:           psf-guard
-Version:        0.9.2
+Version:        0.9.3
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -93,6 +93,13 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Tue Sep 01 2026 Yann Ramin <github@theatr.us> - 0.9.3-1
+- Images tab Status filter works again
+- Master darks, biases, and flats from PixInsight or Siril match and calibrate stacks
+- The catalog is backed up beside itself before each schema upgrade
+- Startup no longer reads every calibration frame's header; readout names fill in afterwards
+- A chosen remote upload folder layout replaces the detected one; dates inside folder names become tokens
+
 * Tue Sep 01 2026 Yann Ramin <github@theatr.us> - 0.9.2-1
 - Max HFR and Min stars reject limits, like N.I.N.A. subframe selection
 - Satellite-trail checking can be turned off for grading
