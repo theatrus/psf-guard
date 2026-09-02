@@ -456,10 +456,22 @@ pub struct RemoteImageUploadUpdate {
     /// Optional so older management clients leave the stored layout alone.
     #[serde(default)]
     pub placement: Option<crate::db_registry::RemoteImageUploadPlacement>,
-    /// Fallback used when the selected receive root has no unambiguous
-    /// catalog layout. Catalog detection can replace it while saving.
+    /// The layout to use. Ignored when `directory_template_source` is
+    /// `catalog`: the catalog match stays and the stored fallback is left
+    /// alone.
     #[serde(default)]
     pub directory_template: Option<String>,
+    /// `preset` says the person chose `directory_template` as the layout:
+    /// when it changes what is in force it replaces a catalog match, and a
+    /// scan in the same save cannot override it (an explicit
+    /// `rescan_directory_layout` can, being the later wish). `catalog` says
+    /// the catalog match stays and the template, if any, is ignored. Omitted
+    /// (older clients) keeps the pre-0.9.3 reading: the template counts as a
+    /// choice only when it differs from the stored fallback, so a client
+    /// echoing the fallback changes nothing, and on the save that first
+    /// selects the catalog tree the first detection still decides.
+    #[serde(default)]
+    pub directory_template_source: Option<crate::db_registry::RemoteImageUploadTemplateSource>,
     /// Request a fresh catalog/tree match even when the layout settings did
     /// not otherwise change.
     #[serde(default)]

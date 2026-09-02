@@ -7,6 +7,7 @@ import {
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
 import type {
+  RemoteImageUploadDirectoryTemplateSource,
   ImportFolder,
   ImportScope,
   RemoteImageUploadPlacement,
@@ -108,6 +109,22 @@ export default function TauriSettings({
   const [formRemoteUploadDir, setFormRemoteUploadDir] = useState('');
   const [formRemoteUploadPlacement, setFormRemoteUploadPlacement] =
     useState<RemoteImageUploadPlacement>('flat');
+  /**
+   * Whether uploads follow the layout detected from the catalog ('catalog')
+   * or the preset/custom template below ('preset'). Choosing a template is a
+   * decision: it replaces the catalog match rather than hiding behind it as
+   * the fallback (#399).
+   */
+  const [formRemoteUploadLayoutChoice, setFormRemoteUploadLayoutChoice] =
+    useState<RemoteImageUploadDirectoryTemplateSource>('preset');
+  /**
+   * Whether the person touched the layout select in this edit. Untouched,
+   * the save sends no source: the server then treats the template as the
+   * form's default, and a first switch to the catalog tree lets detection
+   * decide. Touched, `preset` is a pick that holds.
+   */
+  const [formRemoteUploadLayoutTouched, setFormRemoteUploadLayoutTouched] =
+    useState(false);
   const [formRemoteUploadDirectoryTemplate, setFormRemoteUploadDirectoryTemplate] =
     useState(DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE);
   const [formRemoteUploadCatalogMatch, setFormRemoteUploadCatalogMatch] =
@@ -275,6 +292,8 @@ export default function TauriSettings({
       DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE
     );
     setFormRemoteUploadCatalogMatch(null);
+    setFormRemoteUploadLayoutChoice('preset');
+    setFormRemoteUploadLayoutTouched(false);
     setFormRemoteUploadRescanRequested(false);
     setFormRemoteUploadToken('');
     setFormRemoteUploadTokenConfigured(false);
@@ -307,6 +326,12 @@ export default function TauriSettings({
       entry.remote_image_upload?.directory_template ??
       DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE;
     setFormRemoteUploadDirectoryTemplate(directoryTemplate);
+    setFormRemoteUploadLayoutChoice(
+      entry.remote_image_upload?.directory_template_source === 'catalog'
+        ? 'catalog'
+        : 'preset'
+    );
+    setFormRemoteUploadLayoutTouched(false);
     setFormRemoteUploadCatalogMatch(
       entry.remote_image_upload?.directory_template_source === 'catalog'
         ? {
@@ -341,6 +366,8 @@ export default function TauriSettings({
       DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE
     );
     setFormRemoteUploadCatalogMatch(null);
+    setFormRemoteUploadLayoutChoice('preset');
+    setFormRemoteUploadLayoutTouched(false);
     setFormRemoteUploadRescanRequested(false);
     setFormRemoteUploadToken('');
     setFormRemoteUploadTokenConfigured(false);
@@ -362,6 +389,8 @@ export default function TauriSettings({
       DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE
     );
     setFormRemoteUploadCatalogMatch(null);
+    setFormRemoteUploadLayoutChoice('preset');
+    setFormRemoteUploadLayoutTouched(false);
     setFormRemoteUploadRescanRequested(false);
     setFormRemoteUploadToken('');
     setFormRemoteUploadTokenConfigured(false);
@@ -564,9 +593,10 @@ export default function TauriSettings({
         if (
           formRemoteUploadEnabled &&
           formRemoteUploadPlacement === 'target_tree' &&
+          formRemoteUploadLayoutChoice === 'preset' &&
           !formRemoteUploadDirectoryTemplate.trim()
         ) {
-          setStatusMessage('Enter a layout for new catalog images');
+          setStatusMessage('Enter a folder layout');
           setIsApplying(false);
           return;
         }
@@ -607,10 +637,20 @@ export default function TauriSettings({
             token: formRemoteUploadToken || undefined,
             sync_enabled: formRemoteSyncEnabled,
             placement: formRemoteUploadPlacement,
+            // In catalog mode no template is sent: the match stays as it is
+            // and the server leaves the stored fallback alone.
             directory_template:
               formRemoteUploadEnabled &&
-              formRemoteUploadPlacement === 'target_tree'
+              formRemoteUploadPlacement === 'target_tree' &&
+              formRemoteUploadLayoutChoice === 'preset'
                 ? formRemoteUploadDirectoryTemplate.trim()
+                : undefined,
+            directory_template_source:
+              formRemoteUploadEnabled &&
+              formRemoteUploadPlacement === 'target_tree' &&
+              (formRemoteUploadLayoutTouched ||
+                formRemoteUploadLayoutChoice === 'catalog')
+                ? formRemoteUploadLayoutChoice
                 : undefined,
             rescan_directory_layout:
               formRemoteUploadEnabled &&
@@ -1134,27 +1174,44 @@ export default function TauriSettings({
                       </small>
                     )}
                     <label htmlFor="remote-upload-directory-template">
-                      New catalog layout:
+                      Layout:
                     </label>
                     <div className="file-input-group">
                       <select
                         id="remote-upload-directory-template"
                         value={
-                          isRemoteUploadDirectoryTemplatePreset(
-                            formRemoteUploadDirectoryTemplate
-                          )
-                            ? formRemoteUploadDirectoryTemplate
-                            : 'custom'
+                          formRemoteUploadLayoutChoice === 'catalog' &&
+                          formRemoteUploadCatalogMatch
+                            ? 'catalog'
+                            : isRemoteUploadDirectoryTemplatePreset(
+                                  formRemoteUploadDirectoryTemplate
+                                )
+                              ? formRemoteUploadDirectoryTemplate
+                              : 'custom'
                         }
-                        onChange={(event) =>
+                        onChange={(event) => {
+                          const choice = event.target.value;
+                          setFormRemoteUploadLayoutTouched(true);
+                          if (choice === 'catalog') {
+                            setFormRemoteUploadLayoutChoice('catalog');
+                            return;
+                          }
+                          setFormRemoteUploadLayoutChoice('preset');
+    setFormRemoteUploadLayoutTouched(false);
                           setFormRemoteUploadDirectoryTemplate(
-                            event.target.value === 'custom'
-                              ? ''
-                              : event.target.value
-                          )
-                        }
+                            choice === 'custom' ? '' : choice
+                          );
+                          // A queued rescan would find the catalog match again;
+                          // the person just chose something else.
+                          setFormRemoteUploadRescanRequested(false);
+                        }}
                         className="file-path-input"
                       >
+                        {formRemoteUploadCatalogMatch && (
+                          <option value="catalog">
+                            Match catalog: {formRemoteUploadCatalogMatch.template}
+                          </option>
+                        )}
                         {REMOTE_UPLOAD_DIRECTORY_TEMPLATE_PRESETS.map((template) => (
                           <option key={template} value={template}>
                             {template}
@@ -1178,17 +1235,19 @@ export default function TauriSettings({
                         ↻ {formRemoteUploadRescanRequested ? 'Rescan queued' : 'Rescan'}
                       </button>
                     </div>
-                    {!isRemoteUploadDirectoryTemplatePreset(
-                      formRemoteUploadDirectoryTemplate
-                    ) && (
+                    {formRemoteUploadLayoutChoice === 'preset' &&
+                      !isRemoteUploadDirectoryTemplatePreset(
+                        formRemoteUploadDirectoryTemplate
+                      ) && (
                       <input
                         type="text"
                         aria-label="Custom catalog layout:"
                         className="file-path-input"
                         value={formRemoteUploadDirectoryTemplate}
-                        onChange={(event) =>
-                          setFormRemoteUploadDirectoryTemplate(event.target.value)
-                        }
+                        onChange={(event) => {
+                          setFormRemoteUploadLayoutTouched(true);
+                          setFormRemoteUploadDirectoryTemplate(event.target.value);
+                        }}
                         placeholder="%TARGET%/%NIGHT%/%TYPE%"
                         maxLength={240}
                       />

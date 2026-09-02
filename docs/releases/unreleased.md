@@ -15,6 +15,13 @@
 
 ## Fixed
 
+- Choosing a preset or custom folder layout for remote uploads now replaces
+  the layout detected from the catalog instead of being filed as its
+  fallback. Detection reads a date inside a folder name (`NIGHT_2025-12-14`)
+  as `%NIGHT%` instead of a fixed day, and a layout saved by 0.9.2 with such
+  a fixed day is retired in favour of its fallback the next time the server
+  starts; rescan the catalog to detect it afresh.
+
 - Starting 0.9.2 on a large calibration library could take minutes with
   nothing logged: the schema upgrade read every calibration frame's header
   before the server was up. Upgrades no longer read frame files; readout-mode

@@ -5,6 +5,7 @@ import { getServerUrl } from '../utils/tauri';
 import type {
   CalibrationSettings,
   ExternalMasterPolicy,
+  RemoteImageUploadDirectoryTemplateSource,
   ApiResponse,
   ExportLayout,
   ExportSettings,
@@ -370,6 +371,8 @@ export const apiClient = {
         sync_enabled?: boolean;
         placement?: 'flat' | 'target_tree';
         directory_template?: string;
+        /** `preset`: use `directory_template`; `catalog`: keep the catalog match (any template is ignored). Omit when the layout select was not touched. */
+        directory_template_source?: RemoteImageUploadDirectoryTemplateSource;
         rescan_directory_layout?: boolean;
       };
       /** New export directory; empty string clears it. */

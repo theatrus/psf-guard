@@ -260,6 +260,7 @@ describe('TauriSettings import state', () => {
     const savedUpdates: Array<{
       placement?: string;
       directory_template?: string;
+      directory_template_source?: string;
       rescan_directory_layout?: boolean;
     }> = [];
     server.use(
@@ -372,10 +373,10 @@ describe('TauriSettings import state', () => {
     ).toBeChecked();
     expect(screen.getByLabelText('Receive directory:')).toHaveValue('/images/remote');
     expect(screen.getByLabelText('Folder layout:')).toHaveValue('target_tree');
-    const directoryTemplateSelect = screen.getByLabelText('New catalog layout:');
-    expect(directoryTemplateSelect).toHaveValue(
-      '%TARGET%/%DATE%/%TYPE%'
-    );
+    // A catalog match in force shows as the selected choice, with the
+    // remembered fallback available as a preset below it.
+    const directoryTemplateSelect = screen.getByLabelText('Layout:');
+    expect(directoryTemplateSelect).toHaveValue('catalog');
     expect(
       screen.getByText('Detected from 18 catalog images:')
     ).toBeInTheDocument();
@@ -387,6 +388,7 @@ describe('TauriSettings import state', () => {
         .getAllByRole('option')
         .map((option) => option.textContent)
     ).toEqual([
+      'Match catalog: 2026/%TARGET%/%NIGHT%/%TYPE%',
       '%YEAR%/%TARGET%/%NIGHT%/%TYPE%',
       '%TARGET%/%NIGHT%/%TYPE%',
       '%TARGET%/%DATE%/%TYPE%',
@@ -408,26 +410,31 @@ describe('TauriSettings import state', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Copy' })).toBeEnabled();
 
-    fireEvent.change(screen.getByLabelText('New catalog layout:'), {
-      target: { value: 'custom' },
-    });
-    fireEvent.change(screen.getByLabelText('Custom catalog layout:'), {
-      target: { value: '%TARGET%/%DATE%/%TYPE%/%FILTER%' },
-    });
+    // Queue a rescan first, then choose Custom: the choice cancels the
+    // rescan, because a scan would only find the same match again.
     const rescanButton = screen.getByRole('button', {
       name: 'Rescan catalog layout',
     });
     fireEvent.click(rescanButton);
     expect(rescanButton).toHaveAttribute('aria-pressed', 'true');
-    expect(rescanButton).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Layout:'), {
+      target: { value: 'custom' },
+    });
+    expect(rescanButton).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.change(screen.getByLabelText('Custom catalog layout:'), {
+      target: { value: '%TARGET%/%DATE%/%TYPE%/%FILTER%' },
+    });
 
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
     await waitFor(() => expect(savedUpdates).toHaveLength(1));
+    // Choosing Custom is a choice of layout (#399): the save says so, and
+    // the server will keep it rather than re-scanning the catalog over it.
     expect(savedUpdates[0]).toMatchObject({
       placement: 'target_tree',
       directory_template: '%TARGET%/%DATE%/%TYPE%/%FILTER%',
-      rescan_directory_layout: true,
+      directory_template_source: 'preset',
     });
+    expect(savedUpdates[0].rescan_directory_layout).toBeUndefined();
 
     await screen.findByText('Saved.');
     fireEvent.click(screen.getByRole('button', { name: 'Edit Remote catalog' }));

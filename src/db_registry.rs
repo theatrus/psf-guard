@@ -107,6 +107,24 @@ pub struct RemoteImageUploadDirectoryLayout {
     pub samples: usize,
 }
 
+/// Whether a layout carries a calendar date below its `%TARGET%` level — a
+/// per-night folder that detection failed to turn into a token.
+pub fn template_carries_a_date(template: &str) -> bool {
+    fn is_iso_date(value: &str) -> bool {
+        value.len() == 10
+            && value.as_bytes().get(4) == Some(&b'-')
+            && value.as_bytes().get(7) == Some(&b'-')
+            && chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok()
+    }
+    template
+        .split('/')
+        .skip_while(|component| !component.contains("%TARGET%"))
+        .any(|component| {
+            (0..component.len().saturating_sub(9))
+                .any(|start| component.get(start..start + 10).is_some_and(is_iso_date))
+        })
+}
+
 fn default_remote_upload_directory_template() -> String {
     DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE.to_string()
 }
@@ -454,6 +472,18 @@ impl DbRegistry {
             Ok(mut reg) if reg.schema_version >= 1 => {
                 // Dedup any duplicate slugs introduced by hand-editing.
                 reg.dedup_and_validate()?;
+                if reg.retire_dated_catalog_layouts() {
+                    // Persist the repair now: this loader serves read paths
+                    // that never save, and a file left as it was would warn
+                    // on every load and resume filing under one night for any
+                    // other reader.
+                    if let Err(error) = reg.save(path) {
+                        tracing::warn!(
+                            "Could not persist the repaired remote upload layout to {}: {error:#}",
+                            path.display()
+                        );
+                    }
+                }
                 Ok(reg)
             }
             _ => {
@@ -464,6 +494,43 @@ impl DbRegistry {
                 Ok(migrated)
             }
         }
+    }
+
+    /// 0.9.2 could detect a catalog layout with a literal date in it
+    /// (`…/NIGHT_2025-12-14/…`) and every upload since has been filed under
+    /// that one night. Detection no longer produces such a layout, but a
+    /// stored one is only replaced by a rescan, so a catalog match that
+    /// carries a date below the target is returned to its fallback here, at
+    /// load, and logged. The next save persists the repair.
+    fn retire_dated_catalog_layouts(&mut self) -> bool {
+        let mut changed = false;
+        for entry in &mut self.databases {
+            let Some(config) = entry.remote_image_upload.as_mut() else {
+                continue;
+            };
+            let Some(layout) = config.directory_layout.as_ref() else {
+                continue;
+            };
+            if layout.source != RemoteImageUploadTemplateSource::Catalog
+                || !template_carries_a_date(&layout.template)
+            {
+                continue;
+            }
+            let fallback = layout.fallback_template.clone();
+            tracing::warn!(
+                database = %entry.id,
+                template = %layout.template,
+                "Retired a remote upload layout that fixes one date; using {fallback} until the next catalog rescan"
+            );
+            config.directory_layout = Some(RemoteImageUploadDirectoryLayout {
+                template: fallback.clone(),
+                fallback_template: fallback,
+                source: RemoteImageUploadTemplateSource::Preset,
+                samples: 0,
+            });
+            changed = true;
+        }
+        changed
     }
 
     fn migrate_from_v1(v1: LegacyConfigV1, path: &Path) -> Result<Self> {
@@ -774,6 +841,55 @@ mod tests {
         reg.save(&path).unwrap();
         let reloaded = DbRegistry::load_or_init(&path).unwrap();
         assert_eq!(reloaded.databases, reg.databases);
+    }
+
+    #[test]
+    fn a_stored_catalog_layout_with_a_fixed_date_is_retired_on_load() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut reg = DbRegistry::default();
+        reg.databases.push(DbEntry {
+            id: "remote".into(),
+            name: "Remote".into(),
+            db_path: "/tmp/remote.sqlite".into(),
+            image_dirs: vec!["/images".into()],
+            reject_archive: None,
+            remote_image_upload: Some(RemoteImageUploadConfig {
+                placement: RemoteImageUploadPlacement::TargetTree,
+                directory_layout: Some(RemoteImageUploadDirectoryLayout {
+                    template: "ZWO ASI2600MM Pro/%TARGET%/NIGHT_2025-12-14/%FILTER%/%TYPE%".into(),
+                    fallback_template: "%CAMERA%/%TARGET%/NIGHT_%NIGHT%/%FILTER%/%TYPE%".into(),
+                    source: RemoteImageUploadTemplateSource::Catalog,
+                    samples: 157,
+                }),
+                ..Default::default()
+            }),
+            export_dir: None,
+        });
+        reg.save(&path).unwrap();
+
+        let reloaded = DbRegistry::load_or_init(&path).unwrap();
+        let layout = reloaded.databases[0]
+            .remote_image_upload
+            .as_ref()
+            .unwrap()
+            .directory_layout
+            .clone()
+            .unwrap();
+        assert_eq!(
+            layout.template,
+            "%CAMERA%/%TARGET%/NIGHT_%NIGHT%/%FILTER%/%TYPE%"
+        );
+        assert_eq!(layout.source, RemoteImageUploadTemplateSource::Preset);
+        // Persisted, so the file itself no longer carries the fixed date.
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(!on_disk.contains("NIGHT_2025-12-14"), "{on_disk}");
+
+        assert!(template_carries_a_date("%TARGET%/NIGHT_2025-12-14/%TYPE%"));
+        assert!(!template_carries_a_date(
+            "Trip_2025-08-01/%TARGET%/%NIGHT%/%TYPE%"
+        ));
+        assert!(!template_carries_a_date("%TARGET%/%NIGHT%/%TYPE%"));
     }
 
     #[test]
