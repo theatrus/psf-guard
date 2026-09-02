@@ -8,7 +8,7 @@
 %global rustflags_debuginfo 0
 
 Name:           psf-guard
-Version:        0.9.1
+Version:        0.9.2
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -93,6 +93,14 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Tue Sep 01 2026 Yann Ramin <github@theatr.us> - 0.9.2-1
+- Max HFR and Min stars reject limits, like N.I.N.A. subframe selection
+- Satellite-trail checking can be turned off for grading
+- Calibration matching tells named readout modes apart
+- Stack previews remember the scoring settings that admitted their frames
+- Remote image intake keeps a durable identity and can match a catalog folder tree
+- Remote sync waits out transient SQLite locks
+
 * Fri Aug 29 2026 Yann Ramin <github@theatr.us> - 0.9.1-1
 - Every view lays out for phone screens
 - RC-Astro steps cache one by one, so changing a later step reuses earlier work
