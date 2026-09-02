@@ -204,6 +204,10 @@ pub fn import_frames(
     frames: Vec<FrameMeta>,
     options: &ImportOptions,
 ) -> Result<ImportOutcome> {
+    // Bring the catalog's PSF Guard tables up to date — and back the file up
+    // first — before the import transaction begins. Inside it there is no
+    // consistent moment to copy from, so the upgrade would run unbacked.
+    crate::calibration::migrate_existing(conn)?;
     let mut outcome = ImportOutcome {
         scanned: frames.len(),
         dry_run: options.dry_run,

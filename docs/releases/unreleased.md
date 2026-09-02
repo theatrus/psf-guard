@@ -6,9 +6,20 @@
 
 ## Added
 
+- Before upgrading its tables in a scheduler catalog, PSF Guard now copies the
+  catalog beside itself (`…psf-guard-backup-v<schema>-<time>.sqlite`), keeps
+  the three newest copies, and refuses to upgrade if the copy cannot be
+  written.
+
 ## Changed
 
 ## Fixed
+
+- Starting 0.9.2 on a large calibration library could take minutes with
+  nothing logged: the schema upgrade read every calibration frame's header
+  before the server was up. Upgrades no longer read frame files; readout-mode
+  names are recorded after startup, in the background, with progress in the
+  log.
 
 - The Images tab's Status filter works again: choosing Accepted, Rejected, or
   Pending shows those images instead of an empty grid, the summary line names

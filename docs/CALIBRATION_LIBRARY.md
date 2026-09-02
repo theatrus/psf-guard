@@ -77,6 +77,23 @@ again. Two things differ from raw frames:
 how they take part: use one whenever it matches (the default), only when raw
 frames cannot build a master, or never.
 
+## Upgrades and backups
+
+PSF Guard keeps its own tables inside the scheduler catalog and upgrades them
+in place when a newer build opens the catalog. Before any upgrade that changes
+the file, it takes a consistent copy beside it with SQLite's `VACUUM INTO`:
+
+```
+scheduler.sqlite.psf-guard-backup-v4-20260902-031500.sqlite
+```
+
+The name carries the schema the catalog had and the UTC time. The three newest
+backups of a catalog are kept; older ones are removed as new ones arrive. If
+the copy cannot be written (disk full, folder read-only), the upgrade does not
+run, the catalog stays readable at its old schema, and the log names the path
+to clear. An upgrade never reads frame files; anything that needs them, such
+as recording readout-mode names, runs after the server is up.
+
 ## Safe matching
 
 PSF Guard only uses candidates that agree with every known hard setting:
@@ -98,9 +115,10 @@ one setting where a candidate that recorded nothing is still accepted: it is
 a label the capture software chose, and frames from software that writes a
 number or nothing would otherwise stop matching lights that name a mode.
 Two frames that both name a mode must agree, and a master never mixes two
-names. Opening a library built before names were kept reads them off the
-frames' headers once; a frame whose file was unreachable then stays unnamed
-and matches as it did before. A match still needs a positive camera-name or sensor-size
+names. For a library built before names were kept, the server reads them off
+the frames' headers after it has started, in the background and in chunks,
+logging its progress; a frame whose file is unreachable is tried again at the
+next start and matches as it did before until then. A match still needs a positive camera-name or sensor-size
 identity; wholly unknown sensors never match. It sorts safe candidates by
 distance from the light's capture time and uses at most 64 frames per master.
 
