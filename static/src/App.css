@@ -7210,3 +7210,11 @@
   font-size: 0.75rem;
   padding: 0.2rem 0.5rem;
 }
+
+/* A master integrated by other software, shown beside its kind badge. */
+.calibration-kind-master {
+  margin-left: 0.35rem;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted, #aab);
+  border: 1px dashed currentColor;
+}

@@ -507,6 +507,14 @@ export default function CalibrationLibraryDialog({
                         <span className={`calibration-kind calibration-kind-${frame.kind}`}>
                           {KIND_LABELS[frame.kind]}
                         </span>
+                        {frame.is_master && (
+                          <span
+                            className="calibration-kind calibration-kind-master"
+                            title="An integrated master from other software, used as a master as-is"
+                          >
+                            Master
+                          </span>
+                        )}
                       </td>
                       <td>
                         <strong>{fileName(frame.source_path)}</strong>
