@@ -370,6 +370,8 @@ export const apiClient = {
         sync_enabled?: boolean;
         placement?: 'flat' | 'target_tree';
         directory_template?: string;
+        /** `preset`: use `directory_template`; `catalog`: keep the catalog match, remember the template as fallback. */
+        directory_template_source?: 'preset' | 'catalog';
         rescan_directory_layout?: boolean;
       };
       /** New export directory; empty string clears it. */

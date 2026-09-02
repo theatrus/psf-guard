@@ -1637,14 +1637,36 @@ fn apply_remote_image_upload_update(
         config.placement = placement;
     }
     if let Some(template) = update.directory_template.as_deref() {
+        use crate::db_registry::{
+            RemoteImageUploadDirectoryLayout, RemoteImageUploadTemplateSource,
+        };
         crate::server::remote_upload_layout::validate_directory_template(template)
             .map_err(|error| AppError::BadRequest(error.to_string()))?;
         let template = template.trim().replace('\\', "/");
-        if target_tree_was_selected || template != config.fallback_directory_template() {
-            config.directory_layout = Some(crate::db_registry::RemoteImageUploadDirectoryLayout {
+        let keeps_catalog_match =
+            update.directory_template_source == Some(RemoteImageUploadTemplateSource::Catalog);
+        let current_is_catalog = config
+            .directory_layout
+            .as_ref()
+            .is_some_and(|layout| layout.source == RemoteImageUploadTemplateSource::Catalog);
+        if keeps_catalog_match && current_is_catalog {
+            // "Match catalog" stays in force; the chosen template is only what
+            // a future empty scan falls back to.
+            if let Some(layout) = config.directory_layout.as_mut() {
+                layout.fallback_template = template;
+            }
+        } else if target_tree_was_selected
+            || current_is_catalog
+            || template != config.directory_template()
+        {
+            // A preset or custom layout the person chose is the layout: it
+            // replaces a detected one rather than hiding behind it. (This used
+            // to compare against the fallback only, so choosing a custom
+            // layout over a catalog match changed nothing visible — #399.)
+            config.directory_layout = Some(RemoteImageUploadDirectoryLayout {
                 template: template.clone(),
                 fallback_template: template,
-                source: crate::db_registry::RemoteImageUploadTemplateSource::Preset,
+                source: RemoteImageUploadTemplateSource::Preset,
                 samples: 0,
             });
         }
@@ -1671,6 +1693,15 @@ fn remote_image_layout_needs_scan(
     if request.is_some_and(|request| request.rescan_directory_layout) {
         return true;
     }
+    // Choosing a preset or custom layout is a decision, not a reason to go
+    // looking for a different one. A scan here used to promote the catalog
+    // match back over the layout just chosen (#399).
+    if request.is_some_and(|request| {
+        request.directory_template_source
+            == Some(crate::db_registry::RemoteImageUploadTemplateSource::Preset)
+    }) {
+        return false;
+    }
     let previous_config = previous.remote_image_upload.as_ref();
     let updated_config = updated.remote_image_upload.as_ref();
     previous.db_path != updated.db_path
@@ -1681,8 +1712,6 @@ fn remote_image_layout_needs_scan(
             != updated_config.map(|config| config.image_dir.trim())
         || previous_config.map(|config| config.placement)
             != updated_config.map(|config| config.placement)
-        || previous_config.map(|config| config.fallback_directory_template())
-            != updated_config.map(|config| config.fallback_directory_template())
 }
 
 fn reset_catalog_directory_layout(config: &mut crate::db_registry::RemoteImageUploadConfig) {
@@ -1727,7 +1756,95 @@ mod remote_image_layout_settings_tests {
             placement: Some(crate::db_registry::RemoteImageUploadPlacement::TargetTree),
             directory_template: None,
             rescan_directory_layout: false,
+            directory_template_source: None,
         }
+    }
+
+    fn catalog_matched_entry() -> crate::db_registry::DbEntry {
+        let mut entry = legacy_target_tree_entry();
+        // Disabled, like the test request: enabling needs a token, and the
+        // enabled flag flipping is itself a reason to scan.
+        entry.remote_image_upload = Some(crate::db_registry::RemoteImageUploadConfig {
+            enabled: false,
+            image_dir: "images".into(),
+            placement: crate::db_registry::RemoteImageUploadPlacement::TargetTree,
+            directory_layout: Some(crate::db_registry::RemoteImageUploadDirectoryLayout {
+                template: "ZWO ASI2600MM Pro/%TARGET%/NIGHT_%NIGHT%/%FILTER%/%TYPE%".into(),
+                fallback_template: "%YEAR%/%TARGET%/%NIGHT%/%TYPE%".into(),
+                source: crate::db_registry::RemoteImageUploadTemplateSource::Catalog,
+                samples: 157,
+            }),
+            ..Default::default()
+        });
+        entry
+    }
+
+    #[test]
+    fn a_chosen_layout_replaces_the_catalog_match_and_is_not_scanned_away() {
+        // #399: the person chose Custom over a wrong catalog match, and the
+        // save filed the custom layout as the fallback while the catalog
+        // match stayed in force, then re-scanned and kept it that way.
+        let previous = catalog_matched_entry();
+        let mut entry = catalog_matched_entry();
+        let mut request = update();
+        request.placement = Some(crate::db_registry::RemoteImageUploadPlacement::TargetTree);
+        request.directory_template = Some("%CAMERA%/%TARGET%/NIGHT_%NIGHT%/%FILTER%/%TYPE%".into());
+        request.directory_template_source =
+            Some(crate::db_registry::RemoteImageUploadTemplateSource::Preset);
+        apply_remote_image_upload_update(&mut entry, &request).unwrap();
+
+        let config = entry.remote_image_upload.as_ref().unwrap();
+        let layout = config.directory_layout.as_ref().unwrap();
+        assert_eq!(
+            layout.template,
+            "%CAMERA%/%TARGET%/NIGHT_%NIGHT%/%FILTER%/%TYPE%"
+        );
+        assert_eq!(layout.fallback_template, layout.template);
+        assert_eq!(
+            layout.source,
+            crate::db_registry::RemoteImageUploadTemplateSource::Preset
+        );
+        assert_eq!(config.directory_template(), layout.template);
+        assert!(
+            !remote_image_layout_needs_scan(&previous, &entry, Some(&request)),
+            "an explicit choice is final until a rescan is asked for"
+        );
+
+        // The same choice without naming its source is still a choice: the
+        // template differs from the one in force.
+        let mut entry = catalog_matched_entry();
+        let mut request = update();
+        request.directory_template = Some("%TARGET%/%NIGHT%/%TYPE%".into());
+        apply_remote_image_upload_update(&mut entry, &request).unwrap();
+        let layout = entry.remote_image_upload.unwrap().directory_layout.unwrap();
+        assert_eq!(layout.template, "%TARGET%/%NIGHT%/%TYPE%");
+        assert_eq!(
+            layout.source,
+            crate::db_registry::RemoteImageUploadTemplateSource::Preset
+        );
+    }
+
+    #[test]
+    fn keeping_match_catalog_only_changes_the_fallback() {
+        let previous = catalog_matched_entry();
+        let mut entry = catalog_matched_entry();
+        let mut request = update();
+        request.directory_template = Some("%TARGET%/%DATE%/%TYPE%".into());
+        request.directory_template_source =
+            Some(crate::db_registry::RemoteImageUploadTemplateSource::Catalog);
+        apply_remote_image_upload_update(&mut entry, &request).unwrap();
+        let config = entry.remote_image_upload.as_ref().unwrap();
+        let layout = config.directory_layout.as_ref().unwrap();
+        assert_eq!(
+            layout.template,
+            "ZWO ASI2600MM Pro/%TARGET%/NIGHT_%NIGHT%/%FILTER%/%TYPE%"
+        );
+        assert_eq!(layout.fallback_template, "%TARGET%/%DATE%/%TYPE%");
+        assert_eq!(layout.samples, 157);
+        assert!(
+            !remote_image_layout_needs_scan(&previous, &entry, Some(&request)),
+            "changing the fallback alone is no reason to rescan"
+        );
     }
 
     #[test]

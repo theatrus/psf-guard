@@ -260,6 +260,7 @@ describe('TauriSettings import state', () => {
     const savedUpdates: Array<{
       placement?: string;
       directory_template?: string;
+      directory_template_source?: string;
       rescan_directory_layout?: boolean;
     }> = [];
     server.use(
@@ -372,10 +373,10 @@ describe('TauriSettings import state', () => {
     ).toBeChecked();
     expect(screen.getByLabelText('Receive directory:')).toHaveValue('/images/remote');
     expect(screen.getByLabelText('Folder layout:')).toHaveValue('target_tree');
-    const directoryTemplateSelect = screen.getByLabelText('New catalog layout:');
-    expect(directoryTemplateSelect).toHaveValue(
-      '%TARGET%/%DATE%/%TYPE%'
-    );
+    // A catalog match in force shows as the selected choice, with the
+    // remembered fallback available as a preset below it.
+    const directoryTemplateSelect = screen.getByLabelText('Layout:');
+    expect(directoryTemplateSelect).toHaveValue('catalog');
     expect(
       screen.getByText('Detected from 18 catalog images:')
     ).toBeInTheDocument();
@@ -387,6 +388,7 @@ describe('TauriSettings import state', () => {
         .getAllByRole('option')
         .map((option) => option.textContent)
     ).toEqual([
+      'Match catalog: 2026/%TARGET%/%NIGHT%/%TYPE%',
       '%YEAR%/%TARGET%/%NIGHT%/%TYPE%',
       '%TARGET%/%NIGHT%/%TYPE%',
       '%TARGET%/%DATE%/%TYPE%',
@@ -408,7 +410,7 @@ describe('TauriSettings import state', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Copy' })).toBeEnabled();
 
-    fireEvent.change(screen.getByLabelText('New catalog layout:'), {
+    fireEvent.change(screen.getByLabelText('Layout:'), {
       target: { value: 'custom' },
     });
     fireEvent.change(screen.getByLabelText('Custom catalog layout:'), {
@@ -423,9 +425,12 @@ describe('TauriSettings import state', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
     await waitFor(() => expect(savedUpdates).toHaveLength(1));
+    // Choosing Custom is a choice of layout (#399): the save says so, and
+    // the server will keep it rather than re-scanning the catalog over it.
     expect(savedUpdates[0]).toMatchObject({
       placement: 'target_tree',
       directory_template: '%TARGET%/%DATE%/%TYPE%/%FILTER%',
+      directory_template_source: 'preset',
       rescan_directory_layout: true,
     });
 

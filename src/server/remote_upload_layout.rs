@@ -142,6 +142,24 @@ pub fn detect_catalog_directory_layout(
             samples: *count,
         })
     });
+    // A single night's catalog can agree unanimously on a folder that is a
+    // date the detector could not tie to any frame. Adopting that would file
+    // every future upload under one fixed night (#399), so a template that
+    // still carries a literal date is no layout at all.
+    let detected = detected.filter(|layout| {
+        let literal_date = layout
+            .template
+            .split('/')
+            .any(|component| split_embedded_iso_date(component).is_some());
+        if literal_date {
+            tracing::warn!(
+                root = %receive_root.display(),
+                template = %layout.template,
+                "Ignored a detected remote upload layout that contains a literal date"
+            );
+        }
+        !literal_date
+    });
 
     tracing::info!(
         root = %receive_root.display(),
@@ -281,13 +299,16 @@ fn templates_from_sample(root: &Path, path: &Path, sample: &CatalogLayoutSample)
             vec![("%PROJECT%".to_string(), false, false)]
         } else if matching_observing_year(component, observing_night.as_deref()) {
             vec![("%YEAR%".to_string(), false, false)]
-        } else if is_iso_date(component) {
+        } else if let Some((prefix, date, suffix)) = split_embedded_iso_date(component) {
+            // The date may be the whole folder name or sit inside one, as in
+            // N.I.N.A.'s `NIGHT_2025-12-14`. Either way it is the capture
+            // date, the observing night, or a literal that stays literal.
             let mut dates = Vec::new();
-            if capture_date.as_deref() == Some(component.as_str()) {
-                dates.push(("%DATE%".to_string(), false, false));
+            if capture_date.as_deref() == Some(date) {
+                dates.push((format!("{prefix}%DATE%{suffix}"), false, false));
             }
-            if observing_night.as_deref() == Some(component.as_str()) {
-                dates.push(("%NIGHT%".to_string(), false, false));
+            if observing_night.as_deref() == Some(date) {
+                dates.push((format!("{prefix}%NIGHT%{suffix}"), false, false));
             }
             if dates.is_empty() {
                 dates.push((component.to_string(), false, false));
@@ -373,6 +394,20 @@ fn relative_components(path: &Path) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+/// `prefix`, the first `YYYY-MM-DD` inside `component`, and `suffix` — so a
+/// folder like `NIGHT_2025-12-14` can become `NIGHT_%NIGHT%`. `None` when the
+/// component holds no calendar date.
+fn split_embedded_iso_date(component: &str) -> Option<(&str, &str, &str)> {
+    let bytes = component.as_bytes();
+    (0..bytes.len().saturating_sub(9)).find_map(|start| {
+        let end = start + 10;
+        component
+            .get(start..end)
+            .filter(|candidate| is_iso_date(candidate))
+            .map(|date| (&component[..start], date, &component[end..]))
+    })
 }
 
 fn is_iso_date(value: &str) -> bool {
@@ -478,6 +513,94 @@ mod tests {
         assert!(!is_iso_date("2026-13-30"));
         assert!(matching_observing_year("2026", Some("2026-08-30")));
         assert!(!matching_observing_year("2026", Some("2025-12-31")));
+        assert_eq!(
+            split_embedded_iso_date("NIGHT_2025-12-14"),
+            Some(("NIGHT_", "2025-12-14", ""))
+        );
+        assert_eq!(
+            split_embedded_iso_date("2025-12-14_session"),
+            Some(("", "2025-12-14", "_session"))
+        );
+        assert_eq!(split_embedded_iso_date("LIGHT"), None);
+        assert_eq!(split_embedded_iso_date("2025-13-40"), None);
+    }
+
+    #[test]
+    fn a_date_inside_a_folder_name_becomes_a_token() {
+        // #399: N.I.N.A.'s `NIGHT_$$DATEMINUS12$$` folders came out of
+        // detection as `NIGHT_2025-12-14`, a literal, so a whole catalog's
+        // uploads would have been filed under one night forever.
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("receive");
+        let db_path = temp.path().join("scheduler.sqlite");
+        let connection = create_catalog(&db_path);
+        for (id, night, captured, filename) in [
+            (1, "2025-12-14", "2025-12-15T04:00:00", "cres-001.fits"),
+            (2, "2025-12-15", "2025-12-16T04:00:00", "cres-002.fits"),
+        ] {
+            let directory = root
+                .join("ZWO ASI2600MM Pro")
+                .join("Crescent Nebula")
+                .join(format!("NIGHT_{night}"))
+                .join("O")
+                .join("LIGHT");
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(directory.join(filename), b"fixture").unwrap();
+            add_catalog_image(
+                &connection,
+                id,
+                "Crescent Nebula",
+                "Crescent Nebula",
+                "O",
+                filename,
+                crate::commands::import::headers::parse_fits_datetime(captured).unwrap(),
+            );
+        }
+        drop(connection);
+        let detected = detect_catalog_directory_layout(
+            db_path.to_str().unwrap(),
+            &dunce::canonicalize(root).unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            detected.template,
+            "ZWO ASI2600MM Pro/%TARGET%/NIGHT_%NIGHT%/%FILTER%/%TYPE%"
+        );
+        assert_eq!(detected.samples, 2);
+    }
+
+    #[test]
+    fn a_layout_that_still_carries_a_literal_date_is_refused() {
+        // Every frame agrees on a folder that is a date, but not the frames'
+        // date: one night's catalog named after the previous evening, say.
+        // Unanimous or not, a fixed date is not a layout.
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("receive");
+        let db_path = temp.path().join("scheduler.sqlite");
+        let connection = create_catalog(&db_path);
+        for (id, filename) in [(1, "a-001.fits"), (2, "a-002.fits")] {
+            let directory = root.join("M31").join("2025-12-01").join("LIGHT");
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(directory.join(filename), b"fixture").unwrap();
+            add_catalog_image(
+                &connection,
+                id,
+                "M31",
+                "M31",
+                "L",
+                filename,
+                crate::commands::import::headers::parse_fits_datetime("2025-12-15T04:00:00")
+                    .unwrap(),
+            );
+        }
+        drop(connection);
+        let detected = detect_catalog_directory_layout(
+            db_path.to_str().unwrap(),
+            &dunce::canonicalize(root).unwrap(),
+        )
+        .unwrap();
+        assert!(detected.is_none(), "got {detected:?}");
     }
 
     #[test]

@@ -370,10 +370,15 @@ observing-night convention: `DATE-LOC` minus 12 hours. Omitting placement keeps
 the compatibility `flat` layout.
 
 The desktop Settings flow scans catalog-linked files below the selected receive
-root when `target_tree` is saved. It persists a uniquely dominant pattern and
-shows how many catalog files supported it. Empty or mixed catalogs keep the
-selected preset, so placement never requires a filesystem scan during an image
-upload. Headless servers have no Settings scanner and use their explicit
+root when `target_tree` is first saved or a rescan is asked for. It persists a
+uniquely dominant pattern and shows how many catalog files supported it. A date
+inside a folder name (`NIGHT_2025-12-14`) becomes its token (`NIGHT_%NIGHT%`);
+a pattern that still carries a literal date is refused, since it would file
+every upload under one night. Empty or mixed catalogs keep the selected preset,
+so placement never requires a filesystem scan during an image upload. Choosing
+a preset or custom layout in Settings replaces a catalog match rather than
+becoming its fallback; the save says which it means with
+`directory_template_source`. Headless servers have no Settings scanner and use their explicit
 `directory_template` (or the legacy target/type/filter default).
 
 They apply to the in-memory database list at startup and are never written back
