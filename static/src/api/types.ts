@@ -1181,11 +1181,15 @@ export interface CatalogInstallStatus {
   progress: CatalogInstallProgress;
 }
 
+export type ExternalMasterPolicy = 'prefer' | 'fallback' | 'ignore';
+
 export interface CalibrationSettings {
   /** Configured override in degrees; null when the library default applies. */
   rotation_tolerance_deg: number | null;
   /** What applies with no override, for labeling the placeholder. */
   default_rotation_tolerance_deg: number;
+  /** How masters built by other software are used; `prefer` by default. */
+  external_masters: ExternalMasterPolicy;
 }
 
 export interface ExportSettings {
@@ -1486,6 +1490,8 @@ export interface CalibrationFrameSummary {
   readout_mode?: number | null;
   /** The readout mode as N.I.N.A. names it, when the header spelled it that way. */
   readout_mode_name?: string | null;
+  /** An integrated master from other software, used as a master as-is. */
+  is_master?: boolean;
   bayer_pattern?: string | null;
   exposure_s?: number | null;
   camera_temp?: number | null;

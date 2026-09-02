@@ -20,6 +20,7 @@ const current = (rotation: number | null) => ({
   data: {
     rotation_tolerance_deg: rotation,
     default_rotation_tolerance_deg: 2,
+    external_masters: 'prefer',
   },
   error: null,
 });
@@ -51,9 +52,34 @@ describe('CalibrationMatchingSettings', () => {
     fireEvent.change(input, { target: { value: '3.5' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
-      expect(saved).toEqual({ rotation_tolerance_deg: 3.5 })
+      expect(saved).toEqual({ rotation_tolerance_deg: 3.5, external_masters: 'prefer' })
     );
     // The response is the new truth; the button falls back to disabled.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+    );
+  });
+
+  it('saves the external-master policy on its own', async () => {
+    let saved: unknown = null;
+    server.use(
+      http.get('/api/settings/calibration', () => HttpResponse.json(current(null))),
+      http.put('/api/settings/calibration', async ({ request }) => {
+        saved = await request.json();
+        return HttpResponse.json({
+          ...current(null),
+          data: { ...current(null).data, external_masters: 'fallback' },
+        });
+      })
+    );
+    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
+    const select = await screen.findByLabelText('Masters from other software');
+    expect(select).toHaveValue('prefer');
+    fireEvent.change(select, { target: { value: 'fallback' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(saved).toEqual({ rotation_tolerance_deg: null, external_masters: 'fallback' })
+    );
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
     );

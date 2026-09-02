@@ -1,6 +1,29 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
+import type { ExternalMasterPolicy } from '../api/types';
+
+const EXTERNAL_MASTER_OPTIONS: ReadonlyArray<{
+  value: ExternalMasterPolicy;
+  label: string;
+  hint: string;
+}> = [
+  {
+    value: 'prefer',
+    label: 'Use them whenever one matches',
+    hint: 'The nearest matching external master is used as-is, even when raw frames match too.',
+  },
+  {
+    value: 'fallback',
+    label: 'Only when raw frames cannot build one',
+    hint: 'PSF Guard integrates its own master from raw frames when enough match.',
+  },
+  {
+    value: 'ignore',
+    label: 'Never',
+    hint: 'External masters stay in the library but never calibrate a stack.',
+  },
+];
 
 /**
  * The calibration matching knob: how far a flat's rotator angle may sit from
@@ -18,6 +41,7 @@ export default function CalibrationMatchingSettings() {
   // The field edits as text so a half-typed "1." is not fought by the parser;
   // it commits on Save.
   const [draft, setDraft] = useState<string>('');
+  const [policy, setPolicy] = useState<ExternalMasterPolicy>('prefer');
   useEffect(() => {
     if (settings.data) {
       setDraft(
@@ -25,11 +49,15 @@ export default function CalibrationMatchingSettings() {
           ? ''
           : String(settings.data.rotation_tolerance_deg)
       );
+      setPolicy(settings.data.external_masters);
     }
   }, [settings.data]);
 
   const save = useMutation({
-    mutationFn: (value: number | null) => apiClient.updateCalibrationSettings(value),
+    mutationFn: (update: {
+      rotation_tolerance_deg: number | null;
+      external_masters: ExternalMasterPolicy;
+    }) => apiClient.updateCalibrationSettings(update),
     onSuccess: (updated) => {
       queryClient.setQueryData(['calibration-settings'], updated);
     },
@@ -51,7 +79,10 @@ export default function CalibrationMatchingSettings() {
     parsed !== null && (!Number.isFinite(parsed) || parsed < 0 || parsed > 180);
   const dirty =
     (parsed === null) !== (current.rotation_tolerance_deg === null) ||
-    (parsed !== null && parsed !== current.rotation_tolerance_deg);
+    (parsed !== null && parsed !== current.rotation_tolerance_deg) ||
+    policy !== current.external_masters;
+  const policyHint =
+    EXTERNAL_MASTER_OPTIONS.find((option) => option.value === policy)?.hint ?? '';
 
   return (
     <div className="calibration-matching-settings">
@@ -82,13 +113,37 @@ export default function CalibrationMatchingSettings() {
       {invalid && (
         <p className="error-text">Enter a value between 0 and 180 degrees.</p>
       )}
+      <label className="review-preference">
+        <span>
+          Masters from other software
+          <small>
+            A master dark, bias, or flat integrated by PixInsight, Siril, or
+            another tool is matched on what its header kept — such files
+            usually drop gain, offset, and temperature — and used as-is rather
+            than integrated again. {policyHint}
+          </small>
+        </span>
+        <select
+          value={policy}
+          aria-label="Masters from other software"
+          onChange={(event) => setPolicy(event.target.value as ExternalMasterPolicy)}
+        >
+          {EXTERNAL_MASTER_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
       {save.isError && (
         <p className="error-text">{(save.error as Error).message}</p>
       )}
       <button
         type="button"
         disabled={invalid || !dirty || save.isPending}
-        onClick={() => save.mutate(parsed)}
+        onClick={() =>
+          save.mutate({ rotation_tolerance_deg: parsed, external_masters: policy })
+        }
       >
         {save.isPending ? 'Saving…' : 'Save'}
       </button>

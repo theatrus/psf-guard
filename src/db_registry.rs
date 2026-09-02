@@ -389,6 +389,10 @@ pub struct CalibrationSettings {
     /// Absent uses the library default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation_tolerance_deg: Option<f64>,
+    /// How masters built by other software are used: `prefer` (the
+    /// default), `fallback`, or `ignore`. Absent means prefer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_masters: Option<crate::calibration::ExternalMasterPolicy>,
 }
 
 /// What the export dialog starts from. The dialog still offers every layout
@@ -779,6 +783,7 @@ mod tests {
         let reg = DbRegistry {
             calibration: Some(CalibrationSettings {
                 rotation_tolerance_deg: Some(3.5),
+                external_masters: Some(crate::calibration::ExternalMasterPolicy::Fallback),
             }),
             ..Default::default()
         };
@@ -789,6 +794,7 @@ mod tests {
         let serialized = std::fs::read_to_string(&path).unwrap();
         assert!(serialized.contains("\"calibration\""));
         assert!(serialized.contains("rotation_tolerance_deg"));
+        assert!(serialized.contains("\"external_masters\": \"fallback\""));
 
         // A registry that never configured it keeps a clean file: additive
         // within v2, and an older build reading this file sees nothing new.

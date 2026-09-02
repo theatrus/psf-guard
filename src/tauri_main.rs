@@ -70,6 +70,12 @@ pub fn main() {
             .as_ref()
             .and_then(|calibration| calibration.rotation_tolerance_deg),
     );
+    crate::calibration::configure_external_master_policy(
+        initial_registry
+            .calibration
+            .as_ref()
+            .and_then(|calibration| calibration.external_masters),
+    );
     let server_config_for_task = server_config.clone();
     let registry_path_for_task = registry_path.clone();
     rt.spawn(async move {

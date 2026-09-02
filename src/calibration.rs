@@ -7,6 +7,7 @@ use crate::commands::import::headers::FrameMeta;
 use anyhow::{Context, Result};
 use rusqlite::types::Value;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use seiza_fits::{HeaderValue, WriteHeaderCard};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -31,7 +32,11 @@ use std::time::UNIX_EPOCH;
 ///    N.I.N.A. spells it. The integer column stays empty on such rigs, so
 ///    without the name two modes of one camera matched each other's frames.
 /// 6: that name read off the files for rows that predate the column.
-pub const CALIBRATION_SCHEMA_VERSION: i64 = 6;
+/// 7: `psf_guard_calibration_frame.is_master`, so a master built by other
+///    software (PixInsight's WBPP, Siril) is used as a master rather than
+///    integrated as if it were one raw frame.
+/// 8: that flag set from `image_type_raw` for rows that predate the column.
+pub const CALIBRATION_SCHEMA_VERSION: i64 = 8;
 // 2: flat masters suppress defective pixels spatially after integration.
 /// Version 3: masters preserve sensor, optics, exposure and capture-time
 /// metadata (seiza-stacking 0.11.1). Masters written before that carry no
@@ -125,6 +130,10 @@ pub struct CalibrationFrame {
     /// The readout mode's name when the header spelled it that way; see
     /// [`FrameMeta::readout_mode_name`].
     pub readout_mode_name: Option<String>,
+    /// An integrated master from other software rather than a raw frame.
+    /// Matched leniently (its producer strips most settings) and used as a
+    /// master as-is instead of being integrated.
+    pub is_master: bool,
     pub bayer_pattern: Option<String>,
     pub exposure_s: Option<f64>,
     pub camera_temp: Option<f64>,
@@ -208,6 +217,7 @@ pub struct CalibrationFrameSummary {
     pub offset: Option<i64>,
     pub readout_mode: Option<i64>,
     pub readout_mode_name: Option<String>,
+    pub is_master: bool,
     pub bayer_pattern: Option<String>,
     pub exposure_s: Option<f64>,
     pub camera_temp: Option<f64>,
@@ -406,6 +416,14 @@ const MIGRATIONS: &[Migration] = &[
         to_version: 6,
         apply: backfill_readout_mode_name,
     },
+    Migration {
+        to_version: 7,
+        apply: add_is_master_column,
+    },
+    Migration {
+        to_version: 8,
+        apply: backfill_is_master,
+    },
 ];
 
 /// Columns selected by the calibration matching and master-building paths.
@@ -440,6 +458,7 @@ const READABLE_FRAME_COLUMNS: &[&str] = &[
     "rotation",
     "valid_direction",
     "readout_mode_name",
+    "is_master",
 ];
 
 fn add_valid_direction_column(conn: &Connection) -> Result<bool> {
@@ -608,6 +627,44 @@ fn backfill_readout_mode_name(conn: &Connection) -> Result<bool> {
         pending.len()
     );
     Ok(!recovered.is_empty())
+}
+
+fn add_is_master_column(conn: &Connection) -> Result<bool> {
+    // Zero means "a raw frame", which is what every row was taken for before
+    // the column existed; [`backfill_is_master`] then marks the masters.
+    add_column_if_missing(
+        conn,
+        "psf_guard_calibration_frame",
+        "is_master",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+}
+
+/// Mark the masters that were imported before the catalog could tell them
+/// from raw frames. The header's own word for it was recorded as
+/// `image_type_raw` all along, so this is one UPDATE and reads no files.
+fn backfill_is_master(conn: &Connection) -> Result<bool> {
+    if recorded_schema_version(conn)? >= 8 {
+        return Ok(false);
+    }
+    let columns = table_column_names(conn, "psf_guard_calibration_frame").unwrap_or_default();
+    let has = |wanted: &str| {
+        columns
+            .iter()
+            .any(|column| column.eq_ignore_ascii_case(wanted))
+    };
+    if !(has("is_master") && has("image_type_raw")) {
+        return Ok(false);
+    }
+    let marked = conn.execute(
+        "UPDATE psf_guard_calibration_frame SET is_master = 1
+         WHERE is_master = 0 AND UPPER(COALESCE(image_type_raw, '')) LIKE '%MASTER%'",
+        [],
+    )?;
+    if marked > 0 {
+        tracing::info!("calibration upgrade: marked {marked} imported master(s)");
+    }
+    Ok(marked > 0)
 }
 
 fn add_column_if_missing(
@@ -807,6 +864,7 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
             offset             INTEGER,
             readout_mode       INTEGER,
             readout_mode_name  TEXT,
+            is_master          INTEGER NOT NULL DEFAULT 0,
             bayer_pattern      TEXT,
             bayer_x_offset     INTEGER,
             bayer_y_offset     INTEGER,
@@ -930,11 +988,12 @@ pub fn import_calibration_frames(
                 channels, binning_x, binning_y, gain, offset, readout_mode,
                 bayer_pattern, bayer_x_offset, bayer_y_offset, exposure_s,
                 camera_temp, filter_name, focal_length_mm, file_size,
-                file_mtime_ns, added_at, updated_at, rotation, readout_mode_name
+                file_mtime_ns, added_at, updated_at, rotation, readout_mode_name,
+                is_master
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
                 ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24,
-                ?25, ?26, ?27, ?27, ?28, ?29
+                ?25, ?26, ?27, ?27, ?28, ?29, ?30
             )
             ON CONFLICT(source_path) DO UPDATE SET
                 rig_uuid=excluded.rig_uuid, kind=excluded.kind,
@@ -951,7 +1010,7 @@ pub fn import_calibration_frames(
                 filter_name=excluded.filter_name, focal_length_mm=excluded.focal_length_mm,
                 file_size=excluded.file_size, file_mtime_ns=excluded.file_mtime_ns,
                 updated_at=excluded.updated_at, rotation=excluded.rotation,
-                readout_mode_name=excluded.readout_mode_name
+                readout_mode_name=excluded.readout_mode_name, is_master=excluded.is_master
             "#,
             params![
                 frame_uuid,
@@ -983,6 +1042,9 @@ pub fn import_calibration_frames(
                 now,
                 frame.rotator_position,
                 frame.readout_mode_name,
+                // Integration masters and other processing outputs are what
+                // `processed` marks; among calibration kinds that is a master.
+                frame.processed,
             ],
         )?;
         if existing.is_some() {
@@ -1081,13 +1143,18 @@ pub fn library_details(conn: &Connection) -> Result<CalibrationLibraryDetails> {
     } else {
         "NULL AS readout_mode_name"
     };
+    let is_master_column = if has("is_master") {
+        "is_master"
+    } else {
+        "0 AS is_master"
+    };
     let mut statement = conn.prepare(&format!(
         r#"
         SELECT id, frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
                captured_at, telescope, camera, width, height, channels,
                binning_x, binning_y, gain, offset, readout_mode, bayer_pattern,
                exposure_s, camera_temp, filter_name, focal_length_mm,
-               NULL AS rotation, {validity_column}, {readout_name_column}
+               NULL AS rotation, {validity_column}, {readout_name_column}, {is_master_column}
         FROM psf_guard_calibration_frame
         ORDER BY kind, captured_at DESC, source_path COLLATE NOCASE
         "#
@@ -1113,6 +1180,7 @@ pub fn library_details(conn: &Connection) -> Result<CalibrationLibraryDetails> {
                 offset: frame.offset,
                 readout_mode: frame.readout_mode,
                 readout_mode_name: frame.readout_mode_name,
+                is_master: frame.is_master,
                 bayer_pattern: frame.bayer_pattern,
                 exposure_s: frame.exposure_s,
                 camera_temp: frame.camera_temp,
@@ -1441,7 +1509,7 @@ pub fn select_for_light(conn: &Connection, light: &FrameMeta) -> Result<Calibrat
                captured_at, telescope, camera, width, height, channels,
                binning_x, binning_y, gain, offset, readout_mode, bayer_pattern,
                exposure_s, camera_temp, filter_name, focal_length_mm, rotation,
-               valid_direction, readout_mode_name
+               valid_direction, readout_mode_name, is_master
         FROM psf_guard_calibration_frame
         ORDER BY captured_at DESC, id DESC
         "#,
@@ -1450,7 +1518,11 @@ pub fn select_for_light(conn: &Connection, light: &FrameMeta) -> Result<Calibrat
         .query_map([], row_to_frame)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut selected = CalibrationSelection::default();
+    let policy = external_master_policy();
     for candidate in frames {
+        if candidate.is_master && policy == ExternalMasterPolicy::Ignore {
+            continue;
+        }
         // A frame marked usable only forward or backward of its capture —
         // shot around an optics change or cleaning — never serves a light
         // on the other side of that boundary.
@@ -1464,7 +1536,7 @@ pub fn select_for_light(conn: &Connection, light: &FrameMeta) -> Result<Calibrat
             CalibrationKind::Bias => true,
             CalibrationKind::Dark => {
                 exposure_matches(light.exposure_s, candidate.exposure_s)
-                    && temperature_matches(light.camera_temp, candidate.camera_temp)
+                    && temperature_admits(light.camera_temp, &candidate)
             }
             CalibrationKind::DarkFlat => false,
             CalibrationKind::Flat => flat_matches(light, &candidate),
@@ -2055,6 +2127,10 @@ fn resolve_or_build_masters_pinned(
     // master. Cancellation stays fatal via `stop_requested` between
     // builds.
     let mut build_failures: Vec<(CalibrationKind, String)> = Vec::new();
+    // Masters taken from other software as they were, with what each match
+    // had to take on trust; reported so the operator knows what calibrated.
+    let external_used: std::cell::RefCell<Vec<(CalibrationKind, String)>> =
+        std::cell::RefCell::new(Vec::new());
     // Frames that clustered but that the integrator would have refused. The
     // master still builds from the rest; this says what was left out, because
     // a dropped frame usually means the library holds something the selection
@@ -2067,6 +2143,52 @@ fn resolve_or_build_masters_pinned(
                          failures: &mut Vec<(CalibrationKind, String)>,
                          set_aside: &mut Vec<(CalibrationKind, usize, String)>|
      -> Option<BuiltMaster> {
+        if frames.is_empty() {
+            return None;
+        }
+        // An external master is used as it is, never integrated with raw
+        // frames. Candidates arrive nearest-first, so "the first master" is
+        // the one shot closest to the lights.
+        let (masters, raw): (Vec<&CalibrationFrame>, Vec<&CalibrationFrame>) =
+            frames.iter().partition(|frame| frame.is_master);
+        let raw: Vec<CalibrationFrame> = raw.into_iter().cloned().collect();
+        let adopt = match external_master_policy() {
+            ExternalMasterPolicy::Prefer => masters.first().copied(),
+            ExternalMasterPolicy::Fallback => {
+                if coherent_master_subset(kind, &raw).len() >= MIN_MASTER_FRAMES {
+                    None
+                } else {
+                    masters.first().copied()
+                }
+            }
+            ExternalMasterPolicy::Ignore => None,
+        };
+        if let Some(master) = adopt {
+            return match adopt_external_master(
+                conn,
+                &master_root,
+                kind,
+                master,
+                master_recording_blocker.as_deref(),
+            ) {
+                Ok(adopted) => {
+                    external_used
+                        .borrow_mut()
+                        .push((kind, adopted.note.clone()));
+                    Some(adopted.master)
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        "{} external master {} unusable; stacking without it: {error:#}",
+                        kind.as_str(),
+                        master.source_path.display()
+                    );
+                    failures.push((kind, format!("{error:#}")));
+                    None
+                }
+            };
+        }
+        let frames = raw.as_slice();
         if frames.is_empty() {
             return None;
         }
@@ -2363,6 +2485,21 @@ fn resolve_or_build_masters_pinned(
         });
     }
     if let Some(note) = flat_note {
+        applied.warning = Some(match applied.warning.take() {
+            Some(previous) => format!("{previous}. {note}"),
+            None => note,
+        });
+    }
+    let external_used = external_used.into_inner();
+    if !external_used.is_empty() {
+        let note = format!(
+            "Used masters built by other software — {}",
+            external_used
+                .iter()
+                .map(|(kind, note)| format!("{}: {note}", kind.as_str()))
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
         applied.warning = Some(match applied.warning.take() {
             Some(previous) => format!("{previous}. {note}"),
             None => note,
@@ -2681,6 +2818,220 @@ struct MasterInputs<'a> {
     dark_dependency: Option<&'a BuiltMaster>,
 }
 
+struct AdoptedMaster {
+    master: BuiltMaster,
+    /// What the stack report says about it: the file, and what the match had
+    /// to take on trust.
+    note: String,
+}
+
+/// Take a master built by other software into the master cache.
+///
+/// The stacker reads masters through one loader that expects PSF Guard's own
+/// output, so the external file is copied once, as 32-bit float, with three
+/// things settled on the way: a float master normalized to 0..1 (WBPP's FITS
+/// output, which declares no bounds) is placed on the 16-bit scale every
+/// other frame lives on, its declared kind is checked against the use, and a
+/// flat is marked as already bias- and dark-subtracted so the stacker does not
+/// calibrate it again. The copy is keyed by the source file's fingerprint, so
+/// replacing the file re-adopts it and everything downstream re-keys. The
+/// original is never written to.
+fn adopt_external_master(
+    conn: &Connection,
+    root: &Path,
+    kind: CalibrationKind,
+    frame: &CalibrationFrame,
+    recording_blocker: Option<&str>,
+) -> Result<AdoptedMaster> {
+    let frames = std::slice::from_ref(frame);
+    let source_hash = source_set_hash(frames, None, None);
+    let master_uuid = stable_uuid(&format!("{}:{source_hash}", kind.as_str()));
+    let path = root.join(format!("{}-{source_hash}.fits", kind.as_str()));
+    let expected_kind = match kind {
+        CalibrationKind::Bias => "BIAS",
+        CalibrationKind::Dark | CalibrationKind::DarkFlat => "DARK",
+        CalibrationKind::Flat => "FLAT",
+    };
+    let source_name = frame
+        .source_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| frame.source_path.display().to_string());
+    let mut unknown = Vec::new();
+    if frame.camera_temp.is_none() {
+        unknown.push("temperature");
+    }
+    if frame.gain.is_none() {
+        unknown.push("gain");
+    }
+    if frame.offset.is_none() {
+        unknown.push("offset");
+    }
+    if kind == CalibrationKind::Flat && frame.filter.is_none() {
+        unknown.push("filter");
+    }
+    let trust_note = if unknown.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ", matched without {} (not recorded in it)",
+            unknown.join(", ")
+        )
+    };
+
+    if path.exists() {
+        let recorded_version: Option<i64> = conn
+            .query_row(
+                "SELECT cache_version FROM psf_guard_calibration_master WHERE cache_path = ?1",
+                [path.to_string_lossy().as_ref()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let file_valid = crate::image_io::open_linear_frame(&path)
+            .and_then(|copy| copy.validate_master_kind(expected_kind))
+            .is_ok();
+        if recorded_version == Some(i64::from(MASTER_CACHE_VERSION)) && file_valid {
+            return Ok(AdoptedMaster {
+                master: BuiltMaster {
+                    path,
+                    master_uuid,
+                    skipped: Vec::new(),
+                },
+                note: format!("{source_name}{trust_note}"),
+            });
+        }
+        std::fs::remove_file(&path)
+            .with_context(|| format!("removing stale master copy {}", path.display()))?;
+    }
+    if let Some(blocker) = recording_blocker {
+        anyhow::bail!(
+            "{blocker}; cannot record the adopted {} master",
+            kind.as_str()
+        );
+    }
+
+    let mut source = crate::image_io::open_linear_frame(&frame.source_path)
+        .with_context(|| format!("reading {}", frame.source_path.display()))?;
+    source
+        .validate_master_kind(expected_kind)
+        .with_context(|| format!("{} declares another kind", frame.source_path.display()))?;
+    let rescaled = place_unit_range_float_on_adu_scale(&mut source);
+    let exposure = frame.exposure_s.or(source.exposure_seconds);
+
+    let mut headers: Vec<WriteHeaderCard> = source
+        .headers
+        .iter()
+        .filter(|(name, _)| !is_structural_fits_card(name))
+        .map(|(name, value)| WriteHeaderCard::new(name, value.clone()))
+        .collect();
+    headers.push(WriteHeaderCard::new(
+        "PSFGSRC",
+        HeaderValue::String(source_name.clone()),
+    ));
+    if let Some(exposure) = exposure
+        && !headers
+            .iter()
+            .any(|card| card.keyword().eq_ignore_ascii_case("EXPTIME"))
+    {
+        headers.push(WriteHeaderCard::new(
+            "EXPTIME",
+            HeaderValue::Float(exposure),
+        ));
+    }
+    if kind == CalibrationKind::Flat {
+        // A master flat from a preprocessing pipeline has had its bias and
+        // dark removed already. Without these the stacker would subtract
+        // ours from it a second time. Its response is normalized by the
+        // stacker, as for a flat PSF Guard built itself.
+        for key in ["BIASSUB", "DARKSUB"] {
+            headers.retain(|card| !card.keyword().eq_ignore_ascii_case(key));
+            headers.push(WriteHeaderCard::new(key, HeaderValue::Logical(true)));
+        }
+    }
+    let image = &source.image;
+    let pixels = match image.channels {
+        1 => seiza_fits::F32ImageData::Mono(&image.data),
+        3 => seiza_fits::F32ImageData::RgbInterleaved(&image.data),
+        other => anyhow::bail!("{other}-channel master is not supported"),
+    };
+    std::fs::create_dir_all(root)?;
+    seiza_fits::write_f32_image(&path, image.width, image.height, pixels, &headers)
+        .with_context(|| format!("writing {}", path.display()))?;
+    record_master(
+        conn,
+        kind,
+        frames,
+        &source_hash,
+        &path,
+        RecordedMaster {
+            exposure_seconds: exposure,
+            statistics: serde_json::json!({
+                "external": true,
+                "source": source_name,
+                "rescaled_from_unit_range": rescaled,
+            }),
+        },
+        MasterInputs::default(),
+    )?;
+    let scale_note = if rescaled {
+        ", placed on the 16-bit scale from 0..1"
+    } else {
+        ""
+    };
+    Ok(AdoptedMaster {
+        master: BuiltMaster {
+            path,
+            master_uuid,
+            skipped: Vec::new(),
+        },
+        note: format!("{source_name}{trust_note}{scale_note}"),
+    })
+}
+
+/// Cards the writer produces itself; copying them would contradict the
+/// float layout of the copy.
+fn is_structural_fits_card(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "SIMPLE" | "BITPIX" | "NAXIS" | "EXTEND" | "BZERO" | "BSCALE" | "END" | "COMMENT"
+    ) || upper.starts_with("NAXIS")
+}
+
+/// A float frame whose samples all sit in 0..1 and that declares no bounds
+/// is a PixInsight-style normalized image: WBPP writes its FITS masters that
+/// way, and only its XISF output says so. Left alone it would subtract a
+/// hundredth of an ADU from lights in the thousands. Placed on the same
+/// 16-bit scale the XISF path already uses, it corrects them.
+fn place_unit_range_float_on_adu_scale(frame: &mut seiza_stacking::FitsFrame) -> bool {
+    if frame.bounds.is_some() {
+        return false;
+    }
+    let is_float = frame
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("BITPIX"))
+        .and_then(|(_, value)| value.as_i64())
+        .is_some_and(|bitpix| bitpix < 0);
+    if !is_float {
+        return false;
+    }
+    let samples = &frame.image.data;
+    if samples.is_empty()
+        || !samples
+            .iter()
+            .all(|sample| sample.is_finite() && (0.0..=1.0).contains(sample))
+    {
+        return false;
+    }
+    let scale = crate::image_io::NORMALIZED_FULL_SCALE;
+    for sample in &mut frame.image.data {
+        *sample *= scale;
+    }
+    frame.bounds = Some((0.0, f64::from(scale)));
+    true
+}
+
 fn build_master(
     conn: &Connection,
     root: &Path,
@@ -2818,7 +3169,14 @@ fn build_master(
         frames,
         &source_hash,
         &path,
-        &frame,
+        RecordedMaster {
+            exposure_seconds: frame.exposure_seconds,
+            statistics: serde_json::json!({
+                "accepted_samples": frame.accepted_samples,
+                "rejected_samples": frame.rejected_samples,
+                "fallback_pixels": frame.fallback_pixels,
+            }),
+        },
         MasterInputs {
             bias: None,
             dark: None,
@@ -2833,13 +3191,19 @@ fn build_master(
     }))
 }
 
+/// What a master row records about the build beyond its inputs.
+struct RecordedMaster {
+    exposure_seconds: Option<f64>,
+    statistics: serde_json::Value,
+}
+
 fn record_master(
     conn: &Connection,
     kind: CalibrationKind,
     frames: &[CalibrationFrame],
     source_hash: &str,
     path: &Path,
-    master: &seiza_stacking::MasterFrame,
+    master: RecordedMaster,
     inputs: MasterInputs<'_>,
 ) -> Result<()> {
     let master_kind = kind.as_str();
@@ -2850,11 +3214,7 @@ fn record_master(
             .map(|frame| &frame.frame_uuid)
             .collect::<Vec<_>>(),
     )?;
-    let stats = serde_json::json!({
-        "accepted_samples": master.accepted_samples,
-        "rejected_samples": master.rejected_samples,
-        "fallback_pixels": master.fallback_pixels,
-    });
+    let stats = master.statistics;
     conn.execute(
         r#"
         INSERT INTO psf_guard_calibration_master (
@@ -3218,6 +3578,65 @@ fn frame_signature(frame: &CalibrationFrame) -> Signature {
 /// a value that never changes after startup.
 static ROTATION_TOLERANCE_BITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// What to do when the library holds a master built by other software
+/// (PixInsight's WBPP, Siril) alongside — or instead of — raw frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalMasterPolicy {
+    /// Use the nearest matching external master whenever there is one; the
+    /// person integrated it on purpose. The default.
+    #[default]
+    Prefer,
+    /// Build from raw frames when enough match; use an external master
+    /// only when they do not.
+    Fallback,
+    /// Never use external masters; only raw frames feed a master.
+    Ignore,
+}
+
+impl ExternalMasterPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Prefer => "prefer",
+            Self::Fallback => "fallback",
+            Self::Ignore => "ignore",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "prefer" => Some(Self::Prefer),
+            "fallback" => Some(Self::Fallback),
+            "ignore" => Some(Self::Ignore),
+            _ => None,
+        }
+    }
+}
+
+/// Process-wide like [`ROTATION_TOLERANCE_BITS`], and for the same reason:
+/// a deployment's property, set once from the registry before any catalog
+/// is opened.
+static EXTERNAL_MASTER_POLICY: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Choose how external masters are used for every selection this process
+/// makes. `None` keeps the default, [`ExternalMasterPolicy::Prefer`].
+pub fn configure_external_master_policy(policy: Option<ExternalMasterPolicy>) {
+    let code = match policy.unwrap_or_default() {
+        ExternalMasterPolicy::Prefer => 0,
+        ExternalMasterPolicy::Fallback => 1,
+        ExternalMasterPolicy::Ignore => 2,
+    };
+    EXTERNAL_MASTER_POLICY.store(code, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn external_master_policy() -> ExternalMasterPolicy {
+    match EXTERNAL_MASTER_POLICY.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => ExternalMasterPolicy::Fallback,
+        2 => ExternalMasterPolicy::Ignore,
+        _ => ExternalMasterPolicy::Prefer,
+    }
+}
+
 /// Override the rotator-angle tolerance for every match this process makes.
 /// Call once at startup, before any catalog is opened. `None` keeps the
 /// library default.
@@ -3242,16 +3661,45 @@ fn tolerances() -> seiza_calibration::MatchTolerances {
     tolerances
 }
 
+/// Whether a candidate's sensor settings admit this light.
+///
+/// A raw frame must positively prove every setting the light records. A
+/// master from other software cannot: PixInsight's WBPP writes `IMAGETYP`,
+/// `EXPTIME`, `INSTRUME`, binning and optics, and drops `GAIN`, `OFFSET`
+/// and `CCD-TEMP`. The person integrated that master for this rig on
+/// purpose, so a master is held to the rule two calibration frames are held
+/// to: what both record must agree, and positive identity — camera name or
+/// sensor size — is still required.
 fn sensor_matches(light: &FrameMeta, candidate: &CalibrationFrame) -> bool {
-    signature_sensor_matches(&light_signature(light), &frame_signature(candidate))
+    let (light, candidate_signature) = (light_signature(light), frame_signature(candidate));
+    if candidate.is_master {
+        signature_sensor_consistent(&light, &candidate_signature)
+    } else {
+        signature_sensor_matches(&light, &candidate_signature)
+    }
 }
 
 fn flat_matches(light: &FrameMeta, candidate: &CalibrationFrame) -> bool {
-    seiza_calibration::optics_match(
-        &light_signature(light).seiza,
-        &frame_signature(candidate).seiza,
-        &tolerances(),
-    )
+    let (light, candidate_signature) = (light_signature(light), frame_signature(candidate));
+    if candidate.is_master {
+        seiza_calibration::optics_consistent(
+            &light.seiza,
+            &candidate_signature.seiza,
+            &tolerances(),
+        )
+    } else {
+        seiza_calibration::optics_match(&light.seiza, &candidate_signature.seiza, &tolerances())
+    }
+}
+
+/// A dark's temperature gate, with a master's missing reading tolerated:
+/// an unrecorded temperature on a master reads as "cannot rule it out",
+/// while two recorded temperatures still go through Seiza's rule.
+fn temperature_admits(light_temp: Option<f64>, candidate: &CalibrationFrame) -> bool {
+    if candidate.is_master && candidate.camera_temp.is_none() {
+        return true;
+    }
+    temperature_matches(light_temp, candidate.camera_temp)
 }
 
 fn frame_pair_matches(left: &CalibrationFrame, right: &CalibrationFrame) -> bool {
@@ -3431,7 +3879,7 @@ fn query_kind(conn: &Connection, kind: CalibrationKind) -> Result<Vec<Calibratio
                captured_at, telescope, camera, width, height, channels,
                binning_x, binning_y, gain, offset, readout_mode, bayer_pattern,
                exposure_s, camera_temp, filter_name, focal_length_mm, rotation,
-               valid_direction, readout_mode_name
+               valid_direction, readout_mode_name, is_master
         FROM psf_guard_calibration_frame WHERE kind = ?1
         ORDER BY captured_at DESC, id DESC
         "#,
@@ -3476,6 +3924,7 @@ fn row_to_frame(row: &rusqlite::Row<'_>) -> rusqlite::Result<CalibrationFrame> {
         rotation: row.get(22)?,
         valid_direction: ValidDirection::from_db(row.get(23)?),
         readout_mode_name: row.get(24)?,
+        is_master: row.get::<_, Option<i64>>(25)?.unwrap_or(0) != 0,
         source_verified: false,
     })
 }
@@ -3843,7 +4292,8 @@ mod tests {
         conn.execute_batch(
             "ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;
              ALTER TABLE psf_guard_calibration_frame ADD COLUMN valid_direction TEXT;
-             ALTER TABLE psf_guard_calibration_frame ADD COLUMN readout_mode_name TEXT;",
+             ALTER TABLE psf_guard_calibration_frame ADD COLUMN readout_mode_name TEXT;
+             ALTER TABLE psf_guard_calibration_frame ADD COLUMN is_master INTEGER NOT NULL DEFAULT 0;",
         )
         .unwrap();
         assert!(
@@ -3939,7 +4389,8 @@ mod tests {
         conn.execute_batch(
             "ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;
              ALTER TABLE psf_guard_calibration_frame ADD COLUMN valid_direction TEXT;
-             ALTER TABLE psf_guard_calibration_frame ADD COLUMN readout_mode_name TEXT;",
+             ALTER TABLE psf_guard_calibration_frame ADD COLUMN readout_mode_name TEXT;
+             ALTER TABLE psf_guard_calibration_frame ADD COLUMN is_master INTEGER NOT NULL DEFAULT 0;",
         )
         .unwrap();
         assert!(
@@ -3980,7 +4431,8 @@ mod tests {
         conn.execute_batch(
             "ALTER TABLE psf_guard_calibration_frame ADD COLUMN rotation REAL;
              ALTER TABLE psf_guard_calibration_frame ADD COLUMN valid_direction TEXT;
-             ALTER TABLE psf_guard_calibration_frame ADD COLUMN readout_mode_name TEXT;",
+             ALTER TABLE psf_guard_calibration_frame ADD COLUMN readout_mode_name TEXT;
+             ALTER TABLE psf_guard_calibration_frame ADD COLUMN is_master INTEGER NOT NULL DEFAULT 0;",
         )
         .unwrap();
         conn.execute(
@@ -4182,6 +4634,284 @@ mod tests {
         assert!(!backfill_readout_mode_name(&conn).unwrap());
     }
 
+    /// Serializes the tests that change the process-wide external-master
+    /// policy, which every selection in the process reads.
+    static POLICY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A master as PixInsight's WBPP writes one: 32-bit float samples
+    /// normalized to 0..1, `IMAGETYP` naming the master, exposure, camera,
+    /// binning and optics kept — and no GAIN, OFFSET or CCD-TEMP.
+    fn write_pixinsight_master(path: &Path, image_type: &str, value: f32, filter: Option<&str>) {
+        let mut header = Vec::new();
+        fits_card(&mut header, "SIMPLE  =                    T");
+        fits_card(&mut header, "BITPIX  =                  -32");
+        fits_card(&mut header, "NAXIS   =                    2");
+        fits_card(&mut header, "NAXIS1  =                    4");
+        fits_card(&mut header, "NAXIS2  =                    4");
+        fits_card(&mut header, &format!("IMAGETYP= '{image_type}'"));
+        fits_card(&mut header, "XBINNING=                    1");
+        fits_card(&mut header, "YBINNING=                    1");
+        if let Some(filter) = filter {
+            fits_card(&mut header, &format!("FILTER  = '{filter}'"));
+        } else {
+            fits_card(&mut header, "FILTER  = ''");
+        }
+        fits_card(&mut header, "EXPTIME =              300.000");
+        fits_card(&mut header, "INSTRUME= 'Camera'");
+        fits_card(&mut header, "TELESCOP= 'Scope'");
+        fits_card(&mut header, "FOCALLEN=                  530");
+        fits_card(&mut header, "DATE-OBS= '2025-11-11T08:52:21.616'");
+        fits_card(&mut header, "END");
+        header.resize(header.len().div_ceil(2880) * 2880, b' ');
+        let mut payload = Vec::new();
+        for _ in 0..16 {
+            payload.extend(value.to_be_bytes());
+        }
+        payload.resize(2880, 0);
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(&header).unwrap();
+        file.write_all(&payload).unwrap();
+    }
+
+    #[test]
+    fn an_external_master_without_gain_or_temperature_still_matches() {
+        // The reporter's case: a WBPP master dark records neither CCD-TEMP
+        // nor GAIN/OFFSET, and a light that records all three refused it.
+        let light = frame("/light.fits", "LIGHT");
+        let master = CalibrationFrame {
+            id: 1,
+            frame_uuid: "m".into(),
+            rig_uuid: "r".into(),
+            kind: CalibrationKind::Dark,
+            source_path: "/masterDark.fits".into(),
+            source_fingerprint: "x".into(),
+            captured_at: None,
+            telescope: Some("Scope".into()),
+            camera: Some("Camera".into()),
+            width: Some(3000),
+            height: Some(2000),
+            channels: Some(1),
+            binning_x: Some(1),
+            binning_y: Some(1),
+            gain: None,
+            offset: None,
+            readout_mode: None,
+            readout_mode_name: None,
+            is_master: true,
+            bayer_pattern: None,
+            exposure_s: Some(300.0),
+            camera_temp: None,
+            filter: None,
+            focal_length_mm: None,
+            rotation: None,
+            valid_direction: None,
+            source_verified: false,
+        };
+        assert!(sensor_matches(&light, &master));
+        assert!(temperature_admits(light.camera_temp, &master));
+
+        // The same header on a raw frame still cannot prove it is this rig's
+        // gain and offset, so it is refused as before.
+        let raw = CalibrationFrame {
+            is_master: false,
+            ..master.clone()
+        };
+        assert!(!sensor_matches(&light, &raw));
+        assert!(!temperature_admits(light.camera_temp, &raw));
+
+        // A master of another camera is still another camera.
+        let other = CalibrationFrame {
+            camera: Some("Other".into()),
+            ..master.clone()
+        };
+        assert!(!sensor_matches(&light, &other));
+    }
+
+    #[test]
+    fn a_pixinsight_master_dark_is_adopted_on_the_right_scale() {
+        let _policy = POLICY_LOCK.lock().unwrap();
+        configure_external_master_policy(None);
+        let temp = tempfile::tempdir().unwrap();
+        let master_path = temp.path().join("masterDark_BIN-1_EXPOSURE-300.00s.fits");
+        write_pixinsight_master(&master_path, "Master Dark", 0.02, None);
+        let light_path = temp.path().join("light.fits");
+        write_test_fits(&light_path, "LIGHT", 1_100);
+
+        let meta = crate::commands::import::headers::read_frame_meta(&master_path);
+        assert!(
+            meta.processed,
+            "IMAGETYP 'Master Dark' marks a processing output"
+        );
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            let outcome = import_calibration_frames(&tx, &[meta], Some("profile")).unwrap();
+            assert_eq!(outcome.dark, 1);
+            tx.commit().unwrap();
+        }
+        let light = crate::commands::import::headers::read_frame_meta(&light_path);
+        let selection = select_for_light(&conn, &light).unwrap();
+        assert_eq!(
+            selection.dark.len(),
+            1,
+            "the master matches despite its missing settings"
+        );
+        assert!(selection.dark[0].is_master);
+
+        let cache = temp.path().join("cache");
+        let (masters, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        assert!(
+            !masters.is_empty(),
+            "the stack calibrates with the adopted dark"
+        );
+        let label = applied.dark_master.as_deref().expect("dark master applied");
+        assert!(
+            label.starts_with("dark-"),
+            "adopted into the master cache: {label}"
+        );
+        let warning = applied.warning.as_deref().unwrap_or_default();
+        assert!(
+            warning.contains("Used masters built by other software")
+                && warning.contains("masterDark_BIN-1_EXPOSURE-300.00s.fits")
+                && warning.contains("temperature, gain, offset")
+                && warning.contains("16-bit scale"),
+            "the report says what was used and what it took on trust: {warning}"
+        );
+
+        // The cached copy carries the normalized samples on the 16-bit scale:
+        // 0.02 of full well is ~1311 ADU, not 0.02 ADU.
+        let copy =
+            crate::image_io::open_linear_frame(cache.join("calibration-masters").join(label))
+                .unwrap();
+        let sample = copy.image.data[0];
+        assert!((sample - 0.02 * 65535.0).abs() < 0.5, "got {sample}");
+        copy.validate_master_kind("DARK").unwrap();
+
+        // Its provenance is recorded like any master, pointing at the file.
+        let recorded: (i64, String) = conn
+            .query_row(
+                "SELECT source_count, statistics_json FROM psf_guard_calibration_master",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(recorded.0, 1);
+        assert!(recorded.1.contains("\"external\":true"));
+    }
+
+    #[test]
+    fn the_external_master_policy_decides_between_a_master_and_raw_frames() {
+        let _policy = POLICY_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let mut calibration_meta = Vec::new();
+        let master_path = temp.path().join("masterDark.fits");
+        write_pixinsight_master(&master_path, "Master Dark", 0.02, None);
+        calibration_meta.push(crate::commands::import::headers::read_frame_meta(
+            &master_path,
+        ));
+        for index in 0..2 {
+            let path = temp.path().join(format!("dark-{index}.fits"));
+            write_test_fits(&path, "DARK", 1_000 + index);
+            calibration_meta.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        let light_path = temp.path().join("light.fits");
+        write_test_fits(&light_path, "LIGHT", 1_100);
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &calibration_meta, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        let light = crate::commands::import::headers::read_frame_meta(&light_path);
+        let resolve = |conn: &Connection, cache: &str| {
+            resolve_or_build_masters(
+                conn,
+                &temp.path().join(cache),
+                std::slice::from_ref(&light_path),
+                None,
+                None,
+                CalibrationMode::Auto,
+            )
+            .unwrap()
+            .1
+        };
+
+        // Prefer (the default): the master wins even with two raw darks.
+        configure_external_master_policy(Some(ExternalMasterPolicy::Prefer));
+        assert_eq!(select_for_light(&conn, &light).unwrap().dark.len(), 3);
+        let applied = resolve(&conn, "prefer");
+        assert!(applied.dark_master.is_some());
+        assert!(applied
+            .warning
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Used masters built by other software"));
+
+        // Fallback: two raw darks are enough, so PSF Guard integrates its own.
+        configure_external_master_policy(Some(ExternalMasterPolicy::Fallback));
+        let applied = resolve(&conn, "fallback");
+        assert!(applied.dark_master.is_some());
+        assert!(!applied
+            .warning
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Used masters built by other software"));
+
+        // Ignore: the master is not even a candidate.
+        configure_external_master_policy(Some(ExternalMasterPolicy::Ignore));
+        let selection = select_for_light(&conn, &light).unwrap();
+        assert_eq!(selection.dark.len(), 2);
+        assert!(selection.dark.iter().all(|frame| !frame.is_master));
+
+        configure_external_master_policy(None);
+    }
+
+    #[test]
+    fn upgrading_marks_the_masters_the_catalog_already_held() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        for (uuid, image_type) in [("m", "MASTER DARK"), ("d", "DARK")] {
+            conn.execute(
+                "INSERT INTO psf_guard_calibration_frame
+                   (frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
+                    image_type_raw, added_at, updated_at)
+                 VALUES (?1, 'r', 'dark', ?2, 'fp', ?3, 0, 0)",
+                rusqlite::params![uuid, format!("/{uuid}.fits"), image_type],
+            )
+            .unwrap();
+        }
+        let is_master = |uuid: &str| -> i64 {
+            conn.query_row(
+                "SELECT is_master FROM psf_guard_calibration_frame WHERE frame_uuid = ?1",
+                [uuid],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        conn.execute(
+            "UPDATE psf_guard_calibration_schema SET version = 7 WHERE singleton = 1",
+            [],
+        )
+        .unwrap();
+        assert!(backfill_is_master(&conn).unwrap());
+        assert_eq!(is_master("m"), 1);
+        assert_eq!(is_master("d"), 0);
+        conn.execute(
+            "UPDATE psf_guard_calibration_schema SET version = 8 WHERE singleton = 1",
+            [],
+        )
+        .unwrap();
+        assert!(!backfill_is_master(&conn).unwrap(), "the rung is spent");
+    }
+
     fn write_test_fits(path: &Path, kind: &str, value: i16) {
         write_test_fits_with_gain(path, kind, value, 100);
     }
@@ -4361,6 +5091,7 @@ mod tests {
             offset: Some(30),
             readout_mode: None,
             readout_mode_name: None,
+            is_master: false,
             bayer_pattern: None,
             exposure_s: Some(5.0),
             camera_temp: Some(-9.8),
@@ -4418,6 +5149,7 @@ mod tests {
             offset: Some(30),
             readout_mode: None,
             readout_mode_name: None,
+            is_master: false,
             bayer_pattern: None,
             exposure_s: Some(0.0),
             camera_temp: Some(-10.0),
@@ -4456,6 +5188,7 @@ mod tests {
             offset: Some(30),
             readout_mode: None,
             readout_mode_name: None,
+            is_master: false,
             bayer_pattern: None,
             exposure_s: Some(300.0),
             camera_temp: Some(-10.0),
@@ -4501,6 +5234,7 @@ mod tests {
             offset: Some(20),
             readout_mode: None,
             readout_mode_name: None,
+            is_master: false,
             bayer_pattern: None,
             exposure_s: Some(3.0),
             camera_temp: Some(-10.0),
@@ -4544,6 +5278,7 @@ mod tests {
             offset: Some(20),
             readout_mode: None,
             readout_mode_name: None,
+            is_master: false,
             bayer_pattern: None,
             exposure_s: Some(300.0),
             camera_temp: Some(0.0),
@@ -4640,6 +5375,7 @@ mod tests {
             offset: Some(20),
             readout_mode: None,
             readout_mode_name: name.map(str::to_string),
+            is_master: false,
             bayer_pattern: None,
             exposure_s: Some(300.0),
             camera_temp: Some(-10.0),
@@ -4982,6 +5718,7 @@ mod tests {
             offset: Some(20),
             readout_mode: None,
             readout_mode_name: None,
+            is_master: false,
             bayer_pattern: None,
             exposure_s: Some(3.0),
             camera_temp: temp,

@@ -4,6 +4,7 @@ import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
 import type {
   CalibrationSettings,
+  ExternalMasterPolicy,
   ApiResponse,
   ExportLayout,
   ExportSettings,
@@ -247,13 +248,14 @@ export const apiClient = {
     return data.data;
   },
 
-  updateCalibrationSettings: async (
-    rotationToleranceDeg: number | null
-  ): Promise<CalibrationSettings> => {
+  updateCalibrationSettings: async (update: {
+    rotation_tolerance_deg: number | null;
+    external_masters: ExternalMasterPolicy;
+  }): Promise<CalibrationSettings> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.put<ApiResponse<CalibrationSettings>>(
       '/settings/calibration',
-      { rotation_tolerance_deg: rotationToleranceDeg }
+      update
     );
     if (!data.data) throw new Error(data.error || 'Failed to update calibration settings');
     return data.data;

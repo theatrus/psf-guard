@@ -10,6 +10,7 @@ use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::calibration::ExternalMasterPolicy;
 use crate::db_registry::{CalibrationSettings, DbRegistry};
 use crate::server::{
     api::ApiResponse,
@@ -24,18 +25,27 @@ pub struct CalibrationSettingsResponse {
     /// What applies when no override is set, so the panel can label the
     /// placeholder honestly instead of hard-coding a number that drifts.
     pub default_rotation_tolerance_deg: f64,
+    /// How masters built by other software are used. Always populated: the
+    /// default is `prefer`.
+    pub external_masters: ExternalMasterPolicy,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateCalibrationSettingsRequest {
     /// Degrees; `null` clears the override back to the library default.
     pub rotation_tolerance_deg: Option<f64>,
+    /// Omitted keeps the default, `prefer`.
+    #[serde(default)]
+    pub external_masters: Option<ExternalMasterPolicy>,
 }
 
 fn current_response(settings: Option<&CalibrationSettings>) -> CalibrationSettingsResponse {
     CalibrationSettingsResponse {
         rotation_tolerance_deg: settings.and_then(|settings| settings.rotation_tolerance_deg),
         default_rotation_tolerance_deg: seiza_calibration::MatchTolerances::default().rotation_deg,
+        external_masters: settings
+            .and_then(|settings| settings.external_masters)
+            .unwrap_or_default(),
     }
 }
 
@@ -76,15 +86,21 @@ pub async fn update_calibration_settings(
     let _registry_guard = state.registry_write.lock().await;
     let mut registry = DbRegistry::load_or_init(&path)
         .map_err(|error| AppError::InternalError(error.to_string()))?;
-    registry.calibration = request
-        .rotation_tolerance_deg
-        .map(|degrees| CalibrationSettings {
-            rotation_tolerance_deg: Some(degrees),
+    // The default policy is not written down, so a registry that only ever
+    // held defaults stays clean and older builds see nothing new.
+    let external_masters = request
+        .external_masters
+        .filter(|policy| *policy != ExternalMasterPolicy::default());
+    registry.calibration = (request.rotation_tolerance_deg.is_some() || external_masters.is_some())
+        .then_some(CalibrationSettings {
+            rotation_tolerance_deg: request.rotation_tolerance_deg,
+            external_masters,
         });
     registry
         .save(&path)
         .map_err(|error| AppError::InternalError(error.to_string()))?;
     crate::calibration::configure_rotation_tolerance(request.rotation_tolerance_deg);
+    crate::calibration::configure_external_master_policy(external_masters);
     Ok(Json(ApiResponse::success(current_response(
         registry.calibration.as_ref(),
     ))))

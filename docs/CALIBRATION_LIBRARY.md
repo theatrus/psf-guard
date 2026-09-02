@@ -53,6 +53,30 @@ Forgetting a frame also drops every master record that used it, including
 downstream masters that used one of those masters. Clearing masters waits for
 any active stack preview and rebuilds them on demand later.
 
+## Masters from other software
+
+A master dark, bias, or flat integrated by PixInsight's WBPP, Siril, or
+another tool imports like any calibration frame; its `IMAGETYP` (`Master
+Dark`) or `NCOMBINE` card marks it as a master, and the library shows a
+**Master** badge. Such a file is used as a master as-is, never integrated
+again. Two things differ from raw frames:
+
+- **Matching is lenient.** WBPP keeps `IMAGETYP`, `EXPTIME`, `INSTRUME`,
+  binning, telescope, and focal length, and drops `GAIN`, `OFFSET`, and
+  `CCD-TEMP`. A master is therefore held to the rule two calibration frames
+  are held to: what both sides record must agree, and a camera name or
+  sensor size must still match. Exposure still has to match for a dark. The
+  stack report names what the match had to take on trust.
+- **Scale is settled on the way in.** WBPP's FITS masters are 32-bit floats
+  normalized to 0..1 with no declared bounds. PSF Guard copies the master
+  into its cache once, placing such a file on the same 16-bit scale as every
+  other frame and marking a flat as already bias- and dark-subtracted. The
+  original is never written to; replacing it re-adopts it.
+
+**Settings → Calibration matching → Masters from other software** decides
+how they take part: use one whenever it matches (the default), only when raw
+frames cannot build a master, or never.
+
 ## Safe matching
 
 PSF Guard only uses candidates that agree with every known hard setting:
