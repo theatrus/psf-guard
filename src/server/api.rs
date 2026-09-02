@@ -460,12 +460,12 @@ pub struct RemoteImageUploadUpdate {
     /// the fallback to remember while the catalog match stays in force.
     #[serde(default)]
     pub directory_template: Option<String>,
-    /// Which layout `directory_template` is: `preset` means "use this",
-    /// replacing any catalog-detected layout and skipping detection;
-    /// `catalog` means keep matching the catalog and only remember the
-    /// template as the fallback for when detection finds nothing. Omitted
-    /// behaves as `preset` whenever the template differs from what is in
-    /// force.
+    /// `preset` says the person chose `directory_template` as the layout: it
+    /// replaces a catalog match and a scan in the same save cannot override
+    /// it. `catalog` says the catalog match stays and the template, if any,
+    /// is ignored. Omitted (older clients) keeps the pre-0.9.3 reading: the
+    /// template counts as a choice only when it differs from the stored
+    /// fallback, so a client echoing the fallback changes nothing.
     #[serde(default)]
     pub directory_template_source: Option<crate::db_registry::RemoteImageUploadTemplateSource>,
     /// Request a fresh catalog/tree match even when the layout settings did

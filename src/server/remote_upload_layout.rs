@@ -150,6 +150,7 @@ pub fn detect_catalog_directory_layout(
         let literal_date = layout
             .template
             .split('/')
+            .skip_while(|component| !component.contains("%TARGET%"))
             .any(|component| split_embedded_iso_date(component).is_some());
         if literal_date {
             tracing::warn!(
@@ -267,6 +268,10 @@ fn templates_from_sample(root: &Path, path: &Path, sample: &CatalogLayoutSample)
     let components = relative_components(parent);
     let (capture_date, observing_night) = sample_capture_dates(path, sample);
     let mut variants = vec![(Vec::<String>::new(), false, false)];
+    // Dates are per-night folders and live below the target. A date in a
+    // folder above it — `Trip_2025-08-01/M31/...` — names a fixed root and
+    // stays the literal it is.
+    let mut below_target = false;
 
     for component in &components {
         let target_match = component.eq_ignore_ascii_case(&sample.target)
@@ -299,27 +304,28 @@ fn templates_from_sample(root: &Path, path: &Path, sample: &CatalogLayoutSample)
             vec![("%PROJECT%".to_string(), false, false)]
         } else if matching_observing_year(component, observing_night.as_deref()) {
             vec![("%YEAR%".to_string(), false, false)]
-        } else if let Some((prefix, date, suffix)) = split_embedded_iso_date(component) {
-            // The date may be the whole folder name or sit inside one, as in
-            // N.I.N.A.'s `NIGHT_2025-12-14`. Either way it is the capture
-            // date, the observing night, or a literal that stays literal.
-            let mut dates = Vec::new();
-            if capture_date.as_deref() == Some(date) {
-                dates.push((format!("{prefix}%DATE%{suffix}"), false, false));
-            }
-            if observing_night.as_deref() == Some(date) {
-                dates.push((format!("{prefix}%NIGHT%{suffix}"), false, false));
-            }
+        } else if below_target && split_embedded_iso_date(component).is_some() {
+            let dates = date_component_replacements(
+                component,
+                capture_date.as_deref(),
+                observing_night.as_deref(),
+            );
             if dates.is_empty() {
-                dates.push((component.to_string(), false, false));
+                // A date folder this frame cannot account for is not evidence
+                // of any layout; the frame abstains rather than voting for a
+                // template with a fixed date in it.
+                return Vec::new();
             }
-            dates
+            dates.into_iter().map(|date| (date, false, false)).collect()
         } else {
             // A four-digit directory can be a manually named season. Preserve
             // it unless the catalog supplies evidence for a date transform.
             vec![(component.to_string(), false, false)]
         };
 
+        if target_match {
+            below_target = true;
+        }
         let mut next = Vec::new();
         for (parts, has_target, has_type) in variants {
             for (replacement, marks_target, marks_type) in &replacements {
@@ -394,6 +400,63 @@ fn relative_components(path: &Path) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+/// The template forms a per-night folder below the target can take for this
+/// frame, or none when the frame cannot account for the date in it.
+///
+/// The date may be the whole folder name or sit inside one, as in N.I.N.A.'s
+/// `NIGHT_2025-12-14`. What surrounds it has to be a plain label — letters
+/// and separators — for the date to become a token: `2025-12-14_session1`
+/// carries per-night detail of its own, and tokenizing the date would let
+/// the most common decoration win as the layout for every night. The label
+/// also settles which token: a folder that calls itself a night is the
+/// observing night even in the evening, when the calendar date is the same;
+/// one that calls itself a date is the capture date. A folder that says
+/// neither offers both when both fit, and a catalog of only-evening frames
+/// then ties, as before.
+fn date_component_replacements(
+    component: &str,
+    capture_date: Option<&str>,
+    observing_night: Option<&str>,
+) -> Vec<String> {
+    let Some((prefix, date, suffix)) = split_embedded_iso_date(component) else {
+        return vec![component.to_string()];
+    };
+    if split_embedded_iso_date(suffix).is_some() {
+        return Vec::new();
+    }
+    let label: String = format!("{prefix}{suffix}")
+        .chars()
+        .filter(|character| !matches!(character, '_' | '-' | '.' | ' '))
+        .collect();
+    if !label
+        .chars()
+        .all(|character| character.is_ascii_alphabetic())
+    {
+        return Vec::new();
+    }
+    let label = label.to_ascii_lowercase();
+    let matches_date = capture_date == Some(date);
+    let matches_night = observing_night == Some(date);
+    let mut forms = Vec::new();
+    if label.contains("night") {
+        if matches_night {
+            forms.push(format!("{prefix}%NIGHT%{suffix}"));
+        }
+    } else if label.contains("date") {
+        if matches_date {
+            forms.push(format!("{prefix}%DATE%{suffix}"));
+        }
+    } else {
+        if matches_date {
+            forms.push(format!("{prefix}%DATE%{suffix}"));
+        }
+        if matches_night {
+            forms.push(format!("{prefix}%NIGHT%{suffix}"));
+        }
+    }
+    forms
 }
 
 /// `prefix`, the first `YYYY-MM-DD` inside `component`, and `suffix` — so a
@@ -568,6 +631,168 @@ mod tests {
             "ZWO ASI2600MM Pro/%TARGET%/NIGHT_%NIGHT%/%FILTER%/%TYPE%"
         );
         assert_eq!(detected.samples, 2);
+    }
+
+    #[test]
+    fn date_labels_decide_the_token_and_decorations_stay_literal() {
+        let night = Some("2025-12-14");
+        let date = Some("2025-12-15");
+        // A folder that names the convention gets only that token, so an
+        // evening frame (date == night) does not split the vote.
+        assert_eq!(
+            date_component_replacements("NIGHT_2025-12-14", night, night),
+            vec!["NIGHT_%NIGHT%"]
+        );
+        assert_eq!(
+            date_component_replacements("date-2025-12-15", date, night),
+            vec!["date-%DATE%"]
+        );
+        // Unlabelled: both when both fit.
+        assert_eq!(
+            date_component_replacements("2025-12-14", night, night),
+            vec!["%DATE%", "%NIGHT%"]
+        );
+        // A frame that cannot account for the date abstains.
+        assert!(date_component_replacements("NIGHT_2025-12-01", date, night).is_empty());
+        // Per-night detail around the date is not a layout.
+        assert!(date_component_replacements("2025-12-14_session1", date, night).is_empty());
+        assert!(
+            date_component_replacements("NIGHT_2025-12-14_to_2025-12-15", date, night).is_empty()
+        );
+    }
+
+    #[test]
+    fn a_frame_that_cannot_account_for_a_date_folder_abstains_so_the_real_layout_wins() {
+        // Sixty frames under a folder named for some other day would have
+        // out-voted the forty in proper night folders, and the literal-date
+        // refusal then threw the whole detection away. Frames that cannot
+        // explain their date folder now cast no vote.
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("receive");
+        let db_path = temp.path().join("scheduler.sqlite");
+        let connection = create_catalog(&db_path);
+        let mut id = 0;
+        for index in 0..3 {
+            id += 1;
+            let directory = root.join("M31").join("2025-11-30").join("LIGHT");
+            std::fs::create_dir_all(&directory).unwrap();
+            let filename = format!("stray-{index}.fits");
+            std::fs::write(directory.join(&filename), b"fixture").unwrap();
+            add_catalog_image(
+                &connection,
+                id,
+                "M31",
+                "M31",
+                "L",
+                &filename,
+                crate::commands::import::headers::parse_fits_datetime("2025-12-20T04:00:00")
+                    .unwrap(),
+            );
+        }
+        for (night, captured) in [
+            ("2025-12-14", "2025-12-15T04:00:00"),
+            ("2025-12-15", "2025-12-16T04:00:00"),
+        ] {
+            id += 1;
+            let directory = root.join("M31").join(night).join("LIGHT");
+            std::fs::create_dir_all(&directory).unwrap();
+            let filename = format!("good-{id}.fits");
+            std::fs::write(directory.join(&filename), b"fixture").unwrap();
+            add_catalog_image(
+                &connection,
+                id,
+                "M31",
+                "M31",
+                "L",
+                &filename,
+                crate::commands::import::headers::parse_fits_datetime(captured).unwrap(),
+            );
+        }
+        drop(connection);
+        let detected = detect_catalog_directory_layout(
+            db_path.to_str().unwrap(),
+            &dunce::canonicalize(root).unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(detected.template, "%TARGET%/%NIGHT%/%TYPE%");
+        assert_eq!(detected.samples, 2);
+    }
+
+    #[test]
+    fn a_dated_root_above_the_target_stays_a_literal_and_is_allowed() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("receive");
+        let db_path = temp.path().join("scheduler.sqlite");
+        let connection = create_catalog(&db_path);
+        for (id, night, captured, filename) in [
+            (1, "2025-12-14", "2025-12-15T04:00:00", "a-001.fits"),
+            (2, "2025-12-15", "2025-12-16T04:00:00", "a-002.fits"),
+        ] {
+            let directory = root
+                .join("Trip_2025-08-01")
+                .join("M31")
+                .join(night)
+                .join("LIGHT");
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(directory.join(filename), b"fixture").unwrap();
+            add_catalog_image(
+                &connection,
+                id,
+                "M31",
+                "M31",
+                "L",
+                filename,
+                crate::commands::import::headers::parse_fits_datetime(captured).unwrap(),
+            );
+        }
+        drop(connection);
+        let detected = detect_catalog_directory_layout(
+            db_path.to_str().unwrap(),
+            &dunce::canonicalize(root).unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(detected.template, "Trip_2025-08-01/%TARGET%/%NIGHT%/%TYPE%");
+    }
+
+    #[test]
+    fn evening_only_night_folders_still_detect_the_night_layout() {
+        // Before midnight the calendar date and the observing night agree,
+        // so bare date folders tie between %DATE% and %NIGHT%. A folder that
+        // calls itself NIGHT_ has said which it is.
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("receive");
+        let db_path = temp.path().join("scheduler.sqlite");
+        let connection = create_catalog(&db_path);
+        for (id, night, captured, filename) in [
+            (1, "2025-12-14", "2025-12-14T21:00:00", "e-001.fits"),
+            (2, "2025-12-15", "2025-12-15T22:30:00", "e-002.fits"),
+        ] {
+            let directory = root
+                .join("M31")
+                .join(format!("NIGHT_{night}"))
+                .join("LIGHT");
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(directory.join(filename), b"fixture").unwrap();
+            add_catalog_image(
+                &connection,
+                id,
+                "M31",
+                "M31",
+                "L",
+                filename,
+                crate::commands::import::headers::parse_fits_datetime(captured).unwrap(),
+            );
+        }
+        drop(connection);
+        let detected = detect_catalog_directory_layout(
+            db_path.to_str().unwrap(),
+            &dunce::canonicalize(root).unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(detected.template, "%TARGET%/NIGHT_%NIGHT%/%TYPE%");
     }
 
     #[test]

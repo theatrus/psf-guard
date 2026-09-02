@@ -410,18 +410,20 @@ describe('TauriSettings import state', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Copy' })).toBeEnabled();
 
-    fireEvent.change(screen.getByLabelText('Layout:'), {
-      target: { value: 'custom' },
-    });
-    fireEvent.change(screen.getByLabelText('Custom catalog layout:'), {
-      target: { value: '%TARGET%/%DATE%/%TYPE%/%FILTER%' },
-    });
+    // Queue a rescan first, then choose Custom: the choice cancels the
+    // rescan, because a scan would only find the same match again.
     const rescanButton = screen.getByRole('button', {
       name: 'Rescan catalog layout',
     });
     fireEvent.click(rescanButton);
     expect(rescanButton).toHaveAttribute('aria-pressed', 'true');
-    expect(rescanButton).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Layout:'), {
+      target: { value: 'custom' },
+    });
+    expect(rescanButton).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.change(screen.getByLabelText('Custom catalog layout:'), {
+      target: { value: '%TARGET%/%DATE%/%TYPE%/%FILTER%' },
+    });
 
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
     await waitFor(() => expect(savedUpdates).toHaveLength(1));
@@ -431,8 +433,8 @@ describe('TauriSettings import state', () => {
       placement: 'target_tree',
       directory_template: '%TARGET%/%DATE%/%TYPE%/%FILTER%',
       directory_template_source: 'preset',
-      rescan_directory_layout: true,
     });
+    expect(savedUpdates[0].rescan_directory_layout).toBeUndefined();
 
     await screen.findByText('Saved.');
     fireEvent.click(screen.getByRole('button', { name: 'Edit Remote catalog' }));

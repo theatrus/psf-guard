@@ -624,11 +624,13 @@ export default function TauriSettings({
             token: formRemoteUploadToken || undefined,
             sync_enabled: formRemoteSyncEnabled,
             placement: formRemoteUploadPlacement,
+            // In catalog mode no template is sent: the match stays as it is
+            // and the server leaves the stored fallback alone.
             directory_template:
               formRemoteUploadEnabled &&
-              formRemoteUploadPlacement === 'target_tree'
-                ? formRemoteUploadDirectoryTemplate.trim() ||
-                  DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE
+              formRemoteUploadPlacement === 'target_tree' &&
+              formRemoteUploadLayoutChoice === 'preset'
+                ? formRemoteUploadDirectoryTemplate.trim()
                 : undefined,
             directory_template_source:
               formRemoteUploadEnabled &&
@@ -1182,6 +1184,9 @@ export default function TauriSettings({
                           setFormRemoteUploadDirectoryTemplate(
                             choice === 'custom' ? '' : choice
                           );
+                          // A queued rescan would find the catalog match again;
+                          // the person just chose something else.
+                          setFormRemoteUploadRescanRequested(false);
                         }}
                         className="file-path-input"
                       >

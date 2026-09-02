@@ -1433,6 +1433,7 @@ pub async fn update_database_route(
 
     // Pull the entry back out (post-rename) so we can rebuild the context.
     let new_id = req.slug.clone().unwrap_or_else(|| db_id.clone());
+    let mut layout_chosen = false;
     if let Some(update) = req.remote_image_upload.as_ref() {
         let entry = reg
             .databases
@@ -1441,7 +1442,7 @@ pub async fn update_database_route(
             .ok_or(AppError::InternalError(
                 "registry update lost the entry".into(),
             ))?;
-        apply_remote_image_upload_update(entry, update)?;
+        layout_chosen = apply_remote_image_upload_update(entry, update)?;
     }
     let updated_entry = reg.find(&new_id).ok_or(AppError::InternalError(
         "registry update lost the entry".into(),
@@ -1476,60 +1477,28 @@ pub async fn update_database_route(
         .map_err(|error| {
             AppError::InternalError(format!("remote upload layout scan failed: {error}"))
         })?;
-        match detected {
-            Ok(Some(detected)) => {
-                let entry = reg
-                    .databases
-                    .iter_mut()
-                    .find(|entry| entry.id == new_id)
-                    .ok_or(AppError::InternalError(
-                        "registry update lost the entry".into(),
-                    ))?;
-                let config = entry
-                    .remote_image_upload
-                    .as_mut()
-                    .expect("layout scanning requires remote upload configuration");
-                config.directory_layout =
-                    Some(crate::db_registry::RemoteImageUploadDirectoryLayout {
-                        template: detected.template,
-                        fallback_template: config.fallback_directory_template().to_string(),
-                        source: crate::db_registry::RemoteImageUploadTemplateSource::Catalog,
-                        samples: detected.samples,
-                    });
-            }
-            Ok(None) => {
-                let entry = reg
-                    .databases
-                    .iter_mut()
-                    .find(|entry| entry.id == new_id)
-                    .ok_or(AppError::InternalError(
-                        "registry update lost the entry".into(),
-                    ))?;
-                let config = entry
-                    .remote_image_upload
-                    .as_mut()
-                    .expect("layout scanning requires remote upload configuration");
-                reset_catalog_directory_layout(config);
-            }
+        let detected = match detected {
+            Ok(detected) => detected,
             Err(error) => {
-                let entry = reg
-                    .databases
-                    .iter_mut()
-                    .find(|entry| entry.id == new_id)
-                    .ok_or(AppError::InternalError(
-                        "registry update lost the entry".into(),
-                    ))?;
-                let config = entry
-                    .remote_image_upload
-                    .as_mut()
-                    .expect("layout scanning requires remote upload configuration");
-                reset_catalog_directory_layout(config);
                 tracing::warn!(
                     database = %new_id,
                     "Could not detect remote upload catalog layout; using preset: {error:#}"
                 );
+                None
             }
-        }
+        };
+        let entry = reg
+            .databases
+            .iter_mut()
+            .find(|entry| entry.id == new_id)
+            .ok_or(AppError::InternalError(
+                "registry update lost the entry".into(),
+            ))?;
+        let config = entry
+            .remote_image_upload
+            .as_mut()
+            .expect("layout scanning requires remote upload configuration");
+        adopt_detected_layout(config, detected, layout_chosen);
     }
     if let Some(export_dir) = req.export_dir.as_ref() {
         let entry = reg
@@ -1612,10 +1581,13 @@ pub async fn update_database_route(
     Ok(Json(ApiResponse::success(summary_of(&new_ctx))))
 }
 
+/// Apply a management client's receiver settings. Returns whether the
+/// request chose a folder layout, which a catalog scan in the same save must
+/// not override.
 fn apply_remote_image_upload_update(
     entry: &mut crate::db_registry::DbEntry,
     update: &RemoteImageUploadUpdate,
-) -> Result<(), AppError> {
+) -> Result<bool, AppError> {
     let mut config = entry.remote_image_upload.clone().unwrap_or_default();
     config.enabled = update.enabled;
     if let Some(directory) = update.image_directory.as_ref() {
@@ -1636,6 +1608,7 @@ fn apply_remote_image_upload_update(
     if let Some(placement) = update.placement {
         config.placement = placement;
     }
+    let mut layout_chosen = false;
     if let Some(template) = update.directory_template.as_deref() {
         use crate::db_registry::{
             RemoteImageUploadDirectoryLayout, RemoteImageUploadTemplateSource,
@@ -1643,32 +1616,32 @@ fn apply_remote_image_upload_update(
         crate::server::remote_upload_layout::validate_directory_template(template)
             .map_err(|error| AppError::BadRequest(error.to_string()))?;
         let template = template.trim().replace('\\', "/");
-        let keeps_catalog_match =
-            update.directory_template_source == Some(RemoteImageUploadTemplateSource::Catalog);
-        let current_is_catalog = config
-            .directory_layout
-            .as_ref()
-            .is_some_and(|layout| layout.source == RemoteImageUploadTemplateSource::Catalog);
-        if keeps_catalog_match && current_is_catalog {
-            // "Match catalog" stays in force; the chosen template is only what
-            // a future empty scan falls back to.
-            if let Some(layout) = config.directory_layout.as_mut() {
-                layout.fallback_template = template;
-            }
-        } else if target_tree_was_selected
-            || current_is_catalog
-            || template != config.directory_template()
-        {
-            // A preset or custom layout the person chose is the layout: it
-            // replaces a detected one rather than hiding behind it. (This used
-            // to compare against the fallback only, so choosing a custom
-            // layout over a catalog match changed nothing visible — #399.)
+        // Is this template a choice? A client that says `preset` chose it. A
+        // client that says `catalog` is keeping the catalog match and the
+        // template rides along unused. A client that says nothing is older
+        // than the field; for it, as before 0.9.3, a template that merely
+        // echoes the stored fallback (the summary hands the fallback back)
+        // is not a choice, while a different one is.
+        let chosen = match update.directory_template_source {
+            Some(RemoteImageUploadTemplateSource::Preset) => true,
+            Some(RemoteImageUploadTemplateSource::Catalog) => false,
+            None => target_tree_was_selected || template != config.fallback_directory_template(),
+        };
+        if chosen {
+            // The chosen layout is the layout: it replaces a catalog match
+            // rather than hiding behind it as the fallback (#399).
             config.directory_layout = Some(RemoteImageUploadDirectoryLayout {
                 template: template.clone(),
                 fallback_template: template,
                 source: RemoteImageUploadTemplateSource::Preset,
                 samples: 0,
             });
+            // On the save that first switches to the catalog tree there is
+            // no match yet to choose against: the template is what the form
+            // showed by default, and the first detection still decides. Only
+            // a choice made while the tree was already in force holds against
+            // a scan in the same save.
+            layout_chosen = !target_tree_was_selected;
         }
     }
     if config.sync_enabled && !config.token_is_configured() {
@@ -1682,7 +1655,33 @@ fn apply_remote_image_upload_update(
             .map_err(|error| AppError::BadRequest(error.to_string()))?;
     }
     entry.remote_image_upload = Some(config);
-    Ok(())
+    Ok(layout_chosen)
+}
+
+/// Fold a catalog scan's result into the receiver settings. A layout chosen
+/// in the same request wins over whatever the scan found: the person asked
+/// for that layout, and a scan that promoted the catalog match back over it
+/// is exactly what #399 reported. An empty or failed scan returns a catalog
+/// layout to its fallback and leaves a chosen one alone.
+fn adopt_detected_layout(
+    config: &mut crate::db_registry::RemoteImageUploadConfig,
+    detected: Option<crate::server::remote_upload_layout::DetectedDirectoryLayout>,
+    layout_chosen: bool,
+) {
+    if layout_chosen {
+        return;
+    }
+    match detected {
+        Some(detected) => {
+            config.directory_layout = Some(crate::db_registry::RemoteImageUploadDirectoryLayout {
+                template: detected.template,
+                fallback_template: config.fallback_directory_template().to_string(),
+                source: crate::db_registry::RemoteImageUploadTemplateSource::Catalog,
+                samples: detected.samples,
+            });
+        }
+        None => reset_catalog_directory_layout(config),
+    }
 }
 
 fn remote_image_layout_needs_scan(
@@ -1693,15 +1692,10 @@ fn remote_image_layout_needs_scan(
     if request.is_some_and(|request| request.rescan_directory_layout) {
         return true;
     }
-    // Choosing a preset or custom layout is a decision, not a reason to go
-    // looking for a different one. A scan here used to promote the catalog
-    // match back over the layout just chosen (#399).
-    if request.is_some_and(|request| {
-        request.directory_template_source
-            == Some(crate::db_registry::RemoteImageUploadTemplateSource::Preset)
-    }) {
-        return false;
-    }
+    // A changed layout choice is deliberately not a trigger: choosing a
+    // layout is a decision, not a reason to go looking for another. (It used
+    // to be, and the scan promoted the catalog match back over the layout
+    // just chosen — #399.)
     let previous_config = previous.remote_image_upload.as_ref();
     let updated_config = updated.remote_image_upload.as_ref();
     previous.db_path != updated.db_path
@@ -1779,6 +1773,89 @@ mod remote_image_layout_settings_tests {
         entry
     }
 
+    fn detected(
+        template: &str,
+        samples: usize,
+    ) -> crate::server::remote_upload_layout::DetectedDirectoryLayout {
+        crate::server::remote_upload_layout::DetectedDirectoryLayout {
+            template: template.into(),
+            samples,
+        }
+    }
+
+    #[test]
+    fn a_first_target_tree_save_still_scans_the_catalog() {
+        // The desktop form sends `preset` on every save that has no match yet
+        // (there is nothing else to send), so that must not suppress the
+        // first detection, and the detection must still win: the preset was
+        // only what the form showed by default.
+        let mut previous_flat = legacy_target_tree_entry();
+        previous_flat
+            .remote_image_upload
+            .as_mut()
+            .unwrap()
+            .placement = crate::db_registry::RemoteImageUploadPlacement::Flat;
+        let mut entry = previous_flat.clone();
+        let mut request = update();
+        request.directory_template = Some("%TARGET%/%TYPE%/%FILTER%".into());
+        request.directory_template_source =
+            Some(crate::db_registry::RemoteImageUploadTemplateSource::Preset);
+        let chosen = apply_remote_image_upload_update(&mut entry, &request).unwrap();
+        assert!(
+            !chosen,
+            "with no match yet, the form's default is not a choice against one"
+        );
+        assert_eq!(
+            entry
+                .remote_image_upload
+                .as_ref()
+                .unwrap()
+                .directory_template(),
+            "%TARGET%/%TYPE%/%FILTER%",
+            "until the scan reports, the preset is in force"
+        );
+        assert!(
+            remote_image_layout_needs_scan(&previous_flat, &entry, Some(&request)),
+            "switching to the catalog tree is what triggers detection"
+        );
+        let config = entry.remote_image_upload.as_mut().unwrap();
+        // The first detection wins, with the preset kept as the fallback.
+        adopt_detected_layout(
+            config,
+            Some(detected("%YEAR%/%TARGET%/%NIGHT%/%TYPE%", 40)),
+            chosen,
+        );
+        assert_eq!(
+            config.directory_template(),
+            "%YEAR%/%TARGET%/%NIGHT%/%TYPE%"
+        );
+        assert_eq!(
+            config.directory_layout.as_ref().unwrap().fallback_template,
+            "%TARGET%/%TYPE%/%FILTER%"
+        );
+        // An empty scan returns a catalog match to its fallback.
+        adopt_detected_layout(config, None, false);
+        assert_eq!(config.directory_template(), "%TARGET%/%TYPE%/%FILTER%");
+    }
+
+    #[test]
+    fn an_older_client_echoing_the_fallback_changes_nothing() {
+        // The summary hands the fallback back as `directory_template`; a
+        // client from before the source field re-sends it on unrelated
+        // saves. That is not a choice.
+        let mut entry = catalog_matched_entry();
+        let mut request = update();
+        request.directory_template = Some("%YEAR%/%TARGET%/%NIGHT%/%TYPE%".into());
+        let chosen = apply_remote_image_upload_update(&mut entry, &request).unwrap();
+        assert!(!chosen);
+        let layout = entry.remote_image_upload.unwrap().directory_layout.unwrap();
+        assert_eq!(
+            layout.source,
+            crate::db_registry::RemoteImageUploadTemplateSource::Catalog
+        );
+        assert_eq!(layout.samples, 157);
+    }
+
     #[test]
     fn a_chosen_layout_replaces_the_catalog_match_and_is_not_scanned_away() {
         // #399: the person chose Custom over a wrong catalog match, and the
@@ -1807,7 +1884,25 @@ mod remote_image_layout_settings_tests {
         assert_eq!(config.directory_template(), layout.template);
         assert!(
             !remote_image_layout_needs_scan(&previous, &entry, Some(&request)),
-            "an explicit choice is final until a rescan is asked for"
+            "a layout change alone is no reason to scan"
+        );
+        // Even with a rescan queued in the same save, the scan's result does
+        // not climb back over the layout the person just chose.
+        let mut entry = catalog_matched_entry();
+        request.rescan_directory_layout = true;
+        let chosen = apply_remote_image_upload_update(&mut entry, &request).unwrap();
+        let config = entry.remote_image_upload.as_mut().unwrap();
+        adopt_detected_layout(
+            config,
+            Some(detected(
+                "ZWO ASI2600MM Pro/%TARGET%/NIGHT_%NIGHT%/%FILTER%/%TYPE%",
+                157,
+            )),
+            chosen,
+        );
+        assert_eq!(
+            config.directory_template(),
+            "%CAMERA%/%TARGET%/NIGHT_%NIGHT%/%FILTER%/%TYPE%"
         );
 
         // The same choice without naming its source is still a choice: the
@@ -1825,7 +1920,7 @@ mod remote_image_layout_settings_tests {
     }
 
     #[test]
-    fn keeping_match_catalog_only_changes_the_fallback() {
+    fn keeping_match_catalog_ignores_any_template_sent_along() {
         let previous = catalog_matched_entry();
         let mut entry = catalog_matched_entry();
         let mut request = update();
@@ -1839,11 +1934,11 @@ mod remote_image_layout_settings_tests {
             layout.template,
             "ZWO ASI2600MM Pro/%TARGET%/NIGHT_%NIGHT%/%FILTER%/%TYPE%"
         );
-        assert_eq!(layout.fallback_template, "%TARGET%/%DATE%/%TYPE%");
+        assert_eq!(layout.fallback_template, "%YEAR%/%TARGET%/%NIGHT%/%TYPE%");
         assert_eq!(layout.samples, 157);
         assert!(
             !remote_image_layout_needs_scan(&previous, &entry, Some(&request)),
-            "changing the fallback alone is no reason to rescan"
+            "nothing changed, so nothing to rescan"
         );
     }
 
