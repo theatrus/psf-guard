@@ -14,6 +14,7 @@ import {
   imageDetailPath,
   imageDetailReturnView,
 } from '../utils/imageDetailRoutes';
+import { matchesStatusFilter } from '../utils/statusFilter';
 
 /**
  * Hook for navigating between images in the current context
@@ -42,11 +43,8 @@ export function useImageNavigation(currentImageId?: number) {
   const filteredImages = useMemo(() => {
     return allImages.filter(image => {
       // Status filter
-      if (filters.status !== 'all') {
-        const statusMap: { [key: string]: number } = { 'pending': 0, 'accepted': 1, 'rejected': 2 };
-        if (statusMap[filters.status] !== image.grading_status) {
-          return false;
-        }
+      if (!matchesStatusFilter(filters.status, image.grading_status)) {
+        return false;
       }
       
       // Filter name filter

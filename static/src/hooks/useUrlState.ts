@@ -1,6 +1,7 @@
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { useCallback, useMemo, useRef } from 'react';
 import { type GroupingMode, DEFAULT_SINGLE_PROJECT_MODE } from '../types/grouping';
+import { parseStatusFilter } from '../utils/statusFilter';
 
 /**
  * Hook for managing URL search parameters as state
@@ -153,7 +154,7 @@ export function useFilters() {
   const { getParam, updateParams } = useUrlParams();
   
   const filters = useMemo(() => ({
-    status: getParam('status') || 'all',
+    status: parseStatusFilter(getParam('status')),
     filterName: getParam('filter') || 'all', 
     dateRange: {
       start: getParam('dateStart') || null,

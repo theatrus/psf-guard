@@ -42,6 +42,7 @@ import { thumbnailGridColumns } from '../utils/thumbnailSizing';
 import { useScopedQuality } from '../hooks/useSequenceAnalysis';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import SecondaryScoreToggle from './SecondaryScoreToggle';
+import { matchesStatusFilter, statusFilterLabel } from '../utils/statusFilter';
 
 interface GroupedImageGridProps {
   useLazyImages?: boolean;
@@ -118,11 +119,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const filteredImages = useMemo(() => {
     return allImages.filter(image => {
       // Status filter
-      if (filters.status !== 'all') {
-        const statusMap: { [key: string]: number } = { 'pending': 0, 'accepted': 1, 'rejected': 2 };
-        if (statusMap[filters.status] !== image.grading_status) {
-          return false;
-        }
+      if (!matchesStatusFilter(filters.status, image.grading_status)) {
+        return false;
       }
       
       // Filter name filter
@@ -901,7 +899,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
             <div className="stats-section">
               <div className="grid-stats">
                 {filteredImages.length} of {allImages.length} images • {imageGroups.length} groups
-                {filters.status !== 'all' && ` • ${filters.status}`}
+                {filters.status !== 'all' && ` • ${statusFilterLabel(filters.status)}`}
                 {filters.filterName !== 'all' && ` • ${filters.filterName}`}
                 {filters.searchTerm && ` • "${filters.searchTerm}"`}
                 {' • '}

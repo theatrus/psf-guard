@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { GradingStatus } from '../api/types';
+import {
+  parseStatusFilter,
+  STATUS_FILTER_OPTIONS,
+  type StatusFilter,
+} from '../utils/statusFilter';
 
 export interface FilterOptions {
-  status: GradingStatus | 'all';
+  status: StatusFilter;
   filterName: string | 'all';
   dateRange: {
     start: Date | null;
@@ -37,7 +41,7 @@ export default function FilterControls({ onFilterChange, availableFilters, curre
 
   // Convert URL state (strings) to component state (Date objects)
   const filters = useMemo(() => ({
-    status: currentFilters.status as GradingStatus | 'all',
+    status: parseStatusFilter(currentFilters.status),
     filterName: currentFilters.filterName,
     dateRange: {
       start: currentFilters.dateRange.start ? new Date(currentFilters.dateRange.start) : null,
@@ -46,7 +50,7 @@ export default function FilterControls({ onFilterChange, availableFilters, curre
     searchTerm: currentFilters.searchTerm,
   }), [currentFilters]);
 
-  const handleStatusChange = (status: GradingStatus | 'all') => {
+  const handleStatusChange = (status: StatusFilter) => {
     const newFilters = { ...filters, status };
     onFilterChange(newFilters);
   };
@@ -102,12 +106,13 @@ export default function FilterControls({ onFilterChange, availableFilters, curre
           <select
             id="image-status-filter"
             value={filters.status} 
-            onChange={(e) => handleStatusChange(e.target.value as GradingStatus | 'all')}
+            onChange={(e) => handleStatusChange(parseStatusFilter(e.target.value))}
           >
-            <option value="all">All</option>
-            <option value={GradingStatus.Accepted}>Accepted</option>
-            <option value={GradingStatus.Rejected}>Rejected</option>
-            <option value={GradingStatus.Pending}>Pending</option>
+            {STATUS_FILTER_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
           </select>
         </div>
 
