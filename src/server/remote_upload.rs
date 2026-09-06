@@ -99,7 +99,7 @@ pub async fn upload_image(
             }
             #[cfg(windows)]
             {
-                tempfile::NamedTempFile::new_in(&upload_dir)
+                tempfile::NamedTempFile::new_in(upload_dir)
             }
         }
         .map_err(|error| {
