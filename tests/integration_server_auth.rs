@@ -27,7 +27,7 @@ use tower::ServiceExt;
 fn auth_config() -> ServerAuthConfig {
     ServerAuthConfig {
         session_hours: Some(1),
-        secure_cookie: false,
+        secure_cookie: Some(false),
         allow_read_only_compute: false,
     }
 }
@@ -58,7 +58,7 @@ fn app_with_auth(config: ServerAuthConfig) -> Router {
         Connection::open_in_memory().unwrap(),
     ));
     state.set_server_auth(Some(
-        ServerAuth::from_sources(Some(&config), &auth_registry())
+        ServerAuth::from_sources(Some(&config), &auth_registry(), 3000)
             .unwrap()
             .unwrap(),
     ));
@@ -128,10 +128,10 @@ fn user_management_app(directory: &tempfile::TempDir) -> Router {
     registry.save(&auth_registry_path).unwrap();
     let config = ServerAuthConfig {
         session_hours: Some(1),
-        secure_cookie: false,
+        secure_cookie: Some(false),
         allow_read_only_compute: false,
     };
-    let auth = ServerAuth::from_sources(Some(&config), &registry)
+    let auth = ServerAuth::from_sources(Some(&config), &registry, 3000)
         .unwrap()
         .unwrap();
     let state = Arc::new(AppState::new_for_test(
@@ -240,7 +240,7 @@ async fn login_status_and_logout_use_an_http_only_session_cookie() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(login["data"]["role"], "read_only");
     assert_eq!(login["data"]["can_compute"], false);
-    assert!(cookie.starts_with("psf_guard_session="));
+    assert!(cookie.starts_with("psf_guard_session_3000="));
 
     let authenticated = Request::builder()
         .uri("/api/auth/status")
@@ -265,6 +265,72 @@ async fn login_status_and_logout_use_an_http_only_session_cookie() {
         .to_str()
         .unwrap()
         .contains("Max-Age=0"));
+}
+
+#[tokio::test]
+async fn automatic_cookie_policy_keeps_a_direct_http_browser_session() {
+    let mut config = auth_config();
+    config.secure_cookie = None;
+    let app = app_with_auth(config);
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/api/auth/login")
+        .header("host", "guard.local:3000")
+        .header("origin", "http://guard.local:3000")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "username": "viewer",
+                "password": "viewer-secret"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let (status, headers, body) = json(&app, request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["authenticated"], true);
+    let set_cookie = headers["set-cookie"].to_str().unwrap();
+    assert!(set_cookie.starts_with("psf_guard_session_3000="));
+    assert!(!set_cookie.contains("; Secure"));
+
+    let cookie = set_cookie.split(';').next().unwrap();
+    let status_request = Request::builder()
+        .uri("/api/auth/status")
+        .header(COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        json(&app, status_request).await.2["data"]["authenticated"],
+        true
+    );
+}
+
+#[tokio::test]
+async fn automatic_cookie_policy_keeps_https_and_untrusted_origins_secure() {
+    for origin in ["https://guard.local", "http://other.local"] {
+        let mut config = auth_config();
+        config.secure_cookie = None;
+        let app = app_with_auth(config);
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/api/auth/login")
+            .header("host", "guard.local")
+            .header("origin", origin)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "username": "viewer",
+                    "password": "viewer-secret"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+
+        let (status, headers, _) = json(&app, request).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(headers["set-cookie"].to_str().unwrap().contains("; Secure"));
+    }
 }
 
 #[tokio::test]

@@ -7105,6 +7105,12 @@
   color: var(--color-error-light) !important;
 }
 
+.auth-warning {
+  padding-left: 0.75rem;
+  border-left: 3px solid var(--color-warning);
+  color: var(--color-warning) !important;
+}
+
 .access-badge {
   align-self: center;
   padding: 0.25rem 0.55rem;

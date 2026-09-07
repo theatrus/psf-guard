@@ -1202,6 +1202,7 @@ pub fn main() -> Result<()> {
             let server_auth = crate::server::auth::ServerAuth::from_sources(
                 app_config.server.auth.as_ref(),
                 &auth_registry,
+                server_port,
             )?;
             // Open the configured databases for remote sync and image upload.
             // This edits the in-memory list only — the registry on disk keeps

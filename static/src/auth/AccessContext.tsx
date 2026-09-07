@@ -19,8 +19,17 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     retry: false,
   });
   const login = useMutation({
-    mutationFn: ({ username, password }: { username: string; password: string }) =>
-      apiClient.login(username, password),
+    mutationFn: async ({ username, password }: { username: string; password: string }) => {
+      await apiClient.login(username, password);
+      const status = await apiClient.getAuthStatus();
+      if (!status.authenticated) {
+        throw new Error(
+          'Sign in succeeded, but this browser did not retain the session. ' +
+          'Use HTTPS, or set secure_cookie = false in [server.auth] for a trusted direct HTTP connection.'
+        );
+      }
+      return status;
+    },
     onSuccess: (status) => {
       queryClient.removeQueries({
         predicate: (query) => query.queryKey[0] !== 'authStatus',
@@ -131,6 +140,12 @@ function LoginScreen({
         <img src="/psf-guard.svg" alt="" className="auth-logo" />
         <h1>Sign in to PSF Guard</h1>
         <p>Use the viewer or editor account configured for this server.</p>
+        {window.isSecureContext === false && (
+          <p className="auth-warning" role="note">
+            This HTTP connection is not encrypted. Your password and session can be observed on
+            the network.
+          </p>
+        )}
         <label>
           <span>Username</span>
           <input
