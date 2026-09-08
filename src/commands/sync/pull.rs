@@ -53,6 +53,11 @@ pub struct PullSummary {
     pub grade_filled: usize,
     /// Existing images whose local (non-Pending) grade was preserved.
     pub grade_preserved: usize,
+    /// Destination rows PSF Guard had minted itself — an import or a remote
+    /// upload that ran before the telescope's own row arrived — that this
+    /// pull recognized as the same frame and updated in place, taking the
+    /// telescope's guid, instead of inserting a second row beside them.
+    pub adopted: usize,
     pub imagedata: TableCounts,
     /// Bytes of imagedata BLOBs copied (or, in dry-run, that would be copied).
     pub imagedata_bytes: u64,
@@ -510,6 +515,89 @@ fn cols_str(cols: &[String]) -> Vec<&str> {
 /// grade; existing rows keep their local grade unless it's Pending (0), in
 /// which case they adopt the telescope's grade. FK columns
 /// (`projectId`/`targetId`/`exposureId`) are remapped.
+/// How far apart two capture times may sit and still be one frame. A row
+/// minted from the file's header and the telescope's own record of the same
+/// exposure can disagree by the rounding of a timestamp, not by more.
+const ADOPTION_TIME_TOLERANCE_SECS: i64 = 2;
+
+/// The file name a captured image's metadata points at, as a lower-case
+/// basename, whichever machine and separator wrote the path.
+fn metadata_basename(value: &Value) -> Option<String> {
+    let (file_name, _, _) = metadata_file_identity(value)?;
+    let basename = file_name.rsplit(['/', '\\']).next()?.trim();
+    (!basename.is_empty()).then(|| basename.to_lowercase())
+}
+
+/// Destination rows the source does not know at all, by target and file name.
+///
+/// Sync identity is the guid, and stays so. But a row the destination minted
+/// itself — an import of the night's files, or a remote upload — carries a
+/// guid the telescope has never seen, and when the telescope's own row for
+/// that frame arrives, matching by guid alone inserts it a second time. Such
+/// a row is recognized by what a frame cannot fake: the same target, the same
+/// file name, and a capture time within a couple of seconds. It is then
+/// updated in place and takes the telescope's guid, so the catalog ends up
+/// exactly as if the telescope's row had come first.
+/// A destination row that may be adopted: its Id, capture time, and write
+/// column values.
+type AdoptableRow = (i64, Option<i64>, Vec<Value>);
+
+struct AdoptableRows {
+    by_target_and_name: HashMap<(i64, String), Vec<AdoptableRow>>,
+}
+
+impl AdoptableRows {
+    fn build(
+        dest_map: &HashMap<String, (i64, Vec<Value>)>,
+        source_guids: &HashSet<String>,
+        target_w: usize,
+        acquired_date_w: Option<usize>,
+        metadata_w: Option<usize>,
+    ) -> Self {
+        let mut by_target_and_name: HashMap<(i64, String), Vec<AdoptableRow>> = HashMap::new();
+        let Some(metadata_w) = metadata_w else {
+            return Self { by_target_and_name };
+        };
+        for (guid, (dest_id, values)) in dest_map {
+            if source_guids.contains(guid) {
+                continue;
+            }
+            let (Some(target), Some(basename)) = (
+                as_i64(&values[target_w]),
+                metadata_basename(&values[metadata_w]),
+            ) else {
+                continue;
+            };
+            let acquired = acquired_date_w.and_then(|position| as_i64(&values[position]));
+            by_target_and_name
+                .entry((target, basename))
+                .or_default()
+                .push((*dest_id, acquired, values.clone()));
+        }
+        Self { by_target_and_name }
+    }
+
+    /// Take the destination row this incoming frame is, if there is one.
+    fn take(
+        &mut self,
+        target: i64,
+        basename: &str,
+        acquired: Option<i64>,
+    ) -> Option<(i64, Vec<Value>)> {
+        let candidates = self
+            .by_target_and_name
+            .get_mut(&(target, basename.to_string()))?;
+        let index = candidates.iter().position(|(_, dest_acquired, _)| {
+            match (acquired, dest_acquired) {
+                (Some(a), Some(b)) => (a - b).abs() <= ADOPTION_TIME_TOLERANCE_SECS,
+                _ => false,
+            }
+        })?;
+        let (dest_id, _, values) = candidates.swap_remove(index);
+        Some((dest_id, values))
+    }
+}
+
 fn upsert_acquired_images(
     src: &Connection,
     tx: &Transaction,
@@ -540,6 +628,17 @@ fn upsert_acquired_images(
     // Pre-pull destination state + duplicate-guid sets (ambiguous rows skipped).
     let (dest_map, dest_dups) = dest_guid_map(tx, table, &write_cols, guid_w)?;
     let src_dups = source_dup_guids(src, table)?;
+    let source_guids: HashSet<String> = {
+        let mut statement =
+            src.prepare(&format!("SELECT guid FROM {table} WHERE guid IS NOT NULL"))?;
+        let guids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        guids.into_iter().collect()
+    };
+    let metadata_w = wpos("metadata");
+    let mut adoptable =
+        AdoptableRows::build(&dest_map, &source_guids, tgt_w, acquired_date_w, metadata_w);
 
     let insert_sql = format!(
         "INSERT INTO {} ({}) VALUES ({})",
@@ -658,6 +757,46 @@ fn upsert_acquired_images(
                 }
             }
             None => {
+                let adopted = metadata_w
+                    .and_then(|position| metadata_basename(&write_values[position]))
+                    .and_then(|basename| adoptable.take(target_id, &basename, acquired_date));
+                if let Some((dest_id, cur_vals)) = adopted {
+                    // The destination already holds this frame under a guid
+                    // of its own making. Update that row rather than insert a
+                    // twin: it takes the telescope's guid and capture fields,
+                    // and keeps a grade someone already gave it here.
+                    let old_guid = match &cur_vals[guid_w] {
+                        Value::Text(g) => g.clone(),
+                        _ => String::new(),
+                    };
+                    id_map.insert(src_id, dest_id);
+                    let dest_grade = as_i64(&cur_vals[grade_w]).unwrap_or(0);
+                    if dest_grade != 0 {
+                        write_values[grade_w] = cur_vals[grade_w].clone();
+                        if let Some(rp) = reason_w {
+                            write_values[rp] = cur_vals[rp].clone();
+                        }
+                        summary.grade_preserved += 1;
+                    } else if as_i64(&write_values[grade_w]).unwrap_or(0) != 0 {
+                        summary.grade_filled += 1;
+                    }
+                    let mut p: Vec<&dyn ToSql> =
+                        write_values.iter().map(|v| v as &dyn ToSql).collect();
+                    p.push(&dest_id);
+                    upd_stmt.execute(p.as_slice())?;
+                    summary.acquiredimage.updated += 1;
+                    summary.adopted += 1;
+                    summary.changed_acquiredimages.push(ChangedAcquiredImage {
+                        id: dest_id,
+                        project_id,
+                        target_id,
+                        acquired_date,
+                    });
+                    summary.changes.push(format!(
+                        "adopt acquiredimage {guid} (was local row {old_guid})"
+                    ));
+                    continue;
+                }
                 ins_stmt.execute(params_from_iter(write_values.iter()))?;
                 let dest_id = tx.last_insert_rowid();
                 id_map.insert(src_id, dest_id);
@@ -1089,6 +1228,91 @@ mod tests {
 
     fn one<T: rusqlite::types::FromSql>(c: &Connection, sql: &str) -> T {
         c.query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+
+    /// A local catalog whose structure came from the telescope but whose
+    /// images arrived through an import of the night's files: same target,
+    /// a path under the archive, a guid PSF Guard minted, no grade yet.
+    fn local_with_imported_frame(acquired: i64, grade: i64, reason: Option<&str>) -> Connection {
+        let structure = telescope();
+        structure
+            .execute_batch("DELETE FROM imagedata; DELETE FROM acquiredimage;")
+            .unwrap();
+        let dest = empty_local();
+        sync_pull(&structure, &dest, &opts()).unwrap();
+        dest.execute(
+            "INSERT INTO acquiredimage (projectId,targetId,acquireddate,filtername,gradingStatus,metadata,rejectreason,profileId,exposureId,guid)
+             VALUES (1,1,?1,'Ha',?2,'{\"FileName\":\"/mnt/archive/_Source/2026/C33/2026-01-01/LIGHT/a.fits\",\"HFR\":5.4}',?3,'p',1,'local-a')",
+            rusqlite::params![acquired, grade, reason],
+        )
+        .unwrap();
+        dest
+    }
+
+    #[test]
+    fn adopts_a_locally_imported_row_when_the_telescope_row_for_it_arrives() {
+        // An import ran after the night's files were filed but before this
+        // pull brought the telescope's own rows. Matching by guid alone would
+        // insert a twin for a.fits; the imported row is the same frame.
+        let src = telescope();
+        let dest = local_with_imported_frame(1000, 0, None);
+        let s = sync_pull(&src, &dest, &opts()).unwrap();
+
+        assert_eq!(s.adopted, 1);
+        assert_eq!(s.acquiredimage.inserted, 1, "b.fits is new");
+        assert_eq!(s.acquiredimage.updated, 1, "a.fits was adopted");
+        assert_eq!(one::<i64>(&dest, "SELECT count(*) FROM acquiredimage"), 2);
+        let (guid, grade, file): (String, i64, String) = dest
+            .query_row(
+                "SELECT guid, gradingStatus, json_extract(metadata,'$.FileName') FROM acquiredimage WHERE acquireddate=1000",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(guid, "img1", "the row now carries the telescope's guid");
+        assert_eq!(grade, 1, "a Pending local row takes the telescope's grade");
+        assert_eq!(file, "a.fits", "capture fields come from the telescope");
+        assert!(
+            s.changes
+                .iter()
+                .any(|c| c.starts_with("adopt acquiredimage img1")),
+            "{:?}",
+            s.changes
+        );
+
+        // A second pull finds everything by guid.
+        let again = sync_pull(&src, &dest, &opts()).unwrap();
+        assert_eq!(again.adopted, 0);
+        assert_eq!(again.acquiredimage.inserted, 0);
+    }
+
+    #[test]
+    fn adoption_keeps_a_grade_already_given_locally() {
+        let src = telescope();
+        let dest = local_with_imported_frame(1001, 2, Some("satellite"));
+        let s = sync_pull(&src, &dest, &opts()).unwrap();
+        assert_eq!(s.adopted, 1);
+        assert_eq!(s.grade_preserved, 1);
+        let (grade, reason): (i64, String) = dest
+            .query_row(
+                "SELECT gradingStatus, rejectreason FROM acquiredimage WHERE guid='img1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((grade, reason.as_str()), (2, "satellite"));
+    }
+
+    #[test]
+    fn adoption_needs_the_same_name_and_time() {
+        // Ten seconds apart is another exposure with a reused name, not the
+        // same frame: it is inserted beside the local row, as before.
+        let src = telescope();
+        let dest = local_with_imported_frame(1010, 0, None);
+        let s = sync_pull(&src, &dest, &opts()).unwrap();
+        assert_eq!(s.adopted, 0);
+        assert_eq!(s.acquiredimage.inserted, 2);
+        assert_eq!(one::<i64>(&dest, "SELECT count(*) FROM acquiredimage"), 3);
     }
 
     #[test]

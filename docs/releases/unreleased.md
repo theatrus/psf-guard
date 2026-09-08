@@ -18,6 +18,11 @@
 
 ## Fixed
 
+- Scheduler merge no longer duplicates frames that an import or remote upload
+  had already added before the telescope's own rows arrived: the existing row
+  is recognized by target, file name, and capture time, updated in place, and
+  takes the telescope's identity, keeping any grade it already had.
+
 - Applied stack processing survives reloads, restoring the cached result,
   RC-Astro versions, and editor settings. Reverting also survives reloads.
 
