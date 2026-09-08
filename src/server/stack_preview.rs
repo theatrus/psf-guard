@@ -7,6 +7,7 @@
 
 pub mod artifact;
 pub mod color;
+mod final_integration;
 mod janitor;
 pub mod rc_astro;
 mod resume;
@@ -47,14 +48,14 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-pub const SEIZA_STACKING_VERSION: &str = "0.2.2";
+pub const SEIZA_STACKING_VERSION: &str = seiza_stacking::VERSION;
 /// Bump whenever stack admission, rendering, or persisted artifact semantics
 /// change. This deliberately versions PSF Guard policy separately from Seiza.
-pub(super) const STACK_PREVIEW_CACHE_VERSION: u32 = 13;
+pub(super) const STACK_PREVIEW_CACHE_VERSION: u32 = 14;
 const MAX_REQUEST_IMAGES: usize = 10_000;
 const MAX_REMEMBERED_JOBS: usize = 64;
 const PREVIEW_MAX_DIMENSION: u32 = 2400;
-const STACK_BYTES_PER_OUTPUT_SAMPLE: u64 = 40;
+const STACK_BYTES_PER_OUTPUT_SAMPLE: u64 = 96;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct StackPreviewRequest {
@@ -458,6 +459,7 @@ fn mono_activity(job: &StackPreviewJob) -> StackActivityEntry {
         Some(group) => match group.phase.as_str() {
             "calibration" => "Building calibration masters".to_string(),
             "rendering" => "Rendering preview".to_string(),
+            phase if phase.starts_with("Rejecting transients:") => phase.to_string(),
             _ => "Registering frames".to_string(),
         },
         None => "Preparing stack".to_string(),
@@ -2156,6 +2158,9 @@ fn run_group(
         .sessions
         .iter()
         .all(|session| session.applied.dark_master.is_none());
+    let cosmetic = (no_dark_master
+        && group.calibration != crate::calibration::CalibrationMode::Off)
+        .then(seiza_stacking::ImpulseFilterOptions::default);
     if no_dark_master && group.calibration != crate::calibration::CalibrationMode::Off {
         let note = "Hot pixels suppressed in each light (no dark master to subtract them)";
         applied_calibration.warning = Some(match applied_calibration.warning.take() {
@@ -2358,9 +2363,7 @@ fn run_group(
                 // dark, the dark does the job with real measurements.
                 let options = StackOptions {
                     normalization: NormalizationMode::Global,
-                    cosmetic: (no_dark_master
-                        && group.calibration != crate::calibration::CalibrationMode::Off)
-                        .then(seiza_stacking::ImpulseFilterOptions::default),
+                    cosmetic,
                     ..StackOptions::default()
                 };
                 // The reference calibrates with its own session's masters;
@@ -2373,8 +2376,8 @@ fn run_group(
                 // degrade to a raw stack, and say so and why. Forced
                 // calibration keeps the hard error.
                 let reference_masters = plan.sessions[plan.assignments[0]].masters.clone();
-                let stacker = match LiveStacker::new(reference_frame, reference_masters, options.clone()) {
-                    Ok(stacker) => stacker,
+                let (stacker, calibration_bypassed) = match LiveStacker::new(reference_frame, reference_masters, options.clone()) {
+                    Ok(stacker) => (stacker, false),
                     Err(error)
                         if group.calibration != crate::calibration::CalibrationMode::On =>
                     {
@@ -2396,12 +2399,12 @@ fn run_group(
                         let reference_frame =
                             crate::image_io::open_linear_frame(&group.frames[0].path)
                                 .map_err(|error| error.to_string())?;
-                        LiveStacker::new(
+                        (LiveStacker::new(
                             reference_frame,
                             seiza_stacking::CalibrationMasters::default(),
                             options,
                         )
-                        .map_err(|error| error.to_string())?
+                        .map_err(|error| error.to_string())?, true)
                     }
                     Err(error) => return Err(error.to_string()),
                 };
@@ -2432,6 +2435,7 @@ fn run_group(
                 let ledger = vec![resume::ResumeFrame {
                     decision: reference_decision,
                     exposure_seconds: reference_exposure,
+                    calibration_bypassed,
                     retryable_failure: false,
                     rotation_radians: Some(0.0),
                 }];
@@ -2561,6 +2565,7 @@ fn run_group(
             // stacking this session's frames raw, and the group warning says
             // so and why. Forced calibration keeps the hard error: the user
             // explicitly asked for these masters.
+            let mut calibration_bypassed = false;
             if let Err(error) = stacker.set_calibration(plan.sessions[session].masters.clone()) {
                 if group.calibration == crate::calibration::CalibrationMode::On {
                     return Err(error.to_string());
@@ -2571,6 +2576,7 @@ fn run_group(
                 stacker
                     .set_calibration(seiza_stacking::CalibrationMasters::default())
                     .map_err(|error| error.to_string())?;
+                calibration_bypassed = true;
                 let note = format!(
                     "Session {} stacked uncalibrated: its masters were refused — {error}",
                     session + 1
@@ -2632,6 +2638,7 @@ fn run_group(
                     ledger.push(resume::ResumeFrame {
                         decision: decision.clone(),
                         exposure_seconds: exposure,
+                        calibration_bypassed,
                         retryable_failure,
                         rotation_radians: if decision.disposition == "accepted" {
                             decision
@@ -2737,17 +2744,59 @@ fn run_group(
         if cancel.load(Ordering::Relaxed) {
             return Ok(GroupOutcome::Cancelled);
         }
-        // Only a north-up build has a solve and a reprojection worth naming;
-        // keeping the reference frame's rotation goes straight to rendering.
+        let reference_headers = stacker.reference_headers().to_vec();
+        let snapshot = stacker.into_snapshot().map_err(|error| error.to_string())?;
+        let accepted_frames = snapshot.accepted_frames;
+        let rejected_frames = snapshot.rejected_frames;
+        let integrated = if accepted_frames >= 3 {
+            // The online checkpoint remains useful for admission and the depth
+            // curve. Release its buffers before revisiting early transients.
+            drop(snapshot);
+            tracing::info!(job_id, group_index = group.index, accepted_frames, "Starting final transient rejection");
+            let result = final_integration::integrate(
+                &group, &ledger, &plan, cosmetic, cancel,
+                |pass, index, count| {
+                    let pass = match pass {
+                        seiza_stacking::BatchStackPass::Estimate => 1,
+                        seiza_stacking::BatchStackPass::Integrate => 2,
+                    };
+                    state.stack_previews.update(job_id, |job| {
+                        job.groups[group.index].phase = format!(
+                            "Rejecting transients: pass {pass}/2, frame {}/{count}", index + 1
+                        );
+                    });
+                },
+            );
+            let result = match result {
+                Ok(result) => result,
+                Err(seiza_stacking::Error::Cancelled) => return Ok(GroupOutcome::Cancelled),
+                Err(error) => return Err(format!("Final transient rejection failed: {error}")),
+            };
+            let mut diagnostics = result.frames.iter();
+            state.stack_previews.update(job_id, |job| {
+                for frame in &mut job.groups[group.index].frames {
+                    if matches!(frame.disposition.as_str(), "reference" | "accepted")
+                        && let Some(diagnostic) = diagnostics.next()
+                    {
+                        frame.integrated_fraction = Some(diagnostic.integrated_samples as f32
+                            / result.snapshot.image.sample_count() as f32);
+                    }
+                }
+            });
+            let rejected_samples: u64 = result.snapshot.rejected_samples.iter().map(|&count| u64::from(count)).sum();
+            tracing::info!(job_id, group_index = group.index, rejected_samples, "Final transient rejection completed");
+            result.snapshot.image
+        } else {
+            snapshot.image
+        };
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(GroupOutcome::Cancelled);
+        }
         if north_up {
             state.stack_previews.update(job_id, |job| {
                 job.groups[group.index].phase = "orienting".into();
             });
         }
-        let reference_headers = stacker.reference_headers().to_vec();
-        let snapshot = stacker.into_snapshot().map_err(|error| error.to_string())?;
-        let accepted_frames = snapshot.accepted_frames;
-        let rejected_frames = snapshot.rejected_frames;
         // Registration already absorbs a meridian flip, so a stack is published
         // in the reference frame's own rotation unless the caller asks for the
         // shared north-up grid that a mosaic needs. The one correction it still
@@ -2757,13 +2806,13 @@ fn run_group(
             let (source_wcs, orientation_source) =
                 resolve_stack_wcs(state, &ctx, &group.frames[0], &reference_headers)?;
             let orientation = seiza_stacking::SkyOrientationPlan::new(
-                snapshot.image.width,
-                snapshot.image.height,
+                integrated.width,
+                integrated.height,
                 &source_wcs,
             )
             .map_err(|error| error.to_string())?;
             let oriented = orientation
-                .apply(&snapshot.image)
+                .apply(&integrated)
                 .map_err(|error| error.to_string())?;
             let record = StackSkyOrientation {
                 convention: seiza_stacking::SKY_ORIENTATION_NAME.into(),
@@ -2786,16 +2835,16 @@ fn run_group(
                     "in the reference frame's rotation"
                 }
             );
-            let (width, height) = (snapshot.image.width, snapshot.image.height);
+            let (width, height) = (integrated.width, integrated.height);
             if turn {
                 (
-                    half_turn(snapshot.image),
+                    half_turn(integrated),
                     StackSkyOrientation::source_frame_half_turn(width, height, decided_by),
                     Vec::new(),
                 )
             } else {
                 (
-                    snapshot.image,
+                    integrated,
                     StackSkyOrientation::source_frame(width, height, decided_by),
                     Vec::new(),
                 )

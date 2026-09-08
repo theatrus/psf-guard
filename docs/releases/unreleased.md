@@ -18,6 +18,10 @@
 
 ## Fixed
 
+- Completed stacks revisit early admitted samples to reject bright transient
+  trails, with pass/frame progress and consistent results after resuming a
+  build. Low-coverage pixels and overlapping trails can still retain artifacts.
+
 - Applied stack processing survives reloads, restoring the cached result,
   RC-Astro versions, and editor settings. Reverting also survives reloads.
 
