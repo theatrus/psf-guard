@@ -25,6 +25,11 @@ host = "0.0.0.0"
 # Enable CORS (default: true)
 cors = true
 
+# Keep a rejected remote image upload's staged file in the receive directory
+# so what the client sent can be examined (default: false). The log names the
+# file. Off, a failed upload leaves nothing behind.
+# keep_failed_uploads = false
+
 # Optional browser session policy. Managed users live in auth.json and can be
 # added with:
 #   psf-guard users add editor --role read-write

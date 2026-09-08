@@ -80,6 +80,8 @@ pub struct ServerConfig {
     pub preview_encoding: crate::preview_format::PreviewEncoding,
     /// Whether previews default to colour.
     pub preview_color_default: bool,
+    /// Keep a failed remote upload's staging file for inspection.
+    pub keep_failed_uploads: bool,
     /// Process-global Seiza catalog configuration from the shared registry.
     pub astrometry_config: Option<crate::astrometry::AstrometryConfig>,
 }
@@ -100,6 +102,7 @@ pub async fn run_server(
     worker_policy: crate::concurrency::WorkerPolicy,
     preview_encoding: crate::preview_format::PreviewEncoding,
     preview_color_default: bool,
+    keep_failed_uploads: bool,
     astrometry_config: Option<crate::astrometry::AstrometryConfig>,
 ) -> anyhow::Result<()> {
     // Initialize tracing with environment-based filtering (for CLI mode)
@@ -130,6 +133,7 @@ pub async fn run_server(
         worker_policy,
         preview_encoding,
         preview_color_default,
+        keep_failed_uploads,
         astrometry_config,
     };
 
@@ -237,6 +241,13 @@ async fn run_server_internal(
             state.set_worker_policy(config.worker_policy);
             state.set_preview_encoding(config.preview_encoding);
             state.set_preview_color_default(config.preview_color_default);
+            remote_upload::configure_keep_failed_uploads(config.keep_failed_uploads);
+            if config.keep_failed_uploads {
+                tracing::info!(
+                    "🧪 keep_failed_uploads is on: a failed remote upload leaves its staged file \
+                     in the receive directory for inspection"
+                );
+            }
             if let Some(banner) = &config.site_banner {
                 tracing::info!("📢 Site banner enabled: {}", banner.title);
             }

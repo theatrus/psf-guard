@@ -294,6 +294,7 @@ async fn start_server_for_tauri(
         // keeps the exact rendition.
         preview_encoding: crate::preview_format::PreviewEncoding::png(),
         preview_color_default: true,
+        keep_failed_uploads: false,
         astrometry_config,
     };
 
