@@ -176,12 +176,16 @@ keeps its name and framing. Its exposures and the source target's exposures
 share one target after the merge. The emptied source target is removed; its
 project remains.
 
+![Target merge preview in Overview](target-merge.png)
+
 To split a target, select exposures from that target in Grid and choose
 **Move exposures**. The destination can be an existing target, a new target in
 an existing project, or a new project and target. **Preview move** shows the
 destination and affected exposure counts before **Apply move** writes them.
 Afterward, Grid opens the destination. Select exposures from one source target
 at a time; a selection spanning targets must be moved separately.
+
+![Exposure move preview on a phone](exposure-move-phone.png)
 
 Organization stays within one database and one Target Scheduler profile.
 These controls require an editor account and database management to be enabled

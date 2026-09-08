@@ -88,6 +88,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const { advanceOnGrade } = useDisplayPreferences();
   const [lastSelectedImageId, setLastSelectedImageId] = useState<number | null>(null);
   const [organizationScope, setOrganizationScope] = useState<OrganizationScope | null>(null);
+  const gridScopeKey = JSON.stringify([dbId, projectId, targetId]);
+  const organizationNavigationFromRef = useRef<string | null>(null);
   const { data: serverInfo } = useQuery({
     queryKey: ['serverInfo'],
     queryFn: apiClient.getServerInfo,
@@ -352,6 +354,10 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   // Keep the cursor on an image ID. Group positions can move when new images
   // arrive or the grouping mode changes.
   useEffect(() => {
+    // A post-move source refresh must not overwrite navigation to the destination
+    // while the router is still committing that transition.
+    if (organizationScope || organizationNavigationFromRef.current === gridScopeKey) return;
+    organizationNavigationFromRef.current = null;
     if (selectionAnchorIdRef.current === null && activeImageId !== null) {
       selectionAnchorIdRef.current = activeImageId;
       const base = new Set(selectedImages);
@@ -366,7 +372,9 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     }
   }, [
     activeImageId,
+    gridScopeKey,
     lastSelectedImageId,
+    organizationScope,
     selectedImages,
     setCurrentImageId,
     urlCurrentImageId,
@@ -1111,6 +1119,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
           scope={organizationScope}
           onClose={() => setOrganizationScope(null)}
           onApplied={result => {
+            organizationNavigationFromRef.current = gridScopeKey;
             const params = new URLSearchParams({
               db: organizationScope.dbId,
               project: String(result.project_id),

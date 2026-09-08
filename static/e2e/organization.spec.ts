@@ -87,14 +87,26 @@ async function captureDialog(page: Page, dialog: Locator, testInfo: TestInfo, na
     return {
       left: bounds.left,
       right: bounds.right,
+      top: bounds.top,
+      bottom: bounds.bottom,
       width: window.innerWidth,
+      height: window.innerHeight,
       scrollWidth: element.scrollWidth,
       clientWidth: element.clientWidth,
     };
   });
   expect(layout.left).toBeGreaterThanOrEqual(0);
   expect(layout.right).toBeLessThanOrEqual(layout.width + 1);
+  expect(layout.top).toBeGreaterThanOrEqual(0);
+  expect(layout.bottom).toBeLessThanOrEqual(layout.height + 1);
   expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+  const note = dialog.locator('.organization-note');
+  await note.scrollIntoViewIfNeeded();
+  const noteBounds = await note.boundingBox();
+  const footerBounds = await dialog.locator('.dialog-footer').boundingBox();
+  expect(noteBounds).not.toBeNull();
+  expect(footerBounds).not.toBeNull();
+  expect(noteBounds!.y + noteBounds!.height).toBeLessThanOrEqual(footerBounds!.y + 1);
 }
 
 test.beforeEach(async ({ request }, testInfo) => {
