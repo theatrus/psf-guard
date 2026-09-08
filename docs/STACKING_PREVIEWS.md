@@ -678,8 +678,7 @@ identity, linear, asinh, percentile-asinh, MTF, GHS, and Auto-MTF stages.
 **Apply processing stack** starts a new cached color job; **Revert edits**
 returns to the last rendered pipeline and **Reset defaults** restores additive
 background extraction, deconvolution and RC-Astro off, one Auto-MTF stage per
-input, and no
-post-composition stage.
+input, and no post-composition stage.
 
 Each color input offers the same BlurXTerminator, NoiseXTerminator, and
 StarXTerminator controls as mono view processing. Tools run before that
@@ -688,6 +687,8 @@ retains each tool's CLI/model version and the requested parameters. Processed
 input FITS downloads remain available; star removal preserves a separate
 stars FITS as well as the starless channel used for composition. Named color
 setups include these tool steps.
+
+![RC-Astro tools configured on a linear red input before its display stretch](stack-rc-astro-color-desktop.png)
 
 Every intermediate remains `f32`, and each automatic stage resolves against
 the preceding stage's output. These are sequential transfer passes, not pixel
