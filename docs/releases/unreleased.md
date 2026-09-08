@@ -9,3 +9,7 @@
 ## Changed
 
 ## Fixed
+
+- PixInsight master bias files with a blank `FILTER` header now work during
+  stacking. The cached master preserves the undefined value without requiring
+  edits to the original FITS or XISF file.
