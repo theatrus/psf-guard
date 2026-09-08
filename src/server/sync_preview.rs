@@ -615,6 +615,7 @@ mod tests {
             grades: Some(SchedulerSyncGradeCounts::default()),
             grade_filled: 0,
             grade_preserved: 0,
+            adopted: 0,
             imagedata_bytes: 0,
             total_inserted: 0,
             total_updated: 0,

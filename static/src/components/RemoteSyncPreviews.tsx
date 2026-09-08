@@ -110,6 +110,9 @@ export default function RemoteSyncPreviews({
                 <td>{entry.source}</td>
                 <td>
                   {entry.result.total_inserted} new · {entry.result.total_updated} updated
+                  {(entry.result.adopted ?? 0) > 0
+                    ? ` · ${entry.result.adopted} local rows adopted`
+                    : ''}
                   {entry.result.grades
                     ? ` · ${entry.result.grade_filled + entry.result.grade_preserved} grades`
                     : ''}

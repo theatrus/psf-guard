@@ -1504,6 +1504,7 @@ pub(crate) fn result_summary(result: &SchedulerSyncResponse) -> BTreeMap<String,
         ("total_updated".into(), result.total_updated as i64),
         ("grade_filled".into(), result.grade_filled as i64),
         ("grade_preserved".into(), result.grade_preserved as i64),
+        ("adopted".into(), result.adopted as i64),
         ("imagedata_bytes".into(), result.imagedata_bytes as i64),
     ]);
     for (name, counts) in [
