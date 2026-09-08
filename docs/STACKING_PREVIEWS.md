@@ -71,6 +71,45 @@ building again continues where the stop landed instead of starting over.
 Checkpoints live in the project cache and cost one full-frame state file per
 target/channel.
 
+### Frame preparation and worker budgets
+
+Within one channel, upcoming frames can be read, calibrated, debayered,
+registered, and normalized while earlier frames are integrated. A coordinator
+outside Rayon submits CPU preparation and integration to the group's explicit
+compute pool. Integration remains in source order, including frame decisions,
+calibration-session boundaries, signal-to-noise measurements, and checkpoints.
+
+The existing interactive worker allowance is split between bounded read/decode
+workers and the compute pool, reserving at most two reader slots. A one-worker
+allowance keeps the sequential path. Calibration setup, initialization, depth
+measurements, checkpoints, and final processing use the full allowance after
+readers have drained; those stages never run concurrently with preparation.
+The memory plan reserves stack buffers, every session's resident masters, and
+the active-master replacement peak before allowing queued frames. If even one
+preparation worker cannot fit but known RAM supports the serial-processing
+estimate, the build processes one frame at a time with the full compute pool
+and logs the memory fallback. If serial processing cannot fit either, the build
+reports that clearly.
+Admission reserves 40 bytes per output sample before budgeting preparation.
+Initialization, checkpoints, and final rejection have a separate 96-byte
+per-sample estimate because their peaks do not overlap the preparation queue.
+Both checks include the resident masters and two copies of the largest active
+master set. If available RAM cannot be queried, preparation gets a bounded
+1 GiB allowance, but the serial-processing peak cannot be checked.
+An unknown-RAM build that cannot fit one preparation worker in that allowance
+fails instead of silently starting an unbounded serial job. The intentional
+one-CPU serial path applies the same allowance to its single-frame workspace.
+These are reference-sized estimates, not a hard process-memory limit: larger
+source frames, decoder scratch buffers, and other activity can need more RAM.
+Separate channels and queued stack jobs still run one at a time.
+
+Logs report the configured worker split, estimated memory, actual pipeline mode
+and worker count, and batch elapsed time. Batch timing also separates read/decode,
+CPU preparation, integration, and coordinator waits. Worker-time sums overlap
+and can exceed elapsed time; they must not be added together as a wall-clock
+total. Final transient rejection still replays frames sequentially within the
+compute pool. No extra full-frame pre-measurement pass is required.
+
 ### Cache housekeeping
 
 Stack artifacts are content-addressed by job, so every rebuild writes a new
