@@ -25,7 +25,7 @@ use crate::server::api::ApiResponse;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-pub(super) const RC_ASTRO_CACHE_VERSION: u32 = 2;
+pub(super) const RC_ASTRO_CACHE_VERSION: u32 = 3;
 
 /// The order steps run when several are enabled: sharpen the linear data,
 /// denoise it, then separate the stars.
@@ -410,6 +410,39 @@ pub(super) fn rc_astro_stars_path(cache_root: &FsPath, rc_astro_id: &str) -> Pat
     rc_astro_dir(cache_root, rc_astro_id).join("stars.fits")
 }
 
+#[derive(Default, Deserialize)]
+pub struct RcAstroDownloadQuery {
+    #[serde(default)]
+    stars: bool,
+}
+
+pub async fn download_rc_astro_fits(
+    ctx: crate::server::extract::DbContext,
+    axum::extract::Path((_db_id, id)): axum::extract::Path<(String, String)>,
+    axum::extract::Query(query): axum::extract::Query<RcAstroDownloadQuery>,
+) -> Result<axum::response::Response, AppError> {
+    super::validate_job_id(&id)?;
+    let cached = std::fs::read(rc_astro_manifest_path(&ctx.cache_dir_path, &id))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<CachedRcAstro>(&bytes).ok())
+        .filter(|manifest| {
+            manifest.rc_astro_id == id && (!query.stars || manifest.result.has_stars)
+        })
+        .ok_or(AppError::NotFound)?;
+    let path = if query.stars {
+        rc_astro_stars_path(&ctx.cache_dir_path, &cached.rc_astro_id)
+    } else {
+        rc_astro_fits_path(&ctx.cache_dir_path, &cached.rc_astro_id)
+    };
+    let label = if query.stars { "stars" } else { "processed" };
+    super::color::stream_artifact(
+        path,
+        "application/fits",
+        Some(format!("psf-guard-{label}-{}.fits", &id[..12])),
+    )
+    .await
+}
+
 pub(super) struct RcAstroOutcome {
     /// The processed linear image — the starless one when stars were
     /// removed.
@@ -483,18 +516,20 @@ fn persist_prefix(
         TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     );
     let temporary = fits.with_extension(format!("{unique}.tmp.fits"));
-    write_processed_image_fits_f32(&temporary, image, reference_headers, &rc_astro_cards())
+    let mut cards = rc_astro_cards();
+    cards.extend(
+        reference_headers
+            .iter()
+            .filter(|(key, _)| matches!(key.as_str(), "STACKCNT" | "STACKREJ" | "NCOMBINE"))
+            .map(|(key, value)| seiza_fits::WriteHeaderCard::new(key, value.clone())),
+    );
+    write_processed_image_fits_f32(&temporary, image, reference_headers, &cards)
         .map_err(|error| error.to_string())?;
     std::fs::rename(&temporary, &fits).map_err(|error| error.to_string())?;
     if let Some(stars_image) = stars {
         let temporary = stars_fits.with_extension(format!("{unique}.tmp.fits"));
-        write_processed_image_fits_f32(
-            &temporary,
-            stars_image,
-            reference_headers,
-            &rc_astro_cards(),
-        )
-        .map_err(|error| error.to_string())?;
+        write_processed_image_fits_f32(&temporary, stars_image, reference_headers, &cards)
+            .map_err(|error| error.to_string())?;
         std::fs::rename(&temporary, &stars_fits).map_err(|error| error.to_string())?;
     }
     super::stretch::write_json_atomic(
@@ -522,6 +557,40 @@ pub(super) fn apply_rc_astro(
     image: &LinearImage,
     reference_headers: &[(String, seiza_fits::HeaderValue)],
     on_progress: &mut dyn FnMut(&str, f32),
+) -> Result<RcAstroOutcome, String> {
+    apply_rc_astro_with_runner(
+        cache_root,
+        chain_ids,
+        config,
+        schemas,
+        image,
+        reference_headers,
+        on_progress,
+        &mut |schema, request, input, headers, progress| {
+            cli()
+                .ok_or_else(|| "rc-astro is not installed on this server".to_string())?
+                .process_image(schema, request, input, headers, None, progress)
+                .map_err(|error| error.to_string())
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_rc_astro_with_runner(
+    cache_root: &FsPath,
+    chain_ids: &[String],
+    config: &RcAstroProcessing,
+    schemas: &[(String, ExternalToolSchema)],
+    image: &LinearImage,
+    reference_headers: &[(String, seiza_fits::HeaderValue)],
+    on_progress: &mut dyn FnMut(&str, f32),
+    run: &mut impl FnMut(
+        &ExternalToolSchema,
+        &ExternalToolRequest,
+        &LinearImage,
+        &[(String, seiza_fits::HeaderValue)],
+        &mut dyn FnMut(f32),
+    ) -> Result<seiza_stacking::ProcessedStackImage, String>,
 ) -> Result<RcAstroOutcome, String> {
     let ordered = config.ordered();
     if chain_ids.len() != ordered.len() {
@@ -570,7 +639,6 @@ pub(super) fn apply_rc_astro(
         }
     }
 
-    let cli = cli().ok_or_else(|| "rc-astro is not installed on this server".to_string())?;
     let total_steps = ordered.len().max(1);
     for (index, step) in ordered.iter().enumerate().skip(resume_at) {
         let (_, schema) = schemas
@@ -601,16 +669,33 @@ pub(super) fn apply_rc_astro(
         let mut step_progress = |fraction: f32| {
             on_progress(&schema.name, (index as f32 + fraction) / total_steps as f32)
         };
-        let processed = cli
-            .process_image(
-                schema,
-                &request,
-                &current,
-                reference_headers,
-                None,
-                &mut step_progress,
-            )
-            .map_err(|error| error.to_string())?;
+        // Neural tools require finite inputs. Padding must never become sky
+        // coverage when a registered border comes back from the external tool.
+        let mut padded = current.clone();
+        if current.data.iter().any(|sample| !sample.is_finite()) {
+            let statistics =
+                seiza_stretch::StretchAnalysis::analyze(&current.data, current.channels, 200_000)
+                    .map_err(|error| error.to_string())?
+                    .channel_statistics();
+            for (index, sample) in padded.data.iter_mut().enumerate() {
+                if !sample.is_finite() {
+                    *sample = statistics[index % current.channels]
+                        .ok_or_else(|| "RC-Astro channel has no finite input pixels".to_string())?
+                        .median as f32;
+                }
+            }
+        }
+        let mut processed = run(
+            schema,
+            &request,
+            &padded,
+            reference_headers,
+            &mut step_progress,
+        )?;
+        restore_coverage(&current, &mut processed.image)?;
+        if let Some(stars) = &mut processed.stars {
+            restore_coverage(&current, stars)?;
+        }
         if let Some(step_stars) = processed.stars {
             stars = Some(step_stars);
         }
@@ -655,6 +740,21 @@ pub(super) fn apply_rc_astro(
     })
 }
 
+fn restore_coverage(input: &LinearImage, output: &mut LinearImage) -> Result<(), String> {
+    if (input.width, input.height, input.channels) != (output.width, output.height, output.channels)
+    {
+        return Err("RC-Astro output geometry does not match the input".into());
+    }
+    for (source, sample) in input.data.iter().zip(&mut output.data) {
+        if !source.is_finite() {
+            *sample = f32::NAN;
+        } else if !sample.is_finite() {
+            return Err("RC-Astro returned a non-finite pixel inside valid input coverage".into());
+        }
+    }
+    Ok(())
+}
+
 /// A chain result whose manifest has gone untouched this long is abandoned:
 /// nobody re-applied those settings for two weeks. A reuse refreshes the
 /// manifest's mtime, so live variants survive.
@@ -663,11 +763,16 @@ const RC_ASTRO_RETENTION: std::time::Duration = std::time::Duration::from_secs(1
 /// Sweep abandoned chain results and orphaned temp files. Each entry can be
 /// hundreds of megabytes (processed plus stars FITS), and version bumps
 /// deliberately mint new identities, so the directory grows without this.
-pub(super) fn prune_rc_astro_cache(cache_root: &FsPath) {
+pub(super) fn prune_rc_astro_cache(
+    cache_root: &FsPath,
+    active_sources: &std::collections::HashMap<String, String>,
+) {
     let root = cache_root.join("stack-previews").join("rc-astro");
     let Ok(entries) = std::fs::read_dir(&root) else {
         return;
     };
+    let mut retained = super::stretch::selected_rc_astro_ids(cache_root, active_sources);
+    retained.extend(super::color::latest_color_rc_astro_ids(cache_root));
     let stale = |path: &std::path::Path, retention: std::time::Duration| {
         std::fs::metadata(path)
             .and_then(|metadata| metadata.modified())
@@ -678,6 +783,13 @@ pub(super) fn prune_rc_astro_cache(cache_root: &FsPath) {
     for entry in entries.flatten() {
         let directory = entry.path();
         if !directory.is_dir() {
+            continue;
+        }
+        if directory
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|id| retained.contains(id))
+        {
             continue;
         }
         let manifest = directory.join("manifest.json");
@@ -712,6 +824,92 @@ fn rc_astro_cards() -> Vec<seiza_fits::WriteHeaderCard> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_chain_preserves_coverage_stars_and_metadata_on_cache_hit() {
+        let cache = tempfile::tempdir().unwrap();
+        let config = RcAstroProcessing {
+            steps: vec![step("sxt")],
+        };
+        let schemas = vec![("sxt".into(), schema("sxt", "2.6.6", 11))];
+        let ids = rc_astro_chain_ids("db", "color-input:red", "revision", &config, &schemas, None)
+            .unwrap();
+        let source =
+            LinearImage::new(3, 2, 1, vec![f32::NAN, 10.0, 20.0, 10.0, 20.0, f32::NAN]).unwrap();
+        let mut runs = 0;
+        let mut runner = |_schema: &ExternalToolSchema,
+                          _request: &ExternalToolRequest,
+                          input: &LinearImage,
+                          _headers: &[(String, seiza_fits::HeaderValue)],
+                          progress: &mut dyn FnMut(f32)| {
+            runs += 1;
+            assert!(input.data.iter().all(|sample| sample.is_finite()));
+            assert!((10.0..=20.0).contains(&input.data[0]));
+            progress(1.0);
+            let mut starless = input.clone();
+            for sample in &mut starless.data {
+                *sample *= 0.75;
+            }
+            let mut stars = input.clone();
+            for sample in &mut stars.data {
+                *sample *= 0.25;
+            }
+            Ok(seiza_stacking::ProcessedStackImage {
+                image: starless,
+                stars: Some(stars),
+                device: Some("test-cpu".into()),
+                warnings: vec!["fixture".into()],
+            })
+        };
+        let first = apply_rc_astro_with_runner(
+            cache.path(),
+            &ids,
+            &config,
+            &schemas,
+            &source,
+            &[],
+            &mut |_, _| {},
+            &mut runner,
+        )
+        .unwrap();
+        let second = apply_rc_astro_with_runner(
+            cache.path(),
+            &ids,
+            &config,
+            &schemas,
+            &source,
+            &[],
+            &mut |_, _| {},
+            &mut runner,
+        )
+        .unwrap();
+        assert_eq!(runs, 1, "cache hit must not invoke an external executable");
+        for outcome in [first, second] {
+            assert_eq!(outcome.result.cli_version, "2.6.6");
+            assert_eq!(outcome.result.steps[0].ml_version, Some(11));
+            assert_eq!(outcome.result.steps[0].device.as_deref(), Some("test-cpu"));
+            let stars = outcome.stars.unwrap();
+            for (index, original) in source.data.iter().enumerate() {
+                if original.is_finite() {
+                    assert!(
+                        (outcome.image.data[index] + stars.data[index] - original).abs() < 1.0e-5
+                    );
+                } else {
+                    assert!(outcome.image.data[index].is_nan());
+                    assert!(stars.data[index].is_nan());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn non_finite_tool_output_inside_valid_coverage_is_an_error() {
+        let source = LinearImage::new(2, 1, 1, vec![10.0, f32::NAN]).unwrap();
+        let mut invalid = LinearImage::new(2, 1, 1, vec![f32::NAN, 0.0]).unwrap();
+        assert!(restore_coverage(&source, &mut invalid)
+            .unwrap_err()
+            .contains("non-finite"));
+    }
 
     fn step(tool: &str) -> RcAstroStep {
         RcAstroStep {

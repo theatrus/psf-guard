@@ -78,15 +78,19 @@ fn canonical_settings(
         >(settings)
         .map_err(|error| bad_settings(kind, &error))
         .and_then(|parsed| {
+            if let Some(config) = &parsed.rc_astro {
+                config.validate().map_err(AppError::BadRequest)?;
+            }
             serde_json::to_value(parsed).map_err(|error| bad_settings(kind, &error))
         })?,
         ProcessingSetupKind::Color => {
             // Every pipeline field is optional, so a foreign object would
             // otherwise parse as an empty pipeline and save silently. A
             // non-empty object must mention at least one pipeline field.
-            const COLOR_KEYS: [&str; 4] = [
+            const COLOR_KEYS: [&str; 5] = [
                 "background_extraction",
                 "input_deconvolutions",
+                "input_rc_astro",
                 "input_stretches",
                 "output_stretches",
             ];
@@ -96,7 +100,7 @@ fn canonical_settings(
             {
                 return Err(AppError::BadRequest(
                         "These settings do not describe color processing: no pipeline field is present \
-                         (background_extraction, input_deconvolutions, input_stretches, \
+                         (background_extraction, input_deconvolutions, input_rc_astro, input_stretches, \
                          output_stretches)"
                             .into(),
                     ));
@@ -106,6 +110,9 @@ fn canonical_settings(
             )
             .map_err(|error| bad_settings(kind, &error))
             .and_then(|parsed| {
+                for config in parsed.input_rc_astro.values() {
+                    config.validate().map_err(AppError::BadRequest)?;
+                }
                 serde_json::to_value(parsed).map_err(|error| bad_settings(kind, &error))
             })?
         }
@@ -269,6 +276,39 @@ pub async fn import_setups(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setups_keep_rc_astro_steps_without_requiring_installed_tools() {
+        let chain = serde_json::json!({"steps": [{"tool": "bxt", "parameters": {"sharpen": 0.4}}, {"tool": "sxt"}]});
+        let view = canonical_settings(
+            ProcessingSetupKind::View,
+            serde_json::json!({"model": {"type": "identity"}, "rc_astro": chain}),
+        )
+        .unwrap();
+        assert_eq!(view["rc_astro"]["steps"][0]["parameters"]["sharpen"], 0.4);
+        let color = canonical_settings(
+            ProcessingSetupKind::Color,
+            serde_json::json!({"input_rc_astro": {"red": chain}}),
+        )
+        .unwrap();
+        assert_eq!(color["input_rc_astro"]["red"]["steps"][1]["tool"], "sxt");
+        for chain in [
+            serde_json::json!({"steps": []}),
+            serde_json::json!({"steps": [{"tool":"invalid"}]}),
+            serde_json::json!({"steps": [{"tool":"bxt"},{"tool":"bxt"}]}),
+        ] {
+            assert!(canonical_settings(
+                ProcessingSetupKind::View,
+                serde_json::json!({"model": {"type": "identity"}, "rc_astro": chain})
+            )
+            .is_err());
+            assert!(canonical_settings(
+                ProcessingSetupKind::Color,
+                serde_json::json!({"input_rc_astro": {"red": chain}})
+            )
+            .is_err());
+        }
+    }
 
     #[test]
     fn view_settings_validate_against_the_stretch_request_type() {

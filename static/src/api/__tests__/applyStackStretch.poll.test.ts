@@ -30,11 +30,26 @@ const ready = {
 };
 
 describe('applyStackStretch polling', () => {
+  it('stops detached-job polling when its viewer unmounts', async () => {
+    let calls = 0;
+    const controller = new AbortController();
+    server.use(http.post(`/api/db/test/stack-previews/${jobId}/0/stretch`, () => {
+      calls += 1;
+      return HttpResponse.json({ success: true, data: { pending: true }, error: null }, { status: 202 });
+    }));
+    await expect(apiClient.applyStackStretch('test', jobId, 0,
+      { model: { type: 'identity' }, color_strategy: 'linked' },
+      { signal: controller.signal, pollIntervalMs: 5, onProgress: () => controller.abort() }
+    )).rejects.toThrow();
+    expect(calls).toBe(1);
+  });
   it('polls 202 answers, reporting their progress, until the result is ready', async () => {
     let calls = 0;
+    const pollFlags: Array<string | null> = [];
     server.use(
-      http.post(`/api/db/test/stack-previews/${jobId}/0/stretch`, () => {
+      http.post(`/api/db/test/stack-previews/${jobId}/0/stretch`, ({ request }) => {
         calls += 1;
+        pollFlags.push(new URL(request.url).searchParams.get('poll'));
         if (calls < 3) {
           return HttpResponse.json(
             {
@@ -63,6 +78,7 @@ describe('applyStackStretch polling', () => {
     );
 
     expect(calls).toBe(3);
+    expect(pollFlags).toEqual([null, 'true', 'true']);
     expect(seen.map((progress) => progress.fraction)).toEqual([0.25, 0.5]);
     expect(seen[0].stage).toBe('RC-Astro StarXTerminator');
     expect(preview.stretch_id).toBe('b'.repeat(64));

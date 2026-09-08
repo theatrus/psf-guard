@@ -160,8 +160,77 @@ function seedSyntheticColorStacks(databaseId: string, projectId: number): void {
   );
 }
 
+test('retains RC-Astro color steps in saved setups on desktop and mobile', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  seedSyntheticColorStacks(dbId, 2);
+  await page.route('**/api/tools/rc-astro', (route) => route.fulfill({ json: {
+    success: true,
+    data: {
+      available: true,
+      executable: 'e2e-capabilities-fixture',
+      tools: [{
+        schema_version: 6, cli_version: '2.6.6', key: 'bxt',
+        name: 'RC-Astro BlurXTerminator', ml_version: 4, licensed: true,
+        license_message: 'Test capability fixture',
+        parameters: [{ name: 'ss', flag: '--ss', label: 'Sharpen Stars',
+          description: 'Amount of stellar sharpening',
+          kind: { type: 'float', default: 0.5, min: 0, max: 0.7 } }],
+      }],
+    }, error: null,
+  } }));
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=2`);
+  const card = page.locator('.stack-color-card[data-color-kind="rgb"]');
+  await card.getByRole('button', { name: 'Build RGB color preview' }).click();
+  await expect(card.locator('.stack-preview-progress')).toHaveAttribute(
+    'data-stack-color-state', 'completed', { timeout: 90_000 }
+  );
+  const processing = card.locator('.stack-color-processing');
+  await processing.locator('summary').click();
+  const red = processing.getByRole('region', { name: 'R input stretch stack' });
+  await red.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }).check();
+  await red.getByRole('spinbutton', { name: 'Sharpen Stars' }).fill('0.2');
+  const setups = processing.locator('.processing-setups-bar');
+  await setups.getByRole('button', { name: /Save as/ }).click();
+  await setups.getByRole('textbox', { name: 'New setup name' }).fill('RC color test');
+  await setups.getByRole('button', { name: 'Save current settings', exact: true }).click();
+  await expect(setups.getByRole('combobox', { name: 'Saved color processing setups' })
+    .locator('option', { hasText: 'RC color test' })).toHaveCount(1);
+  const setupsDocument = (await (await page.request.get('/api/processing-setups')).json()).data;
+  const saved = setupsDocument.setups.find((entry: { name: string }) => entry.name === 'RC color test');
+  expect(saved.settings.input_rc_astro.red.steps).toEqual([{ tool: 'bxt', parameters: { ss: 0.2 } }]);
+  await page.reload();
+  await processing.locator('summary').click();
+  await setups.getByRole('combobox', { name: 'Saved color processing setups' })
+    .selectOption({ label: 'RC color test' });
+  await setups.getByRole('button', { name: 'Apply setup' }).click();
+  await expect(red.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' })).toBeChecked();
+  await expect(red.getByRole('spinbutton', { name: 'Sharpen Stars' })).toHaveValue('0.2');
+  const preview = card.locator('.stack-color-image img');
+  await expect.poll(() => preview.evaluate((element) => {
+    const image = element as HTMLImageElement;
+    return image.complete && image.naturalWidth > 0 && image.naturalHeight > 0;
+  })).toBe(true);
+  await red.evaluate((element) => element.scrollIntoView({ block: 'center' }));
+  await red.screenshot({ path: testInfo.outputPath('rc-astro-color-desktop.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(red.getByRole('spinbutton', { name: 'Sharpen Stars' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const mobileTools = red.locator('.stack-rc-astro-controls');
+  await mobileTools.evaluate((element) => element.scrollIntoView({ block: 'center' }));
+  expect(await mobileTools.evaluate((element) => element.scrollWidth <= element.clientWidth + 1))
+    .toBe(true);
+  await mobileTools.screenshot({ path: testInfo.outputPath('rc-astro-color-mobile.png') });
+});
+
 test.beforeEach(async ({ request }) => {
   await resetDatabases(request);
+  // Setups are global and survive a database reset.
+  const setups = (await (await request.get('/api/processing-setups')).json()).data.setups;
+  for (const setup of setups) {
+    const response = await request.delete(`/api/processing-setups/${encodeURIComponent(setup.name)}`);
+    expect(response.ok()).toBe(true);
+  }
   const entry = await registerFixtureDb(request, {
     name: 'Stack Preview e2e',
     slug: 'stack-preview-e2e',
@@ -441,9 +510,24 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
     process.env.PSF_GUARD_E2E_TMP!, 'cache', dbId, 'stack-previews', 'deconvolution'
   );
   expect(fs.readdirSync(deconvolutionRoot)).toHaveLength(1);
+  const persistedProcessingSrc = await preview.getAttribute('src');
+  await page.reload();
+  await expect(preview).toHaveAttribute('src', persistedProcessingSrc!);
+  await stretchControls.locator('summary').click();
+  await expect(stretchControls.getByRole('checkbox', { name: 'Deconvolution' })).toBeChecked();
+  await expect(stretchControls.getByRole('spinbutton', { name: 'Alpha M44 B Target median' }))
+    .toHaveValue('0.3');
+  const selectionUrl = `/api/db/${encodeURIComponent(dbId)}/stack-previews/${jobId}/0/stretch`;
+  const staleRevert = await page.request.delete(`${selectionUrl}?v=old-revision`);
+  expect(staleRevert.status()).toBe(409);
+  expect((await (await page.request.get(selectionUrl)).json()).data.request.deconvolution)
+    .not.toBeNull();
   await stretchControls.getByRole('button', { name: 'Revert processing' }).click();
   await expect(preview).toHaveAttribute('src', defaultPreviewSrc!);
   await expect(stretchControls).toContainText('Deconvolution off');
+  await page.reload();
+  await expect(preview).toHaveAttribute('src', defaultPreviewSrc!);
+  expect((await (await page.request.get(selectionUrl)).json()).data).toBeNull();
 
   const fitsPath = path.join(
     process.env.PSF_GUARD_E2E_TMP!,
@@ -756,7 +840,9 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await expect(rgbCard.locator('.stack-preview-progress')).toContainText('25/25 steps');
   const phaseDetails = rgbCard.locator('.stack-color-phase-details');
   await phaseDetails.locator('summary').click();
-  await expect(phaseDetails.locator('li')).toHaveCount(12);
+  await expect(phaseDetails.locator('li')).toHaveCount(13);
+  await expect(phaseDetails.locator('li[data-phase="rc_astro_inputs"]'))
+    .toHaveAttribute('data-phase-state', 'skipped');
   await expect(phaseDetails.locator('li[data-phase="background_preparation"]'))
     .toHaveAttribute('data-phase-state', 'completed');
   await expect(phaseDetails.locator('li[data-phase="background_preparation"]'))

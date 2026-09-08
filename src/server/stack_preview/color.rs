@@ -262,6 +262,8 @@ pub struct StackColorProcessing {
     /// restore pixels unless the user explicitly enables a role.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub input_deconvolutions: BTreeMap<StackColorRole, seiza_deconvolution::DeconvolutionConfig>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub input_rc_astro: BTreeMap<StackColorRole, super::rc_astro::RcAstroProcessing>,
     /// Ordered display stretches applied independently after registration and
     /// robust normalization of each physical input channel.
     #[serde(default)]
@@ -311,6 +313,7 @@ pub enum StackColorProgressPhase {
     BackgroundPreparation,
     RegisteringSources,
     DeconvolvingInputs,
+    RcAstroInputs,
     NormalizingInputs,
     StretchingInputs,
     ComposingColor,
@@ -418,6 +421,10 @@ pub struct StackColorJob {
     pub resolved_input_deconvolutions:
         BTreeMap<StackColorRole, super::stretch::StackDeconvolutionResult>,
     #[serde(default)]
+    pub resolved_input_rc_astro: BTreeMap<StackColorRole, StackColorRcAstroResult>,
+    #[serde(default)]
+    pub input_rc_astro_ids: BTreeMap<StackColorRole, String>,
+    #[serde(default)]
     pub resolved_output_stretches: Vec<serde_json::Value>,
     #[serde(default)]
     pub resolved_backgrounds: BTreeMap<StackColorRole, BackgroundFit>,
@@ -435,6 +442,14 @@ pub struct StackColorJob {
     pub outdated: bool,
     #[serde(default)]
     pub outdated_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StackColorRcAstroResult {
+    #[serde(flatten)]
+    pub result: super::rc_astro::StackRcAstroResult,
+    pub fits_url: String,
+    pub stars_fits_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -475,6 +490,8 @@ struct CachedColorInputs {
     #[serde(default)]
     background_protection_fallbacks: BTreeMap<StackColorRole, String>,
     resolved_deconvolutions: BTreeMap<StackColorRole, super::stretch::StackDeconvolutionResult>,
+    #[serde(default)]
+    resolved_rc_astro: BTreeMap<StackColorRole, StackColorRcAstroResult>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -497,6 +514,8 @@ struct PreparedColorJob {
     public: StackColorJob,
     cache_root: PathBuf,
     background_regions: BTreeMap<StackColorRole, Vec<ProtectedRegion>>,
+    rc_astro_schemas: BTreeMap<StackColorRole, Vec<(String, seiza_stacking::ExternalToolSchema)>>,
+    rc_astro_chains: BTreeMap<StackColorRole, Vec<String>>,
 }
 
 fn color_progress(
@@ -517,6 +536,9 @@ fn color_progress(
         .unwrap_or(0);
     let deconvolution_units = processing
         .map(|processing| processing.input_deconvolutions.len())
+        .unwrap_or(0);
+    let rc_astro_units = processing
+        .map(|processing| processing.input_rc_astro.len())
         .unwrap_or(0);
     let background_units = if processing
         .and_then(|processing| processing.background_extraction.as_ref())
@@ -546,6 +568,11 @@ fn color_progress(
             StackColorProgressPhase::DeconvolvingInputs,
             "Deconvolving input channels",
             deconvolution_units,
+        ),
+        (
+            StackColorProgressPhase::RcAstroInputs,
+            "Processing input channels with RC-Astro",
+            rc_astro_units,
         ),
         (
             StackColorProgressPhase::NormalizingInputs,
@@ -859,7 +886,7 @@ pub async fn start_stack_color(
         }
         if !request.force
             && existing.state == StackJobState::Completed
-            && color_artifacts_exist(&prepared.cache_root, &existing.job_id)
+            && color_job_artifacts_exist(&prepared.cache_root, &existing)
         {
             let existing = mark_color_reused(existing);
             state
@@ -875,7 +902,7 @@ pub async fn start_stack_color(
         && let Ok(bytes) = std::fs::read(&manifest)
         && let Ok(existing) = serde_json::from_slice::<StackColorJob>(&bytes)
         && existing.state == StackJobState::Completed
-        && color_artifacts_exist(&prepared.cache_root, &existing.job_id)
+        && color_job_artifacts_exist(&prepared.cache_root, &existing)
     {
         let existing = mark_color_reused(existing);
         state
@@ -969,7 +996,7 @@ pub async fn download_stack_color_fits(
     .await
 }
 
-async fn stream_artifact(
+pub(super) async fn stream_artifact(
     path: PathBuf,
     content_type: &'static str,
     filename: Option<String>,
@@ -1060,6 +1087,16 @@ fn validate_request(request: &StackColorRequest) -> Result<(), AppError> {
                     composition_label(request.kind, request.palette)
                 )));
             }
+            for (role, config) in &processing.input_rc_astro {
+                if !required.contains(role) {
+                    return Err(AppError::BadRequest(format!(
+                        "{} is not an input to {}",
+                        role.label(),
+                        composition_label(request.kind, request.palette)
+                    )));
+                }
+                config.validate().map_err(AppError::BadRequest)?;
+            }
             if processing.input_stretches.values().flatten().any(|stage| {
                 stage.color_strategy == seiza_stretch::ColorStrategy::LuminancePreserving
             }) {
@@ -1088,6 +1125,16 @@ fn prepare_color_job(
     project_id: i32,
     request: &StackColorRequest,
 ) -> Result<PreparedColorJob, AppError> {
+    let mut request = request.clone();
+    let mut rc_astro_schemas = BTreeMap::new();
+    if let Some(processing) = &mut request.processing {
+        for (role, config) in &mut processing.input_rc_astro {
+            let schemas = super::rc_astro::schemas_for(config).map_err(AppError::BadRequest)?;
+            *config = super::rc_astro::normalize_against_schemas(config, &schemas)
+                .map_err(AppError::BadRequest)?;
+            rc_astro_schemas.insert(*role, schemas);
+        }
+    }
     let latest = load_latest_stacks(ctx, project_id)?;
     let targets = collect_sources(&ctx.cache_dir_path, &latest);
     let target = targets.get(&request.target_id).ok_or_else(|| {
@@ -1133,7 +1180,7 @@ fn prepare_color_job(
         background_protection_summary.insert(role, protection.summary);
     }
     let label = composition_label(request.kind, request.palette).to_string();
-    let linear_input_id = request
+    let mut linear_input_id = request
         .processing
         .as_ref()
         .map(|processing| {
@@ -1147,6 +1194,16 @@ fn prepare_color_job(
             )
         })
         .transpose()?;
+    // The upstream identity excludes RC-Astro and display stretches, so
+    // changing a later tool or a stretch reuses the matching chain prefix.
+    let mut rc_astro_chains = BTreeMap::new();
+    if let (Some(processing), Some(upstream_id)) = (&request.processing, &linear_input_id) {
+        rc_astro_chains =
+            color_rc_astro_chains(&ctx.id, upstream_id, processing, &rc_astro_schemas)?;
+        if !rc_astro_chains.is_empty() {
+            linear_input_id = Some(rc_astro_input_cache_id(upstream_id, &rc_astro_chains)?);
+        }
+    }
     let mut hasher = Sha256::new();
     hasher.update(ctx.id.as_bytes());
     hasher.update(project_id.to_le_bytes());
@@ -1155,6 +1212,14 @@ fn prepare_color_job(
     hasher.update(STACK_COLOR_CACHE_VERSION.to_le_bytes());
     hasher.update(SEIZA_STACKING_VERSION.as_bytes());
     hasher.update(SEIZA_BACKGROUND_VERSION.as_bytes());
+    if !rc_astro_chains.is_empty() {
+        hasher.update(
+            linear_input_id
+                .as_ref()
+                .expect("RC-Astro requires processed inputs")
+                .as_bytes(),
+        );
+    }
     if request
         .processing
         .as_ref()
@@ -1223,6 +1288,11 @@ fn prepare_color_job(
             processing: request.processing.clone(),
             resolved_input_stretches: BTreeMap::new(),
             resolved_input_deconvolutions: BTreeMap::new(),
+            resolved_input_rc_astro: BTreeMap::new(),
+            input_rc_astro_ids: rc_astro_chains
+                .iter()
+                .filter_map(|(role, chain)| chain.last().map(|id| (*role, id.clone())))
+                .collect(),
             resolved_output_stretches: Vec::new(),
             resolved_backgrounds: BTreeMap::new(),
             resolved_background_protection: background_protection_summary,
@@ -1241,7 +1311,51 @@ fn prepare_color_job(
         },
         cache_root: ctx.cache_dir_path.clone(),
         background_regions,
+        rc_astro_schemas,
+        rc_astro_chains,
     })
+}
+
+fn color_rc_astro_chains(
+    database_id: &str,
+    upstream_id: &str,
+    processing: &StackColorProcessing,
+    schemas: &BTreeMap<StackColorRole, Vec<(String, seiza_stacking::ExternalToolSchema)>>,
+) -> Result<BTreeMap<StackColorRole, Vec<String>>, AppError> {
+    processing
+        .input_rc_astro
+        .iter()
+        .map(|(role, config)| {
+            let schemas = schemas.get(role).ok_or_else(|| {
+                AppError::InternalError("RC-Astro input schemas are missing".into())
+            })?;
+            let chain = super::rc_astro::rc_astro_chain_ids(
+                database_id,
+                &format!("color-input:{upstream_id}:{}", role.label()),
+                upstream_id,
+                config,
+                schemas,
+                None,
+            )?;
+            Ok((*role, chain))
+        })
+        .collect()
+}
+
+fn rc_astro_input_cache_id(
+    upstream_id: &str,
+    chains: &BTreeMap<StackColorRole, Vec<String>>,
+) -> Result<String, AppError> {
+    let mut hasher = Sha256::new();
+    hasher.update(upstream_id.as_bytes());
+    hasher.update(
+        serde_json::to_vec(chains).map_err(|error| AppError::InternalError(error.to_string()))?,
+    );
+    let mut id = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        write!(&mut id, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    Ok(id)
 }
 
 fn color_input_cache_id(
@@ -1486,6 +1600,8 @@ fn run_color_job(state: &Arc<AppState>, prepared: PreparedColorJob) {
             &prepared.public,
             &prepared.background_regions,
             &prepared.cache_root,
+            &prepared.rc_astro_schemas,
+            &prepared.rc_astro_chains,
         )
     }));
     let progress = ColorProgressTracker {
@@ -1611,6 +1727,8 @@ fn compose_color(
     job: &StackColorJob,
     background_regions: &BTreeMap<StackColorRole, Vec<ProtectedRegion>>,
     cache_root: &FsPath,
+    rc_astro_schemas: &BTreeMap<StackColorRole, Vec<(String, seiza_stacking::ExternalToolSchema)>>,
+    rc_astro_chains: &BTreeMap<StackColorRole, Vec<String>>,
 ) -> Result<(), String> {
     let progress = ColorProgressTracker {
         state,
@@ -1627,7 +1745,13 @@ fn compose_color(
         .find(|source| source.role == reference_role)
         .ok_or_else(|| "Color job has no reference channel".to_string())?;
     let cached_inputs = job.linear_input_id.as_deref().and_then(|input_id| {
-        load_cached_color_input_manifest(cache_root, input_id, reference_role, &job.sources)
+        load_cached_color_input_manifest(
+            cache_root,
+            input_id,
+            reference_role,
+            &job.sources,
+            &job.input_rc_astro_ids,
+        )
     });
     let reused_inputs = cached_inputs.is_some();
     let (
@@ -1635,6 +1759,7 @@ fn compose_color(
         mut resolved_backgrounds,
         mut background_protection_fallbacks,
         mut resolved_deconvolutions,
+        mut resolved_rc_astro,
         mut registered_transforms,
     ) = if let Some((manifest, reference)) = cached_inputs {
         state.stack_previews.update_color(&job.job_id, |current| {
@@ -1643,6 +1768,7 @@ fn compose_color(
             current.background_protection_fallbacks =
                 manifest.background_protection_fallbacks.clone();
             current.resolved_input_deconvolutions = manifest.resolved_deconvolutions.clone();
+            current.resolved_input_rc_astro = manifest.resolved_rc_astro.clone();
             for source in &mut current.sources {
                 source.registration_transform =
                     manifest.registered_transforms.get(&source.role).copied();
@@ -1653,6 +1779,7 @@ fn compose_color(
             manifest.resolved_backgrounds,
             manifest.background_protection_fallbacks,
             manifest.resolved_deconvolutions,
+            manifest.resolved_rc_astro,
             manifest.registered_transforms,
         )
     } else {
@@ -1676,6 +1803,7 @@ fn compose_color(
             BTreeMap::new(),
             BTreeMap::new(),
             BTreeMap::new(),
+            BTreeMap::new(),
         )
     };
     registered_transforms
@@ -1692,11 +1820,9 @@ fn compose_color(
     });
     let pixels = reference.image.pixel_count();
     let bytes_per_pixel = COLOR_BYTES_PER_PIXEL
-        + if job
-            .processing
-            .as_ref()
-            .is_some_and(|processing| !processing.input_deconvolutions.is_empty())
-        {
+        + if job.processing.as_ref().is_some_and(|processing| {
+            !processing.input_deconvolutions.is_empty() || !processing.input_rc_astro.is_empty()
+        }) {
             COLOR_DECONVOLUTION_BYTES_PER_PIXEL
         } else {
             0
@@ -1867,6 +1993,11 @@ fn compose_color(
         );
     }
 
+    let mut source_headers = frames
+        .iter()
+        .map(|(role, frame)| (*role, frame.headers.clone()))
+        .collect::<BTreeMap<_, _>>();
+    source_headers.insert(reference_role, reference.headers.clone());
     pool.install(|| {
         let reference_headers = reference.headers;
         let reference_image = reference.image;
@@ -1969,6 +2100,10 @@ fn compose_color(
                     "Reused prepared deconvolution",
                 );
                 progress.reuse(
+                    StackColorProgressPhase::RcAstroInputs,
+                    "Reused RC-Astro input processing",
+                );
+                progress.reuse(
                     StackColorProgressPhase::NormalizingInputs,
                     "Reused normalized input channels",
                 );
@@ -2011,6 +2146,73 @@ fn compose_color(
                     progress.finish(StackColorProgressPhase::DeconvolvingInputs);
                 }
 
+                if processing.input_rc_astro.is_empty() {
+                    progress.skip(
+                        StackColorProgressPhase::RcAstroInputs,
+                        "RC-Astro input processing skipped (disabled)",
+                    );
+                } else {
+                    for source in &job.sources {
+                        let Some(config) = processing.input_rc_astro.get(&source.role) else {
+                            continue;
+                        };
+                        let image = images.get(&source.role).ok_or_else(|| {
+                            format!("{} registered image is missing", source.role.label())
+                        })?;
+                        let chain = rc_astro_chains
+                            .get(&source.role)
+                            .ok_or_else(|| "RC-Astro chain identity is missing".to_string())?;
+                        let schemas = rc_astro_schemas
+                            .get(&source.role)
+                            .ok_or_else(|| "RC-Astro tool schemas are missing".to_string())?;
+                        let headers = registered_channel_headers(
+                            &reference_headers,
+                            &source_headers[&source.role],
+                            &source.filter_name,
+                        );
+                        let outcome = super::rc_astro::apply_rc_astro(
+                            cache_root,
+                            chain,
+                            config,
+                            schemas,
+                            image,
+                            &headers,
+                            &mut |label, fraction| {
+                                let percent = (fraction.clamp(0.0, 1.0) * 100.0).round() as u8;
+                                progress.begin(
+                                    StackColorProgressPhase::RcAstroInputs,
+                                    format!("{}: {label} ({percent}%)", source.role.label()),
+                                    Some(source.role),
+                                    None,
+                                );
+                            },
+                        )?;
+                        let id = chain
+                            .last()
+                            .ok_or_else(|| "RC-Astro chain is empty".to_string())?;
+                        let result = StackColorRcAstroResult {
+                            fits_url: format!(
+                                "/api/db/{}/stack-previews/rc-astro/{id}/fits",
+                                job.database_id
+                            ),
+                            stars_fits_url: outcome.result.has_stars.then(|| {
+                                format!(
+                                    "/api/db/{}/stack-previews/rc-astro/{id}/fits?stars=true",
+                                    job.database_id
+                                )
+                            }),
+                            result: outcome.result,
+                        };
+                        images.insert(source.role, outcome.image);
+                        resolved_rc_astro.insert(source.role, result.clone());
+                        state.stack_previews.update_color(&job.job_id, |current| {
+                            current.resolved_input_rc_astro.insert(source.role, result);
+                        });
+                        progress.advance(StackColorProgressPhase::RcAstroInputs, 1);
+                    }
+                    progress.finish(StackColorProgressPhase::RcAstroInputs);
+                }
+
                 progress.begin(
                     StackColorProgressPhase::NormalizingInputs,
                     "Normalizing input channels",
@@ -2041,6 +2243,7 @@ fn compose_color(
                         resolved_backgrounds: resolved_backgrounds.clone(),
                         background_protection_fallbacks: background_protection_fallbacks.clone(),
                         resolved_deconvolutions: resolved_deconvolutions.clone(),
+                        resolved_rc_astro: resolved_rc_astro.clone(),
                     };
                     store_cached_color_inputs(
                         cache_root,
@@ -2337,6 +2540,53 @@ fn compose_color(
     })
 }
 
+fn registered_channel_headers(
+    reference: &[(String, seiza_fits::HeaderValue)],
+    source: &[(String, seiza_fits::HeaderValue)],
+    filter_name: &str,
+) -> Vec<(String, seiza_fits::HeaderValue)> {
+    // Registered pixels use the reference grid but retain their own channel's
+    // acquisition metadata, never the reference channel's filter or exposure.
+    let wcs_key = |key: &str| {
+        matches!(
+            key,
+            "CRPIX1"
+                | "CRPIX2"
+                | "CRVAL1"
+                | "CRVAL2"
+                | "CTYPE1"
+                | "CTYPE2"
+                | "CUNIT1"
+                | "CUNIT2"
+                | "CDELT1"
+                | "CDELT2"
+                | "CROTA1"
+                | "CROTA2"
+                | "WCSAXES"
+                | "RADESYS"
+                | "EQUINOX"
+                | "LONPOLE"
+                | "LATPOLE"
+                | "SKYORIEN"
+        ) || [
+            "CD1_", "CD2_", "PC1_", "PC2_", "PV1_", "PV2_", "A_", "B_", "AP_", "BP_",
+        ]
+        .iter()
+        .any(|prefix| key.starts_with(prefix))
+    };
+    let mut headers = source
+        .iter()
+        .filter(|(key, _)| !wcs_key(key) && key != "FILTER")
+        .cloned()
+        .collect::<Vec<_>>();
+    headers.extend(reference.iter().filter(|(key, _)| wcs_key(key)).cloned());
+    headers.push((
+        "FILTER".into(),
+        seiza_fits::HeaderValue::String(filter_name.into()),
+    ));
+    headers
+}
+
 fn load_source_frame(cache_root: &FsPath, source: &StackColorSource) -> Result<FitsFrame, String> {
     let frame = crate::image_io::open_linear_frame(super::fits_path(
         cache_root,
@@ -2358,6 +2608,7 @@ fn load_cached_color_input_manifest(
     input_id: &str,
     reference_role: StackColorRole,
     sources: &[StackColorSource],
+    rc_astro_ids: &BTreeMap<StackColorRole, String>,
 ) -> Option<(CachedColorInputs, FitsFrame)> {
     let bytes = std::fs::read(color_input_manifest_path(cache_root, input_id)).ok()?;
     let manifest = serde_json::from_slice::<CachedColorInputs>(&bytes).ok()?;
@@ -2365,6 +2616,7 @@ fn load_cached_color_input_manifest(
     if manifest.schema_version != COLOR_INPUT_CACHE_VERSION
         || manifest.input_id != input_id
         || manifest.roles != roles
+        || !rc_astro_artifacts_exist(cache_root, rc_astro_ids, &manifest.resolved_rc_astro)
     {
         return None;
     }
@@ -2382,6 +2634,30 @@ fn load_cached_color_input_manifest(
     .ok()?;
     validate_mono(&reference.image, reference_role).ok()?;
     Some((manifest, reference))
+}
+
+fn rc_astro_artifacts_exist(
+    cache_root: &FsPath,
+    ids: &BTreeMap<StackColorRole, String>,
+    results: &BTreeMap<StackColorRole, StackColorRcAstroResult>,
+) -> bool {
+    ids.iter().all(|(role, id)| {
+        super::validate_job_id(id).is_ok()
+            && super::rc_astro::rc_astro_fits_path(cache_root, id).is_file()
+            && results.get(role).is_some_and(|result| {
+                !result.result.has_stars
+                    || super::rc_astro::rc_astro_stars_path(cache_root, id).is_file()
+            })
+    })
+}
+
+fn color_job_artifacts_exist(cache_root: &FsPath, job: &StackColorJob) -> bool {
+    color_artifacts_exist(cache_root, &job.job_id)
+        && rc_astro_artifacts_exist(
+            cache_root,
+            &job.input_rc_astro_ids,
+            &job.resolved_input_rc_astro,
+        )
 }
 
 fn store_cached_color_inputs(
@@ -2717,7 +2993,7 @@ fn color_job_outdated_reason(
             return Ok(Some("the plate-solve background protection changed".into()));
         }
     }
-    if !color_artifacts_exist(&ctx.cache_dir_path, &job.job_id) {
+    if !color_job_artifacts_exist(&ctx.cache_dir_path, job) {
         return Ok(Some("a cached color artifact is missing".into()));
     }
     Ok(None)
@@ -2831,6 +3107,16 @@ pub(super) fn latest_color_references(cache_root: &FsPath) -> Vec<(String, Optio
     .collect()
 }
 
+pub(super) fn latest_color_rc_astro_ids(cache_root: &FsPath) -> Vec<String> {
+    super::read_latest_indices::<LatestStackColorPreviews>(
+        &cache_root.join("stack-previews").join("color"),
+    )
+    .into_iter()
+    .flat_map(|latest| latest.jobs)
+    .flat_map(|job| job.input_rc_astro_ids.into_values())
+    .collect()
+}
+
 fn latest_color_path(cache_root: &FsPath, project_id: i32) -> PathBuf {
     cache_root
         .join("stack-previews")
@@ -2844,6 +3130,73 @@ mod tests {
     use crate::server::stack_preview::{
         LatestStackPreviewGroup, StackGroupState, StackGroupStatus, StackSkyOrientation,
     };
+
+    #[test]
+    fn registered_rc_astro_inputs_keep_their_own_filter_and_reference_grid() {
+        use seiza_fits::HeaderValue::{Float, String as Text};
+        let reference = vec![
+            ("FILTER".into(), Text("Ha".into())),
+            ("EXPTIME".into(), Float(300.0)),
+            ("DATE-OBS".into(), Text("2026-01-01".into())),
+            ("CRPIX1".into(), Float(10.0)),
+            ("CRPIX2".into(), Float(20.0)),
+            ("CRVAL1".into(), Float(30.0)),
+            ("CRVAL2".into(), Float(40.0)),
+            ("CTYPE1".into(), Text("RA---TAN".into())),
+            ("CTYPE2".into(), Text("DEC--TAN".into())),
+            ("CD1_1".into(), Float(0.001)),
+        ];
+        let source = vec![
+            ("FILTER".into(), Text("OIII".into())),
+            ("EXPTIME".into(), Float(600.0)),
+            ("DATE-OBS".into(), Text("2026-01-02".into())),
+            ("CRPIX1".into(), Float(99.0)),
+            ("PC1_1".into(), Float(9.0)),
+        ];
+        let headers = registered_channel_headers(&reference, &source, "OIII");
+        let cache = tempfile::tempdir().unwrap();
+        let path = cache.path().join("processed.fits");
+        write_processed_image_fits_f32(
+            &path,
+            &LinearImage::new(2, 2, 1, vec![10.0; 4]).unwrap(),
+            &headers,
+            &[],
+        )
+        .unwrap();
+        let image = crate::image_io::open_linear_frame(&path).unwrap();
+        let header = |key: &str| {
+            image
+                .headers
+                .iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value)
+        };
+        assert_eq!(header("FILTER"), Some(&Text("OIII".into())));
+        assert_eq!(header("EXPTIME"), Some(&Float(600.0)));
+        assert_eq!(header("DATE-OBS"), Some(&Text("2026-01-02".into())));
+        assert_eq!(header("CRPIX1"), Some(&Float(10.0)));
+        assert_eq!(header("CD1_1"), Some(&Float(0.001)));
+        assert!(header("PC1_1").is_none());
+    }
+
+    #[test]
+    fn color_rc_astro_validation_rejects_foreign_roles_and_keeps_processing_identity() {
+        let request: StackColorRequest = serde_json::from_value(serde_json::json!({
+            "target_id":1,"kind":"rgb","processing":{"input_rc_astro":{"ha":{"steps":[{"tool":"bxt"}]}}}
+        })).unwrap();
+        assert!(validate_request(&request).is_err());
+        let first = BTreeMap::from([(StackColorRole::Red, vec!["bxt-v1".into(), "nxt-v1".into()])]);
+        let changed =
+            BTreeMap::from([(StackColorRole::Red, vec!["bxt-v1".into(), "nxt-v2".into()])]);
+        assert_ne!(
+            rc_astro_input_cache_id("input", &first).unwrap(),
+            rc_astro_input_cache_id("input", &changed).unwrap()
+        );
+        assert_ne!(
+            rc_astro_input_cache_id("input", &first).unwrap(),
+            rc_astro_input_cache_id("different-background", &first).unwrap()
+        );
+    }
 
     fn stack_orientation(
         output_width: usize,
@@ -2986,6 +3339,8 @@ mod tests {
             processing: None,
             resolved_input_stretches: BTreeMap::new(),
             resolved_input_deconvolutions: BTreeMap::new(),
+            resolved_input_rc_astro: BTreeMap::new(),
+            input_rc_astro_ids: BTreeMap::new(),
             resolved_output_stretches: Vec::new(),
             resolved_backgrounds: BTreeMap::new(),
             resolved_background_protection: BTreeMap::new(),
@@ -3451,6 +3806,7 @@ mod tests {
                 StackColorRole::Red,
                 seiza_deconvolution::DeconvolutionConfig::conservative(3.1),
             )]),
+            input_rc_astro: BTreeMap::new(),
             input_stretches: BTreeMap::from([
                 (
                     StackColorRole::Red,
@@ -3481,7 +3837,7 @@ mod tests {
 
         let progress = color_progress(3, Some(&processing));
 
-        assert_eq!(progress.phases.len(), 12);
+        assert_eq!(progress.phases.len(), 13);
         assert_eq!(progress.total_units, 25);
         assert_eq!(
             progress
@@ -3617,6 +3973,7 @@ mod tests {
             resolved_backgrounds: BTreeMap::new(),
             background_protection_fallbacks: BTreeMap::new(),
             resolved_deconvolutions: BTreeMap::new(),
+            resolved_rc_astro: BTreeMap::new(),
         };
 
         let encoded = serde_json::to_vec(&cached).unwrap();

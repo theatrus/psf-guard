@@ -5,11 +5,13 @@ import type {
   StackBackgroundFit,
   StackBackgroundProtection,
   StackColorProcessing,
+  StackColorJob,
   StackColorRole,
   StackDeconvolutionResult,
   StackStretchRequest,
 } from '../api/types';
 import StackDeconvolutionControls from './StackDeconvolutionControls';
+import StackRcAstroControls from './StackRcAstroControls';
 import { validateDeconvolution } from './stackDeconvolution';
 import StackStretchStageEditor from './StackStretchStageEditor';
 import { defaultStretchRequest, stretchModelLabels } from './stackStretchModels';
@@ -48,6 +50,10 @@ function hasInvalidNumbers(processing: StackColorProcessing): boolean {
     (value) => typeof value === 'number' && !Number.isFinite(value)
   )) || Object.values(processing.input_deconvolutions).some((config) =>
     config && Object.values(config).some((value) => !Number.isFinite(value))
+  ) || Object.values(processing.input_rc_astro ?? {}).some((config) =>
+    config?.steps.some((step) => Object.values(step.parameters).some((value) =>
+      typeof value === 'number' && !Number.isFinite(value)
+    ))
   );
 }
 
@@ -371,18 +377,23 @@ function BackgroundControls({
 }
 
 function StageLane({
-  label, stages, channels, deconvolution, deconvolutionResult, disabled,
-  onChange, onDeconvolutionChange,
+  label, stages, channels, deconvolution, deconvolutionResult, rcAstro, rcAstroResult, disabled,
+  onChange, onDeconvolutionChange, onRcAstroChange,
 }: {
   label: string;
   stages: StackStretchRequest[];
   channels: 1 | 3;
   deconvolution?: StackColorProcessing['input_deconvolutions'][StackColorRole];
   deconvolutionResult?: StackDeconvolutionResult;
+  rcAstro?: NonNullable<StackColorProcessing['input_rc_astro']>[StackColorRole];
+  rcAstroResult?: NonNullable<StackColorJob['resolved_input_rc_astro']>[StackColorRole];
   disabled: boolean;
   onChange: (stages: StackStretchRequest[]) => void;
   onDeconvolutionChange?: (
     config: StackColorProcessing['input_deconvolutions'][StackColorRole] | null
+  ) => void;
+  onRcAstroChange?: (
+    config: NonNullable<StackColorProcessing['input_rc_astro']>[StackColorRole] | null
   ) => void;
 }) {
   const replace = (index: number, stage: StackStretchRequest) => {
@@ -412,6 +423,20 @@ function StageLane({
           disabled={disabled}
           onChange={onDeconvolutionChange}
         />
+      )}
+      {onRcAstroChange && (
+        <StackRcAstroControls label={label} config={rcAstro} result={rcAstroResult}
+          disabled={disabled} onChange={onRcAstroChange} />
+      )}
+      {rcAstroResult && (
+        <div className="stack-stretch-actions">
+          <a href={rcAstroResult.fits_url} download>
+            {rcAstroResult.has_stars ? 'Starless FITS' : 'Processed FITS'}
+          </a>
+          {rcAstroResult.stars_fits_url && (
+            <a href={rcAstroResult.stars_fits_url} download>Stars FITS</a>
+          )}
+        </div>
       )}
       {stages.length === 0 && (
         <p>Normalized only — no stretch stages.</p>
@@ -452,7 +477,7 @@ function StageLane({
 }
 
 export default function StackColorProcessingControls({
-  label, roles, applied, backgrounds, protections, fallbacks, deconvolutions, disabled, onApply,
+  label, roles, applied, backgrounds, protections, fallbacks, deconvolutions, rcAstro = {}, disabled, onApply,
 }: {
   label: string;
   roles: StackColorRole[];
@@ -461,12 +486,14 @@ export default function StackColorProcessingControls({
   protections: Partial<Record<StackColorRole, StackBackgroundProtection>>;
   fallbacks: Partial<Record<StackColorRole, string>>;
   deconvolutions: Partial<Record<StackColorRole, StackDeconvolutionResult>>;
+  rcAstro?: StackColorJob['resolved_input_rc_astro'];
   disabled: boolean;
   onApply: (processing: StackColorProcessing) => void;
 }) {
   const defaults = useMemo(() => defaultColorProcessing(roles), [roles]);
   const baseline = applied
-    ? { ...applied, input_deconvolutions: applied.input_deconvolutions ?? {} }
+    ? { ...applied, input_deconvolutions: applied.input_deconvolutions ?? {},
+        input_rc_astro: applied.input_rc_astro ?? {} }
     : defaults;
   const [draft, setDraft] = useState<StackColorProcessing>(() => cloneProcessing(baseline));
   const [error, setError] = useState<string | null>(null);
@@ -485,9 +512,18 @@ export default function StackColorProcessingControls({
     else delete input_deconvolutions[role];
     return { ...current, input_deconvolutions };
   });
+  const updateRcAstro = (
+    role: StackColorRole,
+    config: NonNullable<StackColorProcessing['input_rc_astro']>[StackColorRole] | null
+  ) => setDraft((current) => {
+    const input_rc_astro = { ...current.input_rc_astro };
+    if (config) input_rc_astro[role] = config;
+    else delete input_rc_astro[role];
+    return { ...current, input_rc_astro };
+  });
   const submit = () => {
     if (hasInvalidNumbers(draft)) {
-      setError('Enter a finite value for every stretch parameter');
+      setError('Enter a finite value for every processing parameter');
       return;
     }
     const backgroundError = validateBackground(draft.background_extraction);
@@ -512,6 +548,9 @@ export default function StackColorProcessingControls({
         <span>Processing stack</span>
         <small>BG {draft.background_extraction ? draft.background_extraction.correction_mode : 'off'}
           {' · '}DC {Object.keys(draft.input_deconvolutions).length || 'off'}
+          {' · '}RC-Astro {Object.values(draft.input_rc_astro ?? {}).reduce(
+            (count, config) => count + (config?.steps.length ?? 0), 0
+          ) || 'off'}
           {' · '}{roles.map((role) => `${roleLabels[role]} ${draft.input_stretches[role]?.length ?? 0}`).join(' · ')}
           {' · '}RGB {draft.output_stretches.length}</small>
       </summary>
@@ -531,12 +570,6 @@ export default function StackColorProcessingControls({
             setError(null);
           }}
         />
-        <p className="stack-stretch-note">
-          Background correction runs on each linear input before registration. Optional
-          per-channel deconvolution runs after alignment while the data is still linear;
-          normalization and input stretches follow. The RGB output stack runs after composition.
-          Deconvolution is off by default.
-        </p>
         <BackgroundControls
           extraction={draft.background_extraction}
           backgrounds={backgrounds}
@@ -556,9 +589,12 @@ export default function StackColorProcessingControls({
               channels={1}
               deconvolution={draft.input_deconvolutions[role]}
               deconvolutionResult={deconvolutions[role]}
+              rcAstro={draft.input_rc_astro?.[role]}
+              rcAstroResult={rcAstro[role]}
               disabled={disabled}
               onChange={(stages) => updateInput(role, stages)}
               onDeconvolutionChange={(config) => updateDeconvolution(role, config)}
+              onRcAstroChange={(config) => updateRcAstro(role, config)}
             />
           ))}
           <StageLane

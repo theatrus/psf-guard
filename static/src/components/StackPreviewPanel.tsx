@@ -187,6 +187,10 @@ function artifactStretchKey(artifact: StackArtifact) {
   return `${artifact.jobId}:${artifact.group.index}:${artifact.artifactRevision}`;
 }
 
+function appliedProcessingQueryKey(dbId: string, projectId: number, artifact: StackArtifact) {
+  return ['db', dbId, 'project', projectId, 'stack-processing', artifactStretchKey(artifact)] as const;
+}
+
 function formatExposure(seconds: number): string {
   if (seconds < 60) return `${seconds.toFixed(0)} s`;
   const minutes = Math.floor(seconds / 60);
@@ -347,7 +351,6 @@ export default function StackPreviewPanel({
     channelOverride(channel) ?? calibrationMode;
   const [watchedJobIds, setWatchedJobIds] = useState<string[]>([]);
   const [inspector, setInspector] = useState<StackArtifact | null>(null);
-  const [stretches, setStretches] = useState<Record<string, StackStretchPreview>>({});
   // Which channels currently show the stars image instead of the starless
   // one, keyed like `stretches`. Only meaningful while star removal is
   // applied to that channel.
@@ -475,7 +478,6 @@ export default function StackPreviewPanel({
   useEffect(() => {
     setWatchedJobIds([]);
     setInspector(null);
-    setStretches({});
     setStarsView({});
     setFrameOrder('capture');
     resetStart();
@@ -550,6 +552,37 @@ export default function StackPreviewPanel({
       return leftFilter.localeCompare(rightFilter);
     });
   }, [activeByChannel, currentChannels, latestByChannel]);
+
+  const artifactsByChannel = useMemo(() => new Map(displayKeys.map((key) => {
+    const entry = activeByChannel.get(key);
+    const artifact: StackArtifact | undefined = entry?.group.state === 'ready' ? {
+      jobId: entry.job.job_id,
+      artifactRevision: entry.job.artifact_revision,
+      acceptedOnly: entry.job.accepted_only,
+      order: entry.job.order ?? 'capture',
+      scoring: builtScoringSettings(entry.job.scoring),
+      group: entry.group,
+    } : artifactFromLatest(latestByChannel.get(key));
+    return [key, artifact] as const;
+  })), [displayKeys, activeByChannel, latestByChannel]);
+  const processingArtifacts = [...artifactsByChannel.values()].filter(
+    (artifact): artifact is StackArtifact => artifact !== undefined
+  );
+  const processingQueries = useQueries({
+    queries: processingArtifacts.map((artifact) => ({
+      queryKey: appliedProcessingQueryKey(dbId, projectId, artifact),
+      queryFn: ({ signal }: { signal: AbortSignal }) => apiClient.getAppliedStackStretch(
+        dbId, artifact.jobId, artifact.group.index, artifact.artifactRevision, signal
+      ),
+      retry: false,
+    })),
+  });
+  const processingByArtifact = new Map(processingArtifacts.map((artifact, index) =>
+    [artifactStretchKey(artifact), processingQueries[index]] as const
+  ));
+  const stretches: Record<string, StackStretchPreview | undefined> = Object.fromEntries(
+    [...processingByArtifact].map(([key, query]) => [key, query.data ?? undefined])
+  );
 
   const running = startPending || unfinishedJobs.length > 0;
   const queuedBuilds = unfinishedJobs.length;
@@ -826,20 +859,9 @@ export default function StackPreviewPanel({
                 const current = currentChannels.get(key);
                 const activeEntry = activeByChannel.get(key);
                 const activeGroup = activeEntry?.group;
-                const latestEntry = latestByChannel.get(key);
-                const activeArtifact: StackArtifact | undefined =
-                  activeEntry && activeEntry.group.state === 'ready'
-                    ? {
-                        jobId: activeEntry.job.job_id,
-                        artifactRevision: activeEntry.job.artifact_revision,
-                        acceptedOnly: activeEntry.job.accepted_only,
-                        order: activeEntry.job.order ?? 'capture',
-                        scoring: builtScoringSettings(activeEntry.job.scoring),
-                        group: activeEntry.group,
-                      }
-                    : undefined;
-                const artifact = activeArtifact ?? artifactFromLatest(latestEntry);
+                const artifact = artifactsByChannel.get(key);
                 const stretchKey = artifact ? artifactStretchKey(artifact) : null;
+                const processingQuery = stretchKey ? processingByArtifact.get(stretchKey) : undefined;
                 const appliedStretch = stretchKey ? stretches[stretchKey] : undefined;
                 const group = artifact?.group ?? activeGroup;
                 const targetName = current?.targetName ?? group?.target_name ?? 'Unknown target';
@@ -883,6 +905,8 @@ export default function StackPreviewPanel({
                     : progressState === 'running'
                       ? progressGroup?.phase === 'calibration'
                         ? 'Building calibration masters'
+                        : progressGroup?.phase?.startsWith('Rejecting transients:')
+                          ? progressGroup.phase
                         : progressGroup?.phase === 'orienting'
                           ? 'Solving and orienting sky view'
                         : progressGroup?.phase === 'rendering'
@@ -1037,25 +1061,38 @@ export default function StackPreviewPanel({
                       </div>
                     )}
                     {artifact && stretchKey && (
+                      <>
+                      {processingQuery?.isPending && (
+                        <div className="stack-stretch-stats" role="status">Loading saved processing...</div>
+                      )}
+                      {processingQuery?.error && (
+                        <div className="stack-stretch-error" role="alert">
+                          Saved processing could not be loaded: {processingQuery.error.message}
+                          <button type="button" onClick={() => processingQuery.refetch()}>Retry</button>
+                        </div>
+                      )}
                       <StackStretchControls
                         key={stretchKey}
                         label={`${targetName} ${filterName || 'no filter'}`}
                         channels={artifact.group.output_channels === 3 ? 3 : 1}
-                        disabled={!canCompute || running}
+                        disabled={!canCompute || running || processingQuery?.isPending || !!processingQuery?.error}
                         applied={appliedStretch}
-                        apply={(request, onProgress) => apiClient.applyStackStretch(
-                          dbId, artifact.jobId, artifact.group.index, request, { onProgress }
+                        apply={(request, onProgress, signal) => apiClient.applyStackStretch(
+                          dbId, artifact.jobId, artifact.group.index, request,
+                          { onProgress, signal, revision: artifact.artifactRevision }
                         )}
-                        onApplied={(preview) => setStretches((currentStretches) => ({
-                          ...currentStretches,
-                          [stretchKey]: preview,
-                        }))}
-                        onRevert={() => {
-                          setStretches((currentStretches) => {
-                            const next = { ...currentStretches };
-                            delete next[stretchKey];
-                            return next;
-                          });
+                        onApplied={async (preview) => {
+                          const queryKey = appliedProcessingQueryKey(dbId, projectId, artifact);
+                          await queryClient.cancelQueries({ queryKey });
+                          queryClient.setQueryData(queryKey, preview);
+                        }}
+                        onRevert={async () => {
+                          await apiClient.clearStackStretch(
+                            dbId, artifact.jobId, artifact.group.index, artifact.artifactRevision
+                          );
+                          const queryKey = appliedProcessingQueryKey(dbId, projectId, artifact);
+                          await queryClient.cancelQueries({ queryKey });
+                          queryClient.setQueryData(queryKey, null);
                           // The next star removal starts on the starless
                           // view, not wherever this one was left.
                           setStarsView((current) => {
@@ -1065,6 +1102,7 @@ export default function StackPreviewPanel({
                           });
                         }}
                       />
+                      </>
                     )}
                     {!artifact && groupBusy && (
                       <div className="stack-preview-placeholder">
@@ -1073,6 +1111,8 @@ export default function StackPreviewPanel({
                           ? 'Waiting for stacker'
                           : activeGroup?.phase === 'calibration'
                             ? 'Matching and building calibration masters'
+                            : activeGroup?.phase?.startsWith('Rejecting transients:')
+                              ? activeGroup.phase
                             : activeGroup?.phase === 'rendering'
                               ? 'Rendering preview'
                               : 'Registering frames'}

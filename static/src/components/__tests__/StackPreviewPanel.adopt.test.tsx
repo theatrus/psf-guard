@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
@@ -54,6 +54,57 @@ const runningGroup = {
 };
 
 describe('StackPreviewPanel job adoption', () => {
+  it('restores revision-scoped processing on reload and durably reverts without running tools', async () => {
+    const user = userEvent.setup();
+    let posts = 0;
+    let selected: unknown = {
+      schema_version: 3, stretch_id: 'selected', stretch_version: '0.1',
+      config: { model: { type: 'identity' }, color_strategy: 'linked', max_analysis_samples: 4 },
+      request: { model: { type: 'identity' }, color_strategy: 'linked',
+        rc_astro: { steps: [{ tool: 'sxt', parameters: { stars: true } }] } },
+      deconvolution: null, input_range: null,
+      linked_statistics: { min: 0, max: 1, median: 0.2 },
+      rc_astro: { cli_version: '2.6.6', has_stars: true, steps: [{
+        tool: 'sxt', name: 'StarXTerminator', ml_version: 11, warnings: [],
+      }] },
+      preview_url: '/selected.png', original_preview_url: '/selected-full.png',
+      stars_preview_url: '/stars.png', fits_url: '/selected.fits',
+    };
+    const revisions: string[] = [];
+    server.use(
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/latest', () => ok({
+        groups: [{ job_id: 'ready-job', artifact_revision: 'ready-revision', accepted_only: false,
+          group: { ...runningGroup, state: 'ready', phase: 'ready' } }],
+      })),
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/color', () => ok({ targets: [], jobs: [] })),
+      http.get('/api/db/test/stack-previews/ready-job/0/stretch', ({ request }) => {
+        revisions.push(new URL(request.url).searchParams.get('v') ?? '');
+        return ok(selected);
+      }),
+      http.delete('/api/db/test/stack-previews/ready-job/0/stretch', ({ request }) => {
+        expect(new URL(request.url).searchParams.get('v')).toBe('ready-revision');
+        selected = null;
+        return new HttpResponse(null, { status: 204 });
+      }),
+      http.post('/api/db/test/stack-previews/ready-job/0/stretch', () => { posts += 1; return ok(selected); })
+    );
+    const panel = <StackPreviewPanel dbId="test" projectId={1} images={images}
+      selectionSource="visible" onOpenImage={() => undefined} />;
+    const first = render(panel, { wrapper: wrapper() });
+    await waitFor(() => expect(screen.getByAltText('Sh2 86 Ha stack preview')).toHaveAttribute('src', '/selected.png'));
+    first.unmount();
+    const second = render(panel, { wrapper: wrapper() });
+    await waitFor(() => expect(screen.getByAltText('Sh2 86 Ha stack preview')).toHaveAttribute('src', '/selected.png'));
+    await user.click(screen.getByText('View processing'));
+    expect(screen.getByText('RC-Astro 2.6.6')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Revert processing' }));
+    await waitFor(() => expect(screen.getByAltText('Sh2 86 Ha stack preview')).not.toHaveAttribute('src', '/selected.png'));
+    second.unmount();
+    render(panel, { wrapper: wrapper() });
+    await waitFor(() => expect(revisions).toEqual(['ready-revision', 'ready-revision', 'ready-revision']));
+    expect(screen.getByAltText('Sh2 86 Ha stack preview')).not.toHaveAttribute('src', '/selected.png');
+    expect(posts).toBe(0);
+  });
   it('shows a build that was started before the panel mounted', async () => {
     server.use(
       http.get('/api/stack-activity', () => ok({

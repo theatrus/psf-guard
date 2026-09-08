@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type {
   StackStretchPendingProgress,
   StackStretchPreview,
@@ -23,10 +23,27 @@ interface StackStretchControlsProps {
   applied?: StackStretchPreview;
   apply: (
     request: StackViewProcessingRequest,
-    onProgress?: (progress: StackStretchPendingProgress) => void
+    onProgress?: (progress: StackStretchPendingProgress) => void,
+    signal?: AbortSignal
   ) => Promise<StackStretchPreview>;
-  onApplied: (preview: StackStretchPreview) => void;
-  onRevert: () => void;
+  onApplied: (preview: StackStretchPreview) => Promise<void> | void;
+  onRevert: () => Promise<void>;
+}
+
+function requestForPreview(
+  applied: StackStretchPreview | undefined,
+  displayReferred: boolean
+): StackViewProcessingRequest {
+  return applied?.request ?? (applied ? {
+    model: applied.config.model,
+    color_strategy: applied.config.color_strategy,
+    deconvolution: applied.deconvolution?.config ?? null,
+    rc_astro: null,
+  } : {
+    ...defaultStretchRequest(displayReferred ? 'identity' : 'auto-mtf'),
+    deconvolution: null,
+    rc_astro: null,
+  });
 }
 
 export default function StackStretchControls({
@@ -39,19 +56,43 @@ export default function StackStretchControls({
   onApplied,
   onRevert,
 }: StackStretchControlsProps) {
-  const initialType = displayReferred ? 'identity' : 'auto-mtf';
   const [request, setRequest] = useState<StackViewProcessingRequest>(() =>
-    ({ ...defaultStretchRequest(initialType), deconvolution: null, rc_astro: null })
+    requestForPreview(applied, displayReferred)
   );
   const [pending, setPending] = useState(false);
+  const [reverting, setReverting] = useState(false);
   const [pendingProgress, setPendingProgress] =
     useState<StackStretchPendingProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const operation = useRef<AbortController | null>(null);
+  const selected = useRef({ id: applied?.stretch_id, displayReferred });
+  useEffect(() => () => operation.current?.abort(), []);
+  useEffect(() => {
+    if (selected.current.id === applied?.stretch_id &&
+        selected.current.displayReferred === displayReferred) return;
+    selected.current = { id: applied?.stretch_id, displayReferred };
+    setRequest(requestForPreview(applied, displayReferred));
+  }, [applied, displayReferred]);
 
-  const revert = () => {
-    setRequest({ ...defaultStretchRequest(initialType), deconvolution: null, rc_astro: null });
+  const revert = async () => {
+    const controller = new AbortController();
+    operation.current = controller;
+    setPending(true);
+    setReverting(true);
     setError(null);
-    onRevert();
+    try {
+      await onRevert();
+      if (!controller.signal.aborted) setRequest(requestForPreview(undefined, displayReferred));
+    } catch (cause) {
+      if (!controller.signal.aborted) {
+        setError(cause instanceof Error ? cause.message : 'Reverting processing failed');
+      }
+    } finally {
+      if (!controller.signal.aborted) {
+        setPending(false);
+        setReverting(false);
+      }
+    }
   };
   const submit = async () => {
     if (Object.values(request.model).some((value) =>
@@ -75,15 +116,24 @@ export default function StackStretchControls({
       return;
     }
     setPending(true);
+    const controller = new AbortController();
+    operation.current = controller;
     setPendingProgress(null);
     setError(null);
     try {
-      onApplied(await apply(request, setPendingProgress));
+      const preview = await apply(request, (progress) => {
+        if (!controller.signal.aborted) setPendingProgress(progress);
+      }, controller.signal);
+      if (!controller.signal.aborted) await onApplied(preview);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Stretch rendering failed');
+      if (!controller.signal.aborted) {
+        setError(cause instanceof Error ? cause.message : 'Stretch rendering failed');
+      }
     } finally {
-      setPending(false);
-      setPendingProgress(null);
+      if (!controller.signal.aborted) {
+        setPending(false);
+        setPendingProgress(null);
+      }
     }
   };
 
@@ -135,7 +185,7 @@ export default function StackStretchControls({
           channels={channels}
           request={request}
           disabled={disabled || pending}
-          onChange={setRequest}
+          onChange={(stretch) => setRequest((current) => ({ ...current, ...stretch }))}
         />
         {(['linear', 'asinh', 'mtf', 'ghs'] as string[]).includes(request.model.type) && (
           <p className="stack-stretch-note">Explicit points use normalized 0–1 display units.</p>
@@ -154,7 +204,7 @@ export default function StackStretchControls({
         {error && <div className="stack-stretch-error" role="alert">{error}</div>}
         <div className="stack-stretch-actions">
           <button type="button" disabled={disabled || pending} onClick={submit}>
-            {pending
+            {pending && !reverting
               ? pendingProgress?.fraction !== undefined
                 ? `Applying… ${Math.round(pendingProgress.fraction * 100)}%${
                     pendingProgress.stage
@@ -165,7 +215,7 @@ export default function StackStretchControls({
               : 'Apply processing'}
           </button>
           <button type="button" disabled={disabled || pending || !applied} onClick={revert}>
-            Revert processing
+            {reverting ? 'Reverting...' : 'Revert processing'}
           </button>
         </div>
       </div>

@@ -28,6 +28,7 @@ use seiza_stretch::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
+use std::io::Write as _;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use tokio_util::io::ReaderStream;
@@ -101,6 +102,8 @@ pub struct StackStretchPreview {
     #[serde(default)]
     pub deconvolution_id: Option<String>,
     pub config: StretchConfig,
+    #[serde(default)]
+    pub request: Option<StackViewProcessingRequest>,
     pub resolved_plan: serde_json::Value,
     pub source_transfer: StackStretchSourceTransfer,
     pub input_range: Option<StackStretchInputRange>,
@@ -473,6 +476,8 @@ struct StretchIdentity {
     /// Per-prefix cache ids for the RC-Astro chain, canonical order; the
     /// last one is the chain's public identity.
     rc_astro_chain: Option<Vec<String>>,
+    selection_path: PathBuf,
+    request: StackViewProcessingRequest,
 }
 
 impl StretchIdentity {
@@ -490,6 +495,194 @@ fn read_cached_manifest(cache_root: &FsPath, stretch_id: &str) -> Option<StackSt
     stretch_artifacts_exist(cache_root, stretch_id, &cached).then_some(cached)
 }
 
+#[derive(Default, Deserialize, Serialize)]
+struct ProcessingSelection {
+    selected: Option<String>,
+    requested: String,
+    desired: Option<String>,
+    #[serde(default)]
+    source: Option<ProcessingSource>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct ProcessingSource {
+    key: String,
+    revision: String,
+}
+
+static SELECTION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn selection_path(cache_root: &FsPath, source_key: &str, source_revision: &str) -> PathBuf {
+    let mut hasher = Sha256::new();
+    hasher.update(source_key.as_bytes());
+    hasher.update([0]);
+    hasher.update(source_revision.as_bytes());
+    let mut id = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        write!(&mut id, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    cache_root
+        .join("stack-processing")
+        .join(format!("{id}.json"))
+}
+
+fn read_selection(path: &FsPath) -> Option<ProcessingSelection> {
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+}
+
+#[cfg(test)]
+fn request_selection(path: &FsPath, generation: &str) -> Result<(), String> {
+    request_selection_with_source(path, generation, None)
+}
+
+fn request_selection_with_source(
+    path: &FsPath,
+    generation: &str,
+    source: Option<ProcessingSource>,
+) -> Result<(), String> {
+    let _guard = SELECTION_LOCK.lock().map_err(|error| error.to_string())?;
+    let mut selection = read_selection(path).unwrap_or_default();
+    selection.requested = generation.into();
+    selection.desired = None;
+    selection.source = source;
+    write_json_atomic(path, &selection)
+}
+
+fn bind_selection(path: &FsPath, generation: &str, stretch_id: &str) -> Result<(), String> {
+    let _guard = SELECTION_LOCK.lock().map_err(|error| error.to_string())?;
+    if let Some(mut selection) = read_selection(path)
+        && selection.requested == generation
+    {
+        selection.desired = Some(stretch_id.into());
+        write_json_atomic(path, &selection)?;
+    }
+    Ok(())
+}
+
+fn complete_selection(path: &FsPath, stretch_id: &str) -> Result<(), String> {
+    let _guard = SELECTION_LOCK.lock().map_err(|error| error.to_string())?;
+    if let Some(mut selection) = read_selection(path)
+        && selection.desired.as_deref() == Some(stretch_id)
+    {
+        selection.selected = Some(stretch_id.into());
+        write_json_atomic(path, &selection)?;
+    }
+    Ok(())
+}
+
+pub(super) fn selected_processing(
+    cache_root: &FsPath,
+    source_key: &str,
+    source_revision: &str,
+) -> Result<Option<StackStretchPreview>, AppError> {
+    let _guard = SELECTION_LOCK
+        .lock()
+        .map_err(|error| AppError::InternalError(error.to_string()))?;
+    let selected = read_selection(&selection_path(cache_root, source_key, source_revision))
+        .and_then(|selection| selection.selected)
+        .filter(|id| validate_job_id(id).is_ok());
+    Ok(selected.and_then(|id| read_cached_manifest(cache_root, &id)))
+}
+
+pub(super) fn clear_selected_processing(
+    cache_root: &FsPath,
+    source_key: &str,
+    source_revision: &str,
+) -> Result<(), AppError> {
+    let _guard = SELECTION_LOCK
+        .lock()
+        .map_err(|error| AppError::InternalError(error.to_string()))?;
+    match std::fs::remove_file(selection_path(cache_root, source_key, source_revision)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(AppError::InternalError(format!(
+            "Failed to clear processing selection: {error}"
+        ))),
+    }
+}
+
+pub(super) fn selected_rc_astro_ids(
+    cache_root: &FsPath,
+    active_sources: &std::collections::HashMap<String, String>,
+) -> std::collections::HashSet<String> {
+    let Ok(_guard) = SELECTION_LOCK.lock() else {
+        return Default::default();
+    };
+    let Ok(entries) = std::fs::read_dir(cache_root.join("stack-processing")) else {
+        return Default::default();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let selection = read_selection(&entry.path())?;
+            // A ready group may postdate the in-memory snapshot and still
+            // precede publication of its whole-job manifest.
+            let recently_touched = std::fs::metadata(entry.path())
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age < std::time::Duration::from_secs(24 * 3600));
+            if !recently_touched
+                && !selection.source.as_ref().is_some_and(|source| {
+                    processing_source_exists(cache_root, source, active_sources)
+                })
+            {
+                let _ = std::fs::remove_file(entry.path());
+                return None;
+            }
+            Some(selection)
+        })
+        .filter_map(|selection| selection.selected)
+        .filter(|id| validate_job_id(id).is_ok())
+        .filter_map(|id| read_cached_manifest(cache_root, &id))
+        .filter_map(|preview| preview.rc_astro_id)
+        .collect()
+}
+
+fn processing_source_exists(
+    cache_root: &FsPath,
+    source: &ProcessingSource,
+    active_sources: &std::collections::HashMap<String, String>,
+) -> bool {
+    #[derive(Deserialize)]
+    struct SourceManifest {
+        artifact_revision: String,
+        groups: Vec<SourceGroup>,
+    }
+    #[derive(Deserialize)]
+    struct SourceGroup {
+        index: usize,
+        state: super::StackGroupState,
+    }
+    let Some((job_id, group_index)) = source
+        .key
+        .strip_prefix("mono:")
+        .and_then(|key| key.rsplit_once(':'))
+    else {
+        return false;
+    };
+    let Ok(group_index) = group_index.parse::<usize>() else {
+        return false;
+    };
+    if validate_job_id(job_id).is_err() {
+        return false;
+    }
+    if active_sources.get(job_id) == Some(&source.revision) {
+        return true;
+    }
+    std::fs::read(super::manifest_path(cache_root, job_id))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<SourceManifest>(&bytes).ok())
+        .is_some_and(|job| {
+            job.artifact_revision == source.revision
+                && job.groups.get(group_index).is_some_and(|group| {
+                    group.index == group_index && group.state == super::StackGroupState::Ready
+                })
+                && super::fits_path(cache_root, job_id, group_index).is_file()
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn apply_to_fits(
     state: Arc<AppState>,
     database_id: String,
@@ -498,6 +691,7 @@ pub(super) async fn apply_to_fits(
     source_revision: String,
     source_path: PathBuf,
     request: StackViewProcessingRequest,
+    select_processing: bool,
 ) -> Result<StretchApplyOutcome, AppError> {
     if let Some(deconvolution) = request.deconvolution {
         deconvolution
@@ -506,6 +700,19 @@ pub(super) async fn apply_to_fits(
     }
     if let Some(rc_astro) = &request.rc_astro {
         rc_astro.validate().map_err(AppError::BadRequest)?;
+    }
+    let selection_path = selection_path(&cache_root, &source_key, &source_revision);
+    let selection_generation = select_processing.then(super::new_artifact_revision);
+    if let Some(generation) = &selection_generation {
+        request_selection_with_source(
+            &selection_path,
+            generation,
+            Some(ProcessingSource {
+                key: source_key.clone(),
+                revision: source_revision.clone(),
+            }),
+        )
+        .map_err(AppError::InternalError)?;
     }
     let config = request.stretch.config();
     let deconvolution = request.deconvolution;
@@ -573,7 +780,26 @@ pub(super) async fn apply_to_fits(
     for byte in hasher.finalize() {
         write!(&mut stretch_id, "{byte:02x}").expect("writing to a String cannot fail");
     }
-    if let Some(cached) = read_cached_manifest(&cache_root, &stretch_id) {
+    if let Some(generation) = &selection_generation {
+        bind_selection(&selection_path, generation, &stretch_id)
+            .map_err(AppError::InternalError)?;
+    }
+    if let Some(mut cached) = read_cached_manifest(&cache_root, &stretch_id) {
+        if cached.request.is_none() {
+            cached.request = Some(StackViewProcessingRequest {
+                stretch: request.stretch.clone(),
+                deconvolution,
+                rc_astro: rc_astro.clone(),
+            });
+            let _guard = SELECTION_LOCK
+                .lock()
+                .map_err(|error| AppError::InternalError(error.to_string()))?;
+            write_json_atomic(&stretch_manifest_path(&cache_root, &stretch_id), &cached)
+                .map_err(AppError::InternalError)?;
+        }
+        if select_processing {
+            complete_selection(&selection_path, &stretch_id).map_err(AppError::InternalError)?;
+        }
         return Ok(StretchApplyOutcome::Ready(Box::new(cached)));
     }
     // A detached run for this exact request already failed: hand the reason
@@ -587,11 +813,22 @@ pub(super) async fn apply_to_fits(
         // The same request is already computing; the caller polls.
         return Ok(StretchApplyOutcome::Pending { stretch_id });
     };
+    if !select_processing {
+        return Err(AppError::BadRequest(
+            "Processing is no longer running; apply the settings again".into(),
+        ));
+    }
 
     let identity = StretchIdentity {
         stretch_id: stretch_id.clone(),
         deconvolution_id,
         rc_astro_chain,
+        selection_path,
+        request: StackViewProcessingRequest {
+            stretch: request.stretch,
+            deconvolution,
+            rc_astro: rc_astro.clone(),
+        },
     };
 
     if rc_astro.is_some() {
@@ -677,6 +914,10 @@ async fn compute_stretch_variant(
         }
     };
     if let Some(cached) = read_cached_manifest(&cache_root, &identity.stretch_id) {
+        if let Err(message) = complete_selection(&identity.selection_path, &identity.stretch_id) {
+            park_failure(message);
+            return None;
+        }
         return Some(cached);
     }
     let guard = state.begin_interactive_job();
@@ -708,6 +949,7 @@ async fn compute_stretch_variant(
             &stretch_manifest_path(&cache_for_render, &identity.stretch_id),
             &response,
         )?;
+        complete_selection(&identity.selection_path, &identity.stretch_id)?;
         Ok::<_, String>(response)
     })
     .await;
@@ -745,6 +987,7 @@ fn build_stretch_preview(
             .map(|_| deconvolution_version()),
         deconvolution_id: identity.deconvolution_id.clone(),
         config: rendered.config,
+        request: Some(identity.request.clone()),
         resolved_plan: rendered.resolved_plan,
         source_transfer: rendered.source_transfer,
         input_range: rendered.input_range,
@@ -1263,14 +1506,24 @@ fn stretch_artifacts_exist(
 }
 
 pub(super) fn write_json_atomic(path: &FsPath, value: &impl Serialize) -> Result<(), String> {
+    // Windows cannot replace a just-persisted file while another writer still
+    // holds its returned handle. Keep publication and handle close together.
+    static PUBLICATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = PUBLICATION_LOCK.lock().map_err(|error| error.to_string())?;
     let parent = path
         .parent()
         .ok_or_else(|| "Stretch manifest path has no parent".to_string())?;
     std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
+    let mut temporary =
+        tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
-    std::fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
-    std::fs::rename(&temporary, path).map_err(|error| error.to_string())
+    temporary
+        .write_all(&bytes)
+        .map_err(|error| error.to_string())?;
+    temporary
+        .persist(path)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 /// What a 202 poll answer carries: the run's live progress when known.
@@ -1311,6 +1564,210 @@ pub(super) fn apply_response(outcome: StretchApplyOutcome) -> axum::response::Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn persisted_processing_fixture(cache: &FsPath, stretch_id: &str) -> StackStretchPreview {
+        let request: StackViewProcessingRequest = serde_json::from_value(serde_json::json!({
+            "model": {"type": "identity"}, "rc_astro": {"steps": [{"tool": "bxt", "parameters": {"sharpen": 0.4}}]}
+        })).unwrap();
+        let analysis = StretchAnalysis::analyze(&[0.1, 0.2, 0.3, 0.4], 1, 4).unwrap();
+        let identity = StretchIdentity {
+            stretch_id: stretch_id.into(),
+            deconvolution_id: None,
+            rc_astro_chain: None,
+            selection_path: PathBuf::new(),
+            request,
+        };
+        let preview = build_stretch_preview(
+            "db",
+            &identity,
+            false,
+            RenderedVariant {
+                config: identity.request.stretch.config(),
+                resolved_plan: serde_json::json!({}),
+                source_transfer: StackStretchSourceTransfer::Linear,
+                input_range: None,
+                linked_statistics: analysis.linked_statistics(),
+                channel_statistics: analysis.channel_statistics(),
+                luminance_statistics: analysis.luminance_statistics(),
+                deconvolution: None,
+                rc_astro: Some(super::super::rc_astro::StackRcAstroResult {
+                    cli_version: "2.6.6".into(),
+                    steps: vec![],
+                    has_stars: false,
+                }),
+            },
+        );
+        write_json_atomic(&stretch_manifest_path(cache, stretch_id), &preview).unwrap();
+        std::fs::write(stretch_preview_path(cache, stretch_id), b"preview").unwrap();
+        std::fs::write(
+            stretch_original_preview_path(cache, stretch_id),
+            b"original",
+        )
+        .unwrap();
+        preview
+    }
+
+    #[test]
+    fn selected_processing_restores_request_and_versions_but_not_another_revision() {
+        let cache = tempfile::tempdir().unwrap();
+        let id = "a".repeat(64);
+        let expected = persisted_processing_fixture(cache.path(), &id);
+        let path = selection_path(cache.path(), "mono:job:0", "revision1");
+        request_selection(&path, &id).unwrap();
+        bind_selection(&path, &id, &id).unwrap();
+        complete_selection(&path, &id).unwrap();
+        let restored = selected_processing(cache.path(), "mono:job:0", "revision1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(restored.request).unwrap(),
+            serde_json::to_value(expected.request).unwrap()
+        );
+        assert_eq!(restored.rc_astro.unwrap().cli_version, "2.6.6");
+        assert!(selected_processing(cache.path(), "mono:job:0", "revision2")
+            .unwrap()
+            .is_none());
+        assert!(selected_processing(cache.path(), "mono:job:1", "revision1")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn processing_selection_preserves_previous_until_success_and_revert_wins() {
+        let cache = tempfile::tempdir().unwrap();
+        let first = "a".repeat(64);
+        let second = "b".repeat(64);
+        persisted_processing_fixture(cache.path(), &first);
+        persisted_processing_fixture(cache.path(), &second);
+        let path = selection_path(cache.path(), "mono:job:0", "rev");
+        request_selection(&path, &first).unwrap();
+        bind_selection(&path, &first, &first).unwrap();
+        complete_selection(&path, &first).unwrap();
+        request_selection(&path, &second).unwrap();
+        bind_selection(&path, &second, &second).unwrap();
+        assert_eq!(
+            selected_processing(cache.path(), "mono:job:0", "rev")
+                .unwrap()
+                .unwrap()
+                .stretch_id,
+            first
+        );
+        complete_selection(&path, &second).unwrap();
+        complete_selection(&path, &first).unwrap();
+        assert_eq!(
+            selected_processing(cache.path(), "mono:job:0", "rev")
+                .unwrap()
+                .unwrap()
+                .stretch_id,
+            second
+        );
+        clear_selected_processing(cache.path(), "mono:job:0", "rev").unwrap();
+        complete_selection(&path, &second).unwrap();
+        assert!(selected_processing(cache.path(), "mono:job:0", "rev")
+            .unwrap()
+            .is_none());
+        assert!(stretch_manifest_path(cache.path(), &second).is_file());
+    }
+
+    #[test]
+    fn late_schema_probe_cannot_replace_newer_intent_or_reenable_reverted_processing() {
+        let cache = tempfile::tempdir().unwrap();
+        let path = selection_path(cache.path(), "mono:job:0", "rev");
+        request_selection(&path, "old-probe").unwrap();
+        request_selection(&path, "new-probe").unwrap();
+        bind_selection(&path, "new-probe", "new-result").unwrap();
+        bind_selection(&path, "old-probe", "old-result").unwrap();
+        complete_selection(&path, "old-result").unwrap();
+        assert!(read_selection(&path).unwrap().selected.is_none());
+        complete_selection(&path, "new-result").unwrap();
+        assert_eq!(
+            read_selection(&path).unwrap().selected.as_deref(),
+            Some("new-result")
+        );
+        clear_selected_processing(cache.path(), "mono:job:0", "rev").unwrap();
+        bind_selection(&path, "old-probe", "old-result").unwrap();
+        complete_selection(&path, "old-result").unwrap();
+        assert!(read_selection(&path).is_none());
+    }
+
+    #[test]
+    fn durable_rc_astro_selection_is_pinned_only_while_source_revision_exists() {
+        let cache = tempfile::tempdir().unwrap();
+        let job_id = "a".repeat(64);
+        let stretch_id = "b".repeat(64);
+        let rc_id = "c".repeat(64);
+        let key = format!("mono:{job_id}:0");
+        let mut preview = persisted_processing_fixture(cache.path(), &stretch_id);
+        preview.rc_astro_id = Some(rc_id.clone());
+        write_json_atomic(&stretch_manifest_path(cache.path(), &stretch_id), &preview).unwrap();
+        let fits = super::super::rc_astro::rc_astro_fits_path(cache.path(), &rc_id);
+        std::fs::create_dir_all(fits.parent().unwrap()).unwrap();
+        std::fs::write(&fits, b"rc-fits").unwrap();
+        let source_manifest = super::super::manifest_path(cache.path(), &job_id);
+        write_json_atomic(&source_manifest, &serde_json::json!({"artifact_revision": "rev1", "groups": [{"index":0,"state":"ready"}]})).unwrap();
+        std::fs::write(super::super::fits_path(cache.path(), &job_id, 0), b"source").unwrap();
+        let path = selection_path(cache.path(), &key, "rev1");
+        request_selection_with_source(
+            &path,
+            "generation",
+            Some(ProcessingSource {
+                key,
+                revision: "rev1".into(),
+            }),
+        )
+        .unwrap();
+        bind_selection(&path, "generation", &stretch_id).unwrap();
+        complete_selection(&path, &stretch_id).unwrap();
+        let no_active_sources = std::collections::HashMap::new();
+        assert!(selected_rc_astro_ids(cache.path(), &no_active_sources).contains(&rc_id));
+        let old = filetime::FileTime::from_system_time(
+            std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 3600),
+        );
+        filetime::set_file_mtime(&path, old).unwrap();
+        assert!(
+            selected_rc_astro_ids(cache.path(), &no_active_sources).contains(&rc_id),
+            "a durable matching source stays pinned beyond the grace period"
+        );
+        filetime::set_file_mtime(&path, filetime::FileTime::now()).unwrap();
+        write_json_atomic(&source_manifest, &serde_json::json!({"artifact_revision": "rev2", "groups": [{"index":0,"state":"ready"}]})).unwrap();
+        assert!(
+            selected_rc_astro_ids(cache.path(), &no_active_sources).contains(&rc_id),
+            "an in-memory ready group can precede the whole-job manifest"
+        );
+        filetime::set_file_mtime(
+            &path,
+            filetime::FileTime::from_system_time(
+                std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 3600),
+            ),
+        )
+        .unwrap();
+        let active_sources = std::collections::HashMap::from([(job_id, "rev1".into())]);
+        assert!(
+            selected_rc_astro_ids(cache.path(), &active_sources).contains(&rc_id),
+            "in-memory ready sources remain pinned even before whole-job publication"
+        );
+        assert!(selected_rc_astro_ids(cache.path(), &no_active_sources).is_empty());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn concurrent_manifest_writers_publish_complete_documents() {
+        let cache = tempfile::tempdir().unwrap();
+        let path = cache.path().join("manifest.json");
+        std::thread::scope(|scope| {
+            for writer in 0..8 {
+                let path = &path;
+                scope.spawn(move || {
+                    for revision in 0..8 {
+                        write_json_atomic(path, &serde_json::json!({"writer":writer, "revision":revision, "payload":"x".repeat(4000)})).unwrap();
+                    }
+                });
+            }
+        });
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(value["payload"].as_str().unwrap().len(), 4000);
+    }
 
     #[test]
     fn parameterized_stretch_renders_screen_and_original_without_touching_source() {

@@ -47,6 +47,7 @@ export function defaultColorProcessing(roles: StackColorRole[]): StackColorProce
   return {
     background_extraction: defaultBackgroundExtraction(),
     input_deconvolutions: {},
+    input_rc_astro: {},
     input_stretches: Object.fromEntries(
       roles.map((role) => [role, [defaultStretchRequest('auto-mtf')]])
     ),
@@ -73,5 +74,6 @@ export function processingForColorBuild(
         }
       : null,
     input_deconvolutions: processing.input_deconvolutions ?? {},
+    input_rc_astro: processing.input_rc_astro ?? {},
   };
 }

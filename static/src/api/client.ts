@@ -172,6 +172,21 @@ const normalizeStretchPreview = (preview: StackStretchPreview): StackStretchPrev
   preview_url: withServerUrl(preview.preview_url),
   original_preview_url: withServerUrl(preview.original_preview_url),
   fits_url: preview.fits_url ? withServerUrl(preview.fits_url) : null,
+  stars_preview_url: preview.stars_preview_url ? withServerUrl(preview.stars_preview_url) : null,
+  stars_original_preview_url: preview.stars_original_preview_url
+    ? withServerUrl(preview.stars_original_preview_url) : null,
+  stars_fits_url: preview.stars_fits_url ? withServerUrl(preview.stars_fits_url) : null,
+});
+
+const normalizeColorJob = (job: StackColorJob): StackColorJob => ({
+  ...job,
+  resolved_input_rc_astro: Object.fromEntries(
+    Object.entries(job.resolved_input_rc_astro ?? {}).map(([role, result]) => [role, {
+      ...result,
+      fits_url: withServerUrl(result.fits_url),
+      stars_fits_url: result.stars_fits_url ? withServerUrl(result.stars_fits_url) : null,
+    }])
+  ),
 });
 
 const stackStretchError = (cause: unknown, fallback: string): Error => {
@@ -1123,6 +1138,39 @@ export const apiClient = {
     )}`;
   },
 
+  getAppliedStackStretch: async (
+    dbId: string,
+    jobId: string,
+    groupIndex: number,
+    revision: string,
+    signal?: AbortSignal
+  ): Promise<StackStretchPreview | null> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<StackStretchPreview | null>>(
+      dbPath(dbId, `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/stretch`),
+      { params: { v: revision }, signal }
+    );
+    if (data.error) throw new Error(data.error);
+    return data.data ? normalizeStretchPreview(data.data) : null;
+  },
+
+  clearStackStretch: async (
+    dbId: string,
+    jobId: string,
+    groupIndex: number,
+    revision: string
+  ): Promise<void> => {
+    const apiInstance = await getApi();
+    try {
+      await apiInstance.delete(
+        dbPath(dbId, `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/stretch`),
+        { params: { v: revision } }
+      );
+    } catch (cause) {
+      throw stackStretchError(cause, 'Failed to revert stack processing');
+    }
+  },
+
   applyStackStretch: async (
     dbId: string,
     jobId: string,
@@ -1131,6 +1179,8 @@ export const apiClient = {
     options?: {
       /** Live progress from a detached run's 202 polls. */
       onProgress?: (progress: StackStretchPendingProgress) => void;
+      signal?: AbortSignal;
+      revision?: string;
       /** Poll interval override, for tests. */
       pollIntervalMs?: number;
     }
@@ -1141,7 +1191,9 @@ export const apiClient = {
     // result. The cap is generous: a CPU-only StarXTerminator pass on a
     // large stack legitimately takes a while.
     const deadline = Date.now() + 60 * 60 * 1000;
+    let polling = false;
     for (;;) {
+      options?.signal?.throwIfAborted();
       try {
         const apiInstance = await getApi();
         const response = await apiInstance.post<
@@ -1151,7 +1203,8 @@ export const apiClient = {
             dbId,
             `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/stretch`
           ),
-          request
+          request,
+          { signal: options?.signal, params: { v: options?.revision, poll: polling || undefined } }
         );
         if (response.status !== 202) {
           const data = response.data.data as StackStretchPreview | null;
@@ -1162,6 +1215,7 @@ export const apiClient = {
         }
         const pending = response.data.data as StackStretchPendingProgress | null;
         if (pending && options?.onProgress) options.onProgress(pending);
+        polling = true;
       } catch (cause) {
         throw stackStretchError(cause, 'Failed to apply stack stretch');
       }
@@ -1181,7 +1235,7 @@ export const apiClient = {
       dbPath(dbId, `/projects/${projectId}/stack-previews/color`)
     );
     if (!data.data) throw new Error(data.error || 'Color preview availability could not be loaded');
-    return data.data;
+    return { ...data.data, jobs: data.data.jobs.map(normalizeColorJob) };
   },
 
   startStackColor: async (
@@ -1202,7 +1256,7 @@ export const apiClient = {
       request
     );
     if (!data.data) throw new Error(data.error || 'Failed to start color preview');
-    return data.data;
+    return normalizeColorJob(data.data);
   },
 
   getStackColorJob: async (
@@ -1215,7 +1269,7 @@ export const apiClient = {
       dbPath(dbId, `/projects/${projectId}/stack-previews/color/${encodeURIComponent(jobId)}`)
     );
     if (!data.data) throw new Error(data.error || 'Color preview job not found');
-    return data.data;
+    return normalizeColorJob(data.data);
   },
 
   getStackColorPreviewUrl: (

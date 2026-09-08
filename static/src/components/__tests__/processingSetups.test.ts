@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { StackColorProcessing } from '../../api/types';
+import type { RcAstroProcessing, StackColorProcessing } from '../../api/types';
 import {
   builtinColorSetups,
   builtinViewSetups,
@@ -26,6 +26,16 @@ function shoSetup(): StackColorProcessing {
 }
 
 describe('colorSetupForRoles', () => {
+  it('keeps ordered RC-Astro steps only on channels named by the setup', () => {
+    const setup = shoSetup();
+    const chain: RcAstroProcessing = { steps: [
+      { tool: 'bxt', parameters: { ss: 0.3 } },
+      { tool: 'sxt', parameters: { stars: true } },
+    ] };
+    setup.input_rc_astro = { ha: chain, oiii: chain };
+    const mapped = colorSetupForRoles(setup, ['red', 'green', 'blue', 'ha']);
+    expect(mapped.input_rc_astro).toEqual({ ha: chain });
+  });
   it('keeps matching channels and defaults the missing ones', () => {
     const mapped = colorSetupForRoles(shoSetup(), ['red', 'green', 'blue', 'ha']);
     // ha matches by name and keeps its stages and deconvolution.

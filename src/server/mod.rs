@@ -462,7 +462,9 @@ async fn run_server_internal(
         )
         .route(
             "/stack-previews/{job_id}/{group_index}/stretch",
-            post(stack_preview::apply_stack_preview_stretch),
+            post(stack_preview::apply_stack_preview_stretch)
+                .get(stack_preview::get_stack_preview_processing)
+                .delete(stack_preview::clear_stack_preview_processing),
         )
         .route(
             "/stack-previews/{job_id}/{group_index}/artifact-searches",
@@ -491,6 +493,10 @@ async fn run_server_internal(
         .route(
             "/stack-previews/artifact-searches/{search_id}/crops/{image_id}",
             get(stack_preview::artifact::get_artifact_crop),
+        )
+        .route(
+            "/stack-previews/rc-astro/{rc_astro_id}/fits",
+            get(stack_preview::rc_astro::download_rc_astro_fits),
         )
         .route(
             "/stack-previews/stretch/{stretch_id}/preview",

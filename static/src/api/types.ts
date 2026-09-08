@@ -856,6 +856,7 @@ export interface StackStretchPreview {
   deconvolution_version: string | null;
   deconvolution_id: string | null;
   config: StackStretchRequest & { max_analysis_samples: number };
+  request?: StackViewProcessingRequest;
   resolved_plan: unknown;
   source_transfer: 'linear' | 'display_referred';
   input_range: { black: number; white: number } | null;
@@ -902,6 +903,7 @@ export interface StackColorSource {
 export interface StackColorProcessing {
   background_extraction: StackBackgroundExtraction | null;
   input_deconvolutions: Partial<Record<StackColorRole, StackDeconvolutionConfig>>;
+  input_rc_astro?: Partial<Record<StackColorRole, RcAstroProcessing>>;
   input_stretches: Partial<Record<StackColorRole, StackStretchRequest[]>>;
   output_stretches: StackStretchRequest[];
 }
@@ -1024,6 +1026,7 @@ export type StackColorProgressPhase =
   | 'deconvolving_inputs'
   | 'normalizing_inputs'
   | 'stretching_inputs'
+  | 'rc_astro_inputs'
   | 'composing_color'
   | 'stretching_output'
   | 'writing_fits'
@@ -1098,6 +1101,10 @@ export interface StackColorJob {
   processing: StackColorProcessing | null;
   resolved_input_stretches: Partial<Record<StackColorRole, unknown[]>>;
   resolved_input_deconvolutions: Partial<Record<StackColorRole, StackDeconvolutionResult>>;
+  resolved_input_rc_astro?: Partial<Record<StackColorRole, StackRcAstroResult & {
+    fits_url: string;
+    stars_fits_url?: string | null;
+  }>>;
   resolved_output_stretches: unknown[];
   resolved_backgrounds: Partial<Record<StackColorRole, StackBackgroundFit>>;
   resolved_background_protection: Partial<Record<StackColorRole, StackBackgroundProtection>>;

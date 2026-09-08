@@ -116,6 +116,12 @@ export function colorSetupForRoles(
       false,
       () => undefined
     ),
+    input_rc_astro: mapRoleEntries(
+      settings.input_rc_astro,
+      roles,
+      false,
+      () => undefined
+    ),
   };
 }
 
