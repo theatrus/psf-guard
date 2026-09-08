@@ -18,6 +18,10 @@
 
 ## Fixed
 
+- Completed stacks revisit early admitted samples to reject bright transient
+  trails, with pass/frame progress and consistent results after resuming a
+  build. Low-coverage pixels and overlapping trails can still retain artifacts.
+
 - Scheduler merge no longer duplicates frames that an import or remote upload
   had already added before the telescope's own rows arrived: the existing row
   is recognized by target, file name, and capture time, updated in place, and

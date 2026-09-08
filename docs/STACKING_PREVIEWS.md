@@ -49,9 +49,12 @@ A finished or stopped channel build checkpoints its integration state — the
 running accumulator, the online rejection statistics, and the registration
 reference — beside a ledger of every frame it integrated or turned away. A
 later build of the same target and channel whose frame set only grew reopens
-that checkpoint and integrates just the new frames, so adding a night to a
-season-long target costs one night's stacking, not the whole season's. The
-card marks restored work as `resumed` in its frame counter.
+that checkpoint and registers just the new frames. The card marks restored
+work as `resumed` in its frame counter. Final transient rejection still reads
+every admitted frame twice using the saved registration mappings; it does not
+repeat star detection or registration. Adding a night therefore avoids the
+old frames' registration cost, but still needs their source files for the
+completed integration.
 
 The resumed result is exactly the stack a from-scratch build would produce;
 Seiza's checkpoint round trip is bit-for-bit and validates the format version,
@@ -414,6 +417,25 @@ linear FITS samples, debayers when required, performs global normalization,
 registers each source to the reference, applies its overlap/RMS/scale/rotation
 admission gates, and accumulates accepted samples with online delta-sigma
 rejection.
+
+Before publishing a stack with at least three admitted frames, PSF Guard
+reintegrates them with Seiza's two-pass, leave-one-out rejection. Each sample
+is tested against the other frames, so a bright satellite or aircraft trail
+in the reference or early warm-up frames is no longer permanently admitted.
+Small-sample predictive thresholds avoid excessive rejection of ordinary
+noise in shallow stacks. Pixels with fewer than three finite observations
+are averaged without rejection. Several overlapping transients at the same
+pixel can still mask one another; this is not a guarantee that every trail
+will disappear, and quality-based frame exclusion still applies.
+
+The final passes repeat calibration, cosmetic correction, debayering,
+normalization, and resampling using each frame's saved registration mapping.
+Progress names the pass and frame, and logs report the rejected sample count.
+Changing or removing a source while the build runs fails the build rather
+than publishing a mixed-source result. Stop retains the online checkpoint;
+the next build restarts final rejection. The signal-to-noise depth chart still
+describes the online intermediate stacks, not the final rejected image.
+Older cached previews are rebuilt under the new pipeline version.
 
 Expand **Frame decisions** to audit what happened. Each result retains the
 PSF Guard quality score and disposition. Accepted frames also report matched

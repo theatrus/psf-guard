@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 /// Bumped whenever the recorded shape or the stacking pipeline changes in a
 /// way that makes an old accumulator wrong to extend.
-pub(super) const RESUME_SCHEMA_VERSION: u32 = 2;
+pub(super) const RESUME_SCHEMA_VERSION: u32 = 3;
 
 /// One frame the checkpointed stack already integrated or turned away, with
 /// everything needed to replay its ledger entry and its orientation vote.
@@ -31,6 +31,10 @@ pub(super) const RESUME_SCHEMA_VERSION: u32 = 2;
 pub(super) struct ResumeFrame {
     pub decision: StackFrameDecision,
     pub exposure_seconds: f64,
+    /// Auto calibration can refuse a session's masters. A final integration
+    /// must replay that frame raw, including after a checkpoint is reopened.
+    #[serde(default)]
+    pub calibration_bypassed: bool,
     /// A read or pipeline error may clear on retry, so no checkpoint that
     /// contains one is safe to extend.
     #[serde(default)]
@@ -302,6 +306,7 @@ mod tests {
         ResumeFrame {
             decision: decision(image_id, fingerprint),
             exposure_seconds: 300.0,
+            calibration_bypassed: false,
             retryable_failure: false,
             rotation_radians: Some(0.0),
         }
@@ -319,6 +324,16 @@ mod tests {
             b"context",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn checkpoint_retains_per_frame_calibration_fallback() {
+        let mut raw = frame(1, "source");
+        raw.calibration_bypassed = true;
+        let bytes = serde_json::to_vec(&raw).unwrap();
+        let restored: ResumeFrame = serde_json::from_slice(&bytes).unwrap();
+        assert!(restored.calibration_bypassed);
+        assert_eq!(restored.decision.image_id, 1);
     }
 
     fn try_load(cache_root: &Path, requested: &[(i32, &str)]) -> Option<ResumeState> {
