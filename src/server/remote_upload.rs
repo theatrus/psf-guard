@@ -82,7 +82,27 @@ pub async fn upload_image(
         // so it must not carry a frame extension: a folder scan running
         // alongside the upload would pick up the half-written file as a
         // frame. The header read below is told the declared name instead.
-        let temporary = tempfile::NamedTempFile::new_in(&upload_dir).map_err(|error| {
+        let temporary = {
+            let upload_dir: &PathBuf = &upload_dir;
+            #[cfg(unix)]
+            {
+                // Default permissions on temp files on Linux and Unix are created
+                // 0600, accessible only for the user creating the file. By setting
+                // a permission to 0666 here, it allows the user's umask or the
+                // destination directory's default ACL to determine the
+                // permissions.
+                use std::os::unix::fs::PermissionsExt;
+                tempfile::Builder::new()
+                    .disable_cleanup(true)
+                    .permissions(std::fs::Permissions::from_mode(0o666))
+                    .tempfile_in(upload_dir)
+            }
+            #[cfg(windows)]
+            {
+                tempfile::NamedTempFile::new_in(upload_dir)
+            }
+        }
+        .map_err(|error| {
             AppError::InternalError(format!(
                 "creating upload temporary file in {}: {error}",
                 upload_dir.display()
