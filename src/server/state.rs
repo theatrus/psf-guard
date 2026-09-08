@@ -133,6 +133,7 @@ pub struct FileCheckCache {
     pub refresh_in_progress: bool,
     pub has_initial_data: bool,
     pub refresh_progress: RefreshProgress,
+    pub organization_revision: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -304,6 +305,7 @@ impl FileCheckCache {
             refresh_in_progress: false,
             has_initial_data: false,
             refresh_progress: RefreshProgress::default(),
+            organization_revision: 0,
         }
     }
 
@@ -328,8 +330,8 @@ impl FileCheckCache {
 
     pub fn mark_refresh_completed(&mut self) {
         self.refresh_in_progress = false;
-        self.has_initial_data = true;
-        self.last_updated = Instant::now();
+        // Only publication can mark data fresh. A completed refresh may have
+        // failed or been discarded after catalog organization changed it.
         self.refresh_progress.complete_refresh();
     }
 

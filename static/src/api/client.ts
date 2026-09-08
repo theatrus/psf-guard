@@ -12,6 +12,10 @@ import type {
   Project,
   Target,
   TargetNavigation,
+  OrganizationOperation,
+  OrganizationPreview,
+  OrganizationResult,
+  OrganizationDestinations,
   Image,
   ImageQuery,
   BatchGradeEntry,
@@ -841,6 +845,41 @@ export const apiClient = {
       ApiResponse<{ targets_moved: number; images_moved: number }>
     >(dbPath(dbId, `/projects/${projectId}/merge`), { into_project_id: intoProjectId });
     if (!data.data) throw new Error(data.error || 'Failed to merge project');
+    return data.data;
+  },
+
+  getOrganizationDestinations: async (dbId: string): Promise<OrganizationDestinations> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<OrganizationDestinations>>(
+      dbPath(dbId, '/organization/destinations'),
+    );
+    if (!data.data) throw new Error(data.error || 'Could not load destinations');
+    return data.data;
+  },
+
+  previewOrganization: async (
+    dbId: string,
+    operation: OrganizationOperation,
+  ): Promise<OrganizationPreview> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<OrganizationPreview>>(
+      dbPath(dbId, '/organization/preview'), operation,
+    );
+    if (!data.data) throw new Error(data.error || 'Could not preview the change');
+    return data.data;
+  },
+
+  applyOrganization: async (
+    dbId: string,
+    operation: OrganizationOperation,
+    expectedFingerprint: string,
+  ): Promise<OrganizationResult> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<OrganizationResult>>(
+      dbPath(dbId, '/organization/apply'),
+      { operation, expected_fingerprint: expectedFingerprint },
+    );
+    if (!data.data) throw new Error(data.error || 'Could not apply the change');
     return data.data;
   },
 

@@ -14,7 +14,7 @@ use psf_guard::{
     config::ServerAuthConfig,
     server::{
         auth::{self, ServerAuth},
-        handlers,
+        handlers, organization,
         state::AppState,
         user_admin,
     },
@@ -54,6 +54,10 @@ fn app() -> Router {
 }
 
 fn app_with_auth(config: ServerAuthConfig) -> Router {
+    app_with_management(config, true)
+}
+
+fn app_with_management(config: ServerAuthConfig, allow_management: bool) -> Router {
     let state = Arc::new(AppState::new_for_test(
         Connection::open_in_memory().unwrap(),
     ));
@@ -62,13 +66,18 @@ fn app_with_auth(config: ServerAuthConfig) -> Router {
             .unwrap()
             .unwrap(),
     ));
-    state.set_allow_database_management(true);
+    state.set_allow_database_management(allow_management);
 
     let api = Router::new()
         .route("/auth/status", get(auth::status))
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
         .route("/info", get(handlers::get_server_info))
+        .route(
+            "/db/{db_id}/organization/preview",
+            post(organization::preview),
+        )
+        .route("/db/{db_id}/organization/apply", post(organization::apply))
         .route(
             "/catalog",
             get(|| async { "catalog" }).put(|| async { "changed" }),
@@ -158,6 +167,39 @@ fn user_management_app(directory: &tempfile::TempDir) -> Router {
         ))
         .with_state(state);
     Router::new().nest("/api", api)
+}
+
+#[tokio::test]
+async fn organization_requires_an_editor_and_database_management() {
+    for (allow_management, username, password) in [
+        (true, "viewer", "viewer-secret"),
+        (false, "editor", "editor-secret"),
+    ] {
+        let app = app_with_management(auth_config(), allow_management);
+        let (_, cookie, _) = login(&app, username, password).await;
+        let operation = serde_json::json!({
+            "kind": "merge_targets", "source_target_id": 1, "destination_target_id": 2,
+        });
+        for (action, body) in [
+            ("preview", operation.clone()),
+            (
+                "apply",
+                serde_json::json!({ "operation": operation, "expected_fingerprint": "a".repeat(64) }),
+            ),
+        ] {
+            let request = Request::builder()
+                .method(Method::POST)
+                .uri(format!("/api/db/test/organization/{action}"))
+                .header(COOKIE, &cookie)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            assert_eq!(
+                app.clone().oneshot(request).await.unwrap().status(),
+                StatusCode::FORBIDDEN
+            );
+        }
+    }
 }
 
 #[tokio::test]

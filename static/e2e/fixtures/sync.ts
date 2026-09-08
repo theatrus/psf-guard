@@ -28,7 +28,7 @@ export const REVIEW_DB = 'e2e-review';
  * vendored initial schema and migrations keeps one source of truth, so these
  * catalogs move with `src/ts_schema` instead of drifting from it.
  */
-function applyRealSchema(db: InstanceType<typeof Database>): void {
+export function applyRealSchema(db: InstanceType<typeof Database>): void {
   db.exec(fs.readFileSync(path.join(TS_SCHEMA_DIR, 'initial_schema.sql'), 'utf8'));
   const migrations = fs
     .readdirSync(path.join(TS_SCHEMA_DIR, 'migrate'))

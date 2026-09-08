@@ -9,6 +9,11 @@
 - Color-stack processing now offers RC-Astro tools per linear input channel,
   including saved tool steps and separate starless/stars FITS downloads.
 
+- Merge alternate target names in Overview and move selected exposures to an
+  existing or new target or project from Grid, with a preview before Apply.
+  Image files and grades stay unchanged, and Target Scheduler plan counts
+  follow the new grouping.
+
 ## Changed
 
 ## Fixed
