@@ -7,6 +7,7 @@
 
 pub mod artifact;
 pub mod color;
+mod execution;
 mod final_integration;
 mod janitor;
 pub mod rc_astro;
@@ -2090,6 +2091,35 @@ fn run_group(
         worker_policy,
         cancel,
     } = job;
+    let available_memory = crate::concurrency::available_memory_bytes();
+    let reference_path = &group
+        .frames
+        .first()
+        .ok_or_else(|| "Stack group has no input frames".to_string())?
+        .path;
+    let budget = crate::concurrency::plan_workers(
+        None,
+        worker_policy,
+        crate::concurrency::Priority::Interactive,
+        crate::concurrency::probe_frame_pixels(reference_path),
+    );
+    let threads = execution::ThreadBudget::from_total(budget.workers);
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(budget.workers)
+        .thread_name(|index| format!("stack-preview-{index}"))
+        .build()
+        .map_err(|error| error.to_string())?;
+    tracing::info!(
+        job_id,
+        group_index = group.index,
+        total_worker_budget = budget.workers,
+        phase_workers = budget.workers,
+        compute_workers = threads.compute_workers,
+        preparation_workers = threads.preparation_workers,
+        serial = threads.serial,
+        rationale = %budget.rationale,
+        "Stack worker budget configured"
+    );
     let ctx = state
         .get_database(database_id)
         .ok_or_else(|| format!("Database {database_id} is no longer configured"))?;
@@ -2112,14 +2142,24 @@ fn run_group(
     // between them too. The plan partitions a multi-night group into
     // sessions, each with its own masters; a single-night group gets one
     // session and stacks exactly as before.
-    let plan = crate::calibration::resolve_or_build_master_plan(
-        &calibration_conn,
-        cache_root,
-        &light_paths,
-        Some(&directory_tree),
-        Some(cancel.as_ref()),
-        group.calibration,
-        &[],
+    let calibration_mode = group.calibration;
+    let calibration_started = std::time::Instant::now();
+    let plan = pool.install(move || {
+        crate::calibration::resolve_or_build_master_plan(
+            &calibration_conn,
+            cache_root,
+            &light_paths,
+            Some(&directory_tree),
+            Some(cancel.as_ref()),
+            calibration_mode,
+            &[],
+        )
+    });
+    tracing::info!(
+        job_id,
+        group_index = group.index,
+        elapsed_seconds = calibration_started.elapsed().as_secs_f64(),
+        "Stack calibration plan finished"
     );
     if cancel.load(Ordering::Relaxed) {
         return Ok(GroupOutcome::Cancelled);
@@ -2232,37 +2272,26 @@ fn run_group(
         reference_frame.image.channels as u64
     };
     let pixels = reference_frame.image.pixel_count();
-    let estimate = (pixels as u64)
-        .saturating_mul(output_channels)
-        .saturating_mul(STACK_BYTES_PER_OUTPUT_SAMPLE);
-    if let Some(available) = crate::concurrency::available_memory_bytes()
-        && estimate > (available as f64 * worker_policy.memory_budget_fraction) as u64
-    {
-        return Err(format!(
-            "Estimated stack memory {} MiB exceeds the configured available-memory budget",
-            estimate / (1024 * 1024)
-        ));
-    }
-    let budget = crate::concurrency::plan_workers(
-        None,
+    let pipeline_budget = execution::plan_pipeline(
+        available_memory,
         worker_policy,
-        crate::concurrency::Priority::Interactive,
-        Some(pixels),
-    );
-    let pool = ThreadPoolBuilder::new()
-        .num_threads(budget.workers)
-        .thread_name(|index| format!("stack-preview-{index}"))
-        .build()
-        .map_err(|error| error.to_string())?;
+        pixels,
+        pixels.saturating_mul(output_channels as usize),
+        &plan,
+        &threads,
+    )?;
+    let threads = pipeline_budget.threads;
     tracing::info!(
-        "Stack preview {} group {}: {} worker(s) — {}",
         job_id,
-        group.index,
-        budget.workers,
-        budget.rationale
+        group_index = group.index,
+        compute_workers = threads.compute_workers,
+        preparation_workers = threads.preparation_workers,
+        serial = threads.serial,
+        memory = %pipeline_budget.summary(),
+        "Stack pipeline memory planned"
     );
 
-    pool.install(|| {
+    let (mut stacker, mut ledger, mut points, mut orientation_vote) = pool.install(|| {
         // A checkpoint that fails to reopen — a Seiza version change, a
         // truncated file — is discarded and the group builds from scratch.
         let restored = checkpoint.and_then(|checkpoint| {
@@ -2301,7 +2330,7 @@ fn run_group(
             }
         });
         let mut orientation_vote = OrientationVote::default();
-        let (mut stacker, mut ledger, mut points) = match restored {
+        let (stacker, ledger, points) = match restored {
             Some((stacker, manifest)) => {
                 // Replay the checkpointed ledger: the per-frame record, the
                 // counters, and each accepted frame's orientation vote. The
@@ -2442,16 +2471,19 @@ fn run_group(
                 (stacker, ledger, Vec::new())
             }
         };
-        // The reference frame alone is the first depth on the curve and the
-        // baseline every later depth is read against: one frame's noise.
-        if points.is_empty()
-            && let Some(sample) = seiza_stacking::measure_depth(stacker.view())
-        {
-            points.push(snr::point(sample, integrated_exposure(&ledger)));
-        }
-        let save_checkpoint = |stacker: &LiveStacker,
-                               ledger: &[resume::ResumeFrame],
-                               points: &[snr::SnrPoint]| {
+        Ok::<_, String>((stacker, ledger, points, orientation_vote))
+    })?;
+    // The reference frame alone is the first depth on the curve and the
+    // baseline every later depth is read against: one frame's noise.
+    if points.is_empty()
+        && let Some(sample) = pool.install(|| seiza_stacking::measure_depth(stacker.view()))
+    {
+        points.push(snr::point(sample, integrated_exposure(&ledger)));
+    }
+    let save_checkpoint = |stacker: &LiveStacker,
+                           ledger: &[resume::ResumeFrame],
+                           points: &[snr::SnrPoint]| {
+        pool.install(|| {
             // A quality-ordered build is a full restack by nature. Writing its
             // accumulator here would leave a checkpoint no later build can
             // extend, in place of the capture-order one that can be.
@@ -2504,105 +2536,125 @@ fn run_group(
                 tracing::warn!("Failed to save stack checkpoint: {error}");
                 resume::discard(cache_root, database_id, group_target_id, &group_filter_name);
             }
-        };
+        })
+    };
 
-        // Pending frames keep their index into `group.frames`, which is what
-        // the calibration plan's session assignments are aligned with.
-        let pending: Vec<(usize, &PreparedFrame)> =
-            group.frames.iter().enumerate().skip(ledger.len()).collect();
-        // Reads, calibration, registration and normalization overlap across
-        // frames while integration stays in this order, so the accumulator
-        // sees exactly the sequence a frame-at-a-time loop would. A frame
-        // declaring itself normalized is put on the same 16-bit scale the
-        // rest of the catalog uses as it is read.
-        let pipeline = seiza_stacking::PipelineOptions {
-            normalized_full_scale: Some(crate::image_io::NORMALIZED_FULL_SCALE),
-            ..seiza_stacking::PipelineOptions::default()
-        };
-        let mut cancelled = false;
-        // Depths already behind us were measured by the build that wrote the
-        // checkpoint, so only the ones ahead split this run's batches.
-        let start_depth = ledger.len();
-        let mut checkpoints: std::collections::VecDeque<usize> =
-            seiza_stacking::checkpoint_depths(start_depth + pending.len())
-                .into_iter()
-                .filter(|depth| *depth > start_depth)
-                .collect();
-        // Consecutive frames of one calibration session push as one
-        // pipelined batch, with the session's masters swapped in first. The
-        // frames after the reference are chronological, so a night is one
-        // batch and a single-session group is exactly one call. On a
-        // resumed stack this also replaces whatever masters the checkpoint
-        // stored with the ones this batch needs.
-        // Frames the stacker turned away for calibration, folded into the
-        // group warning below: each carries its reason in the frame list,
-        // but nobody reads a hundred rows to learn that six frames shared
-        // one cause.
-        let mut calibration_rejections: Vec<String> = Vec::new();
-        let mut batch_start = 0usize;
-        while batch_start < pending.len() && !cancelled {
-            let session = plan.assignments[pending[batch_start].0];
-            let mut batch_end = pending[batch_start..]
-                .iter()
-                .position(|(index, _)| plan.assignments[*index] != session)
-                .map(|offset| batch_start + offset)
-                .unwrap_or(pending.len());
-            // A batch also ends at the next depth the curve is measured at.
-            // The accumulator can only be read between batches, and the
-            // doubling ladder keeps this to about one extra boundary per
-            // doubling — nine of them across five hundred frames.
-            if let Some(&next) = checkpoints.front() {
-                let limit = next.saturating_sub(start_depth);
-                if limit > batch_start {
-                    batch_end = batch_end.min(limit);
-                }
+    // Pending frames keep their index into `group.frames`, which is what
+    // the calibration plan's session assignments are aligned with.
+    let pending: Vec<(usize, &PreparedFrame)> =
+        group.frames.iter().enumerate().skip(ledger.len()).collect();
+    // Reads, calibration, registration and normalization overlap across
+    // frames while integration stays in this order, so the accumulator
+    // sees exactly the sequence a frame-at-a-time loop would. A frame
+    // declaring itself normalized is put on the same 16-bit scale the
+    // rest of the catalog uses as it is read.
+    // Only the pipeline uses the reduced compute allowance. Its readers are
+    // joined before any SNR, checkpoint or final-processing work uses `pool`.
+    let pipeline_pool = if threads.serial {
+        None
+    } else {
+        Some(
+            ThreadPoolBuilder::new()
+                .num_threads(threads.compute_workers)
+                .thread_name(|index| format!("stack-pipeline-{index}"))
+                .build()
+                .map_err(|error| error.to_string())?,
+        )
+    };
+    let pipeline_pool = pipeline_pool.as_ref().unwrap_or(&pool);
+    let pipeline = pipeline_budget.options;
+    let mut cancelled = false;
+    // Depths already behind us were measured by the build that wrote the
+    // checkpoint, so only the ones ahead split this run's batches.
+    let start_depth = ledger.len();
+    let mut checkpoints: std::collections::VecDeque<usize> =
+        seiza_stacking::checkpoint_depths(start_depth + pending.len())
+            .into_iter()
+            .filter(|depth| *depth > start_depth)
+            .collect();
+    // Consecutive frames of one calibration session push as one
+    // pipelined batch, with the session's masters swapped in first. The
+    // frames after the reference are chronological, so a night is one
+    // batch and a single-session group is exactly one call. On a
+    // resumed stack this also replaces whatever masters the checkpoint
+    // stored with the ones this batch needs.
+    // Frames the stacker turned away for calibration, folded into the
+    // group warning below: each carries its reason in the frame list,
+    // but nobody reads a hundred rows to learn that six frames shared
+    // one cause.
+    let mut calibration_rejections: Vec<String> = Vec::new();
+    let mut batch_start = 0usize;
+    while batch_start < pending.len() && !cancelled {
+        let session = plan.assignments[pending[batch_start].0];
+        let mut batch_end = pending[batch_start..]
+            .iter()
+            .position(|(index, _)| plan.assignments[*index] != session)
+            .map(|offset| batch_start + offset)
+            .unwrap_or(pending.len());
+        // A batch also ends at the next depth the curve is measured at.
+        // The accumulator can only be read between batches, and the
+        // doubling ladder keeps this to about one extra boundary per
+        // doubling — nine of them across five hundred frames.
+        if let Some(&next) = checkpoints.front() {
+            let limit = next.saturating_sub(start_depth);
+            if limit > batch_start {
+                batch_end = batch_end.min(limit);
             }
-            let batch = &pending[batch_start..batch_end];
-            let paths: Vec<PathBuf> = batch.iter().map(|(_, frame)| frame.path.clone()).collect();
-            // Auto mode's contract: a calibration problem is something to
-            // warn about and work around, never a reason to abandon a stack
-            // half-integrated. A swap the stacker refuses falls back to
-            // stacking this session's frames raw, and the group warning says
-            // so and why. Forced calibration keeps the hard error: the user
-            // explicitly asked for these masters.
-            let mut calibration_bypassed = false;
-            if let Err(error) = stacker.set_calibration(plan.sessions[session].masters.clone()) {
-                if group.calibration == crate::calibration::CalibrationMode::On {
-                    return Err(error.to_string());
-                }
-                tracing::warn!(
-                    "session {session} masters refused; stacking its frames uncalibrated: {error}"
-                );
-                stacker
-                    .set_calibration(seiza_stacking::CalibrationMasters::default())
-                    .map_err(|error| error.to_string())?;
-                calibration_bypassed = true;
-                let note = format!(
-                    "Session {} stacked uncalibrated: its masters were refused — {error}",
-                    session + 1
-                );
-                state.stack_previews.update(job_id, |job| {
-                    let calibration = &mut job.groups[group.index].calibration;
-                    calibration.warning = Some(match calibration.warning.take() {
-                        Some(previous) if previous.contains(&note) => previous,
-                        Some(previous) => format!("{previous}. {note}"),
-                        None => note,
-                    });
+        }
+        let batch = &pending[batch_start..batch_end];
+        let paths: Vec<PathBuf> = batch.iter().map(|(_, frame)| frame.path.clone()).collect();
+        // Auto mode's contract: a calibration problem is something to
+        // warn about and work around, never a reason to abandon a stack
+        // half-integrated. A swap the stacker refuses falls back to
+        // stacking this session's frames raw, and the group warning says
+        // so and why. Forced calibration keeps the hard error: the user
+        // explicitly asked for these masters.
+        let mut calibration_bypassed = false;
+        if let Err(error) =
+            pool.install(|| stacker.set_calibration(plan.sessions[session].masters.clone()))
+        {
+            if group.calibration == crate::calibration::CalibrationMode::On {
+                return Err(error.to_string());
+            }
+            tracing::warn!(
+                "session {session} masters refused; stacking its frames uncalibrated: {error}"
+            );
+            pool.install(|| stacker.set_calibration(seiza_stacking::CalibrationMasters::default()))
+                .map_err(|error| error.to_string())?;
+            calibration_bypassed = true;
+            let note = format!(
+                "Session {} stacked uncalibrated: its masters were refused — {error}",
+                session + 1
+            );
+            state.stack_previews.update(job_id, |job| {
+                let calibration = &mut job.groups[group.index].calibration;
+                calibration.warning = Some(match calibration.warning.take() {
+                    Some(previous) if previous.contains(&note) => previous,
+                    Some(previous) => format!("{previous}. {note}"),
+                    None => note,
                 });
-            }
-            let mut consumed = 0usize;
-            // Every frame's outcome is recorded in the callback above, so the
-            // summary adds nothing here.
-            let _report = stacker
-                .push_fits_pipelined(&paths, &pipeline, |_, outcome| {
-                    let (_, frame) = batch[consumed];
-                    consumed += 1;
-                    let exposure = frame.exposure_seconds;
-                    let (decision, retryable_failure) = match outcome {
-                        Ok(FrameDisposition::Accepted(diagnostics)) => {
-                            orientation_vote
-                                .add(diagnostics.mapping.transform().rotation_radians, exposure);
-                            (StackFrameDecision {
+            });
+        }
+        let mut consumed = 0usize;
+        // The coordinator stays outside Rayon; Seiza submits CPU work to
+        // this pool and commits outcomes in source order.
+        let batch_started = std::time::Instant::now();
+        let report = execution::run_pipeline(
+            &mut stacker,
+            &paths,
+            &pipeline,
+            pipeline_pool,
+            &threads,
+            |_, outcome| {
+                let (_, frame) = batch[consumed];
+                consumed += 1;
+                let exposure = frame.exposure_seconds;
+                let (decision, retryable_failure) = match outcome {
+                    Ok(FrameDisposition::Accepted(diagnostics)) => {
+                        orientation_vote
+                            .add(diagnostics.mapping.transform().rotation_radians, exposure);
+                        (
+                            StackFrameDecision {
                                 image_id: frame.image_id,
                                 disposition: "accepted".into(),
                                 reason: None,
@@ -2620,130 +2672,141 @@ fn run_group(
                                 source_fingerprint: Some(frame.source_fingerprint.clone()),
                                 overlap_fraction: Some(diagnostics.overlap_fraction),
                                 integrated_fraction: Some(diagnostics.integrated_fraction),
-                            }, false)
-                        }
-                        // A frame the stack turned away and one that could not be
-                        // read are both "not integrated" to a caller reading the
-                        // group's decisions; only the reason differs.
-                        Ok(FrameDisposition::Rejected(reason)) => {
-                            if let seiza_stacking::FrameRejectionReason::Calibration(message) =
-                                &reason
-                            {
-                                calibration_rejections.push(message.clone());
-                            }
-                            (rejected_decision(frame, reason.to_string()), false)
-                        }
-                        Err(error) => (rejected_decision(frame, error.to_string()), true),
-                    };
-                    ledger.push(resume::ResumeFrame {
-                        decision: decision.clone(),
-                        exposure_seconds: exposure,
-                        calibration_bypassed,
-                        retryable_failure,
-                        rotation_radians: if decision.disposition == "accepted" {
-                            decision
-                                .registered_mapping
-                                .as_ref()
-                                .map(|mapping| mapping.transform().rotation_radians)
-                        } else {
-                            None
-                        },
-                    });
-                    state.stack_previews.update(job_id, |job| {
-                        let status = &mut job.groups[group.index];
-                        status.processed_frames += 1;
-                        if matches!(decision.disposition.as_str(), "accepted") {
-                            status.accepted_frames += 1;
-                            status.total_exposure_seconds += exposure;
-                        } else {
-                            status.rejected_frames += 1;
-                        }
-                        status.frames.push(decision);
-                    });
-
-                    // Integrating one frame is the unit of work, so this is where
-                    // a stop takes effect. Frames already prepared are discarded.
-                    if cancel.load(Ordering::Relaxed) {
-                        cancelled = true;
-                        seiza_stacking::Continue::No
-                    } else {
-                        seiza_stacking::Continue::Yes
+                            },
+                            false,
+                        )
                     }
-                })
-                .map_err(|error| error.to_string())?;
-            batch_start = batch_end;
-
-            // Read the accumulator whenever this batch carried it past a
-            // depth on the ladder, and once more wherever a stop landed, so a
-            // stopped build still publishes the curve it paid for.
-            let depth = start_depth + batch_start;
-            let crossed = checkpoints.front().is_some_and(|next| *next <= depth);
-            while checkpoints.front().is_some_and(|next| *next <= depth) {
-                checkpoints.pop_front();
-            }
-            // Frames the stack turned away move the depth without moving the
-            // accepted count, and a step that integrated nothing is not a
-            // depth on the curve.
-            let advanced = points
-                .last()
-                .is_none_or(|last| last.frames < stacker.view().accepted_frames);
-            if (crossed || cancelled)
-                && advanced
-                && let Some(sample) = seiza_stacking::measure_depth(stacker.view())
-            {
-                points.push(snr::point(sample, integrated_exposure(&ledger)));
-                let exposures = accepted_exposures(&ledger);
-                let progressive =
-                    snr::ProgressiveSnr::new(order, points.clone(), &exposures);
+                    // A frame the stack turned away and one that could not be
+                    // read are both "not integrated" to a caller reading the
+                    // group's decisions; only the reason differs.
+                    Ok(FrameDisposition::Rejected(reason)) => {
+                        if let seiza_stacking::FrameRejectionReason::Calibration(message) = &reason
+                        {
+                            calibration_rejections.push(message.clone());
+                        }
+                        (rejected_decision(frame, reason.to_string()), false)
+                    }
+                    Err(error) => (rejected_decision(frame, error.to_string()), true),
+                };
+                ledger.push(resume::ResumeFrame {
+                    decision: decision.clone(),
+                    exposure_seconds: exposure,
+                    calibration_bypassed,
+                    retryable_failure,
+                    rotation_radians: if decision.disposition == "accepted" {
+                        decision
+                            .registered_mapping
+                            .as_ref()
+                            .map(|mapping| mapping.transform().rotation_radians)
+                    } else {
+                        None
+                    },
+                });
                 state.stack_previews.update(job_id, |job| {
-                    job.groups[group.index].snr = Some(progressive);
+                    let status = &mut job.groups[group.index];
+                    status.processed_frames += 1;
+                    if matches!(decision.disposition.as_str(), "accepted") {
+                        status.accepted_frames += 1;
+                        status.total_exposure_seconds += exposure;
+                    } else {
+                        status.rejected_frames += 1;
+                    }
+                    status.frames.push(decision);
                 });
-            }
-        }
 
-        if cancelled {
-            // The frames that did land are checkpointed, so building again
-            // continues from them.
-            save_checkpoint(&stacker, &ledger, &points);
-            return Ok(GroupOutcome::Cancelled);
-        }
-        // The accumulator is complete: checkpoint it before the snapshot
-        // consumes the stacker, so an additive rebuild can pick it up here.
-        save_checkpoint(&stacker, &ledger, &points);
-        // The per-frame reasons live in the frame list; the summary is what a
-        // person actually reads. One line per distinct cause, with a count.
-        if !calibration_rejections.is_empty() {
-            let mut counts: Vec<(String, usize)> = Vec::new();
-            for reason in &calibration_rejections {
-                match counts.iter_mut().find(|(existing, _)| existing == reason) {
-                    Some((_, count)) => *count += 1,
-                    None => counts.push((reason.clone(), 1)),
+                // Integrating one frame is the unit of work, so this is where
+                // a stop takes effect. Frames already prepared are discarded.
+                if cancel.load(Ordering::Relaxed) {
+                    cancelled = true;
+                    seiza_stacking::Continue::No
+                } else {
+                    seiza_stacking::Continue::Yes
                 }
-            }
-            let note = format!(
-                "{} frame(s) could not be calibrated and were left out — {}",
-                calibration_rejections.len(),
-                counts
-                    .iter()
-                    .map(|(reason, count)| format!("{count}× {reason}"))
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            );
+            },
+        )
+        .map_err(|error| error.to_string())?;
+        tracing::info!(
+            job_id,
+            group_index = group.index,
+            session,
+            batch_frames = paths.len(),
+            elapsed_seconds = batch_started.elapsed().as_secs_f64(),
+            pipeline = ?report,
+            "Stack preparation batch finished"
+        );
+        batch_start = batch_end;
+
+        // Read the accumulator whenever this batch carried it past a
+        // depth on the ladder, and once more wherever a stop landed, so a
+        // stopped build still publishes the curve it paid for.
+        let depth = start_depth + batch_start;
+        let crossed = checkpoints.front().is_some_and(|next| *next <= depth);
+        while checkpoints.front().is_some_and(|next| *next <= depth) {
+            checkpoints.pop_front();
+        }
+        // Frames the stack turned away move the depth without moving the
+        // accepted count, and a step that integrated nothing is not a
+        // depth on the curve.
+        let advanced = points
+            .last()
+            .is_none_or(|last| last.frames < stacker.view().accepted_frames);
+        if (crossed || cancelled)
+            && advanced
+            && let Some(sample) = pool.install(|| seiza_stacking::measure_depth(stacker.view()))
+        {
+            points.push(snr::point(sample, integrated_exposure(&ledger)));
+            let exposures = accepted_exposures(&ledger);
+            let progressive = snr::ProgressiveSnr::new(order, points.clone(), &exposures);
             state.stack_previews.update(job_id, |job| {
-                let calibration = &mut job.groups[group.index].calibration;
-                calibration.warning = Some(match calibration.warning.take() {
-                    Some(previous) if previous.contains(&note) => previous,
-                    Some(previous) => format!("{previous}. {note}"),
-                    None => note,
-                });
+                job.groups[group.index].snr = Some(progressive);
             });
         }
-        // Last exit before the job writes anything. Orienting and rendering
-        // follow, and a stop after this point would have to clean up published
-        // artifacts.
-        if cancel.load(Ordering::Relaxed) {
-            return Ok(GroupOutcome::Cancelled);
+    }
+
+    if cancelled {
+        // The frames that did land are checkpointed, so building again
+        // continues from them.
+        save_checkpoint(&stacker, &ledger, &points);
+        return Ok(GroupOutcome::Cancelled);
+    }
+    // The accumulator is complete: checkpoint it before the snapshot
+    // consumes the stacker, so an additive rebuild can pick it up here.
+    save_checkpoint(&stacker, &ledger, &points);
+    // The per-frame reasons live in the frame list; the summary is what a
+    // person actually reads. One line per distinct cause, with a count.
+    if !calibration_rejections.is_empty() {
+        let mut counts: Vec<(String, usize)> = Vec::new();
+        for reason in &calibration_rejections {
+            match counts.iter_mut().find(|(existing, _)| existing == reason) {
+                Some((_, count)) => *count += 1,
+                None => counts.push((reason.clone(), 1)),
+            }
         }
+        let note = format!(
+            "{} frame(s) could not be calibrated and were left out — {}",
+            calibration_rejections.len(),
+            counts
+                .iter()
+                .map(|(reason, count)| format!("{count}× {reason}"))
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+        state.stack_previews.update(job_id, |job| {
+            let calibration = &mut job.groups[group.index].calibration;
+            calibration.warning = Some(match calibration.warning.take() {
+                Some(previous) if previous.contains(&note) => previous,
+                Some(previous) => format!("{previous}. {note}"),
+                None => note,
+            });
+        });
+    }
+    // Last exit before the job writes anything. Orienting and rendering
+    // follow, and a stop after this point would have to clean up published
+    // artifacts.
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(GroupOutcome::Cancelled);
+    }
+    pool.install(|| {
         let reference_headers = stacker.reference_headers().to_vec();
         let snapshot = stacker.into_snapshot().map_err(|error| error.to_string())?;
         let accepted_frames = snapshot.accepted_frames;
@@ -2752,9 +2815,18 @@ fn run_group(
             // The online checkpoint remains useful for admission and the depth
             // curve. Release its buffers before revisiting early transients.
             drop(snapshot);
-            tracing::info!(job_id, group_index = group.index, accepted_frames, "Starting final transient rejection");
+            tracing::info!(
+                job_id,
+                group_index = group.index,
+                accepted_frames,
+                "Starting final transient rejection"
+            );
             let result = final_integration::integrate(
-                &group, &ledger, &plan, cosmetic, cancel,
+                &group,
+                &ledger,
+                &plan,
+                cosmetic,
+                cancel,
                 |pass, index, count| {
                     let pass = match pass {
                         seiza_stacking::BatchStackPass::Estimate => 1,
@@ -2762,7 +2834,8 @@ fn run_group(
                     };
                     state.stack_previews.update(job_id, |job| {
                         job.groups[group.index].phase = format!(
-                            "Rejecting transients: pass {pass}/2, frame {}/{count}", index + 1
+                            "Rejecting transients: pass {pass}/2, frame {}/{count}",
+                            index + 1
                         );
                     });
                 },
@@ -2778,13 +2851,25 @@ fn run_group(
                     if matches!(frame.disposition.as_str(), "reference" | "accepted")
                         && let Some(diagnostic) = diagnostics.next()
                     {
-                        frame.integrated_fraction = Some(diagnostic.integrated_samples as f32
-                            / result.snapshot.image.sample_count() as f32);
+                        frame.integrated_fraction = Some(
+                            diagnostic.integrated_samples as f32
+                                / result.snapshot.image.sample_count() as f32,
+                        );
                     }
                 }
             });
-            let rejected_samples: u64 = result.snapshot.rejected_samples.iter().map(|&count| u64::from(count)).sum();
-            tracing::info!(job_id, group_index = group.index, rejected_samples, "Final transient rejection completed");
+            let rejected_samples: u64 = result
+                .snapshot
+                .rejected_samples
+                .iter()
+                .map(|&count| u64::from(count))
+                .sum();
+            tracing::info!(
+                job_id,
+                group_index = group.index,
+                rejected_samples,
+                "Final transient rejection completed"
+            );
             result.snapshot.image
         } else {
             snapshot.image
