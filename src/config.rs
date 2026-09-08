@@ -275,6 +275,13 @@ pub struct ServerConfig {
     /// unaffected either way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview_color: Option<bool>,
+    /// Keep a remote upload's staged file in the receive directory when the
+    /// upload fails (bad checksum, unreadable header, publish conflict).
+    /// Off by default: a failed upload leaves nothing behind. On, the
+    /// extension-less staging file stays where the log names it, which is
+    /// how you find out what a client actually sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_failed_uploads: Option<bool>,
 }
 
 /// Browser session policy. Users and password hashes live in auth.json.
@@ -299,6 +306,11 @@ impl ServerConfig {
     /// Whether previews default to colour.
     pub fn preview_color(&self) -> bool {
         self.preview_color.unwrap_or(true)
+    }
+
+    /// Whether a failed remote upload's staging file is kept for inspection.
+    pub fn keep_failed_uploads(&self) -> bool {
+        self.keep_failed_uploads.unwrap_or(false)
     }
 
     /// How generated previews are encoded. An unreadable format name is an
@@ -445,6 +457,7 @@ impl Default for ServerConfig {
             preview_format: None,
             preview_jpeg_quality: None,
             preview_color: None,
+            keep_failed_uploads: None,
         }
     }
 }
@@ -888,6 +901,19 @@ directory = "./cache"
         let policy = config.get_worker_policy();
         assert_eq!(policy.interactive_ratio, 0.05);
         assert_eq!(policy.background_ratio, 1.0);
+    }
+
+    #[test]
+    fn keep_failed_uploads_is_off_unless_the_file_says_so() {
+        let config: Config =
+            toml_edit::de::from_str("[server]\nport = 3000\n\n[cache]\ndirectory = \"./cache\"\n")
+                .unwrap();
+        assert!(!config.server.keep_failed_uploads());
+        let config: Config = toml_edit::de::from_str(
+            "[server]\nport = 3000\nkeep_failed_uploads = true\n\n[cache]\ndirectory = \"./cache\"\n",
+        )
+        .unwrap();
+        assert!(config.server.keep_failed_uploads());
     }
 
     #[test]

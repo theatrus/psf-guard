@@ -1009,6 +1009,7 @@ size:
 preview_format = "jpeg"      # "png" (default) or "jpeg"
 preview_jpeg_quality = 88    # 50–100, ignored for PNG
 preview_color = true         # colour by default for OSC frames
+keep_failed_uploads = false  # keep a rejected remote upload's staged file
 ```
 
 On a realistic stretched sub, JPEG at the default quality is roughly a third
@@ -1025,6 +1026,14 @@ demand; changing it back finds the originals still valid. An artifact is always
 served as whatever it was written as, not as whatever the setting says now.
 Nothing removes the old set — the server reports how much of the cache is in
 the other format at startup, and deleting it is yours to decide.
+
+`keep_failed_uploads` is a debugging aid for remote image intake. A frame
+arrives as an extension-less staging file in the receive directory and is
+moved into place only after its checksum, header, and destination check out;
+a rejected upload normally leaves nothing behind. With the key on, the staged
+file stays, and the log names it, so what the client actually sent can be
+examined. Published frames take the receive directory's usual permissions
+(umask or default ACL) rather than a temporary file's `0600`.
 
 `preview_color` also decides which rendition background pre-generation warms.
 A viewer that disagrees with it still gets what it asked for, generated on

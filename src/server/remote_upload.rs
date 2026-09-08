@@ -36,6 +36,23 @@ const CONTENT_SHA256_HEADER: &str = "x-content-sha256";
 const MAX_UPLOAD_DIRECTORY_COMPONENT_BYTES: usize = 120;
 const CAPTURE_IDENTITY_TIME_TOLERANCE_SECS: u64 = 2;
 
+/// Whether a failed upload's staging file stays in the receive directory.
+///
+/// Process-wide like the other `[server]` knobs: set once at startup from
+/// the config file. Off, the staging file is removed when the request ends
+/// in an error, as it always was; on, it stays where the log names it so
+/// what a client actually sent can be examined.
+static KEEP_FAILED_UPLOADS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn configure_keep_failed_uploads(keep: bool) {
+    KEEP_FAILED_UPLOADS.store(keep, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn keep_failed_uploads() -> bool {
+    KEEP_FAILED_UPLOADS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub async fn upload_image(
     ctx: DbContext,
     headers: HeaderMap,
@@ -82,32 +99,36 @@ pub async fn upload_image(
         // so it must not carry a frame extension: a folder scan running
         // alongside the upload would pick up the half-written file as a
         // frame. The header read below is told the declared name instead.
-        let temporary = {
-            let upload_dir: &PathBuf = &upload_dir;
-            #[cfg(unix)]
-            {
-                // Default permissions on temp files on Linux and Unix are created
-                // 0600, accessible only for the user creating the file. By setting
-                // a permission to 0666 here, it allows the user's umask or the
-                // destination directory's default ACL to determine the
-                // permissions.
-                use std::os::unix::fs::PermissionsExt;
-                tempfile::Builder::new()
-                    .disable_cleanup(true)
-                    .permissions(std::fs::Permissions::from_mode(0o666))
-                    .tempfile_in(upload_dir)
-            }
-            #[cfg(windows)]
-            {
-                tempfile::NamedTempFile::new_in(upload_dir)
-            }
+        let keep_on_failure = keep_failed_uploads();
+        let mut builder = tempfile::Builder::new();
+        // The staging file is removed when the request ends in an error,
+        // unless the operator asked to keep it (`[server]
+        // keep_failed_uploads`) to see what a client sent. On success it is
+        // moved into place below, so the setting never touches a published
+        // frame.
+        builder.disable_cleanup(keep_on_failure);
+        #[cfg(unix)]
+        {
+            // A temporary file is created 0600, readable by nobody but the
+            // server. An uploaded frame is not a secret; created 0666, it
+            // takes the mode the receive directory's umask or default ACL
+            // gives every other file there.
+            use std::os::unix::fs::PermissionsExt;
+            builder.permissions(std::fs::Permissions::from_mode(0o666));
         }
-        .map_err(|error| {
+        let temporary = builder.tempfile_in(&upload_dir).map_err(|error| {
             AppError::InternalError(format!(
                 "creating upload temporary file in {}: {error}",
                 upload_dir.display()
             ))
         })?;
+        if keep_on_failure {
+            tracing::info!(
+                database = %ctx.id,
+                staged = %temporary.path().display(),
+                "Staging {filename}; the file stays there if this upload fails"
+            );
+        }
         let reopened = temporary.reopen().map_err(|error| {
             AppError::InternalError(format!("opening upload temporary file: {error}"))
         })?;

@@ -1508,6 +1508,71 @@ async fn upload_accepts_an_xisf_frame_and_imports_it_like_a_fits_one() {
 }
 
 #[tokio::test]
+async fn a_failed_upload_leaves_no_staged_file_unless_asked_to() {
+    // The staging file lives in the receive directory without an extension.
+    // A rejected upload must not leave it there — unless the operator turned
+    // on `keep_failed_uploads` to see what a client sent.
+    let fixture = Fixture::new();
+    let receive_dir = fixture.images_a.clone();
+    let staged = |dir: &std::path::Path| -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().is_file())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    let before = staged(&receive_dir);
+    let image = fits_bytes("M 81", "2026-07-24T06:00:00");
+
+    remote_upload::configure_keep_failed_uploads(false);
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "m81-001.fits",
+        &image,
+        &sha256(b"not the bytes that were sent"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(
+        staged(&receive_dir),
+        before,
+        "a rejected upload is cleaned up"
+    );
+
+    remote_upload::configure_keep_failed_uploads(true);
+    let (status, _) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "m81-001.fits",
+        &image,
+        &sha256(b"not the bytes that were sent"),
+    )
+    .await;
+    remote_upload::configure_keep_failed_uploads(false);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let after = staged(&receive_dir);
+    assert_eq!(
+        after.len(),
+        before.len() + 1,
+        "the staged file is kept: {after:?}"
+    );
+    let kept = after.iter().find(|name| !before.contains(name)).unwrap();
+    assert!(
+        kept.starts_with(".tmp") && !kept.ends_with(".fits"),
+        "the staged file is the extension-less temporary, not a published frame: {kept}"
+    );
+    assert_eq!(image_count(&fixture.database_a), 0);
+}
+
+#[tokio::test]
 async fn upload_still_rejects_a_non_image_extension() {
     let fixture = Fixture::new();
     let image = fits_bytes("M 81", "2026-07-24T06:00:00");

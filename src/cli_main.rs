@@ -1235,6 +1235,7 @@ pub fn main() -> Result<()> {
                     worker_policy,
                     preview_encoding,
                     preview_color_default,
+                    app_config.server.keep_failed_uploads(),
                     astrometry_config,
                 )
                 .await
