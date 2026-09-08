@@ -81,6 +81,18 @@ calibration, and the source file needs no header edits.
 how they take part: use one whenever it matches (the default), only when raw
 frames cannot build a master, or never.
 
+## Files that move
+
+Capture software drops calibration frames where it likes; a filer or a hand
+then moves them into the calibration tree. Both ends are supported. When a
+frame is imported from a new path and the library holds a row of the same
+kind, file name, and capture time whose file is no longer where it was, that
+row learns the new path and keeps its identity — its validity mark and the
+masters built from it survive. At stack time a row whose file has moved is
+followed by name, and a file is handed to the integrator once even when two
+rows point at it, so a stale row can no longer fail a master with a
+duplicate-input error.
+
 ## Upgrades and backups
 
 PSF Guard keeps its own tables inside the scheduler catalog and upgrades them
