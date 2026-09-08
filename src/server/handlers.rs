@@ -515,9 +515,9 @@ pub(crate) fn require_registry_path(state: &AppState) -> Result<std::path::PathB
 /// reachable over the network could otherwise register an arbitrary path and
 /// read it back through the normal API.
 ///
-/// It deliberately does NOT cover writes that stay inside an already
-/// configured database — grading, project and target edits, exposure plans,
-/// and sync. Those touch only data the operator already pointed the server at.
+/// Bulk target merges and exposure moves also require this opt-in. Ordinary
+/// grading, scheduler field edits, exposure plans, and sync do not: those
+/// touch only data the operator already pointed the server at.
 pub(super) fn require_database_management_allowed(state: &AppState) -> Result<(), AppError> {
     if state.database_management_allowed() {
         Ok(())
@@ -525,7 +525,7 @@ pub(super) fn require_database_management_allowed(state: &AppState) -> Result<()
         Err(AppError::Forbidden(
             "database management is disabled on this server. Restart the server \
             with --allow-database-management to register, create, import, or \
-            export databases."
+            export databases or reorganize targets and exposures."
                 .into(),
         ))
     }

@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useHotkeys } from 'react-hotkeys-hook';
+import { FolderInput } from 'lucide-react';
 import { apiClient } from '../api/client';
 import type { Image } from '../api/types';
 import { GradingStatus } from '../api/types';
@@ -42,6 +43,7 @@ import { thumbnailGridColumns } from '../utils/thumbnailSizing';
 import { useScopedQuality } from '../hooks/useSequenceAnalysis';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import SecondaryScoreToggle from './SecondaryScoreToggle';
+import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog';
 import { matchesStatusFilter, statusFilterLabel } from '../utils/statusFilter';
 
 interface GroupedImageGridProps {
@@ -85,6 +87,12 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const grading = useGrading(dbId!);
   const { advanceOnGrade } = useDisplayPreferences();
   const [lastSelectedImageId, setLastSelectedImageId] = useState<number | null>(null);
+  const [organizationScope, setOrganizationScope] = useState<OrganizationScope | null>(null);
+  const { data: serverInfo } = useQuery({
+    queryKey: ['serverInfo'],
+    queryFn: apiClient.getServerInfo,
+    staleTime: 5 * 60 * 1000,
+  });
   const selectionAnchorIdRef = useRef<number | null>(null);
   const selectionBaseIdsRef = useRef<Set<number>>(new Set());
 
@@ -114,6 +122,11 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     refetchIntervalInBackground: true,
   });
   useStableScrollAnchor(containerRef, !isLoading);
+
+  const imagesToMove = allImages.filter(image => selectedImages.has(image.id));
+  const canMoveImages = imagesToMove.length > 0
+    && imagesToMove.length === selectedImages.size
+    && imagesToMove.every(image => image.target_id === imagesToMove[0].target_id);
 
   // Filter images based on current filters
   const filteredImages = useMemo(() => {
@@ -894,6 +907,28 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                 canWrite={grading.canWrite}
                 className="toolbar-button compact quality-scan-button"
               />
+              {grading.canWrite && serverInfo?.allow_database_management && (
+                <button
+                  type="button"
+                  className="toolbar-button compact organization-action"
+                  disabled={!canMoveImages}
+                  title={canMoveImages ? 'Move selected exposures to another target or project' : 'Select exposures from one target to move'}
+                  onClick={() => {
+                    if (!dbId || !canMoveImages) return;
+                    const source = imagesToMove[0];
+                    setOrganizationScope({
+                      kind: 'move_images',
+                      dbId,
+                      sourceTargetId: source.target_id,
+                      sourceTargetName: source.target_name,
+                      sourceProjectId: source.project_id,
+                      imageIds: imagesToMove.map(image => image.id),
+                    });
+                  }}
+                >
+                  <FolderInput size={14} aria-hidden="true" /> Move exposures
+                </button>
+              )}
             </div>
             
             <div className="stats-section">
@@ -1071,6 +1106,20 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
         </div>
       </div>
 
+      {organizationScope && (
+        <OrganizationDialog
+          scope={organizationScope}
+          onClose={() => setOrganizationScope(null)}
+          onApplied={result => {
+            const params = new URLSearchParams({
+              db: organizationScope.dbId,
+              project: String(result.project_id),
+              target: String(result.target_id),
+            });
+            navigate(`/grid?${params}`);
+          }}
+        />
+      )}
     </>
   );
 }

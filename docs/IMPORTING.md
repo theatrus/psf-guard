@@ -166,6 +166,41 @@ of attaching to an existing name or coordinate match. `--lights-only` and
 `--calibration-only` scope the run to one frame kind. `remove-imported` can
 remove projects created by an import; always preview it first.
 
+## Organize projects and targets
+
+Overview's **Edit** actions rename projects and targets, move a whole target
+to another project, or merge projects. **Merge target** combines alternate
+names for the same target: choose the destination project and target, then
+review **Preview merge** before choosing **Apply merge**. The destination
+keeps its name and framing. Its exposures and the source target's exposures
+share one target after the merge. The emptied source target is removed; its
+project remains.
+
+To split a target, select exposures from that target in Grid and choose
+**Move exposures**. The destination can be an existing target, a new target in
+an existing project, or a new project and target. **Preview move** shows the
+destination and affected exposure counts before **Apply move** writes them.
+Afterward, Grid opens the destination. Select exposures from one source target
+at a time; a selection spanning targets must be moved separately.
+
+Organization stays within one database and one Target Scheduler profile.
+These controls require an editor account and database management to be enabled
+(or the desktop app). A preview changes nothing. If relevant catalog records
+change before Apply, PSF Guard asks for a fresh preview.
+
+Image files, capture metadata, grades, rejection reasons, and image GUIDs do
+not change. Merging moves the source exposure plans with their identities.
+Splitting creates separate inactive plans for the moved exposures and updates
+the source and destination counts. New targets are inactive, and new projects
+start in the Inactive state; activate and configure their plans separately
+when they should drive acquisition.
+
+These edits organize this catalog. A later sync that imports scheduler
+structure can restore the grouping held by that source database. Make the
+same organizational change in the authoritative scheduler when that grouping
+must survive a subsequent sync. Importing already cataloged files skips them
+and keeps their current grouping.
+
 ## Fill or refresh quality data
 
 Header import leaves pixel work for a separate, low-priority server job. Each

@@ -25,6 +25,7 @@
     "@tauri-apps/plugin-updater": "^2.10.1",
     "@types/react-router-dom": "^5.3.3",
     "axios": "^1.18.0",
+    "lucide-react": "^1.42.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-hotkeys-hook": "^5.1.0",

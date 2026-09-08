@@ -400,6 +400,7 @@ pub struct DatabaseContext {
     /// held under it never stalls in-flight queries; `ensure_fresh_connection`
     /// `try_lock`s it so concurrent requests don't pile up behind a reopen.
     reopen_lock: Arc<Mutex<()>>,
+    pub(crate) organization_mutex: Arc<Mutex<()>>,
     pub file_check_cache: Arc<RwLock<FileCheckCache>>,
     pub directory_tree_cache: Arc<RwLock<Option<DirectoryTree>>>,
     /// Files proven by requests since the current tree scan began. A rebuild
@@ -637,12 +638,16 @@ fn publish_file_check_cache(
     projects_with_files: HashMap<i32, bool>,
     project_latest_image_dates: HashMap<i32, i64>,
     targets_with_files: HashMap<i32, bool>,
+    organization_revision: u64,
 ) {
     // Lock order matches record_resolved_image_file. A request that proves a
     // late file while this refresh is publishing either lands in this merge
     // or waits and patches the published snapshot immediately afterwards.
     let mut additions = additions.write().unwrap();
     let mut cache = cache.write().unwrap();
+    if cache.organization_revision != organization_revision {
+        return;
+    }
     cache.projects_with_files = projects_with_files;
     cache.project_latest_image_dates = project_latest_image_dates;
     cache.targets_with_files = targets_with_files;
@@ -750,6 +755,7 @@ impl DatabaseContext {
             db_connection: Arc::new(Mutex::new(conn)),
             db_fingerprint: Arc::new(Mutex::new(fingerprint)),
             reopen_lock: Arc::new(Mutex::new(())),
+            organization_mutex: Arc::new(Mutex::new(())),
             file_check_cache: Arc::new(RwLock::new(FileCheckCache::new())),
             directory_tree_cache: Arc::new(RwLock::new(None)),
             directory_tree_additions: Arc::new(RwLock::new(HashSet::new())),
@@ -1463,6 +1469,7 @@ impl DatabaseContext {
         &self,
     ) -> Result<(usize, usize, usize, u128), anyhow::Error> {
         let start_time = std::time::Instant::now();
+        let organization_revision = self.file_check_cache.read().unwrap().organization_revision;
         tracing::info!("🔄 Starting unified cache refresh for db={}", self.id);
 
         {
@@ -1630,6 +1637,7 @@ impl DatabaseContext {
             project_cache_updates,
             project_latest_image_updates,
             target_cache_updates,
+            organization_revision,
         );
 
         let duration = start_time.elapsed();
@@ -1733,6 +1741,62 @@ impl DatabaseContext {
         }
 
         self.ensure_cache_available()
+    }
+
+    /// Rebuild membership-dependent navigation from the catalog and the tree
+    /// already in memory. Organizing rows never needs another storage scan.
+    pub(crate) fn refresh_organization_navigation(&self, conn: &Connection) -> Result<()> {
+        let mut additions = self.file_check_additions.write().unwrap();
+        let tree = self.directory_tree_cache.read().unwrap().clone();
+        if tree.is_none() {
+            let mut cache = self.file_check_cache.write().unwrap();
+            cache.organization_revision = cache.organization_revision.wrapping_add(1);
+            cache.has_initial_data = false;
+            return Ok(());
+        }
+        let tx = conn.unchecked_transaction()?;
+        let mut projects = HashMap::new();
+        let mut dates = HashMap::<i32, i64>::new();
+        let mut targets = HashMap::new();
+        let mut stmt = tx.prepare(
+            "SELECT ai.projectId, ai.targetId, ai.acquireddate, ai.metadata
+             FROM acquiredimage ai JOIN target t ON t.Id = ai.targetId
+             JOIN project p ON p.Id = ai.projectId",
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let project_id: i32 = row.get(0)?;
+            let target_id: i32 = row.get(1)?;
+            let acquired_date: Option<i64> = row.get(2)?;
+            let metadata: String = row.get(3)?;
+            let found = tree.as_ref().is_some_and(|tree| {
+                serde_json::from_str::<serde_json::Value>(&metadata)
+                    .ok()
+                    .and_then(|metadata| metadata["FileName"].as_str().map(str::to_owned))
+                    .and_then(|filename| filename.rsplit(['\\', '/']).next().map(str::to_owned))
+                    .is_some_and(|filename| tree.find_file_first(&filename).is_some())
+            });
+            *projects.entry(project_id).or_insert(false) |= found;
+            *targets.entry(target_id).or_insert(false) |= found;
+            if let Some(date) = acquired_date {
+                dates
+                    .entry(project_id)
+                    .and_modify(|latest| *latest = (*latest).max(date))
+                    .or_insert(date);
+            }
+        }
+        drop(rows);
+        drop(stmt);
+        tx.commit()?;
+        let mut cache = self.file_check_cache.write().unwrap();
+        cache.projects_with_files = projects;
+        cache.project_latest_image_dates = dates;
+        cache.targets_with_files = targets;
+        cache.organization_revision = cache.organization_revision.wrapping_add(1);
+        cache.has_initial_data = true;
+        cache.last_updated = std::time::Instant::now();
+        additions.clear();
+        Ok(())
     }
 
     async fn refresh_directory_tree_with_progress(&self) -> Result<Arc<DirectoryTree>> {
@@ -1872,6 +1936,7 @@ impl DatabaseContext {
             db_connection: Arc::new(Mutex::new(conn)),
             db_fingerprint: Arc::new(Mutex::new(None)),
             reopen_lock: Arc::new(Mutex::new(())),
+            organization_mutex: Arc::new(Mutex::new(())),
             file_check_cache: Arc::new(RwLock::new(FileCheckCache::new())),
             directory_tree_cache: Arc::new(RwLock::new(None)),
             directory_tree_additions: Arc::new(RwLock::new(HashSet::new())),
@@ -1910,6 +1975,7 @@ impl Clone for DatabaseContext {
             db_connection: self.db_connection.clone(),
             db_fingerprint: self.db_fingerprint.clone(),
             reopen_lock: self.reopen_lock.clone(),
+            organization_mutex: self.organization_mutex.clone(),
             file_check_cache: self.file_check_cache.clone(),
             directory_tree_cache: self.directory_tree_cache.clone(),
             directory_tree_additions: self.directory_tree_additions.clone(),
@@ -2182,6 +2248,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
+            0,
         );
         let cache = ctx.file_check_cache.read().unwrap();
         assert_eq!(cache.projects_with_files.get(&42), Some(&false));
@@ -2309,6 +2376,29 @@ mod tests {
     }
 
     #[test]
+    fn old_refresh_cannot_publish_after_organization() {
+        let mut cache = FileCheckCache::new();
+        cache.organization_revision = 1;
+        cache.mark_refresh_started();
+        let cache = RwLock::new(cache);
+        let additions = RwLock::new(HashMap::new());
+        publish_file_check_cache(
+            &cache,
+            &additions,
+            HashMap::from([(1, true)]),
+            HashMap::from([(1, 99)]),
+            HashMap::from([(1, true)]),
+            0,
+        );
+        let mut cache = cache.write().unwrap();
+        cache.mark_refresh_completed();
+        assert!(!cache.has_initial_data);
+        assert!(!cache.refresh_in_progress);
+        assert!(cache.projects_with_files.is_empty());
+        assert!(cache.targets_with_files.is_empty());
+    }
+
+    #[test]
     fn cache_publication_keeps_live_late_additions_only() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("images");
@@ -2340,6 +2430,7 @@ mod tests {
             HashMap::from([(7, false)]),
             HashMap::new(),
             HashMap::from([(3, false)]),
+            0,
         );
         let file_cache = file_cache.read().unwrap();
         assert_eq!(file_cache.projects_with_files.get(&7), Some(&true));

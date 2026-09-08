@@ -10,6 +10,7 @@ pub mod export_settings;
 pub mod extract;
 pub mod handlers;
 pub mod import_job;
+pub mod organization;
 pub mod pairing;
 pub mod peers;
 pub mod preview_queue;
@@ -359,6 +360,12 @@ async fn run_server_internal(
             put(handlers::refresh_directory_tree_cache),
         )
         .route("/projects", get(handlers::list_projects))
+        .route("/organization/preview", post(organization::preview))
+        .route("/organization/apply", post(organization::apply))
+        .route(
+            "/organization/destinations",
+            get(organization::destinations),
+        )
         .route("/calibrations", get(handlers::get_calibration_library))
         .route(
             "/calibrations/details",
