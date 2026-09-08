@@ -8,7 +8,7 @@
 %global rustflags_debuginfo 0
 
 Name:           psf-guard
-Version:        0.9.3
+Version:        0.9.4
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -93,6 +93,11 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Mon Sep 08 2026 Yann Ramin <github@theatr.us> - 0.9.4-1
+- Browser sign-in works over direct HTTP; local servers on different ports keep separate sessions
+- Remote uploads take the receive directory's usual file permissions
+- New server option keep_failed_uploads keeps a rejected upload's staged file for inspection
+
 * Tue Sep 01 2026 Yann Ramin <github@theatr.us> - 0.9.3-1
 - Images tab Status filter works again
 - Master darks, biases, and flats from PixInsight or Siril match and calibrate stacks
