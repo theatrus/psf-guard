@@ -1418,6 +1418,8 @@ export interface SchedulerSyncResponse {
   grades: SchedulerSyncGradeCounts | null;
   grade_filled: number;
   grade_preserved: number;
+  /** Local import/upload rows recognized as telescope frames and updated in place; absent on old previews. */
+  adopted?: number;
   imagedata_bytes: number;
   total_inserted: number;
   total_updated: number;

@@ -116,6 +116,7 @@ filters remain available.
 | Project, target, template, plan | Stable GUID | Directional source wins |
 | Rule weight | Project GUID plus name | Directional source wins |
 | Captured image | Stable GUID | Insert or update capture fields |
+| Captured image whose GUID the source has never seen, when the destination already holds a row it minted itself (import or upload) for the same target, file name, and capture time within 2 s | That row | Update it in place; it takes the source GUID and capture fields, keeps a reviewed grade |
 | Existing reviewed grade during merge | Image GUID | Destination wins |
 | Existing Pending grade during merge | Image GUID | Fill from source |
 | Explicit grade push | Image GUID | Source grade and reason win |

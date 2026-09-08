@@ -608,6 +608,10 @@ pub struct SchedulerSyncResponse {
     pub grades: Option<SchedulerSyncGradeCounts>,
     pub grade_filled: usize,
     pub grade_preserved: usize,
+    /// Local rows (import or upload) recognized as telescope frames and
+    /// updated in place rather than duplicated. Absent on older responses.
+    #[serde(default)]
+    pub adopted: usize,
     pub imagedata_bytes: u64,
     pub total_inserted: usize,
     pub total_updated: usize,

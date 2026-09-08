@@ -209,6 +209,7 @@ fn pull_summary(summary: &crate::commands::sync::PullSummary) -> BTreeMap<String
         ("total_updated".into(), summary.total_updated() as i64),
         ("grade_filled".into(), summary.grade_filled as i64),
         ("grade_preserved".into(), summary.grade_preserved as i64),
+        ("adopted".into(), summary.adopted as i64),
         ("imagedata_bytes".into(), summary.imagedata_bytes as i64),
     ]);
     for (name, table) in [

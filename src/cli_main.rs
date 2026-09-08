@@ -990,8 +990,8 @@ pub fn main() -> Result<()> {
                 tc("exposureplan", &summary.exposureplan);
                 tc("acquiredimage", &summary.acquiredimage);
                 println!(
-                    "    grades: filled(pending→telescope)={} preserved(local)={}",
-                    summary.grade_filled, summary.grade_preserved
+                    "    grades: filled(pending→telescope)={} preserved(local)={} adopted(local rows)={}",
+                    summary.grade_filled, summary.grade_preserved, summary.adopted
                 );
                 if summary.imagedata_synced {
                     tc("imagedata", &summary.imagedata);
