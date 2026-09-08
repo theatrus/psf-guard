@@ -22,7 +22,7 @@
     "@tanstack/react-query": "^5.85.5",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-process": "^2.3.1",
-    "@tauri-apps/plugin-updater": "^2.10.1",
+    "@tauri-apps/plugin-updater": "^2.11.0",
     "@types/react-router-dom": "^5.3.3",
     "axios": "^1.18.0",
     "lucide-react": "^1.42.0",
