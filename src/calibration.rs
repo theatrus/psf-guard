@@ -1108,6 +1108,36 @@ pub fn import_calibration_frames(
             count_kind(&mut outcome, kind);
             continue;
         }
+        // A frame at a new path may be a frame the catalog already knows,
+        // moved: the filer takes calibration frames out of the drop zone
+        // nightly. The row from before the move keeps its identity — its
+        // uuid, its validity mark, the masters built from it — and only
+        // learns the new path, rather than gaining a twin whose old path
+        // resolves to the same file at stack time.
+        let moved_from = if existing.is_none() {
+            moved_calibration_row(tx, kind, frame, &frame.path)?
+        } else {
+            None
+        };
+        if let Some(previous_id) = moved_from {
+            tx.execute(
+                "UPDATE psf_guard_calibration_frame
+                 SET source_path = ?1, source_fingerprint = ?2, file_size = ?3,
+                     file_mtime_ns = ?4, updated_at = ?5
+                 WHERE id = ?6",
+                params![
+                    source_path,
+                    fingerprint,
+                    file_size,
+                    file_mtime_ns,
+                    now,
+                    previous_id
+                ],
+            )?;
+            outcome.updated += 1;
+            count_kind(&mut outcome, kind);
+            continue;
+        }
         let frame_uuid = existing
             .as_ref()
             .map(|(uuid, _)| uuid.clone())
@@ -3408,6 +3438,43 @@ fn record_master(
     Ok(())
 }
 
+/// The row of a frame that has moved to `new_path`, if the catalog has one:
+/// same kind, same file name, same capture time, and a recorded path whose
+/// file is no longer there. A row whose file still exists is a different
+/// frame that happens to share a name, and is left alone.
+fn moved_calibration_row(
+    conn: &Connection,
+    kind: CalibrationKind,
+    frame: &FrameMeta,
+    new_path: &Path,
+) -> Result<Option<i64>> {
+    let Some(name) = new_path.file_name().and_then(|name| name.to_str()) else {
+        return Ok(None);
+    };
+    // `IS`, not `=`: a frame whose header carries no date has a NULL capture
+    // time on both sides, and the file name and missing file still identify
+    // the move.
+    let mut statement = conn.prepare(
+        "SELECT id, source_path FROM psf_guard_calibration_frame
+         WHERE kind = ?1 AND captured_at IS ?2 AND source_path <> ?3
+         ORDER BY id",
+    )?;
+    let candidates = statement
+        .query_map(
+            params![kind.as_str(), frame.timestamp, canonical_text(new_path)],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(candidates.into_iter().find_map(|(id, path)| {
+        let path = Path::new(&path);
+        let same_name = path
+            .file_name()
+            .and_then(|other| other.to_str())
+            .is_some_and(|other| other.eq_ignore_ascii_case(name));
+        (same_name && !path.is_file()).then_some(id)
+    }))
+}
+
 fn ensure_rig(
     conn: &Connection,
     signature: &str,
@@ -4211,19 +4278,28 @@ fn remap_missing_sources(
         + verify_sources(&mut selection.flat, directory_tree)
 }
 
+/// Check each selected frame's file, following a file that moved, and hand
+/// back the frames whose file is there — one frame per file.
+///
+/// A file that moved (the nightly filer takes calibration frames out of the
+/// drop zone) can be in the catalog twice: the row from before the move,
+/// whose path is now empty, and the row from after. Both are the same frame,
+/// and the first one's lookup by name lands on the second one's file. Sent
+/// on together they would make Seiza refuse the whole master as a duplicate
+/// input, so a file is kept once: the row recorded at that path wins over a
+/// row that only found it by name, and the order the caller sorted the frames
+/// in is preserved for what remains.
 fn verify_sources(
     frames: &mut Vec<CalibrationFrame>,
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
 ) -> usize {
-    let mut output = Vec::with_capacity(frames.len().min(MAX_MASTER_FRAMES));
     let mut missing = 0;
-    for mut frame in std::mem::take(frames) {
-        if output.len() >= MAX_MASTER_FRAMES {
-            break;
-        }
+    // (index in the caller's order, resolved frame, found at its own path)
+    let mut resolved: Vec<(usize, CalibrationFrame, bool)> = Vec::new();
+    for (index, mut frame) in std::mem::take(frames).into_iter().enumerate() {
         if calibration_file_matches(&frame, &frame.source_path) {
             frame.source_verified = true;
-            output.push(frame);
+            resolved.push((index, frame, true));
             continue;
         }
         let Some(filename) = frame.source_path.file_name().and_then(|name| name.to_str()) else {
@@ -4244,12 +4320,42 @@ fn verify_sources(
         {
             frame.source_path = path.clone();
             frame.source_verified = true;
-            output.push(frame);
+            resolved.push((index, frame, false));
         } else {
             missing += 1;
         }
     }
-    *frames = output;
+
+    // One frame per file. A row found at its own path beats one that reached
+    // the file by name; between two of a kind, the earlier in the caller's
+    // order wins.
+    let mut winner_by_path: HashMap<PathBuf, usize> = HashMap::new();
+    for (slot, (_, frame, in_place)) in resolved.iter().enumerate() {
+        match winner_by_path.get(&frame.source_path) {
+            None => {
+                winner_by_path.insert(frame.source_path.clone(), slot);
+            }
+            Some(&current) if !resolved[current].2 && *in_place => {
+                winner_by_path.insert(frame.source_path.clone(), slot);
+            }
+            Some(_) => {}
+        }
+    }
+    let mut kept: Vec<(usize, CalibrationFrame)> = Vec::new();
+    for (slot, (index, frame, _)) in resolved.into_iter().enumerate() {
+        if winner_by_path.get(&frame.source_path) == Some(&slot) {
+            kept.push((index, frame));
+        } else {
+            tracing::info!(
+                "calibration frame {} names a file another row already covers ({}); using it once",
+                frame.frame_uuid,
+                frame.source_path.display()
+            );
+        }
+    }
+    kept.sort_by_key(|(index, _)| *index);
+    kept.truncate(MAX_MASTER_FRAMES);
+    *frames = kept.into_iter().map(|(_, frame)| frame).collect();
     missing
 }
 
@@ -5947,6 +6053,139 @@ mod tests {
             .kept
             .iter()
             .all(|frame| frame.readout_mode_name.as_deref() == Some("Extend Fullwell 2CMS")));
+    }
+
+    #[test]
+    fn a_moved_calibration_file_keeps_its_row() {
+        // The filer moves a frame from the drop zone to the calibration tree
+        // overnight. Importing the new location must not create a twin: the
+        // row keeps its uuid and learns the new path.
+        let temp = tempfile::tempdir().unwrap();
+        let incoming = temp.path().join("_Incoming").join("BIAS");
+        let filed = temp.path().join("_Calibration").join("BIAS");
+        std::fs::create_dir_all(&incoming).unwrap();
+        std::fs::create_dir_all(&filed).unwrap();
+        let name = "2026-08-25_21-15-28_R_-3.50_0.00s_0024.fits";
+        write_test_fits(&incoming.join(name), "BIAS", 100);
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        let first = crate::commands::import::headers::read_frame_meta(&incoming.join(name));
+        {
+            let tx = conn.transaction().unwrap();
+            let outcome = import_calibration_frames(&tx, &[first], Some("profile")).unwrap();
+            assert_eq!(outcome.imported, 1);
+            tx.commit().unwrap();
+        }
+        let uuid_before: String = conn
+            .query_row(
+                "SELECT frame_uuid FROM psf_guard_calibration_frame",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        std::fs::rename(incoming.join(name), filed.join(name)).unwrap();
+        let moved = crate::commands::import::headers::read_frame_meta(&filed.join(name));
+        {
+            let tx = conn.transaction().unwrap();
+            let outcome = import_calibration_frames(&tx, &[moved], Some("profile")).unwrap();
+            assert_eq!((outcome.imported, outcome.updated), (0, 1), "{outcome:?}");
+            tx.commit().unwrap();
+        }
+        let (count, uuid_after, path_after): (i64, String, String) = conn
+            .query_row(
+                "SELECT count(*), max(frame_uuid), max(source_path) FROM psf_guard_calibration_frame",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "one frame, one row");
+        assert_eq!(uuid_after, uuid_before, "the row kept its identity");
+        assert!(
+            path_after.contains("_Calibration"),
+            "and learned the new path: {path_after}"
+        );
+
+        // A different frame that merely reuses the name, while the first
+        // file is still present, is its own row.
+        let elsewhere = temp.path().join("_Other").join("BIAS");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        write_test_fits(&elsewhere.join(name), "BIAS", 101);
+        let other = crate::commands::import::headers::read_frame_meta(&elsewhere.join(name));
+        {
+            let tx = conn.transaction().unwrap();
+            let outcome = import_calibration_frames(&tx, &[other], Some("profile")).unwrap();
+            assert_eq!(outcome.imported, 1, "{outcome:?}");
+            tx.commit().unwrap();
+        }
+    }
+
+    #[test]
+    fn a_stale_twin_of_a_moved_file_does_not_double_a_master() {
+        // Both rows exist (imported before and after the move); the stale
+        // one resolves to the same file by name. The resolver keeps the file
+        // once, preferring the row recorded at the real path.
+        let temp = tempfile::tempdir().unwrap();
+        let filed = temp.path().join("_Calibration").join("BIAS");
+        std::fs::create_dir_all(&filed).unwrap();
+        let name = "2026-08-25_21-15-28_R_-3.50_0.00s_0024.fits";
+        write_test_fits(&filed.join(name), "BIAS", 100);
+        let tree = crate::directory_tree::DirectoryTree::build(temp.path()).unwrap();
+
+        let row = |id: i64, uuid: &str, path: PathBuf| CalibrationFrame {
+            id,
+            frame_uuid: uuid.into(),
+            rig_uuid: "r".into(),
+            kind: CalibrationKind::Bias,
+            source_path: path,
+            source_fingerprint: "x".into(),
+            captured_at: Some(1_000),
+            telescope: Some("Scope".into()),
+            camera: Some("Camera".into()),
+            width: Some(4),
+            height: Some(4),
+            channels: Some(1),
+            binning_x: Some(1),
+            binning_y: Some(1),
+            gain: Some(100),
+            offset: Some(20),
+            readout_mode: None,
+            readout_mode_name: None,
+            is_master: false,
+            bayer_pattern: None,
+            exposure_s: Some(300.0),
+            camera_temp: Some(-10.0),
+            filter: Some("Ha".into()),
+            focal_length_mm: None,
+            rotation: None,
+            valid_direction: None,
+            source_verified: false,
+        };
+        let stale = row(
+            69,
+            "stale",
+            temp.path().join("_Incoming").join("BIAS").join(name),
+        );
+        let real = row(74, "real", filed.join(name));
+        let mut frames = vec![stale, real];
+        let missing = verify_sources(&mut frames, Some(&tree));
+        assert_eq!(missing, 0);
+        assert_eq!(frames.len(), 1, "one file, one input");
+        assert_eq!(
+            frames[0].frame_uuid, "real",
+            "the row recorded at the file wins"
+        );
+        assert!(frames[0].source_verified);
+
+        // With only the stale row, the moved file is still found and used.
+        let mut only_stale = vec![row(
+            69,
+            "stale",
+            temp.path().join("_Incoming").join("BIAS").join(name),
+        )];
+        assert_eq!(verify_sources(&mut only_stale, Some(&tree)), 0);
+        assert_eq!(only_stale.len(), 1);
+        assert_eq!(only_stale[0].source_path, filed.join(name));
     }
 
     #[test]

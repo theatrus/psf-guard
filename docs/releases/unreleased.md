@@ -33,3 +33,7 @@
 - PixInsight master bias files with a blank `FILTER` header now work during
   stacking. The cached master preserves the undefined value without requiring
   edits to the original FITS or XISF file.
+- A calibration frame that was imported, then moved by a filer and imported
+  again no longer fails every master with `duplicate calibration input`: the
+  import updates the row's path instead of adding a twin, and stacking hands
+  a file to the integrator once even when two rows point at it.
