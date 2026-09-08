@@ -80,10 +80,25 @@ compute pool. Integration remains in source order, including frame decisions,
 calibration-session boundaries, signal-to-noise measurements, and checkpoints.
 
 The existing interactive worker allowance is split between bounded read/decode
-workers and the compute pool. A one-worker allowance keeps the sequential path.
+workers and the compute pool, reserving at most two reader slots. A one-worker
+allowance keeps the sequential path. Calibration setup, initialization, depth
+measurements, checkpoints, and final processing use the full allowance after
+readers have drained; those stages never run concurrently with preparation.
 The memory plan reserves stack buffers, every session's resident masters, and
 the active-master replacement peak before allowing queued frames. If even one
-preparation worker cannot fit the estimate, the build reports that clearly.
+preparation worker cannot fit but known RAM supports the serial-processing
+estimate, the build processes one frame at a time with the full compute pool
+and logs the memory fallback. If serial processing cannot fit either, the build
+reports that clearly.
+Admission reserves 40 bytes per output sample before budgeting preparation.
+Initialization, checkpoints, and final rejection have a separate 96-byte
+per-sample estimate because their peaks do not overlap the preparation queue.
+Both checks include the resident masters and two copies of the largest active
+master set. If available RAM cannot be queried, preparation gets a bounded
+1 GiB allowance, but the serial-processing peak cannot be checked.
+An unknown-RAM build that cannot fit one preparation worker in that allowance
+fails instead of silently starting an unbounded serial job. The intentional
+one-CPU serial path applies the same allowance to its single-frame workspace.
 These are reference-sized estimates, not a hard process-memory limit: larger
 source frames, decoder scratch buffers, and other activity can need more RAM.
 Separate channels and queued stack jobs still run one at a time.

@@ -20,7 +20,9 @@
 
 - Stack previews now overlap frame preparation within the configured worker
   and memory budgets instead of silently preparing frames sequentially.
-  Batch logs expose execution mode, worker counts, and stage timings.
+  Builds that fit serial processing but cannot fit a preparation queue keep
+  working with one frame at a time. Batch logs expose execution mode, worker
+  counts, memory fallback, and stage timings.
 
 - Completed stacks revisit early admitted samples to reject bright transient
   trails, with pass/frame progress and consistent results after resuming a
