@@ -639,7 +639,14 @@ impl StackPreviewManager {
     pub(super) fn prune_cache(&self, cache_root: &FsPath) {
         let keep = self.cache_keep_set(cache_root);
         janitor::prune(cache_root, &keep, SEIZA_STACKING_VERSION);
-        rc_astro::prune_rc_astro_cache(cache_root);
+        let active_sources = self
+            .jobs
+            .lock()
+            .unwrap()
+            .values()
+            .map(|job| (job.job_id.clone(), job.artifact_revision.clone()))
+            .collect();
+        rc_astro::prune_rc_astro_cache(cache_root, &active_sources);
     }
 
     pub(crate) async fn acquire_maintenance_permit(
@@ -1226,13 +1233,80 @@ pub async fn apply_stack_preview_stretch(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, job_id, group_index)): Path<(String, String, usize)>,
+    Query(query): Query<StackProcessingSelectionQuery>,
     Json(request): Json<stretch::StackViewProcessingRequest>,
 ) -> Result<axum::response::Response, AppError> {
-    validate_job_id(&job_id)?;
-    let job = if let Some(job) = state.stack_previews.get(&job_id) {
+    let (source_key, revision, source) =
+        stack_processing_source(&state, &ctx, &job_id, group_index)?;
+    validate_processing_revision(query.v.as_deref(), &revision)?;
+    let result = stretch::apply_to_fits(
+        state,
+        ctx.id.clone(),
+        ctx.cache_dir_path.clone(),
+        source_key,
+        revision,
+        source,
+        request,
+        !query.poll,
+    )
+    .await?;
+    Ok(stretch::apply_response(result))
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct StackProcessingSelectionQuery {
+    pub v: Option<String>,
+    #[serde(default)]
+    pub poll: bool,
+}
+
+pub async fn get_stack_preview_processing(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, job_id, group_index)): Path<(String, String, usize)>,
+    Query(query): Query<StackProcessingSelectionQuery>,
+) -> Result<Json<ApiResponse<Option<stretch::StackStretchPreview>>>, AppError> {
+    let (source_key, revision, _) = stack_processing_source(&state, &ctx, &job_id, group_index)?;
+    validate_processing_revision(query.v.as_deref(), &revision)?;
+    Ok(Json(ApiResponse::success(stretch::selected_processing(
+        &ctx.cache_dir_path,
+        &source_key,
+        &revision,
+    )?)))
+}
+
+pub async fn clear_stack_preview_processing(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, job_id, group_index)): Path<(String, String, usize)>,
+    Query(query): Query<StackProcessingSelectionQuery>,
+) -> Result<StatusCode, AppError> {
+    let (source_key, revision, _) = stack_processing_source(&state, &ctx, &job_id, group_index)?;
+    validate_processing_revision(query.v.as_deref(), &revision)?;
+    stretch::clear_selected_processing(&ctx.cache_dir_path, &source_key, &revision)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn validate_processing_revision(expected: Option<&str>, actual: &str) -> Result<(), AppError> {
+    if expected.is_some_and(|expected| expected != actual) {
+        return Err(AppError::Conflict(
+            "The stack was rebuilt; refresh its processing selection".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn stack_processing_source(
+    state: &Arc<AppState>,
+    ctx: &DatabaseContext,
+    job_id: &str,
+    group_index: usize,
+) -> Result<(String, String, PathBuf), AppError> {
+    validate_job_id(job_id)?;
+    let job = if let Some(job) = state.stack_previews.get(job_id) {
         job
     } else {
-        let bytes = std::fs::read(manifest_path(&ctx.cache_dir_path, &job_id))
+        let bytes = std::fs::read(manifest_path(&ctx.cache_dir_path, job_id))
             .map_err(|_| AppError::NotFound)?;
         serde_json::from_slice::<StackPreviewJob>(&bytes).map_err(|error| {
             AppError::InternalError(format!("Invalid stack preview manifest: {error}"))
@@ -1246,18 +1320,12 @@ pub async fn apply_stack_preview_stretch(
         .get(group_index)
         .filter(|group| group.index == group_index && group.state == StackGroupState::Ready)
         .ok_or(AppError::NotFound)?;
-    let source = fits_path(&ctx.cache_dir_path, &job_id, group.index);
-    let result = stretch::apply_to_fits(
-        state,
-        ctx.id.clone(),
-        ctx.cache_dir_path.clone(),
+    let source = fits_path(&ctx.cache_dir_path, job_id, group.index);
+    Ok((
         format!("mono:{job_id}:{}", group.index),
         job.artifact_revision,
         source,
-        request,
-    )
-    .await?;
-    Ok(stretch::apply_response(result))
+    ))
 }
 
 fn validate_request(request: &StackPreviewRequest) -> Result<(), AppError> {
@@ -3099,6 +3167,16 @@ fn publish_snr_artifact(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn processing_selection_rejects_a_stale_displayed_revision() {
+        assert!(super::validate_processing_revision(None, "current").is_ok());
+        assert!(super::validate_processing_revision(Some("current"), "current").is_ok());
+        assert!(matches!(
+            super::validate_processing_revision(Some("old"), "current"),
+            Err(super::AppError::Conflict(_))
+        ));
+    }
 
     /// The stacking pipeline opens frames on its own threads and reports only
     /// the disposition, so the exposure has to come from the record. Both

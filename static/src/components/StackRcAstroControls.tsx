@@ -8,11 +8,18 @@ import type {
   StackRcAstroResult,
 } from '../api/types';
 
+const executionOrder = new Map([['bxt', 0], ['nxt', 1], ['sxt', 2]]);
+
+function orderedSteps(steps: RcAstroProcessing['steps']): RcAstroProcessing['steps'] {
+  return [...steps].sort((left, right) =>
+    (executionOrder.get(left.tool) ?? 3) - (executionOrder.get(right.tool) ?? 3)
+  );
+}
+
 /**
  * RC-Astro tool chain controls (BlurXTerminator, NoiseXTerminator,
  * StarXTerminator), rendered from each tool's live schema so the knobs stay
- * correct across CLI upgrades. Nothing renders when the CLI is not
- * installed on the server.
+ * correct across CLI upgrades. Saved choices remain visible without a CLI.
  */
 export default function StackRcAstroControls({
   label,
@@ -34,17 +41,32 @@ export default function StackRcAstroControls({
     retry: false,
   });
 
-  // No install renders nothing; an install whose probe failed says so, so
-  // a broken setup is distinguishable from an absent one.
   if (!capabilities.data?.available) {
-    if (capabilities.data?.error) {
+    if (capabilities.data?.error || capabilities.error || config?.steps.length || result) {
       return (
         <section className="stack-rc-astro-controls" aria-label={`${label} RC-Astro tools`}>
           <header>
             <strong>RC-Astro tools</strong>
-            <span>unavailable</span>
+            <span>{capabilities.isPending ? 'Checking tools' : 'Unavailable'}</span>
           </header>
-          <p>{capabilities.data.error}</p>
+          <p>{capabilities.data?.error ?? capabilities.error?.message ??
+            (capabilities.isPending ? 'Checking server availability.' :
+              'RC-Astro is not installed on this server. Saved steps are retained.')}</p>
+          {!!config?.steps.length && (
+            <>
+              <ol>{orderedSteps(config.steps).map((step) => (
+                <li key={step.tool}>{step.tool.toUpperCase()}
+                  {Object.entries(step.parameters).map(([name, value]) => (
+                    <small key={name}> {name}: {String(value)}</small>
+                  ))}
+                </li>
+              ))}</ol>
+              <button type="button" disabled={disabled} onClick={() => onChange(null)}>
+                Remove RC-Astro steps
+              </button>
+            </>
+          )}
+          {result && <ResultDiagnostics result={result} />}
         </section>
       );
     }
@@ -55,8 +77,12 @@ export default function StackRcAstroControls({
   const stepFor = (tool: string) => config?.steps.find((step) => step.tool === tool);
 
   const setStep = (tool: string, parameters: Record<string, RcAstroParameterValue> | null) => {
-    const others = config?.steps.filter((step) => step.tool !== tool) ?? [];
-    const steps = parameters === null ? others : [...others, { tool, parameters }];
+    const current = config?.steps ?? [];
+    const steps = parameters === null
+      ? current.filter((step) => step.tool !== tool)
+      : current.some((step) => step.tool === tool)
+        ? current.map((step) => step.tool === tool ? { tool, parameters } : step)
+        : orderedSteps([...current, { tool, parameters }]);
     onChange(steps.length === 0 ? null : { steps });
   };
 
@@ -70,17 +96,17 @@ export default function StackRcAstroControls({
             : 'Off'}
         </span>
       </header>
-      <p>
-        Runs the server&apos;s licensed RC-Astro tools on the linear stack.
-        Star removal keeps both images, so starless and stars stretch on
-        their own.
-      </p>
+      {!!config?.steps.length && (
+        <p>{orderedSteps(config.steps).map((step) =>
+          tools.find((schema) => schema.key === step.tool)?.name ?? step.tool
+        ).join(' → ')}</p>
+      )}
       {tools.map((schema) => (
         <ToolSection
           key={schema.key}
           schema={schema}
           parameters={stepFor(schema.key)?.parameters}
-          disabled={disabled || !schema.licensed}
+          disabled={disabled}
           onToggle={(enabled) =>
             setStep(schema.key, enabled ? defaultParameters(schema) : null)
           }
@@ -90,20 +116,32 @@ export default function StackRcAstroControls({
           }}
         />
       ))}
-      {result && (
-        <div className="stack-rc-astro-diagnostics">
-          {result.steps.map((step) => (
-            <span key={step.tool}>
-              {step.name}
-              {step.device ? ` · ${step.device}` : ''}
-              {step.warnings.map((warning) => (
-                <small key={warning}>{warning}</small>
-              ))}
-            </span>
-          ))}
-        </div>
-      )}
+      {config?.steps.filter((step) => !tools.some((tool) => tool.key === step.tool)).map((step) => (
+        <label key={step.tool}>
+          <input type="checkbox" checked disabled={disabled}
+            aria-label={`${step.tool} unavailable`}
+            onChange={() => setStep(step.tool, null)} />
+          {step.tool} (unavailable)
+        </label>
+      ))}
+      {result && <ResultDiagnostics result={result} />}
     </section>
+  );
+}
+
+function ResultDiagnostics({ result }: { result: StackRcAstroResult }) {
+  return (
+    <div className="stack-rc-astro-diagnostics">
+      <span>RC-Astro {result.cli_version}</span>
+      {result.steps.map((step) => (
+        <span key={step.tool}>
+          {step.name}
+          {step.ml_version !== null ? ` · model ${step.ml_version}` : ''}
+          {step.device ? ` · ${step.device}` : ''}
+          {step.warnings.map((warning) => <small key={warning}>{warning}</small>)}
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -138,7 +176,7 @@ function ToolSection({
         <input
           type="checkbox"
           checked={enabled}
-          disabled={disabled}
+          disabled={disabled || (!schema.licensed && !enabled)}
           onChange={(event) => onToggle(event.target.checked)}
           aria-label={schema.name}
         />
@@ -154,7 +192,7 @@ function ToolSection({
                 key={parameter.name}
                 parameter={parameter}
                 value={parameters[parameter.name]}
-                disabled={disabled}
+                disabled={disabled || !schema.licensed}
                 onChange={(value) => onParameter(parameter.name, value)}
               />
             ))}

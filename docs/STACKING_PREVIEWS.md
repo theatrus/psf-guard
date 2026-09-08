@@ -541,8 +541,9 @@ instead of duplicating it. Each poll answer carries the run's live
 progress — which tool is running and the chain's overall fraction — and
 the **Apply processing** button shows it. A run that stays completely silent for ten
 minutes is killed (a first run downloads ML models; run
-`rc-astro download-models` once ahead of time). Chain results whose
-settings nobody has re-applied for two weeks are swept from the cache.
+`rc-astro download-models` once ahead of time). Unused chain results are swept
+after two weeks. A selected view or current color preview keeps the RC-Astro
+artifacts it still needs.
 
 The controls expose Seiza's identity, explicit linear, asinh,
 percentile-asinh, MTF, Generalized Hyperbolic Stretch (GHS), and Auto-MTF
@@ -557,10 +558,12 @@ inspectable.
 Applied PNG variants are content-addressed by the source artifact revision,
 restoration artifact, stretch configuration, robust-normalization policy, and
 Seiza processing versions. Reapplying the same settings reuses the cached PNG
-pair. Stretch edits also reuse a matching processed linear FITS. The active
-selection is intentionally browser-local and reversible; a reload returns to
-the durable default preview while the linear FITS remains the sole source of
-truth.
+pair. Stretch edits also reuse a matching processed linear FITS. The server
+remembers the active selection and its complete processing request for that
+exact stack revision. Reloading restores the cached image, tool/model versions,
+and editor settings without rerunning the tools. **Revert processing** clears
+that selection across reloads. Rebuilding the source stack starts a new
+selection; it never silently applies the old result to changed pixels.
 
 ![Opt-in Seiza deconvolution and display stretch controls applied to a real M44 stack preview](stack-preview-stretch.png)
 
@@ -580,14 +583,16 @@ a server keep them across restarts. On a server with accounts, viewers can
 list, apply, and export setups; saving, deleting, and importing need an
 editor.
 
-A **view** setup holds a display stretch and optional deconvolution. A
+A **view** setup holds a display stretch, optional deconvolution, and RC-Astro
+tool steps with their parameters. A
 **color** setup holds the whole pipeline: background extraction, per-channel
 input processing, and output stretches. A color setup remembers the channels
 it was saved from, and applying it to a card with different channels matches
 channels by name: the rest fall back to the default input stretch, except that
 one treatment shared by several saved channels follows the setup to every
-channel. Deconvolution never follows a setup onto a channel it did not name —
-sharpening stays opt-in per channel.
+channel. Deconvolution and RC-Astro steps never follow a setup onto a channel
+it did not name; these remain opt-in per channel. Saved tool settings remain
+visible and removable when a server lacks that tool or its license.
 
 The built-in setups are derived from the editors' own defaults and cannot be
 deleted. In **Settings → Setups**, **Export all** downloads every saved setup
@@ -663,7 +668,8 @@ The **Processing stack** editor exposes correction mode and strength, automatic
 or fixed surface selection, sample-grid density and radius, sample-search
 steps, sample and fit rejection thresholds, rejection passes, border exclusion,
 and model-specific controls. After registration it applies optional per-role
-deconvolution while each physical input is still linear, then robustly
+deconvolution and RC-Astro tools while each physical input is still linear,
+then robustly
 normalizes the result and applies that role's ordered stretch stages before
 composition. Deconvolution is independently opt-in for L/R/G/B or
 H-alpha/OIII/SII and is off for every role by default. Expand those input lanes
@@ -671,8 +677,17 @@ or RGB output to add, edit, remove, and reorder Seiza
 identity, linear, asinh, percentile-asinh, MTF, GHS, and Auto-MTF stages.
 **Apply processing stack** starts a new cached color job; **Revert edits**
 returns to the last rendered pipeline and **Reset defaults** restores additive
-background extraction, deconvolution off, one Auto-MTF stage per input, and no
+background extraction, deconvolution and RC-Astro off, one Auto-MTF stage per
+input, and no
 post-composition stage.
+
+Each color input offers the same BlurXTerminator, NoiseXTerminator, and
+StarXTerminator controls as mono view processing. Tools run before that
+channel's stretches, not on the already-stretched RGB composition. The job
+retains each tool's CLI/model version and the requested parameters. Processed
+input FITS downloads remain available; star removal preserves a separate
+stars FITS as well as the starless channel used for composition. Named color
+setups include these tool steps.
 
 Every intermediate remains `f32`, and each automatic stage resolves against
 the preceding stage's output. These are sequential transfer passes, not pixel
@@ -694,11 +709,12 @@ background extraction are rebuilt with the new additive default; a current
 artifact whose extraction was explicitly disabled keeps that choice.
 
 PSF Guard caches each set of prepared linear inputs after background
-correction, registration, optional deconvolution, and normalization. Input or
+correction, registration, optional deconvolution and RC-Astro, and
+normalization. Input or
 output stretch edits reuse those FITS files, so they do not repeat source
 loading, background fits, registration, or deconvolution. Registered channels
-may contain `NaN` at uncovered borders; Seiza keeps that mask through
-deconvolution instead of failing the color build or treating gaps as data.
+may contain `NaN` at uncovered borders; the processing pipeline preserves
+that mask through deconvolution and RC-Astro instead of treating gaps as data.
 
 ### Edge crop
 
@@ -833,8 +849,8 @@ immutable cached response for the rebuilt output.
   is not a final science product.
 - Color is a visual channel combination, not photometric or
   spectrophotometric calibration. There is no custom mixing matrix UI,
-  mosaic, drizzle, or cross-target integration. Star removal exists only
-  through the RC-Astro tools on mono stacks, not for color composites.
+  mosaic, drizzle, or cross-target integration. RC-Astro star removal runs on
+  mono stacks or linear color inputs, not on an already-stretched composite.
 - Deconvolution requires a user-supplied FWHM and one circular Gaussian PSF for
   the whole channel. It does not estimate a PSF, vary it across the field, or
   replace a final scientific restoration workflow.
@@ -855,6 +871,8 @@ GET  /api/db/{db}/projects/{project}/stack-previews/latest
 GET  /api/db/{db}/projects/{project}/stack-previews/{job}
 GET  /api/db/{db}/stack-previews/{job}/{group}/preview[?size=screen|original]
 POST /api/db/{db}/stack-previews/{job}/{group}/stretch
+GET  /api/db/{db}/stack-previews/{job}/{group}/stretch[?v=revision]
+DELETE /api/db/{db}/stack-previews/{job}/{group}/stretch[?v=revision]
 GET  /api/db/{db}/stack-previews/{job}/{group}/fits
 GET  /api/db/{db}/stack-previews/{job}/{group}/snr
 GET  /api/db/{db}/projects/{project}/stack-previews/color
@@ -868,7 +886,16 @@ GET  /api/db/{db}/stack-previews/artifact-searches/{search}
 GET  /api/db/{db}/stack-previews/artifact-searches/{search}/crops/{image}
 GET  /api/db/{db}/stack-previews/stretch/{stretch}/preview[?size=screen|original]
 GET  /api/db/{db}/stack-previews/stretch/{stretch}/fits
+GET  /api/db/{db}/stack-previews/rc-astro/{id}/fits[?stars=true]
 ```
+
+The stretch GET returns the selected cached preview or `null`. DELETE clears
+the selection and returns `204`. Send the displayed artifact revision as `v`
+on GET, POST, and DELETE; a changed revision returns `409`. An initial POST
+selects the requested processing. After `202`, repeat with `poll=true` to read
+progress without changing the selection or starting a new job. Cached
+responses include `request`, the full stretch/deconvolution/RC-Astro settings
+needed to restore the editor.
 
 Named processing setups are global rather than per-database:
 

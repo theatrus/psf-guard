@@ -6,9 +6,15 @@
 
 ## Added
 
+- Color-stack processing now offers RC-Astro tools per linear input channel,
+  including saved tool steps and separate starless/stars FITS downloads.
+
 ## Changed
 
 ## Fixed
+
+- Applied stack processing survives reloads, restoring the cached result,
+  RC-Astro versions, and editor settings. Reverting also survives reloads.
 
 - PixInsight master bias files with a blank `FILTER` header now work during
   stacking. The cached master preserves the undefined value without requiring

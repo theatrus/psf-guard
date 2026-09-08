@@ -341,6 +341,7 @@ function ColorCard({
         protections={artifact?.resolved_background_protection ?? {}}
         fallbacks={artifact?.background_protection_fallbacks ?? {}}
         deconvolutions={artifact?.resolved_input_deconvolutions ?? {}}
+        rcAstro={artifact?.resolved_input_rc_astro ?? {}}
         disabled={!canCompute || busy || unavailable}
         onApply={onProcessingApply}
       />
