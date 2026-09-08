@@ -71,6 +71,30 @@ building again continues where the stop landed instead of starting over.
 Checkpoints live in the project cache and cost one full-frame state file per
 target/channel.
 
+### Frame preparation and worker budgets
+
+Within one channel, upcoming frames can be read, calibrated, debayered,
+registered, and normalized while earlier frames are integrated. A coordinator
+outside Rayon submits CPU preparation and integration to the group's explicit
+compute pool. Integration remains in source order, including frame decisions,
+calibration-session boundaries, signal-to-noise measurements, and checkpoints.
+
+The existing interactive worker allowance is split between bounded read/decode
+workers and the compute pool. A one-worker allowance keeps the sequential path.
+The memory plan reserves stack buffers, every session's resident masters, and
+the active-master replacement peak before allowing queued frames. If even one
+preparation worker cannot fit the estimate, the build reports that clearly.
+These are reference-sized estimates, not a hard process-memory limit: larger
+source frames, decoder scratch buffers, and other activity can need more RAM.
+Separate channels and queued stack jobs still run one at a time.
+
+Logs report the configured worker split, estimated memory, actual pipeline mode
+and worker count, and batch elapsed time. Batch timing also separates read/decode,
+CPU preparation, integration, and coordinator waits. Worker-time sums overlap
+and can exceed elapsed time; they must not be added together as a wall-clock
+total. Final transient rejection still replays frames sequentially within the
+compute pool. No extra full-frame pre-measurement pass is required.
+
 ### Cache housekeeping
 
 Stack artifacts are content-addressed by job, so every rebuild writes a new

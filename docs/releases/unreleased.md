@@ -18,6 +18,10 @@
 
 ## Fixed
 
+- Stack previews now overlap frame preparation within the configured worker
+  and memory budgets instead of silently preparing frames sequentially.
+  Batch logs expose execution mode, worker counts, and stage timings.
+
 - Completed stacks revisit early admitted samples to reject bright transient
   trails, with pass/frame progress and consistent results after resuming a
   build. Low-coverage pixels and overlapping trails can still retain artifacts.
