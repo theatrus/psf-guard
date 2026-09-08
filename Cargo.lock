@@ -4968,9 +4968,9 @@ dependencies = [
 
 [[package]]
 name = "seiza"
-version = "0.18.10"
+version = "0.18.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a66f802d950d2703d2d66c574a453d5abf5eb1f000456e1b1f2fa33edf00ea5f"
+checksum = "ac6487e888f70918c5b6fc4e5e6eca050f20a272a42bde4ccc2c16e83d559d12"
 dependencies = [
  "directories",
  "image",
@@ -5083,9 +5083,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-stacking"
-version = "0.11.6"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9243f76a26b07f83c72d96494204fb940a0b6cf2c8a15dfe1f4e77ab8e467d8e"
+checksum = "a2d58f942188b2cf3f404b25e824e52d971c698e6cafb42fa87214306e8a1291"
 dependencies = [
  "rayon",
  "seiza",
@@ -5098,6 +5098,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "statrs",
  "tempfile",
  "thiserror 2.0.16",
  "zstd",
@@ -5577,6 +5578,19 @@ name = "stable_deref_trait"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
+
+[[package]]
+name = "statrs"
+version = "0.19.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1837f9a1bd13dabbdbb04489c39451482d3cdd35a6e1a0d0f3570dea2b8c8be"
+dependencies = [
+ "approx",
+ "nalgebra",
+ "num-traits",
+ "rand 0.10.2",
+ "thiserror 2.0.16",
+]
 
 [[package]]
 name = "strength_reduce"
