@@ -28,7 +28,7 @@ export const REVIEW_DB = 'e2e-review';
  * vendored initial schema and migrations keeps one source of truth, so these
  * catalogs move with `src/ts_schema` instead of drifting from it.
  */
-function applyRealSchema(db: InstanceType<typeof Database>): void {
+export function applyRealSchema(db: InstanceType<typeof Database>): void {
   db.exec(fs.readFileSync(path.join(TS_SCHEMA_DIR, 'initial_schema.sql'), 'utf8'));
   const migrations = fs
     .readdirSync(path.join(TS_SCHEMA_DIR, 'migrate'))
@@ -231,14 +231,14 @@ export function installSyncFixture(tmpBase: string): SyncFixture {
       `database = "${REVIEW_DB}"`,
       // token_file is the form a deployment actually uses: systemd
       // credentials, Docker secrets, and the like.
-      `token_file = "${reviewTokenFile}"`,
+      `token_file = ${JSON.stringify(reviewTokenFile)}`,
       '',
       // The same key also lets the telescope ship frames here. Catalog rows
       // and pixels travel by different routes and are separate grants.
       '[[remote_upload]]',
       `database = "${REVIEW_DB}"`,
-      `image_dir = "${uploadDir}"`,
-      `token_file = "${reviewTokenFile}"`,
+      `image_dir = ${JSON.stringify(uploadDir)}`,
+      `token_file = ${JSON.stringify(reviewTokenFile)}`,
       '',
     ].join('\n')
   );

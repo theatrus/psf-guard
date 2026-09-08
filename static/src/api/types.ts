@@ -32,6 +32,44 @@ export interface TargetNavigation {
   has_files: boolean;
 }
 
+export type OrganizationOperation =
+  | { kind: 'merge_targets'; source_target_id: number; destination_target_id: number }
+  | {
+      kind: 'move_images';
+      image_ids: number[];
+      destination:
+        | { target_id: number }
+        | { project_id: number; new_target_name: string }
+        | { new_project_name: string; new_target_name: string };
+    };
+
+export interface OrganizationPreview {
+  fingerprint: string;
+  source_project_id: number;
+  source_project_name: string;
+  source_target_id: number;
+  source_target_name: string;
+  destination_project_id?: number | null;
+  destination_project_name: string;
+  destination_target_id?: number | null;
+  destination_target_name: string;
+  images_moved: number;
+  exposure_plans_moved: number;
+  exposure_plans_created: number;
+  warnings: string[];
+}
+
+export interface OrganizationResult {
+  project_id: number;
+  target_id: number;
+  images_moved: number;
+}
+
+export interface OrganizationDestinations {
+  projects: { id: number; name: string; profile_id: string }[];
+  targets: { id: number; name: string; project_id: number }[];
+}
+
 export interface Image {
   id: number;
   project_id: number;

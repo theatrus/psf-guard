@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { Merge } from 'lucide-react';
 import { apiClient } from '../api/client';
 import type {
   ExportLayout,
@@ -42,6 +43,8 @@ import {
 import ProjectSchedulerDialog from './ProjectSchedulerDialog';
 import CalibrationReportDialog from './CalibrationReportDialog';
 import ExportDialog, { type ExportRequest } from './ExportDialog';
+import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog';
+import { useAccess } from '../auth/access';
 import PreviewImage from './PreviewImage';
 import { useColorPreview } from '../hooks/useColorPreview';
 import './Overview.css';
@@ -72,6 +75,7 @@ export default function Overview() {
   const dbFilter = getParam('dbfilter');
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [organizing, setOrganizing] = useState<Organizing | null>(null);
+  const [organizationScope, setOrganizationScope] = useState<OrganizationScope | null>(null);
   const [organizeBusy, setOrganizeBusy] = useState(false);
   const [organizeError, setOrganizeError] = useState('');
   const [seenProjects, setSeenProjects] = useState(loadProjectSeenState);
@@ -96,7 +100,8 @@ export default function Overview() {
   const { data: overallStats, isLoading: statsLoading } = useMergedOverallStats();
   const { data: projects, isLoading: projectsLoading } = useMergedProjectsOverview();
   const { data: targets, isLoading: targetsLoading } = useMergedTargetsOverview();
-  const organizeAllowed = serverInfo?.allow_database_management ?? false;
+  const { canWrite } = useAccess();
+  const organizeAllowed = canWrite && (serverInfo?.allow_database_management ?? false);
 
   useEffect(() => {
     const timer = window.setInterval(() => setRelativeNow(Date.now()), 60_000);
@@ -1089,6 +1094,23 @@ export default function Overview() {
                               {organizeAllowed && (
                                 <button
                                   type="button"
+                                  className="target-settings-button organization-action"
+                                  aria-label={`Merge target ${target.name}`}
+                                  title="Merge this target into another target"
+                                  onClick={() => setOrganizationScope({
+                                    kind: 'merge_targets',
+                                    dbId: target.db_id,
+                                    sourceTargetId: target.id,
+                                    sourceTargetName: target.name,
+                                    sourceProjectId: target.project_id,
+                                  })}
+                                >
+                                  <Merge size={14} aria-hidden="true" /> Merge target
+                                </button>
+                              )}
+                              {organizeAllowed && (
+                                <button
+                                  type="button"
                                   className="target-settings-button"
                                   title="Rename this target or move it to another project"
                                   onClick={() => {
@@ -1254,6 +1276,12 @@ export default function Overview() {
         </div>
       </div>
 
+      {organizationScope && (
+        <OrganizationDialog
+          scope={organizationScope}
+          onClose={() => setOrganizationScope(null)}
+        />
+      )}
       {pendingExport && (
         <ExportDialog
           request={pendingExport}
