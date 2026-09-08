@@ -1,8 +1,9 @@
 use axum::{
     extract::{Request, State},
     http::{
-        header::{CACHE_CONTROL, COOKIE, SET_COOKIE},
-        HeaderMap, HeaderValue, Method, StatusCode,
+        header::{CACHE_CONTROL, COOKIE, HOST, ORIGIN, SET_COOKIE},
+        uri::Authority,
+        HeaderMap, HeaderValue, Method, StatusCode, Uri,
     },
     middleware::Next,
     response::{IntoResponse, Response},
@@ -24,7 +25,7 @@ use crate::{
 
 pub use crate::auth_registry::AccessRole;
 
-const SESSION_COOKIE: &str = "psf_guard_session";
+const SESSION_COOKIE_PREFIX: &str = "psf_guard_session";
 const DEFAULT_SESSION_HOURS: u64 = 24 * 7;
 const MAX_SESSIONS_PER_USER: usize = 128;
 const LOGIN_ATTEMPTS_PER_SECOND: f64 = 4.0;
@@ -43,8 +44,16 @@ pub struct ServerAuth {
     login_rate_limit: Arc<Mutex<LoginRateLimit>>,
     user_management_lock: Arc<Mutex<()>>,
     session_ttl: Duration,
-    secure_cookie: bool,
+    cookie_security: CookieSecurity,
+    session_cookie_name: String,
     allow_read_only_compute: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CookieSecurity {
+    Auto,
+    Always,
+    Never,
 }
 
 #[derive(Clone)]
@@ -90,7 +99,8 @@ impl std::fmt::Debug for ServerAuth {
                     .collect::<Vec<_>>(),
             )
             .field("session_ttl", &self.session_ttl)
-            .field("secure_cookie", &self.secure_cookie)
+            .field("cookie_security", &self.cookie_security)
+            .field("session_cookie_name", &self.session_cookie_name)
             .finish()
     }
 }
@@ -99,6 +109,7 @@ impl ServerAuth {
     pub fn from_sources(
         config: Option<&ServerAuthConfig>,
         registry: &AuthRegistry,
+        server_port: u16,
     ) -> anyhow::Result<Option<Self>> {
         let users = registry
             .users
@@ -128,7 +139,12 @@ impl ServerAuth {
             })),
             user_management_lock: Arc::new(Mutex::new(())),
             session_ttl: Duration::from_secs(session_hours * 60 * 60),
-            secure_cookie: config.is_none_or(|config| config.secure_cookie),
+            cookie_security: match config.and_then(|config| config.secure_cookie) {
+                Some(true) => CookieSecurity::Always,
+                Some(false) => CookieSecurity::Never,
+                None => CookieSecurity::Auto,
+            },
+            session_cookie_name: format!("{SESSION_COOKIE_PREFIX}_{server_port}"),
             allow_read_only_compute: config.is_some_and(|config| config.allow_read_only_compute),
         }))
     }
@@ -221,23 +237,35 @@ impl ServerAuth {
         self.sessions.lock().unwrap().remove(token);
     }
 
-    fn cookie(&self, token: &str) -> HeaderValue {
+    fn cookie(&self, token: &str, headers: &HeaderMap) -> HeaderValue {
         let mut value = format!(
-            "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}",
+            "{}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}",
+            self.session_cookie_name,
             self.session_ttl.as_secs()
         );
-        if self.secure_cookie {
+        if self.cookie_is_secure(headers) {
             value.push_str("; Secure");
         }
         HeaderValue::from_str(&value).expect("session cookie contains safe characters")
     }
 
-    fn clear_cookie(&self) -> HeaderValue {
-        let mut value = format!("{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
-        if self.secure_cookie {
+    fn clear_cookie(&self, headers: &HeaderMap) -> HeaderValue {
+        let mut value = format!(
+            "{}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0",
+            self.session_cookie_name
+        );
+        if self.cookie_is_secure(headers) {
             value.push_str("; Secure");
         }
         HeaderValue::from_str(&value).expect("clear cookie contains safe characters")
+    }
+
+    fn cookie_is_secure(&self, headers: &HeaderMap) -> bool {
+        match self.cookie_security {
+            CookieSecurity::Always => true,
+            CookieSecurity::Never => false,
+            CookieSecurity::Auto => same_origin_request_is_https(headers).unwrap_or(true),
+        }
     }
 
     fn can_compute(&self, role: AccessRole) -> bool {
@@ -415,6 +443,7 @@ pub async fn status(State(state): State<Arc<AppState>>, headers: HeaderMap) -> R
 
 pub async fn login(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(request): Json<LoginRequest>,
 ) -> Response {
     let Some(auth) = state.server_auth() else {
@@ -472,7 +501,7 @@ pub async fn login(
     (
         StatusCode::OK,
         [
-            (SET_COOKIE, auth.cookie(&token)),
+            (SET_COOKIE, auth.cookie(&token, &headers)),
             (CACHE_CONTROL, HeaderValue::from_static("no-store")),
         ],
         Json(ApiResponse::success(AuthStatus {
@@ -490,13 +519,13 @@ pub async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> R
     let Some(auth) = state.server_auth() else {
         return StatusCode::NO_CONTENT.into_response();
     };
-    if let Some(token) = cookie_value(&headers, SESSION_COOKIE) {
+    if let Some(token) = cookie_value(&headers, &auth.session_cookie_name) {
         auth.remove_session(token);
     }
     (
         StatusCode::NO_CONTENT,
         [
-            (SET_COOKIE, auth.clear_cookie()),
+            (SET_COOKIE, auth.clear_cookie(&headers)),
             (CACHE_CONTROL, HeaderValue::from_static("no-store")),
         ],
     )
@@ -592,7 +621,36 @@ pub(crate) fn host_is_loopback(host: &str) -> bool {
 }
 
 fn session_from_headers(auth: &ServerAuth, headers: &HeaderMap) -> Option<Session> {
-    auth.session(cookie_value(headers, SESSION_COOKIE)?)
+    auth.session(cookie_value(headers, &auth.session_cookie_name)?)
+}
+
+/// Infer the browser-facing scheme only from a same-origin request. `Origin`
+/// is supplied by browsers for the login POST and survives an ordinary HTTPS
+/// reverse proxy. Missing or mismatched headers return `None`, which keeps the
+/// automatic policy fail-secure for scripts and cross-origin requests.
+fn same_origin_request_is_https(headers: &HeaderMap) -> Option<bool> {
+    let host = headers
+        .get(HOST)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<Authority>()
+        .ok()?;
+    let origin = headers.get(ORIGIN)?.to_str().ok()?.parse::<Uri>().ok()?;
+    let scheme_is_https = match origin.scheme_str() {
+        Some(scheme) if scheme.eq_ignore_ascii_case("https") => true,
+        Some(scheme) if scheme.eq_ignore_ascii_case("http") => false,
+        _ => return None,
+    };
+    let origin_authority = origin.authority()?;
+    let default_port = if scheme_is_https { 443 } else { 80 };
+    if !origin_authority.host().eq_ignore_ascii_case(host.host())
+        || origin_authority.port_u16().unwrap_or(default_port)
+            != host.port_u16().unwrap_or(default_port)
+    {
+        return None;
+    }
+    Some(scheme_is_https)
 }
 
 fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -674,12 +732,12 @@ mod tests {
     fn test_config() -> ServerAuthConfig {
         ServerAuthConfig {
             session_hours: Some(12),
-            secure_cookie: true,
+            secure_cookie: Some(true),
             allow_read_only_compute: false,
         }
     }
 
-    fn test_auth() -> ServerAuth {
+    fn test_auth_with_cookie_policy(secure_cookie: Option<bool>, port: u16) -> ServerAuth {
         let mut registry = AuthRegistry::default();
         registry
             .add(
@@ -693,9 +751,22 @@ mod tests {
                 false,
             )
             .unwrap();
-        ServerAuth::from_sources(Some(&test_config()), &registry)
+        let mut config = test_config();
+        config.secure_cookie = secure_cookie;
+        ServerAuth::from_sources(Some(&config), &registry, port)
             .unwrap()
             .unwrap()
+    }
+
+    fn test_auth() -> ServerAuth {
+        test_auth_with_cookie_policy(Some(true), 3000)
+    }
+
+    fn browser_headers(origin: &str, host: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(ORIGIN, HeaderValue::from_str(origin).unwrap());
+        headers.insert(HOST, HeaderValue::from_str(host).unwrap());
+        headers
     }
 
     #[tokio::test]
@@ -712,12 +783,62 @@ mod tests {
             .is_none());
 
         let token = auth.create_session(&viewer).unwrap();
-        let cookie = auth.cookie(&token).to_str().unwrap().to_string();
+        let cookie = auth
+            .cookie(&token, &HeaderMap::new())
+            .to_str()
+            .unwrap()
+            .to_string();
         assert!(cookie.contains("HttpOnly"));
         assert!(cookie.contains("SameSite=Strict"));
         assert!(cookie.contains("Max-Age=43200"));
         assert!(cookie.contains("Secure"));
         assert_eq!(auth.session(&token).unwrap().username, "viewer");
+    }
+
+    #[test]
+    fn automatic_cookie_security_follows_only_a_matching_browser_origin() {
+        let auth = test_auth_with_cookie_policy(None, 3000);
+
+        for headers in [
+            browser_headers("http://guard.local:3000", "guard.local:3000"),
+            browser_headers("http://guard.local", "guard.local:80"),
+            browser_headers("http://[::1]", "[::1]:80"),
+        ] {
+            assert_eq!(same_origin_request_is_https(&headers), Some(false));
+            assert!(!auth.cookie_is_secure(&headers));
+        }
+        for headers in [
+            browser_headers("https://guard.local", "guard.local"),
+            browser_headers("https://guard.local", "guard.local:443"),
+        ] {
+            assert_eq!(same_origin_request_is_https(&headers), Some(true));
+            assert!(auth.cookie_is_secure(&headers));
+        }
+        let mismatched = browser_headers("http://other.local:3000", "guard.local:3000");
+        assert_eq!(same_origin_request_is_https(&mismatched), None);
+        assert!(auth.cookie_is_secure(&mismatched));
+        assert!(auth.cookie_is_secure(&HeaderMap::new()));
+    }
+
+    #[test]
+    fn explicit_cookie_security_overrides_the_browser_origin() {
+        let http_headers = browser_headers("http://guard.local:3000", "guard.local:3000");
+        assert!(test_auth_with_cookie_policy(Some(true), 3000).cookie_is_secure(&http_headers));
+        assert!(
+            !test_auth_with_cookie_policy(Some(false), 3000).cookie_is_secure(&HeaderMap::new())
+        );
+    }
+
+    #[test]
+    fn session_cookie_names_keep_loopback_ports_separate() {
+        assert_eq!(
+            test_auth_with_cookie_policy(None, 3000).session_cookie_name,
+            "psf_guard_session_3000"
+        );
+        assert_eq!(
+            test_auth_with_cookie_policy(None, 3001).session_cookie_name,
+            "psf_guard_session_3001"
+        );
     }
 
     #[tokio::test]
@@ -834,14 +955,14 @@ mod tests {
     #[test]
     fn session_policy_without_users_keeps_authentication_off() {
         assert!(
-            ServerAuth::from_sources(Some(&test_config()), &AuthRegistry::default())
+            ServerAuth::from_sources(Some(&test_config()), &AuthRegistry::default(), 3000)
                 .unwrap()
                 .is_none()
         );
     }
 
     #[tokio::test]
-    async fn registry_users_enable_secure_auth_without_session_policy() {
+    async fn registry_users_enable_automatic_auth_without_session_policy() {
         let mut registry = AuthRegistry::default();
         registry
             .add(
@@ -855,8 +976,10 @@ mod tests {
             )
             .unwrap();
 
-        let auth = ServerAuth::from_sources(None, &registry).unwrap().unwrap();
-        assert!(auth.secure_cookie);
+        let auth = ServerAuth::from_sources(None, &registry, 3000)
+            .unwrap()
+            .unwrap();
+        assert_eq!(auth.cookie_security, CookieSecurity::Auto);
         let user = auth
             .authenticate_password("viewer", "viewer-password")
             .await
@@ -877,7 +1000,9 @@ mod tests {
             )
             .unwrap();
         registry.save(&path).unwrap();
-        let auth = ServerAuth::from_sources(None, &registry).unwrap().unwrap();
+        let auth = ServerAuth::from_sources(None, &registry, 3000)
+            .unwrap()
+            .unwrap();
         let stale_user = auth
             .authenticate_password("only-editor", "editor-password")
             .await

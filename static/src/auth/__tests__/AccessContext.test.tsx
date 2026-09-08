@@ -41,13 +41,15 @@ describe('AuthGate', () => {
   });
 
   it('shows a normal login form and exposes the signed-in role', async () => {
+    let authenticated = false;
     server.use(
       http.get('/api/auth/status', () =>
         HttpResponse.json({
           success: true,
           data: {
             authentication_required: true,
-            authenticated: false,
+            authenticated,
+            ...(authenticated ? { role: 'read_only', username: 'viewer' } : {}),
             can_compute: false,
           },
           error: null,
@@ -67,6 +69,7 @@ describe('AuthGate', () => {
             { status: 401 },
           );
         }
+        authenticated = true;
         return HttpResponse.json({
           success: true,
           data: {
@@ -80,7 +83,10 @@ describe('AuthGate', () => {
           status: 'ready',
         });
       }),
-      http.post('/api/auth/logout', () => new HttpResponse(null, { status: 204 })),
+      http.post('/api/auth/logout', () => {
+        authenticated = false;
+        return new HttpResponse(null, { status: 204 });
+      }),
     );
     render(
       <AuthGate><ProtectedContent /></AuthGate>,
@@ -102,5 +108,51 @@ describe('AuthGate', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
     expect(await screen.findByRole('heading', { name: 'Sign in to PSF Guard' }))
       .toBeInTheDocument();
+  });
+
+  it('explains when the browser does not retain a successful login session', async () => {
+    server.use(
+      http.get('/api/auth/status', () =>
+        HttpResponse.json({
+          success: true,
+          data: {
+            authentication_required: true,
+            authenticated: false,
+            can_compute: false,
+          },
+          error: null,
+          status: 'ready',
+        })
+      ),
+      http.post('/api/auth/login', () =>
+        HttpResponse.json({
+          success: true,
+          data: {
+            authentication_required: true,
+            authenticated: true,
+            role: 'read_write',
+            username: 'editor',
+            can_compute: true,
+          },
+          error: null,
+          status: 'ready',
+        })
+      ),
+    );
+    render(
+      <AuthGate><ProtectedContent /></AuthGate>,
+      { wrapper: wrapper() },
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Sign in to PSF Guard' }))
+      .toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'editor' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'this browser did not retain the session'
+    );
+    expect(screen.getByRole('heading', { name: 'Sign in to PSF Guard' })).toBeInTheDocument();
   });
 });

@@ -284,18 +284,15 @@ pub struct ServerAuthConfig {
     /// Browser session lifetime. Defaults to seven days.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_hours: Option<u64>,
-    /// Mark the session cookie Secure. Defaults to true; leave it false only
-    /// for direct HTTP development servers.
-    #[serde(default = "default_secure_cookie")]
-    pub secure_cookie: bool,
+    /// Override whether the session cookie is marked Secure. When omitted,
+    /// matching same-origin browser requests follow their HTTP or HTTPS
+    /// scheme; requests without a trustworthy origin remain Secure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secure_cookie: Option<bool>,
     /// Allow read-only accounts to start costly derived-data jobs such as
     /// stacks, plate solves, and satellite predictions. Defaults to false.
     #[serde(default)]
     pub allow_read_only_compute: bool,
-}
-
-fn default_secure_cookie() -> bool {
-    true
 }
 
 impl ServerConfig {
@@ -742,12 +739,12 @@ directory = "./cache"
         let config: Config = toml_edit::de::from_str(toml).unwrap();
         let auth = config.get_server_auth_config().unwrap().unwrap();
         assert_eq!(auth.session_hours, Some(24));
-        assert!(auth.secure_cookie);
+        assert_eq!(auth.secure_cookie, Some(true));
         assert!(auth.allow_read_only_compute);
     }
 
     #[test]
-    fn server_auth_defaults_to_secure_cookies() {
+    fn server_auth_defaults_to_automatic_cookie_security() {
         let config: Config = toml_edit::de::from_str(
             r#"
 [server.auth]
@@ -759,7 +756,7 @@ directory = "./cache"
         .unwrap();
 
         let auth = config.server.auth.unwrap();
-        assert!(auth.secure_cookie);
+        assert_eq!(auth.secure_cookie, None);
         assert!(!auth.allow_read_only_compute);
     }
 

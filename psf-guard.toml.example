@@ -25,25 +25,19 @@ host = "0.0.0.0"
 # Enable CORS (default: true)
 cors = true
 
-# Optional browser session policy and bootstrap accounts. Managed users live
-# in auth.json and can be added with:
+# Optional browser session policy. Managed users live in auth.json and can be
+# added with:
 #   psf-guard users add editor --role read-write
-# With no managed or bootstrap users, the server stays open. Use password
-# files for bootstrap accounts. Secure cookies are the default; set
-# secure_cookie = false only for a direct HTTP development server.
+# An account-less server stays open only on a loopback bind unless
+# --allow-anonymous-access is set. When secure_cookie is omitted, same-origin
+# browser requests follow their HTTP or HTTPS scheme. Set it explicitly to
+# require Secure cookies or support an HTTP client that sends no Origin.
 #
 # [server.auth]
 # session_hours = 168
-# secure_cookie = true
+# secure_cookie = true  # Require HTTPS.
+# secure_cookie = false # Allow direct HTTP clients that send no Origin.
 # allow_read_only_compute = false
-#
-# [server.auth.read_only]
-# username = "viewer"
-# password_file = "/run/secrets/psf-guard-viewer"
-#
-# [server.auth.read_write]
-# username = "editor"
-# password_file = "/run/secrets/psf-guard-editor"
 
 # Optional notice shown below the application header on every page.
 # Values are plain text. Set both link fields or omit both.

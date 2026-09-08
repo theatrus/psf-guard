@@ -872,7 +872,8 @@ host = "0.0.0.0"
 # docs/AUTHENTICATION.md.
 [server.auth]
 session_hours = 168
-secure_cookie = true
+# Omit to follow a same-origin browser's HTTP or HTTPS scheme.
+# secure_cookie = true
 allow_read_only_compute = false
 
 # Optional plain-text notice shown below the application header.

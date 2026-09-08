@@ -99,7 +99,6 @@ list:
 ```toml
 [server.auth]
 session_hours = 168
-secure_cookie = true
 allow_read_only_compute = false
 ```
 
@@ -108,9 +107,18 @@ the browser will show a PSF Guard login page. A successful login creates an
 HttpOnly, SameSite=Strict session cookie. Sessions live in server memory,
 expire after `session_hours`, and end when the server restarts.
 
-Secure cookies are the default. Set
-`secure_cookie = false` only for a direct HTTP development server; a browser
-will not send a Secure cookie to a plain HTTP URL.
+When `secure_cookie` is omitted, a same-origin browser login on a direct
+connection follows the URL: HTTPS receives a Secure cookie and direct HTTP
+receives a non-Secure cookie. A proxy must preserve Host for automatic mode.
+Requests whose Origin does not match Host, and clients that send no Origin,
+remain Secure by default. Set `secure_cookie = true` to require HTTPS, or set
+it to `false` for a direct HTTP client that cannot send an Origin header or a
+plain-HTTP proxy that rewrites Host.
+
+Direct HTTP exposes both the password and session to anyone who can observe
+the connection. Prefer HTTPS outside a trusted network. Each server port uses
+a different cookie name, so two loopback instances no longer sign each other
+out.
 
 ## Roles
 
