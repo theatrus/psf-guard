@@ -27,7 +27,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml_edit = { version = "0.25", features = ["serde"] }
 anyhow = "1.0"
-argon2 = "0.5.3"
+argon2 = "0.6.0"
 chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
 regex = "1.12"
@@ -79,7 +79,7 @@ tauri = { version = "2.11.1", features = ["custom-protocol"], optional = true }
 tauri-plugin-dialog = { version = "2.7.1", optional = true }
 tauri-plugin-process = { version = "2.3.1", optional = true }
 tauri-plugin-updater = { version = "2.10.1", optional = true }
-dirs = "6.0"
+dirs = "7.0"
 dunce = "1"
 rpassword = "7.5.4"
 async_zip = { version = "0.0.19", features = ["tokio"] }
