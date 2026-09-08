@@ -73,6 +73,10 @@ again. Two things differ from raw frames:
   other frame and marking a flat as already bias- and dark-subtracted. The
   original is never written to; replacing it re-adopts it.
 
+Blank or undefined optional header values, such as `FILTER` in a PixInsight
+master bias XISF, are preserved in the cached FITS master. They do not prevent
+calibration, and the source file needs no header edits.
+
 **Settings → Calibration matching → Masters from other software** decides
 how they take part: use one whenever it matches (the default), only when raw
 frames cannot build a master, or never.

@@ -5055,6 +5055,195 @@ mod tests {
     }
 
     #[test]
+    fn an_external_xisf_bias_with_a_blank_filter_is_adopted() {
+        let _policy = POLICY_LOCK.lock().unwrap();
+        configure_external_master_policy(None);
+        for filter_value in ["", "   ", "''", "'   '"] {
+            let temp = tempfile::tempdir().unwrap();
+            let master_path = temp.path().join("masterBias.xisf");
+            write_pixinsight_xisf_bias(&master_path, filter_value);
+            let expected_filter = if filter_value.starts_with('\'') {
+                HeaderValue::String(String::new())
+            } else {
+                HeaderValue::Raw(String::new())
+            };
+            assert_external_bias_is_adopted(&master_path, temp.path(), expected_filter);
+        }
+    }
+
+    #[test]
+    fn an_external_fits_bias_with_an_undefined_filter_is_adopted() {
+        let _policy = POLICY_LOCK.lock().unwrap();
+        configure_external_master_policy(None);
+        let temp = tempfile::tempdir().unwrap();
+        let master_path = temp.path().join("masterBias.fits");
+        write_pixinsight_master(&master_path, "Master Bias", 0.01, None);
+        replace_test_fits_filter(
+            &master_path,
+            "FILTER  =                      / no filter for bias",
+        );
+        assert_external_bias_is_adopted(&master_path, temp.path(), HeaderValue::Raw(String::new()));
+    }
+
+    fn assert_external_bias_is_adopted(
+        master_path: &Path,
+        directory: &Path,
+        expected_filter: HeaderValue,
+    ) {
+        let original_bytes = std::fs::read(master_path).unwrap();
+        let source_filter = crate::image_io::open_linear_frame(master_path)
+            .unwrap()
+            .headers
+            .into_iter()
+            .find_map(|(key, value)| (key == "FILTER").then_some(value))
+            .unwrap();
+        assert_eq!(source_filter, expected_filter);
+        let light_path = directory.join("light.fits");
+        write_test_fits(&light_path, "LIGHT", 1_100);
+        let meta = crate::commands::import::headers::read_frame_meta(master_path);
+        assert!(meta.readable);
+        assert!(meta.processed);
+        assert!(meta
+            .filter
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty()));
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            let outcome = import_calibration_frames(&tx, &[meta], Some("profile")).unwrap();
+            assert_eq!(outcome.bias, 1);
+            tx.commit().unwrap();
+        }
+        let light = crate::commands::import::headers::read_frame_meta(&light_path);
+        let selection = select_for_light(&conn, &light).unwrap();
+        assert_eq!(selection.bias.len(), 1);
+        assert!(selection.bias[0].is_master);
+        let cache = directory.join("cache");
+        let (masters, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        let label = applied.bias_master.as_deref().unwrap_or_else(|| {
+            panic!("blank FILTER must not disable bias calibration: {applied:?}")
+        });
+        assert_eq!(applied.state, "applied");
+        let copy =
+            crate::image_io::open_linear_frame(cache.join("calibration-masters").join(label))
+                .unwrap();
+        copy.validate_master_kind("BIAS").unwrap();
+        assert!(copy
+            .image
+            .data
+            .iter()
+            .all(|sample| (*sample - 0.01 * 65_535.0).abs() < 0.001));
+        let source_name = master_path.file_name().unwrap().to_str().unwrap();
+        assert_eq!(
+            copy.headers
+                .iter()
+                .find_map(|(key, value)| (key == "FILTER").then_some(value)),
+            Some(&source_filter)
+        );
+        assert_eq!(
+            copy.headers
+                .iter()
+                .find_map(|(key, value)| (key == "PSFGSRC").then_some(value)),
+            Some(&HeaderValue::String(source_name.to_string()))
+        );
+        let (source_count, source_uuids, statistics): (i64, String, String) = conn
+            .query_row(
+                "SELECT source_count, source_frame_uuids, statistics_json
+                 FROM psf_guard_calibration_master",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(source_count, 1);
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(&source_uuids).unwrap(),
+            vec![selection.bias[0].frame_uuid.clone()]
+        );
+        let statistics: serde_json::Value = serde_json::from_str(&statistics).unwrap();
+        assert_eq!(statistics["external"], true);
+        assert_eq!(statistics["source"], source_name);
+
+        let mut calibrated = crate::image_io::open_linear_frame(&light_path).unwrap();
+        masters
+            .apply(
+                &mut calibrated.image,
+                calibrated.exposure_seconds,
+                calibrated.bayer,
+            )
+            .unwrap();
+        let expected = 1_100.0 - 0.01 * 65_535.0;
+        assert!(calibrated
+            .image
+            .data
+            .iter()
+            .all(|sample| (*sample - expected).abs() < 0.001));
+        assert_eq!(std::fs::read(master_path).unwrap(), original_bytes);
+    }
+
+    #[test]
+    fn raw_bias_frames_with_an_undefined_filter_build_a_master() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut sources = Vec::new();
+        let mut original_bytes = Vec::new();
+        let mut metadata = Vec::new();
+        for index in 0..2 {
+            let path = temp.path().join(format!("bias-{index}.fits"));
+            write_test_fits(&path, "BIAS", 100 + index * 2);
+            replace_test_fits_filter(&path, "FILTER  =                      / no filter for bias");
+            metadata.push(crate::commands::import::headers::read_frame_meta(&path));
+            original_bytes.push(std::fs::read(&path).unwrap());
+            sources.push(path);
+        }
+        let light_path = temp.path().join("light.fits");
+        write_test_fits(&light_path, "LIGHT", 1_100);
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            let outcome = import_calibration_frames(&tx, &metadata, Some("profile")).unwrap();
+            assert_eq!(outcome.bias, 2);
+            tx.commit().unwrap();
+        }
+        let cache = temp.path().join("cache");
+        let (masters, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        let label = applied.bias_master.as_deref().unwrap_or_else(|| {
+            panic!("blank FILTER must not prevent a bias master build: {applied:?}")
+        });
+        let copy =
+            crate::image_io::open_linear_frame(cache.join("calibration-masters").join(label))
+                .unwrap();
+        copy.validate_master_kind("BIAS").unwrap();
+        assert!(copy.image.data.iter().all(|sample| *sample == 101.0));
+        let mut calibrated = crate::image_io::open_linear_frame(&light_path).unwrap();
+        masters
+            .apply(
+                &mut calibrated.image,
+                calibrated.exposure_seconds,
+                calibrated.bayer,
+            )
+            .unwrap();
+        assert!(calibrated.image.data.iter().all(|sample| *sample == 999.0));
+        for (path, original) in sources.iter().zip(original_bytes) {
+            assert_eq!(std::fs::read(path).unwrap(), original);
+        }
+    }
+
+    #[test]
     fn the_external_master_policy_decides_between_a_master_and_raw_frames() {
         let _policy = POLICY_LOCK.lock().unwrap();
         let temp = tempfile::tempdir().unwrap();
@@ -5162,6 +5351,46 @@ mod tests {
     /// Serializes the tests that change the process-wide external-master
     /// policy, which every selection in the process reads.
     static POLICY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn replace_test_fits_filter(path: &Path, filter_card: &str) {
+        let mut bytes = std::fs::read(path).unwrap();
+        let card = bytes[..2880]
+            .chunks_exact_mut(80)
+            .find(|card| card.starts_with(b"FILTER  ="))
+            .unwrap();
+        card.fill(b' ');
+        card[..filter_card.len()].copy_from_slice(filter_card.as_bytes());
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    fn write_pixinsight_xisf_bias(path: &Path, filter_value: &str) {
+        // Construct the PixInsight-shaped input independently of Seiza's output
+        // writer, including undefined values for filterless calibration frames.
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<xisf version="1.0" xmlns="http://www.pixinsight.com/xisf">
+<Image geometry="4:4:1" sampleFormat="Float32" bounds="0:1" colorSpace="Gray" pixelStorage="Planar" location="attachment:4096:64">
+<FITSKeyword name="IMAGETYP" value="'Master Bias'"/>
+<FITSKeyword name="FILTER" value="{filter_value}" comment="Filter name"/>
+<FITSKeyword name="EXPTIME" value="0"/>
+<FITSKeyword name="XBINNING" value="1"/>
+<FITSKeyword name="YBINNING" value="1"/>
+<FITSKeyword name="INSTRUME" value="'Camera'"/>
+<FITSKeyword name="TELESCOP" value="'Scope'"/>
+</Image></xisf>"#
+        );
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"XISF0100");
+        bytes.extend_from_slice(&(xml.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&[0; 4]);
+        bytes.extend_from_slice(xml.as_bytes());
+        assert!(bytes.len() <= 4096);
+        bytes.resize(4096, 0);
+        for _ in 0..16 {
+            bytes.extend_from_slice(&0.01_f32.to_le_bytes());
+        }
+        std::fs::write(path, bytes).unwrap();
+    }
 
     /// A master as PixInsight's WBPP writes one: 32-bit float samples
     /// normalized to 0..1, `IMAGETYP` naming the master, exposure, camera,
