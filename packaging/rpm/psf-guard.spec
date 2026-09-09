@@ -8,7 +8,7 @@
 %global rustflags_debuginfo 0
 
 Name:           psf-guard
-Version:        0.9.4
+Version:        0.9.5
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -93,6 +93,16 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Tue Sep 08 2026 Yann Ramin <github@theatr.us> - 0.9.5-1
+- Merge alternate target names and move exposures between targets, with a preview
+- RC-Astro tool steps per linear input channel in color-stack processing
+- Completed stacks get a second integration pass that rejects trails in early frames
+- Bounded, pool-aware stack preparation with a serial fallback when memory is short
+- Scheduler merge adopts rows an import or upload already added instead of duplicating them
+- A calibration file moved by a filer and imported again keeps one row; stacking hands each file to the integrator once
+- Applied stack processing and reverts survive reloads
+- PixInsight master bias files with a blank FILTER header work during stacking
+
 * Mon Sep 08 2026 Yann Ramin <github@theatr.us> - 0.9.4-1
 - Browser sign-in works over direct HTTP; local servers on different ports keep separate sessions
 - Remote uploads take the receive directory's usual file permissions
