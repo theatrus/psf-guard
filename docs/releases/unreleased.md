@@ -6,6 +6,10 @@
 
 ## Added
 
+- Inspect the calibration masters used by a mono or color stack from its
+  **Masters** action, with session/channel provenance, display stretch,
+  native-size zoom, rejection statistics, and unchanged FITS downloads.
+
 - Optional native star masking for flat masters, controlled by **Mask stars
   in flats** in calibration settings. Masked builds retain original unmasked
   measurements, report low coverage, and refuse unsupported pixels without

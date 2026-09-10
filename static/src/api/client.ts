@@ -4,6 +4,8 @@ import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
 import type {
   CalibrationSettings,
+  CalibrationMasterSource,
+  StackCalibrationMasters,
   ExternalMasterPolicy,
   RemoteImageUploadDirectoryTemplateSource,
   ApiResponse,
@@ -1399,8 +1401,12 @@ export const apiClient = {
     requests: PreviewDescriptor[]
   ): Promise<GenerationStatus[]> => {
     const apiInstance = await getApi();
-    const body = {
-      requests: requests.map((d) => ({
+    const imageRequests = requests.filter((d) => d.kind !== 'calibration_master');
+    const masterRequests = requests.filter((d) => d.kind === 'calibration_master');
+    const imageRequest = imageRequests.length ? apiInstance.post<
+      ApiResponse<{ statuses: GenerationStatus[] }>
+    >(dbPath(dbId, '/images/generation-status'), {
+      requests: imageRequests.map((d) => ({
         image_id: d.imageId,
         kind: d.kind,
         size: d.size,
@@ -1410,11 +1416,56 @@ export const apiClient = {
         max_stars: d.maxStars,
         color: d.color,
       })),
-    };
-    const { data } = await apiInstance.post<
+    }).then(({ data }) => data.data?.statuses ?? []) : Promise.resolve([]);
+    const masterRequest = masterRequests.length ? apiInstance.post<
       ApiResponse<{ statuses: GenerationStatus[] }>
-    >(dbPath(dbId, '/images/generation-status'), body);
-    return data.data?.statuses ?? [];
+    >(dbPath(dbId, '/stack-previews/calibration-masters/generation-status'), {
+      requests: masterRequests.map((d) => ({
+        source: {
+          kind: d.source.kind,
+          job_id: d.source.jobId,
+          ...(d.source.kind === 'mono' ? { group_index: d.source.groupIndex } : {}),
+          artifact_revision: d.source.artifactRevision,
+        },
+        master_id: d.masterId,
+        size: d.size,
+        midtone: d.midtone,
+        shadow: d.shadow,
+      })),
+    }).then(({ data }) => data.data?.statuses ?? []) : Promise.resolve([]);
+    // An unavailable endpoint must not stall unrelated previews in this batch.
+    const [images, masters] = await Promise.allSettled([imageRequest, masterRequest]);
+    const imageStatuses = images.status === 'fulfilled' ? images.value : [];
+    const masterStatuses = masters.status === 'fulfilled' ? masters.value : [];
+    let imageIndex = 0;
+    let masterIndex = 0;
+    return requests.map((d) => (d.kind === 'calibration_master'
+      ? masterStatuses[masterIndex++]
+      : imageStatuses[imageIndex++]) ?? { state: 'generating' });
+  },
+
+  getStackCalibrationMasters: async (
+    dbId: string,
+    source: CalibrationMasterSource
+  ): Promise<StackCalibrationMasters> => {
+    const apiInstance = await getApi();
+    const artifactPath = source.kind === 'mono'
+      ? `${encodeURIComponent(source.jobId)}/${source.groupIndex}`
+      : `color/${encodeURIComponent(source.jobId)}`;
+    const { data } = await apiInstance.get<ApiResponse<StackCalibrationMasters>>(
+      dbPath(dbId, `/stack-previews/${artifactPath}/calibration-masters`),
+      { params: { revision: source.artifactRevision } }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to load calibration masters');
+    return {
+      ...data.data,
+      masters: data.data.masters.map((master) => ({
+        ...master,
+        preview_url: master.preview_url ? withServerUrl(master.preview_url) : null,
+        original_preview_url: master.original_preview_url ? withServerUrl(master.original_preview_url) : null,
+        fits_url: master.fits_url ? withServerUrl(master.fits_url) : null,
+      })),
+    };
   },
 
   getPreviewUrl: (dbId: string, imageId: number, options?: PreviewOptions): string => {

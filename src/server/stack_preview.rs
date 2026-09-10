@@ -6,6 +6,7 @@
 //! multi-database server cannot multiply the stacker's full-frame buffers.
 
 pub mod artifact;
+pub mod calibration_masters;
 pub mod color;
 mod execution;
 mod final_integration;

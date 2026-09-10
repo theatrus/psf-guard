@@ -15,6 +15,7 @@ use psf_guard::{
     server::{
         auth::{self, ServerAuth},
         handlers, organization,
+        stack_preview::calibration_masters,
         state::AppState,
         user_admin,
     },
@@ -78,6 +79,10 @@ fn app_with_management(config: ServerAuthConfig, allow_management: bool) -> Rout
             post(organization::preview),
         )
         .route("/db/{db_id}/organization/apply", post(organization::apply))
+        .route(
+            "/db/{db_id}/stack-previews/calibration-masters/generation-status",
+            post(calibration_masters::post_generation_status),
+        )
         .route(
             "/catalog",
             get(|| async { "catalog" }).put(|| async { "changed" }),
@@ -216,6 +221,18 @@ async fn viewer_compute_is_separate_from_read_access() {
         app.clone().oneshot(compute).await.unwrap().status(),
         StatusCode::FORBIDDEN
     );
+
+    let poll = Request::builder()
+        .method(Method::POST)
+        .uri("/api/db/test/stack-previews/calibration-masters/generation-status")
+        .header(COOKIE, &viewer_cookie)
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"requests":[]}"#))
+        .unwrap();
+    let (status, _, body) = json(&app, poll).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["success"], true);
+    assert_eq!(body["data"]["statuses"], serde_json::json!([]));
 
     let mut config = auth_config();
     config.allow_read_only_compute = true;

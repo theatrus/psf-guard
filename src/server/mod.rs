@@ -471,6 +471,34 @@ async fn run_server_internal(
             post(stack_preview::artifact::start_mono_artifact_search),
         )
         .route(
+            "/stack-previews/{job_id}/{group_index}/calibration-masters",
+            get(stack_preview::calibration_masters::get_catalog),
+        )
+        .route(
+            "/stack-previews/{job_id}/{group_index}/calibration-masters/{master_id}/preview",
+            get(stack_preview::calibration_masters::get_preview),
+        )
+        .route(
+            "/stack-previews/{job_id}/{group_index}/calibration-masters/{master_id}/fits",
+            get(stack_preview::calibration_masters::download_fits),
+        )
+        .route(
+            "/stack-previews/color/{job_id}/calibration-masters",
+            get(stack_preview::calibration_masters::get_catalog),
+        )
+        .route(
+            "/stack-previews/color/{job_id}/calibration-masters/{master_id}/preview",
+            get(stack_preview::calibration_masters::get_preview),
+        )
+        .route(
+            "/stack-previews/color/{job_id}/calibration-masters/{master_id}/fits",
+            get(stack_preview::calibration_masters::download_fits),
+        )
+        .route(
+            "/stack-previews/calibration-masters/generation-status",
+            post(stack_preview::calibration_masters::post_generation_status),
+        )
+        .route(
             "/stack-previews/{job_id}/{group_index}/fits",
             get(stack_preview::download_stack_preview_fits),
         )

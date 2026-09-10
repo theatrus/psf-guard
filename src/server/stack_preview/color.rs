@@ -2772,6 +2772,24 @@ fn load_latest_colors(
     }
 }
 
+pub(super) fn retained_calibration_source(
+    ctx: &crate::server::database_context::DatabaseContext,
+    project_id: i32,
+    job_id: &str,
+    revision: &str,
+) -> Result<Option<StackColorJob>, AppError> {
+    Ok(load_latest_colors(ctx, project_id)?
+        .jobs
+        .into_iter()
+        .find(|job| {
+            job.database_id == ctx.id
+                && job.project_id == project_id
+                && job.job_id == job_id
+                && job.artifact_revision == revision
+                && job.state == StackJobState::Completed
+        }))
+}
+
 fn collect_sources(
     cache_root: &FsPath,
     latest: &LatestStackPreviews,

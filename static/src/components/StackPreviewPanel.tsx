@@ -14,6 +14,7 @@ import type {
   StackStretchPreview,
 } from '../api/types';
 import StackPreviewInspector from './StackPreviewInspector';
+import CalibrationMasterButton from './CalibrationMasterInspector';
 import StackSnrCurve from './StackSnrCurve';
 import StackColorPreviewPanel from './StackColorPreviewPanel';
 import StackStretchControls from './StackStretchControls';
@@ -886,7 +887,7 @@ export default function StackPreviewPanel({
                 const progressGroup = activeGroup ?? artifact?.group;
                 const liveCurve = groupBusy ? activeGroup?.snr : null;
                 const artifactCurve = artifact?.group.snr;
-                const calibration = progressGroup?.calibration;
+                  const calibration = artifact ? artifact.group.calibration : progressGroup?.calibration;
                 const progressState = progressGroup?.state ?? 'not-built';
                 const processedFrames = progressGroup?.processed_frames ?? 0;
                 const eligibleFrames =
@@ -1207,6 +1208,14 @@ export default function StackPreviewPanel({
 
                     {artifact && (
                       <>
+                        <div className="calibration-master-entry">
+                          <CalibrationMasterButton
+                            dbId={dbId}
+                            source={{ kind: 'mono', jobId: artifact.jobId, groupIndex: artifact.group.index, artifactRevision: artifact.artifactRevision }}
+                            title={artifact.group.target_name}
+                            label={artifact.group.filter_name || 'No filter'}
+                          />
+                        </div>
                         <details className="stack-preview-details">
                           <summary>Frame decisions ({artifact.group.frames.length})</summary>
                           <div className="stack-frame-table-wrap">

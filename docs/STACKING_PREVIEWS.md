@@ -386,6 +386,26 @@ image set, an image is
 accepted/rejected/pended, or the **Accepted only** policy changes. A failed
 rebuild never replaces the last successful result.
 
+## Inspect calibration masters
+
+Choose **Masters** on a completed mono or color stack to inspect the bias,
+dark, dark-flat, and flat files recorded for that result. The picker lists
+each master once and shows the sessions and color channels that used it,
+including fitted pedestal values. Source counts and rejection or star-masking
+statistics appear when their calibration catalog records remain available.
+
+The inspector provides pan, zoom, native-size inspection, and display-only
+midtone and shadow controls. It preserves floating-point flat detail and the
+original sensor grid: CFA masters are not debayered, rotated, or registered.
+Already-RGB masters retain their color channels. **FITS** downloads the cached
+master unchanged; display settings never change calibration or the stack.
+
+Inspection reads the completed artifact's recorded master references, not the
+current library selection. Color stacks follow their recorded channel
+revisions. Missing master files or older stacks without sufficient provenance
+are reported explicitly, without rebuilding masters or substituting today's
+selection. A changed artifact revision requires reopening the inspector.
+
 ## Calibration before registration
 
 Before Seiza registers the reference, PSF Guard matches the light against the
@@ -942,6 +962,13 @@ POST /api/db/{db}/projects/{project}/stack-previews/color
 GET  /api/db/{db}/projects/{project}/stack-previews/color/{job}
 GET  /api/db/{db}/stack-previews/color/{job}/preview[?size=screen|original]
 GET  /api/db/{db}/stack-previews/color/{job}/fits
+GET  /api/db/{db}/stack-previews/{job}/{group}/calibration-masters?revision={revision}
+GET  /api/db/{db}/stack-previews/{job}/{group}/calibration-masters/{master}/preview?revision={revision}
+GET  /api/db/{db}/stack-previews/{job}/{group}/calibration-masters/{master}/fits?revision={revision}
+GET  /api/db/{db}/stack-previews/color/{job}/calibration-masters?revision={revision}
+GET  /api/db/{db}/stack-previews/color/{job}/calibration-masters/{master}/preview?revision={revision}
+GET  /api/db/{db}/stack-previews/color/{job}/calibration-masters/{master}/fits?revision={revision}
+POST /api/db/{db}/stack-previews/calibration-masters/generation-status
 POST /api/db/{db}/stack-previews/{job}/{group}/artifact-searches
 POST /api/db/{db}/stack-previews/color/{job}/artifact-searches
 GET  /api/db/{db}/stack-previews/artifact-searches/{search}
@@ -950,6 +977,11 @@ GET  /api/db/{db}/stack-previews/stretch/{stretch}/preview[?size=screen|original
 GET  /api/db/{db}/stack-previews/stretch/{stretch}/fits
 GET  /api/db/{db}/stack-previews/rc-astro/{id}/fits[?stars=true]
 ```
+
+Master previews return `202` while queued and use the shared generation-status
+poller. They accept `size=screen|original`, `midtone=0.01..0.99` (default `0.2`),
+and `shadow=-10..0` (default `-2.8`). Catalog responses supply opaque master IDs
+and database-scoped preview and FITS URLs; clients never supply file paths.
 
 The stretch GET returns the selected cached preview or `null`. DELETE clears
 the selection and returns `204`. Send the displayed artifact revision as `v`

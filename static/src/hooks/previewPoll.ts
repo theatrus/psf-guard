@@ -45,6 +45,13 @@ export function __resetForTest(): void {
 }
 
 export function descriptorKey(d: PreviewDescriptor): string {
+  if (d.kind === 'calibration_master') {
+    return JSON.stringify([
+      d.kind, d.source.kind, d.source.jobId,
+      d.source.kind === 'mono' ? d.source.groupIndex : null,
+      d.source.artifactRevision, d.masterId, d.size, d.midtone ?? '', d.shadow ?? '',
+    ]);
+  }
   return [
     d.kind,
     d.imageId,

@@ -374,7 +374,7 @@ export interface GenerationStatus {
 
 // Identifies one artifact for the batch generation-status poll. Mirrors the
 // query params of getPreviewUrl / getAnnotatedUrl.
-export interface PreviewDescriptor {
+export interface ImagePreviewDescriptor {
   imageId: number;
   kind: 'preview' | 'annotated';
   size: 'screen' | 'large' | 'original';
@@ -388,6 +388,49 @@ export interface PreviewDescriptor {
    * the wrong artifact.
    */
   color?: boolean;
+}
+
+export type CalibrationMasterSource =
+  | { kind: 'mono'; jobId: string; groupIndex: number; artifactRevision: string }
+  | { kind: 'color'; jobId: string; artifactRevision: string };
+
+export interface CalibrationMasterPreviewDescriptor {
+  kind: 'calibration_master';
+  source: CalibrationMasterSource;
+  masterId: string;
+  size: 'screen' | 'original';
+  midtone?: number;
+  shadow?: number;
+}
+
+export type PreviewDescriptor = ImagePreviewDescriptor | CalibrationMasterPreviewDescriptor;
+
+export interface StackCalibrationMaster {
+  id: string;
+  kind: 'bias' | 'dark' | 'dark_flat' | 'flat';
+  label: string;
+  available: boolean;
+  unavailable_reason: string | null;
+  usages: Array<{
+    channel: string;
+    session: number;
+    lights: number;
+    estimated_pedestal_adu: number | null;
+  }>;
+  preview_url: string | null;
+  original_preview_url: string | null;
+  fits_url: string | null;
+  source_count: number | null;
+  rejection_method: string | null;
+  masked_samples: number | null;
+  rejected_samples: number | null;
+  minimum_clean_samples: number | null;
+  maximum_clean_samples: number | null;
+}
+
+export interface StackCalibrationMasters {
+  masters: StackCalibrationMaster[];
+  notes: string[];
 }
 
 export type StackJobState = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';

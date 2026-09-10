@@ -327,9 +327,13 @@ The stack card reports `Calibration applied`, `Calibration set incomplete`, or
 no calibration. It also shows input counts and any missing-file warning.
 Calibration happens on raw CFA samples before debayering.
 
-One stack uses one master set. If its lights need different sets, PSF Guard
-leaves that preview uncalibrated and explains why instead of applying the
-reference light's set to every frame.
+Lights that need different master sets are partitioned into calibration
+sessions, and each light uses its session's masters. Choose **Masters** on a
+completed mono or color stack to inspect its recorded files, their session and
+channel usage, and available rejection statistics. The inspector supports
+display stretch, native-size zoom, and unchanged FITS downloads. Missing cached
+masters are reported without rebuilding them. See
+[Inspect calibration masters](STACKING_PREVIEWS.md#inspect-calibration-masters).
 
 ## Export
 

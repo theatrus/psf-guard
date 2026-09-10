@@ -11,6 +11,7 @@ import type {
   StackNarrowbandPalette,
 } from '../api/types';
 import StackPreviewInspector from './StackPreviewInspector';
+import CalibrationMasterButton from './CalibrationMasterInspector';
 import StackColorProcessingControls from './StackColorProcessingControls';
 import {
   processingForColorBuild,
@@ -356,6 +357,16 @@ function ColorCard({
             </span>
           ))}
           {artifact && <span className="stack-color-source-total"><strong>{sourceFrames}</strong> integrated inputs</span>}
+        </div>
+      )}
+      {artifact && (
+        <div className="calibration-master-entry">
+          <CalibrationMasterButton
+            dbId={dbId}
+            source={{ kind: 'color', jobId: artifact.job_id, artifactRevision: artifact.artifact_revision }}
+            title={artifact.target_name}
+            label={artifact.label}
+          />
         </div>
       )}
     </article>
