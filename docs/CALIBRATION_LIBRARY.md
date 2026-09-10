@@ -208,12 +208,21 @@ response is smooth at pixel scale, so dust shadows and vignette structure
 are untouched. Dark and dark-flat masters keep their hot pixels — they are
 what subtracts them from the frames they calibrate.
 
-The defect pass removes pixel-scale impulses, not star images. Stars in
-sky flats are handled by the across-frame clipping instead, and only when
-they move between exposures — let the sky drift or dither between sky
-flats. Sky flats taken with tracking on hold each star on the same pixels
-in every frame, and a star that survives into the master is wider than
-the defect pass can remove. When no dark master
+The defect pass removes pixel-scale impulses, not star images. For sky flats,
+let the sky drift or dither between exposures. Flat integration subtracts the
+available bias/dark calibration, normalizes each exposure to its median
+brightness, then clips each pixel's samples around their temporal median.
+Its sigma estimate comes from the median absolute deviation (MAD), so a few
+star-contaminated samples cannot inflate the threshold and protect each other
+from rejection. The retained samples are averaged, preserving the fixed dust
+shadows and vignette that the flat is meant to measure.
+
+Rejection needs at least three flats; two are only averaged. Use enough
+well-separated sky flats that most samples at each pixel are free of stars.
+A star that stays on the same pixels, or contaminates half or more of the
+samples there, cannot reliably be distinguished from the sensor response.
+The spatial defect pass cannot remove a broad star image that survives this
+combine. When no dark master
 exists anywhere in a stack's plan, the stack instead runs the same impulse
 filter over each calibrated light, and the card says so.
 
@@ -241,8 +250,21 @@ more than a month from their lights.
 ## Stack previews
 
 Stack previews build masters on demand with `seiza-stacking`. Each master needs
-at least two inputs. Seiza uses a two-pass, leave-one-out sigma-clipped mean and
-writes the clipping and source-count provenance into the master FITS.
+at least two inputs. Bias and dark masters use a two-pass, leave-one-out
+sigma-clipped mean. Flat masters use median/MAD clipping after per-frame
+calibration and normalization. Both use 3-sigma low and high thresholds;
+two-frame sets skip rejection. The master FITS records the method in `REJMETH`,
+the clipping thresholds, source count, and rejected-sample counts. Build logs
+and catalog statistics also record the method and counts.
+
+Flat integration decodes each source once and uses temporary disk storage for
+the normalized samples, then combines bounded tiles. This keeps the tile
+memory bounded as the number of flats grows. Scratch files live in the
+database's calibration-master cache directory and are removed when the build
+finishes or fails. Allow roughly 16 GB of free space for 64 mono 61-megapixel
+flats, or three times that for already-RGB inputs. Raw source files are never
+modified. If scratch storage fails, the stack reports the failed master and
+continues without that calibration; it does not silently disable clipping.
 
 Generated masters live below:
 

@@ -3303,8 +3303,18 @@ fn build_master(
         .iter()
         .map(|frame| frame.source_path.clone())
         .collect::<Vec<_>>();
-    let frame = seiza_stacking::build_master_from_fits(&paths, seiza_kind, &options)
-        .with_context(|| format!("building master {}", kind.as_str()))?;
+    let frame =
+        seiza_stacking::build_master_from_fits_with_scratch(&paths, seiza_kind, &options, root)
+            .with_context(|| format!("building master {}", kind.as_str()))?;
+    tracing::info!(
+        "master {} combined {} frame(s) with {} rejection: {} accepted, {} rejected samples, {} fallback pixels",
+        kind.as_str(),
+        frame.input_frames,
+        frame.rejection_method.as_str(),
+        frame.accepted_samples,
+        frame.rejected_samples,
+        frame.fallback_pixels,
+    );
     let skipped: Vec<(PathBuf, String)> = frame
         .skipped_inputs
         .iter()
@@ -3340,6 +3350,7 @@ fn build_master(
         RecordedMaster {
             exposure_seconds: frame.exposure_seconds,
             statistics: serde_json::json!({
+                "rejection_method": frame.rejection_method.as_str(),
                 "accepted_samples": frame.accepted_samples,
                 "rejected_samples": frame.rejected_samples,
                 "fallback_pixels": frame.fallback_pixels,
@@ -6610,6 +6621,99 @@ mod tests {
         );
         assert!(!masters.is_empty());
         assert!(!applied.masters_signature.is_empty());
+    }
+
+    #[test]
+    fn sky_flat_masters_reject_overlapping_stars_and_keep_sensor_response() {
+        let temp = tempfile::tempdir().unwrap();
+        let (width, height) = (96, 64);
+        let response = |x: usize, y: usize| {
+            if x < 8 || x >= width - 8 {
+                0.8
+            } else if (76..88).contains(&x) && (40..52).contains(&y) {
+                0.5
+            } else {
+                1.0
+            }
+        };
+        let mut calibration_meta = Vec::new();
+        for index in 0..2 {
+            let path = temp.path().join(format!("bias-{index}.fits"));
+            write_gradient_fits(&path, "BIAS", width, height, "Camera", 10, |_, _| 100.0);
+            calibration_meta.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        for index in 0..8 {
+            let path = temp.path().join(format!("sky-flat-{index}.fits"));
+            let sky = 1_000.0 + index as f64 * 500.0;
+            let star_left = 10 + index * 6;
+            write_gradient_fits(&path, "FLAT", width, height, "Camera", 10, |x, y| {
+                let star = if (star_left..star_left + 9).contains(&x) && (14..23).contains(&y) {
+                    1.0
+                } else {
+                    0.0
+                };
+                100.0 + sky * (response(x, y) + star)
+            });
+            calibration_meta.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        let light_path = temp.path().join("light.fits");
+        write_gradient_fits(&light_path, "LIGHT", width, height, "Camera", 10, |x, y| {
+            100.0 + 1_000.0 * response(x, y)
+        });
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &calibration_meta, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        let cache = temp.path().join("cache");
+        let (_, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        assert!(applied.flat_master.is_some(), "{:?}", applied.warning);
+        let (path, statistics): (String, String) = conn
+            .query_row(
+                "SELECT cache_path, statistics_json FROM psf_guard_calibration_master WHERE kind = 'flat'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let master = crate::image_io::open_linear_frame(Path::new(&path)).unwrap();
+        // Broad overlapping star images survive a pixel-scale impulse filter.
+        for (x, y) in [(17, 18), (23, 18), (29, 18), (3, 32), (82, 46), (50, 40)] {
+            let actual = master.image.data[y * width + x];
+            assert!(
+                (f64::from(actual) - response(x, y)).abs() < 0.001,
+                "flat response at ({x}, {y}): expected {}, got {actual}",
+                response(x, y),
+            );
+        }
+        let statistics: serde_json::Value = serde_json::from_str(&statistics).unwrap();
+        assert_eq!(statistics["rejection_method"], "MEDIAN_MAD");
+        assert!(statistics["rejected_samples"].as_u64().unwrap() > 0);
+        assert_eq!(statistics["fallback_pixels"], 0);
+        assert_eq!(
+            statistics["accepted_samples"].as_u64().unwrap()
+                + statistics["rejected_samples"].as_u64().unwrap(),
+            (8 * width * height) as u64,
+        );
+        let (_, reused) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        assert_eq!(applied.flat_master, reused.flat_master);
+        assert_eq!(applied.masters_signature, reused.masters_signature);
     }
 
     #[test]
