@@ -1745,10 +1745,24 @@ pub fn selection_fingerprint(
     light_path: &Path,
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
 ) -> Result<String> {
+    selection_fingerprint_with_masking(
+        conn,
+        light_path,
+        directory_tree,
+        flat_star_masking_enabled(),
+    )
+}
+
+pub(crate) fn selection_fingerprint_with_masking(
+    conn: &Connection,
+    light_path: &Path,
+    directory_tree: Option<&crate::directory_tree::DirectoryTree>,
+    flat_star_masking: bool,
+) -> Result<String> {
     let light = crate::commands::import::headers::read_frame_meta(light_path);
     let mut selected = select_for_light(conn, &light)?;
     remap_missing_sources(&mut selected, directory_tree);
-    Ok(selection_hash(&selected))
+    Ok(selection_hash(&selected, flat_star_masking))
 }
 
 // ---------- Project calibration report ----------
@@ -2203,8 +2217,17 @@ pub fn resolve_or_build_masters(
         directory_tree,
         cancel,
         mode,
-        None,
+        CalibrationBuildSettings {
+            flat_star_masking: flat_star_masking_enabled(),
+            ..Default::default()
+        },
     )
+}
+
+#[derive(Clone, Copy, Default)]
+struct CalibrationBuildSettings {
+    pinned_pedestal: Option<f32>,
+    flat_star_masking: bool,
 }
 
 /// [`resolve_or_build_masters`] with a previously fitted pedestal carried
@@ -2219,7 +2242,7 @@ fn resolve_or_build_masters_pinned(
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
     cancel: Option<&AtomicBool>,
     mode: CalibrationMode,
-    pinned_pedestal: Option<f32>,
+    settings: CalibrationBuildSettings,
 ) -> Result<(seiza_stacking::CalibrationMasters, AppliedCalibration)> {
     if mode == CalibrationMode::Off {
         return Ok(calibration_off());
@@ -2230,7 +2253,7 @@ fn resolve_or_build_masters_pinned(
     let light = crate::commands::import::headers::read_frame_meta(light_path);
     let mut selected = select_for_light(conn, &light)?;
     let missing_sources = remap_missing_sources(&mut selected, directory_tree);
-    let fingerprint = selection_hash(&selected);
+    let fingerprint = selection_hash(&selected, settings.flat_star_masking);
     let mut applied = AppliedCalibration {
         mode,
         state: "matching".into(),
@@ -2387,6 +2410,7 @@ fn resolve_or_build_masters_pinned(
             frames,
             inputs,
             master_recording_blocker.as_deref(),
+            settings.flat_star_masking,
         ) {
             // The integrator reads the headers, so it catches what selection
             // could not: a catalog holds only what it recorded at import.
@@ -2524,7 +2548,7 @@ fn resolve_or_build_masters_pinned(
             // pedestal, so the intercept of that line is the pedestal. A
             // pinned value from the stack being reproduced wins over a
             // fresh fit.
-            estimated_pedestal = pinned_pedestal.or_else(|| {
+            estimated_pedestal = settings.pinned_pedestal.or_else(|| {
                 flat.as_ref().and_then(|master| {
                     estimate_flat_pedestal(&master.path, light_paths, header_pedestal_hint(&light))
                 })
@@ -2653,6 +2677,16 @@ fn resolve_or_build_masters_pinned(
         });
     }
     if let Some(note) = flat_note {
+        applied.warning = Some(match applied.warning.take() {
+            Some(previous) => format!("{previous}. {note}"),
+            None => note,
+        });
+    }
+    if let Some(note) = flat
+        .as_ref()
+        .and_then(|master| master.flat_star_masking.as_ref())
+        .and_then(flat_masking_warning)
+    {
         applied.warning = Some(match applied.warning.take() {
             Some(previous) => format!("{previous}. {note}"),
             None => note,
@@ -2793,6 +2827,39 @@ pub fn resolve_or_build_master_plan(
     mode: CalibrationMode,
     pinned: &[CalibrationSessionDetail],
 ) -> Result<CalibrationPlan> {
+    resolve_or_build_master_plan_with_options(
+        conn,
+        cache_root,
+        light_paths,
+        directory_tree,
+        cancel,
+        CalibrationPlanOptions {
+            mode,
+            pinned,
+            flat_star_masking: flat_star_masking_enabled(),
+        },
+    )
+}
+
+pub(crate) struct CalibrationPlanOptions<'a> {
+    pub mode: CalibrationMode,
+    pub pinned: &'a [CalibrationSessionDetail],
+    pub flat_star_masking: bool,
+}
+
+pub(crate) fn resolve_or_build_master_plan_with_options(
+    conn: &Connection,
+    cache_root: &Path,
+    light_paths: &[PathBuf],
+    directory_tree: Option<&crate::directory_tree::DirectoryTree>,
+    cancel: Option<&AtomicBool>,
+    options: CalibrationPlanOptions<'_>,
+) -> Result<CalibrationPlan> {
+    let CalibrationPlanOptions {
+        mode,
+        pinned,
+        flat_star_masking,
+    } = options;
     if mode == CalibrationMode::Off {
         let (masters, applied) = calibration_off();
         return Ok(CalibrationPlan::single(masters, applied, light_paths.len()));
@@ -2834,7 +2901,12 @@ pub fn resolve_or_build_master_plan(
         stop_requested(cancel)?;
         // A session's pin is looked up by its selection fingerprint, which
         // the resolution below recomputes identically from the same lights.
-        let fingerprint = selection_fingerprint(conn, &lights[0], directory_tree)?;
+        let fingerprint = selection_fingerprint_with_masking(
+            conn,
+            &lights[0],
+            directory_tree,
+            flat_star_masking,
+        )?;
         let pinned_pedestal = pinned
             .iter()
             .find(|detail| detail.fingerprint == fingerprint)
@@ -2846,7 +2918,10 @@ pub fn resolve_or_build_master_plan(
             directory_tree,
             cancel,
             mode,
-            pinned_pedestal,
+            CalibrationBuildSettings {
+                pinned_pedestal,
+                flat_star_masking,
+            },
         )?;
         sessions.push(CalibrationSession { masters, applied });
     }
@@ -2966,6 +3041,7 @@ struct BuiltMaster {
     /// Inputs the integrator refused, which only it can see: it reads the
     /// headers, while selection has only what the catalog recorded.
     skipped: Vec<(PathBuf, String)>,
+    flat_star_masking: Option<seiza_stacking::FlatStarMaskingStatistics>,
 }
 
 impl BuiltMaster {
@@ -2976,6 +3052,34 @@ impl BuiltMaster {
             .to_string_lossy()
             .into_owned()
     }
+}
+
+fn flat_masking_warning(statistics: &seiza_stacking::FlatStarMaskingStatistics) -> Option<String> {
+    let mut notes = Vec::new();
+    if statistics.low_coverage_samples > 0 {
+        notes.push(format!(
+            "{} sample(s) have only two retained exposures; coverage ranges from {} to {}. \
+             More well-separated flats improve coverage",
+            statistics.low_coverage_samples,
+            statistics.minimum_clean_samples,
+            statistics.maximum_clean_samples,
+        ));
+    }
+    if statistics.unmasked_saturation_samples > 0 {
+        notes.push(format!(
+            "{} isolated clipped input sample(s) were left to detector-defect suppression, \
+             not star masking",
+            statistics.unmasked_saturation_samples,
+        ));
+    }
+    if statistics.unknown_saturation_inputs > 0 {
+        notes.push(format!(
+            "{} input(s) had no known clipping ceiling; detected stars were masked, \
+             but saturation could not be checked",
+            statistics.unknown_saturation_inputs,
+        ));
+    }
+    (!notes.is_empty()).then(|| format!("Star-masked flat: {}", notes.join(". ")))
 }
 
 #[derive(Default)]
@@ -3012,7 +3116,7 @@ fn adopt_external_master(
     recording_blocker: Option<&str>,
 ) -> Result<AdoptedMaster> {
     let frames = std::slice::from_ref(frame);
-    let source_hash = source_set_hash(frames, None, None);
+    let source_hash = source_set_hash(frames, None, None, false);
     let master_uuid = stable_uuid(&format!("{}:{source_hash}", kind.as_str()));
     let path = root.join(format!("{}-{source_hash}.fits", kind.as_str()));
     let expected_kind = match kind {
@@ -3064,6 +3168,7 @@ fn adopt_external_master(
                     path,
                     master_uuid,
                     skipped: Vec::new(),
+                    flat_star_masking: None,
                 },
                 note: format!("{source_name}{trust_note}"),
             });
@@ -3151,6 +3256,7 @@ fn adopt_external_master(
             path,
             master_uuid,
             skipped: Vec::new(),
+            flat_star_masking: None,
         },
         note: format!("{source_name}{trust_note}{scale_note}"),
     })
@@ -3207,6 +3313,7 @@ fn build_master(
     frames: &[CalibrationFrame],
     inputs: MasterInputs<'_>,
     recording_blocker: Option<&str>,
+    flat_star_masking: bool,
 ) -> Result<Option<BuiltMaster>> {
     // Reduce to the frames that can actually combine (one temperature, one
     // flat session). The master's content hash below covers exactly this
@@ -3222,7 +3329,8 @@ fn build_master(
         bias_dependency,
         dark_dependency,
     } = inputs;
-    let source_hash = source_set_hash(frames, bias_dependency, dark_dependency);
+    let flat_star_masking = kind == CalibrationKind::Flat && flat_star_masking;
+    let source_hash = source_set_hash(frames, bias_dependency, dark_dependency, flat_star_masking);
     let master_uuid = stable_uuid(&format!("{}:{source_hash}", kind.as_str()));
     let path = root.join(format!("{}-{source_hash}.fits", kind.as_str()));
     if path.exists() {
@@ -3258,13 +3366,43 @@ fn build_master(
                     path.display()
                 );
             }
-            return Ok(Some(BuiltMaster {
-                path,
-                master_uuid,
-                // A cached master is served without rebuilding, so there is
-                // no fresh refusal to report.
-                skipped: Vec::new(),
-            }));
+            let masking_statistics = if flat_star_masking {
+                cached_flat_masking_statistics(conn, &path).and_then(|statistics| {
+                    let statistics = statistics
+                        .context("cached star-masked flat is missing coverage statistics")?;
+                    anyhow::ensure!(
+                        statistics.options == seiza_stacking::FlatStarMaskingOptions::default()
+                            && statistics.minimum_clean_samples
+                                >= statistics.options.minimum_clean_samples
+                            && statistics.maximum_clean_samples >= statistics.minimum_clean_samples
+                            && statistics.maximum_clean_samples <= frames.len(),
+                        "cached star-masked flat has invalid coverage statistics"
+                    );
+                    Ok(Some(statistics))
+                })
+            } else {
+                Ok(None)
+            };
+            match masking_statistics {
+                Ok(statistics) => {
+                    return Ok(Some(BuiltMaster {
+                        path,
+                        master_uuid,
+                        // A cached master is served without rebuilding, so there is
+                        // no fresh refusal to report.
+                        skipped: Vec::new(),
+                        flat_star_masking: statistics,
+                    }));
+                }
+                Err(error) => {
+                    if let Some(blocker) = recording_blocker {
+                        anyhow::bail!(
+                            "{blocker}; cached flat coverage cannot be trusted: {error:#}"
+                        );
+                    }
+                    tracing::warn!("rebuilding cached star-masked flat: {error:#}");
+                }
+            }
         }
         if let Some(blocker) = recording_blocker {
             anyhow::bail!(
@@ -3297,14 +3435,35 @@ fn build_master(
         // they are what subtracts them from the frames they calibrate.
         defect_suppression: (kind == CalibrationKind::Flat)
             .then(seiza_stacking::ImpulseFilterOptions::default),
+        flat_star_masking: flat_star_masking.then(seiza_stacking::FlatStarMaskingOptions::default),
         ..Default::default()
     };
     let paths = frames
         .iter()
         .map(|frame| frame.source_path.clone())
         .collect::<Vec<_>>();
-    let frame = seiza_stacking::build_master_from_fits(&paths, seiza_kind, &options)
-        .with_context(|| format!("building master {}", kind.as_str()))?;
+    let frame =
+        seiza_stacking::build_master_from_fits_with_scratch(&paths, seiza_kind, &options, root)
+            .with_context(|| format!("building master {}", kind.as_str()))?;
+    tracing::info!(
+        "master {} combined {} frame(s) with {} rejection: {} accepted, {} rejected samples, {} fallback pixels",
+        kind.as_str(),
+        frame.input_frames,
+        frame.rejection_method.as_str(),
+        frame.accepted_samples,
+        frame.rejected_samples,
+        frame.fallback_pixels,
+    );
+    if let Some(statistics) = &frame.flat_star_masking {
+        tracing::info!(
+            "master flat masked {} samples across {} pixels; retained coverage {}..{}, {} low-coverage samples",
+            statistics.masked_samples,
+            statistics.masked_pixels,
+            statistics.minimum_clean_samples,
+            statistics.maximum_clean_samples,
+            statistics.low_coverage_samples,
+        );
+    }
     let skipped: Vec<(PathBuf, String)> = frame
         .skipped_inputs
         .iter()
@@ -3340,9 +3499,12 @@ fn build_master(
         RecordedMaster {
             exposure_seconds: frame.exposure_seconds,
             statistics: serde_json::json!({
+                "rejection_method": frame.rejection_method.as_str(),
                 "accepted_samples": frame.accepted_samples,
                 "rejected_samples": frame.rejected_samples,
                 "fallback_pixels": frame.fallback_pixels,
+                "masked_samples": frame.masked_samples,
+                "flat_star_masking": frame.flat_star_masking,
             }),
         },
         MasterInputs {
@@ -3356,7 +3518,28 @@ fn build_master(
         path,
         master_uuid,
         skipped,
+        flat_star_masking: frame.flat_star_masking,
     }))
+}
+
+fn cached_flat_masking_statistics(
+    conn: &Connection,
+    path: &Path,
+) -> Result<Option<seiza_stacking::FlatStarMaskingStatistics>> {
+    let statistics: String = conn.query_row(
+        "SELECT statistics_json FROM psf_guard_calibration_master WHERE cache_path = ?1",
+        [path.to_string_lossy().as_ref()],
+        |row| row.get(0),
+    )?;
+    let statistics: serde_json::Value =
+        serde_json::from_str(&statistics).context("reading cached master statistics")?;
+    statistics
+        .get("flat_star_masking")
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            serde_json::from_value(value.clone()).context("reading cached flat mask coverage")
+        })
+        .transpose()
 }
 
 /// What a master row records about the build beyond its inputs.
@@ -3601,6 +3784,7 @@ fn source_set_hash(
     frames: &[CalibrationFrame],
     bias_dependency: Option<&BuiltMaster>,
     dark_dependency: Option<&BuiltMaster>,
+    flat_star_masking: bool,
 ) -> String {
     let mut values = frames
         .iter()
@@ -3614,6 +3798,9 @@ fn source_set_hash(
         })
         .collect::<Vec<_>>();
     values.sort();
+    if flat_star_masking {
+        values.push("flat-star-masking=native-v1".into());
+    }
     hex_digest(&format!(
         "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
         MASTER_CACHE_VERSION,
@@ -3628,7 +3815,7 @@ fn source_set_hash(
     ))
 }
 
-fn selection_hash(selection: &CalibrationSelection) -> String {
+fn selection_hash(selection: &CalibrationSelection, flat_star_masking: bool) -> String {
     let mut values = Vec::new();
     for (kind, frames) in [
         (CalibrationKind::Bias, &selection.bias),
@@ -3651,6 +3838,9 @@ fn selection_hash(selection: &CalibrationSelection) -> String {
         }
     }
     values.sort();
+    if flat_star_masking && selection.flat.iter().any(|frame| !frame.is_master) {
+        values.push("flat-star-masking=native-v1".into());
+    }
     if values.is_empty() {
         "none".into()
     } else {
@@ -3822,6 +4012,18 @@ impl ExternalMasterPolicy {
 /// a deployment's property, set once from the registry before any catalog
 /// is opened.
 static EXTERNAL_MASTER_POLICY: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+static FLAT_STAR_MASKING: AtomicBool = AtomicBool::new(false);
+
+/// Set the default for new calibration plans; already-running plans keep
+/// their captured value and content-addressed master identity.
+pub fn configure_flat_star_masking(enabled: bool) {
+    FLAT_STAR_MASKING.store(enabled, Ordering::Relaxed);
+}
+
+pub fn flat_star_masking_enabled() -> bool {
+    FLAT_STAR_MASKING.load(Ordering::Relaxed)
+}
 
 /// Choose how external masters are used for every selection this process
 /// makes. `None` keeps the default, [`ExternalMasterPolicy::Prefer`].
@@ -6610,6 +6812,280 @@ mod tests {
         );
         assert!(!masters.is_empty());
         assert!(!applied.masters_signature.is_empty());
+    }
+
+    #[test]
+    fn sky_flat_masters_reject_overlapping_stars_and_keep_sensor_response() {
+        let temp = tempfile::tempdir().unwrap();
+        let (width, height) = (96, 64);
+        let response = |x: usize, y: usize| {
+            if x < 8 || x >= width - 8 {
+                0.8
+            } else if (76..88).contains(&x) && (40..52).contains(&y) {
+                0.5
+            } else {
+                1.0
+            }
+        };
+        let mut calibration_meta = Vec::new();
+        for index in 0..2 {
+            let path = temp.path().join(format!("bias-{index}.fits"));
+            write_gradient_fits(&path, "BIAS", width, height, "Camera", 10, |_, _| 100.0);
+            calibration_meta.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        for index in 0..8 {
+            let path = temp.path().join(format!("sky-flat-{index}.fits"));
+            let sky = 1_000.0 + index as f64 * 500.0;
+            let star_left = 10 + index * 6;
+            write_gradient_fits(&path, "FLAT", width, height, "Camera", 10, |x, y| {
+                let star = if (star_left..star_left + 9).contains(&x) && (14..23).contains(&y) {
+                    1.0
+                } else {
+                    0.0
+                };
+                100.0 + sky * (response(x, y) + star)
+            });
+            calibration_meta.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        let light_path = temp.path().join("light.fits");
+        write_gradient_fits(&light_path, "LIGHT", width, height, "Camera", 10, |x, y| {
+            100.0 + 1_000.0 * response(x, y)
+        });
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &calibration_meta, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        let cache = temp.path().join("cache");
+        let (_, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        assert!(applied.flat_master.is_some(), "{:?}", applied.warning);
+        let (path, statistics): (String, String) = conn
+            .query_row(
+                "SELECT cache_path, statistics_json FROM psf_guard_calibration_master WHERE kind = 'flat'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let master = crate::image_io::open_linear_frame(Path::new(&path)).unwrap();
+        // Broad overlapping star images survive a pixel-scale impulse filter.
+        for (x, y) in [(17, 18), (23, 18), (29, 18), (3, 32), (82, 46), (50, 40)] {
+            let actual = master.image.data[y * width + x];
+            assert!(
+                (f64::from(actual) - response(x, y)).abs() < 0.001,
+                "flat response at ({x}, {y}): expected {}, got {actual}",
+                response(x, y),
+            );
+        }
+        let statistics: serde_json::Value = serde_json::from_str(&statistics).unwrap();
+        assert_eq!(statistics["rejection_method"], "MEDIAN_MAD");
+        assert!(statistics["rejected_samples"].as_u64().unwrap() > 0);
+        assert_eq!(statistics["fallback_pixels"], 0);
+        assert_eq!(
+            statistics["accepted_samples"].as_u64().unwrap()
+                + statistics["rejected_samples"].as_u64().unwrap(),
+            (8 * width * height) as u64,
+        );
+        let (_, reused) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        assert_eq!(applied.flat_master, reused.flat_master);
+        assert_eq!(applied.masters_signature, reused.masters_signature);
+    }
+
+    fn masked_sky_flat_fixture(root: &Path, positions: &[(usize, usize)]) -> (Connection, PathBuf) {
+        let (width, height) = (160, 128);
+        let mut metadata = Vec::new();
+        for index in 0..2 {
+            let path = root.join(format!("bias-{index}.fits"));
+            write_gradient_fits(&path, "BIAS", width, height, "Camera", 10, |_, _| 100.0);
+            metadata.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        for (index, &(star_x, star_y)) in positions.iter().enumerate() {
+            let path = root.join(format!("flat-{index}.fits"));
+            let sky = 10_000.0 + index as f64 * 250.0;
+            write_gradient_fits(&path, "FLAT", width, height, "Camera", 10, |x, y| {
+                let distance =
+                    (x as f64 - star_x as f64).powi(2) + (y as f64 - star_y as f64).powi(2);
+                let star = 0.8 * (-distance / 8.0).exp();
+                let response = if x < 12 {
+                    0.8
+                } else if (120..140).contains(&x) && (95..110).contains(&y) {
+                    0.6
+                } else {
+                    1.0
+                };
+                100.0 + sky * (response + star)
+            });
+            metadata.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        let light = root.join("light.fits");
+        write_gradient_fits(&light, "LIGHT", width, height, "Camera", 10, |_, _| 1_100.0);
+        let mut conn = Connection::open_in_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        import_calibration_frames(&tx, &metadata, Some("profile")).unwrap();
+        tx.commit().unwrap();
+        (conn, light)
+    }
+
+    fn resolve_masked_fixture(
+        conn: &Connection,
+        cache: &Path,
+        light: &Path,
+        enabled: bool,
+    ) -> AppliedCalibration {
+        resolve_or_build_masters_pinned(
+            conn,
+            cache,
+            &[light.to_path_buf()],
+            None,
+            None,
+            CalibrationMode::Auto,
+            CalibrationBuildSettings {
+                flat_star_masking: enabled,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .1
+    }
+
+    #[test]
+    fn native_flat_masks_rekey_masters_remove_majority_stars_and_preserve_response() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut positions = vec![(40, 45); 6];
+        positions.extend([(100, 55); 4]);
+        let (conn, light) = masked_sky_flat_fixture(temp.path(), &positions);
+        let cache = temp.path().join("cache");
+        let unmasked = resolve_masked_fixture(&conn, &cache, &light, false);
+        let masked = resolve_masked_fixture(&conn, &cache, &light, true);
+        assert!(masked.flat_master.is_some(), "{:?}", masked.warning);
+        assert_eq!(masked.bias_master, unmasked.bias_master);
+        assert_ne!(masked.flat_master, unmasked.flat_master);
+        assert_ne!(masked.fingerprint, unmasked.fingerprint);
+        assert_ne!(masked.masters_signature, unmasked.masters_signature);
+        let path = cache
+            .join("calibration-masters")
+            .join(masked.flat_master.as_ref().unwrap());
+        let master = crate::image_io::open_linear_frame(&path).unwrap();
+        for (x, y, expected) in [(40, 45, 1.0), (100, 55, 1.0), (4, 64, 0.8), (130, 102, 0.6)] {
+            assert!(
+                (master.image.data[y * 160 + x] - expected).abs() < 0.001,
+                "response at {x},{y}: {} != {expected}",
+                master.image.data[y * 160 + x],
+            );
+        }
+        let statistics = cached_flat_masking_statistics(&conn, &path)
+            .unwrap()
+            .unwrap();
+        assert!(statistics.masked_samples > 0);
+        assert!(statistics.masked_pixels > 0);
+        assert!(statistics.minimum_clean_samples >= 2);
+        let cached = resolve_masked_fixture(&conn, &cache, &light, true);
+        assert_eq!(cached.flat_master, masked.flat_master);
+        assert_eq!(cached.warning, masked.warning);
+        let restored = resolve_masked_fixture(&conn, &cache, &light, false);
+        assert_eq!(restored.flat_master, unmasked.flat_master);
+    }
+
+    #[test]
+    fn native_flat_mask_coverage_failure_is_visible_and_does_not_record_a_master() {
+        let temp = tempfile::tempdir().unwrap();
+        let (conn, light) = masked_sky_flat_fixture(temp.path(), &[(40, 45); 6]);
+        let cache = temp.path().join("cache");
+        let applied = resolve_masked_fixture(&conn, &cache, &light, true);
+        assert!(applied.bias_master.is_some());
+        assert!(applied.flat_master.is_none());
+        let warning = applied
+            .warning
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        assert!(warning.contains("coverage"), "{warning}");
+        assert!(warning.contains("flat"), "{warning}");
+        let recorded: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM psf_guard_calibration_master WHERE kind = 'flat'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(recorded, 0);
+        assert!(cache
+            .join("calibration-masters")
+            .read_dir()
+            .unwrap()
+            .all(|entry| {
+                let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+                !name.starts_with("flat-") && !name.starts_with("seiza-flat-")
+            }));
+    }
+
+    #[test]
+    fn native_flat_mask_low_coverage_warning_survives_cache_reuse() {
+        let temp = tempfile::tempdir().unwrap();
+        let (conn, light) =
+            masked_sky_flat_fixture(temp.path(), &[(40, 45), (40, 45), (100, 55), (100, 55)]);
+        let cache = temp.path().join("cache");
+        let applied = resolve_masked_fixture(&conn, &cache, &light, true);
+        assert!(applied.flat_master.is_some(), "{:?}", applied.warning);
+        assert!(applied
+            .warning
+            .as_deref()
+            .unwrap_or_default()
+            .contains("only two"));
+        let reused = resolve_masked_fixture(&conn, &cache, &light, true);
+        assert_eq!(reused.warning, applied.warning);
+        assert_eq!(reused.flat_master, applied.flat_master);
+
+        for invalid_statistics in ["{}", "not-json"] {
+            conn.execute(
+                "UPDATE psf_guard_calibration_master SET statistics_json = ?1 WHERE kind = 'flat'",
+                [invalid_statistics],
+            )
+            .unwrap();
+            let rebuilt = resolve_masked_fixture(&conn, &cache, &light, true);
+            assert_eq!(rebuilt.flat_master, applied.flat_master);
+            assert_eq!(rebuilt.warning, applied.warning);
+        }
+    }
+
+    #[test]
+    fn native_flat_mask_diagnostics_distinguish_coverage_from_saturation() {
+        let mut statistics = seiza_stacking::FlatStarMaskingStatistics {
+            options: seiza_stacking::FlatStarMaskingOptions::default(),
+            masked_samples: 20,
+            masked_pixels: 10,
+            minimum_clean_samples: 4,
+            maximum_clean_samples: 10,
+            low_coverage_samples: 0,
+            unmasked_saturation_samples: 0,
+            unknown_saturation_inputs: 0,
+        };
+        assert!(flat_masking_warning(&statistics).is_none());
+        statistics.unmasked_saturation_samples = 8;
+        statistics.unknown_saturation_inputs = 3;
+        let warning = flat_masking_warning(&statistics).unwrap();
+        assert!(warning.contains("8 isolated clipped"), "{warning}");
+        assert!(
+            warning.contains("3 input(s) had no known clipping ceiling"),
+            "{warning}"
+        );
+        assert!(!warning.contains("only two"), "{warning}");
     }
 
     #[test]

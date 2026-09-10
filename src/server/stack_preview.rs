@@ -766,6 +766,8 @@ struct PreparedGroup {
     /// The mode this channel calibrates under: its request override, or the
     /// request-wide mode.
     calibration: crate::calibration::CalibrationMode,
+    /// Captured with the cache key, so a settings save cannot change a queued job.
+    flat_star_masking: bool,
     frames: Vec<PreparedFrame>,
 }
 
@@ -1372,6 +1374,7 @@ fn prepare_job(
     project_id: i32,
     request: &StackPreviewRequest,
 ) -> Result<PreparedJob, AppError> {
+    let flat_star_masking = crate::calibration::flat_star_masking_enabled();
     let scoring = StackScoringSettings::from_overrides(&request.scoring);
     let requested = request.image_ids.iter().copied().collect::<HashSet<_>>();
     let (project_images, expected_by_image, mapped_sources) = {
@@ -1583,10 +1586,11 @@ fn prepare_job(
             let conn = ctx.db();
             let conn = conn.lock().map_err(AppError::db)?;
             for frame in &frames {
-                let fingerprint = crate::calibration::selection_fingerprint(
+                let fingerprint = crate::calibration::selection_fingerprint_with_masking(
                     &conn,
                     &frame.path,
                     Some(&directory_tree),
+                    flat_star_masking,
                 )
                 .map_err(AppError::db)?;
                 hasher.update(fingerprint.as_bytes());
@@ -1631,6 +1635,7 @@ fn prepare_job(
             frames: decisions,
         });
         prepared_groups.push(PreparedGroup {
+            flat_star_masking,
             index,
             calibration: group_calibration,
             frames,
@@ -2143,16 +2148,20 @@ fn run_group(
     // sessions, each with its own masters; a single-night group gets one
     // session and stacks exactly as before.
     let calibration_mode = group.calibration;
+    let flat_star_masking = group.flat_star_masking;
     let calibration_started = std::time::Instant::now();
     let plan = pool.install(move || {
-        crate::calibration::resolve_or_build_master_plan(
+        crate::calibration::resolve_or_build_master_plan_with_options(
             &calibration_conn,
             cache_root,
             &light_paths,
             Some(&directory_tree),
             Some(cancel.as_ref()),
-            calibration_mode,
-            &[],
+            crate::calibration::CalibrationPlanOptions {
+                mode: calibration_mode,
+                pinned: &[],
+                flat_star_masking,
+            },
         )
     });
     tracing::info!(

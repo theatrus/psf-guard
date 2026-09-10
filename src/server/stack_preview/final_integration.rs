@@ -305,6 +305,7 @@ mod tests {
         }
         (
             PreparedGroup {
+                flat_star_masking: false,
                 index: 0,
                 calibration: crate::calibration::CalibrationMode::Off,
                 frames,

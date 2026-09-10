@@ -1235,6 +1235,8 @@ export interface CalibrationSettings {
   default_rotation_tolerance_deg: number;
   /** How masters built by other software are used; `prefer` by default. */
   external_masters: ExternalMasterPolicy;
+  /** Mask detected stars when building flat masters; off by default. */
+  flat_star_masking: boolean;
 }
 
 export interface ExportSettings {

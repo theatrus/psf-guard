@@ -6,6 +6,17 @@
 
 ## Added
 
+- Optional native star masking for flat masters, controlled by **Mask stars
+  in flats** in calibration settings. Masked builds retain original unmasked
+  measurements, report low coverage, and refuse unsupported pixels without
+  silently smoothing or filling them. No external star-removal tool is needed.
+
 ## Changed
 
 ## Fixed
+
+- Sky-flat masters improve rejection of overlapping moving-star samples with
+  robust median/MAD clipping after calibration and brightness normalization. Existing
+  generated masters rebuild with the new algorithm when next needed. Stars
+  need enough drift or dithering to leave most samples at each pixel clean;
+  clipping does not guarantee a star-free master.

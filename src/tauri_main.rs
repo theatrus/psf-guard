@@ -76,6 +76,13 @@ pub fn main() {
             .as_ref()
             .and_then(|calibration| calibration.external_masters),
     );
+    crate::calibration::configure_flat_star_masking(
+        initial_registry
+            .calibration
+            .as_ref()
+            .and_then(|calibration| calibration.flat_star_masking)
+            .unwrap_or(false),
+    );
     let server_config_for_task = server_config.clone();
     let registry_path_for_task = registry_path.clone();
     rt.spawn(async move {
