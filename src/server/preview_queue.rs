@@ -29,7 +29,7 @@ use tokio::sync::Semaphore;
 use crate::concurrency::{self, Priority, WorkerPolicy};
 use crate::server::state::AppState;
 
-/// What to generate for a job. Mirrors the two artifact handlers.
+/// What to generate for a job.
 #[derive(Debug, Clone)]
 pub enum GenKind {
     Preview {
@@ -40,6 +40,13 @@ pub enum GenKind {
         /// A frame with no `BAYERPAT` falls back to greyscale, so this can be
         /// asked for on a mixed rig without breaking the mono frames.
         color: bool,
+    },
+    /// Preserve native floating samples, mono/CFA sensor geometry, and RGB
+    /// channels while applying a display-only stretch. Always encoded as PNG.
+    CalibrationMaster {
+        midtone: f64,
+        shadow: f64,
+        max_dimensions: Option<(u32, u32)>,
     },
     Annotated {
         max_stars: usize,
@@ -372,6 +379,11 @@ fn generate_with_fingerprint(
         GenKind::Annotated { max_stars, size } => {
             generate_annotated(&job.fits_path, &tmp, size, *max_stars, job.encoding)
         }
+        GenKind::CalibrationMaster {
+            midtone,
+            shadow,
+            max_dimensions,
+        } => generate_calibration_master(&job.fits_path, &tmp, *midtone, *shadow, *max_dimensions),
     };
 
     // Clean up the temp file on both a generation failure and a rename
@@ -431,6 +443,93 @@ fn generate_preview(
         max_dimensions,
         encoding,
     )
+}
+
+fn generate_calibration_master(
+    fits_path: &Path,
+    output: &Path,
+    midtone: f64,
+    shadow: f64,
+    max_dimensions: Option<(u32, u32)>,
+) -> anyhow::Result<()> {
+    use crate::server::stack_preview::stretch::{
+        default_linear_config, normalize_linear_image, render_dynamic_image,
+    };
+    use seiza_stretch::{StretchModel, StretchParams};
+
+    anyhow::ensure!(
+        midtone.is_finite() && midtone > 0.0 && midtone < 1.0 && shadow.is_finite(),
+        "invalid calibration master display stretch"
+    );
+    anyhow::ensure!(
+        max_dimensions.is_none_or(|(width, height)| width > 0 && height > 0),
+        "calibration master preview dimensions must be positive"
+    );
+    // This loader retains floating values and the original CFA sample grid.
+    // The ordinary light preview loader debayers and quantizes to camera ADU.
+    let frame = crate::image_io::open_linear_frame(fits_path)?;
+    let mut config = default_linear_config();
+    config.model = StretchModel::AutoMtf(StretchParams {
+        target_median: midtone,
+        shadows_clip: shadow,
+    });
+    let prepared = match normalize_linear_image(&frame.image) {
+        Ok((image, _)) => image,
+        Err(error) => {
+            let (minimum, maximum) = frame
+                .image
+                .data
+                .iter()
+                .filter(|value| value.is_finite())
+                .fold(
+                    (f32::INFINITY, f32::NEG_INFINITY),
+                    |(minimum, maximum), &value| (minimum.min(value), maximum.max(value)),
+                );
+            anyhow::ensure!(minimum.is_finite() && maximum.is_finite(), "{error}");
+            if maximum == minimum {
+                // A uniform calibration frame has no contrast to stretch. A
+                // neutral display level distinguishes it from a failed image.
+                config.model = StretchModel::Identity;
+                let data = frame
+                    .image
+                    .data
+                    .iter()
+                    .map(|value| {
+                        if value.is_finite() {
+                            midtone as f32
+                        } else {
+                            f32::NAN
+                        }
+                    })
+                    .collect();
+                seiza_stacking::LinearImage::new(
+                    frame.image.width,
+                    frame.image.height,
+                    frame.image.channels,
+                    data,
+                )?
+            } else {
+                // Sparse detector defects can lie outside both robust bounds.
+                // Keep them visible using the shared linear transfer; do not
+                // round a near-unity flat or invent a spatial background.
+                let span = f64::from(maximum) - f64::from(minimum);
+                config.model = StretchModel::Linear {
+                    black: f64::from(minimum) - span * midtone / (1.0 - midtone),
+                    white: f64::from(maximum),
+                };
+                frame.image
+            }
+        }
+    };
+    let (dynamic, _) = render_dynamic_image(&prepared, &config).map_err(anyhow::Error::msg)?;
+    let dynamic = match max_dimensions {
+        Some((width, height)) if dynamic.width() > width || dynamic.height() > height => {
+            dynamic.resize(width, height, image::imageops::FilterType::Lanczos3)
+        }
+        _ => dynamic,
+    };
+    dynamic.save_with_format(output, image::ImageFormat::Png)?;
+    Ok(())
 }
 
 /// Unique sibling temp path for atomic-rename generation.
@@ -536,6 +635,195 @@ fn hfr_label_scale_for(native_width: u32, size: &str) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn master_job(directory: &Path, channels: usize, data: Vec<f32>, bayer: bool) -> GenJob {
+        let source = directory.join("master.fits");
+        let cards = if bayer {
+            vec![seiza_fits::WriteHeaderCard::new(
+                "BAYERPAT",
+                seiza_fits::HeaderValue::String("RGGB".into()),
+            )]
+        } else {
+            Vec::new()
+        };
+        let image = seiza_stacking::LinearImage::new(64, 64, channels, data).unwrap();
+        seiza_stacking::write_processed_image_fits_f32(&source, &image, &[], &cards).unwrap();
+        GenJob {
+            fits_path: source,
+            cache_path: directory.join("preview.png"),
+            kind: GenKind::CalibrationMaster {
+                midtone: 0.2,
+                shadow: -2.8,
+                max_dimensions: None,
+            },
+            // Calibration inspection stays lossless regardless of the global
+            // light-preview cache encoding carried by a caller.
+            encoding: crate::preview_format::PreviewEncoding::jpeg(80),
+        }
+    }
+
+    fn assert_no_temporary_files(directory: &Path) {
+        assert!(std::fs::read_dir(directory).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".tmp.")
+        }));
+    }
+
+    #[test]
+    fn calibration_master_preview_preserves_near_unity_cfa_and_pixel_defects() {
+        let directory = tempfile::tempdir().unwrap();
+        let data = (0..64 * 64)
+            .map(|index| {
+                let x = index % 64;
+                let y = index / 64;
+                let phase = if x % 2 == y % 2 { 0.0004 } else { 0.0 };
+                0.999 + x as f32 * 0.00003 + phase
+                    - if (20..25).contains(&x) && (20..25).contains(&y) {
+                        0.0003
+                    } else {
+                        0.0
+                    }
+            })
+            .collect::<Vec<_>>();
+        let job = master_job(directory.path(), 1, data, true);
+        let original = std::fs::read(&job.fits_path).unwrap();
+        generate(&job).unwrap();
+        let decoded = image::open(&job.cache_path).unwrap();
+        assert_eq!(
+            decoded.color(),
+            image::ColorType::L8,
+            "raw CFA must stay mono"
+        );
+        assert_eq!((decoded.width(), decoded.height()), (64, 64));
+        let bitmap = decoded.to_luma8();
+        assert!(
+            bitmap.get_pixel(32, 30)[0] > bitmap.get_pixel(33, 30)[0] + 10,
+            "CFA phase contrast must survive without interpolation"
+        );
+        assert!(
+            bitmap.get_pixel(24, 22)[0] + 10 < bitmap.get_pixel(24, 18)[0],
+            "dust response must remain local"
+        );
+        let levels = bitmap.as_raw().iter().copied().collect::<HashSet<_>>();
+        assert!(
+            levels.len() > 30,
+            "sub-ADU response must not collapse to integer levels"
+        );
+        assert_eq!(std::fs::read(&job.fits_path).unwrap(), original);
+        assert_eq!(
+            image::guess_format(&std::fs::read(&job.cache_path).unwrap()).unwrap(),
+            image::ImageFormat::Png
+        );
+        assert_no_temporary_files(directory.path());
+    }
+
+    #[test]
+    fn calibration_master_preview_preserves_rgb_and_bounds_screen_size() {
+        let directory = tempfile::tempdir().unwrap();
+        let data = (0..64 * 64)
+            .flat_map(|index| {
+                let base = 1.0 + (index % 64) as f32 * 0.001;
+                [base + 0.12, base, base - 0.08]
+            })
+            .collect();
+        let mut job = master_job(directory.path(), 3, data, false);
+        generate(&job).unwrap();
+        let original = image::open(&job.cache_path).unwrap();
+        assert_eq!(original.color(), image::ColorType::Rgb8);
+        let rgb = original.to_rgb8();
+        let sample = rgb.get_pixel(32, 32);
+        assert!(
+            sample[0] > sample[1] && sample[1] > sample[2],
+            "native RGB channels must not become luminance"
+        );
+        job.cache_path = directory.path().join("screen.png");
+        job.kind = GenKind::CalibrationMaster {
+            midtone: 0.2,
+            shadow: -2.8,
+            max_dimensions: Some((20, 10)),
+        };
+        generate(&job).unwrap();
+        let screen = image::open(&job.cache_path).unwrap();
+        assert_eq!((screen.width(), screen.height()), (10, 10));
+        job.cache_path = directory.path().join("larger-cap.png");
+        job.kind = GenKind::CalibrationMaster {
+            midtone: 0.2,
+            shadow: -2.8,
+            max_dimensions: Some((1200, 1200)),
+        };
+        generate(&job).unwrap();
+        let screen = image::open(&job.cache_path).unwrap();
+        assert_eq!(
+            (screen.width(), screen.height()),
+            (64, 64),
+            "screen previews must not upscale"
+        );
+        assert_no_temporary_files(directory.path());
+    }
+
+    #[test]
+    fn calibration_master_preview_handles_uniform_frames_and_sparse_defects() {
+        for value in [0.0, 1.0, 1000.0] {
+            let directory = tempfile::tempdir().unwrap();
+            let job = master_job(directory.path(), 1, vec![value; 64 * 64], false);
+            generate(&job).unwrap();
+            let bitmap = image::open(&job.cache_path).unwrap().to_luma8();
+            assert!(bitmap
+                .as_raw()
+                .iter()
+                .all(|value| (49..=52).contains(value)));
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let mut data = vec![1.0; 64 * 64];
+        data[2030] = 1.001;
+        let job = master_job(directory.path(), 1, data, true);
+        generate(&job).unwrap();
+        let bitmap = image::open(&job.cache_path).unwrap().to_luma8();
+        assert_eq!(bitmap.as_raw()[2030], 255);
+        assert!((49..=52).contains(&bitmap.as_raw()[2031]));
+    }
+
+    #[test]
+    fn calibration_master_preview_failures_leave_no_output_or_temporary_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut job = master_job(directory.path(), 1, vec![1.0; 64 * 64], false);
+        job.kind = GenKind::CalibrationMaster {
+            midtone: f64::NAN,
+            shadow: -2.8,
+            max_dimensions: None,
+        };
+        assert!(generate(&job).is_err());
+        assert!(!job.cache_path.exists());
+        assert_no_temporary_files(directory.path());
+        job.kind = GenKind::CalibrationMaster {
+            midtone: 0.2,
+            shadow: -2.8,
+            max_dimensions: Some((0, 64)),
+        };
+        assert!(generate(&job).is_err());
+        assert!(!job.cache_path.exists());
+        job.kind = GenKind::CalibrationMaster {
+            midtone: 0.2,
+            shadow: -2.8,
+            max_dimensions: None,
+        };
+        std::fs::write(&job.fits_path, b"not a FITS master").unwrap();
+        let stale = source_fingerprint(&job.fits_path);
+        assert!(generate(&job).is_err());
+        assert!(!job.cache_path.exists());
+        assert_no_temporary_files(directory.path());
+        let job = master_job(directory.path(), 1, vec![1.001; 64 * 64], false);
+        assert!(generate_with_fingerprint(&job, stale).is_err());
+        assert!(!job.cache_path.exists());
+        assert_no_temporary_files(directory.path());
+        std::fs::create_dir(&job.cache_path).unwrap();
+        assert!(generate(&job).is_err());
+        assert!(job.cache_path.is_dir());
+        assert_no_temporary_files(directory.path());
+    }
 
     #[test]
     fn temp_path_is_unique_sibling() {

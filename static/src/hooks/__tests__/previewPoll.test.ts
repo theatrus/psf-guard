@@ -13,7 +13,7 @@ import {
   __resetForTest,
 } from '../previewPoll';
 import { apiClient } from '../../api/client';
-import type { PreviewDescriptor, GenerationStatus } from '../../api/types';
+import type { PreviewDescriptor, GenerationStatus, CalibrationMasterPreviewDescriptor } from '../../api/types';
 
 const preview = (imageId: number): PreviewDescriptor => ({
   imageId,
@@ -123,5 +123,41 @@ describe('previewPoll coordinator', () => {
     expect(descriptorKey(preview(1))).not.toBe(
       descriptorKey({ imageId: 1, kind: 'preview', size: 'large' })
     );
+  });
+
+  it('keys calibration previews by exact provenance and display stretch', () => {
+    const master: CalibrationMasterPreviewDescriptor = {
+      kind: 'calibration_master', masterId: 'same-master', size: 'original', midtone: 0.2,
+      source: { kind: 'mono', jobId: 'job', groupIndex: 0, artifactRevision: 'old' },
+    };
+    const variants: CalibrationMasterPreviewDescriptor[] = [
+      { ...master, source: { ...master.source, artifactRevision: 'new' } },
+      { ...master, source: { kind: 'mono', jobId: 'job', groupIndex: 1, artifactRevision: 'old' } },
+      { ...master, source: { kind: 'color', jobId: 'job', artifactRevision: 'old' } },
+      { ...master, masterId: 'another-master' },
+      { ...master, size: 'screen' },
+      { ...master, midtone: 0.4 },
+      { ...master, shadow: -2 },
+    ];
+    expect(new Set([master, ...variants].map(descriptorKey)).size).toBe(8);
+  });
+
+  it('drops an old master subscriber when selection changes while polling', async () => {
+    let resolveStatus!: (statuses: GenerationStatus[]) => void;
+    statusSpy.mockImplementationOnce(() => new Promise((resolve) => { resolveStatus = resolve; }))
+      .mockResolvedValue([{ state: 'ready' }]);
+    const master: CalibrationMasterPreviewDescriptor = {
+      kind: 'calibration_master', masterId: 'old', size: 'original',
+      source: { kind: 'color', jobId: 'job', artifactRevision: 'r' },
+    };
+    const oldReady = vi.fn();
+    const newReady = vi.fn();
+    const unregister = registerPending('db1', master, { onReady: oldReady, onError: vi.fn() });
+    unregister();
+    registerPending('db1', { ...master, masterId: 'new' }, { onReady: newReady, onError: vi.fn() });
+    resolveStatus([{ state: 'ready' }]);
+    await vi.advanceTimersByTimeAsync(900);
+    expect(oldReady).not.toHaveBeenCalled();
+    expect(newReady).toHaveBeenCalledTimes(1);
   });
 });

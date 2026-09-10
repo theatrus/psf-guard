@@ -5333,6 +5333,108 @@
   cursor: crosshair;
 }
 
+.calibration-master-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.calibration-master-entry {
+  padding: 0.5rem 0.7rem;
+}
+
+.calibration-master-inspector .stack-inspector-header h2,
+.calibration-master-inspector .stack-inspector-loading {
+  overflow-wrap: anywhere;
+}
+
+.calibration-master-inspector .stack-inspector-loading {
+  padding: 1rem;
+  text-align: center;
+}
+
+.calibration-master-controls {
+  flex-shrink: 0;
+  max-height: 35%;
+  overflow: auto;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+}
+
+.calibration-master-options {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+}
+
+.calibration-master-selector {
+  display: grid;
+  gap: 0.3rem;
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+.calibration-master-selector select {
+  width: 100%;
+  min-width: 0;
+  padding: 0.35rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-input);
+}
+
+.calibration-master-stretch {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.3rem;
+  flex: 0 1 9rem;
+  min-width: 6rem;
+}
+
+.calibration-master-stretch input {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+}
+
+.calibration-master-provenance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  margin-top: 0.6rem;
+  overflow-wrap: anywhere;
+}
+
+.calibration-master-provenance > strong {
+  flex-basis: 100%;
+}
+
+.calibration-master-statistics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  width: 100%;
+  color: var(--color-text-muted);
+}
+
+.calibration-master-note {
+  margin: 0.5rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.calibration-master-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--color-error);
+  overflow-wrap: anywhere;
+}
+
 .stack-artifact-region {
   position: absolute;
   z-index: 3;
@@ -5560,6 +5662,10 @@
   .stack-inspector-hint,
   .stack-inspector-toolbar .stack-preview-download {
     display: none;
+  }
+
+  .calibration-master-inspector .stack-inspector-toolbar .stack-preview-download {
+    display: inline-flex;
   }
 
   .stack-inspector-body {

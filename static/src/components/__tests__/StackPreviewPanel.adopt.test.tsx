@@ -54,6 +54,42 @@ const runningGroup = {
 };
 
 describe('StackPreviewPanel job adoption', () => {
+  it('keeps calibration inspection and summary bound to the displayed artifact during a rebuild', async () => {
+    let inspectedRevision: string | null = null;
+    server.use(
+      http.get('/api/stack-activity', () => ok({ schema_version: 1, active: [{
+        kind: 'mono', job_id: 'rebuild', database_id: 'test', project_id: 1, state: 'running',
+        label: 'Sh2 86 Ha', detail: 'Registering frames', processed_units: 1, total_units: 2, created_unix_seconds: 100,
+      }] })),
+      http.get('/api/db/test/projects/1/stack-previews/latest', () => ok({ groups: [{
+        job_id: 'displayed', artifact_revision: 'displayed-revision', accepted_only: false,
+        group: { ...runningGroup, state: 'ready', phase: 'ready', calibration: {
+          ...runningGroup.calibration, state: 'applied', bias_frames: 20, flat_frames: 5,
+        } },
+      }] })),
+      http.get('/api/db/test/projects/1/stack-previews/color', () => ok({ targets: [], jobs: [] })),
+      http.get('/api/db/test/projects/1/stack-previews/rebuild', () => ok({
+        job_id: 'rebuild', database_id: 'test', project_id: 1, state: 'running', accepted_only: false,
+        artifact_revision: 'new-revision', groups: [{ ...runningGroup, calibration: {
+          ...runningGroup.calibration, state: 'incomplete', bias_frames: 999,
+        } }], error: null,
+      })),
+      http.get('/api/db/test/stack-previews/displayed/0/stretch', () => ok(null)),
+      http.get('/api/db/test/stack-previews/displayed/0/calibration-masters', ({ request }) => {
+        inspectedRevision = new URL(request.url).searchParams.get('revision');
+        return ok({ masters: [], notes: ['Recorded displayed calibration.'] });
+      }),
+    );
+    render(<StackPreviewPanel dbId="test" projectId={1} images={images} selectionSource="visible" onOpenImage={() => undefined} />, { wrapper: wrapper() });
+    await screen.findByText('1/2 frames');
+    expect(screen.getByText('Calibration applied')).toBeInTheDocument();
+    expect(screen.queryByText('Calibration set incomplete')).not.toBeInTheDocument();
+    expect(screen.getByText('20 bias · 0 dark · 0 dark-flat · 5 flat')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Inspect calibration masters for Ha' }));
+    await screen.findByText('Recorded displayed calibration.');
+    expect(inspectedRevision).toBe('displayed-revision');
+  });
+
   it('restores revision-scoped processing on reload and durably reverts without running tools', async () => {
     const user = userEvent.setup();
     let posts = 0;

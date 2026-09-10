@@ -171,7 +171,7 @@ fn deconvolution_cache_id(
     Ok(id)
 }
 
-pub(super) fn default_linear_config() -> StretchConfig {
+pub(crate) fn default_linear_config() -> StretchConfig {
     StretchConfig::auto_mtf(
         StretchParams {
             target_median: 0.2,
@@ -189,7 +189,7 @@ pub(super) fn display_identity_config() -> StretchConfig {
     }
 }
 
-struct StretchRender {
+pub(crate) struct StretchRender {
     plan: StretchPlan,
 }
 
@@ -261,7 +261,7 @@ pub(super) fn render_image_previews_atomic_with_progress(
     .and_then(|render| serde_json::to_value(render.plan).map_err(|error| error.to_string()))
 }
 
-pub(super) fn normalize_linear_image(
+pub(crate) fn normalize_linear_image(
     image: &LinearImage,
 ) -> Result<(LinearImage, StackStretchInputRange), String> {
     let sampled_pixels = (STRETCH_ANALYSIS_SAMPLES / image.channels).max(1);
@@ -369,7 +369,7 @@ fn render_previews_with_plan(
     save_png_atomic(&resized, screen_destination)
 }
 
-fn render_dynamic_image(
+pub(crate) fn render_dynamic_image(
     image: &LinearImage,
     config: &StretchConfig,
 ) -> Result<(image::DynamicImage, StretchRender), String> {

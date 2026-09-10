@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
+import type { StackCalibrationMasters } from '../src/api/types';
 import {
   registerFixtureDb,
   resetDatabases,
@@ -29,7 +30,7 @@ function fitsNumericValue(header: string, keyword: string): number {
   return Number(card!.slice(10).split('/')[0].trim().replace('D', 'E'));
 }
 
-function writeSyntheticMonoStack(destination: string, variant: number): void {
+function writeSyntheticMonoStack(destination: string, variant: number, calibrationMaster = false): void {
   const width = 512;
   const height = 384;
   const values = new Float32Array(width * height);
@@ -79,6 +80,7 @@ function writeSyntheticMonoStack(destination: string, variant: number): void {
     fitsFloatCard('CD1_2', 0),
     fitsFloatCard('CD2_1', 0),
     fitsFloatCard('CD2_2', -0.0004160277777778),
+    ...(calibrationMaster ? [fitsStringCard('BAYERPAT', 'RGGB')] : []),
     'END'.padEnd(80),
   ];
   const headerText = cards.join('');
@@ -86,14 +88,14 @@ function writeSyntheticMonoStack(destination: string, variant: number): void {
   header.write(headerText, 0, 'ascii');
   const pixels = Buffer.alloc(values.length * 4);
   for (let index = 0; index < values.length; index += 1) {
-    pixels.writeFloatBE(values[index], index * 4);
+    pixels.writeFloatBE(calibrationMaster ? values[index] / 10_000 : values[index], index * 4);
   }
   const padding = Buffer.alloc((2880 - (pixels.length % 2880)) % 2880);
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.writeFileSync(destination, Buffer.concat([header, pixels, padding]));
 }
 
-function seedSyntheticColorStacks(databaseId: string, projectId: number): void {
+function seedSyntheticColorStacks(databaseId: string, projectId: number, withCalibration = false): void {
   const cacheRoot = path.join(
     process.env.PSF_GUARD_E2E_TMP!, 'cache', databaseId, 'stack-previews'
   );
@@ -101,7 +103,30 @@ function seedSyntheticColorStacks(databaseId: string, projectId: number): void {
   const groups = filters.map((filterName, index) => {
     const jobId = (index + 1).toString(16).padStart(64, '0');
     writeSyntheticMonoStack(path.join(cacheRoot, jobId, 'group-0.fits'), index);
-    return {
+    const masterRoot = path.join(process.env.PSF_GUARD_E2E_TMP!, 'cache', databaseId, 'calibration-masters');
+    const bias = `bias-${'1'.repeat(64)}.fits`;
+    const dark = `dark-${'2'.repeat(64)}.fits`;
+    const darkFlat = `dark_flat-${'3'.repeat(64)}.fits`;
+    const flat = `flat-${(40 + index).toString(16).padStart(64, '0')}.fits`;
+    const missingFlat = `flat-${(50 + index).toString(16).padStart(64, '0')}.fits`;
+    const signature = `bias=${bias};dark=${dark};dark_flat=${darkFlat};flat=${flat}`;
+    const missingSignature = `bias=${bias};dark=${dark};dark_flat=${darkFlat};flat=${missingFlat}`;
+    const calibration = {
+      mode: 'auto', state: 'applied', bias_frames: 8, dark_frames: 8, dark_flat_frames: 8, flat_frames: 8,
+      bias_master: null, dark_master: null, dark_flat_master: null, flat_master: null,
+      warning: null, fingerprint: `fixture-${index}`, masters_signature: `${signature}||${missingSignature}`,
+      estimated_pedestal_adu: null, sessions: 2,
+      session_details: [
+        { fingerprint: `session-one-${index}`, masters_signature: signature, estimated_pedestal_adu: null, lights: 2 },
+        { fingerprint: `session-two-${index}`, masters_signature: missingSignature, estimated_pedestal_adu: null, lights: 1 },
+      ],
+    };
+    if (withCalibration) {
+      for (const [masterIndex, name] of [bias, dark, darkFlat, flat].entries()) {
+        writeSyntheticMonoStack(path.join(masterRoot, name), masterIndex, true);
+      }
+    }
+    const remembered = {
       job_id: jobId,
       artifact_revision: `synthetic-${index}`,
       accepted_only: false,
@@ -144,8 +169,20 @@ function seedSyntheticColorStacks(databaseId: string, projectId: number): void {
         error: null,
         input_images: [],
         frames: [],
+        ...(withCalibration ? { calibration } : {}),
       },
     };
+    if (withCalibration) {
+      fs.writeFileSync(path.join(cacheRoot, jobId, 'manifest.json'), JSON.stringify({
+        schema_version: 1, database_id: databaseId, project_id: projectId,
+        job_id: jobId, artifact_revision: remembered.artifact_revision,
+        state: 'completed', accepted_only: false,
+        created_unix_seconds: remembered.created_unix_seconds,
+        cache_version: remembered.cache_version, stacking_version: '0.14.0',
+        groups: [remembered.group], error: null,
+      }));
+    }
+    return remembered;
   });
   fs.mkdirSync(cacheRoot, { recursive: true });
   fs.writeFileSync(
@@ -223,7 +260,7 @@ test('retains RC-Astro color steps in saved setups on desktop and mobile', async
   await mobileTools.screenshot({ path: testInfo.outputPath('rc-astro-color-mobile.png') });
 });
 
-test.beforeEach(async ({ request }) => {
+test.beforeEach(async ({ request }, testInfo) => {
   await resetDatabases(request);
   // Setups are global and survive a database reset.
   const setups = (await (await request.get('/api/processing-setups')).json()).data.setups;
@@ -233,10 +270,99 @@ test.beforeEach(async ({ request }) => {
   }
   const entry = await registerFixtureDb(request, {
     name: 'Stack Preview e2e',
-    slug: 'stack-preview-e2e',
+    // Removing a registry entry preserves its cache; each test needs its own slug.
+    slug: `stack-preview-e2e-${testInfo.line}-${testInfo.repeatEachIndex}-${testInfo.retry}`,
   });
   dbId = entry.id;
   await waitForCacheReady(request, dbId);
+});
+
+test('inspects exact calibration masters across mono sessions and color channels', async ({ page, request }, testInfo) => {
+  test.setTimeout(180_000);
+  seedSyntheticColorStacks(dbId, 2, true);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.route('**/images/*/preview?*', (route) => route.abort());
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=2`);
+  const catalogResponse = page.waitForResponse((response) => response.url().includes('/calibration-masters?'));
+  await page.getByRole('button', { name: 'Inspect calibration masters for R', exact: true }).click();
+  const catalog: StackCalibrationMasters = (await (await catalogResponse).json()).data;
+  expect(catalog.masters).toHaveLength(5);
+  expect(catalog.masters.filter((master) => master.available)).toHaveLength(4);
+  expect(catalog.masters.find((master) => master.kind === 'bias')?.usages).toHaveLength(2);
+  const dialog = page.getByRole('dialog', { name: /Beta Field/ });
+  const selector = dialog.getByRole('combobox', { name: 'Master' });
+  const image = dialog.getByTestId('stack-inspector-image');
+
+  for (const master of catalog.masters.filter((entry) => entry.available)) {
+    await selector.selectOption(master.id);
+    await expect(image).toHaveAttribute('src', new RegExp(master.id));
+    await expect(image).toBeVisible({ timeout: 30_000 });
+    await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth)).toBe(512);
+    const pixels = await image.evaluate((element: HTMLImageElement) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = element.naturalWidth;
+      canvas.height = element.naturalHeight;
+      const context = canvas.getContext('2d')!;
+      context.drawImage(element, 0, 0);
+      const values = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      const levels = new Set<number>();
+      let mono = true;
+      for (let index = 0; index < values.length; index += 4) {
+        levels.add(values[index]);
+        mono &&= values[index] === values[index + 1] && values[index] === values[index + 2];
+      }
+      return { levels: levels.size, mono };
+    });
+    expect(pixels.levels).toBeGreaterThan(32);
+    expect(pixels.mono).toBe(true);
+    const download = await request.get(master.fits_url!);
+    expect(download.ok()).toBe(true);
+    const original = fs.readFileSync(path.join(process.env.PSF_GUARD_E2E_TMP!, 'cache', dbId, 'calibration-masters', master.label));
+    expect(Buffer.compare(await download.body(), original)).toBe(0);
+  }
+
+  const availableFlat = catalog.masters.find((master) => master.kind === 'flat' && master.available)!;
+  await selector.selectOption(availableFlat.id);
+  await expect(image).toHaveAttribute('src', new RegExp(availableFlat.id));
+  await expect(image).toBeVisible();
+  await dialog.getByRole('button', { name: '100%', exact: true }).click();
+  const transform = await image.evaluate((element) => element.style.transform);
+  const midtone = dialog.getByRole('slider', { name: 'Master midtone' });
+  await midtone.focus();
+  for (let step = 0; step < 15; step += 1) await midtone.press('ArrowRight');
+  await expect(image).toHaveAttribute('src', /midtone=0.35/);
+  await expect(image).toBeVisible({ timeout: 30_000 });
+  expect(await image.evaluate((element) => element.style.transform)).toBe(transform);
+  await dialog.screenshot({ path: testInfo.outputPath('calibration-masters-desktop.png') });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await dialog.getByRole('button', { name: 'Fit', exact: true }).click();
+  await expect(dialog).toBeInViewport();
+  await expect(dialog.getByRole('link', { name: 'Download master FITS' })).toBeVisible();
+  expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  expect(await dialog.locator('.calibration-master-controls').evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  expect(await image.evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThan(100);
+  await dialog.screenshot({ path: testInfo.outputPath('calibration-masters-mobile.png') });
+  await selector.selectOption(catalog.masters.find((master) => !master.available)!.id);
+  await expect(dialog.getByRole('status').filter({ hasText: /master|file|available/i })).toBeVisible();
+  await expect(image).toHaveCount(0);
+  await expect(dialog.getByRole('link', { name: 'Download master FITS' })).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Close calibration master inspector' }).click();
+
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const rgb = page.locator('.stack-color-card[data-color-kind="rgb"]').first();
+  await rgb.getByRole('button', { name: 'Build RGB color preview', exact: true }).click();
+  await expect(rgb.locator('[data-stack-color-state]')).toHaveAttribute('data-stack-color-state', 'completed', { timeout: 90_000 });
+  const colorResponse = page.waitForResponse((response) => response.url().includes('/color/') && response.url().includes('/calibration-masters?'));
+  await rgb.getByRole('button', { name: 'Inspect calibration masters for RGB', exact: true }).click();
+  const colorCatalog: StackCalibrationMasters = (await (await colorResponse).json()).data;
+  const sharedBias = colorCatalog.masters.filter((master) => master.kind === 'bias');
+  expect(sharedBias).toHaveLength(1);
+  expect(sharedBias[0].usages).toHaveLength(6);
+  await dialog.getByRole('combobox', { name: 'Master' }).selectOption(sharedBias[0].id);
+  await expect(dialog.getByTestId('stack-inspector-image')).toBeVisible({ timeout: 30_000 });
+  await expect(dialog.locator('.calibration-master-provenance')).toContainText(/Session 2/);
+  await dialog.getByRole('button', { name: 'Close calibration master inspector' }).click();
 });
 
 test('builds a real three-frame Seiza stack and exposes its frame decisions', async ({

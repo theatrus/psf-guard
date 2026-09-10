@@ -35,7 +35,7 @@ interface AsyncImageRecord {
 export function useAsyncImage(
   dbId: string | null | undefined,
   src: string,
-  descriptor: PreviewDescriptor
+  descriptor?: PreviewDescriptor
 ): AsyncImageResult {
   const [record, setRecord] = useState<AsyncImageRecord>(() => ({
     baseSrc: src,
@@ -73,7 +73,7 @@ export function useAsyncImage(
 
   const onError = useCallback(() => {
     unregisterRef.current?.();
-    if (!dbId) {
+    if (!dbId || !descRef.current) {
       unregisterRef.current = null;
       setRecord((current) => ({
         baseSrc: src,

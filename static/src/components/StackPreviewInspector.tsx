@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   MouseEvent as ReactMouseEvent,
   TouchEvent as ReactTouchEvent,
+  ReactNode,
 } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../api/client';
-import type { ArtifactSearchJob, ArtifactSearchResult, ReferenceRegion } from '../api/types';
+import type { ArtifactSearchJob, ArtifactSearchResult, PreviewDescriptor, ReferenceRegion } from '../api/types';
 import { useImageZoom } from '../hooks/useImageZoom';
+import { useAsyncImage } from '../hooks/useAsyncImage';
 import { morphologyLabel } from './artifactMorphology';
 import {
   artifactRegionFromPoints,
@@ -33,16 +35,24 @@ export type StackArtifactSource =
     };
 
 interface StackPreviewInspectorProps {
+  className?: string;
   eyebrow: string;
   title: string;
   label: string;
   summary: string[];
-  imageUrl: string;
-  fitsUrl: string;
+  imageUrl: string | null;
+  fitsUrl: string | null;
   imageAlt: string;
   downloadLabel: string;
   artifactSource?: StackArtifactSource;
   artifactEnabled?: boolean;
+  controls?: ReactNode;
+  asyncPreview?: { dbId: string; descriptor: PreviewDescriptor };
+  imageIdentity?: string;
+  emptyMessage?: string;
+  loadingMessage?: string;
+  errorMessage?: string;
+  closeLabel?: string;
   onOpenImage?: (imageId: number) => void;
   onClose: () => void;
 }
@@ -72,6 +82,7 @@ function ArtifactMorphologyBadge({ result }: { result: ArtifactSearchResult }) {
 }
 
 export default function StackPreviewInspector({
+  className = '',
   eyebrow,
   title,
   label,
@@ -82,11 +93,20 @@ export default function StackPreviewInspector({
   downloadLabel,
   artifactSource,
   artifactEnabled = false,
+  controls,
+  asyncPreview,
+  imageIdentity,
+  emptyMessage,
+  loadingMessage = 'Loading full-resolution stack…',
+  errorMessage = 'The full-resolution stack could not be loaded.',
+  closeLabel = 'Close stack inspector',
   onOpenImage,
   onClose,
 }: StackPreviewInspectorProps) {
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState(false);
+  const image = useAsyncImage(asyncPreview?.dbId, imageUrl ?? '', asyncPreview?.descriptor);
+  const loaded = image.state === 'ready';
+  const error = image.state === 'error';
+  const loadedIdentity = useRef<string | null>(null);
   const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null);
   const [selecting, setSelecting] = useState(false);
   const [dragStart, setDragStart] = useState<ImagePoint | null>(null);
@@ -114,8 +134,6 @@ export default function StackPreviewInspector({
   }, [zoom.containerRef]);
 
   useEffect(() => {
-    setLoaded(false);
-    setError(false);
     setDimensions(null);
     setSelecting(false);
     setDragStart(null);
@@ -289,7 +307,7 @@ export default function StackPreviewInspector({
   return (
     <div className="stack-inspector-overlay" role="presentation" onClick={onClose}>
       <section
-        className={`stack-inspector ${activeSearch ? 'with-artifact-results' : ''}`}
+        className={`stack-inspector ${activeSearch ? 'with-artifact-results' : ''} ${className}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="stack-inspector-title"
@@ -306,10 +324,12 @@ export default function StackPreviewInspector({
             {summary.map((item) => <span key={item}>{item}</span>)}
             {dimensions && <span>{dimensions.width} × {dimensions.height}</span>}
           </div>
-          <button className="close-button" type="button" onClick={onClose} aria-label="Close stack inspector">
+          <button className="close-button" type="button" onClick={onClose} aria-label={closeLabel}>
             ×
           </button>
         </header>
+
+        {controls}
 
         <div className="stack-inspector-body">
           <div
@@ -330,31 +350,35 @@ export default function StackPreviewInspector({
             onKeyDown={zoom.handleKeyDown}
             tabIndex={0}
           >
-            {!loaded && !error && (
+            {!imageUrl ? (
+              <div className="stack-inspector-loading" role="status">{emptyMessage}</div>
+            ) : !loaded && !error && (
               <div className="stack-inspector-loading">
                 <span className="stack-preview-spinner" aria-hidden="true" />
-                Loading full-resolution stack…
+                {image.state === 'generating' ? 'Generating preview…' : loadingMessage}
               </div>
             )}
             {error ? (
               <div className="stack-inspector-loading error" role="alert">
-                The full-resolution stack could not be loaded.
+                {image.error || errorMessage}
               </div>
-            ) : (
+            ) : imageUrl && (
               <img
                 ref={zoom.imageRef}
-                src={imageUrl}
+                src={image.src}
                 alt={imageAlt}
                 data-testid="stack-inspector-image"
                 draggable={false}
-                onError={() => setError(true)}
+                onError={image.onError}
                 onLoad={(event) => {
                   const { naturalWidth: width, naturalHeight: height } = event.currentTarget;
                   if (!width || !height) return;
                   setDimensions({ width, height });
                   zoom.setImageDimensions(width, height, true);
-                  zoom.applyBitmapDimensions(width, height, 'fit');
-                  setLoaded(true);
+                  const identity = imageIdentity ?? imageUrl;
+                  zoom.applyBitmapDimensions(width, height, loadedIdentity.current === identity ? 'preserve' : 'fit');
+                  loadedIdentity.current = identity;
+                  image.onLoad();
                 }}
                 style={{
                   visibility: loaded ? 'visible' : 'hidden',
@@ -507,7 +531,7 @@ export default function StackPreviewInspector({
               {startSearch.error instanceof Error ? startSearch.error.message : 'Search failed'}
             </span>
           )}
-          <a className="stack-preview-download" href={fitsUrl} download>{downloadLabel}</a>
+          {fitsUrl && <a className="stack-preview-download" href={fitsUrl} download>{downloadLabel}</a>}
           <div className="zoom-info-compact">
             <span className="zoom-percentage-compact">{zoom.getZoomPercentage()}%</span>
           </div>
