@@ -212,15 +212,21 @@ The defect pass removes pixel-scale impulses, not star images. For sky flats,
 let the sky drift or dither between exposures. Flat integration subtracts the
 available bias/dark calibration, normalizes each exposure to its median
 brightness, then clips each pixel's samples around their temporal median.
-Its sigma estimate comes from the median absolute deviation (MAD), so a few
-star-contaminated samples cannot inflate the threshold and protect each other
-from rejection. The retained samples are averaged, preserving the fixed dust
-shadows and vignette that the flat is meant to measure.
+Its sigma estimate comes from the median absolute deviation (MAD), which is
+less sensitive to star-contaminated samples than a mean/variance estimate.
+The retained samples are averaged, preserving the fixed dust shadows and
+vignette that the flat is meant to measure.
 
 Rejection needs at least three flats; two are only averaged. Use enough
 well-separated sky flats that most samples at each pixel are free of stars.
 A star that stays on the same pixels, or contaminates half or more of the
 samples there, cannot reliably be distinguished from the sensor response.
+Keeping that contaminated majority can even strengthen its imprint compared
+with an ordinary average. A clean majority is necessary, not a guarantee of
+complete removal: with few inputs, noise and faint star wings can still leave
+residuals below the clipping threshold. Move stars clear of their full footprint
+between enough exposures and inspect the resulting master, especially around
+saturated stars.
 The spatial defect pass cannot remove a broad star image that survives this
 combine. When no dark master
 exists anywhere in a stack's plan, the stack instead runs the same impulse
