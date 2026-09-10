@@ -271,6 +271,7 @@ export const apiClient = {
   updateCalibrationSettings: async (update: {
     rotation_tolerance_deg: number | null;
     external_masters: ExternalMasterPolicy;
+    flat_star_masking: boolean;
   }): Promise<CalibrationSettings> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.put<ApiResponse<CalibrationSettings>>(

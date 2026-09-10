@@ -1685,6 +1685,60 @@
   margin: 0.4rem 0 0;
 }
 
+.calibration-settings-group {
+  min-width: 0;
+  margin: 0 0 1rem;
+  padding: 0;
+  border: 0;
+}
+
+.calibration-settings-group legend {
+  margin-bottom: 0.5rem;
+  padding: 0;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.calibration-settings-group .review-preference + .review-preference {
+  margin-top: 0.75rem;
+}
+
+.calibration-settings-group .review-preference > span {
+  min-width: 0;
+}
+
+.calibration-settings-group input[type="checkbox"] {
+  flex: 0 0 auto;
+}
+
+.calibration-matching-group .review-preference {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(9rem, 17rem);
+}
+
+.calibration-matching-group input,
+.calibration-matching-group select {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+}
+
+.calibration-matching-group input[type="number"] {
+  max-width: 8rem;
+  justify-self: end;
+}
+
+@media (max-width: 640px) {
+  .calibration-matching-group .review-preference {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .calibration-matching-group input[type="number"] {
+    justify-self: start;
+  }
+}
+
 .remote-sync-previews {
   margin-top: 1.2rem;
   border-top: 1px solid var(--color-border, #444);

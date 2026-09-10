@@ -1183,6 +1183,13 @@ pub fn main() -> Result<()> {
                     .as_ref()
                     .and_then(|calibration| calibration.external_masters),
             );
+            crate::calibration::configure_flat_star_masking(
+                db_registry
+                    .calibration
+                    .as_ref()
+                    .and_then(|calibration| calibration.flat_star_masking)
+                    .unwrap_or(false),
+            );
             let cache_directory = app_config.get_cache_directory();
             let server_host = app_config.get_host();
             let server_port = app_config.get_port();

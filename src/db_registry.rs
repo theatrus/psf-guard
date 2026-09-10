@@ -411,6 +411,9 @@ pub struct CalibrationSettings {
     /// default), `fallback`, or `ignore`. Absent means prefer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_masters: Option<crate::calibration::ExternalMasterPolicy>,
+    /// Mask stars in raw flats before integration. Absent means disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flat_star_masking: Option<bool>,
 }
 
 /// What the export dialog starts from. The dialog still offers every layout
@@ -900,6 +903,7 @@ mod tests {
             calibration: Some(CalibrationSettings {
                 rotation_tolerance_deg: Some(3.5),
                 external_masters: Some(crate::calibration::ExternalMasterPolicy::Fallback),
+                flat_star_masking: Some(true),
             }),
             ..Default::default()
         };
@@ -911,6 +915,7 @@ mod tests {
         assert!(serialized.contains("\"calibration\""));
         assert!(serialized.contains("rotation_tolerance_deg"));
         assert!(serialized.contains("\"external_masters\": \"fallback\""));
+        assert!(serialized.contains("\"flat_star_masking\": true"));
 
         // A registry that never configured it keeps a clean file: additive
         // within v2, and an older build reading this file sees nothing new.
@@ -918,6 +923,14 @@ mod tests {
         bare.save(&path).unwrap();
         let serialized = std::fs::read_to_string(&path).unwrap();
         assert!(!serialized.contains("calibration"));
+    }
+
+    #[test]
+    fn legacy_calibration_settings_leave_flat_star_masking_disabled() {
+        let settings: CalibrationSettings =
+            serde_json::from_str(r#"{"rotation_tolerance_deg":3.5,"external_masters":"fallback"}"#)
+                .unwrap();
+        assert_eq!(settings.flat_star_masking, None);
     }
 
     #[test]

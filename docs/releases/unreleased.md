@@ -6,6 +6,11 @@
 
 ## Added
 
+- Optional native star masking for flat masters, controlled by **Mask stars
+  in flats** in calibration settings. Masked builds retain original unmasked
+  measurements, report low coverage, and refuse unsupported pixels without
+  silently smoothing or filling them. No external star-removal tool is needed.
+
 ## Changed
 
 ## Fixed

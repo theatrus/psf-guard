@@ -77,7 +77,7 @@ Blank or undefined optional header values, such as `FILTER` in a PixInsight
 master bias XISF, are preserved in the cached FITS master. They do not prevent
 calibration, and the source file needs no header edits.
 
-**Settings → Calibration matching → Masters from other software** decides
+**Settings > Setups > Calibration > Masters from other software** decides
 how they take part: use one whenever it matches (the default), only when raw
 frames cannot build a master, or never.
 
@@ -217,8 +217,9 @@ less sensitive to star-contaminated samples than a mean/variance estimate.
 The retained samples are averaged, preserving the fixed dust shadows and
 vignette that the flat is meant to measure.
 
-Rejection needs at least three flats; two are only averaged. Use enough
-well-separated sky flats that most samples at each pixel are free of stars.
+Without star masking, rejection needs at least three flats; two are only
+averaged. Use enough well-separated sky flats that most samples at each pixel
+are free of stars.
 A star that stays on the same pixels, or contaminates half or more of the
 samples there, cannot reliably be distinguished from the sensor response.
 Keeping that contaminated majority can even strengthen its imprint compared
@@ -231,6 +232,43 @@ The spatial defect pass cannot remove a broad star image that survives this
 combine. When no dark master
 exists anywhere in a stack's plan, the stack instead runs the same impulse
 filter over each calibrated light, and the card says so.
+
+### Native sky-flat masks
+
+Enable **Mask stars in flats** under
+**Settings > Setups > Calibration > Flat masters** to exclude detected stars
+before flat integration. The setting is off by default, applies to every
+database on this server, and persists through a restart. It needs no
+StarXTerminator or other external tool. Imported masters
+are used unchanged; this option only affects masters built from raw flats.
+
+The native detector analyzes each input, expands stellar footprints to include
+halos, and adds masks around multi-pixel clipped cores when the raw encoding
+or headers establish a clipping ceiling. The original sensor samples are not
+resampled, smoothed, or filled. Integration excludes the masks, then applies
+median/MAD clipping to the remaining samples. Two remaining samples are
+averaged without clipping. This can recover a pixel from a minority of usable
+exposures rather than accepting the star-contaminated majority.
+
+Every output sample must retain at least two input measurements. Otherwise
+the flat build fails with coverage counts and is not published or applied.
+The stack can continue without that flat, with the reason shown in its
+calibration warning. Successful masters record masked-sample counts and
+retained coverage in their FITS headers, catalog statistics, and build logs.
+Coverage of only two retained exposures also appears in the stack warning,
+including when the master is reused from cache.
+
+Coverage means unmasked retained measurements, not certified artifact-free
+pixels. Faint halos can escape detection, and the mask does not reconstruct
+response hidden by a star in every exposure. Isolated detector impulses stay
+under the existing defect-suppression policy instead of growing star-sized
+masks; the statistics distinguish unmasked clipped impulses and inputs whose
+clipping ceiling is unknown. Inspect the master and capture enough separated
+flats to measure the whole sensor response.
+
+Masked and unmasked masters have separate cache identities. Changing the
+setting affects new stack requests; a queued or running stack keeps the value
+captured with its cache key.
 
 A master that fails to build does not fail the stack. The frames integrate
 without that master, and the stack card's calibration warning names the
@@ -279,10 +317,10 @@ Generated masters live below:
 ```
 
 The master filename is content-addressed by the source-frame UUIDs, current
-file fingerprints, input master UUIDs, algorithm version, and master-cache
-version. A changed bias therefore invalidates dark and flat masters that used
-it; a changed dark-flat invalidates its flat master. A later stack reuses a
-valid file. The database records its source set, input masters, and Seiza
+file fingerprints, input master UUIDs, algorithm version, flat star-masking
+mode, and master-cache version. A changed bias therefore invalidates dark and
+flat masters that used it; a changed dark-flat invalidates its flat master.
+A later stack reuses a valid file. The database records its source set, input masters, and Seiza
 version.
 
 The stack card reports `Calibration applied`, `Calibration set incomplete`, or

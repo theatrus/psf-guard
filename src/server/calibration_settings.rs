@@ -28,6 +28,7 @@ pub struct CalibrationSettingsResponse {
     /// How masters built by other software are used. Always populated: the
     /// default is `prefer`.
     pub external_masters: ExternalMasterPolicy,
+    pub flat_star_masking: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,6 +38,9 @@ pub struct UpdateCalibrationSettingsRequest {
     /// Omitted keeps the default, `prefer`.
     #[serde(default)]
     pub external_masters: Option<ExternalMasterPolicy>,
+    /// Omitted preserves the existing setting, including requests from older clients.
+    #[serde(default)]
+    pub flat_star_masking: Option<bool>,
 }
 
 fn current_response(settings: Option<&CalibrationSettings>) -> CalibrationSettingsResponse {
@@ -46,6 +50,9 @@ fn current_response(settings: Option<&CalibrationSettings>) -> CalibrationSettin
         external_masters: settings
             .and_then(|settings| settings.external_masters)
             .unwrap_or_default(),
+        flat_star_masking: settings
+            .and_then(|settings| settings.flat_star_masking)
+            .unwrap_or(false),
     }
 }
 
@@ -91,17 +98,53 @@ pub async fn update_calibration_settings(
     let external_masters = request
         .external_masters
         .filter(|policy| *policy != ExternalMasterPolicy::default());
-    registry.calibration = (request.rotation_tolerance_deg.is_some() || external_masters.is_some())
+    let flat_star_masking = requested_flat_star_masking(&request, registry.calibration.as_ref());
+    registry.calibration = (request.rotation_tolerance_deg.is_some()
+        || external_masters.is_some()
+        || flat_star_masking)
         .then_some(CalibrationSettings {
             rotation_tolerance_deg: request.rotation_tolerance_deg,
             external_masters,
+            flat_star_masking: flat_star_masking.then_some(true),
         });
     registry
         .save(&path)
         .map_err(|error| AppError::InternalError(error.to_string()))?;
     crate::calibration::configure_rotation_tolerance(request.rotation_tolerance_deg);
     crate::calibration::configure_external_master_policy(external_masters);
+    crate::calibration::configure_flat_star_masking(flat_star_masking);
     Ok(Json(ApiResponse::success(current_response(
         registry.calibration.as_ref(),
     ))))
+}
+
+fn requested_flat_star_masking(
+    request: &UpdateCalibrationSettingsRequest,
+    current: Option<&CalibrationSettings>,
+) -> bool {
+    request
+        .flat_star_masking
+        .or_else(|| current.and_then(|settings| settings.flat_star_masking))
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flat_star_masking_defaults_off_and_omission_preserves_saved_choice() {
+        assert!(!current_response(None).flat_star_masking);
+        let settings = CalibrationSettings {
+            flat_star_masking: Some(true),
+            ..Default::default()
+        };
+        assert!(current_response(Some(&settings)).flat_star_masking);
+        let mut request: UpdateCalibrationSettingsRequest =
+            serde_json::from_str(r#"{"rotation_tolerance_deg":null}"#).unwrap();
+        assert!(!requested_flat_star_masking(&request, None));
+        assert!(requested_flat_star_masking(&request, Some(&settings)));
+        request.flat_star_masking = Some(false);
+        assert!(!requested_flat_star_masking(&request, Some(&settings)));
+    }
 }
