@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { CalibrationFrameSummary } from '../api/types';
+import SchedulerFlatHistory from './SchedulerFlatHistory';
 
 interface CalibrationLibraryDialogProps {
   dbId: string;
@@ -128,6 +129,7 @@ export default function CalibrationLibraryDialog({
   onImport,
 }: CalibrationLibraryDialogProps) {
   const queryClient = useQueryClient();
+  const [view, setView] = useState<'frames' | 'scheduler'>('frames');
   const [kind, setKind] = useState<'all' | CalibrationFrameSummary['kind']>('all');
   const [rig, setRig] = useState('all');
   const [missingOnly, setMissingOnly] = useState(false);
@@ -297,6 +299,11 @@ export default function CalibrationLibraryDialog({
           </button>
         </header>
 
+        <div className="calibration-library-tabs" role="tablist" aria-label="Calibration views">
+          <button role="tab" aria-selected={view === 'frames'} onClick={() => setView('frames')}>Frames</button>
+          <button role="tab" aria-selected={view === 'scheduler'} onClick={() => setView('scheduler')}>Scheduler flats</button>
+        </div>
+        {view === 'scheduler' ? <SchedulerFlatHistory key={dbId} dbId={dbId} canManage={canManage} /> : <>
         <div className="calibration-library-toolbar">
           <label>
             Rig
@@ -575,6 +582,7 @@ export default function CalibrationLibraryDialog({
             </div>
           )}
         </div>
+        </>}
       </section>
     </div>
   );

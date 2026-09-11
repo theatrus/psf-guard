@@ -53,6 +53,39 @@ Forgetting a frame also drops every master record that used it, including
 downstream masters that used one of those masters. Clearing masters waits for
 any active stack preview and rebuilds them on demand later.
 
+## Scheduler flat coverage
+
+The NINA plugin sends Target Scheduler's `flathistory` coverage records during
+grade pulls and applied reconciles. In **Settings > Databases**, open the
+database's calibration library and choose **Scheduler flats**. Filter by target,
+source, filter, or status, then select the suspect coverage records and choose
+**Invalidate coverage** with a reason. This requires database management access.
+
+The next plugin grade pull or applied reconcile removes those exact, unchanged
+history rows from the source scheduler database and reports the result here.
+Preview-only reconcile does not apply invalidations. A full database round trip
+is not required. Run this sync before the next Target Scheduler flats action:
+an action already in progress has already loaded its coverage. The next action
+reads fresh history and can request replacement flats, subject to its current
+profile, target, cadence, and light-frame eligibility. Target Scheduler normally
+considers lights from the last 45 days; older runs can require manual flats.
+
+Coverage is not a list of flat files. Target Scheduler may record coverage after
+reusing an existing flat set, and duplicate coverage can satisfy the same run.
+Select every suspect record for the intended run, including duplicates and any
+other sessions known to have reused the bad set. PSF Guard does not guess these
+relationships from filenames or capture times. Invalidating coverage does not
+reject or delete calibration files or masters, and forgetting a calibration
+frame does not invalidate scheduler coverage automatically.
+
+Each source database has a plugin-owned origin UUID. Every decision also binds
+the original row ID, exact target GUID, and complete source-row fingerprint.
+Newly taken flats, changed rows, and reused IDs are preserved; **Changed in
+NINA** records require review. Decisions and acknowledgements remain in PSF
+Guard, so stale snapshots cannot revive invalid coverage. The plugin keeps its
+origin identity outside the scheduler database; moving the database or replacing
+that identity starts a new source and does not apply old-source decisions.
+
 ## Masters from other software
 
 A master dark, bias, or flat integrated by PixInsight's WBPP, Siril, or

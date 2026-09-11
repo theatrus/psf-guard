@@ -34,6 +34,9 @@ pub enum AuditAction {
     PreviewRefresh,
     Apply,
     Pair,
+    FlatHistorySnapshot,
+    FlatHistoryPending,
+    FlatHistoryAcknowledge,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
