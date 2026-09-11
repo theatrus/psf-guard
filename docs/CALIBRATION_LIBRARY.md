@@ -135,10 +135,11 @@ bright bead at every spot wherever the sky is bright. So PSF Guard reads a
 freshly built flat master back against its own inputs. Pixels where the
 master departs from the smooth response around it by more than 10% are its
 features. A frame that departs from the master by more than 5% of the local
-response at enough of those pixels (one in fifty thousand of the sensor, at
-least sixteen) was not looking at the same window. A dust shadow or a dead
-cluster is a feature too, but one every frame shows the same way, and it
-stays. On a colour camera the smooth response is judged per CFA phase.
+response at a fifth of those pixels (never fewer than sixteen, never more
+than one in two hundred thousand of the sensor) was not looking at the same
+window. A dust shadow or a dead cluster is a feature too, but one every
+frame shows the same way, and it stays. On a colour camera the smooth
+response is judged per CFA phase.
 
 - When the frames that disagree are a minority, the master rebuilds from the
   rest and the stack card says how many were left out.
@@ -147,9 +148,11 @@ stays. On a colour camera the smooth response is judged per CFA phase.
 - When there is no other set, the master serves and the card says the set
   was unstable and needs retaking.
 
-The check runs once per build. The master's record keeps the judgement, so a
-cached master repeats its note, and a set that was set aside is remembered
-rather than read again. Flat masters built before this check rebuild once.
+The check runs once per build, before the master is published, so nothing
+else can pick up a master that is about to be set aside. The master's record
+keeps the judgement: a cached master repeats its note, and a set that was
+set aside is remembered rather than read again. Flat masters built before
+this check rebuild once; bias and dark masters stay as they are.
 
 ## Upgrades and backups
 
