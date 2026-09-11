@@ -106,6 +106,18 @@ condemned score and gets an `[Auto]` reject recommendation. A frame missing
 the measurement is exempt. The CLI equivalents are `screen-fits --max-hfr`
 and `--min-stars`.
 
+A third absolute check is always on: **sensor temperature**. A frame whose
+sensor ran more than 10 °C warmer than the median of its capture session,
+or more than 20 °C above the cooler's recorded set point, is capped and
+recommended for rejection the same way, with a `Sensor Temperature` issue.
+Dark current and hot pixels climb steeply with temperature, and no dark
+shot at the set point removes them, so a cooler dropout ruins a frame even
+when its stars still measure well. Colder never flags, and a frame without
+a temperature reading is exempt. Target Scheduler records the temperature
+and set point per exposure; PSF Guard imports carry the sensor temperature
+from the FITS header. API callers can change the margin with
+`sensor_temp_tolerance_c`.
+
 The preference is remembered and applies to every scoring surface —
 Sequence view, grid badges, and the detail panel — so a frame scores the
 same everywhere. The zero-star cap does not scale: a frame measured to

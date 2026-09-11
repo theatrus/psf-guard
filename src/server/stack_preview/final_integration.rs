@@ -1,6 +1,6 @@
 //! Revisit admitted frames without repeating their registration decisions.
 
-use super::{resume, PreparedGroup};
+use super::{resume, PreparedGroup, SessionCosmetics};
 use seiza_stacking::{
     BatchStackOptions, BatchStackPass, BatchStackResult, CalibrationMasters, FitsFrame,
     ImpulseFilterOptions, LinearImage, ReferenceRegion, RegisteredFrameMapping,
@@ -12,7 +12,7 @@ pub(super) fn integrate(
     group: &PreparedGroup,
     ledger: &[resume::ResumeFrame],
     plan: &crate::calibration::CalibrationPlan,
-    cosmetic: Option<ImpulseFilterOptions>,
+    cosmetics: &SessionCosmetics,
     cancel: &Arc<AtomicBool>,
     mut progress: impl FnMut(BatchStackPass, usize, usize),
 ) -> seiza_stacking::Result<BatchStackResult> {
@@ -45,8 +45,9 @@ pub(super) fn integrate(
         let mapping = record.decision.registered_mapping.as_ref().ok_or_else(|| {
             seiza_stacking::Error::Stack("An admitted frame has no registered mapping".into())
         })?;
-        let masters = (!record.calibration_bypassed)
-            .then_some(&plan.sessions[plan.assignments[source_index]].masters);
+        let session = plan.assignments[source_index];
+        let masters = (!record.calibration_bypassed).then_some(&plan.sessions[session].masters);
+        let cosmetic = cosmetics.for_frame(session, record.calibration_bypassed);
         let image = prepare_registered_frame(frame, masters, cosmetic, mapping)?;
         if super::source_fingerprint(&source.path) != source.source_fingerprint {
             return Err(seiza_stacking::Error::Stack(format!(
@@ -324,7 +325,7 @@ mod tests {
             &group,
             &ledger,
             &plan,
-            None,
+            &SessionCosmetics::none(plan.sessions.len()),
             &Arc::new(AtomicBool::new(false)),
             |pass, index, count| progress.push((pass, index, count)),
         )
@@ -344,11 +345,12 @@ mod tests {
         let plan = crate::calibration::CalibrationPlan::without_calibration(group.frames.len());
         let cancel = Arc::new(AtomicBool::new(false));
         group.frames[0].source_fingerprint = "changed".into();
-        let error = integrate(&group, &ledger, &plan, None, &cancel, |_, _, _| {}).unwrap_err();
+        let none = SessionCosmetics::none(plan.sessions.len());
+        let error = integrate(&group, &ledger, &plan, &none, &cancel, |_, _, _| {}).unwrap_err();
         assert!(error.to_string().contains("changed during stacking"));
         cancel.store(true, Ordering::Relaxed);
         assert!(matches!(
-            integrate(&group, &ledger, &plan, None, &cancel, |_, _, _| {}),
+            integrate(&group, &ledger, &plan, &none, &cancel, |_, _, _| {}),
             Err(seiza_stacking::Error::Cancelled)
         ));
     }

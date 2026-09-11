@@ -32,6 +32,11 @@ pub enum IssueCategory {
     HfrAboveLimit,
     /// Measured star count fell below the operator's absolute reject limit.
     StarCountBelowLimit,
+    /// The sensor ran far warmer than the rest of its session, or far above
+    /// its set point: the cooler dropped out. Dark current and hot pixels
+    /// climb steeply with temperature, and no dark shot at the set point
+    /// removes them, so the frame is condemned on its own evidence.
+    SensorTemperature,
     UnknownDegradation,
 }
 
@@ -457,6 +462,12 @@ pub struct ImageMetrics {
     pub eccentricity: Option<f64>,
     pub snr: Option<f64>,
     pub background: Option<f64>,
+    /// Sensor temperature the camera reported for this exposure, in Celsius.
+    #[serde(default)]
+    pub camera_temp: Option<f64>,
+    /// Cooler set point the camera was asked to hold, in Celsius.
+    #[serde(default)]
+    pub camera_target_temp: Option<f64>,
     /// Fraction of frame grid cells with collapsed star density
     /// (see `spatial_analysis::SpatialMetrics::star_dead_cell_fraction`).
     /// Detects partial occlusion (trees, dome, stray light) that global star
@@ -950,6 +961,17 @@ pub struct SequenceAnalyzerConfig {
     /// `None` (the default) disables the check; unmeasured frames are exempt.
     #[serde(default)]
     pub star_count_reject_below: Option<f64>,
+    /// How much warmer than its session a frame's sensor may run before the
+    /// frame is condemned, in Celsius. A frame also fails at twice this
+    /// above its recorded set point: a healthy cooler in summer holds a few
+    /// degrees above target, a cooler that dropped out sits thirty above.
+    /// Colder never flags, and a frame without a reading is exempt.
+    #[serde(default = "default_sensor_temp_tolerance_c")]
+    pub sensor_temp_tolerance_c: f64,
+}
+
+fn default_sensor_temp_tolerance_c() -> f64 {
+    10.0
 }
 
 fn default_dead_cell_rise_threshold() -> f64 {
@@ -1017,6 +1039,7 @@ impl Default for SequenceAnalyzerConfig {
             bg_glow_threshold: default_bg_glow_threshold(),
             hfr_reject_above: None,
             star_count_reject_below: None,
+            sensor_temp_tolerance_c: default_sensor_temp_tolerance_c(),
         }
     }
 }
@@ -1045,6 +1068,9 @@ impl SequenceAnalyzerConfig {
         self.star_count_reject_below = self
             .star_count_reject_below
             .filter(|limit| limit.is_finite() && *limit > 0.0);
+        if !(self.sensor_temp_tolerance_c.is_finite() && self.sensor_temp_tolerance_c > 0.0) {
+            self.sensor_temp_tolerance_c = default_sensor_temp_tolerance_c();
+        }
         self
     }
 }
@@ -1627,22 +1653,20 @@ impl SequenceAnalyzer {
         }
     }
 
-    /// Enforce the operator's absolute reject limits (HFR ceiling and
-    /// star-count floor). Unlike the sequence-relative metrics these are
-    /// explicit operator thresholds, so a violation both caps the score
-    /// and proposes an `[Auto]` rejection. A frame without the measurement
-    /// is exempt: grading must not punish an image because an optional
-    /// scan has not run.
+    /// Enforce the absolute reject limits: the operator's HFR ceiling and
+    /// star-count floor, and the sensor-temperature rule. Unlike the
+    /// sequence-relative metrics these judge a frame on its own, so a
+    /// violation both caps the score and proposes an `[Auto]` rejection. A
+    /// frame without the measurement is exempt: grading must not punish an
+    /// image because an optional scan has not run.
     fn apply_absolute_metric_limits(
         &self,
         results: &mut [ImageQualityResult],
         images: &[ImageMetrics],
     ) {
-        if self.config.hfr_reject_above.is_none() && self.config.star_count_reject_below.is_none() {
-            return;
-        }
+        let session_temp = median_camera_temp(images);
         for (result, image) in results.iter_mut().zip(images) {
-            for (category, detail, reason) in self.absolute_limit_violations(image) {
+            for (category, detail, reason) in self.absolute_limit_violations(image, session_temp) {
                 result.quality_score = result.quality_score.min(ABSOLUTE_LIMIT_SCORE_CAP);
                 if !result.flags.contains(&category) {
                     result.flags.push(category.clone());
@@ -1660,8 +1684,12 @@ impl SequenceAnalyzer {
     fn absolute_limit_violations(
         &self,
         image: &ImageMetrics,
+        session_temp: Option<f64>,
     ) -> Vec<(IssueCategory, String, String)> {
         let mut violations = Vec::new();
+        if let Some((detail, reason)) = self.sensor_temperature_violation(image, session_temp) {
+            violations.push((IssueCategory::SensorTemperature, detail, reason));
+        }
         if let (Some(limit), Some(hfr)) = (self.config.hfr_reject_above, image.hfr)
             && hfr > limit
         {
@@ -1692,6 +1720,37 @@ impl SequenceAnalyzer {
             ));
         }
         violations
+    }
+
+    /// Why a frame's sensor temperature condemns it, if it does: warmer than
+    /// the session median by more than the tolerance, or warmer than the
+    /// recorded set point by more than twice it. The second rule catches a
+    /// whole session shot with the cooler off, which the first cannot see.
+    fn sensor_temperature_violation(
+        &self,
+        image: &ImageMetrics,
+        session_temp: Option<f64>,
+    ) -> Option<(String, String)> {
+        let temp = image.camera_temp.filter(|temp| temp.is_finite())?;
+        let tolerance = self.config.sensor_temp_tolerance_c;
+        let over_session = session_temp.filter(|median| temp - median > tolerance);
+        let over_set_point = image
+            .camera_target_temp
+            .filter(|target| target.is_finite() && temp - target > 2.0 * tolerance);
+        let (reference, label) = match (over_session, over_set_point) {
+            (Some(median), _) => (median, "the session's"),
+            (None, Some(target)) => (target, "its set point of"),
+            (None, None) => return None,
+        };
+        let excess = temp - reference;
+        Some((
+            format!(
+                "Sensor at {temp:.1} °C, {excess:.0} °C warmer than {label} {reference:.1} °C. \
+                 Dark current and hot pixels rise steeply with temperature and no dark \
+                 shot at the set point removes them, so this frame is judged on its own."
+            ),
+            format!("[Auto] Sensor warm - {temp:.1} °C vs {label} {reference:.1} °C"),
+        ))
     }
 
     /// Compute EWMA-based temporal deviation scores for the sequence.
@@ -2917,9 +2976,9 @@ fn append_regrade_reason(slot: &mut Option<String>, reason: String) {
 fn absolute_cap_for(flag: &IssueCategory) -> Option<f64> {
     match flag {
         IssueCategory::NoStarsDetected => Some(ZERO_STAR_SCORE_CAP),
-        IssueCategory::HfrAboveLimit | IssueCategory::StarCountBelowLimit => {
-            Some(ABSOLUTE_LIMIT_SCORE_CAP)
-        }
+        IssueCategory::HfrAboveLimit
+        | IssueCategory::StarCountBelowLimit
+        | IssueCategory::SensorTemperature => Some(ABSOLUTE_LIMIT_SCORE_CAP),
         _ => None,
     }
 }
@@ -2958,6 +3017,27 @@ fn apply_zero_star_cap(results: &mut [ImageQualityResult], images: &[ImageMetric
 /// every view (below the 0.35 screening default), above the zero-star cap
 /// so a merely soft frame still outranks a ruined one.
 const ABSOLUTE_LIMIT_SCORE_CAP: f64 = 0.25;
+
+/// Median of the sensor temperatures a sequence recorded, or None when no
+/// frame carries one. The median, not the mean: a cooler that drops out
+/// mid-session must not drag the reference up towards itself.
+fn median_camera_temp(images: &[ImageMetrics]) -> Option<f64> {
+    let mut temps: Vec<f64> = images
+        .iter()
+        .filter_map(|image| image.camera_temp)
+        .filter(|temp| temp.is_finite())
+        .collect();
+    if temps.is_empty() {
+        return None;
+    }
+    temps.sort_by(f64::total_cmp);
+    let middle = temps.len() / 2;
+    Some(if temps.len().is_multiple_of(2) {
+        (temps[middle - 1] + temps[middle]) / 2.0
+    } else {
+        temps[middle]
+    })
+}
 
 const STAR_COUNT_TOLERANCE: RelativeMetricTolerance = RelativeMetricTolerance::new(0.10, 0.40);
 const HFR_TOLERANCE: RelativeMetricTolerance = RelativeMetricTolerance::new(0.05, 0.30);
@@ -3256,6 +3336,12 @@ pub fn extract_metrics_from_metadata(
         eccentricity,
         snr,
         background,
+        // Target Scheduler records CameraTemp; PSF Guard's own quality
+        // backfill writes Temperature.
+        camera_temp: metadata["CameraTemp"]
+            .as_f64()
+            .or_else(|| metadata["Temperature"].as_f64()),
+        camera_target_temp: metadata["CameraTargetTemp"].as_f64(),
         dead_cell_fraction,
         bg_cell_spread,
         transparency: metadata["Transparency"].as_f64(),
@@ -3285,6 +3371,8 @@ mod tests {
             eccentricity: None,
             snr: None,
             background: None,
+            camera_temp: None,
+            camera_target_temp: None,
             dead_cell_fraction: None,
             bg_cell_spread: None,
             transparency: None,
@@ -3318,6 +3406,8 @@ mod tests {
             eccentricity: Some(ecc),
             snr: Some(snr),
             background: Some(bg),
+            camera_temp: None,
+            camera_target_temp: None,
             dead_cell_fraction: None,
             bg_cell_spread: None,
             transparency: None,
@@ -3350,6 +3440,8 @@ mod tests {
             eccentricity: None,
             snr: None,
             background: None,
+            camera_temp: None,
+            camera_target_temp: None,
             dead_cell_fraction: Some(dead),
             bg_cell_spread: Some(bg_spread),
             transparency: None,
@@ -3823,6 +3915,114 @@ mod tests {
         }
     }
 
+    fn warm_and_cold(temps: &[f64], set_point: Option<f64>) -> Vec<ImageMetrics> {
+        temps
+            .iter()
+            .enumerate()
+            .map(|(i, temp)| {
+                let mut image = make_image(i as i32, i as i64 * 300, 500.0, 2.5);
+                image.camera_temp = Some(*temp);
+                image.camera_target_temp = set_point;
+                image
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_cooler_dropout_inside_a_session_condemns_only_the_warm_frames() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        // The NGC 7023 night: -6 °C holding a -10 set point, then the
+        // cooler drops out and the last frames run at +27 to +31.
+        let temps = [
+            -6.3, -6.1, -6.1, -5.9, -6.0, -6.2, -6.3, -6.1, 26.6, 30.1, 31.1, 31.1,
+        ];
+        let images = warm_and_cold(&temps, Some(-10.0));
+        let sequence = &analyzer.analyze(&images, 1, "target", "G")[0];
+        for (index, result) in sequence.images.iter().enumerate() {
+            let warm = temps[index] > 0.0;
+            assert_eq!(
+                result.flags.contains(&IssueCategory::SensorTemperature),
+                warm,
+                "frame {index} at {} °C",
+                temps[index]
+            );
+            if warm {
+                assert!(result.quality_score <= ABSOLUTE_LIMIT_SCORE_CAP);
+                assert!(result
+                    .regrade_reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("[Auto] Sensor warm")));
+                assert!(result
+                    .details
+                    .as_deref()
+                    .is_some_and(|details| details.contains("warmer than the session's")));
+            } else {
+                assert!(result.regrade_reason.is_none(), "frame {index} rejected");
+            }
+        }
+    }
+
+    #[test]
+    fn a_session_shot_with_the_cooler_off_fails_against_its_set_point() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let images = warm_and_cold(&[30.9, 31.0, 31.1, 31.1, 30.8, 31.0], Some(-10.0));
+        let sequence = &analyzer.analyze(&images, 1, "target", "G")[0];
+        for result in &sequence.images {
+            assert!(result.flags.contains(&IssueCategory::SensorTemperature));
+            assert!(result.quality_score <= ABSOLUTE_LIMIT_SCORE_CAP);
+            assert!(result
+                .regrade_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("vs its set point of -10.0 °C")));
+        }
+        // Without a recorded set point the session is its own reference,
+        // and a uniformly warm night cannot be told from a warm camera.
+        let unknown = warm_and_cold(&[30.9, 31.0, 31.1, 31.1, 30.8, 31.0], None);
+        let sequence = &analyzer.analyze(&unknown, 1, "target", "G")[0];
+        assert!(sequence
+            .images
+            .iter()
+            .all(|result| !result.flags.contains(&IssueCategory::SensorTemperature)));
+    }
+
+    #[test]
+    fn a_healthy_cooler_a_cold_frame_and_a_missing_reading_never_flag() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        // Summer: the cooler holds 4 to 9 °C above its -10 set point.
+        let mut images = warm_and_cold(&[-1.5, -2.0, -3.0, -4.0, -5.0, -6.0], Some(-10.0));
+        // One frame colder than the rest, one with no reading at all.
+        images[2].camera_temp = Some(-12.0);
+        images[4].camera_temp = None;
+        let sequence = &analyzer.analyze(&images, 1, "target", "R")[0];
+        for result in &sequence.images {
+            assert!(!result.flags.contains(&IssueCategory::SensorTemperature));
+            assert!(result.regrade_reason.is_none());
+        }
+    }
+
+    #[test]
+    fn sensor_temperature_tolerance_is_configurable_and_sanitized() {
+        let strict = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            sensor_temp_tolerance_c: 3.0,
+            ..Default::default()
+        });
+        let images = warm_and_cold(&[-6.0, -6.0, -6.0, -6.0, -6.0, -1.0], Some(-10.0));
+        let sequence = &strict.analyze(&images, 1, "target", "L")[0];
+        assert!(sequence.images[5]
+            .flags
+            .contains(&IssueCategory::SensorTemperature));
+        let nonsense = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            sensor_temp_tolerance_c: -4.0,
+            ..Default::default()
+        });
+        assert_eq!(nonsense.config.sensor_temp_tolerance_c, 10.0);
+        assert_eq!(median_camera_temp(&[]), None);
+        assert_eq!(
+            median_camera_temp(&warm_and_cold(&[3.0, 1.0, 2.0, 40.0], None)),
+            Some(2.5)
+        );
+    }
+
     #[test]
     fn near_threshold_hfr_reason_preserves_the_comparison() {
         let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
@@ -3832,7 +4032,7 @@ mod tests {
         let mut image = make_image(1, 0, 500.0, 2.55041);
         image.hfr = Some(2.55041);
 
-        let violations = analyzer.absolute_limit_violations(&image);
+        let violations = analyzer.absolute_limit_violations(&image, None);
         assert_eq!(violations.len(), 1);
         assert!(violations[0]
             .1
@@ -4969,6 +5169,19 @@ mod tests {
         assert_eq!(metrics.star_count, Some(342.0));
         assert_eq!(metrics.hfr, Some(2.5));
         assert_eq!(metrics.session_id.as_deref(), Some("5"));
+        assert_eq!(metrics.camera_temp, None);
+        assert_eq!(metrics.camera_target_temp, None);
+
+        let scheduler = extract_metrics_from_metadata(
+            2,
+            r#"{"CameraTemp": 31.1, "CameraTargetTemp": -10.0}"#,
+            None,
+        );
+        assert_eq!(scheduler.camera_temp, Some(31.1));
+        assert_eq!(scheduler.camera_target_temp, Some(-10.0));
+        let backfilled = extract_metrics_from_metadata(3, r#"{"Temperature": -5.5}"#, None);
+        assert_eq!(backfilled.camera_temp, Some(-5.5));
+        assert_eq!(backfilled.camera_target_temp, None);
         assert_eq!(
             metrics.capture_profile.as_deref(),
             Some("exposure=60|gain=100|offset=10|binning=1x1|readout=0|roi=100")

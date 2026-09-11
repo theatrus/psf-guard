@@ -920,6 +920,8 @@ fn score_records(
                     eccentricity: None,
                     snr: None,
                     background: Some(r.median_adu),
+                    camera_temp: None,
+                    camera_target_temp: None,
                     dead_cell_fraction: r.dead_cell_fraction,
                     bg_cell_spread: Some(r.bg_cell_spread),
                     transparency: sig.and_then(|s| s.transparency),
@@ -1006,6 +1008,7 @@ fn category_label(category: &Option<IssueCategory>) -> &'static str {
         Some(IssueCategory::NoStarsDetected) => "no-stars",
         Some(IssueCategory::HfrAboveLimit) => "hfr-limit",
         Some(IssueCategory::StarCountBelowLimit) => "star-limit",
+        Some(IssueCategory::SensorTemperature) => "sensor-warm",
         Some(IssueCategory::UnknownDegradation) => "unknown",
         None => "-",
     }
