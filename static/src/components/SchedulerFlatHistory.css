@@ -1,0 +1,92 @@
+.tauri-settings .calibration-library-tabs {
+  display: flex;
+  gap: 20px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--color-border-primary);
+  flex-shrink: 0;
+}
+
+.tauri-settings .calibration-library-tabs button {
+  padding: 12px 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--color-text-muted);
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.tauri-settings .calibration-library-tabs button[aria-selected='true'] {
+  color: var(--color-text-primary);
+  border-bottom-color: var(--color-primary);
+}
+
+.scheduler-flat-history {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.flat-history-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--color-border-primary);
+}
+
+.flat-history-toolbar label,
+.flat-history-invalidate label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--color-text-secondary);
+}
+
+.flat-history-search { flex: 1 1 230px; }
+.flat-history-toolbar input,
+.flat-history-toolbar select,
+.flat-history-invalidate input {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 4px;
+  background: var(--color-bg-input);
+  color: var(--color-text-primary);
+}
+
+.flat-history-table-scroll { overflow: auto; min-height: 120px; }
+.flat-history-table { width: 100%; border-collapse: collapse; text-align: left; }
+.flat-history-table th { background: var(--color-bg-secondary); font-weight: 600; position: sticky; top: 0; z-index: 1; }
+.flat-history-table td,
+.flat-history-table th { padding: 12px; vertical-align: top; border-bottom: 1px solid var(--color-border-primary); }
+.flat-history-table td { overflow-wrap: anywhere; min-width: 100px; max-width: 280px; }
+.flat-history-table td:first-child { min-width: 20px; }
+.flat-history-table small { display: block; color: var(--color-text-muted); margin-top: 5px; }
+.flat-history-state { font-weight: 600; }
+.flat-history-state-pending { color: var(--color-warning); }
+.flat-history-state-conflict { color: var(--color-error); }
+.flat-history-state-removed, .flat-history-state-absent { color: var(--color-success); }
+.flat-history-invalidate { padding: 16px 24px; background: var(--color-bg-secondary); border-bottom: 1px solid var(--color-border-primary); }
+.flat-history-invalidate p { margin: 8px 0; line-height: 1.5; }
+.flat-history-invalidate > div { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.flat-history-invalidate button { display: inline-flex; align-items: center; gap: 7px; }
+.flat-history-footer { display: flex; align-items: center; gap: 10px; padding: 12px 24px; }
+.flat-history-footer > span { margin-right: auto; }
+.flat-history-message { padding: 0 24px; color: var(--color-success); }
+.tauri-settings .scheduler-flat-history .flat-history-icon { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; flex-shrink: 0; }
+.flat-history-icon svg { flex-shrink: 0; }
+
+@media (max-width: 600px) {
+  .flat-history-toolbar, .flat-history-invalidate, .flat-history-footer { padding: 12px; }
+  .flat-history-table { font-size: 12px; }
+  .flat-history-table td, .flat-history-table th { padding: 8px; }
+}

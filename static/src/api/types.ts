@@ -2252,3 +2252,38 @@ export interface RemoteSyncResult {
   peer_catalog: string;
   summary: Record<string, number>;
 }
+export type FlatHistoryState =
+  | 'recorded' | 'pending' | 'removed' | 'absent' | 'conflict' | 'superseded';
+
+export interface SchedulerFlatHistoryRecord {
+  record_id: string;
+  origin_id: string;
+  source_name: string;
+  source_row_id: number;
+  fingerprint: string;
+  target_guid: string | null;
+  target_name: string | null;
+  profile_id: string;
+  light_session_date: number | null;
+  light_session_id: number;
+  flats_taken_date: number | null;
+  flats_type: string | null;
+  filter_name: string | null;
+  gain: number | null;
+  offset: number | null;
+  bin: number | null;
+  readout_mode: number | null;
+  rotation: number | null;
+  roi: number | null;
+  state: FlatHistoryState;
+  reason: string | null;
+  invalidated_at: number | null;
+  last_seen: number;
+  acknowledged_at: number | null;
+  detail: string | null;
+}
+
+export interface SchedulerFlatHistoryPage {
+  records: SchedulerFlatHistoryRecord[];
+  total: number;
+}

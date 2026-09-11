@@ -3,6 +3,8 @@ import type { AxiosInstance } from 'axios';
 import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
 import type {
+  FlatHistoryState,
+  SchedulerFlatHistoryPage,
   CalibrationSettings,
   CalibrationMasterSource,
   StackCalibrationMasters,
@@ -662,6 +664,29 @@ export const apiClient = {
       dbPath(dbId, '/calibrations/details')
     );
     if (!data.data) throw new Error(data.error || 'Failed to read calibration frames');
+    return data.data;
+  },
+
+  getSchedulerFlatHistory: async (
+    dbId: string,
+    params: { limit: number; offset: number; state?: FlatHistoryState; q?: string }
+  ): Promise<SchedulerFlatHistoryPage> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<SchedulerFlatHistoryPage>>(
+      dbPath(dbId, '/flat-history'), { params }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read scheduler flat coverage');
+    return data.data;
+  },
+
+  invalidateSchedulerFlatHistory: async (
+    dbId: string, recordIds: string[], reason: string
+  ): Promise<{ invalidated: number }> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<{ invalidated: number }>>(
+      dbPath(dbId, '/flat-history/invalidate'), { record_ids: recordIds, reason }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to invalidate flat coverage');
     return data.data;
   },
 
