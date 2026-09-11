@@ -53,7 +53,91 @@ use crate::server::state::AppState;
 pub const SEIZA_STACKING_VERSION: &str = seiza_stacking::VERSION;
 /// Bump whenever stack admission, rendering, or persisted artifact semantics
 /// change. This deliberately versions PSF Guard policy separately from Seiza.
-pub(super) const STACK_PREVIEW_CACHE_VERSION: u32 = 14;
+pub(super) const STACK_PREVIEW_CACHE_VERSION: u32 = 15;
+
+/// Which calibration sessions get the spatial impulse filter.
+///
+/// A dark master subtracts hot pixels with real measurements; a session
+/// without one has only the filter. Calibration switched off means the
+/// user asked for raw frames, so nothing is filtered.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct SessionCosmetics {
+    per_session: Vec<Option<seiza_stacking::ImpulseFilterOptions>>,
+    /// The filter for a frame whose session masters were refused and that
+    /// stacked raw: nothing subtracted its hot pixels either.
+    bypassed: Option<seiza_stacking::ImpulseFilterOptions>,
+}
+
+impl SessionCosmetics {
+    pub(super) fn for_plan(
+        plan: &crate::calibration::CalibrationPlan,
+        mode: crate::calibration::CalibrationMode,
+    ) -> Self {
+        Self {
+            per_session: plan
+                .sessions
+                .iter()
+                .map(|session| impulse_filter_for(mode, session.applied.dark_master.is_some()))
+                .collect(),
+            bypassed: impulse_filter_for(mode, false),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn none(sessions: usize) -> Self {
+        Self {
+            per_session: vec![None; sessions],
+            bypassed: None,
+        }
+    }
+
+    /// The filter for one frame: its session's, or the raw-frame filter
+    /// when its masters were bypassed.
+    pub(super) fn for_frame(
+        &self,
+        session: usize,
+        calibration_bypassed: bool,
+    ) -> Option<seiza_stacking::ImpulseFilterOptions> {
+        if calibration_bypassed {
+            return self.bypassed;
+        }
+        self.per_session.get(session).copied().flatten()
+    }
+
+    /// The one filter the live stacker can hold for the whole group: set
+    /// only when every session lacks a dark, as before sessions could differ.
+    pub(super) fn whole_group(&self) -> Option<seiza_stacking::ImpulseFilterOptions> {
+        if !self.per_session.is_empty() && self.per_session.iter().all(Option::is_some) {
+            self.per_session[0]
+        } else {
+            None
+        }
+    }
+
+    /// What the calibration card says about hot pixels, if anything.
+    pub(super) fn card_note(&self) -> Option<String> {
+        let filtered = self.per_session.iter().filter(|c| c.is_some()).count();
+        let sessions = self.per_session.len();
+        match filtered {
+            0 => None,
+            n if n == sessions => {
+                Some("Hot pixels suppressed in each light (no dark master to subtract them)".into())
+            }
+            n => Some(format!(
+                "Hot pixels suppressed in {n} of {sessions} calibration sessions, the ones \
+                 with no dark master to subtract them"
+            )),
+        }
+    }
+}
+
+fn impulse_filter_for(
+    mode: crate::calibration::CalibrationMode,
+    has_dark_master: bool,
+) -> Option<seiza_stacking::ImpulseFilterOptions> {
+    (!has_dark_master && mode != crate::calibration::CalibrationMode::Off)
+        .then(seiza_stacking::ImpulseFilterOptions::default)
+}
 const MAX_REQUEST_IMAGES: usize = 10_000;
 const MAX_REMEMBERED_JOBS: usize = 64;
 const PREVIEW_MAX_DIMENSION: u32 = 2400;
@@ -2201,21 +2285,19 @@ fn run_group(
         }
     };
     let mut applied_calibration = plan.applied.clone();
-    // With no dark master anywhere in the plan, the lights keep their hot
-    // pixels and the stack runs the spatial impulse filter over each frame.
-    // Say so on the card; display only, after the identity is computed.
-    let no_dark_master = plan
-        .sessions
-        .iter()
-        .all(|session| session.applied.dark_master.is_none());
-    let cosmetic = (no_dark_master
-        && group.calibration != crate::calibration::CalibrationMode::Off)
-        .then(seiza_stacking::ImpulseFilterOptions::default);
-    if no_dark_master && group.calibration != crate::calibration::CalibrationMode::Off {
-        let note = "Hot pixels suppressed in each light (no dark master to subtract them)";
+    // A session without a dark master keeps its lights' hot pixels, and a
+    // handful of frames cannot reject them statistically, so the spatial
+    // impulse filter runs over that session's frames. The live stacker
+    // fixes its filter at construction, so the online pass filters only
+    // when no session has a dark; the final integration, which produces
+    // the stack, decides per session. Say so on the card; display only,
+    // after the identity is computed.
+    let session_cosmetics = SessionCosmetics::for_plan(&plan, group.calibration);
+    let cosmetic = session_cosmetics.whole_group();
+    if let Some(note) = session_cosmetics.card_note() {
         applied_calibration.warning = Some(match applied_calibration.warning.take() {
             Some(previous) => format!("{previous}. {note}"),
-            None => note.into(),
+            None => note,
         });
     }
     // The resume checkpoint key carries the applied-master signature too:
@@ -2835,7 +2917,7 @@ fn run_group(
                 &group,
                 &ledger,
                 &plan,
-                cosmetic,
+                &session_cosmetics,
                 cancel,
                 |pass, index, count| {
                     let pass = match pass {
@@ -3311,6 +3393,53 @@ fn publish_snr_artifact(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn hot_pixel_filter_follows_each_session_s_dark() {
+        use super::SessionCosmetics;
+        use crate::calibration::CalibrationMode;
+        let filter = Some(seiza_stacking::ImpulseFilterOptions::default());
+        assert_eq!(
+            super::impulse_filter_for(CalibrationMode::Auto, false),
+            filter
+        );
+        assert_eq!(super::impulse_filter_for(CalibrationMode::Auto, true), None);
+        assert_eq!(super::impulse_filter_for(CalibrationMode::Off, false), None);
+
+        let mixed = SessionCosmetics {
+            per_session: vec![None, filter, None],
+            bypassed: filter,
+        };
+        assert_eq!(mixed.for_frame(0, false), None);
+        assert_eq!(mixed.for_frame(1, false), filter);
+        // Masters refused: the frame stacked raw and keeps only the filter.
+        assert_eq!(mixed.for_frame(0, true), filter);
+        assert_eq!(
+            mixed.whole_group(),
+            None,
+            "the live stacker holds one filter"
+        );
+        assert_eq!(
+            mixed.card_note().as_deref(),
+            Some(
+                "Hot pixels suppressed in 1 of 3 calibration sessions, the ones with no dark \
+                 master to subtract them"
+            )
+        );
+
+        let none_have_darks = SessionCosmetics {
+            per_session: vec![filter, filter],
+            bypassed: filter,
+        };
+        assert_eq!(none_have_darks.whole_group(), filter);
+        assert_eq!(
+            none_have_darks.card_note().as_deref(),
+            Some("Hot pixels suppressed in each light (no dark master to subtract them)")
+        );
+        let all_have_darks = SessionCosmetics::none(2);
+        assert_eq!(all_have_darks.card_note(), None);
+        assert_eq!(all_have_darks.whole_group(), None);
+    }
 
     #[test]
     fn processing_selection_rejects_a_stale_displayed_revision() {

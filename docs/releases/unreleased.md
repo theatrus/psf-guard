@@ -20,6 +20,17 @@
   measurements, report low coverage, and refuse unsupported pixels without
   silently smoothing or filling them. No external star-removal tool is needed.
 
+- A frame shot with a warm sensor is flagged **Sensor Temperature**, capped
+  to a rejected score, and given an `[Auto]` reject recommendation: more
+  than 10 °C warmer than its capture session, or more than 20 °C above the
+  cooler's set point. A cooler dropout no longer slips into a stack because
+  the stars still measured well.
+
+- In a multi-night stack, lights from a session with no dark master now get
+  hot-pixel suppression even when other sessions have darks; the calibration
+  card says which sessions were filtered. Existing stack previews rebuild
+  when next opened.
+
 ## Changed
 
 ## Fixed

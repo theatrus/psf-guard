@@ -440,6 +440,14 @@ The panel's **Calibration** control chooses how the next build calibrates:
   Auto refuses. The calibration warning still says what to expect.
 - **Off** stacks the raw frames without touching the library.
 
+Lights whose calibration session has no dark master keep their hot pixels,
+so a spatial impulse filter runs over each of those frames before
+integration; the calibration card says which sessions it covered. A session
+with a dark master is left to the dark, which subtracts hot pixels with
+real measurements. The online pass that admits frames can hold only one
+setting for the whole group, so it filters only when no session has a dark;
+the final integration that produces the stack decides per session.
+
 The choice is remembered across reloads, becomes part of the stack job key,
 and a finished preview built under a different mode is marked out of date.
 Source-frame searches re-create the stack's own mode, whatever the control
