@@ -2648,10 +2648,7 @@ fn resolve_or_build_masters_pinned(
             "{} lacked enough matching coherent frames (each master needs at least {MIN_MASTER_FRAMES})",
             missing.join(", ")
         );
-        applied.warning = Some(match applied.warning.take() {
-            Some(previous) => format!("{previous}. {partial}"),
-            None => partial,
-        });
+        append_warning(&mut applied.warning, partial);
     }
     if !build_failures.is_empty() {
         let failed = format!(
@@ -2662,10 +2659,7 @@ fn resolve_or_build_masters_pinned(
                 .collect::<Vec<_>>()
                 .join("; ")
         );
-        applied.warning = Some(match applied.warning.take() {
-            Some(previous) => format!("{previous}. {failed}"),
-            None => failed,
-        });
+        append_warning(&mut applied.warning, failed);
     }
     if !set_aside.is_empty() {
         let note = format!(
@@ -2680,32 +2674,20 @@ fn resolve_or_build_masters_pinned(
                 .collect::<Vec<_>>()
                 .join("; ")
         );
-        applied.warning = Some(match applied.warning.take() {
-            Some(previous) => format!("{previous}. {note}"),
-            None => note,
-        });
+        append_warning(&mut applied.warning, note);
     }
     for note in stability_notes.into_inner() {
-        applied.warning = Some(match applied.warning.take() {
-            Some(previous) => format!("{previous}. {note}"),
-            None => note,
-        });
+        append_warning(&mut applied.warning, note);
     }
     if let Some(note) = flat_note {
-        applied.warning = Some(match applied.warning.take() {
-            Some(previous) => format!("{previous}. {note}"),
-            None => note,
-        });
+        append_warning(&mut applied.warning, note);
     }
     if let Some(note) = flat
         .as_ref()
         .and_then(|master| master.flat_star_masking.as_ref())
         .and_then(flat_masking_warning)
     {
-        applied.warning = Some(match applied.warning.take() {
-            Some(previous) => format!("{previous}. {note}"),
-            None => note,
-        });
+        append_warning(&mut applied.warning, note);
     }
     let external_used = external_used.into_inner();
     if !external_used.is_empty() {
@@ -2717,10 +2699,7 @@ fn resolve_or_build_masters_pinned(
                 .collect::<Vec<_>>()
                 .join("; ")
         );
-        applied.warning = Some(match applied.warning.take() {
-            Some(previous) => format!("{previous}. {note}"),
-            None => note,
-        });
+        append_warning(&mut applied.warning, note);
     }
     applied.masters_signature = masters_signature(&applied);
     applied.sessions = 1;
@@ -3521,23 +3500,10 @@ fn build_master_once(
     };
     // Only a build needs its own copies of the bias and dark; the cache hit
     // above returned without touching them.
-    let bias = inputs.bias.clone();
-    let dark = inputs.dark.clone();
-    // The check below calibrates each flat the way the integrator did, so
-    // it needs the same bias and dark once more.
-    let stability_calibration = (kind == CalibrationKind::Flat)
-        .then(|| seiza_stacking::CalibrationMasters::new(bias.clone(), dark.clone(), None))
-        .and_then(|masters| match masters {
-            Ok(masters) => Some(masters),
-            Err(error) => {
-                tracing::warn!("flat-set stability check skipped: {error}");
-                None
-            }
-        });
     let options = seiza_stacking::MasterBuildOptions {
         exposure_seconds: frames.first().and_then(|frame| frame.exposure_s),
-        bias,
-        dark,
+        bias: inputs.bias.clone(),
+        dark: inputs.dark.clone(),
         // A defective sensor pixel repeats in every flat, so across-frame
         // clipping keeps it and it would divide every light forever. The
         // flat's true response is smooth at pixel scale, so a spatial pass
@@ -3555,6 +3521,21 @@ fn build_master_once(
     let frame =
         seiza_stacking::build_master_from_fits_with_scratch(&paths, seiza_kind, &options, root)
             .with_context(|| format!("building master {}", kind.as_str()))?;
+    // The integrator's copies of the bias and dark go before the check
+    // below takes its own: it calibrates each flat the way the integrator
+    // did, and one full-frame copy at a time is enough.
+    drop(options);
+    let stability_calibration = (kind == CalibrationKind::Flat)
+        .then(|| {
+            seiza_stacking::CalibrationMasters::new(inputs.bias.clone(), inputs.dark.clone(), None)
+        })
+        .and_then(|masters| match masters {
+            Ok(masters) => Some(masters),
+            Err(error) => {
+                tracing::warn!("flat-set stability check skipped: {error}");
+                None
+            }
+        });
     tracing::info!(
         "master {} combined {} frame(s) with {} rejection: {} accepted, {} rejected samples, {} fallback pixels",
         kind.as_str(),
@@ -3790,6 +3771,15 @@ fn build_master(
         drifting.len()
     );
     Ok(Some(with_stability_note(conn, first.master, note)))
+}
+
+/// Add one more sentence to the applied-calibration warning.
+fn append_warning(warning: &mut Option<String>, note: impl Into<String>) {
+    let note = note.into();
+    *warning = Some(match warning.take() {
+        Some(previous) => format!("{previous}. {note}"),
+        None => note,
+    });
 }
 
 /// "20 G flats from 2026-09-10", for a note about one flat set.
