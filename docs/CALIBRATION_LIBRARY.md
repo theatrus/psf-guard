@@ -129,24 +129,27 @@ duplicate-input error.
 ## Flats that changed while they were shot
 
 Dew or frost drying off the sensor window leaves small spots that fade from
-one flat to the next. Across-frame clipping keeps a middling copy of each
-spot, because every frame has one, and each light divided by that master
-gets a bright bead at every spot wherever the sky is bright. So a freshly
-built flat master is read back against its own inputs. Pixels where the
+one flat to the next. Every frame has one, so across-frame clipping keeps a
+middling copy of each spot, and each light divided by that master gets a
+bright bead at every spot wherever the sky is bright. So PSF Guard reads a
+freshly built flat master back against its own inputs. Pixels where the
 master departs from the smooth response around it by more than 10% are its
-features; a frame that disagrees with the master at more than a fifth of
-them was not looking at the same window. A dust shadow or a dead cluster is
-a feature too, but one every frame shows the same way, and it stays.
+features. A frame that departs from the master by more than 5% of the local
+response at enough of those pixels (one in fifty thousand of the sensor, at
+least sixteen) was not looking at the same window. A dust shadow or a dead
+cluster is a feature too, but one every frame shows the same way, and it
+stays. On a colour camera the smooth response is judged per CFA phase.
 
-- When the frames that disagree are a minority, the master is rebuilt from
-  the rest and the stack card says how many were left out.
+- When the frames that disagree are a minority, the master rebuilds from the
+  rest and the stack card says how many were left out.
 - When the set as a whole disagrees with itself, the next-nearest flat set
-  is built and used instead, and the card names both.
-- When there is no other set, the master is used and the card says the set
-  was unstable and should be retaken.
+  takes its place and the card names both.
+- When there is no other set, the master serves and the card says the set
+  was unstable and needs retaking.
 
-The check runs once per build and is recorded with the master, so a cached
-master repeats its note. Flat masters built before this check rebuild once.
+The check runs once per build. The master's record keeps the judgement, so a
+cached master repeats its note, and a set that was set aside is remembered
+rather than read again. Flat masters built before this check rebuild once.
 
 ## Upgrades and backups
 
