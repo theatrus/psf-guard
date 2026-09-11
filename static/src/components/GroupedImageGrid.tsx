@@ -16,6 +16,7 @@ import FilterControls, { type FilterOptions } from './FilterControls';
 import StatsDashboard from './StatsDashboard';
 import UndoRedoToolbar from './UndoRedoToolbar';
 import StackPreviewPanel from './StackPreviewPanel';
+import ProjectExposureGrouping from './ProjectExposureGrouping';
 import ThumbnailSizeControl from './ThumbnailSizeControl';
 import { QualityScanButton } from './QualityScanControl';
 import { 
@@ -33,6 +34,7 @@ import {
   imageGroupKey,
   NO_EXPANDED_GROUPS,
   resolveExpandedGroups,
+  splitImageGroupsByExposure,
 } from '../utils/imageGrouping';
 import { imageDetailPath } from '../utils/imageDetailRoutes';
 import {
@@ -239,7 +241,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   // Group images based on selected mode
   const imageGroups = useMemo(() => {
     if (groupingMode === 'session') {
-      return groupImagesBySession(filteredImages);
+      return splitImageGroupsByExposure(groupImagesBySession(filteredImages));
     }
 
     const groups = new Map<string, Image[]>();
@@ -312,7 +314,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
       sorted.sort((a, b) => a.filterName.localeCompare(b.filterName));
     }
     
-    return sorted;
+    return splitImageGroupsByExposure(sorted);
   }, [filteredImages, groupingMode]);
 
   const visibleExpandedGroups = useMemo(
@@ -847,6 +849,12 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
               </div>
 
               <SecondaryScoreToggle className="compact" />
+              {dbId && projectId != null && <ProjectExposureGrouping
+                key={`${dbId}:${projectId}`}
+                dbId={dbId}
+                projectId={projectId}
+                canManage={grading.canWrite && !!serverInfo?.allow_database_management}
+              />}
             </div>
             
             {/* Undo/Redo Toolbar */}

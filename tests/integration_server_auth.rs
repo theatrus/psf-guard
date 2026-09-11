@@ -14,7 +14,7 @@ use psf_guard::{
     config::ServerAuthConfig,
     server::{
         auth::{self, ServerAuth},
-        flat_history, handlers, organization,
+        exposure_groups, flat_history, handlers, organization,
         stack_preview::calibration_masters,
         state::AppState,
         user_admin,
@@ -79,6 +79,11 @@ fn app_with_management(config: ServerAuthConfig, allow_management: bool) -> Rout
             post(organization::preview),
         )
         .route("/db/{db_id}/organization/apply", post(organization::apply))
+        .route(
+            "/db/{db_id}/projects/{project_id}/processing-settings",
+            get(exposure_groups::get_project_settings)
+                .put(exposure_groups::update_project_settings),
+        )
         .route(
             "/db/{db_id}/flat-history/invalidate",
             post(flat_history::invalidate),
@@ -176,6 +181,26 @@ fn user_management_app(directory: &tempfile::TempDir) -> Router {
         ))
         .with_state(state);
     Router::new().nest("/api", api)
+}
+
+#[tokio::test]
+async fn project_processing_settings_require_an_editor_and_database_management() {
+    for (allow_management, username, password) in [
+        (true, "viewer", "viewer-secret"),
+        (false, "editor", "editor-secret"),
+    ] {
+        let app = app_with_management(auth_config(), allow_management);
+        let (_, cookie, _) = login(&app, username, password).await;
+        let request = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/db/test/projects/1/processing-settings")
+            .header(COOKIE, &cookie)
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"split_exposure_groups":true}"#))
+            .unwrap();
+        let (status, _, _) = json(&app, request).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
 }
 
 #[tokio::test]

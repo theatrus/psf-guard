@@ -7,6 +7,7 @@ pub mod database_context;
 pub mod embedded_static;
 pub mod export_job;
 pub mod export_settings;
+pub mod exposure_groups;
 pub mod extract;
 pub mod flat_history;
 pub mod handlers;
@@ -372,6 +373,11 @@ async fn run_server_internal(
             put(handlers::refresh_directory_tree_cache),
         )
         .route("/projects", get(handlers::list_projects))
+        .route(
+            "/projects/{project_id}/processing-settings",
+            get(exposure_groups::get_project_settings)
+                .put(exposure_groups::update_project_settings),
+        )
         .route("/organization/preview", post(organization::preview))
         .route("/organization/apply", post(organization::apply))
         .route(

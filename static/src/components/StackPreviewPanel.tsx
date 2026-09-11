@@ -3,6 +3,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/rea
 import { apiClient } from '../api/client';
 import type {
   CalibrationMode,
+  ExposureGroup,
   Image,
   LatestStackPreviewGroup,
   StackFrameDecision,
@@ -17,6 +18,7 @@ import StackPreviewInspector from './StackPreviewInspector';
 import CalibrationMasterButton from './CalibrationMasterInspector';
 import StackSnrCurve from './StackSnrCurve';
 import StackColorPreviewPanel from './StackColorPreviewPanel';
+import { colorSourceKey } from './stackColorSources';
 import StackStretchControls from './StackStretchControls';
 import { isSkyOriented } from './stackOrientation';
 import { useAccess } from '../auth/access';
@@ -31,7 +33,7 @@ import {
 
 type StackCandidateImage = Pick<
   Image,
-  'id' | 'target_id' | 'target_name' | 'filter_name' | 'grading_status'
+  'id' | 'target_id' | 'target_name' | 'filter_name' | 'grading_status' | 'exposure_group'
 >;
 
 interface StackPreviewPanelProps {
@@ -58,6 +60,7 @@ interface ChannelInput {
   targetId: number;
   targetName: string;
   filterName: string;
+  exposureGroup?: ExposureGroup | null;
   images: StackCandidateImage[];
 }
 
@@ -180,8 +183,14 @@ function latestStackQueryKey(dbId: string, projectId: number) {
   return ['db', dbId, 'project', projectId, 'stack-preview', 'latest'] as const;
 }
 
-function channelKey(targetId: number, filterName: string | null) {
-  return `${targetId}:${filterName ?? ''}`;
+function channelKey(targetId: number, filterName: string | null, exposure?: ExposureGroup | null) {
+  return exposure
+    ? JSON.stringify([targetId, filterName ?? '', exposure.key])
+    : `${targetId}:${filterName ?? ''}`;
+}
+
+function channelLabel(filterName: string | null, exposure?: ExposureGroup | null) {
+  return [filterName || 'No filter', exposure?.label].filter(Boolean).join(' · ');
 }
 
 function artifactStretchKey(artifact: StackArtifact) {
@@ -360,7 +369,7 @@ export default function StackPreviewPanel({
   const currentChannels = useMemo(() => {
     const channels = new Map<string, ChannelInput>();
     for (const image of images) {
-      const key = channelKey(image.target_id, image.filter_name);
+      const key = channelKey(image.target_id, image.filter_name, image.exposure_group);
       const existing = channels.get(key);
       if (existing) {
         existing.images.push(image);
@@ -370,6 +379,7 @@ export default function StackPreviewPanel({
           targetId: image.target_id,
           targetName: image.target_name,
           filterName: image.filter_name ?? '',
+          exposureGroup: image.exposure_group,
           images: [image],
         });
       }
@@ -417,6 +427,7 @@ export default function StackPreviewPanel({
           .map((channel) => ({
             target_id: channel.targetId,
             filter_name: channel.filterName,
+            exposure_group_key: channel.exposureGroup?.key,
             calibration: channelOverride(channel.key)!,
           })),
       }),
@@ -512,7 +523,7 @@ export default function StackPreviewPanel({
     () =>
       new Map(
         (latest.data?.groups ?? []).map((entry) => [
-          channelKey(entry.group.target_id, entry.group.filter_name),
+          channelKey(entry.group.target_id, entry.group.filter_name, entry.group.exposure_group),
           entry,
         ])
       ),
@@ -522,7 +533,7 @@ export default function StackPreviewPanel({
     const merged = new Map<string, { job: StackPreviewJob; group: StackPreviewJob['groups'][number] }>();
     for (const job of watchedJobs) {
       for (const group of job.groups) {
-        const key = channelKey(group.target_id, group.filter_name);
+        const key = channelKey(group.target_id, group.filter_name, group.exposure_group);
         const existing = merged.get(key);
         // A build still holding the channel outranks a settled one; among
         // equals the newer request wins, matching iteration order.
@@ -639,10 +650,10 @@ export default function StackPreviewPanel({
         ) !== null
       : false;
   }).length;
-  const outdatedTargetIds = useMemo(() => {
-    const targetIds = new Set<number>();
+  const outdatedSourceKeys = useMemo(() => {
+    const sourceKeys = new Set<string>();
     for (const entry of latest.data?.groups ?? []) {
-      const key = channelKey(entry.group.target_id, entry.group.filter_name);
+      const key = channelKey(entry.group.target_id, entry.group.filter_name, entry.group.exposure_group);
       if (
         staleReason(
           currentChannels.get(key),
@@ -657,10 +668,14 @@ export default function StackPreviewPanel({
           currentScoring
         )
       ) {
-        targetIds.add(entry.group.target_id);
+        sourceKeys.add(colorSourceKey({
+          job_id: entry.job_id,
+          group_index: entry.group.index,
+          artifact_revision: entry.artifact_revision,
+        }));
       }
     }
-    return targetIds;
+    return sourceKeys;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- effectiveCalibration reads calibrationMode and overrides, listed below.
   }, [
     acceptedOnly,
@@ -830,7 +845,7 @@ export default function StackPreviewPanel({
           projectId={projectId}
           sourceRevision={colorSourceRevision}
           channelBuildRunning={running}
-          outdatedTargetIds={outdatedTargetIds}
+          outdatedSourceKeys={outdatedSourceKeys}
           canCompute={canCompute}
           onOpenImage={onOpenImage}
         />
@@ -867,6 +882,7 @@ export default function StackPreviewPanel({
                 const group = artifact?.group ?? activeGroup;
                 const targetName = current?.targetName ?? group?.target_name ?? 'Unknown target';
                 const filterName = current?.filterName ?? group?.filter_name ?? '';
+                const exposureGroup = current?.exposureGroup ?? group?.exposure_group;
                 const outdated = artifact
                   ? staleReason(
                       current,
@@ -935,12 +951,14 @@ export default function StackPreviewPanel({
                   <article
                     className={`stack-preview-card ${outdated ? 'outdated' : ''}`}
                     data-outdated={outdated ? 'true' : 'false'}
+                    data-exposure-group={exposureGroup?.key}
                     key={key}
                   >
                     <header>
                       <div className="stack-preview-card-title">
                         <h3>{targetName}</h3>
                         <span className="stack-preview-channel">{filterName || 'No filter'}</span>
+                        {exposureGroup && <span className="stack-preview-exposure">{exposureGroup.label}</span>}
                       </div>
                       <div className="stack-preview-card-actions">
                         <span className={`stack-group-state ${activeGroup?.state ?? group?.state ?? 'not-built'}`}>
@@ -951,10 +969,11 @@ export default function StackPreviewPanel({
                           title={
                             'Calibration for this channel only. "Project" follows the ' +
                             'panel-wide Calibration choice; the other options override it ' +
-                            'for this target and filter, and are remembered.'
+                            'for this target, filter, and exposure group, and are remembered.'
                           }
                         >
                           <select
+                            aria-label={`${targetName} ${channelLabel(filterName, exposureGroup)} calibration`}
                             value={channelOverride(key) ?? ''}
                             disabled={running}
                             onChange={(event) =>
@@ -1031,7 +1050,7 @@ export default function StackPreviewPanel({
                             || apiClient.getStackPreviewUrl(
                               dbId, artifact.jobId, artifact.group.index, artifact.artifactRevision
                             )}
-                          alt={`${targetName} ${filterName} stack preview`}
+                          alt={`${targetName} ${channelLabel(filterName, exposureGroup)} stack preview`}
                         />
                         {isSkyOriented(artifact.group.sky_orientation) && (
                           <span className="stack-preview-orientation">N ↑ · E ←</span>
@@ -1074,7 +1093,7 @@ export default function StackPreviewPanel({
                       )}
                       <StackStretchControls
                         key={stretchKey}
-                        label={`${targetName} ${filterName || 'no filter'}`}
+                        label={`${targetName} ${channelLabel(filterName, exposureGroup)}`}
                         channels={artifact.group.output_channels === 3 ? 3 : 1}
                         disabled={!canCompute || running || processingQuery?.isPending || !!processingQuery?.error}
                         applied={appliedStretch}
@@ -1143,7 +1162,7 @@ export default function StackPreviewPanel({
                       <div
                         className="stack-preview-progress-track"
                         role="progressbar"
-                        aria-label={`${targetName} ${filterName || 'no filter'} stack progress`}
+                        aria-label={`${targetName} ${channelLabel(filterName, exposureGroup)} stack progress`}
                         aria-valuemin={0}
                         aria-valuemax={eligibleFrames}
                         aria-valuenow={processedFrames}
@@ -1164,7 +1183,7 @@ export default function StackPreviewPanel({
                     {artifactCurve && (
                       <StackSnrCurve
                         curve={artifactCurve}
-                        label={`${targetName} ${filterName || 'no filter'} completed stack`}
+                        label={`${targetName} ${channelLabel(filterName, exposureGroup)} completed stack`}
                         open={snrCurveOpen}
                         onOpenChange={chooseSnrCurveOpen}
                       />
@@ -1174,7 +1193,7 @@ export default function StackPreviewPanel({
                         <strong>{artifact ? 'Live rebuild progress' : 'Live build progress'}</strong>
                         <StackSnrCurve
                           curve={liveCurve}
-                          label={`${targetName} ${filterName || 'no filter'} live build`}
+                          label={`${targetName} ${channelLabel(filterName, exposureGroup)} live build`}
                           open={snrCurveOpen}
                           onOpenChange={chooseSnrCurveOpen}
                         />
@@ -1213,7 +1232,7 @@ export default function StackPreviewPanel({
                             dbId={dbId}
                             source={{ kind: 'mono', jobId: artifact.jobId, groupIndex: artifact.group.index, artifactRevision: artifact.artifactRevision }}
                             title={artifact.group.target_name}
-                            label={artifact.group.filter_name || 'No filter'}
+                            label={channelLabel(artifact.group.filter_name, artifact.group.exposure_group)}
                           />
                         </div>
                         <details className="stack-preview-details">
@@ -1248,7 +1267,7 @@ export default function StackPreviewPanel({
         <StackPreviewInspector
           eyebrow="Full-resolution integration"
           title={inspector.group.target_name}
-          label={inspector.group.filter_name || 'No filter'}
+          label={channelLabel(inspector.group.filter_name, inspector.group.exposure_group)}
           summary={[
             `${inspector.group.accepted_frames} frames`,
             `${Math.round(inspector.group.total_exposure_seconds)} s`,
@@ -1271,7 +1290,7 @@ export default function StackPreviewPanel({
               inspector.group.index,
               inspector.artifactRevision
             )}
-          imageAlt={`Full-resolution stack for ${inspector.group.target_name} ${inspector.group.filter_name || 'No filter'}`}
+          imageAlt={`Full-resolution stack for ${inspector.group.target_name} ${channelLabel(inspector.group.filter_name, inspector.group.exposure_group)}`}
           downloadLabel={stretches[artifactStretchKey(inspector)]?.fits_url
             ? 'Download deconvolved linear FITS'
             : 'Download linear FITS'}

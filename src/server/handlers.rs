@@ -3672,6 +3672,18 @@ pub async fn get_images(
         )
         .map_err(AppError::db)?;
 
+    let mut exposure_groups = std::collections::HashMap::new();
+    let projects: std::collections::HashSet<_> = images
+        .iter()
+        .map(|(image, _, _)| image.project_id)
+        .collect();
+    for project_id in projects {
+        exposure_groups.insert(
+            project_id,
+            crate::server::exposure_groups::cached_project_groups(&ctx, &conn, project_id)?,
+        );
+    }
+
     let response: Vec<ImageResponse> = images
         .into_iter()
         .map(|(img, proj_name, target_name)| {
@@ -3685,6 +3697,10 @@ pub async fn get_images(
 
             ImageResponse {
                 id: img.id,
+                exposure_group: exposure_groups
+                    .get(&img.project_id)
+                    .and_then(|groups| groups.by_image.get(&img.id))
+                    .cloned(),
                 project_id: img.project_id,
                 project_name: proj_name,
                 project_display_name,
@@ -3711,7 +3727,7 @@ pub async fn get_image(
     use crate::image_analysis::FitsImage;
 
     // Get image data from database first (before any async operations)
-    let (image, proj_name, target_name, mut metadata, ambiguous_names) = {
+    let (image, proj_name, target_name, mut metadata, ambiguous_names, exposure_group) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
@@ -3735,7 +3751,19 @@ pub async fn get_image(
         let metadata: serde_json::Value = serde_json::from_str(&image.metadata)
             .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
-        (image, proj_name, target_name, metadata, ambiguous_names)
+        let exposure_group =
+            crate::server::exposure_groups::cached_project_groups(&ctx, &conn, image.project_id)?
+                .by_image
+                .get(&image.id)
+                .cloned();
+        (
+            image,
+            proj_name,
+            target_name,
+            metadata,
+            ambiguous_names,
+            exposure_group,
+        )
     }; // Database connection is dropped here
 
     // Try to resolve the filesystem path for the FITS file
@@ -3867,6 +3895,7 @@ pub async fn get_image(
     };
 
     let response = ImageResponse {
+        exposure_group,
         id: image.id,
         project_id: image.project_id,
         project_name: proj_name,

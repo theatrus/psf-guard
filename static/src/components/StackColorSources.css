@@ -1,0 +1,65 @@
+.stack-color-source-selectors {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
+  gap: 0.6rem;
+  margin: 0.6rem 0;
+}
+
+.stack-color-source-selectors label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  font-size: 0.8rem;
+}
+
+.stack-color-source-selectors select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.35rem;
+  border-radius: 4px;
+  color: inherit;
+  background: var(--bg-secondary, #222);
+  border: 1px solid var(--border-color, #444);
+}
+
+.stack-preview-exposure {
+  display: inline-block;
+  flex-shrink: 0;
+  margin-left: 0.5rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.stack-color-exposure {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 0.85rem;
+}
+
+.stack-color-card[data-exposure-set] > header > div:first-child {
+  flex-wrap: wrap;
+}
+
+.stack-color-unavailable {
+  padding: 0.4rem 0.75rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.stack-color-custom {
+  grid-column: 1 / -1;
+  min-width: 0;
+  border-top: 1px solid var(--border-color);
+}
+
+.stack-color-custom > summary {
+  cursor: pointer;
+  padding: 0.65rem 0;
+}
+
+.stack-color-custom > summary small {
+  margin-left: 0.75rem;
+  color: var(--text-secondary);
+}

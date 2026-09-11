@@ -24,6 +24,40 @@ only that channel's remembered result; the other channel cards remain intact.
 - **Accepted only** removes Pending frames. By default both Accepted and usable
   Pending frames are eligible.
 
+### Separate exposure lengths
+
+Enable **Separate exposure groups** in a project's image grid to keep short
+exposures apart from substantially longer ones. The setting is saved for that
+project in this database and is off by default. It does not change Target
+Scheduler templates or exposure plans.
+
+PSF Guard uses each image's recorded exposure, not the template's current
+default. Within each exact target and filter, it sorts known exposure lengths
+and starts a new group when an exposure is at least twice the shortest one in
+the current group. Small timing differences remain together, and intermediate
+lengths cannot bridge a short group into a long one. For example, 10, 10.1, and
+19 seconds share a group; 30 seconds and 300 seconds each start another.
+Missing, zero, negative, or invalid exposure values form **Unknown exposure**.
+
+Groups are calculated from the complete project catalog, before status, date,
+target, or selection filters. Grid headings and stack cards show the exposure
+length or range. Each group has its own calibration override, latest result,
+and resume checkpoint. Changing the setting, or adding an exposure that changes
+group membership, prevents incompatible remembered stacks from being reused.
+
+Color previews offer separate RGB, LRGB, and narrowband cards for matching
+exposure bands. For example, 30-second and 300-second RGB inputs produce two
+cards, each ready to build without selecting its channels by hand. A band
+without every required channel stays visible but disabled, with its missing
+roles named. Different exposure combinations retain separate color previews;
+rebuilding one does not replace another. **Custom combination** exposes manual
+source selection for deliberately mixed exposures or ambiguous channels. This
+is not automatic HDR blending or saturated-pixel replacement.
+
+Sequence grading already compares matching capture profiles, including exposure
+length. This setting changes presentation and stacking boundaries, not those
+grading cohorts or existing grades.
+
 The build runs in the background and the panel polls its status. Different
 target/channel groups are processed sequentially. Only one stacking job runs
 in the PSF Guard process at a time, even when the server hosts multiple
@@ -707,8 +741,8 @@ the grid adds a **Combine channel stacks** section. Color generation is a
 separate on-demand job: rebuilding or changing a color palette never changes
 the mono integrations or their admission evidence.
 
-- **RGB** requires one unambiguous Red, Green, and Blue stack.
-- **LRGB** requires one unambiguous Luminance, Red, Green, and Blue stack.
+- **RGB** requires one Red, Green, and Blue stack in its exposure band.
+- **LRGB** requires one Luminance, Red, Green, and Blue stack in its exposure band.
   Luminance supplies the output luminance while Seiza retains the RGB
   chromaticity.
 - **Narrowband** requires H-alpha and OIII. HOO and Foraxx HOO are then
@@ -717,12 +751,30 @@ the mono integrations or their admission evidence.
   remain available, and selecting another palette builds or restores its own
   artifact.
 
+With exposure grouping enabled, the default cards match channels by their
+recorded duration ranges, not their filter-specific group identifiers. Starting
+with the shortest range, a band accepts another channel only while its longest
+exposure remains less than twice its shortest. The whole range must fit, so
+small timing differences can match without chaining short and long exposures
+together. RGB and LRGB use their required channels. Narrowband bands include
+the available H-alpha, OIII, and SII stacks so palette changes stay within the
+same exposure band; each palette still requires only its own channels.
+
+Incomplete bands show their missing roles and cannot build. Multiple candidates
+for the same role remain ambiguous rather than choosing one arbitrarily.
+Unknown durations and ranges already spanning a factor of two or more require
+manual selection. Open **Custom combination** for the target and composition
+to choose those inputs, deliberately mix short and long exposures, or inspect
+a saved custom combination. A source that disappears or changes revision must
+be chosen again; PSF Guard never silently substitutes another stack.
+
 PSF Guard recognizes the ordinary short and long filter names (`L`, `Red`,
 `Ha`, `H-alpha`, `OIII`, `SII`, `O3`, and `S2`) plus descriptive names such as
 `Red`, `H-alpha`, and `OIII` as distinct tokens in vendor labels. It
-deliberately does not guess when two stacks map to the same role or when a
-multi-band filter name is ambiguous. Rename the Target Scheduler filters to
-make those roles explicit before building color.
+deliberately does not guess when two stacks in a band map to the same role or
+when a multi-band filter name is ambiguous. Choose a known-role stack under
+**Custom combination**, or rename ambiguous Target Scheduler filters to make
+their roles explicit before building color.
 
 Before registration, PSF Guard uses `seiza-background` to fit and correct each
 linear channel independently. Background extraction is enabled for new UI
@@ -956,6 +1008,8 @@ immutable cached response for the rebuilt output.
 The grid uses these per-database endpoints:
 
 ```text
+GET  /api/db/{db}/projects/{project}/processing-settings
+PUT  /api/db/{db}/projects/{project}/processing-settings
 POST /api/db/{db}/projects/{project}/stack-previews
 GET  /api/db/{db}/projects/{project}/stack-previews/latest
 GET  /api/db/{db}/projects/{project}/stack-previews/{job}
@@ -985,6 +1039,34 @@ GET  /api/db/{db}/stack-previews/stretch/{stretch}/preview[?size=screen|original
 GET  /api/db/{db}/stack-previews/stretch/{stretch}/fits
 GET  /api/db/{db}/stack-previews/rc-astro/{id}/fits[?stars=true]
 ```
+
+Project processing settings use `{ "split_exposure_groups": false }`. Writes
+require editor access and the database-management gate. This is a catalog
+setting, not a per-build request flag. Image and mono stack-group responses
+include nullable `exposure_group` metadata with an opaque `key`, a display
+`label`, and `min_seconds`/`max_seconds`. Unknown exposure has null bounds.
+
+The color catalog's `source_candidates` lists every usable mono input with
+its role, exposure group, and exact artifact reference. Color build requests
+may specify `input_sources`, keyed by role:
+
+```json
+{
+  "target_id": 42,
+  "kind": "rgb",
+  "input_sources": {
+    "red": { "job_id": "<mono-job>", "group_index": 0, "artifact_revision": "<revision>" }
+  }
+}
+```
+
+An omitted role resolves automatically only when it has one usable candidate.
+The UI supplies exact `input_sources` for each automatic exposure-band card;
+the API does not infer an exposure band from the target and role alone.
+Selected sources must belong to the same project and target, match the role,
+and still have the selected revision. The worker checks again after waiting
+in the queue. Color latest results have a `source_family_key` so distinct
+exposure combinations remain separate when individual mono stacks rebuild.
 
 Master previews return `202` while queued and use the shared generation-status
 poller. They accept `size=screen|original`, `midtone=0.01..0.99` (default `0.2`),

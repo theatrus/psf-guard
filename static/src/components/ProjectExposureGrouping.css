@@ -1,0 +1,21 @@
+.project-exposure-grouping {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+  min-width: 0;
+  flex: 0 0 auto;
+  font-size: 0.8rem;
+}
+
+.project-exposure-grouping label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
+.project-exposure-grouping .error {
+  color: var(--error-color, #c84f4f);
+  overflow-wrap: anywhere;
+}

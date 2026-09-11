@@ -187,6 +187,7 @@ pub struct RecentActivity {
 #[derive(Debug, Serialize)]
 pub struct ImageResponse {
     pub id: i32,
+    pub exposure_group: Option<crate::server::exposure_groups::ExposureGroup>,
     pub project_id: i32,
     pub project_name: String,
     pub project_display_name: String,

@@ -6,6 +6,13 @@
 
 ## Added
 
+- A per-project **Separate exposure groups** option keeps substantially different
+  exposure lengths apart in the image grid and stack previews. Short and long
+  integrations retain independent stack results and calibration choices.
+  RGB, LRGB, and narrowband cards pair matching exposure bands automatically;
+  incomplete bands show their missing channels. **Custom combination** keeps
+  manual source selection available for mixed exposures and saved variants.
+
 - Review Target Scheduler flat coverage in the calibration library and invalidate
   suspect runs with a reason. The NINA plugin applies these requests on grade
   pulls and applied reconciles, preserving changed or newly taken coverage and
