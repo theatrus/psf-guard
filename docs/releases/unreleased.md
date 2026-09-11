@@ -35,6 +35,13 @@
 
 ## Fixed
 
+- A flat master is now checked against the flats that made it. Spots that
+  fade across the run (dew drying off the sensor window) used to survive
+  clipping and put a bright bead into every light wherever the sky is bright.
+  Frames that disagree with the rest of the set are left out; a set that
+  disagrees with itself gives way to the next one, or is used with a warning
+  when there is no other. Flat masters built before this rebuild once.
+
 - Sky-flat masters improve rejection of overlapping moving-star samples with
   robust median/MAD clipping after calibration and brightness normalization. Existing
   generated masters rebuild with the new algorithm when next needed. Stars

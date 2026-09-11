@@ -126,6 +126,28 @@ followed by name, and a file is handed to the integrator once even when two
 rows point at it, so a stale row can no longer fail a master with a
 duplicate-input error.
 
+## Flats that changed while they were shot
+
+Dew or frost drying off the sensor window leaves small spots that fade from
+one flat to the next. Across-frame clipping keeps a middling copy of each
+spot, because every frame has one, and each light divided by that master
+gets a bright bead at every spot wherever the sky is bright. So a freshly
+built flat master is read back against its own inputs. Pixels where the
+master departs from the smooth response around it by more than 10% are its
+features; a frame that disagrees with the master at more than a fifth of
+them was not looking at the same window. A dust shadow or a dead cluster is
+a feature too, but one every frame shows the same way, and it stays.
+
+- When the frames that disagree are a minority, the master is rebuilt from
+  the rest and the stack card says how many were left out.
+- When the set as a whole disagrees with itself, the next-nearest flat set
+  is built and used instead, and the card names both.
+- When there is no other set, the master is used and the card says the set
+  was unstable and should be retaken.
+
+The check runs once per build and is recorded with the master, so a cached
+master repeats its note. Flat masters built before this check rebuild once.
+
 ## Upgrades and backups
 
 PSF Guard keeps its own tables inside the scheduler catalog and upgrades them
