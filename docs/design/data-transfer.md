@@ -327,6 +327,50 @@ Each database opts into this protocol on its own. Holding a valid key is not
 enough: the operator ticks **Accept remote scheduler sync** for that database,
 separately from **Accept remote image uploads**.
 
+### Scheduler flat coverage
+
+`flat_history_v1` advertises a separate typed exchange for the NINA plugin.
+Native `flathistory` has no GUID and is deliberately not added to merge or
+grade bundles. These bearer-authenticated endpoints require the paired
+catalog's existing scheduler-sync grant:
+
+```
+POST /api/sync/v1/flat-history/snapshot
+POST /api/sync/v1/flat-history/pending
+POST /api/sync/v1/flat-history/acknowledge
+```
+
+Every request carries `protocol_version: 1`, `catalog_id`, and the plugin's
+persistent per-source-database `origin_id` UUID. Every response echoes the
+catalog and origin, which the plugin checks before applying local changes.
+Snapshots add `source_name` and up to 1000 typed `records`. Each record carries
+`source_row_id`, `fingerprint`, resolved `target_guid` (null only for profile
+coverage), `target_name`, `profile_id`, exact native session/capture timestamps,
+`light_session_id`, flats type, filter, and acquisition settings. The SHA-256
+fingerprint is computed and checked by the plugin over every native row value,
+schema metadata, and resolved target GUID. The server treats it as opaque; it
+does not try to reproduce another implementation's JSON serialization.
+
+PSF-owned `psf_guard_scheduler_flat_history` records bind origin, row ID, and
+fingerprint to a server UUID. Replayed snapshots update display metadata but
+cannot clear invalidations. A new row generation can supersede an undecided
+record, never a pending or acknowledged decision. Missing snapshot rows have
+no meaning: a chunk or target-scoped snapshot is not a deletion request.
+
+`GET /api/db/{id}/flat-history` supports `limit`, `offset`, `state`, and literal
+substring `q` filters. It performs no schema writes. The editor- and
+database-management-gated `POST /api/db/{id}/flat-history/invalidate` accepts
+explicit `record_ids` and a nonempty `reason`, atomically marking recorded
+coverage pending. This is a reviewed coverage operation, not image grading.
+
+The plugin requests pending decisions, optionally restricted to an exact target
+GUID, and applies them in batches of at most 1000. Local deletion requires an
+unchanged row fingerprint and target identity inside a short transaction.
+Acknowledgements carry the full decision identity and `removed`, `absent`, or
+`conflict`. Compatible removed/absent retries retain the first audit result;
+changed coverage is never deleted. See [calibration libraries](../CALIBRATION_LIBRARY.md#scheduler-flat-coverage)
+for scheduler timing, duplicate coverage, and recapture eligibility.
+
 ### Speaking the protocol, not only answering it
 
 `server/remote_sync.rs` answers `/api/sync/v1`; `sync_client.rs` speaks it.

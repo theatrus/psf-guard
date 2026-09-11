@@ -8,6 +8,7 @@ pub mod embedded_static;
 pub mod export_job;
 pub mod export_settings;
 pub mod extract;
+pub mod flat_history;
 pub mod handlers;
 pub mod import_job;
 pub mod organization;
@@ -378,6 +379,8 @@ async fn run_server_internal(
             get(organization::destinations),
         )
         .route("/calibrations", get(handlers::get_calibration_library))
+        .route("/flat-history", get(flat_history::list))
+        .route("/flat-history/invalidate", post(flat_history::invalidate))
         .route(
             "/calibrations/details",
             get(handlers::get_calibration_library_details),
@@ -724,6 +727,19 @@ async fn run_server_internal(
             post(peers::sync_with_peer),
         )
         .route("/sync/v1/capabilities", get(remote_sync::capabilities))
+        .route(
+            "/sync/v1/flat-history/snapshot",
+            post(flat_history::snapshot).layer(DefaultBodyLimit::max(flat_history::MAX_BODY_BYTES)),
+        )
+        .route(
+            "/sync/v1/flat-history/pending",
+            post(flat_history::pending).layer(DefaultBodyLimit::max(flat_history::MAX_BODY_BYTES)),
+        )
+        .route(
+            "/sync/v1/flat-history/acknowledge",
+            post(flat_history::acknowledge)
+                .layer(DefaultBodyLimit::max(flat_history::MAX_BODY_BYTES)),
+        )
         .route("/sync/v1/pair", post(pairing::pair_route))
         .route(
             "/sync/v1/previews",

@@ -14,7 +14,7 @@ use psf_guard::{
     config::ServerAuthConfig,
     server::{
         auth::{self, ServerAuth},
-        handlers, organization,
+        flat_history, handlers, organization,
         stack_preview::calibration_masters,
         state::AppState,
         user_admin,
@@ -79,6 +79,10 @@ fn app_with_management(config: ServerAuthConfig, allow_management: bool) -> Rout
             post(organization::preview),
         )
         .route("/db/{db_id}/organization/apply", post(organization::apply))
+        .route(
+            "/db/{db_id}/flat-history/invalidate",
+            post(flat_history::invalidate),
+        )
         .route(
             "/db/{db_id}/stack-previews/calibration-masters/generation-status",
             post(calibration_masters::post_generation_status),
@@ -204,6 +208,34 @@ async fn organization_requires_an_editor_and_database_management() {
                 StatusCode::FORBIDDEN
             );
         }
+    }
+}
+
+#[tokio::test]
+async fn flat_history_invalidation_requires_an_editor_and_database_management() {
+    for (allow_management, username, password) in [
+        (true, "viewer", "viewer-secret"),
+        (false, "editor", "editor-secret"),
+    ] {
+        let app = app_with_management(auth_config(), allow_management);
+        let (_, cookie, _) = login(&app, username, password).await;
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/api/db/test/flat-history/invalidate")
+            .header(COOKIE, &cookie)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "record_ids": ["11111111-1111-4111-8111-111111111111"],
+                    "reason": "Flat panel reflection",
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
     }
 }
 

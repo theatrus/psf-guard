@@ -433,6 +433,7 @@ pub async fn capabilities(
         "preview_refresh",
         "async_preview_jobs",
         "exports",
+        "flat_history_v1",
     ];
     if catalog
         .remote_image_upload
@@ -972,7 +973,7 @@ pub async fn get_export(
     export_response(export)
 }
 
-fn authenticated_catalog(
+pub(super) fn authenticated_catalog(
     state: &AppState,
     headers: &HeaderMap,
     action: AuditAction,
@@ -1040,7 +1041,7 @@ fn require_protocol(version: u32) -> Result<(), AppError> {
     }
 }
 
-fn require_catalog(catalog: &DatabaseContext, requested: &str) -> Result<(), AppError> {
+pub(super) fn require_catalog(catalog: &DatabaseContext, requested: &str) -> Result<(), AppError> {
     if catalog.id == requested {
         Ok(())
     } else {

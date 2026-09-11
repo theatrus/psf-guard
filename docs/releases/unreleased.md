@@ -6,6 +6,11 @@
 
 ## Added
 
+- Review Target Scheduler flat coverage in the calibration library and invalidate
+  suspect runs with a reason. The NINA plugin applies these requests on grade
+  pulls and applied reconciles, preserving changed or newly taken coverage and
+  leaving calibration files untouched.
+
 - Inspect the calibration masters used by a mono or color stack from its
   **Masters** action, with session/channel provenance, display stretch,
   native-size zoom, rejection statistics, and unchanged FITS downloads.
