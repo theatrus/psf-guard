@@ -151,14 +151,26 @@ test('persists project exposure grouping and separates mono and color choices', 
   await expect(page.locator('.stack-preview-card img').first()).toBeVisible();
   await expect(page.getByText('Loading saved processing...', { exact: true })).toHaveCount(0);
   await expect(page.getByText(/Saved processing could not be loaded:/)).toHaveCount(0);
-  const rgb = page.locator('.stack-color-card[data-color-kind="rgb"]');
-  await expect(rgb.getByRole('button', { name: 'Build RGB color preview' })).toBeDisabled();
+  const rgb = page.locator('.stack-color-card[data-color-kind="rgb"][data-exposure-set]');
+  await expect(rgb).toHaveCount(2);
+  const shortRgb = rgb.filter({ has: page.getByRole('button', { name: 'Build RGB 30 s color preview', exact: true }) });
+  const longRgb = rgb.filter({ has: page.getByRole('button', { name: 'Build RGB 300 s color preview', exact: true }) });
+  await expect(shortRgb.getByRole('button', { name: 'Build RGB 30 s color preview', exact: true })).toBeEnabled();
+  await expect(longRgb.getByRole('button', { name: 'Build RGB 300 s color preview', exact: true })).toBeEnabled();
+  await expect(rgb.locator('.stack-color-source-selectors')).toHaveCount(0);
+  await expect(page.getByRole('combobox', { name: 'Beta Field rgb R source stack' })).toHaveCount(0);
+  const custom = page.locator('details[data-color-kind="rgb"][data-target-id="2"]');
+  const customSummary = custom.getByText('Custom combination', { exact: true });
+  await customSummary.click();
+  const customRgb = custom.locator('.stack-color-card[data-color-kind="rgb"]');
+  await expect(customRgb.getByRole('button', { name: 'Build RGB custom color preview', exact: true })).toBeDisabled();
   for (const role of ['R', 'G', 'B']) {
-    const selector = rgb.getByRole('combobox', { name: `Beta Field rgb ${role} source stack` });
+    const selector = customRgb.getByRole('combobox', { name: `Beta Field rgb ${role} source stack` });
     await expect(selector.locator('option')).toHaveCount(3);
-    await selector.selectOption({ label: `${role} (300 s) · 2 frames` });
+    await selector.selectOption({ label: `${role} (${role === 'R' ? 30 : 300} s) · 2 frames` });
   }
-  await expect(rgb.getByRole('button', { name: 'Build RGB color preview' })).toBeEnabled();
+  await expect(customRgb.getByRole('button', { name: 'Build RGB custom color preview', exact: true })).toBeEnabled();
+  await customSummary.click();
   await page.locator('.app-main').evaluate((element) => { element.scrollTop = 0; });
   expect(await page.locator('.project-exposure-grouping label').evaluate((element) => element.getBoundingClientRect().height)).toBeLessThan(28);
   await page.screenshot({ path: testInfo.outputPath('exposure-groups-desktop.png'), fullPage: false });
@@ -176,9 +188,26 @@ test('persists project exposure grouping and separates mono and color choices', 
   for (const header of await page.locator('.stack-preview-card > header').all()) {
     expect(await header.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   }
-  await positionBelowToolbar(rgb);
-  await rgb.screenshot({ path: testInfo.outputPath('exposure-color-sources-mobile.png') });
-  expect(await rgb.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  for (const [card, duration] of [[shortRgb, 30], [longRgb, 300]] as const) {
+    await positionBelowToolbar(card);
+    await card.screenshot({ path: testInfo.outputPath(`exposure-color-${duration}-mobile.png`) });
+    expect(await card.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  }
+  await customSummary.click();
+  await positionBelowToolbar(customRgb);
+  await customRgb.screenshot({ path: testInfo.outputPath('exposure-color-sources-mobile.png') });
+  expect(await customRgb.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+
+  // Leave the short RGB set complete while removing only the remembered long B stack.
+  const indexPath = path.join(tmpBase(), 'cache', dbId, 'stack-previews', 'latest-project-2.json');
+  const remembered = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+  fs.writeFileSync(indexPath, JSON.stringify({ ...remembered, groups: savedStacks.filter((stack) =>
+    !(stack.group.filter_name === 'B' && stack.group.exposure_group?.min_seconds === 300)) }));
+  await page.reload();
+  await expect(rgb).toHaveCount(2);
+  await expect(shortRgb.getByRole('button', { name: 'Build RGB 30 s color preview', exact: true })).toBeEnabled();
+  await expect(longRgb.getByRole('button', { name: 'Build RGB 300 s color preview', exact: true })).toBeDisabled();
+  await expect(longRgb).toContainText('Missing B');
   await toggle.click();
   await expect(toggle).not.toBeChecked();
   await expect(page.locator('.stack-preview-card')).toHaveCount(3);

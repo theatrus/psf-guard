@@ -18,6 +18,7 @@ import StackPreviewInspector from './StackPreviewInspector';
 import CalibrationMasterButton from './CalibrationMasterInspector';
 import StackSnrCurve from './StackSnrCurve';
 import StackColorPreviewPanel from './StackColorPreviewPanel';
+import { colorSourceKey } from './stackColorSources';
 import StackStretchControls from './StackStretchControls';
 import { isSkyOriented } from './stackOrientation';
 import { useAccess } from '../auth/access';
@@ -649,8 +650,8 @@ export default function StackPreviewPanel({
         ) !== null
       : false;
   }).length;
-  const outdatedTargetIds = useMemo(() => {
-    const targetIds = new Set<number>();
+  const outdatedSourceKeys = useMemo(() => {
+    const sourceKeys = new Set<string>();
     for (const entry of latest.data?.groups ?? []) {
       const key = channelKey(entry.group.target_id, entry.group.filter_name, entry.group.exposure_group);
       if (
@@ -667,10 +668,14 @@ export default function StackPreviewPanel({
           currentScoring
         )
       ) {
-        targetIds.add(entry.group.target_id);
+        sourceKeys.add(colorSourceKey({
+          job_id: entry.job_id,
+          group_index: entry.group.index,
+          artifact_revision: entry.artifact_revision,
+        }));
       }
     }
-    return targetIds;
+    return sourceKeys;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- effectiveCalibration reads calibrationMode and overrides, listed below.
   }, [
     acceptedOnly,
@@ -840,7 +845,7 @@ export default function StackPreviewPanel({
           projectId={projectId}
           sourceRevision={colorSourceRevision}
           channelBuildRunning={running}
-          outdatedTargetIds={outdatedTargetIds}
+          outdatedSourceKeys={outdatedSourceKeys}
           canCompute={canCompute}
           onOpenImage={onOpenImage}
         />

@@ -31,3 +31,35 @@
   font-size: 0.85rem;
   white-space: nowrap;
 }
+
+.stack-color-exposure {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 0.85rem;
+}
+
+.stack-color-card[data-exposure-set] > header > div:first-child {
+  flex-wrap: wrap;
+}
+
+.stack-color-unavailable {
+  padding: 0.4rem 0.75rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.stack-color-custom {
+  grid-column: 1 / -1;
+  min-width: 0;
+  border-top: 1px solid var(--border-color);
+}
+
+.stack-color-custom > summary {
+  cursor: pointer;
+  padding: 0.65rem 0;
+}
+
+.stack-color-custom > summary small {
+  margin-left: 0.75rem;
+  color: var(--text-secondary);
+}

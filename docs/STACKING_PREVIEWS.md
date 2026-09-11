@@ -45,10 +45,14 @@ length or range. Each group has its own calibration override, latest result,
 and resume checkpoint. Changing the setting, or adding an exposure that changes
 group membership, prevents incompatible remembered stacks from being reused.
 
-When a color role has more than one mono stack, select the desired input for
-that role. Different exposure combinations retain separate color previews;
-rebuilding one does not replace another. This is explicit channel selection,
-not automatic HDR blending or saturated-pixel replacement.
+Color previews offer separate RGB, LRGB, and narrowband cards for matching
+exposure bands. For example, 30-second and 300-second RGB inputs produce two
+cards, each ready to build without selecting its channels by hand. A band
+without every required channel stays visible but disabled, with its missing
+roles named. Different exposure combinations retain separate color previews;
+rebuilding one does not replace another. **Custom combination** exposes manual
+source selection for deliberately mixed exposures or ambiguous channels. This
+is not automatic HDR blending or saturated-pixel replacement.
 
 Sequence grading already compares matching capture profiles, including exposure
 length. This setting changes presentation and stacking boundaries, not those
@@ -737,8 +741,8 @@ the grid adds a **Combine channel stacks** section. Color generation is a
 separate on-demand job: rebuilding or changing a color palette never changes
 the mono integrations or their admission evidence.
 
-- **RGB** requires one unambiguous Red, Green, and Blue stack.
-- **LRGB** requires one unambiguous Luminance, Red, Green, and Blue stack.
+- **RGB** requires one Red, Green, and Blue stack in its exposure band.
+- **LRGB** requires one Luminance, Red, Green, and Blue stack in its exposure band.
   Luminance supplies the output luminance while Seiza retains the RGB
   chromaticity.
 - **Narrowband** requires H-alpha and OIII. HOO and Foraxx HOO are then
@@ -747,12 +751,30 @@ the mono integrations or their admission evidence.
   remain available, and selecting another palette builds or restores its own
   artifact.
 
+With exposure grouping enabled, the default cards match channels by their
+recorded duration ranges, not their filter-specific group identifiers. Starting
+with the shortest range, a band accepts another channel only while its longest
+exposure remains less than twice its shortest. The whole range must fit, so
+small timing differences can match without chaining short and long exposures
+together. RGB and LRGB use their required channels. Narrowband bands include
+the available H-alpha, OIII, and SII stacks so palette changes stay within the
+same exposure band; each palette still requires only its own channels.
+
+Incomplete bands show their missing roles and cannot build. Multiple candidates
+for the same role remain ambiguous rather than choosing one arbitrarily.
+Unknown durations and ranges already spanning a factor of two or more require
+manual selection. Open **Custom combination** for the target and composition
+to choose those inputs, deliberately mix short and long exposures, or inspect
+a saved custom combination. A source that disappears or changes revision must
+be chosen again; PSF Guard never silently substitutes another stack.
+
 PSF Guard recognizes the ordinary short and long filter names (`L`, `Red`,
 `Ha`, `H-alpha`, `OIII`, `SII`, `O3`, and `S2`) plus descriptive names such as
 `Red`, `H-alpha`, and `OIII` as distinct tokens in vendor labels. It
-deliberately does not guess when two stacks map to the same role or when a
-multi-band filter name is ambiguous. Rename the Target Scheduler filters to
-make those roles explicit before building color.
+deliberately does not guess when two stacks in a band map to the same role or
+when a multi-band filter name is ambiguous. Choose a known-role stack under
+**Custom combination**, or rename ambiguous Target Scheduler filters to make
+their roles explicit before building color.
 
 Before registration, PSF Guard uses `seiza-background` to fit and correct each
 linear channel independently. Background extraction is enabled for new UI
@@ -1039,6 +1061,8 @@ may specify `input_sources`, keyed by role:
 ```
 
 An omitted role resolves automatically only when it has one usable candidate.
+The UI supplies exact `input_sources` for each automatic exposure-band card;
+the API does not infer an exposure band from the target and role alone.
 Selected sources must belong to the same project and target, match the role,
 and still have the selected revision. The worker checks again after waiting
 in the queue. Color latest results have a `source_family_key` so distinct
