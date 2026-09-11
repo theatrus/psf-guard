@@ -43,6 +43,9 @@ pub const CALIBRATION_SCHEMA_VERSION: i64 = 8;
 /// metadata (seiza-stacking 0.11.1). Masters written before that carry no
 /// TELESCOP or FOCALLEN, which weakens validation and later matching to
 /// "nothing recorded, nothing to check" — so they rebuild once.
+/// A flat master built before the flat-set check (see [`build_master`]) is
+/// invalidated by its record lacking a judgement rather than by this number,
+/// so bias and dark masters stay put when the check arrives.
 pub const MASTER_CACHE_VERSION: u32 = 3;
 const MIN_MASTER_FRAMES: usize = 2;
 const MAX_MASTER_FRAMES: usize = 64;
@@ -2320,6 +2323,8 @@ fn resolve_or_build_masters_pinned(
     let mut build_failures: Vec<(CalibrationKind, String)> = Vec::new();
     // Masters taken from other software as they were, with what each match
     // had to take on trust; reported so the operator knows what calibrated.
+    // What the flat-set stability check did, for the card.
+    let stability_notes: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
     let external_used: std::cell::RefCell<Vec<(CalibrationKind, String)>> =
         std::cell::RefCell::new(Vec::new());
     // Frames that clustered but that the integrator would have refused. The
@@ -2411,12 +2416,16 @@ fn resolve_or_build_masters_pinned(
             inputs,
             master_recording_blocker.as_deref(),
             settings.flat_star_masking,
+            cancel,
         ) {
             // The integrator reads the headers, so it catches what selection
             // could not: a catalog holds only what it recorded at import.
             Ok(Some(master)) => {
                 if let Some((path, _)) = master.skipped.first() {
                     set_aside.push((kind, master.skipped.len(), path.display().to_string()));
+                }
+                if let Some(note) = &master.stability_note {
+                    stability_notes.borrow_mut().push(note.clone());
                 }
                 Some(master)
             }
@@ -2639,10 +2648,7 @@ fn resolve_or_build_masters_pinned(
             "{} lacked enough matching coherent frames (each master needs at least {MIN_MASTER_FRAMES})",
             missing.join(", ")
         );
-        applied.warning = Some(match applied.warning.take() {
-            Some(previous) => format!("{previous}. {partial}"),
-            None => partial,
-        });
+        append_warning(&mut applied.warning, partial);
     }
     if !build_failures.is_empty() {
         let failed = format!(
@@ -2653,10 +2659,7 @@ fn resolve_or_build_masters_pinned(
                 .collect::<Vec<_>>()
                 .join("; ")
         );
-        applied.warning = Some(match applied.warning.take() {
-            Some(previous) => format!("{previous}. {failed}"),
-            None => failed,
-        });
+        append_warning(&mut applied.warning, failed);
     }
     if !set_aside.is_empty() {
         let note = format!(
@@ -2671,26 +2674,20 @@ fn resolve_or_build_masters_pinned(
                 .collect::<Vec<_>>()
                 .join("; ")
         );
-        applied.warning = Some(match applied.warning.take() {
-            Some(previous) => format!("{previous}. {note}"),
-            None => note,
-        });
+        append_warning(&mut applied.warning, note);
+    }
+    for note in stability_notes.into_inner() {
+        append_warning(&mut applied.warning, note);
     }
     if let Some(note) = flat_note {
-        applied.warning = Some(match applied.warning.take() {
-            Some(previous) => format!("{previous}. {note}"),
-            None => note,
-        });
+        append_warning(&mut applied.warning, note);
     }
     if let Some(note) = flat
         .as_ref()
         .and_then(|master| master.flat_star_masking.as_ref())
         .and_then(flat_masking_warning)
     {
-        applied.warning = Some(match applied.warning.take() {
-            Some(previous) => format!("{previous}. {note}"),
-            None => note,
-        });
+        append_warning(&mut applied.warning, note);
     }
     let external_used = external_used.into_inner();
     if !external_used.is_empty() {
@@ -2702,10 +2699,7 @@ fn resolve_or_build_masters_pinned(
                 .collect::<Vec<_>>()
                 .join("; ")
         );
-        applied.warning = Some(match applied.warning.take() {
-            Some(previous) => format!("{previous}. {note}"),
-            None => note,
-        });
+        append_warning(&mut applied.warning, note);
     }
     applied.masters_signature = masters_signature(&applied);
     applied.sessions = 1;
@@ -3042,6 +3036,9 @@ struct BuiltMaster {
     /// headers, while selection has only what the catalog recorded.
     skipped: Vec<(PathBuf, String)>,
     flat_star_masking: Option<seiza_stacking::FlatStarMaskingStatistics>,
+    /// What the flat-set stability check did or found, for the stack card.
+    /// Recorded with the master so a cache hit repeats it.
+    stability_note: Option<String>,
 }
 
 impl BuiltMaster {
@@ -3082,7 +3079,7 @@ fn flat_masking_warning(statistics: &seiza_stacking::FlatStarMaskingStatistics) 
     (!notes.is_empty()).then(|| format!("Star-masked flat: {}", notes.join(". ")))
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct MasterInputs<'a> {
     bias: Option<seiza_stacking::LinearImage>,
     dark: Option<seiza_stacking::MasterDark>,
@@ -3169,6 +3166,7 @@ fn adopt_external_master(
                     master_uuid,
                     skipped: Vec::new(),
                     flat_star_masking: None,
+                    stability_note: None,
                 },
                 note: format!("{source_name}{trust_note}"),
             });
@@ -3257,6 +3255,7 @@ fn adopt_external_master(
             master_uuid,
             skipped: Vec::new(),
             flat_star_masking: None,
+            stability_note: None,
         },
         note: format!("{source_name}{trust_note}{scale_note}"),
     })
@@ -3306,15 +3305,72 @@ fn place_unit_range_float_on_adu_scale(frame: &mut seiza_stacking::FitsFrame) ->
     true
 }
 
-fn build_master(
-    conn: &Connection,
-    root: &Path,
+/// One master build: what it made, which frames fed it and, for a flat, how
+/// well those frames agreed about the features it kept.
+struct BuiltAttempt {
+    master: BuiltMaster,
+    /// The frames the integrator combined, in the order they were offered.
+    used: Vec<CalibrationFrame>,
+    /// How the frames agreed with the master: measured on a fresh flat
+    /// build, read back from the record on a cache hit, absent otherwise.
+    stability: Option<FlatSetStability>,
+    /// The master is a memo of a set this build once judged unstable: its
+    /// record remains, its file does not, and it must not be served.
+    memo: bool,
+    /// A master this build made and has not published: the file waits under
+    /// a staging name and no record exists until the caller decides. A cache
+    /// hit or a memo has nothing staged and is never this build's to remove.
+    staged: Option<StagedMaster>,
+}
+
+struct StagedMaster {
+    file: PathBuf,
+    source_hash: String,
+    exposure_seconds: Option<f64>,
+    statistics: serde_json::Value,
+}
+
+impl BuiltAttempt {
+    /// Frames that disagree with the master at enough of its feature pixels
+    /// to have been looking at a different sensor window.
+    fn drifting(&self) -> Vec<CalibrationFrame> {
+        let Some(stability) = &self.stability else {
+            return Vec::new();
+        };
+        self.used
+            .iter()
+            .zip(&stability.disagreement)
+            .filter(|(_, disagree)| **disagree >= stability.drift_threshold)
+            .map(|(frame, _)| frame.clone())
+            .collect()
+    }
+}
+
+/// What every attempt at one master shares: where it goes, what it is, and
+/// what it subtracts.
+#[derive(Clone, Copy)]
+struct MasterBuildContext<'a, 'b> {
+    conn: &'a Connection,
+    root: &'a Path,
     kind: CalibrationKind,
-    frames: &[CalibrationFrame],
-    inputs: MasterInputs<'_>,
-    recording_blocker: Option<&str>,
+    inputs: &'a MasterInputs<'b>,
+    recording_blocker: Option<&'a str>,
     flat_star_masking: bool,
-) -> Result<Option<BuiltMaster>> {
+}
+
+fn build_master_once(
+    context: &MasterBuildContext<'_, '_>,
+    frames: &[CalibrationFrame],
+    allow_memo: bool,
+) -> Result<Option<BuiltAttempt>> {
+    let MasterBuildContext {
+        conn,
+        root,
+        kind,
+        inputs,
+        recording_blocker,
+        flat_star_masking,
+    } = *context;
     // Reduce to the frames that can actually combine (one temperature, one
     // flat session). The master's content hash below covers exactly this
     // subset, so a subset change re-keys the cache.
@@ -3323,16 +3379,33 @@ fn build_master(
     if frames.len() < MIN_MASTER_FRAMES {
         return Ok(None);
     }
-    let MasterInputs {
-        bias,
-        dark,
-        bias_dependency,
-        dark_dependency,
-    } = inputs;
+    let bias_dependency = inputs.bias_dependency;
+    let dark_dependency = inputs.dark_dependency;
     let flat_star_masking = kind == CalibrationKind::Flat && flat_star_masking;
     let source_hash = source_set_hash(frames, bias_dependency, dark_dependency, flat_star_masking);
     let master_uuid = stable_uuid(&format!("{}:{source_hash}", kind.as_str()));
     let path = root.join(format!("{}-{source_hash}.fits", kind.as_str()));
+    // A flat set this build once judged unstable keeps its record as a memo
+    // of that judgement, file gone. Serving the judgement spares reading
+    // every flat again only to reach the same replacement.
+    if kind == CalibrationKind::Flat
+        && allow_memo
+        && let Some(stability) = recorded_flat_stability(conn, &path, frames, true)
+    {
+        return Ok(Some(BuiltAttempt {
+            master: BuiltMaster {
+                path,
+                master_uuid,
+                skipped: Vec::new(),
+                flat_star_masking: None,
+                stability_note: None,
+            },
+            used: frames.to_vec(),
+            stability: Some(stability),
+            memo: true,
+            staged: None,
+        }));
+    }
     if path.exists() {
         let expected_kind = match kind {
             CalibrationKind::Bias => "BIAS",
@@ -3353,7 +3426,13 @@ fn build_master(
         // recorded, nothing to check" for a week because reuse never asked.
         // The exception is a blocked recorder: it cannot rebuild, and an old
         // master under today's validation still beats no master at all.
-        let row_current = recorded_version == Some(i64::from(MASTER_CACHE_VERSION));
+        // A flat recorded before the flat-set check carries no judgement;
+        // it rebuilds once so the check runs, without disturbing the other
+        // kinds.
+        let judged = kind != CalibrationKind::Flat
+            || recorded_master_statistics(conn, &path)
+                .is_some_and(|statistics| statistics["flat_stability"].is_object());
+        let row_current = recorded_version == Some(i64::from(MASTER_CACHE_VERSION)) && judged;
         let file_valid = crate::image_io::open_linear_frame(&path)
             .and_then(|frame| frame.validate_master_kind(expected_kind))
             .is_ok();
@@ -3385,13 +3464,25 @@ fn build_master(
             };
             match masking_statistics {
                 Ok(statistics) => {
-                    return Ok(Some(BuiltMaster {
-                        path,
-                        master_uuid,
-                        // A cached master is served without rebuilding, so there is
-                        // no fresh refusal to report.
-                        skipped: Vec::new(),
-                        flat_star_masking: statistics,
+                    let stability_note = cached_stability_note(conn, &path);
+                    // A kept-but-unstable flat must not pass as a sound
+                    // fallback for another set: its record says how its
+                    // frames disagreed, and that judgement stands.
+                    let stability = recorded_flat_stability(conn, &path, frames, false);
+                    return Ok(Some(BuiltAttempt {
+                        master: BuiltMaster {
+                            path,
+                            master_uuid,
+                            // A cached master is served without rebuilding, so there is
+                            // no fresh refusal to report.
+                            skipped: Vec::new(),
+                            flat_star_masking: statistics,
+                            stability_note,
+                        },
+                        used: frames.to_vec(),
+                        stability,
+                        memo: false,
+                        staged: None,
                     }));
                 }
                 Err(error) => {
@@ -3424,10 +3515,12 @@ fn build_master(
         CalibrationKind::Dark | CalibrationKind::DarkFlat => seiza_stacking::MasterFrameKind::Dark,
         CalibrationKind::Flat => seiza_stacking::MasterFrameKind::Flat,
     };
+    // Only a build needs its own copies of the bias and dark; the cache hit
+    // above returned without touching them.
     let options = seiza_stacking::MasterBuildOptions {
         exposure_seconds: frames.first().and_then(|frame| frame.exposure_s),
-        bias,
-        dark,
+        bias: inputs.bias.clone(),
+        dark: inputs.dark.clone(),
         // A defective sensor pixel repeats in every flat, so across-frame
         // clipping keeps it and it would divide every light forever. The
         // flat's true response is smooth at pixel scale, so a spatial pass
@@ -3445,6 +3538,21 @@ fn build_master(
     let frame =
         seiza_stacking::build_master_from_fits_with_scratch(&paths, seiza_kind, &options, root)
             .with_context(|| format!("building master {}", kind.as_str()))?;
+    // The integrator's copies of the bias and dark go before the check
+    // below takes its own: it calibrates each flat the way the integrator
+    // did, and one full-frame copy at a time is enough.
+    drop(options);
+    let stability_calibration = (kind == CalibrationKind::Flat)
+        .then(|| {
+            seiza_stacking::CalibrationMasters::new(inputs.bias.clone(), inputs.dark.clone(), None)
+        })
+        .and_then(|masters| match masters {
+            Ok(masters) => Some(masters),
+            Err(error) => {
+                tracing::warn!("flat-set stability check skipped: {error}");
+                None
+            }
+        });
     tracing::info!(
         "master {} combined {} frame(s) with {} rejection: {} accepted, {} rejected samples, {} fallback pixels",
         kind.as_str(),
@@ -3483,43 +3591,753 @@ fn build_master(
             frame.defect_pixels_replaced
         );
     }
-    if !path.exists() {
-        let temporary = path.with_extension(format!("fits.tmp-{}", std::process::id()));
-        seiza_stacking::write_master_fits_f32(&temporary, &frame)
-            .with_context(|| format!("writing {}", temporary.display()))?;
-        std::fs::rename(&temporary, &path)
-            .with_context(|| format!("publishing {}", path.display()))?;
-    }
-    record_master(
-        conn,
-        kind,
-        frames,
-        &source_hash,
-        &path,
-        RecordedMaster {
+    let stability = (kind == CalibrationKind::Flat).then(|| {
+        let stability = flat_set_stability(
+            frames,
+            &skipped,
+            &frame.image,
+            frame.bayer,
+            stability_calibration.as_ref(),
+        );
+        tracing::info!(
+            "master flat kept {} feature pixel(s); frames disagree at {:?} of them (drift from {})",
+            stability.feature_pixels,
+            stability.disagreement,
+            stability.drift_threshold
+        );
+        #[cfg(test)]
+        FLAT_STABILITY_CHECKED.lock().unwrap().push(path.clone());
+        stability
+    });
+    // The file waits under a staging name and nothing is recorded until the
+    // caller has judged the set: a second process on the same cache must
+    // not take a master this build is about to set aside.
+    let staged = path.with_extension(format!(
+        "fits.tmp-{}-{}",
+        std::process::id(),
+        STAGED_MASTERS.fetch_add(1, Ordering::Relaxed)
+    ));
+    seiza_stacking::write_master_fits_f32(&staged, &frame)
+        .with_context(|| format!("writing {}", staged.display()))?;
+    let statistics = serde_json::json!({
+        "rejection_method": frame.rejection_method.as_str(),
+        "accepted_samples": frame.accepted_samples,
+        "rejected_samples": frame.rejected_samples,
+        "fallback_pixels": frame.fallback_pixels,
+        "masked_samples": frame.masked_samples,
+        "flat_star_masking": frame.flat_star_masking,
+    });
+    Ok(Some(BuiltAttempt {
+        master: BuiltMaster {
+            path,
+            master_uuid,
+            skipped,
+            flat_star_masking: frame.flat_star_masking,
+            stability_note: None,
+        },
+        used: frames.to_vec(),
+        stability,
+        memo: false,
+        staged: Some(StagedMaster {
+            file: staged,
+            source_hash,
             exposure_seconds: frame.exposure_seconds,
-            statistics: serde_json::json!({
-                "rejection_method": frame.rejection_method.as_str(),
-                "accepted_samples": frame.accepted_samples,
-                "rejected_samples": frame.rejected_samples,
-                "fallback_pixels": frame.fallback_pixels,
-                "masked_samples": frame.masked_samples,
-                "flat_star_masking": frame.flat_star_masking,
-            }),
+            statistics,
+        }),
+    }))
+}
+
+/// Distinguishes the staging files of one process's concurrent builds.
+static STAGED_MASTERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Master paths whose flat set was checked, so a test can tell a memo hit
+/// from a rebuild.
+#[cfg(test)]
+static FLAT_STABILITY_CHECKED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// Build one master from nearest-first candidates.
+///
+/// Bias and dark masters build once. A flat master is also checked against
+/// the frames that fed it: dew or frost drying off the sensor window while
+/// the flats ran leaves spots that fade frame by frame, the across-frame
+/// median keeps a middling copy of each spot, and every light divided by that
+/// master gets a bright bead wherever the sky is bright. When a minority of
+/// frames disagree with the master about such features, the master rebuilds
+/// without them; when the set as a whole disagrees, the next set takes its
+/// place; when there is no next set the master stays and the card says so.
+/// Nothing is published until the judgement is made.
+#[allow(clippy::too_many_arguments)]
+fn build_master(
+    conn: &Connection,
+    root: &Path,
+    kind: CalibrationKind,
+    frames: &[CalibrationFrame],
+    inputs: MasterInputs<'_>,
+    recording_blocker: Option<&str>,
+    flat_star_masking: bool,
+    cancel: Option<&AtomicBool>,
+) -> Result<Option<BuiltMaster>> {
+    let context = MasterBuildContext {
+        conn,
+        root,
+        kind,
+        inputs: &inputs,
+        recording_blocker,
+        flat_star_masking,
+    };
+    let build = |candidates: &[CalibrationFrame], allow_memo: bool| {
+        build_master_once(&context, candidates, allow_memo)
+    };
+    if kind != CalibrationKind::Flat {
+        return build(frames, false)?
+            .map(|attempt| publish_master(&context, attempt, None))
+            .transpose();
+    }
+    let without = |excluded: &[CalibrationFrame]| -> Vec<CalibrationFrame> {
+        frames
+            .iter()
+            .filter(|frame| {
+                !excluded
+                    .iter()
+                    .any(|other| other.frame_uuid == frame.frame_uuid)
+            })
+            .cloned()
+            .collect()
+    };
+    // A retry that fails must not fail the build: the first master exists
+    // and is the honest fallback, named as such below.
+    let retry = |candidates: &[CalibrationFrame]| match build(candidates, true) {
+        Ok(attempt) => attempt,
+        Err(error) => {
+            tracing::warn!("flat master retry failed; keeping the first build: {error:#}");
+            None
+        }
+    };
+    let Some(first) = build(frames, true)? else {
+        return Ok(None);
+    };
+    let drifting = first.drifting();
+    if drifting.is_empty() {
+        return publish_master(&context, first, None).map(Some);
+    }
+    let feature_pixels = first
+        .stability
+        .as_ref()
+        .map_or(0, |stability| stability.feature_pixels);
+    let used = first.used.len();
+    let stable = used - drifting.len();
+    let spots = "spots that come and go across the run: dew or frost on the sensor window?";
+
+    // A minority of odd frames: the rest of this set still make an honest
+    // master. Only this set's frames are offered, so the trim cannot slide
+    // onto another session while the card speaks of leaving frames out.
+    if stable >= MIN_MASTER_FRAMES && stable * 2 >= used {
+        stop_requested(cancel)?;
+        let rest: Vec<CalibrationFrame> = first
+            .used
+            .iter()
+            .filter(|frame| {
+                !drifting
+                    .iter()
+                    .any(|other| other.frame_uuid == frame.frame_uuid)
+            })
+            .cloned()
+            .collect();
+        if let Some(trimmed) = retry(&rest) {
+            if trimmed.drifting().is_empty() && !trimmed.memo {
+                set_aside_master(&context, first);
+                let note = format!(
+                    "Left out {} of {used} flats that disagreed with the rest of the set at \
+                     {feature_pixels} pixels ({spots})",
+                    drifting.len()
+                );
+                return publish_master(&context, trimmed, Some(note)).map(Some);
+            }
+            set_aside_master(&context, trimmed);
+        }
+    }
+
+    // The set disagrees with itself: the next set takes its place when
+    // there is one. Everything shot around this set goes with it: the
+    // frames the clusterer dropped from the same noon saw the same window.
+    stop_requested(cancel)?;
+    if let Some(other) = retry(&without(&same_session_as(&first.used, frames))) {
+        if other.drifting().is_empty() && !other.memo {
+            let note = format!(
+                "The nearest {} disagree with each other at {feature_pixels} pixels ({spots}); \
+                 used {} instead",
+                flat_set_label(&first.used),
+                flat_set_label(&other.used)
+            );
+            set_aside_master(&context, first);
+            return publish_master(&context, other, Some(note)).map(Some);
+        }
+        set_aside_master(&context, other);
+    }
+    // Nothing better: the first master serves. A memo has no file, so the
+    // set builds again for real.
+    let first = if first.memo {
+        stop_requested(cancel)?;
+        match build(frames, false)? {
+            Some(rebuilt) => rebuilt,
+            None => return Ok(None),
+        }
+    } else {
+        first
+    };
+    let note = format!(
+        "Built from an unstable flat set: {} of {used} frames disagree with the master at \
+         {feature_pixels} pixels ({spots}). Retake these flats",
+        drifting.len()
+    );
+    publish_master(&context, first, Some(note)).map(Some)
+}
+
+/// The candidates shot within one flat session of `set`: the set itself and
+/// whatever the clusterer left out of it from the same run.
+fn same_session_as(
+    set: &[CalibrationFrame],
+    candidates: &[CalibrationFrame],
+) -> Vec<CalibrationFrame> {
+    let window = tolerances().flat_session_seconds as i64;
+    let first = set.iter().filter_map(|frame| frame.captured_at).min();
+    let last = set.iter().filter_map(|frame| frame.captured_at).max();
+    candidates
+        .iter()
+        .filter(|candidate| {
+            set.iter()
+                .any(|frame| frame.frame_uuid == candidate.frame_uuid)
+                || match (first, last, candidate.captured_at) {
+                    (Some(first), Some(last), Some(at)) => {
+                        at >= first - window && at <= last + window
+                    }
+                    _ => false,
+                }
+        })
+        .cloned()
+        .collect()
+}
+
+/// Make a built master real: move its staged file into place and record it,
+/// with the judgement and any note. A cache hit or memo is already real and
+/// only takes the note.
+fn publish_master(
+    context: &MasterBuildContext<'_, '_>,
+    attempt: BuiltAttempt,
+    note: Option<String>,
+) -> Result<BuiltMaster> {
+    let BuiltAttempt {
+        mut master,
+        used,
+        stability,
+        staged,
+        ..
+    } = attempt;
+    if let Some(note) = &note {
+        tracing::warn!("master flat {}: {note}", master.label());
+    }
+    if let Some(staged) = staged {
+        std::fs::rename(&staged.file, &master.path)
+            .with_context(|| format!("publishing {}", master.path.display()))?;
+        let mut statistics = staged.statistics;
+        if let Some(stability) = &stability {
+            statistics["flat_stability"] =
+                flat_stability_json(stability, &used, false, note.as_deref());
+        }
+        record_master(
+            context.conn,
+            context.kind,
+            &used,
+            &staged.source_hash,
+            &master.path,
+            RecordedMaster {
+                exposure_seconds: staged.exposure_seconds,
+                statistics,
+            },
+            MasterInputs {
+                bias: None,
+                dark: None,
+                bias_dependency: context.inputs.bias_dependency,
+                dark_dependency: context.inputs.dark_dependency,
+            },
+        )?;
+    } else if let Some(note) = &note {
+        patch_flat_stability(context.conn, &master.master_uuid, |stability| {
+            stability["note"] = serde_json::Value::String(note.clone());
+        });
+    }
+    master.stability_note = note;
+    Ok(master)
+}
+
+/// Drop a master this build made and judged against: its staged file goes,
+/// and its record stays as a memo of the judgement so the next selection of
+/// the same frames reaches the replacement without reading a flat. A cache
+/// hit or memo belongs to another selection and is left alone.
+fn set_aside_master(context: &MasterBuildContext<'_, '_>, attempt: BuiltAttempt) {
+    let BuiltAttempt {
+        master,
+        used,
+        stability,
+        staged,
+        ..
+    } = attempt;
+    let Some(staged) = staged else {
+        return;
+    };
+    if let Err(error) = std::fs::remove_file(&staged.file)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(
+            "could not remove set-aside master {}: {error}",
+            staged.file.display()
+        );
+    }
+    let Some(stability) = stability else {
+        return;
+    };
+    let mut statistics = staged.statistics;
+    statistics["flat_stability"] = flat_stability_json(&stability, &used, true, None);
+    if let Err(error) = record_master(
+        context.conn,
+        context.kind,
+        &used,
+        &staged.source_hash,
+        &master.path,
+        RecordedMaster {
+            exposure_seconds: staged.exposure_seconds,
+            statistics,
         },
         MasterInputs {
             bias: None,
             dark: None,
-            bias_dependency,
-            dark_dependency,
+            bias_dependency: context.inputs.bias_dependency,
+            dark_dependency: context.inputs.dark_dependency,
         },
-    )?;
-    Ok(Some(BuiltMaster {
-        path,
-        master_uuid,
-        skipped,
-        flat_star_masking: frame.flat_star_masking,
-    }))
+    ) {
+        tracing::warn!("could not record the flat-set judgement: {error:#}");
+    }
+}
+
+/// The judgement as recorded with a master, keyed by frame so a later
+/// selection lines it up by identity rather than by position.
+fn flat_stability_json(
+    stability: &FlatSetStability,
+    used: &[CalibrationFrame],
+    superseded: bool,
+    note: Option<&str>,
+) -> serde_json::Value {
+    let mut value = serde_json::json!({
+        "feature_pixels": stability.feature_pixels,
+        "drift_threshold": stability.drift_threshold,
+        "frames": used.iter().map(|frame| frame.frame_uuid.as_str()).collect::<Vec<_>>(),
+        "disagreement": stability.disagreement,
+    });
+    if superseded {
+        value["superseded"] = serde_json::Value::Bool(true);
+    }
+    if let Some(note) = note {
+        value["note"] = serde_json::Value::String(note.to_string());
+    }
+    value
+}
+
+/// Add one more sentence to the applied-calibration warning.
+fn append_warning(warning: &mut Option<String>, note: impl Into<String>) {
+    let note = note.into();
+    *warning = Some(match warning.take() {
+        Some(previous) => format!("{previous}. {note}"),
+        None => note,
+    });
+}
+
+/// "20 G flats from 2026-09-10", for a note about one flat set.
+fn flat_set_label(frames: &[CalibrationFrame]) -> String {
+    let filter = frames
+        .iter()
+        .find_map(|frame| frame.filter.as_deref())
+        .map(|name| format!("{name} "))
+        .unwrap_or_default();
+    let day = |timestamp: i64| {
+        chrono::DateTime::from_timestamp(timestamp, 0)
+            .map(|at| at.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| timestamp.to_string())
+    };
+    let first = frames.iter().filter_map(|frame| frame.captured_at).min();
+    let last = frames.iter().filter_map(|frame| frame.captured_at).max();
+    let when = match (first, last) {
+        (Some(first), Some(last)) if day(first) != day(last) => {
+            format!(" from {} to {}", day(first), day(last))
+        }
+        (Some(first), _) => format!(" from {}", day(first)),
+        _ => String::new(),
+    };
+    format!("{} {filter}flats{when}", frames.len())
+}
+
+/// Edit the `flat_stability` object in a recorded master's statistics. A
+/// master without a record (recording blocked) is left alone.
+fn patch_flat_stability(
+    conn: &Connection,
+    master_uuid: &str,
+    edit: impl FnOnce(&mut serde_json::Value),
+) {
+    let recorded: Option<String> = conn
+        .query_row(
+            "SELECT statistics_json FROM psf_guard_calibration_master WHERE master_uuid = ?1",
+            [master_uuid],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    let Some(recorded) = recorded else {
+        return;
+    };
+    let mut statistics: serde_json::Value =
+        serde_json::from_str(&recorded).unwrap_or(serde_json::Value::Null);
+    if !statistics.is_object() {
+        statistics = serde_json::json!({});
+    }
+    if !statistics["flat_stability"].is_object() {
+        statistics["flat_stability"] = serde_json::json!({});
+    }
+    edit(&mut statistics["flat_stability"]);
+    if let Err(error) = conn.execute(
+        "UPDATE psf_guard_calibration_master SET statistics_json = ?1 WHERE master_uuid = ?2",
+        params![statistics.to_string(), master_uuid],
+    ) {
+        tracing::warn!("could not record the flat stability judgement: {error}");
+    }
+}
+
+/// The statistics recorded with the master at `path` by this generation of
+/// the cache, if any.
+fn recorded_master_statistics(conn: &Connection, path: &Path) -> Option<serde_json::Value> {
+    let recorded: String = conn
+        .query_row(
+            "SELECT statistics_json FROM psf_guard_calibration_master
+             WHERE cache_path = ?1 AND cache_version = ?2",
+            params![path.to_string_lossy().as_ref(), MASTER_CACHE_VERSION],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten()?;
+    serde_json::from_str(&recorded).ok()
+}
+
+/// The stability note recorded with a cached master, if it has one.
+fn cached_stability_note(conn: &Connection, path: &Path) -> Option<String> {
+    recorded_master_statistics(conn, path)?["flat_stability"]["note"]
+        .as_str()
+        .map(str::to_string)
+}
+
+/// The flat-set judgement recorded with the master at `path`, lined up with
+/// `frames` by identity; a frame the record never judged counts as agreeing.
+/// With `superseded_only`, only a memo of a set this build once set aside.
+fn recorded_flat_stability(
+    conn: &Connection,
+    path: &Path,
+    frames: &[CalibrationFrame],
+    superseded_only: bool,
+) -> Option<FlatSetStability> {
+    let statistics = recorded_master_statistics(conn, path)?;
+    let stability = &statistics["flat_stability"];
+    if superseded_only && stability["superseded"] != serde_json::Value::Bool(true) {
+        return None;
+    }
+    let by_frame: HashMap<&str, usize> = stability["frames"]
+        .as_array()?
+        .iter()
+        .zip(stability["disagreement"].as_array()?)
+        .map(|(uuid, count)| Some((uuid.as_str()?, count.as_u64()? as usize)))
+        .collect::<Option<_>>()?;
+    Some(FlatSetStability {
+        feature_pixels: stability["feature_pixels"].as_u64()? as usize,
+        drift_threshold: stability["drift_threshold"].as_u64()? as usize,
+        disagreement: frames
+            .iter()
+            .map(|frame| {
+                by_frame
+                    .get(frame.frame_uuid.as_str())
+                    .copied()
+                    .unwrap_or(0)
+            })
+            .collect(),
+    })
+}
+
+/// A master pixel counts as a feature when it departs from the smooth
+/// response around it by more than this fraction. Dust shadows sit at a few
+/// percent; a drying droplet reads at 3 to 70 percent of its surround.
+const FLAT_FEATURE_DEPTH: f32 = 0.10;
+/// A frame disagrees with the master at a feature when its own value departs
+/// from the master's by more than this fraction of the local response. Half
+/// the feature depth, so a spot that only drifts slowly across the run still
+/// shows up in the frames on either side of the median. Photon noise in a
+/// flat sits near one percent.
+const FLAT_AGREEMENT_DEPTH: f32 = 0.05;
+/// Half-width of the box that estimates the smooth response. Wider than any
+/// droplet, narrower than a dust donut, which the frames all agree on anyway.
+const FLAT_SMOOTH_RADIUS: usize = 16;
+
+/// How the frames of one flat set agree about the features their master
+/// kept. A feature every frame shows the same way is a real property of the
+/// optical path (a dust shadow, a dead cluster) and corrects the lights. A
+/// feature the frames disagree about was changing while they were shot, and
+/// the master's copy of it corrects nothing.
+struct FlatSetStability {
+    /// Master pixels that depart from the smooth response around them.
+    feature_pixels: usize,
+    /// Disagreeing pixels at or above which a frame counts as drifting: a
+    /// share of the sensor rather than of the features, so a dusty optical
+    /// path with many honest features cannot hide a droplet run.
+    drift_threshold: usize,
+    /// Per input frame, in `frames` order: feature pixels at which the frame
+    /// disagrees with the master. Zero for a frame that could not be read
+    /// back or calibrated.
+    disagreement: Vec<usize>,
+}
+
+/// The sample grids a flat master is smooth on: one per colour channel of an
+/// RGB image, one per CFA phase of a raw colour frame (each phase has its
+/// own response, and a box mean across phases would call every pixel a
+/// feature), and one for a mono frame.
+struct SamplePlanes {
+    width: usize,
+    height: usize,
+    channels: usize,
+    cfa: bool,
+}
+
+impl SamplePlanes {
+    fn new(
+        image: &seiza_stacking::LinearImage,
+        bayer: Option<seiza_stacking::BayerLayout>,
+    ) -> Self {
+        let channels = image.channels.max(1);
+        Self {
+            width: image.width,
+            height: image.height,
+            channels,
+            cfa: channels == 1 && bayer.is_some(),
+        }
+    }
+
+    fn count(&self) -> usize {
+        if self.cfa {
+            4
+        } else {
+            self.channels
+        }
+    }
+
+    /// Which plane a sample index belongs to.
+    fn plane_of(&self, index: usize) -> usize {
+        if self.cfa {
+            let (x, y) = (index % self.width, index / self.width);
+            (y & 1) * 2 + (x & 1)
+        } else {
+            index % self.channels
+        }
+    }
+
+    /// The plane's own grid size.
+    fn size(&self, plane: usize) -> (usize, usize) {
+        if self.cfa {
+            let (ox, oy) = (plane & 1, plane >> 1);
+            (
+                (self.width + 1 - ox.min(self.width)) / 2,
+                (self.height + 1 - oy.min(self.height)) / 2,
+            )
+        } else {
+            (self.width, self.height)
+        }
+    }
+
+    /// Sample index of a plane-grid position.
+    fn index(&self, plane: usize, x: usize, y: usize) -> usize {
+        if self.cfa {
+            let (ox, oy) = (plane & 1, plane >> 1);
+            (2 * y + oy) * self.width + 2 * x + ox
+        } else {
+            (y * self.width + x) * self.channels + plane
+        }
+    }
+
+    /// The smooth response under every sample: a box mean on each plane.
+    fn smooth(&self, data: &[f32]) -> Vec<f32> {
+        let mut smooth = vec![0f32; data.len()];
+        let radius = if self.cfa {
+            FLAT_SMOOTH_RADIUS / 2
+        } else {
+            FLAT_SMOOTH_RADIUS
+        };
+        for plane in 0..self.count() {
+            let (width, height) = self.size(plane);
+            let values: Vec<f32> = (0..height)
+                .flat_map(|y| (0..width).map(move |x| (x, y)))
+                .map(|(x, y)| data[self.index(plane, x, y)])
+                .collect();
+            let blurred = box_mean_plane(&values, width, height, radius);
+            for y in 0..height {
+                for x in 0..width {
+                    smooth[self.index(plane, x, y)] = blurred[y * width + x];
+                }
+            }
+        }
+        smooth
+    }
+}
+
+fn flat_set_stability(
+    frames: &[CalibrationFrame],
+    skipped: &[(PathBuf, String)],
+    master: &seiza_stacking::LinearImage,
+    bayer: Option<seiza_stacking::BayerLayout>,
+    calibration: Option<&seiza_stacking::CalibrationMasters>,
+) -> FlatSetStability {
+    let planes = SamplePlanes::new(master, bayer);
+    let pixels = master.width * master.height;
+    let smooth = planes.smooth(&master.data);
+    let features: Vec<usize> = (0..master.data.len())
+        .filter(|&index| {
+            let value = master.data[index];
+            let surround = smooth[index];
+            value.is_finite()
+                && surround > 0.0
+                && (value - surround).abs() > FLAT_FEATURE_DEPTH * surround
+        })
+        .collect();
+    // Below this many feature pixels there is nothing to judge a set by: a
+    // handful of dead pixels, or a clean master. A frame drifts once it
+    // disagrees at a fifth of the features, capped at one pixel in two
+    // hundred thousand of the sensor so a dusty optical path with many
+    // honest features cannot hide a droplet run, and never below sixteen so
+    // noise cannot reach it.
+    let minimum = (pixels / 100_000).max(16);
+    let drift_threshold = (pixels / 200_000).min(features.len() / 5).max(16);
+    if features.len() < minimum {
+        return FlatSetStability {
+            feature_pixels: features.len(),
+            drift_threshold,
+            disagreement: vec![0; frames.len()],
+        };
+    }
+    // Each frame is put on the master's scale by the median ratio of its
+    // samples to the master's, per plane, so a plane's own response does
+    // not read as disagreement.
+    let step = (master.data.len() / 200_000).max(1);
+    // A frame the integrator left out was never in the master and counts
+    // as agreeing; a frame the check cannot read back or calibrate is not
+    // trusted and counts as drifting.
+    let disagreement = frames
+        .iter()
+        .map(|frame| {
+            if skipped.iter().any(|(path, _)| *path == frame.source_path) {
+                return 0;
+            }
+            let mut opened = match crate::image_io::open_linear_frame(&frame.source_path) {
+                Ok(opened) => opened,
+                Err(error) => {
+                    tracing::warn!(
+                        "flat-set check could not read {}: {error}",
+                        frame.source_path.display()
+                    );
+                    return drift_threshold;
+                }
+            };
+            if opened.image.width != master.width
+                || opened.image.height != master.height
+                || opened.image.channels.max(1) != planes.channels
+            {
+                return drift_threshold;
+            }
+            // The integrator scaled any dark by the catalog's exposure; do
+            // the same rather than trusting a header the catalog may not.
+            let exposure = frame.exposure_s.or(opened.exposure_seconds);
+            if let Some(calibration) = calibration
+                && let Err(error) = calibration.apply(&mut opened.image, exposure, opened.bayer)
+            {
+                tracing::warn!(
+                    "flat-set check could not calibrate {}: {error}",
+                    frame.source_path.display()
+                );
+                return drift_threshold;
+            }
+            let data = &opened.image.data;
+            let mut ratios: Vec<Vec<f32>> = vec![Vec::new(); planes.count()];
+            for index in (0..data.len()).step_by(step) {
+                let (value, reference) = (data[index], master.data[index]);
+                if reference > 0.05 && reference.is_finite() && value.is_finite() {
+                    ratios[planes.plane_of(index)].push(value / reference);
+                }
+            }
+            let gains: Vec<f32> = ratios.into_iter().map(median_f32).collect();
+            features
+                .iter()
+                .filter(|&&index| {
+                    let gain = gains[planes.plane_of(index)];
+                    gain.is_finite()
+                        && gain > 0.0
+                        && (data[index] / gain - master.data[index]).abs()
+                            > FLAT_AGREEMENT_DEPTH * smooth[index]
+                })
+                .count()
+        })
+        .collect();
+    FlatSetStability {
+        feature_pixels: features.len(),
+        drift_threshold,
+        disagreement,
+    }
+}
+
+fn median_f32(mut values: Vec<f32>) -> f32 {
+    if values.is_empty() {
+        return f32::NAN;
+    }
+    let middle = values.len() / 2;
+    let (_, median, _) = values.select_nth_unstable_by(middle, |a, b| a.total_cmp(b));
+    *median
+}
+
+/// Mean over a (2r+1)-square box clamped at the edges, in two separable
+/// passes. Non-finite samples count as zero.
+fn box_mean_plane(plane: &[f32], width: usize, height: usize, radius: usize) -> Vec<f32> {
+    let mut rows = vec![0f32; plane.len()];
+    let mut prefix = vec![0f64; width.max(height) + 1];
+    for y in 0..height {
+        let row = &plane[y * width..(y + 1) * width];
+        for x in 0..width {
+            let value = row[x];
+            prefix[x + 1] = prefix[x]
+                + if value.is_finite() {
+                    f64::from(value)
+                } else {
+                    0.0
+                };
+        }
+        for x in 0..width {
+            let low = x.saturating_sub(radius);
+            let high = (x + radius + 1).min(width);
+            rows[y * width + x] = ((prefix[high] - prefix[low]) / (high - low) as f64) as f32;
+        }
+    }
+    let mut out = vec![0f32; plane.len()];
+    for x in 0..width {
+        for y in 0..height {
+            prefix[y + 1] = prefix[y] + f64::from(rows[y * width + x]);
+        }
+        for y in 0..height {
+            let low = y.saturating_sub(radius);
+            let high = (y + radius + 1).min(height);
+            out[y * width + x] = ((prefix[high] - prefix[low]) / (high - low) as f64) as f32;
+        }
+    }
+    out
 }
 
 fn cached_flat_masking_statistics(
@@ -7406,6 +8224,286 @@ mod tests {
         assert!(
             (value - neighbor).abs() < 0.05,
             "the defect must sit on the smooth response: {value} vs neighbor {neighbor}"
+        );
+        assert!(
+            applied.warning.as_deref().is_none_or(
+                |warning| !warning.contains("disagree") && !warning.contains("Left out")
+            ),
+            "a set that agrees with itself draws no stability note: {:?}",
+            applied.warning
+        );
+    }
+
+    /// A flat library with a bias pair, `wet` flats whose 8x8 spot at
+    /// (20..28, 30..38) reads `factor(index)` of its surround, optional clean
+    /// flats from three nights earlier, and one light. Returns the connection,
+    /// cache root, and light path, ready for `resolve_or_build_masters`.
+    fn spotted_flat_library(
+        temp: &tempfile::TempDir,
+        wet: usize,
+        factor: impl Fn(usize) -> f64,
+        dry_earlier: usize,
+    ) -> (Connection, PathBuf, PathBuf) {
+        const SIZE: usize = 64;
+        let night = 1_750_000_000i64;
+        let vignette = |x: usize| 0.7 + 0.6 * x as f64 / (SIZE - 1) as f64;
+        let in_spot = |x: usize, y: usize| (20..28).contains(&x) && (30..38).contains(&y);
+        let mut calibration_meta = Vec::new();
+        for index in 0..2 {
+            let path = temp.path().join(format!("bias-{index}.fits"));
+            write_gradient_fits(&path, "BIAS", SIZE, SIZE, "Camera", 30, |x, y| {
+                100.0 + ((x * 31 + y * 17 + index) % 13) as f64 / 13.0
+            });
+            let mut meta = crate::commands::import::headers::read_frame_meta(&path);
+            meta.timestamp = Some(night);
+            calibration_meta.push(meta);
+        }
+        for index in 0..wet {
+            let factor = factor(index);
+            let path = temp.path().join(format!("flat-wet-{index}.fits"));
+            write_gradient_fits(&path, "FLAT", SIZE, SIZE, "Camera", 30, move |x, y| {
+                let response =
+                    100.0 + 20_000.0 * vignette(x) + ((x * 7 + y * 3 + index) % 11) as f64;
+                if in_spot(x, y) {
+                    100.0 + (response - 100.0) * factor
+                } else {
+                    response
+                }
+            });
+            let mut meta = crate::commands::import::headers::read_frame_meta(&path);
+            meta.timestamp = Some(night + 60 + index as i64 * 5);
+            calibration_meta.push(meta);
+        }
+        for index in 0..dry_earlier {
+            let path = temp.path().join(format!("flat-dry-{index}.fits"));
+            write_gradient_fits(&path, "FLAT", SIZE, SIZE, "Camera", 30, move |x, y| {
+                100.0 + 20_000.0 * vignette(x) + ((x * 7 + y * 3 + index) % 11) as f64
+            });
+            let mut meta = crate::commands::import::headers::read_frame_meta(&path);
+            meta.timestamp = Some(night - 3 * 86_400 + index as i64 * 5);
+            calibration_meta.push(meta);
+        }
+        let light_path = temp.path().join("light.fits");
+        write_gradient_fits(&light_path, "LIGHT", SIZE, SIZE, "Camera", 30, |x, _| {
+            400.0 + 100.0 * vignette(x)
+        });
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &calibration_meta, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        (conn, temp.path().join("cache"), light_path)
+    }
+
+    /// The master's response at the spot relative to the same column outside
+    /// it, so the vignette cancels.
+    fn spot_response(cache: &Path, label: &str) -> f32 {
+        let master =
+            crate::image_io::open_linear_frame(cache.join("calibration-masters").join(label))
+                .unwrap();
+        master.image.data[34 * 64 + 24] / master.image.data[45 * 64 + 24]
+    }
+
+    /// Flat masters that can be served: a set-aside one keeps its record
+    /// as a memo but is not counted.
+    fn flat_master_count(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT count(*) FROM psf_guard_calibration_master WHERE kind = 'flat'
+             AND json_extract(statistics_json, '$.flat_stability.superseded') IS NOT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    /// How many flat sets under `cache` have been read back and checked.
+    fn stability_checks(cache: &Path) -> usize {
+        FLAT_STABILITY_CHECKED
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|path| path.starts_with(cache))
+            .count()
+    }
+
+    #[test]
+    fn an_unstable_flat_set_gives_way_to_the_next_one() {
+        // Six flats shot while a droplet dried off the sensor window: the
+        // spot reads 10% of its surround in the first frame and 85% in the
+        // last. The median keeps a middling copy that matches no frame. With
+        // four clean flats from three nights earlier on offer, those must be
+        // used instead, and the card must say so.
+        let temp = tempfile::tempdir().unwrap();
+        let (conn, cache, light) =
+            spotted_flat_library(&temp, 6, |index| 0.10 + 0.15 * index as f64, 4);
+        let (_, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        let label = applied.flat_master.expect("a flat master");
+        let response = spot_response(&cache, &label);
+        assert!(
+            (response - 1.0).abs() < 0.05,
+            "the master must come from the clean set; spot response {response}"
+        );
+        let warning = applied.warning.as_deref().unwrap_or_default();
+        assert!(
+            warning.contains("6 Ha flats") && warning.contains("disagree with each other"),
+            "the card must say the nearest set was passed over: {warning}"
+        );
+        assert!(
+            warning.contains("used 4 Ha flats") && warning.contains("instead"),
+            "the card must say what was used: {warning}"
+        );
+        assert_eq!(
+            flat_master_count(&conn),
+            1,
+            "the set-aside master must not be served again"
+        );
+        // The same selection again: the judgement is remembered, so no flat
+        // is read back and the same master and note come out.
+        let checks = stability_checks(&cache);
+        let (_, again) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        assert_eq!(again.flat_master.as_deref(), Some(label.as_str()));
+        assert!(
+            again
+                .warning
+                .as_deref()
+                .unwrap_or_default()
+                .contains("instead"),
+            "the note repeats: {:?}",
+            again.warning
+        );
+        assert_eq!(
+            stability_checks(&cache),
+            checks,
+            "a remembered judgement must not read the flats again"
+        );
+    }
+
+    #[test]
+    fn a_spot_that_drifts_slowly_still_marks_the_set_unstable() {
+        // The spot deepens gently: 60% of its surround in the first frame,
+        // 100% in the last. Only the frames at either end sit far from the
+        // median; the ones beside it are within a tenth. Judged at half the
+        // feature depth they still disagree, so the set is unstable rather
+        // than trimmed to a master with a shallow spot.
+        let temp = tempfile::tempdir().unwrap();
+        let (conn, cache, light) =
+            spotted_flat_library(&temp, 5, |index| 0.6 + 0.1 * index as f64, 0);
+        let (_, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        let warning = applied.warning.as_deref().unwrap_or_default();
+        assert!(
+            warning.contains("unstable flat set"),
+            "a slow drift must not pass as a trimmed set: {warning}"
+        );
+    }
+
+    #[test]
+    fn a_few_flats_that_disagree_with_the_set_are_left_out() {
+        // Four flats share a spot at half response and two show none: the
+        // spot appeared or cleared partway through the run. The four that
+        // agree make the master, the two are left out, and the card says so.
+        let temp = tempfile::tempdir().unwrap();
+        let (conn, cache, light) =
+            spotted_flat_library(&temp, 6, |index| if index < 4 { 0.5 } else { 1.0 }, 0);
+        let (_, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        let label = applied.flat_master.expect("a flat master");
+        let response = spot_response(&cache, &label);
+        assert!(
+            (response - 0.5).abs() < 0.05,
+            "the master must keep the feature the majority shows; spot response {response}"
+        );
+        let warning = applied.warning.as_deref().unwrap_or_default();
+        assert!(
+            warning.contains("Left out 2 of 6 flats that disagreed"),
+            "the card must say which frames were left out: {warning}"
+        );
+        assert_eq!(
+            flat_master_count(&conn),
+            1,
+            "the first attempt must be set aside"
+        );
+    }
+
+    #[test]
+    fn an_unstable_flat_set_with_no_alternative_is_kept_and_named() {
+        // The same drying droplet, but no other flats to fall back to. Auto
+        // mode never hard-fails: the master is used and the card says the set
+        // was unstable.
+        let temp = tempfile::tempdir().unwrap();
+        let (conn, cache, light) =
+            spotted_flat_library(&temp, 6, |index| 0.10 + 0.15 * index as f64, 0);
+        let (_, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        assert!(applied.flat_master.is_some(), "the master is still used");
+        let warning = applied.warning.as_deref().unwrap_or_default();
+        assert!(
+            warning.contains("unstable flat set") && warning.contains("of 6 frames disagree"),
+            "the card must name the problem: {warning}"
+        );
+        // A second selection of the same frames is a cache hit and must
+        // repeat the note.
+        let checks = stability_checks(&cache);
+        let (_, again) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        assert!(
+            again
+                .warning
+                .as_deref()
+                .unwrap_or_default()
+                .contains("unstable flat set"),
+            "a cached master repeats its note: {:?}",
+            again.warning
+        );
+        assert_eq!(
+            stability_checks(&cache),
+            checks,
+            "a cache hit must not read the flats again"
         );
     }
 

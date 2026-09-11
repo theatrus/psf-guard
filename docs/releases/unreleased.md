@@ -35,6 +35,14 @@
 
 ## Fixed
 
+- PSF Guard now checks a flat master against the flats that made it. Spots
+  that fade across the run (dew drying off the sensor window) used to survive
+  clipping and put a bright bead into every light wherever the sky is bright.
+  Frames that disagree with the rest of the set stay out; a set that disagrees
+  with itself gives way to the next one, or serves with a warning when there
+  is no other. Flat masters built before this rebuild once; bias and dark
+  masters do not.
+
 - Sky-flat masters improve rejection of overlapping moving-star samples with
   robust median/MAD clipping after calibration and brightness normalization. Existing
   generated masters rebuild with the new algorithm when next needed. Stars
