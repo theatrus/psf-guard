@@ -3,6 +3,8 @@ import type { AxiosInstance } from 'axios';
 import { AUTH_REQUIRED_EVENT } from '../auth/events';
 import { getServerUrl } from '../utils/tauri';
 import type {
+  ProjectProcessingSettings,
+  StackColorInputSources,
   FlatHistoryState,
   SchedulerFlatHistoryPage,
   CalibrationSettings,
@@ -997,6 +999,28 @@ export const apiClient = {
     return data.data;
   },
 
+  getProjectProcessingSettings: async (
+    dbId: string, projectId: number, signal?: AbortSignal
+  ): Promise<ProjectProcessingSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<ProjectProcessingSettings>>(
+      dbPath(dbId, `/projects/${projectId}/processing-settings`), { signal }
+    );
+    if (!data.data) throw new Error(data.error || 'Project processing settings could not be loaded');
+    return data.data;
+  },
+
+  updateProjectProcessingSettings: async (
+    dbId: string, projectId: number, settings: ProjectProcessingSettings
+  ): Promise<ProjectProcessingSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<ProjectProcessingSettings>>(
+      dbPath(dbId, `/projects/${projectId}/processing-settings`), settings
+    );
+    if (!data.data) throw new Error(data.error || 'Project processing settings could not be saved');
+    return data.data;
+  },
+
   startStackPreviews: async (
     dbId: string,
     projectId: number,
@@ -1023,6 +1047,7 @@ export const apiClient = {
       calibration_overrides?: Array<{
         target_id: number;
         filter_name: string;
+        exposure_group_key?: string;
         calibration: CalibrationMode;
       }>;
     }
@@ -1276,6 +1301,7 @@ export const apiClient = {
       force?: boolean;
       crop?: StackColorCrop;
       processing?: StackColorProcessing;
+      input_sources?: StackColorInputSources;
     }
   ): Promise<StackColorJob> => {
     const apiInstance = await getApi();

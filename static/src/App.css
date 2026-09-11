@@ -3063,7 +3063,9 @@
   grid-area: view;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 1rem;
+  min-width: 0;
 }
 
 .toolbar-section {
@@ -3108,7 +3110,7 @@
   font-size: 0.8rem;
 }
 
-@media (max-width: 1200px) {
+@media (max-width: 1500px) {
   .controls-row-combined {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
@@ -3139,11 +3141,18 @@
   }
   
   .controls-row-combined > .stats-section {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.25rem;
     font-size: 0.8rem;
     min-height: 2rem;
     margin: 0;
     padding: 0;
     text-align: left;
+  }
+
+  .controls-row-combined .grid-stats {
+    white-space: normal;
   }
 
   .size-control.compact input[type="range"] {
@@ -3390,7 +3399,8 @@
   }
 
   .controls-row-combined .selection-action-bar {
-    min-width: 19rem;
+    min-width: 0;
+    max-width: 100%;
     overflow-x: auto;
   }
 }
@@ -5611,21 +5621,80 @@
 }
 
 @media (max-width: 760px) {
+  .app-main:has(.grouped-image-container) {
+    padding-inline: 0.5rem;
+  }
+
+  .grouped-image-container > .image-controls.sticky {
+    position: static;
+  }
+
+  .stack-preview-panel {
+    margin: 0.75rem 0;
+    padding: 0.65rem;
+  }
+
   .stack-preview-heading {
     flex-direction: column;
+    gap: 0.75rem;
   }
 
   .stack-preview-actions {
     justify-content: flex-start;
   }
 
+  .stack-preview-statusline {
+    flex-wrap: wrap;
+    gap: 0.4rem 0.65rem;
+  }
+
+  .stack-preview-card > header,
+  .stack-color-card > header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .stack-preview-card-title,
+  .stack-color-card > header > div:first-child {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .stack-preview-card-title h3 {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .stack-preview-card-actions {
+    flex-wrap: wrap;
+    flex-shrink: 1;
+    justify-content: flex-start;
+    max-width: 100%;
+  }
+
+  .stack-color-section {
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
   .stack-color-heading {
     flex-direction: column;
   }
 
-  .stack-color-card > header {
-    align-items: flex-start;
-    flex-direction: column;
+  .stack-color-palette,
+  .stack-color-crop {
+    max-width: 100%;
+  }
+
+  .stack-color-palette select,
+  .stack-color-crop select {
+    max-width: 100%;
+  }
+
+  .stack-color-processing > summary small {
+    min-width: 0;
   }
 
   .stack-preview-metrics {
@@ -6501,13 +6570,15 @@
 
 @media (max-width: 620px) {
   .controls-section {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 0.5rem 0.75rem;
   }
 
   .size-control.compact {
     min-width: 0;
+    flex: 0 0 auto;
     gap: 0.3rem;
   }
 

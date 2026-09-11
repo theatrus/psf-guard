@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type {
@@ -7,6 +7,7 @@ import type {
   StackColorKind,
   StackColorProcessing,
   StackColorRole,
+  StackColorInputSources,
   StackColorTargetAvailability,
   StackNarrowbandPalette,
 } from '../api/types';
@@ -19,6 +20,8 @@ import {
 import { isColorStackSkyOriented } from './stackOrientation';
 import { cropLabels, cropOrder, describeCrop, offCenterChannels } from './stackColorCrop';
 import { STACK_ACTIVITY_QUERY_KEY, useStackActivity } from '../hooks/useStackActivity';
+import { colorSourceKey, colorSourcesLabel, completedColorArtifact, resolveColorSources, sameColorSourceFamily } from './stackColorSources';
+import './StackColorSources.css';
 
 interface StackColorPreviewPanelProps {
   dbId: string;
@@ -38,6 +41,7 @@ interface ColorOperation {
   operationKey: string;
   crop: StackColorCrop;
   processing: StackColorProcessing;
+  inputSources?: StackColorInputSources;
 }
 
 const terminalStates = new Set(['completed', 'failed']);
@@ -128,6 +132,7 @@ function ColorCard({
   onBuild,
   onInspect,
   onProcessingApply,
+  sourceControls,
 }: {
   dbId: string;
   target: StackColorTargetAvailability;
@@ -147,6 +152,7 @@ function ColorCard({
   onBuild: () => void;
   onInspect: (job: StackColorJob) => void;
   onProcessingApply: (processing: StackColorProcessing) => void;
+  sourceControls?: ReactNode;
 }) {
   const current = activeJob ?? artifact;
   const state = activeJob?.state ?? (artifact ? 'completed' : 'not-built');
@@ -177,6 +183,7 @@ function ColorCard({
       className={`stack-color-card ${artifact?.outdated || sourceStacksOutdated ? 'outdated' : ''}`}
       data-color-kind={kind}
       data-target-id={target.target_id}
+      data-source-family={artifact?.source_family_key ?? ''}
     >
       <header>
         <div>
@@ -246,6 +253,7 @@ function ColorCard({
           </button>
         </div>
       </header>
+      {sourceControls}
 
       {(artifact?.outdated || sourceStacksOutdated) && (
         <div className="stack-preview-outdated">
@@ -352,7 +360,7 @@ function ColorCard({
           {current.sources.map((source) => (
             <span key={`${source.role}:${source.job_id}:${source.group_index}`}>
               <strong>{roleLabels[source.role]}</strong>
-              {source.filter_name}
+              {colorSourcesLabel([source])}
               <small>{source.accepted_frames} frames</small>
             </span>
           ))}
@@ -386,6 +394,8 @@ export default function StackColorPreviewPanel({
   const [watchedJobIds, setWatchedJobIds] = useState<string[]>([]);
   const [paletteByTarget, setPaletteByTarget] = useState<Record<number, StackNarrowbandPalette>>({});
   const [cropByCard, setCropByCard] = useState<Record<string, StackColorCrop>>({});
+  const [sourcesByCard, setSourcesByCard] = useState<Record<string, Partial<Record<StackColorRole, string>>>>({});
+  const [savedByCard, setSavedByCard] = useState<Record<string, string>>({});
   const [inspector, setInspector] = useState<StackColorJob | null>(null);
 
   const catalog = useQuery({
@@ -407,8 +417,14 @@ export default function StackColorPreviewPanel({
       force: operation.force,
       crop: operation.crop,
       processing: operation.processing,
+      ...(operation.inputSources ? { input_sources: operation.inputSources } : {}),
     }),
-    onSuccess: (job) => {
+    onSuccess: (job, operation) => {
+      setSavedByCard((current) => {
+        const next = { ...current };
+        delete next[operationKey(operation.targetId, operation.kind, operation.palette)];
+        return next;
+      });
       queryClient.setQueryData(jobQueryKey(dbId, projectId, job.job_id), job);
       setWatchedJobIds((current) =>
         current.includes(job.job_id) ? current : [...current, job.job_id]
@@ -453,6 +469,8 @@ export default function StackColorPreviewPanel({
     setWatchedJobIds([]);
     setPaletteByTarget({});
     setCropByCard({});
+    setSourcesByCard({});
+    setSavedByCard({});
     setInspector(null);
     resetStart();
   }, [dbId, projectId, resetStart]);
@@ -512,10 +530,90 @@ export default function StackColorPreviewPanel({
   const newestWatched = (
     targetId: number,
     kind: StackColorKind,
-    palette?: StackNarrowbandPalette
+    palette?: StackNarrowbandPalette,
+    matchesFamily: (job: StackColorJob) => boolean = () => true,
   ) => {
-    const mine = watchedJobs.filter((job) => jobMatches(job, targetId, kind, palette));
+    const mine = watchedJobs.filter((job) => jobMatches(job, targetId, kind, palette) && matchesFamily(job));
     return mine[mine.length - 1];
+  };
+
+  const sourceSelection = (target: StackColorTargetAvailability, kind: StackColorKind, palette?: StackNarrowbandPalette) => {
+    const key = operationKey(target.target_id, kind, palette);
+    const roles = requiredRoles(kind, palette);
+    const candidates = target.source_candidates ?? [];
+    const aware = target.source_candidates !== undefined;
+    const resolved = resolveColorSources(candidates, roles, sourcesByCard[key] ?? {});
+    const saved = (catalog.data?.jobs ?? []).filter((job) => jobMatches(job, target.target_id, kind, palette));
+    const selectedSaved = saved.find((job) => job.job_id === savedByCard[key]);
+    const matchesFamily = (job: StackColorJob) => !aware || (resolved.complete
+      && job.sources.length === roles.length
+      && resolved.sources.every((source) => job.sources.some((previous) => sameColorSourceFamily(source, previous))));
+    const showChoices = candidates.some((source) => source.exposure_group)
+      || target.ambiguous_roles.some((role) => roles.includes(role))
+      || (!resolved.complete && roles.some((role) => sourcesByCard[key]?.[role] !== undefined))
+      || saved.length > 1;
+    const resetCrop = () => setCropByCard((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    const controls = showChoices ? (
+      <div className="stack-color-source-selectors">
+        {saved.length > 0 && <label>
+          <span>Saved preview</span>
+          <select
+            aria-label={`${target.target_name} ${palette ?? kind} saved preview`}
+            value={selectedSaved?.job_id ?? ''}
+            onChange={(event) => {
+              resetCrop();
+              const job = saved.find((entry) => entry.job_id === event.target.value);
+              setSavedByCard((current) => ({ ...current, [key]: event.target.value }));
+              if (job) setSourcesByCard((current) => ({
+                ...current,
+                [key]: Object.fromEntries(roles.map((role) => {
+                  const previous = job.sources.find((source) => source.role === role);
+                  const current = previous && candidates.find((source) => sameColorSourceFamily(source, previous));
+                  return [role, current ? colorSourceKey(current) : ''];
+                })),
+              }));
+            }}
+          >
+            <option value="">Current source selection</option>
+            {saved.map((job) => <option key={job.job_id} value={job.job_id}>{colorSourcesLabel(job.sources)}</option>)}
+          </select>
+        </label>}
+        {roles.map((role) => {
+          const choices = candidates.filter((source) => source.role === role);
+          const chosen = resolved.sources.find((source) => source.role === role);
+          return <label key={role}>
+            <span>{roleLabels[role]}</span>
+            <select
+              aria-label={`${target.target_name} ${palette ?? kind} ${roleLabels[role]} source stack`}
+              value={chosen ? colorSourceKey(chosen) : ''}
+              disabled={choices.length === 0}
+              onChange={(event) => {
+                resetCrop();
+                setSourcesByCard((current) => ({ ...current, [key]: { ...current[key], [role]: event.target.value } }));
+                setSavedByCard((current) => ({ ...current, [key]: '' }));
+              }}
+            >
+              <option value="">{choices.length ? 'Choose stack' : 'Unavailable'}</option>
+              {choices.map((source) => <option key={colorSourceKey(source)} value={colorSourceKey(source)}>
+                {colorSourcesLabel([source])} · {source.accepted_frames} frames
+              </option>)}
+            </select>
+          </label>;
+        })}
+      </div>
+    ) : undefined;
+    return {
+      complete: !aware || resolved.complete,
+      inputSources: showChoices && resolved.complete ? resolved.inputSources : undefined,
+      matchesFamily,
+      remembered: selectedSaved ?? saved.find(matchesFamily)
+        ?? (candidates.length === 0 ? saved[0] : undefined),
+      controls,
+    };
   };
 
   return (
@@ -542,11 +640,10 @@ export default function StackColorPreviewPanel({
             { kind: 'lrgb', available: target.lrgb_available },
           ];
           for (const { kind, available } of broadbandKinds) {
-            const watched = newestWatched(target.target_id, kind);
-            const artifact = watched?.state === 'completed'
-              ? watched
-              : targetJobs.find((job) => jobMatches(job, target.target_id, kind));
-            const cardActive = watched;
+            const sources = sourceSelection(target, kind);
+            const watched = newestWatched(target.target_id, kind, undefined, sources.matchesFamily);
+            const artifact = completedColorArtifact(watched, catalog.data?.jobs ?? [], sources.remembered);
+            const cardActive = watched?.state === 'completed' ? undefined : watched;
             if (available || artifact) {
               const key = operationKey(target.target_id, kind);
               const crop = cropByCard[key] ?? artifact?.crop ?? 'none';
@@ -567,7 +664,8 @@ export default function StackColorPreviewPanel({
                   activeJob={cardActive}
                   busy={cardBusy}
                   operationPending={operationPending}
-                  unavailable={!available}
+                  unavailable={!available || !sources.complete}
+                  sourceControls={sources.controls}
                   sourceStacksOutdated={outdatedTargetIds.has(target.target_id)}
                   canCompute={canCompute}
                   onCropChange={(next) => setCropByCard((current) => ({
@@ -580,6 +678,7 @@ export default function StackColorPreviewPanel({
                     operationKey: key,
                     crop,
                     processing: processingForColorBuild(artifact, requiredRoles(kind)),
+                    inputSources: sources.inputSources,
                   })}
                   onInspect={setInspector}
                   onProcessingApply={(processing) => startColor({
@@ -589,6 +688,7 @@ export default function StackColorPreviewPanel({
                     operationKey: `${key}:processing`,
                     crop,
                     processing,
+                    inputSources: sources.inputSources,
                   })}
                 />
               );
@@ -601,11 +701,10 @@ export default function StackColorPreviewPanel({
           );
           const palette = paletteByTarget[target.target_id] ?? defaultPalette(paletteChoices);
           if (palette) {
-            const watched = newestWatched(target.target_id, 'narrowband', palette);
-            const artifact = watched?.state === 'completed'
-              ? watched
-              : targetJobs.find((job) => jobMatches(job, target.target_id, 'narrowband', palette));
-            const cardActive = watched;
+            const sources = sourceSelection(target, 'narrowband', palette);
+            const watched = newestWatched(target.target_id, 'narrowband', palette, sources.matchesFamily);
+            const artifact = completedColorArtifact(watched, catalog.data?.jobs ?? [], sources.remembered);
+            const cardActive = watched?.state === 'completed' ? undefined : watched;
             const key = operationKey(target.target_id, 'narrowband', palette);
             const crop = cropByCard[key] ?? artifact?.crop ?? 'none';
             const operationPending = startPending &&
@@ -626,7 +725,8 @@ export default function StackColorPreviewPanel({
                 activeJob={cardActive}
                 busy={cardBusy}
                 operationPending={operationPending}
-                unavailable={!target.narrowband_palettes.includes(palette)}
+                unavailable={!target.narrowband_palettes.includes(palette) || !sources.complete}
+                sourceControls={sources.controls}
                 sourceStacksOutdated={outdatedTargetIds.has(target.target_id)}
                 canCompute={canCompute}
                 onPaletteChange={(next) => setPaletteByTarget((current) => ({
@@ -645,6 +745,7 @@ export default function StackColorPreviewPanel({
                   processing: processingForColorBuild(
                     artifact, requiredRoles('narrowband', palette)
                   ),
+                  inputSources: sources.inputSources,
                 })}
                 onInspect={setInspector}
                 onProcessingApply={(processing) => startColor({
@@ -655,6 +756,7 @@ export default function StackColorPreviewPanel({
                   operationKey: `${key}:processing`,
                   crop,
                   processing,
+                  inputSources: sources.inputSources,
                 })}
               />
             );
@@ -668,6 +770,7 @@ export default function StackColorPreviewPanel({
           title={inspector.target_name}
           label={inspector.label}
           summary={[
+            colorSourcesLabel(inspector.sources),
             `${inspector.sources.length} channel stacks`,
             `${inspector.sources.reduce((sum, source) => sum + source.accepted_frames, 0)} integrated inputs`,
             ...(isColorStackSkyOriented(inspector) ? ['North up · East left'] : []),

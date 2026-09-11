@@ -4,8 +4,41 @@ import type { GroupingMode } from '../types/grouping';
 export interface ImageGroup {
   /** Stable identity for React and URL state. The label may change as a live session grows. */
   key?: string;
+  baseKey?: string;
   filterName: string;
   images: Image[];
+}
+
+/** Use the project's server-assigned partition, never a filtered subset's durations. */
+export function splitImageGroupsByExposure(groups: ImageGroup[]): ImageGroup[] {
+  return groups.flatMap((group) => {
+    if (!group.images.some((image) => image.exposure_group)) return [group];
+    const multipleTargets = new Set(group.images.map((image) => image.target_id)).size > 1;
+    const multipleFilters = new Set(group.images.map((image) => image.filter_name ?? '')).size > 1;
+    const partitions = new Map<string, ImageGroup>();
+    for (const image of group.images) {
+      const exposure = image.exposure_group;
+      const baseKey = imageGroupKey(group);
+      const key = exposure
+        ? JSON.stringify(['exposure', baseKey, image.project_id, image.target_id, image.filter_name ?? '', exposure.key])
+        : baseKey;
+      let partition = partitions.get(key);
+      if (!partition) {
+        partition = {
+          key,
+          baseKey,
+          filterName: exposure ? [group.filterName,
+            multipleTargets ? image.target_name : null,
+            multipleFilters ? image.filter_name || 'No Filter' : null,
+            exposure.label].filter(Boolean).join(' · ') : group.filterName,
+          images: [],
+        };
+        partitions.set(key, partition);
+      }
+      partition.images.push(image);
+    }
+    return [...partitions.values()];
+  });
 }
 
 export const NO_EXPANDED_GROUPS = '__none__';
@@ -73,9 +106,27 @@ export function resolveExpandedGroups(
   expandedGroups: ReadonlySet<string>,
 ): ReadonlySet<string> {
   if (expandedGroups.has(NO_EXPANDED_GROUPS)) return new Set();
-  if (expandedGroups.size > 0) return expandedGroups;
+  if (expandedGroups.size > 0) {
+    const previousBaseKeys = new Set<string>();
+    for (const key of expandedGroups) {
+      try {
+        const parts = JSON.parse(key);
+        if (Array.isArray(parts) && parts[0] === 'exposure' && typeof parts[1] === 'string') {
+          previousBaseKeys.add(parts[1]);
+        }
+      } catch { /* Existing filter/session keys are plain strings. */ }
+    }
+    return new Set(imageGroups.filter((group) => {
+      const key = imageGroupKey(group);
+      return expandedGroups.has(key)
+        || (group.baseKey !== undefined && expandedGroups.has(group.baseKey))
+        || (group.baseKey === undefined && previousBaseKeys.has(key));
+    }).map(imageGroupKey));
+  }
 
-  const initialGroups = groupingMode === 'session' ? imageGroups.slice(0, 1) : imageGroups;
+  const newestBase = imageGroups[0]?.baseKey;
+  const initialGroups = groupingMode !== 'session' ? imageGroups
+    : newestBase ? imageGroups.filter((group) => group.baseKey === newestBase) : imageGroups.slice(0, 1);
   return new Set(initialGroups.map(imageGroupKey));
 }
 

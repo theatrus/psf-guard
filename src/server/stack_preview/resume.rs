@@ -50,6 +50,8 @@ pub(super) struct ResumeManifest {
     pub stacking_version: String,
     pub target_id: i32,
     pub filter_name: String,
+    #[serde(default)]
+    pub exposure_group_key: Option<String>,
     pub accepted_only: bool,
     /// The scoring policy that decided which frames reached this accumulator.
     /// Checkpoints from before this field existed used calibrated defaults.
@@ -119,11 +121,23 @@ impl ResumeDecision {
 
 /// One group identity has one checkpoint, replaced on every settle. The key
 /// hashes the identity so filter names never reach the filesystem.
-fn group_key(database_id: &str, target_id: i32, filter_name: &str) -> String {
+fn group_key(
+    database_id: &str,
+    target_id: i32,
+    filter_name: &str,
+    exposure_group_key: Option<&str>,
+) -> String {
     let mut hasher = Sha256::new();
+    if exposure_group_key.is_some() {
+        hasher.update(b"exposure-groups-v1\0");
+    }
     hasher.update(database_id.as_bytes());
     hasher.update(target_id.to_le_bytes());
     hasher.update(filter_name.as_bytes());
+    if let Some(key) = exposure_group_key {
+        hasher.update(b"\0exposure-group\0");
+        hasher.update(key.as_bytes());
+    }
     let mut output = String::with_capacity(64);
     for byte in hasher.finalize() {
         write!(&mut output, "{byte:02x}").expect("writing to a String cannot fail");
@@ -140,10 +154,11 @@ pub(super) fn context_path(
     database_id: &str,
     target_id: i32,
     filter_name: &str,
+    exposure_group_key: Option<&str>,
 ) -> PathBuf {
     resume_dir(cache_root).join(format!(
         "{}.seiza-stack",
-        group_key(database_id, target_id, filter_name)
+        group_key(database_id, target_id, filter_name, exposure_group_key)
     ))
 }
 
@@ -152,10 +167,11 @@ pub(super) fn manifest_path(
     database_id: &str,
     target_id: i32,
     filter_name: &str,
+    exposure_group_key: Option<&str>,
 ) -> PathBuf {
     resume_dir(cache_root).join(format!(
         "{}.json",
-        group_key(database_id, target_id, filter_name)
+        group_key(database_id, target_id, filter_name, exposure_group_key)
     ))
 }
 
@@ -168,6 +184,7 @@ pub(super) fn load(
     database_id: &str,
     target_id: i32,
     filter_name: &str,
+    exposure_group_key: Option<&str>,
     accepted_only: bool,
     scoring: StackScoringSettings,
     stacking_version: &str,
@@ -175,8 +192,20 @@ pub(super) fn load(
     order: snr::StackFrameOrder,
     requested: &[(i32, &str, f64)],
 ) -> ResumeDecision {
-    let manifest_path = manifest_path(cache_root, database_id, target_id, filter_name);
-    let context_path = context_path(cache_root, database_id, target_id, filter_name);
+    let manifest_path = manifest_path(
+        cache_root,
+        database_id,
+        target_id,
+        filter_name,
+        exposure_group_key,
+    );
+    let context_path = context_path(
+        cache_root,
+        database_id,
+        target_id,
+        filter_name,
+        exposure_group_key,
+    );
     if !context_path.exists() {
         return ResumeDecision::Fresh(None);
     }
@@ -196,6 +225,7 @@ pub(super) fn load(
         || manifest.stacking_version != stacking_version
         || manifest.target_id != target_id
         || manifest.filter_name != filter_name
+        || manifest.exposure_group_key.as_deref() != exposure_group_key
     {
         return ResumeDecision::Fresh(Some("the stacking pipeline changed"));
     }
@@ -250,18 +280,26 @@ pub(super) fn store_manifest(path: &Path, manifest: &ResumeManifest) -> Result<(
 
 /// Drop a group's checkpoint. Used when a fresh build replaces it and fails
 /// to save its own, so a later build cannot resume from the wrong ancestor.
-pub(super) fn discard(cache_root: &Path, database_id: &str, target_id: i32, filter_name: &str) {
+pub(super) fn discard(
+    cache_root: &Path,
+    database_id: &str,
+    target_id: i32,
+    filter_name: &str,
+    exposure_group_key: Option<&str>,
+) {
     let _ = std::fs::remove_file(manifest_path(
         cache_root,
         database_id,
         target_id,
         filter_name,
+        exposure_group_key,
     ));
     let _ = std::fs::remove_file(context_path(
         cache_root,
         database_id,
         target_id,
         filter_name,
+        exposure_group_key,
     ));
 }
 
@@ -295,6 +333,7 @@ mod tests {
             stacking_version: "test".into(),
             target_id: 7,
             filter_name: "Ha".into(),
+            exposure_group_key: None,
             accepted_only: false,
             scoring: StackScoringSettings::default(),
             calibration_fingerprint: "cal-1".into(),
@@ -314,13 +353,25 @@ mod tests {
 
     fn store(cache_root: &Path, manifest: &ResumeManifest) {
         store_manifest(
-            &manifest_path(cache_root, "db", manifest.target_id, &manifest.filter_name),
+            &manifest_path(
+                cache_root,
+                "db",
+                manifest.target_id,
+                &manifest.filter_name,
+                manifest.exposure_group_key.as_deref(),
+            ),
             manifest,
         )
         .unwrap();
         // The context itself is Seiza's; its presence is what load checks.
         std::fs::write(
-            context_path(cache_root, "db", manifest.target_id, &manifest.filter_name),
+            context_path(
+                cache_root,
+                "db",
+                manifest.target_id,
+                &manifest.filter_name,
+                manifest.exposure_group_key.as_deref(),
+            ),
             b"context",
         )
         .unwrap();
@@ -353,6 +404,7 @@ mod tests {
             "db",
             7,
             "Ha",
+            None,
             false,
             StackScoringSettings::default(),
             "test",
@@ -432,6 +484,7 @@ mod tests {
             "db",
             7,
             "Ha",
+            None,
             false,
             StackScoringSettings::default(),
             "test",
@@ -500,6 +553,7 @@ mod tests {
             "db",
             7,
             "Ha",
+            None,
             false,
             StackScoringSettings::default(),
             "test",
@@ -524,6 +578,7 @@ mod tests {
             "db",
             7,
             "Ha",
+            None,
             false,
             StackScoringSettings::default(),
             "test",
@@ -563,6 +618,7 @@ mod tests {
             "db",
             7,
             "Ha",
+            None,
             false,
             StackScoringSettings::default(),
             "test",
@@ -586,6 +642,7 @@ mod tests {
             "db",
             7,
             "Ha",
+            None,
             false,
             changed,
             "test",
@@ -606,6 +663,7 @@ mod tests {
             "db",
             recorded.target_id,
             &recorded.filter_name,
+            None,
         );
         let mut legacy = serde_json::to_value(&recorded).unwrap();
         legacy.as_object_mut().unwrap().remove("scoring");
@@ -617,6 +675,7 @@ mod tests {
                 "db",
                 recorded.target_id,
                 &recorded.filter_name,
+                None,
             ),
             b"legacy context",
         )
@@ -634,6 +693,7 @@ mod tests {
             "db",
             7,
             "Ha",
+            None,
             false,
             StackScoringSettings::default(),
             "newer",
@@ -656,6 +716,7 @@ mod tests {
             "db",
             recorded.target_id,
             &recorded.filter_name,
+            None,
         );
         let mut legacy = serde_json::to_value(&recorded).unwrap();
         legacy["schema_version"] = serde_json::Value::from(1);
@@ -668,6 +729,7 @@ mod tests {
                 "db",
                 recorded.target_id,
                 &recorded.filter_name,
+                None,
             ),
             b"legacy context",
         )
@@ -678,6 +740,7 @@ mod tests {
             "db",
             7,
             "Ha",
+            None,
             false,
             StackScoringSettings::default(),
             "test",
@@ -700,6 +763,7 @@ mod tests {
             "db",
             7,
             "Ha",
+            None,
             true,
             StackScoringSettings::default(),
             "test",
@@ -717,7 +781,11 @@ mod tests {
     fn a_missing_context_never_resumes_even_with_a_manifest() {
         let cache = tempfile::tempdir().unwrap();
         let manifest_value = manifest(vec![frame(1, "f1")]);
-        store_manifest(&manifest_path(cache.path(), "db", 7, "Ha"), &manifest_value).unwrap();
+        store_manifest(
+            &manifest_path(cache.path(), "db", 7, "Ha", None),
+            &manifest_value,
+        )
+        .unwrap();
         assert!(try_load(cache.path(), &[(1, "f1"), (2, "f2")]).is_none());
     }
 
@@ -725,20 +793,70 @@ mod tests {
     fn discard_removes_both_files() {
         let cache = tempfile::tempdir().unwrap();
         store(cache.path(), &manifest(vec![frame(1, "f1")]));
-        discard(cache.path(), "db", 7, "Ha");
+        discard(cache.path(), "db", 7, "Ha", None);
         assert!(try_load(cache.path(), &[(1, "f1"), (2, "f2")]).is_none());
-        assert!(!manifest_path(cache.path(), "db", 7, "Ha").exists());
+        assert!(!manifest_path(cache.path(), "db", 7, "Ha", None).exists());
     }
 
     #[test]
     fn group_keys_separate_databases_targets_and_filters() {
         let keys = [
-            group_key("db-a", 7, "Ha"),
-            group_key("db-b", 7, "Ha"),
-            group_key("db-a", 8, "Ha"),
-            group_key("db-a", 7, "OIII"),
+            group_key("db-a", 7, "Ha", None),
+            group_key("db-b", 7, "Ha", None),
+            group_key("db-a", 8, "Ha", None),
+            group_key("db-a", 7, "OIII", None),
+            group_key("db-a", 7, "Ha", Some("short")),
+            group_key("db-a", 7, "Ha", Some("long")),
         ];
         let unique: std::collections::HashSet<_> = keys.iter().collect();
         assert_eq!(unique.len(), keys.len());
+    }
+
+    #[test]
+    fn exposure_families_keep_independent_checkpoints_and_validate_their_identity() {
+        let cache = tempfile::tempdir().unwrap();
+        let legacy = manifest(vec![frame(1, "f1")]);
+        let mut short = legacy.clone();
+        short.exposure_group_key = Some("short".into());
+        let mut long = legacy.clone();
+        long.exposure_group_key = Some("long".into());
+        for checkpoint in [&legacy, &short, &long] {
+            store(cache.path(), checkpoint);
+        }
+        let load_family = |key| {
+            load(
+                cache.path(),
+                "db",
+                7,
+                "Ha",
+                key,
+                false,
+                StackScoringSettings::default(),
+                "test",
+                "cal-1",
+                snr::StackFrameOrder::Capture,
+                &[(1, "f1", 300.0)],
+            )
+        };
+        assert!(load_family(None).state().is_some());
+        assert!(load_family(Some("short")).state().is_some());
+        assert!(load_family(Some("long")).state().is_some());
+        store_manifest(
+            &manifest_path(cache.path(), "db", 7, "Ha", Some("short")),
+            &long,
+        )
+        .unwrap();
+        assert!(load_family(Some("short")).state().is_none());
+        discard(cache.path(), "db", 7, "Ha", Some("short"));
+        assert!(load_family(None).state().is_some());
+        assert!(load_family(Some("long")).state().is_some());
+    }
+
+    #[test]
+    fn checkpoints_without_exposure_group_metadata_remain_readable() {
+        let mut value = serde_json::to_value(manifest(vec![])).unwrap();
+        value.as_object_mut().unwrap().remove("exposure_group_key");
+        let restored: ResumeManifest = serde_json::from_value(value).unwrap();
+        assert!(restored.exposure_group_key.is_none());
     }
 }

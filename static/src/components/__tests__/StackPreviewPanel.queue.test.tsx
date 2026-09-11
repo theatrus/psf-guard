@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
@@ -77,6 +77,44 @@ function job(jobId: string, created: number, state: string, groups: unknown[]) {
     error: null,
   };
 }
+
+describe('StackPreviewPanel exposure groups', () => {
+  it('keeps same-filter cards, progress, and calibration overrides independent', async () => {
+    const short = { key: 'short', label: '30 s', min_seconds: 30, max_seconds: 30 };
+    const long = { key: 'long', label: '300 s', min_seconds: 300, max_seconds: 300 };
+    const inputs = images.map((image, index) => ({
+      ...image, filter_name: 'Ha', exposure_group: index < 2 ? short : long,
+    }));
+    let submitted: Record<string, unknown> | undefined;
+    const started = job('split', 100, 'running', [
+      { ...group(0, 'Ha', 'running', [1, 2]), exposure_group: short },
+      { ...group(1, 'Ha', 'queued', [3, 4]), exposure_group: long },
+    ]);
+    server.use(
+      http.get('/api/stack-activity', () => ok({ schema_version: 1, active: [] })),
+      http.get('/api/db/test/projects/1/stack-previews/latest', () => ok({ groups: [] })),
+      http.get('/api/db/test/projects/1/stack-previews/color', () => ok({ targets: [], jobs: [] })),
+      http.post('/api/db/test/projects/1/stack-previews', async ({ request }) => {
+        submitted = await request.json() as Record<string, unknown>;
+        return ok(started);
+      }),
+      http.get('/api/db/test/projects/1/stack-previews/split', () => ok(started)),
+    );
+    const view = render(<StackPreviewPanel dbId="test" projectId={1} images={inputs}
+      selectionSource="visible" onOpenImage={() => undefined} />, { wrapper: wrapper() });
+    expect(await screen.findAllByRole('button', { name: 'Build channel' })).toHaveLength(2);
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Sh2 86 Ha · 30 s calibration' }), 'off');
+    expect(screen.getByRole('combobox', { name: 'Sh2 86 Ha · 300 s calibration' })).toHaveValue('');
+    await userEvent.click(screen.getByRole('button', { name: 'Build stack previews' }));
+    await waitFor(() => expect(submitted?.calibration_overrides).toEqual([
+      { target_id: 42, filter_name: 'Ha', exposure_group_key: 'short', calibration: 'off' },
+    ]));
+    await waitFor(() => expect(view.container.querySelectorAll('.stack-preview-card')).toHaveLength(2));
+    expect(view.container.querySelector('[data-exposure-group="short"]')).toHaveTextContent('running');
+    expect(view.container.querySelector('[data-exposure-group="long"]')).toHaveTextContent('queued');
+    window.localStorage.removeItem('psf-guard.stack-calibration-overrides');
+  });
+});
 
 describe('StackPreviewPanel manual queue', () => {
   it('keeps other channels buildable and shows both queued builds', async () => {

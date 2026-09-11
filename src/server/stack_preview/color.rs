@@ -249,6 +249,17 @@ pub struct StackColorRequest {
     /// original quick-look behavior for API compatibility.
     #[serde(default)]
     pub processing: Option<StackColorProcessing>,
+    /// Exact current mono artifacts to use when a role has multiple stacks.
+    /// Omitted roles are resolved only when there is one usable candidate.
+    #[serde(default)]
+    pub input_sources: BTreeMap<StackColorRole, StackColorSourceRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StackColorSourceRef {
+    pub job_id: String,
+    pub group_index: usize,
+    pub artifact_revision: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -348,6 +359,10 @@ pub struct StackColorProgress {
 pub struct StackColorSource {
     pub role: StackColorRole,
     pub filter_name: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub exposure_group: Option<crate::server::exposure_groups::ExposureGroup>,
     pub job_id: String,
     pub group_index: usize,
     pub artifact_revision: String,
@@ -390,6 +405,9 @@ pub struct StackColorJob {
     pub kind: StackColorKind,
     pub palette: Option<StackNarrowbandPalette>,
     pub label: String,
+    /// Stable channel-family identity, independent of artifact revisions.
+    #[serde(default)]
+    pub source_family_key: String,
     pub state: StackJobState,
     pub phase: String,
     pub processed_channels: usize,
@@ -463,6 +481,7 @@ pub struct StackColorTargetAvailability {
     pub target_id: i32,
     pub target_name: String,
     pub available_roles: Vec<StackColorAvailableRole>,
+    pub source_candidates: Vec<StackColorSource>,
     pub ambiguous_roles: Vec<StackColorRole>,
     pub unmapped_filters: Vec<String>,
     pub rgb_available: bool,
@@ -1038,10 +1057,21 @@ fn validate_request(request: &StackColorRequest) -> Result<(), AppError> {
             "Narrowband color previews require a palette".into(),
         )),
         _ => {
+            let required = required_roles(request.kind, request.palette);
+            if let Some(role) = request
+                .input_sources
+                .keys()
+                .find(|role| !required.contains(role))
+            {
+                return Err(AppError::BadRequest(format!(
+                    "{} is not an input to {}",
+                    role.label(),
+                    composition_label(request.kind, request.palette)
+                )));
+            }
             let Some(processing) = &request.processing else {
                 return Ok(());
             };
-            let required = required_roles(request.kind, request.palette);
             if let Some(role) = processing
                 .input_stretches
                 .keys()
@@ -1140,28 +1170,8 @@ fn prepare_color_job(
     let target = targets.get(&request.target_id).ok_or_else(|| {
         AppError::BadRequest("No completed channel stacks are available for that target".into())
     })?;
-    let roles = required_roles(request.kind, request.palette);
-    let mut sources = Vec::with_capacity(roles.len());
-    for role in roles {
-        let candidates = target.by_role.get(&role).map(Vec::as_slice).unwrap_or(&[]);
-        match candidates {
-            [source] => sources.push(source.clone()),
-            [] => {
-                return Err(AppError::BadRequest(format!(
-                    "{} requires a {} channel stack",
-                    composition_label(request.kind, request.palette),
-                    role.label()
-                )))
-            }
-            _ => {
-                return Err(AppError::BadRequest(format!(
-                    "{} has multiple channel stacks that map to {}; rename filters to make the role unambiguous",
-                    target.target_name,
-                    role.label()
-                )))
-            }
-        }
-    }
+    let sources = select_sources(target, &request)?;
+    let source_family_key = source_family_key(&sources);
 
     let resolved_background_protection = if request.processing.as_ref().is_some_and(|processing| {
         processing
@@ -1265,6 +1275,7 @@ fn prepare_color_job(
             kind: request.kind,
             palette: request.palette,
             label,
+            source_family_key,
             state: StackJobState::Queued,
             phase: "Waiting for color processor".into(),
             processed_channels: 0,
@@ -1314,6 +1325,78 @@ fn prepare_color_job(
         rc_astro_schemas,
         rc_astro_chains,
     })
+}
+
+fn select_sources(
+    target: &TargetSources,
+    request: &StackColorRequest,
+) -> Result<Vec<StackColorSource>, AppError> {
+    let roles = required_roles(request.kind, request.palette);
+    let mut sources = Vec::with_capacity(roles.len());
+    for role in roles {
+        let candidates = target.by_role.get(&role).map(Vec::as_slice).unwrap_or(&[]);
+        if let Some(selected) = request.input_sources.get(&role) {
+            let source = candidates.iter().find(|source| {
+                source.job_id == selected.job_id
+                    && source.group_index == selected.group_index
+                    && source.artifact_revision == selected.artifact_revision
+            });
+            let Some(source) = source else {
+                return Err(AppError::BadRequest(format!(
+                    "The selected {} stack is not a current source for this target; refresh the channel selection",
+                    role.label()
+                )));
+            };
+            sources.push(source.clone());
+            continue;
+        }
+        match candidates {
+            [source] => sources.push(source.clone()),
+            [] => {
+                return Err(AppError::BadRequest(format!(
+                    "{} requires a {} channel stack",
+                    composition_label(request.kind, request.palette),
+                    role.label()
+                )))
+            }
+            _ => {
+                return Err(AppError::BadRequest(format!(
+                "{} has multiple {} channel stacks; select the source exposure group explicitly",
+                target.target_name,
+                role.label()
+            )))
+            }
+        }
+    }
+    Ok(sources)
+}
+
+fn source_family_key(sources: &[StackColorSource]) -> String {
+    // Preserve the pre-grouping latest identity for legacy unsplit projects.
+    if sources.iter().all(|source| source.exposure_group.is_none()) {
+        return String::new();
+    }
+    let families = sources
+        .iter()
+        .map(|source| {
+            (
+                source.role,
+                (
+                    source.filter_name.as_str(),
+                    source
+                        .exposure_group
+                        .as_ref()
+                        .map(|group| group.key.as_str()),
+                ),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let bytes = serde_json::to_vec(&families).expect("color source families are serializable");
+    let mut key = String::with_capacity(64);
+    for byte in Sha256::digest(bytes) {
+        write!(&mut key, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    key
 }
 
 fn color_rc_astro_chains(
@@ -1595,6 +1678,14 @@ fn run_color_job(state: &Arc<AppState>, prepared: PreparedColorJob) {
         job.phase = "Loading channel stacks".into();
     });
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // A mono rebuild ahead in the shared queue may have replaced a
+        // selected revision while this color job waited for the permit.
+        let ctx = state
+            .get_database(&prepared.public.database_id)
+            .ok_or_else(|| "The color source database is no longer available".to_string())?;
+        let latest = load_latest_stacks(&ctx, prepared.public.project_id)
+            .map_err(|error| format!("Failed to validate color sources: {error:?}"))?;
+        validate_current_color_sources(&prepared.public, &latest)?;
         compose_color(
             state,
             &prepared.public,
@@ -2727,7 +2818,7 @@ fn load_latest_stacks(
             if latest.database_id != ctx.id || latest.project_id != project_id {
                 return Err(AppError::NotFound);
             }
-            Ok(super::current_latest_stacks(latest))
+            super::current_project_latest_stacks(ctx, project_id, latest)
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(LatestStackPreviews {
             schema_version: 1,
@@ -2796,7 +2887,10 @@ fn collect_sources(
 ) -> BTreeMap<i32, TargetSources> {
     let mut targets = BTreeMap::<i32, TargetSources>::new();
     for entry in &latest.groups {
-        if super::validate_job_id(&entry.job_id).is_err() {
+        if super::validate_job_id(&entry.job_id).is_err()
+            || entry.group.state != super::StackGroupState::Ready
+            || entry.group.output_channels != 1
+        {
             continue;
         }
         if !super::fits_path(cache_root, &entry.job_id, entry.group.index).is_file() {
@@ -2817,6 +2911,11 @@ fn collect_sources(
             .push(StackColorSource {
                 role,
                 filter_name: entry.group.filter_name.clone(),
+                label: entry.group.exposure_group.as_ref().map_or_else(
+                    || entry.group.filter_name.clone(),
+                    |group| format!("{} ({})", entry.group.filter_name, group.label),
+                ),
+                exposure_group: entry.group.exposure_group.clone(),
                 job_id: entry.job_id.clone(),
                 group_index: entry.group.index,
                 artifact_revision: entry.artifact_revision.clone(),
@@ -2829,6 +2928,16 @@ fn collect_sources(
     for target in targets.values_mut() {
         target.unmapped_filters.sort();
         target.unmapped_filters.dedup();
+        for candidates in target.by_role.values_mut() {
+            candidates.sort_by(|left, right| {
+                left.filter_name.cmp(&right.filter_name).then_with(|| {
+                    left.exposure_group
+                        .as_ref()
+                        .map(|group| &group.key)
+                        .cmp(&right.exposure_group.as_ref().map(|group| &group.key))
+                })
+            });
+        }
     }
     targets
 }
@@ -2848,22 +2957,19 @@ fn availability(sources: &BTreeMap<i32, TargetSources>) -> Vec<StackColorTargetA
                     _ => ambiguous_roles.push(*role),
                 }
             }
-            let unique = available_roles
-                .iter()
-                .map(|available| available.role)
-                .collect::<HashSet<_>>();
+            let present = target.by_role.keys().copied().collect::<HashSet<_>>();
             let rgb_available = [
                 StackColorRole::Red,
                 StackColorRole::Green,
                 StackColorRole::Blue,
             ]
             .iter()
-            .all(|role| unique.contains(role));
-            let lrgb_available = rgb_available && unique.contains(&StackColorRole::Luminance);
+            .all(|role| present.contains(role));
+            let lrgb_available = rgb_available && present.contains(&StackColorRole::Luminance);
             let has_ha_oiii =
-                unique.contains(&StackColorRole::Ha) && unique.contains(&StackColorRole::Oiii);
+                present.contains(&StackColorRole::Ha) && present.contains(&StackColorRole::Oiii);
             let narrowband_palettes = if has_ha_oiii {
-                StackNarrowbandPalette::all(unique.contains(&StackColorRole::Sii))
+                StackNarrowbandPalette::all(present.contains(&StackColorRole::Sii))
             } else {
                 Vec::new()
             };
@@ -2871,6 +2977,7 @@ fn availability(sources: &BTreeMap<i32, TargetSources>) -> Vec<StackColorTargetA
                 target_id: *target_id,
                 target_name: target.target_name.clone(),
                 available_roles,
+                source_candidates: target.by_role.values().flatten().cloned().collect(),
                 ambiguous_roles,
                 unmapped_filters: target.unmapped_filters.clone(),
                 rgb_available,
@@ -2960,13 +3067,37 @@ fn classify_filter(filter_name: &str) -> Option<StackColorRole> {
     }
 }
 
-fn source_is_current(source: &StackColorSource, latest: &LatestStackPreviews) -> bool {
+fn source_is_current(
+    source: &StackColorSource,
+    target_id: i32,
+    latest: &LatestStackPreviews,
+) -> bool {
     latest.groups.iter().any(|entry| {
         entry.job_id == source.job_id
             && entry.artifact_revision == source.artifact_revision
             && entry.group.index == source.group_index
+            && entry.group.target_id == target_id
             && entry.group.filter_name == source.filter_name
+            && entry.group.exposure_group == source.exposure_group
+            && classify_filter(&entry.group.filter_name) == Some(source.role)
     })
+}
+
+fn validate_current_color_sources(
+    job: &StackColorJob,
+    latest: &LatestStackPreviews,
+) -> Result<(), String> {
+    if latest.database_id != job.database_id || latest.project_id != job.project_id {
+        return Err("The color source project changed while the build was queued".into());
+    }
+    if !job
+        .sources
+        .iter()
+        .all(|source| source_is_current(source, job.target_id, latest))
+    {
+        return Err("A selected channel stack changed while the color build was queued; refresh the channel selection and build again".into());
+    }
+    Ok(())
 }
 
 fn color_artifacts_exist(cache_root: &FsPath, job_id: &str) -> bool {
@@ -2992,7 +3123,7 @@ fn color_job_outdated_reason(
         return Ok(Some("the color processing version changed".into()));
     }
     if !job.sources.iter().all(|source| {
-        source_is_current(source, latest)
+        source_is_current(source, job.target_id, latest)
             && super::fits_path(&ctx.cache_dir_path, &source.job_id, source.group_index).is_file()
     }) {
         return Ok(Some("one or more source channel stacks changed".into()));
@@ -3039,6 +3170,7 @@ fn persist_latest_color(cache_root: &FsPath, job: &StackColorJob) -> Result<(), 
         existing.target_id == job.target_id
             && existing.kind == job.kind
             && existing.palette == job.palette
+            && existing.source_family_key == job.source_family_key
     }) {
         *existing = job.clone();
     } else {
@@ -3247,6 +3379,7 @@ mod tests {
                 target_id: 7,
                 target_name: "Color target".into(),
                 filter_name: filter_name.into(),
+                exposure_group: None,
                 state: StackGroupState::Ready,
                 phase: "ready".into(),
                 total_candidates: 3,
@@ -3341,6 +3474,7 @@ mod tests {
             crop: StackColorCrop::None,
             crop_report: None,
             label: "SHO".into(),
+            source_family_key: String::new(),
             state,
             phase: "Registering source channels".into(),
             processed_channels: 1,
@@ -3594,6 +3728,177 @@ mod tests {
     }
 
     #[test]
+    fn exposure_candidates_require_an_explicit_current_source() {
+        let cache = tempfile::tempdir().unwrap();
+        let mut groups = vec![
+            source_group("R", 0),
+            source_group("R", 1),
+            source_group("G", 2),
+            source_group("B", 3),
+        ];
+        for (index, group) in groups.iter_mut().enumerate() {
+            let seconds = if index == 1 { 300.0 } else { 30.0 };
+            group.group.exposure_group = Some(crate::server::exposure_groups::ExposureGroup {
+                key: format!("{seconds}"),
+                label: format!("{seconds} s"),
+                min_seconds: Some(seconds),
+                max_seconds: Some(seconds),
+            });
+            let path = super::super::fits_path(cache.path(), &group.job_id, group.group.index);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"fixture").unwrap();
+        }
+        let latest = LatestStackPreviews {
+            schema_version: 1,
+            database_id: "db".into(),
+            project_id: 1,
+            updated_unix_seconds: 1,
+            groups,
+        };
+        let targets = collect_sources(cache.path(), &latest);
+        let target = targets.get(&7).unwrap();
+        let catalog = availability(&targets);
+        assert!(catalog[0].rgb_available);
+        assert_eq!(catalog[0].source_candidates.len(), 4);
+        assert_eq!(catalog[0].ambiguous_roles, [StackColorRole::Red]);
+        assert_eq!(catalog[0].source_candidates[0].label, "R (30 s)");
+        let mut request: StackColorRequest = serde_json::from_value(serde_json::json!({
+            "target_id": 7, "kind": "rgb"
+        }))
+        .unwrap();
+        assert!(select_sources(target, &request).is_err());
+        let selected = &target.by_role[&StackColorRole::Red][0];
+        request.input_sources.insert(
+            StackColorRole::Red,
+            StackColorSourceRef {
+                job_id: selected.job_id.clone(),
+                group_index: selected.group_index,
+                artifact_revision: selected.artifact_revision.clone(),
+            },
+        );
+        let sources = select_sources(target, &request).unwrap();
+        assert_eq!(sources.len(), 3);
+        assert_eq!(sources[0].job_id, selected.job_id);
+        let mut queued = running_color_job(&"a".repeat(64), StackJobState::Queued);
+        queued.database_id = latest.database_id.clone();
+        queued.project_id = latest.project_id;
+        queued.target_id = request.target_id;
+        queued.sources = sources.clone();
+        assert!(validate_current_color_sources(&queued, &latest).is_ok());
+        let mut rebuilt = latest.clone();
+        rebuilt.groups[0].artifact_revision = "rebuilt-while-queued".into();
+        assert!(validate_current_color_sources(&queued, &rebuilt).is_err());
+        let mut regrouped = latest.clone();
+        regrouped.groups.clear();
+        assert!(validate_current_color_sources(&queued, &regrouped).is_err());
+        let mut other_target = latest.clone();
+        other_target.groups[0].group.target_id += 1;
+        assert!(validate_current_color_sources(&queued, &other_target).is_err());
+        let mut other_project = latest.clone();
+        other_project.project_id += 1;
+        assert!(validate_current_color_sources(&queued, &other_project).is_err());
+        let mut stale = request.clone();
+        stale
+            .input_sources
+            .get_mut(&StackColorRole::Red)
+            .unwrap()
+            .artifact_revision = "old".into();
+        assert!(select_sources(target, &stale).is_err());
+        let mut wrong_role = request.clone();
+        let green = &target.by_role[&StackColorRole::Green][0];
+        wrong_role.input_sources.insert(
+            StackColorRole::Red,
+            StackColorSourceRef {
+                job_id: green.job_id.clone(),
+                group_index: green.group_index,
+                artifact_revision: green.artifact_revision.clone(),
+            },
+        );
+        assert!(select_sources(target, &wrong_role).is_err());
+        let mut foreign_target = request.clone();
+        foreign_target
+            .input_sources
+            .get_mut(&StackColorRole::Red)
+            .unwrap()
+            .job_id = "f".repeat(64);
+        assert!(select_sources(target, &foreign_target).is_err());
+        request.input_sources.insert(
+            StackColorRole::Ha,
+            StackColorSourceRef {
+                job_id: selected.job_id.clone(),
+                group_index: selected.group_index,
+                artifact_revision: selected.artifact_revision.clone(),
+            },
+        );
+        assert!(validate_request(&request).is_err());
+
+        let mut variant = sources.clone();
+        variant[0] = target.by_role[&StackColorRole::Red][1].clone();
+        assert_ne!(source_family_key(&sources), source_family_key(&variant));
+        let original_key = source_family_key(&variant);
+        variant.reverse();
+        for source in &mut variant {
+            source.job_id = "new".into();
+            source.artifact_revision = "new".into();
+            source.group_index += 3;
+        }
+        assert_eq!(original_key, source_family_key(&variant));
+    }
+
+    #[test]
+    fn single_sources_remain_automatic_and_non_mono_artifacts_are_excluded() {
+        let cache = tempfile::tempdir().unwrap();
+        let mut groups = vec![
+            source_group("R", 0),
+            source_group("G", 1),
+            source_group("B", 2),
+            source_group("R", 3),
+        ];
+        groups[3].group.output_channels = 3;
+        for group in &groups {
+            let path = super::super::fits_path(cache.path(), &group.job_id, group.group.index);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"fixture").unwrap();
+        }
+        let latest = LatestStackPreviews {
+            schema_version: 1,
+            database_id: "db".into(),
+            project_id: 1,
+            updated_unix_seconds: 1,
+            groups,
+        };
+        let targets = collect_sources(cache.path(), &latest);
+        let request: StackColorRequest = serde_json::from_value(serde_json::json!({
+            "target_id": 7, "kind": "rgb"
+        }))
+        .unwrap();
+        let sources = select_sources(&targets[&7], &request).unwrap();
+        assert_eq!(sources.len(), 3);
+        assert_eq!(source_family_key(&sources), "");
+    }
+
+    #[test]
+    fn latest_color_index_keeps_exposure_variants_and_replaces_only_the_same_family() {
+        let cache = tempfile::tempdir().unwrap();
+        let mut short = running_color_job(&"a".repeat(64), StackJobState::Completed);
+        short.source_family_key = "short-family".into();
+        let mut long = short.clone();
+        long.job_id = "b".repeat(64);
+        long.source_family_key = "long-family".into();
+        persist_latest_color(cache.path(), &short).unwrap();
+        persist_latest_color(cache.path(), &long).unwrap();
+        short.job_id = "c".repeat(64);
+        persist_latest_color(cache.path(), &short).unwrap();
+        let latest: LatestStackColorPreviews = serde_json::from_slice(
+            &std::fs::read(latest_color_path(cache.path(), short.project_id)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(latest.jobs.len(), 2);
+        assert_eq!(latest.jobs[0].job_id, short.job_id);
+        assert_eq!(latest.jobs[1].job_id, long.job_id);
+    }
+
+    #[test]
     fn color_artifact_paths_are_separate_from_mono_groups() {
         let root = FsPath::new("/cache/db");
         assert_eq!(
@@ -3699,6 +4004,7 @@ mod tests {
             force: false,
             crop: StackColorCrop::None,
             processing: None,
+            input_sources: BTreeMap::new(),
         })
         .is_err());
         assert!(validate_request(&StackColorRequest {
@@ -3708,6 +4014,7 @@ mod tests {
             force: false,
             crop: StackColorCrop::None,
             processing: None,
+            input_sources: BTreeMap::new(),
         })
         .is_err());
         assert!(validate_request(&StackColorRequest {
@@ -3717,6 +4024,7 @@ mod tests {
             force: false,
             crop: StackColorCrop::None,
             processing: None,
+            input_sources: BTreeMap::new(),
         })
         .is_err());
     }
@@ -3729,6 +4037,7 @@ mod tests {
             palette: None,
             force: false,
             crop: StackColorCrop::None,
+            input_sources: BTreeMap::new(),
             processing: Some(StackColorProcessing {
                 background_extraction: Some(extraction),
                 ..StackColorProcessing::default()
@@ -3903,6 +4212,8 @@ mod tests {
         .map(|(index, role)| StackColorSource {
             role,
             filter_name: role.label().into(),
+            label: role.label().into(),
+            exposure_group: None,
             job_id: format!("{index:064x}"),
             group_index: 0,
             artifact_revision: format!("revision-{index}"),

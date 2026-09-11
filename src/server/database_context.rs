@@ -393,6 +393,8 @@ pub struct DatabaseContext {
     pub cache_dir: String,
     pub cache_dir_path: PathBuf,
     db_connection: Arc<Mutex<Connection>>,
+    pub(crate) exposure_groups_cache:
+        Arc<Mutex<crate::server::exposure_groups::ProjectExposureGroupsCache>>,
     /// File identity of `database_path` as of the currently open connection.
     /// Compared on every `db()` to detect an external replace.
     db_fingerprint: Arc<Mutex<Option<DbFingerprint>>>,
@@ -753,6 +755,7 @@ impl DatabaseContext {
             cache_dir,
             cache_dir_path,
             db_connection: Arc::new(Mutex::new(conn)),
+            exposure_groups_cache: Arc::new(Mutex::new(Default::default())),
             db_fingerprint: Arc::new(Mutex::new(fingerprint)),
             reopen_lock: Arc::new(Mutex::new(())),
             organization_mutex: Arc::new(Mutex::new(())),
@@ -858,7 +861,11 @@ impl DatabaseContext {
         // block queries.
         match open_scheduler_connection(&self.database_path) {
             Ok(new_conn) => {
-                *lock_recover(&self.db_connection) = new_conn;
+                {
+                    let mut conn = lock_recover(&self.db_connection);
+                    *conn = new_conn;
+                    lock_recover(&self.exposure_groups_cache).clear();
+                }
                 *lock_recover(&self.db_fingerprint) = Some(new_fp);
                 lock_recover(&self.remote_image_verifications).clear();
                 lock_recover(&self.remote_file_verifications).clear();
@@ -887,7 +894,11 @@ impl DatabaseContext {
         let _reopen = lock_recover(&self.reopen_lock);
         match open_scheduler_connection(&self.database_path) {
             Ok(new_conn) => {
-                *lock_recover(&self.db_connection) = new_conn;
+                {
+                    let mut conn = lock_recover(&self.db_connection);
+                    *conn = new_conn;
+                    lock_recover(&self.exposure_groups_cache).clear();
+                }
                 *lock_recover(&self.db_fingerprint) = fingerprint_path(&self.database_path);
                 lock_recover(&self.remote_image_verifications).clear();
                 lock_recover(&self.remote_file_verifications).clear();
@@ -1934,6 +1945,7 @@ impl DatabaseContext {
             cache_dir: "/tmp/psf-guard-test".to_string(),
             cache_dir_path: PathBuf::from("/tmp/psf-guard-test"),
             db_connection: Arc::new(Mutex::new(conn)),
+            exposure_groups_cache: Arc::new(Mutex::new(Default::default())),
             db_fingerprint: Arc::new(Mutex::new(None)),
             reopen_lock: Arc::new(Mutex::new(())),
             organization_mutex: Arc::new(Mutex::new(())),
@@ -1973,6 +1985,7 @@ impl Clone for DatabaseContext {
             cache_dir: self.cache_dir.clone(),
             cache_dir_path: self.cache_dir_path.clone(),
             db_connection: self.db_connection.clone(),
+            exposure_groups_cache: self.exposure_groups_cache.clone(),
             db_fingerprint: self.db_fingerprint.clone(),
             reopen_lock: self.reopen_lock.clone(),
             organization_mutex: self.organization_mutex.clone(),
@@ -2002,6 +2015,28 @@ impl Clone for DatabaseContext {
 mod tests {
     use super::*;
     use rusqlite::Connection;
+
+    #[test]
+    fn connection_reopen_invalidates_shared_project_exposure_cache() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("catalog.sqlite");
+        make_db(&path, "Project");
+        let mut ctx = DatabaseContext::new_for_test(Connection::open(&path).unwrap());
+        ctx.database_path = path.to_string_lossy().into_owned();
+        let before = {
+            let db = ctx.db();
+            let conn = db.lock().unwrap();
+            crate::server::exposure_groups::cached_project_groups(&ctx, &conn, 1).unwrap()
+        };
+        let shared = ctx.clone();
+        ctx.force_reopen();
+        let after = {
+            let db = shared.db();
+            let conn = db.lock().unwrap();
+            crate::server::exposure_groups::cached_project_groups(&shared, &conn, 1).unwrap()
+        };
+        assert!(!Arc::ptr_eq(&before, &after));
+    }
 
     /// Write a tiny standalone SQLite DB holding one project row.
     fn make_db(path: &std::path::Path, project_name: &str) {

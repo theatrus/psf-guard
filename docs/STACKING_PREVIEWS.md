@@ -24,6 +24,36 @@ only that channel's remembered result; the other channel cards remain intact.
 - **Accepted only** removes Pending frames. By default both Accepted and usable
   Pending frames are eligible.
 
+### Separate exposure lengths
+
+Enable **Separate exposure groups** in a project's image grid to keep short
+exposures apart from substantially longer ones. The setting is saved for that
+project in this database and is off by default. It does not change Target
+Scheduler templates or exposure plans.
+
+PSF Guard uses each image's recorded exposure, not the template's current
+default. Within each exact target and filter, it sorts known exposure lengths
+and starts a new group when an exposure is at least twice the shortest one in
+the current group. Small timing differences remain together, and intermediate
+lengths cannot bridge a short group into a long one. For example, 10, 10.1, and
+19 seconds share a group; 30 seconds and 300 seconds each start another.
+Missing, zero, negative, or invalid exposure values form **Unknown exposure**.
+
+Groups are calculated from the complete project catalog, before status, date,
+target, or selection filters. Grid headings and stack cards show the exposure
+length or range. Each group has its own calibration override, latest result,
+and resume checkpoint. Changing the setting, or adding an exposure that changes
+group membership, prevents incompatible remembered stacks from being reused.
+
+When a color role has more than one mono stack, select the desired input for
+that role. Different exposure combinations retain separate color previews;
+rebuilding one does not replace another. This is explicit channel selection,
+not automatic HDR blending or saturated-pixel replacement.
+
+Sequence grading already compares matching capture profiles, including exposure
+length. This setting changes presentation and stacking boundaries, not those
+grading cohorts or existing grades.
+
 The build runs in the background and the panel polls its status. Different
 target/channel groups are processed sequentially. Only one stacking job runs
 in the PSF Guard process at a time, even when the server hosts multiple
@@ -956,6 +986,8 @@ immutable cached response for the rebuilt output.
 The grid uses these per-database endpoints:
 
 ```text
+GET  /api/db/{db}/projects/{project}/processing-settings
+PUT  /api/db/{db}/projects/{project}/processing-settings
 POST /api/db/{db}/projects/{project}/stack-previews
 GET  /api/db/{db}/projects/{project}/stack-previews/latest
 GET  /api/db/{db}/projects/{project}/stack-previews/{job}
@@ -985,6 +1017,32 @@ GET  /api/db/{db}/stack-previews/stretch/{stretch}/preview[?size=screen|original
 GET  /api/db/{db}/stack-previews/stretch/{stretch}/fits
 GET  /api/db/{db}/stack-previews/rc-astro/{id}/fits[?stars=true]
 ```
+
+Project processing settings use `{ "split_exposure_groups": false }`. Writes
+require editor access and the database-management gate. This is a catalog
+setting, not a per-build request flag. Image and mono stack-group responses
+include nullable `exposure_group` metadata with an opaque `key`, a display
+`label`, and `min_seconds`/`max_seconds`. Unknown exposure has null bounds.
+
+The color catalog's `source_candidates` lists every usable mono input with
+its role, exposure group, and exact artifact reference. Color build requests
+may specify `input_sources`, keyed by role:
+
+```json
+{
+  "target_id": 42,
+  "kind": "rgb",
+  "input_sources": {
+    "red": { "job_id": "<mono-job>", "group_index": 0, "artifact_revision": "<revision>" }
+  }
+}
+```
+
+An omitted role resolves automatically only when it has one usable candidate.
+Selected sources must belong to the same project and target, match the role,
+and still have the selected revision. The worker checks again after waiting
+in the queue. Color latest results have a `source_family_key` so distinct
+exposure combinations remain separate when individual mono stacks rebuild.
 
 Master previews return `202` while queued and use the shared generation-status
 poller. They accept `size=screen|original`, `midtone=0.01..0.99` (default `0.2`),

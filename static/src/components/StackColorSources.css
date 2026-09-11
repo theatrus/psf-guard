@@ -1,0 +1,33 @@
+.stack-color-source-selectors {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
+  gap: 0.6rem;
+  margin: 0.6rem 0;
+}
+
+.stack-color-source-selectors label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  font-size: 0.8rem;
+}
+
+.stack-color-source-selectors select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.35rem;
+  border-radius: 4px;
+  color: inherit;
+  background: var(--bg-secondary, #222);
+  border: 1px solid var(--border-color, #444);
+}
+
+.stack-preview-exposure {
+  display: inline-block;
+  flex-shrink: 0;
+  margin-left: 0.5rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}

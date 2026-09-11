@@ -1442,6 +1442,7 @@ mod tests {
         std::fs::create_dir_all(preview_path.parent().unwrap()).unwrap();
         image::GrayImage::new(16, 16).save(preview_path).unwrap();
         let group = StackGroupStatus {
+            exposure_group: None,
             index: 0,
             target_id: 1,
             target_name: "Target".into(),

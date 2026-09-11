@@ -46,6 +46,7 @@ use crate::sequence_analysis::{
 };
 use crate::server::api::ApiResponse;
 use crate::server::database_context::DatabaseContext;
+use crate::server::exposure_groups::{ExposureGroup, ProjectExposureGroups};
 use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
@@ -188,6 +189,8 @@ pub struct CalibrationOverride {
     pub target_id: i32,
     #[serde(default)]
     pub filter_name: String,
+    #[serde(default)]
+    pub exposure_group_key: Option<String>,
     pub calibration: crate::calibration::CalibrationMode,
 }
 
@@ -198,10 +201,15 @@ impl StackPreviewRequest {
         &self,
         target_id: i32,
         filter_name: &str,
+        exposure_group_key: Option<&str>,
     ) -> crate::calibration::CalibrationMode {
         self.calibration_overrides
             .iter()
-            .find(|entry| entry.target_id == target_id && entry.filter_name == filter_name)
+            .find(|entry| {
+                entry.target_id == target_id
+                    && entry.filter_name == filter_name
+                    && entry.exposure_group_key.as_deref() == exposure_group_key
+            })
             .map(|entry| entry.calibration)
             .unwrap_or(self.calibration)
     }
@@ -327,6 +335,8 @@ pub struct StackGroupStatus {
     pub target_id: i32,
     pub target_name: String,
     pub filter_name: String,
+    #[serde(default)]
+    pub exposure_group: Option<ExposureGroup>,
     pub state: StackGroupState,
     #[serde(default)]
     pub phase: String,
@@ -520,7 +530,11 @@ fn mono_activity(job: &StackPreviewJob) -> StackActivityEntry {
     });
     let label = match pending {
         Some(group) => {
-            let base = channel_label(&group.target_name, &group.filter_name);
+            let mut base = channel_label(&group.target_name, &group.filter_name);
+            if let Some(exposure_group) = &group.exposure_group {
+                base.push_str(" · ");
+                base.push_str(&exposure_group.label);
+            }
             let remaining = job
                 .groups
                 .iter()
@@ -774,9 +788,15 @@ impl StackPreviewManager {
         }
     }
 
-    fn persist_latest(&self, cache_root: &FsPath, job: &StackPreviewJob) -> Result<(), String> {
+    fn persist_latest(&self, ctx: &DatabaseContext, job: &StackPreviewJob) -> Result<(), String> {
+        let current = {
+            let db = ctx.db();
+            let conn = db.lock().map_err(|error| error.to_string())?;
+            crate::server::exposure_groups::cached_project_groups(ctx, &conn, job.project_id)
+                .map_err(|error| format!("Failed to load project exposure groups: {error:?}"))?
+        };
         let _guard = self.latest_write.lock().unwrap();
-        persist_latest_groups(cache_root, job)
+        persist_latest_groups_with_exposures(&ctx.cache_dir_path, job, Some(&current))
     }
 }
 
@@ -810,19 +830,7 @@ struct PreparedFrame {
 /// can arrive as a number or as text, so take the first that reads as a finite
 /// positive number.
 fn exposure_seconds_from_metadata(metadata_json: &str) -> f64 {
-    let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata_json) else {
-        return 0.0;
-    };
-    ["ExposureDuration", "ExposureTime", "EXPTIME"]
-        .iter()
-        .find_map(|key| {
-            let value = &metadata[*key];
-            value
-                .as_f64()
-                .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
-        })
-        .filter(|value: &f64| value.is_finite() && *value > 0.0)
-        .unwrap_or(0.0)
+    crate::server::exposure_groups::exposure_seconds_from_metadata(metadata_json).unwrap_or(0.0)
 }
 
 /// The decision recorded for a frame that did not reach the accumulator,
@@ -1111,9 +1119,7 @@ pub async fn start_stack_previews(
         ) || (!request.force && existing.state == StackJobState::Completed))
     {
         if existing.state == StackJobState::Completed
-            && let Err(error) = state
-                .stack_previews
-                .persist_latest(&prepared.cache_root, &existing)
+            && let Err(error) = state.stack_previews.persist_latest(&ctx, &existing)
         {
             tracing::warn!("Failed to refresh latest stack preview index: {error}");
         }
@@ -1124,10 +1130,7 @@ pub async fn start_stack_previews(
         && let Ok(existing) = serde_json::from_slice::<StackPreviewJob>(&bytes)
         && existing.state == StackJobState::Completed
     {
-        if let Err(error) = state
-            .stack_previews
-            .persist_latest(&prepared.cache_root, &existing)
-        {
+        if let Err(error) = state.stack_previews.persist_latest(&ctx, &existing) {
             tracing::warn!("Failed to refresh latest stack preview index: {error}");
         }
         let _ = state.stack_previews.insert(existing.clone());
@@ -1205,10 +1208,10 @@ pub async fn get_latest_stack_previews(
             )))
         }
     };
-    let latest = current_latest_stacks(latest);
     if latest.database_id != ctx.id || latest.project_id != project_id {
         return Err(AppError::NotFound);
     }
+    let latest = current_project_latest_stacks(&ctx, project_id, latest)?;
     Ok(Json(ApiResponse::success(latest)))
 }
 
@@ -1462,10 +1465,12 @@ fn prepare_job(
     let flat_star_masking = crate::calibration::flat_star_masking_enabled();
     let scoring = StackScoringSettings::from_overrides(&request.scoring);
     let requested = request.image_ids.iter().copied().collect::<HashSet<_>>();
-    let (project_images, expected_by_image, mapped_sources) = {
+    let (project_images, expected_by_image, mapped_sources, exposure_groups) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
+        let exposure_groups =
+            crate::server::exposure_groups::cached_project_groups(ctx, &conn, project_id)?;
         let images = db
             .get_images_by_project_id(project_id)
             .map_err(AppError::db)?;
@@ -1509,7 +1514,7 @@ fn prepare_job(
             &ctx.image_dir_paths,
             relevant.iter().map(|(image, _, _)| image),
         )?;
-        (relevant, expected, mapped_sources)
+        (relevant, expected, mapped_sources, exposure_groups)
     };
 
     let quality = quality_results(
@@ -1524,8 +1529,9 @@ fn prepare_job(
         .map(|result| (result.image_id, result))
         .collect::<HashMap<_, _>>();
 
-    let mut grouped: BTreeMap<(i32, String, String), Vec<(AcquiredImage, ImageQualityResult)>> =
-        BTreeMap::new();
+    type StackGroupKey = (i32, String, String, Option<String>);
+    type ScoredImages = Vec<(AcquiredImage, ImageQualityResult)>;
+    let mut grouped: BTreeMap<StackGroupKey, ScoredImages> = BTreeMap::new();
     for (image, _project_name, target_name) in project_images {
         if !requested.contains(&image.id) {
             continue;
@@ -1535,7 +1541,15 @@ fn prepare_job(
             .cloned()
             .unwrap_or_else(|| fallback_quality(image.id));
         grouped
-            .entry((image.target_id, target_name, image.filter_name.clone()))
+            .entry((
+                image.target_id,
+                target_name,
+                image.filter_name.clone(),
+                exposure_groups
+                    .by_image
+                    .get(&image.id)
+                    .map(|group| group.key.clone()),
+            ))
             .or_default()
             .push((image, scored));
     }
@@ -1544,6 +1558,9 @@ fn prepare_job(
     let mut prepared_groups = Vec::new();
     let artifact_revision = new_artifact_revision();
     let mut hasher = Sha256::new();
+    if exposure_groups.settings.split_exposure_groups {
+        hasher.update(b"exposure-groups-v1\0");
+    }
     hasher.update(ctx.id.as_bytes());
     hasher.update(project_id.to_le_bytes());
     hasher.update([request.accepted_only as u8]);
@@ -1571,17 +1588,26 @@ fn prepare_job(
         }
     }
 
-    for (index, ((target_id, target_name, filter_name), mut entries)) in
+    for (index, ((target_id, target_name, filter_name, exposure_group_key), mut entries)) in
         grouped.into_iter().enumerate()
     {
         // Hash the mode each channel actually stacks under, so the same
         // effective configuration lands on the same job whether it came from
         // the request-wide mode or an override.
-        let group_calibration = request.calibration_for(target_id, &filter_name);
+        let group_calibration =
+            request.calibration_for(target_id, &filter_name, exposure_group_key.as_deref());
+        let exposure_group = entries
+            .first()
+            .and_then(|(image, _)| exposure_groups.by_image.get(&image.id))
+            .cloned();
         hasher.update(target_id.to_le_bytes());
         hasher.update(target_name.as_bytes());
         hasher.update(filter_name.as_bytes());
         hasher.update(group_calibration.as_str().as_bytes());
+        if let Some(key) = &exposure_group_key {
+            hasher.update(b"\0exposure-group\0");
+            hasher.update(key.as_bytes());
+        }
         entries.sort_by_key(|(image, _)| (image.acquired_date.unwrap_or(0), image.id));
         let total_candidates = entries.len();
         let input_images = entries
@@ -1687,6 +1713,7 @@ fn prepare_job(
             target_id,
             target_name,
             filter_name,
+            exposure_group,
             state: if eligible_frames >= 2 {
                 StackGroupState::Queued
             } else {
@@ -2134,7 +2161,8 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
             job.state,
             StackJobState::Completed | StackJobState::Cancelled
         )
-        && let Err(error) = state.stack_previews.persist_latest(&cache_root, &job)
+        && let Some(ctx) = state.get_database(&database_id)
+        && let Err(error) = state.stack_previews.persist_latest(&ctx, &job)
     {
         tracing::warn!("Failed to persist latest stack preview index: {error}");
     }
@@ -2314,12 +2342,16 @@ fn run_group(
         status.calibration = applied_calibration;
         status.phase = "stacking".into();
     });
-    let (group_target_id, group_filter_name) = state
+    let (group_target_id, group_filter_name, group_exposure_key) = state
         .stack_previews
         .get(job_id)
         .map(|job| {
             let status = &job.groups[group.index];
-            (status.target_id, status.filter_name.clone())
+            (
+                status.target_id,
+                status.filter_name.clone(),
+                exposure_group_key(status).map(str::to_owned),
+            )
         })
         .ok_or_else(|| "Stack job disappeared while running".to_string())?;
     let requested = group
@@ -2338,6 +2370,7 @@ fn run_group(
         database_id,
         group_target_id,
         &group_filter_name,
+        group_exposure_key.as_deref(),
         accepted_only,
         scoring,
         SEIZA_STACKING_VERSION,
@@ -2401,7 +2434,7 @@ fn run_group(
                     tracing::warn!(
                         "Stack checkpoint context and manifest did not match; rebuilding from scratch"
                     );
-                    resume::discard(cache_root, database_id, group_target_id, &group_filter_name);
+                    resume::discard(cache_root, database_id, group_target_id, &group_filter_name, group_exposure_key.as_deref());
                     state.stack_previews.update(job_id, |job| {
                         job.groups[group.index].resume_note =
                             Some("Full restack: the checkpoint files did not match".into());
@@ -2412,7 +2445,7 @@ fn run_group(
                     tracing::warn!(
                         "Stack checkpoint could not be reopened ({error}); rebuilding from scratch"
                     );
-                    resume::discard(cache_root, database_id, group_target_id, &group_filter_name);
+                    resume::discard(cache_root, database_id, group_target_id, &group_filter_name, group_exposure_key.as_deref());
                     state.stack_previews.update(job_id, |job| {
                         job.groups[group.index].resume_note =
                             Some("Full restack: the checkpoint could not be reopened".into());
@@ -2572,64 +2605,82 @@ fn run_group(
     {
         points.push(snr::point(sample, integrated_exposure(&ledger)));
     }
-    let save_checkpoint = |stacker: &LiveStacker,
-                           ledger: &[resume::ResumeFrame],
-                           points: &[snr::SnrPoint]| {
-        pool.install(|| {
-            // A quality-ordered build is a full restack by nature. Writing its
-            // accumulator here would leave a checkpoint no later build can
-            // extend, in place of the capture-order one that can be.
-            if !order.resumable() {
-                return;
-            }
-            if ledger.iter().any(|frame| frame.retryable_failure) {
-                resume::discard(cache_root, database_id, group_target_id, &group_filter_name);
-                return;
-            }
-            let context_path =
-                resume::context_path(cache_root, database_id, group_target_id, &group_filter_name);
-            let manifest = resume::ResumeManifest {
-                schema_version: resume::RESUME_SCHEMA_VERSION,
-                stacking_version: SEIZA_STACKING_VERSION.into(),
-                target_id: group_target_id,
-                filter_name: group_filter_name.clone(),
-                accepted_only,
-                scoring,
-                calibration_fingerprint: calibration_fingerprint.clone(),
-                order,
-                snr_points: points.to_vec(),
-                frames: ledger.to_vec(),
-            };
-            let saved = context_path
-                .parent()
-                .ok_or_else(|| "checkpoint path has no parent".to_string())
-                .and_then(|parent| {
-                    std::fs::create_dir_all(parent).map_err(|error| error.to_string())
-                })
-                .and_then(|()| {
-                    stacker
-                        .save_context(&context_path)
-                        .map_err(|error| error.to_string())
-                })
-                .and_then(|()| {
-                    resume::store_manifest(
-                        &resume::manifest_path(
-                            cache_root,
-                            database_id,
-                            group_target_id,
-                            &group_filter_name,
-                        ),
-                        &manifest,
-                    )
-                });
-            if let Err(error) = saved {
-                // A checkpoint is an optimization; a build never fails over
-                // it. Discard the pair so nothing resumes from half a save.
-                tracing::warn!("Failed to save stack checkpoint: {error}");
-                resume::discard(cache_root, database_id, group_target_id, &group_filter_name);
-            }
-        })
-    };
+    let save_checkpoint =
+        |stacker: &LiveStacker, ledger: &[resume::ResumeFrame], points: &[snr::SnrPoint]| {
+            pool.install(|| {
+                // A quality-ordered build is a full restack by nature. Writing its
+                // accumulator here would leave a checkpoint no later build can
+                // extend, in place of the capture-order one that can be.
+                if !order.resumable() {
+                    return;
+                }
+                if ledger.iter().any(|frame| frame.retryable_failure) {
+                    resume::discard(
+                        cache_root,
+                        database_id,
+                        group_target_id,
+                        &group_filter_name,
+                        group_exposure_key.as_deref(),
+                    );
+                    return;
+                }
+                let context_path = resume::context_path(
+                    cache_root,
+                    database_id,
+                    group_target_id,
+                    &group_filter_name,
+                    group_exposure_key.as_deref(),
+                );
+                let manifest = resume::ResumeManifest {
+                    schema_version: resume::RESUME_SCHEMA_VERSION,
+                    stacking_version: SEIZA_STACKING_VERSION.into(),
+                    target_id: group_target_id,
+                    filter_name: group_filter_name.clone(),
+                    exposure_group_key: group_exposure_key.clone(),
+                    accepted_only,
+                    scoring,
+                    calibration_fingerprint: calibration_fingerprint.clone(),
+                    order,
+                    snr_points: points.to_vec(),
+                    frames: ledger.to_vec(),
+                };
+                let saved = context_path
+                    .parent()
+                    .ok_or_else(|| "checkpoint path has no parent".to_string())
+                    .and_then(|parent| {
+                        std::fs::create_dir_all(parent).map_err(|error| error.to_string())
+                    })
+                    .and_then(|()| {
+                        stacker
+                            .save_context(&context_path)
+                            .map_err(|error| error.to_string())
+                    })
+                    .and_then(|()| {
+                        resume::store_manifest(
+                            &resume::manifest_path(
+                                cache_root,
+                                database_id,
+                                group_target_id,
+                                &group_filter_name,
+                                group_exposure_key.as_deref(),
+                            ),
+                            &manifest,
+                        )
+                    });
+                if let Err(error) = saved {
+                    // A checkpoint is an optimization; a build never fails over
+                    // it. Discard the pair so nothing resumes from half a save.
+                    tracing::warn!("Failed to save stack checkpoint: {error}");
+                    resume::discard(
+                        cache_root,
+                        database_id,
+                        group_target_id,
+                        &group_filter_name,
+                        group_exposure_key.as_deref(),
+                    );
+                }
+            })
+        };
 
     // Pending frames keep their index into `group.frames`, which is what
     // the calibration plan's session assignments are aligned with.
@@ -3215,11 +3266,23 @@ fn persist_manifest(cache_root: &FsPath, job: &StackPreviewJob) -> Result<(), St
     std::fs::rename(&temporary, path).map_err(|error| error.to_string())
 }
 
+#[cfg(test)]
 fn persist_latest_groups(cache_root: &FsPath, job: &StackPreviewJob) -> Result<(), String> {
+    persist_latest_groups_with_exposures(cache_root, job, None)
+}
+
+fn persist_latest_groups_with_exposures(
+    cache_root: &FsPath,
+    job: &StackPreviewJob,
+    current: Option<&ProjectExposureGroups>,
+) -> Result<(), String> {
     let ready = job
         .groups
         .iter()
         .filter(|group| group.state == StackGroupState::Ready)
+        .filter(|group| {
+            current.is_none_or(|current| group_matches_project_exposures(group, current))
+        })
         .cloned()
         .collect::<Vec<_>>();
     if ready.is_empty() {
@@ -3240,6 +3303,21 @@ fn persist_latest_groups(cache_root: &FsPath, job: &StackPreviewJob) -> Result<(
             groups: Vec::new(),
         });
 
+    // Only successful current split builds retire obsolete split identities.
+    // A toggle, failed build, or cached old request never discards another
+    // family's remembered result. Keep the unsplit result for switching back.
+    if let Some(current) = current
+        && current.settings.split_exposure_groups
+        && ready
+            .iter()
+            .any(|group| group_matches_project_exposures(group, current))
+    {
+        latest.groups.retain(|entry| {
+            entry.group.exposure_group.is_none()
+                || group_matches_project_exposures(&entry.group, current)
+        });
+    }
+
     for group in ready {
         let replacement = LatestStackPreviewGroup {
             job_id: job.job_id.clone(),
@@ -3254,6 +3332,7 @@ fn persist_latest_groups(cache_root: &FsPath, job: &StackPreviewJob) -> Result<(
         if let Some(existing) = latest.groups.iter_mut().find(|existing| {
             existing.group.target_id == replacement.group.target_id
                 && existing.group.filter_name == replacement.group.filter_name
+                && exposure_group_key(&existing.group) == exposure_group_key(&replacement.group)
         }) {
             *existing = replacement;
         } else {
@@ -3266,6 +3345,7 @@ fn persist_latest_groups(cache_root: &FsPath, job: &StackPreviewJob) -> Result<(
             .cmp(&right.group.target_name)
             .then_with(|| left.group.filter_name.cmp(&right.group.filter_name))
             .then_with(|| left.group.target_id.cmp(&right.group.target_id))
+            .then_with(|| exposure_group_key(&left.group).cmp(&exposure_group_key(&right.group)))
     });
     latest.updated_unix_seconds = chrono::Utc::now().timestamp();
 
@@ -3289,6 +3369,47 @@ pub(super) fn current_latest_stacks(mut latest: LatestStackPreviews) -> LatestSt
                 .is_some_and(StackSkyOrientation::is_current)
     });
     latest
+}
+
+fn exposure_group_key(group: &StackGroupStatus) -> Option<&str> {
+    group
+        .exposure_group
+        .as_ref()
+        .map(|group| group.key.as_str())
+}
+
+fn group_matches_project_exposures(
+    group: &StackGroupStatus,
+    current: &ProjectExposureGroups,
+) -> bool {
+    if !current.settings.split_exposure_groups {
+        return group.exposure_group.is_none();
+    }
+    let Some(key) = exposure_group_key(group) else {
+        return false;
+    };
+    !group.input_images.is_empty()
+        && group.input_images.iter().all(|image| {
+            current
+                .by_image
+                .get(&image.image_id)
+                .is_some_and(|group| group.key == key)
+        })
+}
+
+pub(super) fn current_project_latest_stacks(
+    ctx: &DatabaseContext,
+    project_id: i32,
+    latest: LatestStackPreviews,
+) -> Result<LatestStackPreviews, AppError> {
+    let mut latest = current_latest_stacks(latest);
+    let conn = ctx.db();
+    let conn = conn.lock().map_err(AppError::db)?;
+    let current = crate::server::exposure_groups::cached_project_groups(ctx, &conn, project_id)?;
+    latest
+        .groups
+        .retain(|entry| group_matches_project_exposures(&entry.group, &current));
+    Ok(latest)
 }
 
 fn stack_dir(cache_root: &FsPath, job_id: &str) -> PathBuf {
@@ -3502,6 +3623,7 @@ mod tests {
             target_id,
             target_name: format!("Target {target_id}"),
             filter_name: filter_name.into(),
+            exposure_group: None,
             state: StackGroupState::Ready,
             phase: "ready".into(),
             total_candidates: 2,
@@ -3548,6 +3670,189 @@ mod tests {
             groups,
             error: None,
         }
+    }
+
+    fn exposure_group(key: &str, seconds: f64) -> ExposureGroup {
+        ExposureGroup {
+            key: key.into(),
+            label: format!("{seconds} s"),
+            min_seconds: Some(seconds),
+            max_seconds: Some(seconds),
+        }
+    }
+
+    #[test]
+    fn latest_exposure_groups_are_independent_and_replace_only_their_own_family() {
+        let cache = tempfile::tempdir().unwrap();
+        let mut short = ready_group(42, "Ha", 1);
+        short.exposure_group = Some(exposure_group("short", 10.0));
+        let mut long = ready_group(42, "Ha", 2);
+        long.exposure_group = Some(exposure_group("long", 300.0));
+        persist_latest_groups(
+            cache.path(),
+            &completed_job("first", vec![short.clone(), long]),
+        )
+        .unwrap();
+        persist_latest_groups(cache.path(), &completed_job("second", vec![short])).unwrap();
+        let latest: LatestStackPreviews =
+            serde_json::from_slice(&std::fs::read(latest_path(cache.path(), 7)).unwrap()).unwrap();
+        assert_eq!(latest.groups.len(), 2);
+        assert_eq!(
+            latest
+                .groups
+                .iter()
+                .find(|entry| exposure_group_key(&entry.group) == Some("short"))
+                .unwrap()
+                .job_id,
+            "second"
+        );
+        assert_eq!(
+            latest
+                .groups
+                .iter()
+                .find(|entry| exposure_group_key(&entry.group) == Some("long"))
+                .unwrap()
+                .job_id,
+            "first"
+        );
+    }
+
+    #[test]
+    fn latest_group_must_match_the_current_project_setting_and_every_input() {
+        use crate::server::exposure_groups::ProjectProcessingSettings;
+        let short = exposure_group("short", 10.0);
+        let mut current = ProjectExposureGroups {
+            settings: ProjectProcessingSettings {
+                split_exposure_groups: true,
+            },
+            by_image: HashMap::from([(1, short.clone()), (2, exposure_group("long", 300.0))]),
+        };
+        let mut group = ready_group(42, "Ha", 1);
+        assert!(!group_matches_project_exposures(&group, &current));
+        group.exposure_group = Some(short);
+        assert!(group_matches_project_exposures(&group, &current));
+        group.input_images.push(StackInputImage {
+            image_id: 2,
+            grading_status: 1,
+        });
+        assert!(!group_matches_project_exposures(&group, &current));
+        group.input_images.pop();
+        current.by_image.remove(&1);
+        assert!(!group_matches_project_exposures(&group, &current));
+        current.settings.split_exposure_groups = false;
+        assert!(!group_matches_project_exposures(&group, &current));
+        group.exposure_group = None;
+        assert!(group_matches_project_exposures(&group, &current));
+    }
+
+    #[test]
+    fn old_stack_groups_without_exposure_metadata_remain_readable() {
+        let mut value = serde_json::to_value(ready_group(42, "Ha", 1)).unwrap();
+        value.as_object_mut().unwrap().remove("exposure_group");
+        let group: StackGroupStatus = serde_json::from_value(value).unwrap();
+        assert!(group.exposure_group.is_none());
+    }
+
+    #[test]
+    fn successful_split_publish_retires_only_obsolete_split_families() {
+        use crate::server::exposure_groups::ProjectProcessingSettings;
+        let cache = tempfile::tempdir().unwrap();
+        let unsplit = ready_group(42, "Ha", 1);
+        let mut old_short = ready_group(42, "Ha", 1);
+        old_short.exposure_group = Some(exposure_group("old-short", 11.0));
+        let mut long = ready_group(42, "Ha", 2);
+        long.exposure_group = Some(exposure_group("long", 300.0));
+        persist_latest_groups(
+            cache.path(),
+            &completed_job("previous", vec![unsplit, old_short, long]),
+        )
+        .unwrap();
+        let short = exposure_group("new-short", 10.0);
+        let current = ProjectExposureGroups {
+            settings: ProjectProcessingSettings {
+                split_exposure_groups: true,
+            },
+            by_image: HashMap::from([(1, short.clone()), (2, exposure_group("long", 300.0))]),
+        };
+        let mut replacement = ready_group(42, "Ha", 1);
+        replacement.exposure_group = Some(short);
+        persist_latest_groups_with_exposures(
+            cache.path(),
+            &completed_job("current", vec![replacement]),
+            Some(&current),
+        )
+        .unwrap();
+        let mut queued_before_regroup = ready_group(42, "Ha", 1);
+        queued_before_regroup.exposure_group = Some(exposure_group("old-short", 11.0));
+        persist_latest_groups_with_exposures(
+            cache.path(),
+            &completed_job("stale-queued", vec![queued_before_regroup]),
+            Some(&current),
+        )
+        .unwrap();
+        let latest: LatestStackPreviews =
+            serde_json::from_slice(&std::fs::read(latest_path(cache.path(), 7)).unwrap()).unwrap();
+        let keys: HashSet<_> = latest
+            .groups
+            .iter()
+            .map(|entry| exposure_group_key(&entry.group))
+            .collect();
+        assert_eq!(keys, HashSet::from([None, Some("new-short"), Some("long")]));
+    }
+
+    #[test]
+    fn prepare_job_uses_persisted_full_project_exposure_groups_for_subsets() {
+        let directory = tempfile::tempdir().unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        conn.execute_batch("INSERT INTO project(Id,name,profileId,guid) VALUES(1,'Project','profile','project-one');
+            INSERT INTO target(Id,name,projectId,active,ra,dec,epochcode,rotation,roi,guid)
+                VALUES(1,'Target',1,1,10,20,0,0,100,'target-one');
+            CREATE TABLE psf_guard_project_processing(project_key TEXT PRIMARY KEY,split_exposure_groups INTEGER NOT NULL);
+            INSERT INTO psf_guard_project_processing VALUES('guid:project-one',1);").unwrap();
+        for (id, exposure) in [(1, 10.0), (2, 11.0), (3, 300.0), (4, 310.0)] {
+            conn.execute("INSERT INTO acquiredimage(Id,projectId,targetId,gradingStatus,metadata,acquireddate,filtername)
+                VALUES(?1,1,1,1,?2,?1,'Ha')", rusqlite::params![id, serde_json::json!({"ExposureDuration":exposure}).to_string()]).unwrap();
+        }
+        let mut ctx = DatabaseContext::new_for_test(conn);
+        ctx.cache_dir_path = directory.path().to_path_buf();
+        ctx.cache_dir = directory.path().to_string_lossy().into_owned();
+        let ctx = Arc::new(ctx);
+        let request = |ids: Vec<i32>| {
+            serde_json::from_value::<StackPreviewRequest>(
+                serde_json::json!({"image_ids":ids,"calibration":"off"}),
+            )
+            .unwrap()
+        };
+        let full = prepare_job(&ctx, 1, &request(vec![1, 2, 3, 4])).unwrap();
+        let subset = prepare_job(&ctx, 1, &request(vec![2, 4])).unwrap();
+        assert_eq!(full.public.groups.len(), 2);
+        assert_eq!(subset.public.groups.len(), 2);
+        for group in &subset.public.groups {
+            assert_eq!(group.total_candidates, 1);
+            let whole_group = full
+                .public
+                .groups
+                .iter()
+                .find(|candidate| exposure_group_key(candidate) == exposure_group_key(group))
+                .unwrap();
+            assert_eq!(whole_group.exposure_group, group.exposure_group);
+            assert_eq!(whole_group.total_candidates, 2);
+        }
+        {
+            let db = ctx.db();
+            db.lock()
+                .unwrap()
+                .execute(
+                    "UPDATE psf_guard_project_processing SET split_exposure_groups=0",
+                    [],
+                )
+                .unwrap();
+        }
+        let unsplit = prepare_job(&ctx, 1, &request(vec![2, 4])).unwrap();
+        assert_eq!(unsplit.public.groups.len(), 1);
+        assert!(unsplit.public.groups[0].exposure_group.is_none());
+        assert_ne!(unsplit.public.job_id, subset.public.job_id);
     }
 
     #[test]
@@ -3737,7 +4042,7 @@ mod tests {
     #[test]
     fn a_channel_override_wins_over_the_request_mode() {
         use crate::calibration::CalibrationMode;
-        let request = StackPreviewRequest {
+        let mut request = StackPreviewRequest {
             image_ids: vec![1, 2],
             accepted_only: false,
             force: false,
@@ -3748,12 +4053,36 @@ mod tests {
             calibration_overrides: vec![CalibrationOverride {
                 target_id: 7,
                 filter_name: "Ha".into(),
+                exposure_group_key: None,
                 calibration: CalibrationMode::Off,
             }],
         };
-        assert_eq!(request.calibration_for(7, "Ha"), CalibrationMode::Off);
-        assert_eq!(request.calibration_for(7, "OIII"), CalibrationMode::Auto);
-        assert_eq!(request.calibration_for(8, "Ha"), CalibrationMode::Auto);
+        assert_eq!(request.calibration_for(7, "Ha", None), CalibrationMode::Off);
+        assert_eq!(
+            request.calibration_for(7, "OIII", None),
+            CalibrationMode::Auto
+        );
+        assert_eq!(
+            request.calibration_for(8, "Ha", None),
+            CalibrationMode::Auto
+        );
+        assert_eq!(
+            request.calibration_for(7, "Ha", Some("short")),
+            CalibrationMode::Auto
+        );
+        request.calibration_overrides[0].exposure_group_key = Some("short".into());
+        assert_eq!(
+            request.calibration_for(7, "Ha", Some("short")),
+            CalibrationMode::Off
+        );
+        assert_eq!(
+            request.calibration_for(7, "Ha", Some("long")),
+            CalibrationMode::Auto
+        );
+        assert_eq!(
+            request.calibration_for(7, "Ha", None),
+            CalibrationMode::Auto
+        );
     }
 
     #[test]

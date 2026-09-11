@@ -70,7 +70,19 @@ export interface OrganizationDestinations {
   targets: { id: number; name: string; project_id: number }[];
 }
 
+export interface ExposureGroup {
+  key: string;
+  label: string;
+  min_seconds: number | null;
+  max_seconds: number | null;
+}
+
+export interface ProjectProcessingSettings {
+  split_exposure_groups: boolean;
+}
+
 export interface Image {
+  exposure_group?: ExposureGroup | null;
   id: number;
   project_id: number;
   project_name: string;
@@ -623,6 +635,7 @@ export interface ProgressiveSnr {
 }
 
 export interface StackGroupStatus {
+  exposure_group?: ExposureGroup | null;
   index: number;
   target_id: number;
   target_name: string;
@@ -932,6 +945,8 @@ export type StackNarrowbandPalette =
   | 'foraxx-hoo';
 
 export interface StackColorSource {
+  label?: string;
+  exposure_group?: ExposureGroup | null;
   role: StackColorRole;
   filter_name: string;
   job_id: string;
@@ -942,6 +957,14 @@ export interface StackColorSource {
   sky_orientation: StackSkyOrientation | null;
   registration_transform: SimilarityTransform | null;
 }
+
+export interface StackColorSourceReference {
+  job_id: string;
+  group_index: number;
+  artifact_revision: string;
+}
+
+export type StackColorInputSources = Partial<Record<StackColorRole, StackColorSourceReference>>;
 
 export interface StackColorProcessing {
   background_extraction: StackBackgroundExtraction | null;
@@ -1117,6 +1140,7 @@ export interface StackColorCropReport {
 }
 
 export interface StackColorJob {
+  source_family_key?: string;
   schema_version: number;
   job_id: string;
   database_id: string;
@@ -1165,6 +1189,7 @@ export interface StackColorAvailableRole {
 }
 
 export interface StackColorTargetAvailability {
+  source_candidates?: StackColorSource[];
   target_id: number;
   target_name: string;
   available_roles: StackColorAvailableRole[];

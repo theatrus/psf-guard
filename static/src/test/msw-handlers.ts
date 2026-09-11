@@ -52,6 +52,9 @@ const idleSpatialScan = {
 };
 
 export const handlers = [
+  http.get('/api/db/:dbId/projects/:projectId/processing-settings', () => HttpResponse.json({
+    success: true, data: { split_exposure_groups: false }, error: null,
+  })),
   http.get('/api/tools/rc-astro', () => HttpResponse.json({
     success: true, data: { available: false, tools: [] }, error: null,
   })),

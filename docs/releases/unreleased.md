@@ -6,6 +6,11 @@
 
 ## Added
 
+- A per-project **Separate exposure groups** option keeps substantially different
+  exposure lengths apart in the image grid and stack previews. Short and long
+  integrations retain independent stack results and calibration choices, with
+  explicit mono-input selection and separate saved combinations for color.
+
 - Review Target Scheduler flat coverage in the calibration library and invalidate
   suspect runs with a reason. The NINA plugin applies these requests on grade
   pulls and applied reconciles, preserving changed or newly taken coverage and
