@@ -26,6 +26,7 @@ pub mod scheduler;
 pub mod slug;
 pub mod spatial_scan;
 pub mod stack_preview;
+pub mod stack_settings;
 pub mod state;
 pub mod static_file_service;
 pub mod sync_preview;
@@ -313,6 +314,10 @@ async fn run_server_internal(
     // Release feeds are process-global. Refresh once now and then every 24
     // hours; browser reloads only read this cache through the API.
     state.update_notices.start_refresh_loop();
+
+    // Remembered stack previews follow the catalog when the operator asked
+    // for that; the scheduler idles otherwise.
+    crate::server::stack_preview::automatic::spawn(Arc::clone(&state));
 
     // Build PSF Guard's query indexes on each configured catalog, once, off
     // the request path and before cache refreshes start long-lived reads.
@@ -645,6 +650,10 @@ async fn run_server_internal(
         .route(
             "/settings/export",
             get(export_settings::get_export_settings).put(export_settings::update_export_settings),
+        )
+        .route(
+            "/settings/stacking",
+            get(stack_settings::get_stack_settings).put(stack_settings::update_stack_settings),
         )
         .route(
             "/processing-setups",

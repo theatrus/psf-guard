@@ -268,6 +268,12 @@ pub async fn sync_with_peer(
         context.clear_directory_tree_cache();
         let _ = context.ensure_cache_available();
     }
+    if !request.dry_run && direction == RemoteDirection::Pull {
+        state.auto_stacks.touch_database(
+            &context.id,
+            crate::server::stack_preview::automatic::RefreshReason::Sync,
+        );
+    }
     Ok(Json(ApiResponse::success(RemoteSyncResult {
         applied: outcome.applied,
         peer_product: outcome.peer_product,

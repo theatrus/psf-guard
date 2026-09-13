@@ -184,6 +184,12 @@ pub async fn apply(
     })
     .await
     .map_err(|error| AppError::InternalError(format!("organization apply: {error}")))??;
+    // Frames moved between targets or projects: the cards of both sides
+    // are out of date.
+    state.auto_stacks.touch_database(
+        &ctx.id,
+        crate::server::stack_preview::automatic::RefreshReason::Sync,
+    );
     Ok(Json(ApiResponse::success(result)))
 }
 

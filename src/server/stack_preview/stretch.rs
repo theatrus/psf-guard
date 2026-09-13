@@ -903,6 +903,8 @@ async fn compute_stretch_variant(
             failures.insert(stretch_id.clone(), message);
         }
     };
+    // A person is waiting on this: an automatic build in the way yields.
+    super::interrupt_automatic(&state);
     let permit = match Arc::clone(&state.stack_previews.permit)
         .acquire_owned()
         .await
