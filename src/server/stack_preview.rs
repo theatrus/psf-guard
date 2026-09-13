@@ -6,6 +6,7 @@
 //! multi-database server cannot multiply the stacker's full-frame buffers.
 
 pub mod artifact;
+pub mod automatic;
 pub mod calibration_masters;
 pub mod color;
 mod execution;
@@ -401,6 +402,10 @@ pub struct StackPreviewJob {
     pub scoring: StackScoringSettings,
     pub groups: Vec<StackGroupStatus>,
     pub error: Option<String>,
+    /// Built by the automatic refresh rather than asked for. Such a build
+    /// steps aside for one the user starts.
+    #[serde(default)]
+    pub automatic: bool,
 }
 
 /// A concrete scoring-policy snapshot attached to every stack artifact.
@@ -505,6 +510,9 @@ pub struct StackActivityEntry {
     pub processed_units: usize,
     pub total_units: usize,
     pub created_unix_seconds: i64,
+    /// Started by the automatic refresh, not by a person.
+    #[serde(default)]
+    pub automatic: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -593,6 +601,7 @@ fn mono_activity(job: &StackPreviewJob) -> StackActivityEntry {
         processed_units,
         total_units,
         created_unix_seconds: job.created_unix_seconds,
+        automatic: job.automatic,
     }
 }
 
@@ -617,6 +626,7 @@ fn color_activity(job: &color::StackColorJob) -> StackActivityEntry {
         processed_units,
         total_units,
         created_unix_seconds: job.created_unix_seconds,
+        automatic: job.automatic,
     }
 }
 
@@ -675,6 +685,34 @@ impl StackPreviewManager {
     /// Every queued or running stack build, oldest first. Jobs outlive the
     /// page that started them, so a client that navigated away can still see
     /// the work and re-attach to it.
+    /// Stop every automatic build so an interactive one gets the worker.
+    /// Returns the projects whose refresh should come back later; a stopped
+    /// build's checkpoint resumes when it does.
+    pub fn cancel_automatic(&self) -> Vec<(String, i32)> {
+        let mut projects = Vec::new();
+        let mut job_ids = Vec::new();
+        for job in self.jobs.lock().unwrap().values() {
+            if job.automatic && matches!(job.state, StackJobState::Queued | StackJobState::Running)
+            {
+                projects.push((job.database_id.clone(), job.project_id));
+                job_ids.push(job.job_id.clone());
+            }
+        }
+        for job in self.color_jobs.lock().unwrap().values() {
+            if job.automatic && matches!(job.state, StackJobState::Queued | StackJobState::Running)
+            {
+                projects.push((job.database_id.clone(), job.project_id));
+                job_ids.push(job.job_id.clone());
+            }
+        }
+        for job_id in job_ids {
+            self.request_cancel(&job_id);
+        }
+        projects.sort();
+        projects.dedup();
+        projects
+    }
+
     pub fn active(&self) -> Vec<StackActivityEntry> {
         let mut active: Vec<StackActivityEntry> = {
             let jobs = self.jobs.lock().unwrap();
@@ -1100,6 +1138,7 @@ pub async fn start_stack_previews(
     Json(request): Json<StackPreviewRequest>,
 ) -> Result<Json<ApiResponse<StackPreviewJob>>, AppError> {
     validate_request(&request)?;
+    interrupt_automatic(&state);
 
     let ctx_arc = Arc::clone(&ctx.0);
     let request_for_prepare = request.clone();
@@ -1145,6 +1184,18 @@ pub async fn start_stack_previews(
     }
     enqueue_job(Arc::clone(&state), prepared);
     Ok(Json(ApiResponse::success(response)))
+}
+
+/// A build the user asks for takes the worker: automatic builds stop, and
+/// their projects come back for a refresh once the user's build is done.
+pub(super) fn interrupt_automatic(state: &AppState) {
+    for (database_id, project_id) in state.stack_previews.cancel_automatic() {
+        state.auto_stacks.touch_projects(
+            &database_id,
+            [project_id],
+            automatic::RefreshReason::Arrival,
+        );
+    }
 }
 
 /// Ask a queued or running stack build to stop. Returns the job as it stands;
@@ -1774,6 +1825,7 @@ fn prepare_job(
     let now = chrono::Utc::now().timestamp();
     Ok(PreparedJob {
         public: StackPreviewJob {
+            automatic: false,
             schema_version: 2,
             job_id,
             database_id: ctx.id.clone(),
@@ -2165,6 +2217,14 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
         && let Err(error) = state.stack_previews.persist_latest(&ctx, &job)
     {
         tracing::warn!("Failed to persist latest stack preview index: {error}");
+    }
+    // The color previews composed from these channels follow the refresh.
+    if let Some(job) = state.stack_previews.get(&job_id)
+        && job.automatic
+        && job.state == StackJobState::Completed
+        && let Some(ctx) = state.get_database(&database_id)
+    {
+        automatic::recompose_colors(state, &ctx, &job);
     }
     state.stack_previews.prune_cache(&cache_root);
 }
@@ -3655,6 +3715,7 @@ mod tests {
 
     fn completed_job(job_id: &str, groups: Vec<StackGroupStatus>) -> StackPreviewJob {
         StackPreviewJob {
+            automatic: false,
             schema_version: 2,
             job_id: job_id.into(),
             database_id: "db-test".into(),

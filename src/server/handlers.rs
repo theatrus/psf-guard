@@ -1117,6 +1117,12 @@ pub(crate) async fn execute_scheduler_sync_paths(
             error
         );
     }
+    if !dry_run {
+        state.auto_stacks.touch_database(
+            &destination_id_for_cache,
+            crate::server::stack_preview::automatic::RefreshReason::Sync,
+        );
+    }
     Ok((response, fingerprint))
 }
 
@@ -2939,7 +2945,14 @@ fn spawn_import_job(
                 target_ids.push(*id);
             }
         }
+        let dry_run = outcome.dry_run;
         job::complete_import(&job_store, outcome);
+        if !dry_run {
+            state.auto_stacks.touch_database(
+                &ctx.id,
+                crate::server::stack_preview::automatic::RefreshReason::Arrival,
+            );
+        }
 
         // New rows reference files the DB-based file cache hasn't seen; kick
         // the normal background refresh so the UI resolves them promptly.
@@ -3197,6 +3210,11 @@ fn spawn_quality_backfill(
             job::finish_target(&ctx.quality_backfill);
         }
         job::finish(&ctx.quality_backfill);
+        // Scores changed under the remembered stacks; refresh them.
+        state.auto_stacks.touch_database(
+            &ctx.id,
+            crate::server::stack_preview::automatic::RefreshReason::Arrival,
+        );
         tracing::info!("📐 Database quality work finished for db={}", ctx.id);
     });
     true
@@ -3933,6 +3951,7 @@ fn source_file_cache_token(path: &FsPath) -> Option<String> {
 }
 
 pub async fn update_image_grade(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,
     Json(request): Json<UpdateGradeRequest>,
@@ -3950,8 +3969,26 @@ pub async fn update_image_grade(
 
     db.update_grading_status(image_id, status, request.reason.as_deref())
         .map_err(AppError::db)?;
+    note_grade_changes(&state, &ctx, &db, &[image_id]);
 
     Ok(Json(ApiResponse::success(())))
+}
+
+/// A grade change queues a refresh of the project's remembered stack
+/// previews, after the grading delay so an interactive pass settles first.
+fn note_grade_changes(state: &AppState, ctx: &DatabaseContext, db: &Database, image_ids: &[i32]) {
+    let projects: std::collections::HashSet<i32> = match db.get_images_by_ids(image_ids) {
+        Ok(images) => images.into_iter().map(|image| image.project_id).collect(),
+        Err(error) => {
+            tracing::warn!("could not find the projects of regraded images: {error}");
+            return;
+        }
+    };
+    state.auto_stacks.touch_projects(
+        &ctx.id,
+        projects,
+        crate::server::stack_preview::automatic::RefreshReason::Grade,
+    );
 }
 
 fn parse_grading_status(status: &str) -> Result<GradingStatus, AppError> {
@@ -3976,6 +4013,7 @@ fn grading_status_label(status: i32) -> &'static str {
 /// one SQLite write transaction per image. Returns the grades it replaced
 /// so the client records undo state without fetching every image first.
 pub async fn batch_update_image_grades(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Json(request): Json<BatchGradeRequest>,
 ) -> Result<Json<ApiResponse<BatchGradeResponse>>, AppError> {
@@ -4017,6 +4055,8 @@ pub async fn batch_update_image_grades(
 
     db.batch_update_grading_status(&updates)
         .map_err(AppError::db)?;
+    let changed: Vec<i32> = previous.iter().map(|entry| entry.image_id).collect();
+    note_grade_changes(&state, &ctx, &db, &changed);
 
     Ok(Json(ApiResponse::success(BatchGradeResponse {
         updated: updates.len(),

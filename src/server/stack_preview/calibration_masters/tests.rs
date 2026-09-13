@@ -190,6 +190,7 @@ impl Fixture {
         }))
         .unwrap();
         let job = StackPreviewJob {
+            automatic: false,
             schema_version: 2,
             job_id: "a".repeat(64),
             database_id: self.ctx.id.clone(),

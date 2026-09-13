@@ -24,9 +24,11 @@ export default function StackActivityStatus({ className = '' }: StackActivitySta
     : 0;
   const others = active.length - 1;
   const unit = entry.kind === 'mono' ? 'frames' : 'steps';
-  const detail = entry.total_units > 0
+  const progress = entry.total_units > 0
     ? `${entry.label} · ${entry.processed_units}/${entry.total_units} ${unit}`
     : `${entry.label} · ${entry.detail}`;
+  // An automatic rebuild says so, so a build nobody started is not a surprise.
+  const detail = entry.automatic ? `${progress} · automatic` : progress;
 
   return (
     <div

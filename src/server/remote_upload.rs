@@ -54,6 +54,9 @@ fn keep_failed_uploads() -> bool {
 }
 
 pub async fn upload_image(
+    axum::extract::State(state): axum::extract::State<
+        std::sync::Arc<crate::server::state::AppState>,
+    >,
     ctx: DbContext,
     headers: HeaderMap,
     mut multipart: Multipart,
@@ -248,6 +251,10 @@ pub async fn upload_image(
     ctx.clear_directory_tree_cache();
     ctx.file_check_cache.write().unwrap().clear();
     let _ = ctx.ensure_cache_available();
+    state.auto_stacks.touch_database(
+        &ctx.id,
+        crate::server::stack_preview::automatic::RefreshReason::Arrival,
+    );
     tracing::info!(
         "Remote image received for db={}: {} ({} bytes, sha256={})",
         ctx.id,

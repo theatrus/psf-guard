@@ -82,6 +82,8 @@ pub struct AppState {
     /// Process-global, single-flight project stacking preview jobs. Full-frame
     /// stacking is memory intensive, so groups and databases share one permit.
     pub stack_previews: crate::server::stack_preview::StackPreviewManager,
+    /// Refreshes of remembered stack previews waiting on new frames or grades.
+    pub auto_stacks: crate::server::stack_preview::automatic::AutomaticStackRefresh,
     /// Process-global, single-flight Seiza catalog installation with progress
     /// that survives closing and reopening the Settings page.
     pub catalog_install: crate::server::catalog_install::CatalogInstallManager,
@@ -436,6 +438,7 @@ impl AppState {
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
+            auto_stacks: crate::server::stack_preview::automatic::AutomaticStackRefresh::default(),
             catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
             sync_previews: crate::server::sync_preview::SyncPreviewManager::new(&cache_dir),
             sync_apply_lock: tokio::sync::Mutex::new(()),
@@ -606,6 +609,7 @@ impl AppState {
             active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
+            auto_stacks: crate::server::stack_preview::automatic::AutomaticStackRefresh::default(),
             catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
             sync_previews: crate::server::sync_preview::SyncPreviewManager::new(
                 "/tmp/psf-guard-test",

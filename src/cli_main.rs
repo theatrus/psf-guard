@@ -1190,6 +1190,9 @@ pub fn main() -> Result<()> {
                     .and_then(|calibration| calibration.flat_star_masking)
                     .unwrap_or(false),
             );
+            crate::server::stack_preview::automatic::configure_from_registry(
+                db_registry.stacking.as_ref(),
+            );
             let cache_directory = app_config.get_cache_directory();
             let server_host = app_config.get_host();
             let server_port = app_config.get_port();

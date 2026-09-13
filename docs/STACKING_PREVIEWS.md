@@ -408,6 +408,42 @@ FITS then contains a replacement TAN WCS for the reprojected pixels and records
 reference channel's grid, so RGB, LRGB, and narrowband outputs inherit whichever
 frame their channels were built in.
 
+## Automatic refresh
+
+Once a project's previews have been built, PSF Guard can keep them current on
+its own. Turn on **Rebuild stack previews on their own** under Settings →
+Setups → Stack previews. It applies to every database on the server and is
+off by default.
+
+A refresh rebuilds exactly what the project's cards remember: the same
+targets and channels, the same Accepted-only policy, order, scoring, and
+per-channel calibration choices, over the frames the project holds now. Any
+color preview composed from a rebuilt channel is recomposed afterwards with
+its kind, palette, crop, and processing unchanged. A refresh whose inputs and
+grades match the cards already built is a cache hit and starts nothing.
+
+What queues a refresh, and how long it waits first:
+
+- **New frames** — an import, a remote upload, or a scan of quality metrics
+  finishing — wait for the arrival delay (5 minutes by default). Each further
+  arrival pushes the refresh out again, so a night's stream of uploads is
+  stacked in batches; a stream cannot push it past four delays from the
+  first arrival.
+- **A sync** — a scheduler sync or a database transfer — waits the same
+  arrival delay.
+- **Grade changes**, by hand or by a regrade, wait for the grade delay (15
+  minutes by default) because grading is interactive. Each further change
+  pushes the refresh out again, up to four delays. New frames outrank waiting
+  grades and pull the refresh in to the arrival delay.
+
+A refresh runs on the same single stacking worker as any other build, waits
+while a quality scan of that database runs, and steps aside for you: starting
+a build or a color composition stops every automatic build, whose checkpoint
+resumes when its project comes back for a refresh a few minutes later. The
+header **Stacking** indicator marks such builds `automatic`. A refresh never
+touches a project that has no remembered previews, and never changes the
+calibration library, grades, or files.
+
 ## Cached results
 
 PSF Guard remembers the last successful preview for every target/channel in the
@@ -1038,10 +1074,14 @@ GET  /api/db/{db}/stack-previews/artifact-searches/{search}/crops/{image}
 GET  /api/db/{db}/stack-previews/stretch/{stretch}/preview[?size=screen|original]
 GET  /api/db/{db}/stack-previews/stretch/{stretch}/fits
 GET  /api/db/{db}/stack-previews/rc-astro/{id}/fits[?stars=true]
+GET  /api/settings/stacking
+PUT  /api/settings/stacking
 ```
 
 Project processing settings use `{ "split_exposure_groups": false }`. Writes
-require editor access and the database-management gate. This is a catalog
+require editor access and the database-management gate. The stacking settings
+carry `automatic_previews`, `arrival_delay_minutes`, and `grade_delay_minutes`;
+a PUT may omit a delay to keep it. This is a catalog
 setting, not a per-build request flag. Image and mono stack-group responses
 include nullable `exposure_group` metadata with an opaque `key`, a display
 `label`, and `min_seconds`/`max_seconds`. Unknown exposure has null bounds.

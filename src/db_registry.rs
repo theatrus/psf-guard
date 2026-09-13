@@ -393,6 +393,42 @@ pub struct DbRegistry {
     /// standard layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub export: Option<ExportSettings>,
+    /// Process-global automatic stack preview policy, edited from the
+    /// settings panel. Additive within registry v2; absent means off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stacking: Option<StackAutomationSettings>,
+}
+
+/// Whether, and how soon, remembered stack previews rebuild on their own
+/// when frames arrive or grades change.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StackAutomationSettings {
+    /// Absent means off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automatic_previews: Option<bool>,
+    /// Minutes an arrival or sync settles before the refresh; absent uses
+    /// the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrival_delay_minutes: Option<u32>,
+    /// Minutes a grade change settles before the refresh; absent uses the
+    /// default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grade_delay_minutes: Option<u32>,
+}
+
+impl StackAutomationSettings {
+    pub fn policy(&self) -> crate::server::stack_preview::automatic::AutomationPolicy {
+        let defaults = crate::server::stack_preview::automatic::AutomationPolicy::default();
+        crate::server::stack_preview::automatic::AutomationPolicy {
+            enabled: self.automatic_previews.unwrap_or(defaults.enabled),
+            arrival_delay_minutes: self
+                .arrival_delay_minutes
+                .unwrap_or(defaults.arrival_delay_minutes),
+            grade_delay_minutes: self
+                .grade_delay_minutes
+                .unwrap_or(defaults.grade_delay_minutes),
+        }
+    }
 }
 
 /// How far apart two readings may sit and still calibrate each other.
@@ -436,6 +472,7 @@ impl Default for DbRegistry {
             peers: Vec::new(),
             calibration: None,
             export: None,
+            stacking: None,
         }
     }
 }

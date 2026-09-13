@@ -6,6 +6,15 @@
 
 ## Added
 
+- Stack previews can keep themselves current. With **Rebuild stack previews
+  on their own** turned on in Settings → Setups, a project whose previews were
+  built once rebuilds the same channels, with the same settings, after new
+  frames arrive by import, upload, or sync (5 minutes of settling, so a
+  night's stream is stacked in batches) and after grades change (15 minutes,
+  so an interactive pass settles first). Color previews follow their
+  channels. A build you start takes precedence; the automatic one steps aside
+  and comes back afterwards.
+
 - A per-project **Separate exposure groups** option keeps substantially different
   exposure lengths apart in the image grid and stack previews. Short and long
   integrations retain independent stack results and calibration choices.

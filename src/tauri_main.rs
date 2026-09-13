@@ -83,6 +83,9 @@ pub fn main() {
             .and_then(|calibration| calibration.flat_star_masking)
             .unwrap_or(false),
     );
+    crate::server::stack_preview::automatic::configure_from_registry(
+        initial_registry.stacking.as_ref(),
+    );
     let server_config_for_task = server_config.clone();
     let registry_path_for_task = registry_path.clone();
     rt.spawn(async move {
@@ -559,6 +562,7 @@ mod tests {
             astrometry: None,
             calibration: None,
             export: None,
+            stacking: None,
             peers: Vec::new(),
         }
     }

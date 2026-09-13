@@ -8,6 +8,7 @@ import type {
   FlatHistoryState,
   SchedulerFlatHistoryPage,
   CalibrationSettings,
+  StackAutomationSettings,
   CalibrationMasterSource,
   StackCalibrationMasters,
   ExternalMasterPolicy,
@@ -285,6 +286,28 @@ export const apiClient = {
       update
     );
     if (!data.data) throw new Error(data.error || 'Failed to update calibration settings');
+    return data.data;
+  },
+
+  getStackAutomationSettings: async (): Promise<StackAutomationSettings> => {
+    const apiInstance = await getApi();
+    const { data } =
+      await apiInstance.get<ApiResponse<StackAutomationSettings>>('/settings/stacking');
+    if (!data.data) throw new Error(data.error || 'Failed to get stack settings');
+    return data.data;
+  },
+
+  updateStackAutomationSettings: async (update: {
+    automatic_previews: boolean;
+    arrival_delay_minutes: number;
+    grade_delay_minutes: number;
+  }): Promise<StackAutomationSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<StackAutomationSettings>>(
+      '/settings/stacking',
+      update
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to update stack settings');
     return data.data;
   },
 

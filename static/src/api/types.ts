@@ -708,6 +708,8 @@ export interface AppliedCalibration {
 export interface StackPreviewJob {
   schema_version: number;
   job_id: string;
+  /** Built by the automatic refresh rather than asked for. */
+  automatic?: boolean;
   database_id: string;
   project_id: number;
   state: StackJobState;
@@ -767,6 +769,8 @@ export interface StackActivityEntry {
   processed_units: number;
   total_units: number;
   created_unix_seconds: number;
+  /** Started by the automatic refresh, not by a person. */
+  automatic?: boolean;
 }
 
 export interface StackActivity {
@@ -1305,6 +1309,19 @@ export interface CalibrationSettings {
   external_masters: ExternalMasterPolicy;
   /** Mask detected stars when building flat masters; off by default. */
   flat_star_masking: boolean;
+}
+
+/** Whether, and how soon, remembered stack previews rebuild on their own. */
+export interface StackAutomationSettings {
+  /** Rebuild when frames arrive, a sync lands, or grades change. */
+  automatic_previews: boolean;
+  /** Minutes an arrival or sync settles before the refresh runs. */
+  arrival_delay_minutes: number;
+  /** Minutes a grade change settles before the refresh runs. */
+  grade_delay_minutes: number;
+  default_arrival_delay_minutes: number;
+  default_grade_delay_minutes: number;
+  max_delay_minutes: number;
 }
 
 export interface ExportSettings {
