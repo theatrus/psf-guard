@@ -29,7 +29,7 @@ const current = (enabled: boolean, arrival = 5, grade = 15) => ({
 });
 
 describe('StackAutomationSettings', () => {
-  it('starts off with the delays shown but not editable', async () => {
+  it('starts off with the delays shown but not editable, and no save button', async () => {
     server.use(http.get('/api/settings/stacking', () => HttpResponse.json(current(false))));
     render(<StackAutomationSettings />, { wrapper: wrapper() });
     const toggle = await screen.findByRole('checkbox', {
@@ -39,26 +39,49 @@ describe('StackAutomationSettings', () => {
     const arrival = screen.getByLabelText('Minutes to wait after new frames');
     expect(arrival).toHaveValue(5);
     expect(arrival).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
   });
 
-  it('turns automation on with its own delays and reflects the server response', async () => {
+  it('saves the switch as soon as it is flipped', async () => {
     let saved: unknown = null;
     server.use(
       http.get('/api/settings/stacking', () => HttpResponse.json(current(false))),
       http.put('/api/settings/stacking', async ({ request }) => {
         saved = await request.json();
-        return HttpResponse.json(current(true, 5, 30));
+        return HttpResponse.json(current(true));
       })
     );
     render(<StackAutomationSettings />, { wrapper: wrapper() });
     fireEvent.click(
       await screen.findByRole('checkbox', { name: /Rebuild stack previews on their own/ })
     );
-    fireEvent.change(screen.getByLabelText('Minutes to wait after grade changes'), {
-      target: { value: '30' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(saved).toEqual({
+        automatic_previews: true,
+        arrival_delay_minutes: 5,
+        grade_delay_minutes: 15,
+      })
+    );
+    // The response is the new truth: the delays become editable.
+    await waitFor(() =>
+      expect(screen.getByLabelText('Minutes to wait after new frames')).toBeEnabled()
+    );
+  });
+
+  it('commits a delay when its field is left, and snaps an invalid one back', async () => {
+    let saved: unknown = null;
+    server.use(
+      http.get('/api/settings/stacking', () => HttpResponse.json(current(true))),
+      http.put('/api/settings/stacking', async ({ request }) => {
+        saved = await request.json();
+        return HttpResponse.json(current(true, 5, 30));
+      })
+    );
+    render(<StackAutomationSettings />, { wrapper: wrapper() });
+    const grade = await screen.findByLabelText('Minutes to wait after grade changes');
+    fireEvent.change(grade, { target: { value: '30' } });
+    expect(saved).toBeNull();
+    fireEvent.blur(grade);
     await waitFor(() =>
       expect(saved).toEqual({
         automatic_previews: true,
@@ -66,18 +89,35 @@ describe('StackAutomationSettings', () => {
         grade_delay_minutes: 30,
       })
     );
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
-    );
-    expect(screen.getByLabelText('Minutes to wait after grade changes')).toHaveValue(30);
-  });
+    await waitFor(() => expect(grade).toHaveValue(30));
 
-  it('refuses a delay outside the allowed range', async () => {
-    server.use(http.get('/api/settings/stacking', () => HttpResponse.json(current(true))));
-    render(<StackAutomationSettings />, { wrapper: wrapper() });
-    const arrival = await screen.findByLabelText('Minutes to wait after new frames');
+    const arrival = screen.getByLabelText('Minutes to wait after new frames');
     fireEvent.change(arrival, { target: { value: '0' } });
     expect(screen.getByText(/Enter whole minutes between 1 and 1440/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    fireEvent.blur(arrival);
+    expect(arrival).toHaveValue(5);
+    expect(screen.queryByText(/Enter whole minutes/)).toBeNull();
+  });
+
+  it('commits a delay on Enter', async () => {
+    let saved: unknown = null;
+    server.use(
+      http.get('/api/settings/stacking', () => HttpResponse.json(current(true))),
+      http.put('/api/settings/stacking', async ({ request }) => {
+        saved = await request.json();
+        return HttpResponse.json(current(true, 10, 15));
+      })
+    );
+    render(<StackAutomationSettings />, { wrapper: wrapper() });
+    const arrival = await screen.findByLabelText('Minutes to wait after new frames');
+    fireEvent.change(arrival, { target: { value: '10' } });
+    fireEvent.keyDown(arrival, { key: 'Enter' });
+    await waitFor(() =>
+      expect(saved).toEqual({
+        automatic_previews: true,
+        arrival_delay_minutes: 10,
+        grade_delay_minutes: 15,
+      })
+    );
   });
 });
