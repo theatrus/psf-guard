@@ -444,7 +444,7 @@ export default function SequenceView() {
     replaceSelectedImages(new Set(
       activeSequence.images
         .filter(img => (img.flags ?? []).some(flag =>
-          flag === 'off_target' || flag === 'pointing_jump' || flag === 'pointing_drift'))
+          flag === 'off_target' || flag === 'pointing_jump' || flag === 'pointing_drift' || flag === 'rotation_skew'))
         .map(img => img.image_id)
     ));
   }, [activeSequence, replaceSelectedImages]);
@@ -1007,7 +1007,7 @@ const PointingScatter = memo(function PointingScatter({ images }: { images: Imag
             key={image.image_id}
             cx={project(east)}
             cy={project(-north)}
-            r={(image.flags ?? []).some(flag => flag === 'off_target' || flag === 'pointing_jump' || flag === 'pointing_drift') ? 5 : 3}
+            r={(image.flags ?? []).some(flag => flag === 'off_target' || flag === 'pointing_jump' || flag === 'pointing_drift' || flag === 'rotation_skew') ? 5 : 3}
             fill={qualityColor(image.quality_score)}
           >
             <title>Image {image.image_id}: E {east.toFixed(0)}″, N {north.toFixed(0)}″</title>

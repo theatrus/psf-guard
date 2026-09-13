@@ -17,6 +17,10 @@ pub enum IssueCategory {
     StableOffset,
     PointingJump,
     PointingDrift,
+    /// The solved field rotation departs from the rest of its framing
+    /// segment by more than the tolerance. A meridian flip is not skew: the
+    /// comparison is modulo a half turn, which stacking already absorbs.
+    RotationSkew,
     PlateSolveFailed,
     /// A linear pixel trail aligns with a predicted satellite crossing.
     /// The pixels confirm the trail, while the orbital identity remains a
@@ -91,6 +95,24 @@ pub struct PointingQuality {
     pub reference_field_fraction: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drift_rate_arcsec_per_hour: Option<f64>,
+    /// Direction of celestial north from image up, degrees, positive toward
+    /// image right, from the fresh solve's CD matrix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_rotation_deg: Option<f64>,
+    /// East and west swap sides compared with the sky.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_mirrored: Option<bool>,
+    /// This frame's rotation against the robust rotation of its framing
+    /// segment, modulo a half turn, in (-90, 90] degrees.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_skew_deg: Option<f64>,
+    /// The rotation the scheduler planned for the target, as recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planned_rotation_deg: Option<f64>,
+    /// Solved minus planned rotation, modulo a half turn. Display only:
+    /// capture software records rotation by its own convention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planned_rotation_offset_deg: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matched_stars: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -122,6 +144,15 @@ pub struct AstrometryFrameMetrics {
     pub matched_stars: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rms_arcsec: Option<f64>,
+    /// Direction of celestial north from image up, degrees, positive toward
+    /// image right; from the solve's CD matrix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_rotation_deg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_mirrored: Option<bool>,
+    /// The rotation the scheduler planned for the target, when it recorded one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planned_rotation_deg: Option<f64>,
     /// Large cataloged emission regions projected through this frame's fresh
     /// pixel-derived solution. These are context for background screening,
     /// not proof that the emission is visible in the pixels.
@@ -197,6 +228,14 @@ pub fn astrometry_metrics_from_analysis(
         solution.pixel_scale_arcsec_per_pixel
             * f64::from(solution.image_width.min(solution.image_height))
     });
+    let rotation = if pixel_solved {
+        analysis
+            .solution
+            .as_ref()
+            .and_then(|solution| field_rotation_from_cd(solution.wcs.cd))
+    } else {
+        None
+    };
     let cataloged_extended_emission = if pixel_solved {
         analysis
             .solution
@@ -225,9 +264,63 @@ pub fn astrometry_metrics_from_analysis(
         field_short_axis_arcsec,
         matched_stars: analysis.solution.as_ref().map(|s| s.matched_stars),
         rms_arcsec: analysis.solution.as_ref().map(|s| s.rms_arcsec),
+        field_rotation_deg: rotation.map(|(degrees, _)| degrees),
+        field_mirrored: rotation.map(|(_, mirrored)| mirrored),
+        planned_rotation_deg: None,
         cataloged_extended_emission,
         error: analysis.error.clone(),
     })
+}
+
+/// Camera field rotation from a WCS CD matrix: the direction of celestial
+/// north from image up, in degrees, positive toward image right, in
+/// (-180, 180]; and whether the field is mirrored (east and west swapped
+/// compared with the sky). The same arithmetic the image detail view uses.
+pub fn field_rotation_from_cd(cd: [[f64; 2]; 2]) -> Option<(f64, bool)> {
+    let [[cd11, cd12], [cd21, cd22]] = cd;
+    let det = cd11 * cd22 - cd12 * cd21;
+    if !det.is_finite() || det == 0.0 {
+        return None;
+    }
+    // inv(CD) · (0, 1): pixel displacement per degree of declination.
+    let north_x = -cd12 / det;
+    let north_y = cd11 / det;
+    if north_x == 0.0 && north_y == 0.0 {
+        return None;
+    }
+    // Image up is -y; positive angles turn toward +x.
+    let degrees = north_x.atan2(-north_y).to_degrees();
+    Some((degrees, det < 0.0))
+}
+
+/// Wrap a rotation difference into (-90, 90]: a half turn is the same
+/// framing, since a meridian flip turns the field by exactly that.
+fn wrap_half_turn(degrees: f64) -> f64 {
+    let wrapped = (degrees + 90.0).rem_euclid(180.0) - 90.0;
+    if wrapped <= -90.0 {
+        wrapped + 180.0
+    } else {
+        wrapped
+    }
+}
+
+/// The rotation, modulo a half turn, that the fewest degrees separate the
+/// others from: the sample that minimizes the summed wrapped distance, so a
+/// single skewed frame cannot pull the center toward itself.
+fn half_turn_median(rotations: &[f64]) -> f64 {
+    rotations
+        .iter()
+        .copied()
+        .min_by(|left, right| {
+            let cost = |candidate: f64| {
+                rotations
+                    .iter()
+                    .map(|rotation| wrap_half_turn(rotation - candidate).abs())
+                    .sum::<f64>()
+            };
+            cost(*left).total_cmp(&cost(*right))
+        })
+        .unwrap_or(0.0)
 }
 
 fn cataloged_extended_emission(
@@ -416,6 +509,9 @@ pub struct SequenceSummary {
     pub out_of_target_count: usize,
     #[serde(default)]
     pub plate_solve_failed_count: usize,
+    /// Frames whose solved field rotation departs from their framing segment.
+    #[serde(default)]
+    pub rotation_skew_count: usize,
     #[serde(
         default,
         rename = "satellite_risk_count",
@@ -968,6 +1064,16 @@ pub struct SequenceAnalyzerConfig {
     /// Colder never flags, and a frame without a reading is exempt.
     #[serde(default = "default_sensor_temp_tolerance_c")]
     pub sensor_temp_tolerance_c: f64,
+    /// Degrees a frame's solved field rotation may sit from the rest of its
+    /// framing segment before it is flagged as rotation skew. Rotators
+    /// repeat to a fraction of a degree; two degrees already costs the stack
+    /// tens of pixels of overlap at the corners of a large sensor.
+    #[serde(default = "default_rotation_skew_tolerance_deg")]
+    pub rotation_skew_tolerance_deg: f64,
+}
+
+fn default_rotation_skew_tolerance_deg() -> f64 {
+    2.0
 }
 
 fn default_sensor_temp_tolerance_c() -> f64 {
@@ -1040,6 +1146,7 @@ impl Default for SequenceAnalyzerConfig {
             hfr_reject_above: None,
             star_count_reject_below: None,
             sensor_temp_tolerance_c: default_sensor_temp_tolerance_c(),
+            rotation_skew_tolerance_deg: default_rotation_skew_tolerance_deg(),
         }
     }
 }
@@ -1070,6 +1177,10 @@ impl SequenceAnalyzerConfig {
             .filter(|limit| limit.is_finite() && *limit > 0.0);
         if !(self.sensor_temp_tolerance_c.is_finite() && self.sensor_temp_tolerance_c > 0.0) {
             self.sensor_temp_tolerance_c = default_sensor_temp_tolerance_c();
+        }
+        if !(self.rotation_skew_tolerance_deg.is_finite() && self.rotation_skew_tolerance_deg > 0.0)
+        {
+            self.rotation_skew_tolerance_deg = default_rotation_skew_tolerance_deg();
         }
         self
     }
@@ -1974,6 +2085,14 @@ impl SequenceAnalyzer {
                     reference_offset_arcsec: None,
                     reference_field_fraction: None,
                     drift_rate_arcsec_per_hour: None,
+                    field_rotation_deg: a.field_rotation_deg,
+                    field_mirrored: a.field_mirrored,
+                    rotation_skew_deg: None,
+                    planned_rotation_deg: a.planned_rotation_deg,
+                    planned_rotation_offset_deg: a
+                        .field_rotation_deg
+                        .zip(a.planned_rotation_deg)
+                        .map(|(solved, planned)| wrap_half_turn(solved - planned)),
                     matched_stars: a.matched_stars,
                     rms_arcsec: a.rms_arcsec,
                     error: a.error.clone(),
@@ -2207,6 +2326,49 @@ impl SequenceAnalyzer {
             }
         }
 
+        // Field rotation is judged inside each framing segment: the robust
+        // rotation of the segment is what the rotator held, and a frame
+        // that sits further from it than the tolerance (or than the
+        // segment's own scatter allows) was shot skewed. A half turn is the
+        // same framing, so a meridian flip inside a segment is not skew.
+        let tolerance = self.config.rotation_skew_tolerance_deg;
+        for &(start, end, _) in &runs {
+            let rotations: Vec<(usize, f64)> = solved_indices[start..=end]
+                .iter()
+                .filter_map(|&idx| {
+                    Some((idx, images[idx].astrometry.as_ref()?.field_rotation_deg?))
+                })
+                .collect();
+            if rotations.len() < 3 {
+                continue;
+            }
+            let center = half_turn_median(
+                &rotations
+                    .iter()
+                    .map(|(_, rotation)| *rotation)
+                    .collect::<Vec<_>>(),
+            );
+            let residuals = rotations
+                .iter()
+                .map(|(_, rotation)| wrap_half_turn(rotation - center))
+                .collect::<Vec<_>>();
+            let scatter = median(
+                &residuals
+                    .iter()
+                    .map(|residual| residual.abs())
+                    .collect::<Vec<_>>(),
+            );
+            let threshold = (6.0 * scatter).max(tolerance);
+            for ((idx, _), residual) in rotations.iter().zip(&residuals) {
+                if let Some(pointing) = quality[*idx].as_mut() {
+                    pointing.rotation_skew_deg = Some(*residual);
+                    if residual.abs() > threshold {
+                        push_issue(&mut pointing.flags, IssueCategory::RotationSkew);
+                    }
+                }
+            }
+        }
+
         quality
     }
 
@@ -2264,6 +2426,19 @@ impl SequenceAnalyzer {
                         "[Auto] Astrometry: Tracking drift - score {:.2}; {:.0} arcsec/hour",
                         result.quality_score,
                         pointing.drift_rate_arcsec_per_hour.unwrap_or(0.0)
+                    )),
+                )
+            } else if pointing.flags.contains(&IssueCategory::RotationSkew) {
+                let skew = pointing.rotation_skew_deg.unwrap_or(0.0);
+                (
+                    Some(IssueCategory::RotationSkew),
+                    Some(format!(
+                        "Solved field rotation sits {skew:+.1}° from the rest of its framing segment, \
+                         so this frame overlaps the others less and crops the stack."
+                    )),
+                    Some(format!(
+                        "[Auto] Astrometry: Rotation skew - score {:.2}; {skew:+.1}° from the sequence",
+                        result.quality_score
                     )),
                 )
             } else if pointing.flags.contains(&IssueCategory::PlateSolveFailed) {
@@ -2732,6 +2907,7 @@ impl SequenceAnalyzer {
             tracking_issues_detected: false,
             out_of_target_count: 0,
             plate_solve_failed_count: 0,
+            rotation_skew_count: 0,
             satellite_trail_count: 0,
         };
 
@@ -2765,6 +2941,9 @@ impl SequenceAnalyzer {
             }
             if r.flags.contains(&IssueCategory::PlateSolveFailed) {
                 summary.plate_solve_failed_count += 1;
+            }
+            if r.flags.contains(&IssueCategory::RotationSkew) {
+                summary.rotation_skew_count += 1;
             }
             if r.flags.contains(&IssueCategory::SatelliteTrailDetected) {
                 summary.satellite_trail_count += 1;
@@ -2800,6 +2979,7 @@ fn pointing_normalized(pointing: &PointingQuality) -> Option<f64> {
                 IssueCategory::OffTarget
                     | IssueCategory::PointingJump
                     | IssueCategory::PointingDrift
+                    | IssueCategory::RotationSkew
             )
         }) {
             Some(base.min(0.10))
@@ -2825,7 +3005,9 @@ fn apply_pointing_score(score: f64, pointing: Option<&PointingQuality>, scale: f
     } else if pointing.flags.iter().any(|flag| {
         matches!(
             flag,
-            IssueCategory::PointingJump | IssueCategory::PointingDrift
+            IssueCategory::PointingJump
+                | IssueCategory::PointingDrift
+                | IssueCategory::RotationSkew
         )
     }) {
         0.30
@@ -3493,6 +3675,9 @@ mod tests {
             field_short_axis_arcsec: Some(field),
             matched_stars: Some(30),
             rms_arcsec: Some(0.8),
+            field_rotation_deg: None,
+            field_mirrored: None,
+            planned_rotation_deg: None,
             cataloged_extended_emission: Vec::new(),
             error: None,
         }
@@ -4291,6 +4476,161 @@ mod tests {
         assert!(excursion.regrade_reason.is_some());
         assert!(excursion.quality_score <= 0.20);
         assert!(sequence.images[1].regrade_reason.is_none());
+    }
+
+    fn rotated_astrometry(rotation_deg: f64) -> AstrometryFrameMetrics {
+        AstrometryFrameMetrics {
+            field_rotation_deg: Some(rotation_deg),
+            field_mirrored: Some(false),
+            ..solved_astrometry(0.0, 0.0, 2000.0, true)
+        }
+    }
+
+    #[test]
+    fn field_rotation_reads_north_from_the_cd_matrix() {
+        // Image rows run downward, so north up means declination falls
+        // with y, and east left means right ascension falls with x.
+        let scale = 1.0 / 3600.0;
+        let (degrees, mirrored) =
+            field_rotation_from_cd([[-scale, 0.0], [0.0, -scale]]).expect("a rotation");
+        assert!(degrees.abs() < 1e-9, "north up reads as 0°, got {degrees}");
+        assert!(!mirrored);
+        // The same field turned a quarter turn so north points to image right.
+        let (degrees, mirrored) =
+            field_rotation_from_cd([[0.0, -scale], [scale, 0.0]]).expect("a rotation");
+        assert!(
+            (degrees - 90.0).abs() < 1e-9,
+            "north right reads as +90°, got {degrees}"
+        );
+        assert!(!mirrored);
+        // A mirrored field: north up but east on the right.
+        let (_, mirrored) =
+            field_rotation_from_cd([[scale, 0.0], [0.0, -scale]]).expect("a rotation");
+        assert!(mirrored);
+        assert!(field_rotation_from_cd([[0.0, 0.0], [0.0, 0.0]]).is_none());
+    }
+
+    #[test]
+    fn a_half_turn_is_the_same_framing() {
+        assert!((wrap_half_turn(180.0)).abs() < 1e-9);
+        assert!((wrap_half_turn(-180.0)).abs() < 1e-9);
+        assert!((wrap_half_turn(93.0) - (-87.0)).abs() < 1e-9);
+        assert!((wrap_half_turn(-93.0) - 87.0).abs() < 1e-9);
+        // Three frames near 10°, one flipped to 190°, one skewed to 16°:
+        // the flipped frame is at the center, the skewed one six degrees off.
+        let center = half_turn_median(&[10.0, 10.2, 190.1, 9.9, 16.0]);
+        assert!(wrap_half_turn(center - 10.0).abs() < 0.3, "center {center}");
+        assert!(wrap_half_turn(190.1 - center).abs() < 0.3);
+        assert!((wrap_half_turn(16.0 - center) - 6.0).abs() < 0.3);
+    }
+
+    #[test]
+    fn a_frame_rotated_away_from_its_segment_is_skew_and_a_meridian_flip_is_not() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..8)
+            .map(|i| make_full_image(i, i as i64 * 300, 500.0, 2.5, 1000.0, 20.0, 0.4))
+            .collect();
+        // The rotator holds 35° with a little jitter; frame 3 was shot 5°
+        // off, and the second half of the night follows a meridian flip.
+        let rotations = [35.0, 35.1, 34.9, 40.0, 215.0, 215.1, 214.9, 35.05];
+        for (image, rotation) in images.iter_mut().zip(rotations) {
+            image.astrometry = Some(rotated_astrometry(rotation));
+        }
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        let skewed = &sequence.images[3];
+        assert!(
+            skewed.flags.contains(&IssueCategory::RotationSkew),
+            "{:?}",
+            skewed.flags
+        );
+        assert_eq!(skewed.category, Some(IssueCategory::RotationSkew));
+        assert!(skewed.quality_score <= 0.30);
+        let reason = skewed.regrade_reason.as_deref().unwrap_or_default();
+        assert!(
+            reason.contains("Rotation skew") && reason.contains("+5.0°"),
+            "{reason}"
+        );
+        let pointing = skewed.pointing.as_ref().unwrap();
+        assert!((pointing.rotation_skew_deg.unwrap() - 5.0).abs() < 0.2);
+        assert_eq!(pointing.field_rotation_deg, Some(40.0));
+        for (index, result) in sequence.images.iter().enumerate() {
+            if index == 3 {
+                continue;
+            }
+            assert!(
+                !result.flags.contains(&IssueCategory::RotationSkew),
+                "frame {index} at {}° is the same framing",
+                rotations[index]
+            );
+            assert!(result.regrade_reason.is_none(), "frame {index}");
+            let skew = result.pointing.as_ref().unwrap().rotation_skew_deg.unwrap();
+            assert!(skew.abs() < 0.3, "frame {index} skew {skew}");
+        }
+        assert_eq!(sequence.summary.rotation_skew_count, 1);
+    }
+
+    #[test]
+    fn rotation_skew_needs_a_segment_to_compare_with_and_respects_the_tolerance() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..2)
+            .map(|i| make_full_image(i, i as i64 * 300, 500.0, 2.5, 1000.0, 20.0, 0.4))
+            .collect();
+        images[0].astrometry = Some(rotated_astrometry(0.0));
+        images[1].astrometry = Some(rotated_astrometry(30.0));
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        assert!(sequence
+            .images
+            .iter()
+            .all(|result| !result.flags.contains(&IssueCategory::RotationSkew)));
+
+        // Within the tolerance nothing is flagged; a wider tolerance passes
+        // a wider skew.
+        let mut images: Vec<_> = (0..5)
+            .map(|i| make_full_image(i, i as i64 * 300, 500.0, 2.5, 1000.0, 20.0, 0.4))
+            .collect();
+        for (image, rotation) in images.iter_mut().zip([0.0, 0.1, -0.1, 1.5, 0.0]) {
+            image.astrometry = Some(rotated_astrometry(rotation));
+        }
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        assert!(!sequence.images[3]
+            .flags
+            .contains(&IssueCategory::RotationSkew));
+        images[3].astrometry = Some(rotated_astrometry(3.0));
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        assert!(sequence.images[3]
+            .flags
+            .contains(&IssueCategory::RotationSkew));
+        let lenient = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            rotation_skew_tolerance_deg: 5.0,
+            ..Default::default()
+        });
+        let sequence = &lenient.analyze(&images, 1, "target", "L")[0];
+        assert!(!sequence.images[3]
+            .flags
+            .contains(&IssueCategory::RotationSkew));
+        let nonsense = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            rotation_skew_tolerance_deg: -1.0,
+            ..Default::default()
+        });
+        assert_eq!(nonsense.config.rotation_skew_tolerance_deg, 2.0);
+    }
+
+    #[test]
+    fn planned_rotation_offset_wraps_a_half_turn() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..3)
+            .map(|i| make_full_image(i, i as i64 * 300, 500.0, 2.5, 1000.0, 20.0, 0.4))
+            .collect();
+        for image in &mut images {
+            image.astrometry = Some(AstrometryFrameMetrics {
+                planned_rotation_deg: Some(30.0),
+                ..rotated_astrometry(212.0)
+            });
+        }
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        let pointing = sequence.images[0].pointing.as_ref().unwrap();
+        assert_eq!(pointing.planned_rotation_deg, Some(30.0));
+        assert!((pointing.planned_rotation_offset_deg.unwrap() - 2.0).abs() < 1e-9);
     }
 
     #[test]

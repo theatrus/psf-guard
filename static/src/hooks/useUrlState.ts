@@ -2,6 +2,7 @@ import { useLocation, useSearchParams } from 'react-router-dom';
 import { useCallback, useMemo, useRef } from 'react';
 import { type GroupingMode, DEFAULT_SINGLE_PROJECT_MODE } from '../types/grouping';
 import { parseStatusFilter } from '../utils/statusFilter';
+import { parseFlagFilter } from '../utils/flagFilter';
 
 /**
  * Hook for managing URL search parameters as state
@@ -161,6 +162,7 @@ export function useFilters() {
       end: getParam('dateEnd') || null,
     },
     searchTerm: getParam('search') || '',
+    flag: parseFlagFilter(getParam('flag')),
   }), [getParam]);
   
   const updateFilters = useCallback((updates: {
@@ -169,6 +171,7 @@ export function useFilters() {
     dateStart?: string;
     dateEnd?: string;
     searchTerm?: string;
+    flag?: string;
   }) => {
     updateParams({
       status: updates.status,
@@ -176,6 +179,8 @@ export function useFilters() {
       dateStart: updates.dateStart,
       dateEnd: updates.dateEnd, 
       search: updates.searchTerm,
+      // No flag chosen leaves the URL clean.
+      flag: updates.flag === undefined ? undefined : (updates.flag === 'all' ? '' : updates.flag),
     });
   }, [updateParams]);
   
@@ -186,6 +191,7 @@ export function useFilters() {
       dateStart: null,
       dateEnd: null,
       search: null,
+      flag: null,
     });
   }, [updateParams]);
   
