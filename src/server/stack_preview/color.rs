@@ -889,7 +889,6 @@ pub async fn start_stack_color(
     Json(request): Json<StackColorRequest>,
 ) -> Result<Json<ApiResponse<StackColorJob>>, AppError> {
     validate_request(&request)?;
-    super::interrupt_automatic(&state);
     let ctx_arc = Arc::clone(&ctx.0);
     let request_for_prepare = request.clone();
     let prepared = tokio::task::spawn_blocking(move || {
@@ -905,6 +904,16 @@ pub async fn start_stack_color(
             existing.state,
             StackJobState::Queued | StackJobState::Running
         ) {
+            // The same composition is already under way for the automatic
+            // refresh: it is now the user's, and other automatic work yields.
+            if existing.automatic {
+                state.stack_previews.adopt(&existing.job_id);
+                super::interrupt_automatic(&state);
+            }
+            let existing = state
+                .stack_previews
+                .get_color(&existing.job_id)
+                .unwrap_or(existing);
             return Ok(Json(ApiResponse::success(existing)));
         }
         if !request.force
@@ -936,6 +945,8 @@ pub async fn start_stack_color(
         return Ok(Json(ApiResponse::success(existing)));
     }
 
+    // Real work is about to queue: the user's composition takes the worker.
+    super::interrupt_automatic(&state);
     let response = prepared.public.clone();
     if !state.stack_previews.insert_color(response.clone()) {
         return Err(AppError::BadRequest(format!(
@@ -1654,15 +1665,31 @@ fn composition_label(
 
 pub(super) fn enqueue_color_job(state: Arc<AppState>, prepared: PreparedColorJob) {
     let permit = Arc::clone(&state.stack_previews.permit);
+    let job_id = prepared.public.job_id.clone();
+    // A composition can be stopped while it waits for the worker; once it
+    // runs it finishes, which is minutes at most.
+    let cancel = state.stack_previews.track_cancel(&job_id);
     tokio::spawn(async move {
         let Ok(_permit) = permit.acquire_owned().await else {
+            state.stack_previews.forget_cancel(&job_id);
             return;
         };
-        let guard = state.begin_interactive_job();
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            state.stack_previews.update_color(&job_id, |job| {
+                job.state = StackJobState::Cancelled;
+                job.phase = "Stopped before composing".into();
+            });
+            state.stack_previews.forget_cancel(&job_id);
+            return;
+        }
+        // Only a composition a person asked for outranks pre-generation and
+        // quality scans; an automatic one is background work like them.
+        let guard = (!prepared.public.automatic).then(|| state.begin_interactive_job());
         let state_for_job = Arc::clone(&state);
-        let job_id = prepared.public.job_id.clone();
+        let job_id_for_job = job_id.clone();
         let result = tokio::task::spawn_blocking(move || {
             let _guard = guard;
+            let _ = job_id_for_job;
             run_color_job(&state_for_job, prepared)
         })
         .await;
@@ -1673,6 +1700,7 @@ pub(super) fn enqueue_color_job(state: Arc<AppState>, prepared: PreparedColorJob
                 job.error = Some(format!("Color worker panicked: {error}"));
             });
         }
+        state.stack_previews.forget_cancel(&job_id);
     });
 }
 

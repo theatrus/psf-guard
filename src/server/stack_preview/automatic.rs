@@ -20,8 +20,8 @@
 
 use super::color::{self, StackColorJob, StackColorRequest, StackColorSourceRef};
 use super::{
-    current_latest_stacks, enqueue_job, latest_path, manifest_path, prepare_job,
-    read_latest_indices, validate_request, CalibrationOverride, LatestStackPreviews,
+    current_latest_stacks, current_project_latest_stacks, enqueue_job, latest_path, manifest_path,
+    prepare_job, read_latest_indices, validate_request, CalibrationOverride, LatestStackPreviews,
     StackGroupState, StackJobState, StackPreviewJob, StackPreviewRequest, StackScoringSettings,
     MAX_REMEMBERED_JOBS,
 };
@@ -33,7 +33,6 @@ use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path as FsPath;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -127,6 +126,11 @@ impl RefreshReason {
         Duration::from_secs(u64::from(minutes) * 60)
     }
 
+    /// Arrivals and syncs share one delay and one stream; grades have their own.
+    fn settles_like(self, other: RefreshReason) -> bool {
+        (self == RefreshReason::Grade) == (other == RefreshReason::Grade)
+    }
+
     fn label(self) -> &'static str {
         match self {
             RefreshReason::Arrival => "new frames",
@@ -200,17 +204,20 @@ impl AutomaticStackRefresh {
             first_touched: now,
             reason,
         });
-        // A further touch lets the stream settle, but never past the cap
-        // from the first one. An arrival outranks waiting grades: its
-        // shorter delay wins, and the card names the sooner reason.
-        let cap = entry.first_touched + delay * MAX_DEFERRALS;
-        let proposed = (now + delay).min(cap);
-        if reason == RefreshReason::Grade && entry.reason != RefreshReason::Grade {
-            entry.due_at = entry.due_at.min(proposed);
-        } else {
-            entry.due_at = proposed;
+        if entry.reason.settles_like(reason) {
+            // A further touch lets the stream settle, but never past the
+            // cap from the stream's first touch.
+            entry.due_at = (now + delay).min(entry.first_touched + delay * MAX_DEFERRALS);
+            entry.reason = reason;
+        } else if reason != RefreshReason::Grade {
+            // New frames outrank waiting grades: a fresh, shorter stream
+            // starts now, and the refresh comes no later than it would have.
+            entry.due_at = entry.due_at.min(now + delay);
+            entry.first_touched = now;
             entry.reason = reason;
         }
+        // A grade change under pending frames changes nothing: the frames
+        // already come sooner.
     }
 
     /// Put a refresh back, to run again after `by`, keeping its history so
@@ -302,7 +309,8 @@ async fn tick(state: &Arc<AppState>) {
             match refresh_project(state, &ctx, project_id, pending.reason).await {
                 Ok(RefreshOutcome::Started) => {
                     // The worker is taken; the rest of this database and
-                    // every other due key wait for the next free moment.
+                    // every other due key wait for the next free moment,
+                    // keeping their history so the cap still holds.
                     let rest: Vec<i32> = match key.project_id {
                         Some(_) => Vec::new(),
                         None => followed_projects(&ctx)
@@ -310,10 +318,16 @@ async fn tick(state: &Arc<AppState>) {
                             .filter(|other| *other > project_id)
                             .collect(),
                     };
-                    if !rest.is_empty() {
-                        state
-                            .auto_stacks
-                            .touch_projects(&key.database_id, rest, pending.reason);
+                    for other in rest {
+                        state.auto_stacks.postpone(
+                            RefreshKey {
+                                database_id: key.database_id.clone(),
+                                project_id: Some(other),
+                            },
+                            pending,
+                            BUSY_RETRY,
+                            now,
+                        );
                     }
                     for (key, pending) in remaining {
                         state.auto_stacks.postpone(key, pending, BUSY_RETRY, now);
@@ -349,25 +363,52 @@ enum RefreshOutcome {
     Skipped(String),
 }
 
-/// Projects whose cards this database remembers.
+/// Projects whose cards this database shows: the cards the grid would show
+/// now, under the project's current exposure grouping. Cards kept aside for
+/// the other grouping are not followed.
 fn followed_projects(ctx: &DatabaseContext) -> Vec<i32> {
     let mut projects: Vec<i32> =
         read_latest_indices::<LatestStackPreviews>(&ctx.cache_dir_path.join("stack-previews"))
             .into_iter()
             .filter(|latest| latest.database_id == ctx.id)
-            .map(current_latest_stacks)
-            .filter(|latest| !latest.groups.is_empty())
-            .map(|latest| latest.project_id)
+            .filter_map(|latest| {
+                let project_id = latest.project_id;
+                match current_project_latest_stacks(ctx, project_id, latest) {
+                    Ok(latest) if !latest.groups.is_empty() => Some(project_id),
+                    Ok(_) => None,
+                    Err(error) => {
+                        tracing::warn!(
+                            db = %ctx.id,
+                            project_id,
+                            "could not read remembered stack previews: {error:?}"
+                        );
+                        None
+                    }
+                }
+            })
             .collect();
     projects.sort_unstable();
     projects.dedup();
     projects
 }
 
-fn read_latest(cache_root: &FsPath, project_id: i32) -> Option<LatestStackPreviews> {
-    let bytes = std::fs::read(latest_path(cache_root, project_id)).ok()?;
-    let latest: LatestStackPreviews = serde_json::from_slice(&bytes).ok()?;
-    Some(current_latest_stacks(latest))
+fn read_latest(
+    ctx: &DatabaseContext,
+    project_id: i32,
+) -> Result<Option<LatestStackPreviews>, AppError> {
+    let bytes = match std::fs::read(latest_path(&ctx.cache_dir_path, project_id)) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(AppError::InternalError(format!(
+                "reading remembered stack previews: {error}"
+            )))
+        }
+    };
+    let latest: LatestStackPreviews = serde_json::from_slice(&bytes).map_err(|error| {
+        AppError::InternalError(format!("remembered stack previews are unreadable: {error}"))
+    })?;
+    current_project_latest_stacks(ctx, project_id, current_latest_stacks(latest)).map(Some)
 }
 
 async fn refresh_project(
@@ -376,11 +417,16 @@ async fn refresh_project(
     project_id: i32,
     reason: RefreshReason,
 ) -> Result<RefreshOutcome, AppError> {
-    let Some(latest) = read_latest(&ctx.cache_dir_path, project_id) else {
+    let Some(latest) = read_latest(ctx, project_id)? else {
         return Ok(RefreshOutcome::Skipped(
             "no remembered stack previews".into(),
         ));
     };
+    if latest.groups.is_empty() {
+        return Ok(RefreshOutcome::Skipped(
+            "no remembered stack previews".into(),
+        ));
+    }
     let images: Vec<AcquiredImage> = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
@@ -653,18 +699,24 @@ mod tests {
         }
     }
 
-    /// Tests share the process-wide policy; each one sets what it needs.
-    fn enabled(arrival: u32, grade: u32) {
+    /// Tests share the process-wide policy, so they take turns with it.
+    static POLICY_LOCK: Mutex<()> = Mutex::new(());
+
+    fn enabled(arrival: u32, grade: u32) -> std::sync::MutexGuard<'static, ()> {
+        let guard = POLICY_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         configure(AutomationPolicy {
             enabled: true,
             arrival_delay_minutes: arrival,
             grade_delay_minutes: grade,
         });
+        guard
     }
 
     #[test]
     fn a_stream_of_arrivals_settles_but_not_forever() {
-        enabled(5, 15);
+        let _policy = enabled(5, 15);
         let refresh = AutomaticStackRefresh::default();
         let start = Instant::now();
         refresh.touch(key(Some(1)), RefreshReason::Arrival, start);
@@ -685,7 +737,7 @@ mod tests {
 
     #[test]
     fn grades_wait_longer_and_an_arrival_pulls_them_in() {
-        enabled(5, 15);
+        let _policy = enabled(5, 15);
         let refresh = AutomaticStackRefresh::default();
         let start = Instant::now();
         refresh.touch(key(Some(7)), RefreshReason::Grade, start);
@@ -693,9 +745,17 @@ mod tests {
         // A later grade change pushes the refresh out again.
         refresh.touch(key(Some(7)), RefreshReason::Grade, start + minutes(10));
         assert!(refresh.take_due(start + minutes(20)).is_empty());
-        // New frames outrank waiting grades: due in the arrival delay.
-        refresh.touch(key(Some(7)), RefreshReason::Arrival, start + minutes(21));
-        let due = refresh.take_due(start + minutes(26));
+        // New frames outrank waiting grades: due in the arrival delay, and
+        // no sooner, even late in a long grading stream.
+        for touch in [22u64, 30, 40, 50] {
+            refresh.touch(key(Some(7)), RefreshReason::Grade, start + minutes(touch));
+        }
+        refresh.touch(key(Some(7)), RefreshReason::Arrival, start + minutes(55));
+        assert!(
+            refresh.take_due(start + minutes(59)).is_empty(),
+            "the arrival settles first"
+        );
+        let due = refresh.take_due(start + minutes(60));
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].1.reason, RefreshReason::Arrival);
         // And a grade change after an arrival does not push the arrival out.
@@ -706,7 +766,7 @@ mod tests {
 
     #[test]
     fn a_postponed_refresh_keeps_its_history_and_disabled_automation_takes_nothing() {
-        enabled(5, 15);
+        let _policy = enabled(5, 15);
         let refresh = AutomaticStackRefresh::default();
         let start = Instant::now();
         refresh.touch(key(None), RefreshReason::Sync, start);

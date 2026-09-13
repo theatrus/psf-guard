@@ -436,13 +436,18 @@ What queues a refresh, and how long it waits first:
   pushes the refresh out again, up to four delays. New frames outrank waiting
   grades and pull the refresh in to the arrival delay.
 
-A refresh runs on the same single stacking worker as any other build, waits
-while a quality scan of that database runs, and steps aside for you: starting
-a build or a color composition stops every automatic build, whose checkpoint
-resumes when its project comes back for a refresh a few minutes later. The
-header **Stacking** indicator marks such builds `automatic`. A refresh never
-touches a project that has no remembered previews, and never changes the
-calibration library, grades, or files.
+A refresh runs on the same single stacking worker as any other build, as
+background work that yields to previews and quality scans, waits while a
+quality scan of that database runs, and steps aside for you: starting a
+build, a color composition, a stretch, or an artifact search stops every
+automatic build (a color recomposition already running finishes, which is
+minutes at most), and the stopped build's checkpoint resumes when its project
+comes back for a refresh a few minutes later. Starting the very build the
+refresh is already running simply makes it yours. The header **Stacking**
+indicator marks automatic builds `automatic`. A refresh follows only the
+cards the grid shows, never a project without remembered previews, and never
+changes the calibration library, grades, or files. Target merges, exposure
+moves, and peer pulls count as syncs.
 
 ## Cached results
 
@@ -1081,7 +1086,8 @@ PUT  /api/settings/stacking
 Project processing settings use `{ "split_exposure_groups": false }`. Writes
 require editor access and the database-management gate. The stacking settings
 carry `automatic_previews`, `arrival_delay_minutes`, and `grade_delay_minutes`;
-a PUT may omit a delay to keep it. This is a catalog
+a PUT may omit a delay to keep it, and needs editor access like the other
+server-wide settings. This is a catalog
 setting, not a per-build request flag. Image and mono stack-group responses
 include nullable `exposure_group` metadata with an opaque `key`, a display
 `label`, and `min_seconds`/`max_seconds`. Unknown exposure has null bounds.

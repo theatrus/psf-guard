@@ -2564,7 +2564,7 @@ pub async fn update_target_route(
 /// `POST /api/db/{db_id}/projects/{project_id}/merge` — merge this project's
 /// targets and images into another project, then delete it.
 pub async fn merge_project_route(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, project_id)): Path<(String, i32)>,
     Json(req): Json<MergeProjectRequest>,
@@ -2576,6 +2576,11 @@ pub async fn merge_project_route(
             .merge_projects(project_id, req.into_project_id)
             .map_err(|e| AppError::BadRequest(e.to_string()))?
     };
+    // Targets and frames changed projects: the cards of both are out of date.
+    state.auto_stacks.touch_database(
+        &ctx.id,
+        crate::server::stack_preview::automatic::RefreshReason::Sync,
+    );
     Ok(Json(ApiResponse::success(MergeProjectResponse {
         targets_moved,
         images_moved,

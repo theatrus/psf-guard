@@ -632,6 +632,8 @@ fn prepare_search(
 
 fn enqueue_search(state: Arc<AppState>, prepared: PreparedSearch) {
     let permit = Arc::clone(&state.stack_previews.permit);
+    // A person is waiting on this: an automatic build in the way yields.
+    super::interrupt_automatic(&state);
     tokio::spawn(async move {
         let Ok(_permit) = permit.acquire_owned().await else {
             return;
