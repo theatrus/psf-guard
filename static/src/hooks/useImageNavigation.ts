@@ -29,12 +29,15 @@ export function useImageNavigation(currentImageId?: number) {
   const { filters } = useFilters();
   const { groupingMode, expandedGroups } = useGridState();
   // The grid filters by quality flag too, so keyboard navigation reads
-  // the same scoped quality results the grid does.
+  // the same scoped quality results the grid does. Without a flag filter
+  // the analysis is not fetched: the detail view must not pay for a
+  // sequence analysis it does not use.
   const quality = useScopedQuality(
     dbId,
     projectId,
     targetId,
     filters.filterName === 'all' ? undefined : filters.filterName,
+    filters.flag !== 'all',
   );
 
   // Fetch all images for navigation context

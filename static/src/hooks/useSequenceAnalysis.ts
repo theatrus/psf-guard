@@ -81,6 +81,9 @@ export function useScopedQuality(
   projectId: number | null | undefined,
   targetId: number | null | undefined,
   filterName?: string,
+  /** False leaves the analysis unfetched and the maps empty, for a caller
+   * that only needs quality when a flag filter is active. */
+  enabled = true,
 ) {
   const penalties = useScoringPreferences();
   const penaltyParams = penaltyParamsOf(penalties);
@@ -100,7 +103,7 @@ export function useScopedQuality(
   const query = useQuery({
     queryKey,
     queryFn: () => apiClient.analyzeSequence(dbId!, request),
-    enabled: !!dbId,
+    enabled: !!dbId && enabled,
     staleTime: 60000,
   });
 
