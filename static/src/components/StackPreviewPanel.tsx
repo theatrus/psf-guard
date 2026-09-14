@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { formatIntegration, totalIntegration } from '../utils/integrationTime';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type {
@@ -201,12 +202,7 @@ function appliedProcessingQueryKey(dbId: string, projectId: number, artifact: St
   return ['db', dbId, 'project', projectId, 'stack-processing', artifactStretchKey(artifact)] as const;
 }
 
-function formatExposure(seconds: number): string {
-  if (seconds < 60) return `${seconds.toFixed(0)} s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainder = Math.round(seconds % 60);
-  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
-}
+const formatExposure = formatIntegration;
 
 function registrationSummary(frame: StackFrameDecision): string {
   if (frame.disposition === 'reference') return 'Reference frame';
@@ -694,6 +690,12 @@ export default function StackPreviewPanel({
     [latest.data?.groups]
   );
 
+  // Every remembered channel's integration added up: the number people
+  // quote for a project.
+  const projectIntegrationSeconds = totalIntegration(
+    (latest.data?.groups ?? []).map((entry) => entry.group.total_exposure_seconds)
+  );
+
   return (
     <>
       <section
@@ -704,7 +706,14 @@ export default function StackPreviewPanel({
       >
         <div className="stack-preview-heading">
           <div>
-            <div className="stack-preview-eyebrow">Project integration</div>
+            <div className="stack-preview-eyebrow">
+              Project integration
+              {!collapsed && projectIntegrationSeconds > 0 && (
+                <span className="stack-preview-eyebrow-total">
+                  {' '}· {formatIntegration(projectIntegrationSeconds)} integrated
+                </span>
+              )}
+            </div>
             <h2 id="stack-preview-title">
               <button
                 type="button"
@@ -726,7 +735,9 @@ export default function StackPreviewPanel({
                     ? 'building…'
                     : `${latest.data?.groups.length ?? 0} remembered channel${
                         (latest.data?.groups.length ?? 0) === 1 ? '' : 's'
-                      }`}
+                      }${projectIntegrationSeconds > 0
+                        ? ` · ${formatIntegration(projectIntegrationSeconds)} integrated`
+                        : ''}`}
                 </small>
               )}
             </h2>
@@ -1270,7 +1281,7 @@ export default function StackPreviewPanel({
           label={channelLabel(inspector.group.filter_name, inspector.group.exposure_group)}
           summary={[
             `${inspector.group.accepted_frames} frames`,
-            `${Math.round(inspector.group.total_exposure_seconds)} s`,
+            `${formatIntegration(inspector.group.total_exposure_seconds)} integrated`,
             ...(isSkyOriented(inspector.group.sky_orientation)
               ? ['North up · East left']
               : []),

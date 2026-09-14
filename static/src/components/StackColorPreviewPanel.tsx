@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { formatIntegration, totalIntegration } from '../utils/integrationTime';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type {
@@ -187,6 +188,7 @@ function ColorCard({
     : activeJob?.total_channels ?? artifact?.total_channels ?? expectedChannelCount(kind, palette);
   const percent = state === 'completed' ? 100 : total > 0 ? Math.min(100, processed / total * 100) : 0;
   const sourceFrames = artifact?.sources.reduce((sum, source) => sum + source.accepted_frames, 0) ?? 0;
+  const sourceSeconds = totalIntegration((artifact?.sources ?? []).map((source) => source.total_exposure_seconds));
   const stateLabel =
     state === 'queued' ? 'Waiting for color processor' :
       state === 'running' ? activeJob?.phase ?? 'Building color preview' :
@@ -380,10 +382,18 @@ function ColorCard({
             <span key={`${source.role}:${source.job_id}:${source.group_index}`}>
               <strong>{roleLabels[source.role]}</strong>
               {colorSourcesLabel([source])}
-              <small>{source.accepted_frames} frames</small>
+              <small>
+                {source.accepted_frames} frames
+                {source.total_exposure_seconds != null && ` · ${formatIntegration(source.total_exposure_seconds)}`}
+              </small>
             </span>
           ))}
-          {artifact && <span className="stack-color-source-total"><strong>{sourceFrames}</strong> integrated inputs</span>}
+          {artifact && (
+            <span className="stack-color-source-total">
+              <strong>{sourceFrames}</strong> integrated inputs
+              {sourceSeconds > 0 && <> · <strong>{formatIntegration(sourceSeconds)}</strong> integrated</>}
+            </span>
+          )}
         </div>
       )}
       {artifact && (
@@ -637,7 +647,7 @@ export default function StackColorPreviewPanel({
             >
               <option value="">{choices.length ? 'Choose stack' : 'Unavailable'}</option>
               {choices.map((source) => <option key={colorSourceKey(source)} value={colorSourceKey(source)}>
-                {colorSourcesLabel([source])} · {source.accepted_frames} frames
+                {colorSourcesLabel([source])} · {source.accepted_frames} frames{source.total_exposure_seconds != null ? ` · ${formatIntegration(source.total_exposure_seconds)}` : ''}
               </option>)}
             </select>
           </label>;
@@ -821,6 +831,7 @@ export default function StackColorPreviewPanel({
             colorSourcesLabel(inspector.sources),
             `${inspector.sources.length} channel stacks`,
             `${inspector.sources.reduce((sum, source) => sum + source.accepted_frames, 0)} integrated inputs`,
+            `${formatIntegration(totalIntegration(inspector.sources.map((source) => source.total_exposure_seconds)))} integrated`,
             ...(isColorStackSkyOriented(inspector) ? ['North up · East left'] : []),
           ]}
           imageUrl={apiClient.getStackColorPreviewUrl(

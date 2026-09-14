@@ -367,6 +367,9 @@ pub struct StackColorSource {
     pub group_index: usize,
     pub artifact_revision: String,
     pub accepted_frames: usize,
+    /// Integrated exposure of the channel stack, in seconds.
+    #[serde(default)]
+    pub total_exposure_seconds: f64,
     #[serde(default)]
     pub reference_image_id: Option<i32>,
     #[serde(default)]
@@ -2953,6 +2956,7 @@ fn collect_sources(
                 group_index: entry.group.index,
                 artifact_revision: entry.artifact_revision.clone(),
                 accepted_frames: entry.group.accepted_frames,
+                total_exposure_seconds: entry.group.total_exposure_seconds,
                 reference_image_id: entry.group.reference_image_id,
                 sky_orientation: entry.group.sky_orientation.clone(),
                 registration_transform: None,
@@ -4252,6 +4256,7 @@ mod tests {
             group_index: 0,
             artifact_revision: format!("revision-{index}"),
             accepted_frames: 4,
+            total_exposure_seconds: 1200.0,
             reference_image_id: Some(index as i32 + 1),
             sky_orientation: Some(stack_orientation(
                 100,
