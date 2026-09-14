@@ -1,9 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-} from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
 import type {
@@ -161,6 +156,15 @@ export default function TauriSettings({
   // Checked folder paths. Exactly the configured roots means "everything",
   // and the request then omits image_dirs entirely.
   const [importSelectedDirs, setImportSelectedDirs] = useState<string[]>([]);
+  // The import preview renders under the database it imports into, so a
+  // scan from that database's calibration dialog lands where the eye is.
+  const importPreviewRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (importDbId) {
+      importPreviewRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [importDbId]);
+
 
   const reload = useCallback(async () => {
     setIsLoading(true);
@@ -1316,6 +1320,223 @@ export default function TauriSettings({
     );
   };
 
+  const importPreviewPanel =
+    importDbId && importProgress && importProgress.stage !== '' ? (
+      <div className="import-progress-panel">
+        {confirmImport && importDbId === confirmImport.id && (
+          <div className="import-scope-controls">
+            <label className="import-scope-choice">
+              Import
+              <select
+                value={importScope}
+                onChange={(event) => setImportScope(event.target.value as ImportScope)}
+                disabled={importRunning || isApplying}
+              >
+                <option value="all">Lights and calibration</option>
+                <option value="lights">Lights only</option>
+                <option value="calibration">Calibration only</option>
+              </select>
+            </label>
+            {importFolders.length > 0 && (
+              <div className="import-folder-tree">
+                {importFolders.map((root) => (
+                  <details key={root.path} className="import-folder-root">
+                    <summary>
+                      <label onClick={(event) => event.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={importSelectedDirs.includes(root.path)}
+                          onChange={() =>
+                            setImportSelectedDirs((current) =>
+                              current.includes(root.path)
+                                ? current.filter((d) => d !== root.path)
+                                : [...current, root.path]
+                            )
+                          }
+                        />
+                        {root.path}
+                      </label>
+                    </summary>
+                    {root.children.map((child) => (
+                      <div key={child.path} className="import-folder-child">
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={
+                              importSelectedDirs.includes(child.path) ||
+                              importSelectedDirs.includes(root.path)
+                            }
+                            disabled={importSelectedDirs.includes(root.path)}
+                            onChange={() =>
+                              setImportSelectedDirs((current) =>
+                                current.includes(child.path)
+                                  ? current.filter((d) => d !== child.path)
+                                  : [...current, child.path]
+                              )
+                            }
+                          />
+                          {child.name}
+                        </label>
+                        {child.children.length > 0 && (
+                          <div className="import-folder-grandchildren">
+                            {child.children.map((grandchild) => (
+                              <label key={grandchild.path}>
+                                <input
+                                  type="checkbox"
+                                  checked={
+                                    importSelectedDirs.includes(grandchild.path) ||
+                                    importSelectedDirs.includes(child.path) ||
+                                    importSelectedDirs.includes(root.path)
+                                  }
+                                  disabled={
+                                    importSelectedDirs.includes(child.path) ||
+                                    importSelectedDirs.includes(root.path)
+                                  }
+                                  onChange={() =>
+                                    setImportSelectedDirs((current) =>
+                                      current.includes(grandchild.path)
+                                        ? current.filter((d) => d !== grandchild.path)
+                                        : [...current, grandchild.path]
+                                    )
+                                  }
+                                />
+                                {grandchild.name}
+                              </label>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </details>
+                ))}
+              </div>
+            )}
+            <label className="quality-analysis-option import-skip-processed">
+              <input
+                type="checkbox"
+                checked={importSkipProcessed}
+                onChange={(event) => setImportSkipProcessed(event.target.checked)}
+                disabled={importRunning || isApplying}
+              />
+              <span>
+                <small>
+                  Skip processing artifacts (integration masters and
+                  calibrated/registered intermediates). Useful when a scanned
+                  folder contains a processing tree whose derived files repeat
+                  exposures already cataloged.
+                </small>
+              </span>
+            </label>
+            <button
+              className="browse-button"
+              onClick={handleRepreviewImport}
+              disabled={importRunning || isApplying}
+              title="Re-run the preview with the selection above; nothing is written."
+            >
+              Update preview
+            </button>
+          </div>
+        )}
+        <div className="import-progress-line">
+          {importRunning && <span className="import-spinner">⏳ </span>}
+          {describeImportProgress(importProgress)}
+        </div>
+        {importProgress.stage === 'complete' && importProgress.outcome && (
+          <>
+            {(importProgress.outcome.skipped_processed ?? 0) > 0 && (
+              <div className="muted">
+                {importProgress.outcome.skipped_processed} processing artifact(s)
+                (masters, calibrated/registered intermediates) skipped.
+              </div>
+            )}
+            {(importProgress.outcome.skipped_out_of_scope ?? 0) > 0 && (
+              <div className="muted">
+                {importProgress.outcome.skipped_out_of_scope} frame(s) outside the
+                selected scope.
+              </div>
+            )}
+            {importProgress.outcome.attach_summaries.length > 0 && (
+              <ul className="import-project-list">
+                {importProgress.outcome.attach_summaries.map((a) => (
+                  <li key={`${a.project}:${a.target}`}>
+                    ↳ existing {a.project} / {a.target} — +{a.frames} frame(s) (
+                    {a.matched_by} match)
+                  </li>
+                ))}
+              </ul>
+            )}
+            {importProgress.outcome.project_summaries.length > 0 && (
+              <ul className="import-project-list">
+                {importProgress.outcome.project_summaries.map((p) => (
+                  <li key={p.name}>
+                    NEW {p.name} — {p.targets} target(s), {p.frames} frame(s)
+                  </li>
+                ))}
+              </ul>
+            )}
+            {importProgress.outcome.dry_run &&
+              confirmImport &&
+              importDbId === confirmImport.id && (
+                <div className="modal-buttons import-confirm-buttons">
+                  {importProgress.outcome.imported +
+                    importProgress.outcome.calibration.imported +
+                    importProgress.outcome.calibration.updated >
+                  0 ? (
+                    <div className="import-confirm-content">
+                      {importProgress.outcome.imported > 0 && <label className="quality-analysis-option">
+                        <input
+                          type="checkbox"
+                          checked={importAnalyzeQuality}
+                          onChange={(event) =>
+                            setImportAnalyzeQuality(event.target.checked)
+                          }
+                        />
+                        <span>
+                          <strong>Queue background quality analysis</strong>
+                          <small>
+                            Reads every image to measure stars, background, clouds,
+                            obstructions, and pointing. This can take a long time,
+                            especially in a debug build. You can run it later from this
+                            database&apos;s settings.
+                          </small>
+                        </span>
+                      </label>}
+                      <div className="modal-buttons import-action-buttons">
+                      <button
+                        className="save-button"
+                        onClick={handleConfirmImport}
+                        disabled={isApplying}
+                      >
+                        Import{' '}
+                        {importProgress.outcome.imported +
+                          importProgress.outcome.calibration.imported +
+                          importProgress.outcome.calibration.updated}{' '}
+                        frame(s)
+                      </button>
+                      <button
+                        className="cancel-button"
+                        onClick={() => {
+                          setConfirmImport(null);
+                          setStatusMessage('Import cancelled — nothing was written.');
+                        }}
+                        disabled={isApplying}
+                      >
+                        Cancel
+                      </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <span className="muted">
+                      Nothing new to import — every frame is already in the database.
+                    </span>
+                  )}
+                </div>
+              )}
+          </>
+        )}
+      </div>
+    ) : null;
+
   return (
     <div className="tauri-settings modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -1499,6 +1720,9 @@ export default function TauriSettings({
                     )}
                   </div>
                   {isEditing && <div id={editorId}>{renderDatabaseForm(entry)}</div>}
+                  {importDbId === entry.id && importPreviewPanel && (
+                    <div ref={importPreviewRef}>{importPreviewPanel}</div>
+                  )}
                 </section>
               );
             })}
@@ -1525,220 +1749,10 @@ export default function TauriSettings({
               </div>
             )}
 
-            {importDbId && importProgress && importProgress.stage !== '' && (
-              <div className="import-progress-panel">
-                {confirmImport && importDbId === confirmImport.id && (
-                  <div className="import-scope-controls">
-                    <label className="import-scope-choice">
-                      Import
-                      <select
-                        value={importScope}
-                        onChange={(event) => setImportScope(event.target.value as ImportScope)}
-                        disabled={importRunning || isApplying}
-                      >
-                        <option value="all">Lights and calibration</option>
-                        <option value="lights">Lights only</option>
-                        <option value="calibration">Calibration only</option>
-                      </select>
-                    </label>
-                    {importFolders.length > 0 && (
-                      <div className="import-folder-tree">
-                        {importFolders.map((root) => (
-                          <details key={root.path} className="import-folder-root">
-                            <summary>
-                              <label onClick={(event) => event.stopPropagation()}>
-                                <input
-                                  type="checkbox"
-                                  checked={importSelectedDirs.includes(root.path)}
-                                  onChange={() =>
-                                    setImportSelectedDirs((current) =>
-                                      current.includes(root.path)
-                                        ? current.filter((d) => d !== root.path)
-                                        : [...current, root.path]
-                                    )
-                                  }
-                                />
-                                {root.path}
-                              </label>
-                            </summary>
-                            {root.children.map((child) => (
-                              <div key={child.path} className="import-folder-child">
-                                <label>
-                                  <input
-                                    type="checkbox"
-                                    checked={
-                                      importSelectedDirs.includes(child.path) ||
-                                      importSelectedDirs.includes(root.path)
-                                    }
-                                    disabled={importSelectedDirs.includes(root.path)}
-                                    onChange={() =>
-                                      setImportSelectedDirs((current) =>
-                                        current.includes(child.path)
-                                          ? current.filter((d) => d !== child.path)
-                                          : [...current, child.path]
-                                      )
-                                    }
-                                  />
-                                  {child.name}
-                                </label>
-                                {child.children.length > 0 && (
-                                  <div className="import-folder-grandchildren">
-                                    {child.children.map((grandchild) => (
-                                      <label key={grandchild.path}>
-                                        <input
-                                          type="checkbox"
-                                          checked={
-                                            importSelectedDirs.includes(grandchild.path) ||
-                                            importSelectedDirs.includes(child.path) ||
-                                            importSelectedDirs.includes(root.path)
-                                          }
-                                          disabled={
-                                            importSelectedDirs.includes(child.path) ||
-                                            importSelectedDirs.includes(root.path)
-                                          }
-                                          onChange={() =>
-                                            setImportSelectedDirs((current) =>
-                                              current.includes(grandchild.path)
-                                                ? current.filter((d) => d !== grandchild.path)
-                                                : [...current, grandchild.path]
-                                            )
-                                          }
-                                        />
-                                        {grandchild.name}
-                                      </label>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                          </details>
-                        ))}
-                      </div>
-                    )}
-                    <label className="quality-analysis-option import-skip-processed">
-                      <input
-                        type="checkbox"
-                        checked={importSkipProcessed}
-                        onChange={(event) => setImportSkipProcessed(event.target.checked)}
-                        disabled={importRunning || isApplying}
-                      />
-                      <span>
-                        <small>
-                          Skip processing artifacts (integration masters and
-                          calibrated/registered intermediates). Useful when a scanned
-                          folder contains a processing tree whose derived files repeat
-                          exposures already cataloged.
-                        </small>
-                      </span>
-                    </label>
-                    <button
-                      className="browse-button"
-                      onClick={handleRepreviewImport}
-                      disabled={importRunning || isApplying}
-                      title="Re-run the preview with the selection above; nothing is written."
-                    >
-                      Update preview
-                    </button>
-                  </div>
-                )}
-                <div className="import-progress-line">
-                  {importRunning && <span className="import-spinner">⏳ </span>}
-                  {describeImportProgress(importProgress)}
-                </div>
-                {importProgress.stage === 'complete' && importProgress.outcome && (
-                  <>
-                    {(importProgress.outcome.skipped_processed ?? 0) > 0 && (
-                      <div className="muted">
-                        {importProgress.outcome.skipped_processed} processing artifact(s)
-                        (masters, calibrated/registered intermediates) skipped.
-                      </div>
-                    )}
-                    {(importProgress.outcome.skipped_out_of_scope ?? 0) > 0 && (
-                      <div className="muted">
-                        {importProgress.outcome.skipped_out_of_scope} frame(s) outside the
-                        selected scope.
-                      </div>
-                    )}
-                    {importProgress.outcome.attach_summaries.length > 0 && (
-                      <ul className="import-project-list">
-                        {importProgress.outcome.attach_summaries.map((a) => (
-                          <li key={`${a.project}:${a.target}`}>
-                            ↳ existing {a.project} / {a.target} — +{a.frames} frame(s) (
-                            {a.matched_by} match)
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    {importProgress.outcome.project_summaries.length > 0 && (
-                      <ul className="import-project-list">
-                        {importProgress.outcome.project_summaries.map((p) => (
-                          <li key={p.name}>
-                            NEW {p.name} — {p.targets} target(s), {p.frames} frame(s)
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    {importProgress.outcome.dry_run &&
-                      confirmImport &&
-                      importDbId === confirmImport.id && (
-                        <div className="modal-buttons import-confirm-buttons">
-                          {importProgress.outcome.imported +
-                            importProgress.outcome.calibration.imported +
-                            importProgress.outcome.calibration.updated >
-                          0 ? (
-                            <div className="import-confirm-content">
-                              {importProgress.outcome.imported > 0 && <label className="quality-analysis-option">
-                                <input
-                                  type="checkbox"
-                                  checked={importAnalyzeQuality}
-                                  onChange={(event) =>
-                                    setImportAnalyzeQuality(event.target.checked)
-                                  }
-                                />
-                                <span>
-                                  <strong>Queue background quality analysis</strong>
-                                  <small>
-                                    Reads every image to measure stars, background, clouds,
-                                    obstructions, and pointing. This can take a long time,
-                                    especially in a debug build. You can run it later from this
-                                    database&apos;s settings.
-                                  </small>
-                                </span>
-                              </label>}
-                              <div className="modal-buttons import-action-buttons">
-                              <button
-                                className="save-button"
-                                onClick={handleConfirmImport}
-                                disabled={isApplying}
-                              >
-                                Import{' '}
-                                {importProgress.outcome.imported +
-                                  importProgress.outcome.calibration.imported +
-                                  importProgress.outcome.calibration.updated}{' '}
-                                frame(s)
-                              </button>
-                              <button
-                                className="cancel-button"
-                                onClick={() => {
-                                  setConfirmImport(null);
-                                  setStatusMessage('Import cancelled — nothing was written.');
-                                }}
-                                disabled={isApplying}
-                              >
-                                Cancel
-                              </button>
-                              </div>
-                            </div>
-                          ) : (
-                            <span className="muted">
-                              Nothing new to import — every frame is already in the database.
-                            </span>
-                          )}
-                        </div>
-                      )}
-                  </>
-                )}
-              </div>
+            {/* An import whose database is not in the list above (one just
+                created, before the list refreshes) still shows here. */}
+            {importPreviewPanel && !databases.some((entry) => entry.id === importDbId) && (
+              <div ref={importPreviewRef}>{importPreviewPanel}</div>
             )}
           </div>
 
