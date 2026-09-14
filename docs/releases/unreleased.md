@@ -71,6 +71,10 @@
 
 ## Fixed
 
+- The Settings footer now reports when an import finishes instead of
+  staying on "Importing…". A calibration-only import reads "Imported 12
+  calibration frame(s)." rather than "0 light frame(s) — nothing new".
+
 - The import preview now appears under the database it imports into, and
   the page scrolls to it, instead of at the bottom of Settings. A scan
   started from a database's calibration library dialog lands where you were
