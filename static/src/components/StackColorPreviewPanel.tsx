@@ -647,7 +647,7 @@ export default function StackColorPreviewPanel({
             >
               <option value="">{choices.length ? 'Choose stack' : 'Unavailable'}</option>
               {choices.map((source) => <option key={colorSourceKey(source)} value={colorSourceKey(source)}>
-                {colorSourcesLabel([source])} · {source.accepted_frames} frames{source.total_exposure_seconds != null ? ` · ${formatIntegration(source.total_exposure_seconds)}` : ''}
+                {colorSourcesLabel([source])} · {source.accepted_frames} frames
               </option>)}
             </select>
           </label>;
