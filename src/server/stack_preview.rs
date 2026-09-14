@@ -1930,6 +1930,9 @@ fn quality_results(
                 &image.metadata,
                 &ctx.astrometry_evidence,
                 expected_by_image.get(&image.id).copied().flatten(),
+                // The planned rotation is display only; the rotation-skew flag
+                // comes from the solved rotations alone and still excludes here.
+                None,
                 mapped_source.map(|source| source.path.as_path()),
                 mapped_sources.is_invalid(image.id),
             );

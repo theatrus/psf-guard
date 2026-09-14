@@ -13,6 +13,7 @@ import { useDbProjectTarget, useGridState, useFilters } from '../hooks/useUrlSta
 import ImageCard from './ImageCard';
 import LazyImageCard from './LazyImageCard';
 import FilterControls, { type FilterOptions } from './FilterControls';
+import { availableFlags, matchesFlagFilter } from '../utils/flagFilter';
 import StatsDashboard from './StatsDashboard';
 import UndoRedoToolbar from './UndoRedoToolbar';
 import StackPreviewPanel from './StackPreviewPanel';
@@ -82,6 +83,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
       dateStart: filterOptions.dateRange.start?.toISOString().split('T')[0] || '',
       dateEnd: filterOptions.dateRange.end?.toISOString().split('T')[0] || '',
       searchTerm: filterOptions.searchTerm,
+      flag: filterOptions.flag,
     });
   }, [updateFilters]);
 
@@ -132,6 +134,16 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     && imagesToMove.length === selectedImages.size
     && imagesToMove.every(image => image.target_id === imagesToMove[0].target_id);
 
+  const quality = useScopedQuality(
+    dbId,
+    projectId,
+    targetId,
+    filters.filterName === 'all' ? undefined : filters.filterName,
+  );
+
+  const flagFilterActive = filters.flag !== 'all';
+  const flagFilterReady = !quality.isLoading && !quality.error;
+
   // Filter images based on current filters
   const filteredImages = useMemo(() => {
     return allImages.filter(image => {
@@ -164,10 +176,23 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
           return false;
         }
       }
+
+      // Quality flag filter. While the analysis is still loading, or could
+      // not load, nothing is hidden: an empty grid would read as "no such
+      // frames" rather than "not known yet".
+      if (flagFilterActive && flagFilterReady
+        && !matchesFlagFilter(filters.flag, quality.qualityByImage.get(image.id))) {
+        return false;
+      }
       
       return true;
     });
-  }, [allImages, filters]);
+  }, [allImages, filters, flagFilterActive, flagFilterReady, quality.qualityByImage]);
+
+  const availableFlagsForScope = useMemo(
+    () => availableFlags(quality.qualityByImage.values()),
+    [quality.qualityByImage]
+  );
   
   // Get available filter names from all images (not just filtered)
   const availableFilters = useMemo(() => {
@@ -178,12 +203,6 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     return Array.from(filterSet).sort();
   }, [allImages]);
 
-  const quality = useScopedQuality(
-    dbId,
-    projectId,
-    targetId,
-    filters.filterName === 'all' ? undefined : filters.filterName,
-  );
   const spatialScan = useSpatialScan(
     dbId,
     targetId ?? undefined,
@@ -632,6 +651,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     filters.dateRange.start ?? '',
     filters.dateRange.end ?? '',
     filters.searchTerm,
+    filters.flag,
   ].join('\u0000');
   const previousSelectionFilterKey = useRef(selectionFilterKey);
   useEffect(() => {
@@ -817,6 +837,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
             <FilterControls 
               onFilterChange={handleFilterChange}
               availableFilters={availableFilters}
+              availableFlags={availableFlagsForScope}
               currentFilters={filters}
             />
             

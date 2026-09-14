@@ -2127,6 +2127,15 @@ export interface ImageQualityResult {
     /** Residual from the segment's own robust center, as a field fraction. */
     reference_field_fraction?: number;
     drift_rate_arcsec_per_hour?: number;
+    /** Direction of celestial north from image up, degrees, positive toward image right. */
+    field_rotation_deg?: number;
+    field_mirrored?: boolean;
+    /** This frame's rotation against its framing segment, modulo a half turn, in (-90, 90]. */
+    rotation_skew_deg?: number;
+    /** The rotation Target Scheduler planned for the target, as recorded. */
+    planned_rotation_deg?: number;
+    /** Solved minus planned rotation, modulo a half turn; display only. */
+    planned_rotation_offset_deg?: number;
     matched_stars?: number;
     rms_arcsec?: number;
     error?: string;
@@ -2239,6 +2248,8 @@ export interface SequenceSummary {
   tracking_issues_detected: boolean;
   out_of_target_count: number;
   plate_solve_failed_count: number;
+  /** Frames whose solved field rotation departs from their framing segment. */
+  rotation_skew_count?: number;
   satellite_risk_count: number;
 }
 

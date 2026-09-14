@@ -6111,7 +6111,7 @@ pub async fn analyze_sequence(
     // Fetch images from the requested target, project, or database. Wider
     // scopes still score each target/filter group independently and only read
     // evidence already stored in metadata or caches.
-    let (images_data, expected_by_image, mapped_sources) = {
+    let (images_data, expected_by_image, planned_rotation_by_image, mapped_sources) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
@@ -6147,6 +6147,7 @@ pub async fn analyze_sequence(
             crate::acquisition_context::FramingResolver::new(&conn).map_err(AppError::db)?;
         let mut images_data = Vec::new();
         let mut expected_by_image = std::collections::HashMap::new();
+        let mut planned_rotation_by_image = std::collections::HashMap::new();
         let all_images = db
             .query_images_scoped(None, params.project_id, params.target_id, None, 0)
             .map_err(AppError::db)?;
@@ -6164,6 +6165,13 @@ pub async fn analyze_sequence(
                     .expected_for_grading(&conn, &image.0)
                     .map_err(AppError::db)?,
             );
+            planned_rotation_by_image.insert(
+                image.0.id,
+                resolver
+                    .expected_framing(&conn, &image.0)
+                    .map_err(AppError::db)?
+                    .and_then(|framing| framing.rotation_deg),
+            );
             images_data.push(image);
         }
 
@@ -6172,7 +6180,12 @@ pub async fn analyze_sequence(
             &ctx.image_dir_paths,
             images_data.iter().map(|(image, _, _)| image),
         )?;
-        (images_data, expected_by_image, mapped_sources)
+        (
+            images_data,
+            expected_by_image,
+            planned_rotation_by_image,
+            mapped_sources,
+        )
     };
 
     if images_data.is_empty() {
@@ -6247,6 +6260,7 @@ pub async fn analyze_sequence(
                 &img.metadata,
                 &astrometry_evidence,
                 expected_by_image.get(&img.id).copied().flatten(),
+                planned_rotation_by_image.get(&img.id).copied().flatten(),
                 mapped_source.map(|source| source.path.as_path()),
                 mapped_sources.is_invalid(img.id),
             );
@@ -6342,7 +6356,14 @@ pub async fn get_image_quality(
     };
 
     // Get the target image and its context from database
-    let (target_image, all_filter_images, target_name, expected_by_image, mapped_sources) = {
+    let (
+        target_image,
+        all_filter_images,
+        target_name,
+        expected_by_image,
+        planned_rotation_by_image,
+        mapped_sources,
+    ) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
@@ -6380,6 +6401,15 @@ pub async fn get_image_quality(
             })
             .collect::<Result<std::collections::HashMap<_, _>, _>>()
             .map_err(AppError::db)?;
+        let planned_rotation_by_image = filter_images
+            .iter()
+            .map(|(image, _, _)| {
+                resolver
+                    .expected_framing(&conn, image)
+                    .map(|framing| (image.id, framing.and_then(|framing| framing.rotation_deg)))
+            })
+            .collect::<Result<std::collections::HashMap<_, _>, _>>()
+            .map_err(AppError::db)?;
 
         let mapped_sources = crate::server::remote_upload::mapped_light_sources(
             &conn,
@@ -6392,6 +6422,7 @@ pub async fn get_image_quality(
             filter_images,
             target_name,
             expected_by_image,
+            planned_rotation_by_image,
             mapped_sources,
         )
     };
@@ -6442,6 +6473,7 @@ pub async fn get_image_quality(
                 &img.metadata,
                 &astrometry_evidence,
                 expected_by_image.get(&img.id).copied().flatten(),
+                planned_rotation_by_image.get(&img.id).copied().flatten(),
                 mapped_source.map(|source| source.path.as_path()),
                 mapped_sources.is_invalid(img.id),
             );
@@ -6667,12 +6699,14 @@ pub(crate) fn merge_spatial_metrics(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn merge_astrometry_metrics(
     metrics: &mut crate::sequence_analysis::ImageMetrics,
     cache_dir: &std::path::Path,
     metadata_json: &str,
     evidence: &crate::astrometry::AstrometryEvidenceCache,
     expected_target: Option<(f64, f64)>,
+    planned_rotation_deg: Option<f64>,
     mapped_source_path: Option<&std::path::Path>,
     mapped_source_invalid: bool,
 ) {
@@ -6694,6 +6728,9 @@ pub(crate) fn merge_astrometry_metrics(
         return;
     }
     metrics.astrometry = crate::sequence_analysis::astrometry_metrics_from_analysis(&analysis);
+    if let Some(astrometry) = metrics.astrometry.as_mut() {
+        astrometry.planned_rotation_deg = planned_rotation_deg;
+    }
     metrics.satellite =
         crate::satellites::persisted_analysis(cache_dir, metrics.image_id, &analysis)
             .as_ref()

@@ -232,6 +232,16 @@ export default function ImageCard({
             offset {(quality.pointing.field_fraction_offset * 100).toFixed(0)}% field
           </span>
         )}
+        {qualityPresentation === 'full'
+          && quality?.pointing?.rotation_skew_deg != null
+          && (quality.flags ?? []).includes('rotation_skew') && (
+          <span
+            className="analysis-signal danger"
+            title={`Solved field rotation ${quality.pointing.field_rotation_deg?.toFixed(1) ?? '?'}°, ${quality.pointing.rotation_skew_deg > 0 ? '+' : ''}${quality.pointing.rotation_skew_deg.toFixed(1)}° from the rest of the framing segment`}
+          >
+            rotation {quality.pointing.rotation_skew_deg > 0 ? '+' : ''}{quality.pointing.rotation_skew_deg.toFixed(1)}°
+          </span>
+        )}
         {qualityPresentation === 'full' && quality?.pointing?.solve_failed && (
           <span
             className="analysis-signal warning"

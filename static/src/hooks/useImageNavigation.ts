@@ -15,6 +15,8 @@ import {
   imageDetailReturnView,
 } from '../utils/imageDetailRoutes';
 import { matchesStatusFilter } from '../utils/statusFilter';
+import { matchesFlagFilter } from '../utils/flagFilter';
+import { useScopedQuality } from './useSequenceAnalysis';
 
 /**
  * Hook for navigating between images in the current context
@@ -26,6 +28,17 @@ export function useImageNavigation(currentImageId?: number) {
   const { dbId, projectId, targetId } = useDbProjectTarget();
   const { filters } = useFilters();
   const { groupingMode, expandedGroups } = useGridState();
+  // The grid filters by quality flag too, so keyboard navigation reads
+  // the same scoped quality results the grid does. Without a flag filter
+  // the analysis is not fetched: the detail view must not pay for a
+  // sequence analysis it does not use.
+  const quality = useScopedQuality(
+    dbId,
+    projectId,
+    targetId,
+    filters.filterName === 'all' ? undefined : filters.filterName,
+    filters.flag !== 'all',
+  );
 
   // Fetch all images for navigation context
   const { data: allImages = [] } = useQuery({
@@ -71,10 +84,17 @@ export function useImageNavigation(currentImageId?: number) {
           return false;
         }
       }
+
+      // Quality flag filter, once the analysis is in; until then, or if it
+      // failed, navigation walks the unfiltered set rather than none.
+      if (filters.flag !== 'all' && !quality.isLoading && !quality.error
+        && !matchesFlagFilter(filters.flag, quality.qualityByImage.get(image.id))) {
+        return false;
+      }
       
       return true;
     });
-  }, [allImages, filters]);
+  }, [allImages, filters, quality.isLoading, quality.error, quality.qualityByImage]);
 
   // Group and sort images the same way as GroupedImageGrid
   const imageGroups = useMemo(() => {

@@ -4,6 +4,7 @@ import {
   STATUS_FILTER_OPTIONS,
   type StatusFilter,
 } from '../utils/statusFilter';
+import { ALL_FLAGS, flagFilterLabel, parseFlagFilter } from '../utils/flagFilter';
 
 export interface FilterOptions {
   status: StatusFilter;
@@ -13,11 +14,15 @@ export interface FilterOptions {
     end: Date | null;
   };
   searchTerm: string;
+  /** A quality issue category to keep, as the API spells it, or `all`. */
+  flag: string;
 }
 
 interface FilterControlsProps {
   onFilterChange: (filters: FilterOptions) => void;
   availableFilters: string[];
+  /** Quality flags any loaded image carries; the Flag select offers these. */
+  availableFlags?: string[];
   currentFilters: {
     status: string;
     filterName: string;
@@ -26,10 +31,16 @@ interface FilterControlsProps {
       end: string | null;
     };
     searchTerm: string;
+    flag?: string;
   };
 }
 
-export default function FilterControls({ onFilterChange, availableFilters, currentFilters }: FilterControlsProps) {
+export default function FilterControls({
+  onFilterChange,
+  availableFilters,
+  availableFlags = [],
+  currentFilters,
+}: FilterControlsProps) {
   const [showDateFilters, setShowDateFilters] = useState(
     Boolean(currentFilters.dateRange.start || currentFilters.dateRange.end),
   );
@@ -48,6 +59,7 @@ export default function FilterControls({ onFilterChange, availableFilters, curre
       end: currentFilters.dateRange.end ? new Date(currentFilters.dateRange.end) : null,
     },
     searchTerm: currentFilters.searchTerm,
+    flag: parseFlagFilter(currentFilters.flag),
   }), [currentFilters]);
 
   const handleStatusChange = (status: StatusFilter) => {
@@ -77,6 +89,10 @@ export default function FilterControls({ onFilterChange, availableFilters, curre
     onFilterChange(newFilters);
   };
 
+  const handleFlagChange = (flag: string) => {
+    onFilterChange({ ...filters, flag: parseFlagFilter(flag) });
+  };
+
   const resetFilters = () => {
     const defaultFilters: FilterOptions = {
       status: 'all',
@@ -86,6 +102,7 @@ export default function FilterControls({ onFilterChange, availableFilters, curre
         end: null,
       },
       searchTerm: '',
+      flag: ALL_FLAGS,
     };
     onFilterChange(defaultFilters);
     setShowDateFilters(false);
@@ -96,7 +113,13 @@ export default function FilterControls({ onFilterChange, availableFilters, curre
   const hasFilters = filters.status !== 'all'
     || filters.filterName !== 'all'
     || dateFilterCount > 0
-    || filters.searchTerm !== '';
+    || filters.searchTerm !== ''
+    || filters.flag !== ALL_FLAGS;
+  // A chosen flag stays offered even when the current scope has no image
+  // carrying it, so the select keeps showing what the URL asked for.
+  const flagOptions = filters.flag !== ALL_FLAGS && !availableFlags.includes(filters.flag)
+    ? [filters.flag, ...availableFlags]
+    : availableFlags;
 
   return (
     <div className="filter-controls compact">
@@ -126,6 +149,21 @@ export default function FilterControls({ onFilterChange, availableFilters, curre
             <option value="all">All</option>
             {availableFilters.map(filter => (
               <option key={filter} value={filter}>{filter}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="filter-input-group">
+          <label htmlFor="image-flag-filter">Flag:</label>
+          <select
+            id="image-flag-filter"
+            value={filters.flag}
+            onChange={(e) => handleFlagChange(e.target.value)}
+            title="Keep only images whose quality analysis raised this flag"
+          >
+            <option value={ALL_FLAGS}>All</option>
+            {flagOptions.map(flag => (
+              <option key={flag} value={flag}>{flagFilterLabel(flag)}</option>
             ))}
           </select>
         </div>
