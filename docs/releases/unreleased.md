@@ -60,6 +60,12 @@
 
 ## Changed
 
+- Stack and color previews state integrated exposure in hours and minutes.
+  A stack card and its inspector read "2h 5m" instead of "125m 12s", the
+  stack panel adds up every remembered channel into a project total, and a
+  color preview now shows each channel stack's integration and the total
+  across its channels, which it never showed before.
+
 ## Fixed
 
 - PSF Guard now checks a flat master against the flats that made it. Spots
