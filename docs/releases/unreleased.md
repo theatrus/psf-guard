@@ -71,6 +71,11 @@
 
 ## Fixed
 
+- The import preview now appears under the database it imports into, and
+  the page scrolls to it, instead of at the bottom of Settings. A scan
+  started from a database's calibration library dialog lands where you were
+  looking.
+
 - PSF Guard now checks a flat master against the flats that made it. Spots
   that fade across the run (dew drying off the sensor window) used to survive
   clipping and put a bright bead into every light wherever the sky is bright.
