@@ -33,7 +33,7 @@ A same-name replacement file is therefore never graded from stale WCS.
 | **Stable offset** | At least three consecutive solves form a stable deliberate framing cluster while the target remains inside the solved footprint | Advisory only; no score cap or automatic rejection |
 | **Pointing jump** | A short run leaves one framing cluster and later returns to it | Total score is capped at 0.30; rejection is recommended |
 | **Pointing drift** | A robust Theil-Sen trend within one contiguous framing segment exceeds the field/scatter threshold after detrending | Affected tail frames are capped at 0.30; rejection is recommended |
-| **Rotation skew** | Fewer than three consecutive frames sit more than 2° from the rotation the rotator held on either side, compared modulo a half turn so a meridian flip is the same framing | Total score is capped at 0.30; rejection is recommended; stack previews leave the frame out |
+| **Rotation skew** | A run of frames sits more than 2° from the rotation the rotator held, and is either shorter than three frames or an excursion that returns to the held angle; compared modulo a half turn so a meridian flip is the same framing | Total score is capped at 0.30; rejection is recommended; stack previews leave the frame out |
 | **Plate solve failed** | Pixels decoded and the configured solver had enough information, but no field matched (or too few stars were detected) | Modest score reduction; no automatic rejection unless independent cloud, obstruction, or tracking evidence corroborates it |
 | **Solve unavailable** | Missing catalogs/index, decode error, unsupported image, cancellation, or internal/resource failure | Operational error only; no quality flag or automatic grade |
 
@@ -52,7 +52,9 @@ north from image up, and whether the field is mirrored. Within each framing
 segment, consecutive frames whose rotation agrees within the tolerance form
 a rotation run. A run of three or more frames is a framing the rotator held,
 so a re-rotation mid-session is not a fault, just as a pointing cluster of
-three is deliberate framing. A shorter run is skew: PSF Guard measures it
+three is deliberate framing; a run that leaves the held angle and comes back
+to it is an excursion, not framing, like a pointing jump. A shorter run is
+skew: PSF Guard measures it
 against the nearest held framing and flags it, because such a frame overlaps
 the rest less and crops the stack. When Target Scheduler recorded a planned
 rotation for the target, the sequence response also carries it beside the
@@ -129,8 +131,8 @@ GET  /api/db/{db_id}/analysis/quality-scan
 GET  /api/db/{db_id}/analysis/sequence?target_id=...&weight_pointing=...
 ```
 
-The rotation skew tolerance is `rotation_skew_tolerance_deg` in the analyzer
-configuration, 2° by default.
+The rotation skew tolerance is fixed at 2° (the analyzer's
+`rotation_skew_tolerance_deg`); no request or setting changes it yet.
 
 The default pointing weight is additive and missing-metric-safe: databases
 that have not been scanned keep their previous scores because the remaining

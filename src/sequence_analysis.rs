@@ -324,21 +324,41 @@ fn half_turn_median(rotations: &[f64]) -> f64 {
 }
 
 /// Split rotations, in capture order, into runs of consecutive frames that
-/// agree within `tolerance` of the run's own robust center (modulo a half
-/// turn). Returns `(first, last, center)` index ranges into `rotations`.
+/// agree within `tolerance` of the run's own center (modulo a half turn).
+/// Returns `(first, last, center)` index ranges into `rotations`.
+///
+/// Every member of a run sits within the tolerance of its center, so the
+/// members unwrap about the run's first sample onto one line, and the
+/// center is a plain median of those unwrapped values kept in sorted order.
+/// That keeps a thousand-frame session to a few million moves rather than
+/// a sample-median per appended frame.
 fn rotation_runs(rotations: &[f64], tolerance: f64) -> Vec<(usize, usize, f64)> {
     let mut runs: Vec<(usize, usize, f64)> = Vec::new();
+    let Some(&first_value) = rotations.first() else {
+        return runs;
+    };
     let mut first = 0usize;
-    for index in 1..=rotations.len() {
-        let extend = index < rotations.len() && {
-            let center = half_turn_median(&rotations[first..index]);
-            wrap_half_turn(rotations[index] - center).abs() <= tolerance
-        };
-        if !extend {
-            runs.push((first, index - 1, half_turn_median(&rotations[first..index])));
+    let mut origin = first_value;
+    let mut sorted: Vec<f64> = vec![0.0];
+    let center = |origin: f64, sorted: &[f64]| origin + sorted[sorted.len() / 2];
+    for (index, &rotation) in rotations.iter().enumerate().skip(1) {
+        let unwrapped = wrap_half_turn(rotation - origin);
+        let current = center(origin, &sorted);
+        if wrap_half_turn(rotation - current).abs() <= tolerance {
+            let at = sorted.partition_point(|value| *value < unwrapped);
+            sorted.insert(at, unwrapped);
+        } else {
+            runs.push((first, index - 1, wrap_half_turn(current)));
             first = index;
+            origin = rotation;
+            sorted = vec![0.0];
         }
     }
+    runs.push((
+        first,
+        rotations.len() - 1,
+        wrap_half_turn(center(origin, &sorted)),
+    ));
     runs
 }
 
@@ -2381,13 +2401,30 @@ impl SequenceAnalyzer {
                     .collect::<Vec<_>>(),
                 tolerance,
             );
+            // A run that leaves the held angle and comes back to it is an
+            // excursion, not framing, however long it lasted short of half
+            // the segment: the same rule pointing applies to a jump.
+            let returning = |run_index: usize| -> bool {
+                let (first, last, _) = rotation_runs[run_index];
+                run_index > 0
+                    && run_index + 1 < rotation_runs.len()
+                    && wrap_half_turn(
+                        rotation_runs[run_index - 1].2 - rotation_runs[run_index + 1].2,
+                    )
+                    .abs()
+                        <= tolerance
+                    && (last - first + 1) * 2 < rotations.len()
+            };
             let held: Vec<(usize, usize, f64)> = rotation_runs
                 .iter()
-                .filter(|(first, last, _)| last - first + 1 >= 3)
-                .copied()
+                .enumerate()
+                .filter(|(run_index, (first, last, _))| {
+                    last - first + 1 >= 3 && !returning(*run_index)
+                })
+                .map(|(_, run)| *run)
                 .collect();
-            for &(first, last, center) in &rotation_runs {
-                let stable = last - first + 1 >= 3;
+            for (run_index, &(first, last, center)) in rotation_runs.iter().enumerate() {
+                let stable = last - first + 1 >= 3 && !returning(run_index);
                 // A short run is measured against the nearest held framing;
                 // with none held, against the segment as a whole.
                 let reference = if stable {
@@ -4694,6 +4731,51 @@ mod tests {
         // Measured against the nearest held framing, the 90° run.
         let skew = stray.pointing.as_ref().unwrap().rotation_skew_deg.unwrap();
         assert!((skew - (-45.0)).abs() < 0.2, "skew {skew}");
+    }
+
+    #[test]
+    fn a_rotation_excursion_that_returns_is_skew_however_long_it_lasted() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..24)
+            .map(|i| make_full_image(i, i as i64 * 300, 500.0, 2.5, 1000.0, 20.0, 0.4))
+            .collect();
+        // Ten frames at 0°, a bumped rotator at 7° for four frames, then
+        // corrected back to 0° for ten.
+        let rotations: Vec<f64> = (0..24)
+            .map(|i| if (10..14).contains(&i) { 7.0 } else { 0.0 })
+            .collect();
+        for (image, rotation) in images.iter_mut().zip(&rotations) {
+            image.astrometry = Some(rotated_astrometry(*rotation));
+        }
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        for (index, result) in sequence.images.iter().enumerate() {
+            let flagged = result.flags.contains(&IssueCategory::RotationSkew);
+            assert_eq!(flagged, (10..14).contains(&index), "frame {index}");
+        }
+        let bumped = sequence.images[11].pointing.as_ref().unwrap();
+        assert!((bumped.rotation_skew_deg.unwrap() - 7.0).abs() < 0.2);
+    }
+
+    #[test]
+    fn rotation_runs_split_where_the_angle_moves_and_stay_cheap_on_long_sessions() {
+        let runs = rotation_runs(&[0.0, 0.1, -0.1, 5.0, 5.2, 4.9, 0.05], 2.0);
+        assert_eq!(runs.len(), 3);
+        assert_eq!((runs[0].0, runs[0].1), (0, 2));
+        assert_eq!((runs[1].0, runs[1].1), (3, 5));
+        assert!((runs[1].2 - 5.0).abs() < 0.3);
+        assert_eq!((runs[2].0, runs[2].1), (6, 6));
+        // Across the half-turn seam the run holds together.
+        let runs = rotation_runs(&[89.5, -89.5, 89.8, -89.9], 2.0);
+        assert_eq!(runs.len(), 1);
+        // Two thousand steady frames with jitter: one run, in well under a second.
+        let steady: Vec<f64> = (0..2000)
+            .map(|i| 35.0 + ((i * 7) % 11) as f64 * 0.01)
+            .collect();
+        let started = std::time::Instant::now();
+        let runs = rotation_runs(&steady, 2.0);
+        assert_eq!(runs.len(), 1);
+        assert!((runs[0].2 - 35.05).abs() < 0.1, "center {}", runs[0].2);
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
     }
 
     #[test]

@@ -179,8 +179,9 @@ export function useFilters() {
       dateStart: updates.dateStart,
       dateEnd: updates.dateEnd, 
       search: updates.searchTerm,
-      // No flag chosen leaves the URL clean.
-      flag: updates.flag === undefined ? undefined : (updates.flag === 'all' ? '' : updates.flag),
+      // updateParams drops the key for undefined, empty, or 'all', like
+      // the other filters: no flag chosen leaves the URL clean.
+      flag: updates.flag,
     });
   }, [updateParams]);
   

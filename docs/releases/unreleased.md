@@ -9,7 +9,8 @@
 - Quality analysis now flags **Rotation skew**: a frame, or a run of two,
   whose solved field rotation sits more than 2° from the rotation the rotator
   held around it, compared modulo a half turn so a meridian flip is not skew;
-  a re-rotation held for three frames or more is framing, not skew. A skewed
+  a re-rotation held for three frames or more is framing, not skew, unless
+  it returns to the earlier angle. A skewed
   frame is scored like a pointing jump, recommended for rejection, and left
   out of stack previews. The Sequence view's astrometry selection includes
   it, and the image grid can filter by any quality flag, rotation skew among
