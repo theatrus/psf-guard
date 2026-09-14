@@ -62,19 +62,50 @@ export function describeImportProgress(
       const detail = [attached, fresh].filter(Boolean).join(', ') || 'nothing new';
       const calibration = o.calibration;
       const calibrationChanged = calibration.imported + calibration.updated;
-      const calibrationText =
+      const calibrationPart =
         calibrationChanged > 0
-          ? `, ${calibrationChanged} calibration frame(s)`
+          ? `${calibrationChanged} calibration frame(s)`
           : calibration.skipped_existing > 0
-            ? `, ${calibration.skipped_existing} calibration frame(s) unchanged`
+            ? `${calibration.skipped_existing} calibration frame(s) unchanged`
             : '';
-      return o.dry_run
-        ? `Preview: would import ${o.imported} light frame(s) — ${detail}${skipped}${calibrationText}.`
-        : `Imported ${o.imported} light frame(s) — ${detail}${skipped}${calibrationText}.`;
+      // A calibration-only import leads with its calibration frames instead
+      // of "0 light frame(s) — nothing new".
+      const calibrationOnly = o.imported === 0 && calibrationChanged > 0;
+      const lightPart = calibrationOnly
+        ? o.skipped_existing > 0
+          ? `${o.skipped_existing} light frame(s) already present`
+          : ''
+        : `${o.imported} light frame(s) — ${detail}${skipped}`;
+      const summary = (calibrationOnly ? [calibrationPart, lightPart] : [lightPart, calibrationPart])
+        .filter(Boolean)
+        .join(', ');
+      return o.dry_run ? `Preview: would import ${summary}.` : `Imported ${summary}.`;
     }
     case 'error':
       return `Import failed: ${progress.error ?? 'unknown error'}`;
     default:
       return progress.stage;
+  }
+}
+
+/**
+ * Footer message for an import job that just stopped running, or `null`
+ * while it runs. A preview hands over to the confirm step below it; a
+ * real import reports what it wrote; a failure reads as one.
+ */
+export function importFinishedMessage(
+  progress: import('../api/types').ImportJobProgress | undefined,
+  dbName: string
+): string | null {
+  if (!progress || progress.running) return null;
+  switch (progress.stage) {
+    case 'error':
+      return describeImportProgress(progress);
+    case 'complete':
+      return progress.outcome?.dry_run
+        ? `Preview ready for ${dbName} — nothing is written until you confirm.`
+        : describeImportProgress(progress);
+    default:
+      return null;
   }
 }

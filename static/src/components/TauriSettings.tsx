@@ -16,7 +16,7 @@ import CalibrationMatchingSettings from './CalibrationMatchingSettings';
 import StackAutomationSettings from './StackAutomationSettings';
 import ExportDefaultsSettings from './ExportDefaultsSettings';
 import type { DatabaseSummary } from '../api/types';
-import { describeImportProgress, useImportJob } from '../hooks/useImportJob';
+import { describeImportProgress, importFinishedMessage, useImportJob } from '../hooks/useImportJob';
 import { starMetadataFillEnabled } from '../hooks/useStarMetadataFill';
 import QualityBackfillControls from './QualityBackfillControls';
 import RemotePeerSync from './RemotePeerSync';
@@ -147,6 +147,17 @@ export default function TauriSettings({
   // the 1s progress poll + the progress panel at the bottom of the modal.
   const [importDbId, setImportDbId] = useState<string | null>(null);
   const { progress: importProgress, isRunning: importRunning } = useImportJob(importDbId);
+  // The footer announces an import when it starts. Announce its end too, or
+  // a finished job keeps reading "Importing…" until the page reloads.
+  const importWasRunning = useRef(false);
+  useEffect(() => {
+    if (importWasRunning.current && !importRunning && importDbId) {
+      const dbName = registry?.databases.find((entry) => entry.id === importDbId)?.name ?? importDbId;
+      const message = importFinishedMessage(importProgress, dbName);
+      if (message) setStatusMessage(message);
+    }
+    importWasRunning.current = importRunning;
+  }, [importRunning, importProgress, importDbId, registry]);
   // A running preview survives closing or reloading this page. Keep the
   // destination so its completed dry-run can still show the confirm step.
   const [confirmImport, setConfirmImport] = useState<DbEntry | null>(null);
@@ -561,7 +572,7 @@ export default function TauriSettings({
         setImportDbId(created.database.id);
         await reload();
         resetForm();
-        setStatusMessage(`Created ${created.database.name}; importing images…`);
+        setStatusMessage(`Created ${created.database.name}; importing frames…`);
       } catch (err) {
         console.error('create-from-images failed:', err);
         const msg = err instanceof Error ? err.message : String(err);
@@ -781,7 +792,7 @@ export default function TauriSettings({
         fill_metadata: starMetadataFillEnabled(),
         ...importOptionsOf(entry),
       });
-      setStatusMessage(`Importing images into ${entry.name}…`);
+      setStatusMessage(`Importing frames into ${entry.name}…`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setStatusMessage(`Failed to start import: ${msg}`);
