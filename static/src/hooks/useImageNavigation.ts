@@ -85,14 +85,16 @@ export function useImageNavigation(currentImageId?: number) {
         }
       }
 
-      // Quality flag filter
-      if (!matchesFlagFilter(filters.flag, quality.qualityByImage.get(image.id))) {
+      // Quality flag filter, once the analysis is in; until then, or if it
+      // failed, navigation walks the unfiltered set rather than none.
+      if (filters.flag !== 'all' && !quality.isLoading && !quality.error
+        && !matchesFlagFilter(filters.flag, quality.qualityByImage.get(image.id))) {
         return false;
       }
       
       return true;
     });
-  }, [allImages, filters, quality.qualityByImage]);
+  }, [allImages, filters, quality.isLoading, quality.error, quality.qualityByImage]);
 
   // Group and sort images the same way as GroupedImageGrid
   const imageGroups = useMemo(() => {

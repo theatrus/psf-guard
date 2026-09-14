@@ -323,6 +323,25 @@ fn half_turn_median(rotations: &[f64]) -> f64 {
         .unwrap_or(0.0)
 }
 
+/// Split rotations, in capture order, into runs of consecutive frames that
+/// agree within `tolerance` of the run's own robust center (modulo a half
+/// turn). Returns `(first, last, center)` index ranges into `rotations`.
+fn rotation_runs(rotations: &[f64], tolerance: f64) -> Vec<(usize, usize, f64)> {
+    let mut runs: Vec<(usize, usize, f64)> = Vec::new();
+    let mut first = 0usize;
+    for index in 1..=rotations.len() {
+        let extend = index < rotations.len() && {
+            let center = half_turn_median(&rotations[first..index]);
+            wrap_half_turn(rotations[index] - center).abs() <= tolerance
+        };
+        if !extend {
+            runs.push((first, index - 1, half_turn_median(&rotations[first..index])));
+            first = index;
+        }
+    }
+    runs
+}
+
 fn cataloged_extended_emission(
     solution: &crate::astrometry::AstrometrySolutionResponse,
 ) -> Vec<CatalogedExtendedEmission> {
@@ -2061,6 +2080,9 @@ impl SequenceAnalyzer {
                 // Absolute off-target flags are assigned below once the
                 // segment's own cluster is known: a consistently displaced
                 // segment is deliberate framing, not a pointing failure.
+                // Target Scheduler and PSF Guard's import both store 0 for a
+                // target whose rotation was never planned, so 0 is "no plan".
+                let planned_rotation = a.planned_rotation_deg.filter(|planned| *planned != 0.0);
                 let mut flags = Vec::new();
                 if a.pixel_solved && a.target_in_frame == Some(false) {
                     flags.push(IssueCategory::OffTarget);
@@ -2088,11 +2110,19 @@ impl SequenceAnalyzer {
                     field_rotation_deg: a.field_rotation_deg,
                     field_mirrored: a.field_mirrored,
                     rotation_skew_deg: None,
-                    planned_rotation_deg: a.planned_rotation_deg,
-                    planned_rotation_offset_deg: a
-                        .field_rotation_deg
-                        .zip(a.planned_rotation_deg)
-                        .map(|(solved, planned)| wrap_half_turn(solved - planned)),
+                    planned_rotation_deg: planned_rotation,
+                    planned_rotation_offset_deg: a.field_rotation_deg.zip(planned_rotation).map(
+                        |(solved, planned)| {
+                            // A mirrored field turns the other way for the
+                            // same position angle.
+                            let solved = if a.field_mirrored == Some(true) {
+                                -solved
+                            } else {
+                                solved
+                            };
+                            wrap_half_turn(solved - planned)
+                        },
+                    ),
                     matched_stars: a.matched_stars,
                     rms_arcsec: a.rms_arcsec,
                     error: a.error.clone(),
@@ -2326,11 +2356,13 @@ impl SequenceAnalyzer {
             }
         }
 
-        // Field rotation is judged inside each framing segment: the robust
-        // rotation of the segment is what the rotator held, and a frame
-        // that sits further from it than the tolerance (or than the
-        // segment's own scatter allows) was shot skewed. A half turn is the
-        // same framing, so a meridian flip inside a segment is not skew.
+        // Field rotation is judged inside each framing segment. Consecutive
+        // frames whose rotation agrees within the tolerance form a rotation
+        // run; a run of three or more is a framing the rotator held, as a
+        // pointing cluster of three is deliberate framing, so a re-rotation
+        // mid-session is not a fault. A shorter run is skew: the frame sits
+        // away from the framing on either side of it. A half turn is the
+        // same framing, so a meridian flip is never skew.
         let tolerance = self.config.rotation_skew_tolerance_deg;
         for &(start, end, _) in &runs {
             let rotations: Vec<(usize, f64)> = solved_indices[start..=end]
@@ -2342,28 +2374,50 @@ impl SequenceAnalyzer {
             if rotations.len() < 3 {
                 continue;
             }
-            let center = half_turn_median(
+            let rotation_runs = rotation_runs(
                 &rotations
                     .iter()
                     .map(|(_, rotation)| *rotation)
                     .collect::<Vec<_>>(),
+                tolerance,
             );
-            let residuals = rotations
+            let held: Vec<(usize, usize, f64)> = rotation_runs
                 .iter()
-                .map(|(_, rotation)| wrap_half_turn(rotation - center))
-                .collect::<Vec<_>>();
-            let scatter = median(
-                &residuals
-                    .iter()
-                    .map(|residual| residual.abs())
-                    .collect::<Vec<_>>(),
-            );
-            let threshold = (6.0 * scatter).max(tolerance);
-            for ((idx, _), residual) in rotations.iter().zip(&residuals) {
-                if let Some(pointing) = quality[*idx].as_mut() {
-                    pointing.rotation_skew_deg = Some(*residual);
-                    if residual.abs() > threshold {
-                        push_issue(&mut pointing.flags, IssueCategory::RotationSkew);
+                .filter(|(first, last, _)| last - first + 1 >= 3)
+                .copied()
+                .collect();
+            for &(first, last, center) in &rotation_runs {
+                let stable = last - first + 1 >= 3;
+                // A short run is measured against the nearest held framing;
+                // with none held, against the segment as a whole.
+                let reference = if stable {
+                    center
+                } else {
+                    held.iter()
+                        .min_by_key(|(held_first, held_last, _)| {
+                            if *held_last < first {
+                                first - held_last
+                            } else {
+                                held_first - last
+                            }
+                        })
+                        .map(|(_, _, held_center)| *held_center)
+                        .unwrap_or_else(|| {
+                            half_turn_median(
+                                &rotations
+                                    .iter()
+                                    .map(|(_, rotation)| *rotation)
+                                    .collect::<Vec<_>>(),
+                            )
+                        })
+                };
+                for &(idx, rotation) in &rotations[first..=last] {
+                    if let Some(pointing) = quality[idx].as_mut() {
+                        let residual = wrap_half_turn(rotation - reference);
+                        pointing.rotation_skew_deg = Some(residual);
+                        if !stable && residual.abs() > tolerance {
+                            push_issue(&mut pointing.flags, IssueCategory::RotationSkew);
+                        }
                     }
                 }
             }
@@ -4613,6 +4667,62 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(nonsense.config.rotation_skew_tolerance_deg, 2.0);
+    }
+
+    #[test]
+    fn a_deliberate_re_rotation_held_for_three_frames_is_framing_not_skew() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..9)
+            .map(|i| make_full_image(i, i as i64 * 300, 500.0, 2.5, 1000.0, 20.0, 0.4))
+            .collect();
+        // Five frames at 0°, a re-rotation to 90° held for three, then one
+        // stray frame at 45° at the end.
+        let rotations = [0.0, 0.1, -0.1, 0.0, 0.05, 90.0, 90.1, 89.9, 45.0];
+        for (image, rotation) in images.iter_mut().zip(rotations) {
+            image.astrometry = Some(rotated_astrometry(rotation));
+        }
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        for (index, (result, rotation)) in sequence.images.iter().zip(rotations).take(8).enumerate()
+        {
+            assert!(
+                !result.flags.contains(&IssueCategory::RotationSkew),
+                "frame {index} at {rotation}° is held framing"
+            );
+        }
+        let stray = &sequence.images[8];
+        assert!(stray.flags.contains(&IssueCategory::RotationSkew));
+        // Measured against the nearest held framing, the 90° run.
+        let skew = stray.pointing.as_ref().unwrap().rotation_skew_deg.unwrap();
+        assert!((skew - (-45.0)).abs() < 0.2, "skew {skew}");
+    }
+
+    #[test]
+    fn planned_rotation_zero_means_unplanned_and_a_mirrored_field_turns_the_other_way() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mut images: Vec<_> = (0..3)
+            .map(|i| make_full_image(i, i as i64 * 300, 500.0, 2.5, 1000.0, 20.0, 0.4))
+            .collect();
+        for image in &mut images {
+            image.astrometry = Some(AstrometryFrameMetrics {
+                planned_rotation_deg: Some(0.0),
+                ..rotated_astrometry(47.0)
+            });
+        }
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        let pointing = sequence.images[0].pointing.as_ref().unwrap();
+        assert_eq!(pointing.planned_rotation_deg, None);
+        assert_eq!(pointing.planned_rotation_offset_deg, None);
+
+        for image in &mut images {
+            image.astrometry = Some(AstrometryFrameMetrics {
+                planned_rotation_deg: Some(30.0),
+                field_mirrored: Some(true),
+                ..rotated_astrometry(-30.0)
+            });
+        }
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        let pointing = sequence.images[0].pointing.as_ref().unwrap();
+        assert!(pointing.planned_rotation_offset_deg.unwrap().abs() < 1e-9);
     }
 
     #[test]

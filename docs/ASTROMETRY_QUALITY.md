@@ -33,7 +33,7 @@ A same-name replacement file is therefore never graded from stale WCS.
 | **Stable offset** | At least three consecutive solves form a stable deliberate framing cluster while the target remains inside the solved footprint | Advisory only; no score cap or automatic rejection |
 | **Pointing jump** | A short run leaves one framing cluster and later returns to it | Total score is capped at 0.30; rejection is recommended |
 | **Pointing drift** | A robust Theil-Sen trend within one contiguous framing segment exceeds the field/scatter threshold after detrending | Affected tail frames are capped at 0.30; rejection is recommended |
-| **Rotation skew** | The solved field rotation sits more than 2° (or six times the segment's own scatter) from the robust rotation of its framing segment, compared modulo a half turn so a meridian flip is the same framing | Total score is capped at 0.30; rejection is recommended |
+| **Rotation skew** | Fewer than three consecutive frames sit more than 2° from the rotation the rotator held on either side, compared modulo a half turn so a meridian flip is the same framing | Total score is capped at 0.30; rejection is recommended; stack previews leave the frame out |
 | **Plate solve failed** | Pixels decoded and the configured solver had enough information, but no field matched (or too few stars were detected) | Modest score reduction; no automatic rejection unless independent cloud, obstruction, or tracking evidence corroborates it |
 | **Solve unavailable** | Missing catalogs/index, decode error, unsupported image, cancellation, or internal/resource failure | Operational error only; no quality flag or automatic grade |
 
@@ -47,15 +47,21 @@ new stable framing segment instead of making every later frame look off target
 or manufacturing a session-wide drift. A short `A → B → A` excursion is a
 pointing jump. Drift is fitted separately inside each contiguous segment.
 
-Field rotation comes from each solve's CD matrix: the direction of celestial
+Each solve's CD matrix gives the field rotation: the direction of celestial
 north from image up, and whether the field is mirrored. Within each framing
-segment the rotation the rotator held is the sample the fewest degrees
-separate the others from, and a frame further from it than the tolerance was
-shot skewed: it overlaps the rest less and crops the stack. When Target
-Scheduler recorded a planned rotation for the target, the sequence response
-also carries it beside the solved value and their difference modulo a half
-turn (`planned_rotation_offset_deg`). That difference is for display: capture
-software records rotation by its own convention, so it does not flag anything.
+segment, consecutive frames whose rotation agrees within the tolerance form
+a rotation run. A run of three or more frames is a framing the rotator held,
+so a re-rotation mid-session is not a fault, just as a pointing cluster of
+three is deliberate framing. A shorter run is skew: PSF Guard measures it
+against the nearest held framing and flags it, because such a frame overlaps
+the rest less and crops the stack. When Target Scheduler recorded a planned
+rotation for the target, the sequence response also carries it beside the
+solved value, with their difference modulo a half turn
+(`planned_rotation_offset_deg`, sign-corrected for a mirrored field). A
+recorded rotation of exactly 0 counts as no plan, since Target Scheduler and
+PSF Guard's import both store 0 for a target nobody rotated. The difference
+is for display: capture software records rotation by its own convention, so
+it flags nothing.
 
 ## Where the intended target comes from
 

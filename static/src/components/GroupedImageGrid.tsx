@@ -141,6 +141,9 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     filters.filterName === 'all' ? undefined : filters.filterName,
   );
 
+  const flagFilterActive = filters.flag !== 'all';
+  const flagFilterReady = !quality.isLoading && !quality.error;
+
   // Filter images based on current filters
   const filteredImages = useMemo(() => {
     return allImages.filter(image => {
@@ -174,14 +177,17 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
         }
       }
 
-      // Quality flag filter
-      if (!matchesFlagFilter(filters.flag, quality.qualityByImage.get(image.id))) {
+      // Quality flag filter. While the analysis is still loading, or could
+      // not load, nothing is hidden: an empty grid would read as "no such
+      // frames" rather than "not known yet".
+      if (flagFilterActive && flagFilterReady
+        && !matchesFlagFilter(filters.flag, quality.qualityByImage.get(image.id))) {
         return false;
       }
       
       return true;
     });
-  }, [allImages, filters, quality.qualityByImage]);
+  }, [allImages, filters, flagFilterActive, flagFilterReady, quality.qualityByImage]);
 
   const availableFlagsForScope = useMemo(
     () => availableFlags(quality.qualityByImage.values()),
@@ -645,6 +651,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     filters.dateRange.start ?? '',
     filters.dateRange.end ?? '',
     filters.searchTerm,
+    filters.flag,
   ].join('\u0000');
   const previousSelectionFilterKey = useRef(selectionFilterKey);
   useEffect(() => {

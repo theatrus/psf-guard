@@ -6,14 +6,15 @@
 
 ## Added
 
-- Quality analysis now flags **Rotation skew**: a frame whose solved field
-  rotation sits more than 2° from the rest of its framing segment, compared
-  modulo a half turn so a meridian flip is not skew. The frame is scored like
-  a pointing jump and recommended for rejection, the Sequence view's
-  astrometry selection includes it, and the image grid can filter by any
-  quality flag, rotation skew among them. Each frame's solved rotation and,
-  when Target Scheduler planned one, the planned rotation and their
-  difference are in the sequence results.
+- Quality analysis now flags **Rotation skew**: a frame, or a run of two,
+  whose solved field rotation sits more than 2° from the rotation the rotator
+  held around it, compared modulo a half turn so a meridian flip is not skew;
+  a re-rotation held for three frames or more is framing, not skew. A skewed
+  frame is scored like a pointing jump, recommended for rejection, and left
+  out of stack previews. The Sequence view's astrometry selection includes
+  it, and the image grid can filter by any quality flag, rotation skew among
+  them. Each frame's solved rotation and, when Target Scheduler planned one,
+  the planned rotation and their difference are in the sequence results.
 
 - Stack previews can keep themselves current. With **Rebuild stack previews
   on their own** turned on in Settings → Setups, a project whose previews were

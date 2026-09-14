@@ -6,7 +6,7 @@ import type {
   ProjectSequenceAnalysisRequest,
   SequenceAnalysisRequest,
 } from '../api/types';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import type { BasisScores, QualityScoreScope } from '../utils/qualityScore';
 import {
   penaltyKeyOf,
@@ -114,6 +114,9 @@ export function useScopedQuality(
   // whose small session normalized against itself. The rollup entry
   // carries only the score fields, so it overlays a copy of the session
   // entry — category, pointing, and overlays stay intact.
+  // Built once per response: the grid filters and memoizes on these maps,
+  // so a fresh Map every render would re-filter the grid on every hover.
+  const { qualityByImage, scopeByImage, basisScoresByImage } = useMemo(() => {
   const qualityByImage = new Map<number, ImageQualityResult>();
   const scopeByImage = new Map<number, QualityScoreScope>();
   // Every basis score the frame has, for the always-on chips: the
@@ -150,6 +153,8 @@ export function useScopedQuality(
       scopeByImage.set(score.image_id, 'target_filter');
     }
   }
+  return { qualityByImage, scopeByImage, basisScoresByImage };
+  }, [query.data]);
 
   return {
     qualityByImage,
