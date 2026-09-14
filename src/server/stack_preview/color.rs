@@ -40,7 +40,7 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-const STACK_COLOR_CACHE_VERSION: u32 = 12;
+const STACK_COLOR_CACHE_VERSION: u32 = 13;
 const COLOR_INPUT_CACHE_VERSION: u32 = 3;
 const SEIZA_BACKGROUND_VERSION: &str = "0.2.0";
 const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
@@ -367,9 +367,10 @@ pub struct StackColorSource {
     pub group_index: usize,
     pub artifact_revision: String,
     pub accepted_frames: usize,
-    /// Integrated exposure of the channel stack, in seconds.
+    /// Integrated exposure of the channel stack, in seconds. `None` on a
+    /// color artifact composed before the total was recorded.
     #[serde(default)]
-    pub total_exposure_seconds: f64,
+    pub total_exposure_seconds: Option<f64>,
     #[serde(default)]
     pub reference_image_id: Option<i32>,
     #[serde(default)]
@@ -2956,7 +2957,7 @@ fn collect_sources(
                 group_index: entry.group.index,
                 artifact_revision: entry.artifact_revision.clone(),
                 accepted_frames: entry.group.accepted_frames,
-                total_exposure_seconds: entry.group.total_exposure_seconds,
+                total_exposure_seconds: Some(entry.group.total_exposure_seconds),
                 reference_image_id: entry.group.reference_image_id,
                 sky_orientation: entry.group.sky_orientation.clone(),
                 registration_transform: None,
@@ -4256,7 +4257,7 @@ mod tests {
             group_index: 0,
             artifact_revision: format!("revision-{index}"),
             accepted_frames: 4,
-            total_exposure_seconds: 1200.0,
+            total_exposure_seconds: Some(1200.0),
             reference_image_id: Some(index as i32 + 1),
             sky_orientation: Some(stack_orientation(
                 100,

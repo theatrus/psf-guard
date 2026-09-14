@@ -384,7 +384,7 @@ function ColorCard({
               {colorSourcesLabel([source])}
               <small>
                 {source.accepted_frames} frames
-                {source.total_exposure_seconds != null && ` · ${formatIntegration(source.total_exposure_seconds)}`}
+                {(source.total_exposure_seconds ?? 0) > 0 && ` · ${formatIntegration(source.total_exposure_seconds)}`}
               </small>
             </span>
           ))}
@@ -831,7 +831,9 @@ export default function StackColorPreviewPanel({
             colorSourcesLabel(inspector.sources),
             `${inspector.sources.length} channel stacks`,
             `${inspector.sources.reduce((sum, source) => sum + source.accepted_frames, 0)} integrated inputs`,
-            `${formatIntegration(totalIntegration(inspector.sources.map((source) => source.total_exposure_seconds)))} integrated`,
+            ...(totalIntegration(inspector.sources.map((source) => source.total_exposure_seconds)) > 0
+              ? [`${formatIntegration(totalIntegration(inspector.sources.map((source) => source.total_exposure_seconds)))} integrated`]
+              : []),
             ...(isColorStackSkyOriented(inspector) ? ['North up · East left'] : []),
           ]}
           imageUrl={apiClient.getStackColorPreviewUrl(

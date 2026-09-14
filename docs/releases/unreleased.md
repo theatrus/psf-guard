@@ -65,6 +65,9 @@
   stack panel adds up every remembered channel into a project total, and a
   color preview now shows each channel stack's integration and the total
   across its channels, which it never showed before.
+  A color preview composed before this release reads as out of date and
+  rebuilds to pick up its hours; until then it shows frame counts only
+  instead of "0s".
 
 ## Fixed
 
