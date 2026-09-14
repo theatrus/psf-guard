@@ -958,7 +958,7 @@ export interface StackColorSource {
   artifact_revision: string;
   accepted_frames: number;
   /** Integrated exposure of the channel stack, in seconds. */
-  total_exposure_seconds?: number;
+  total_exposure_seconds?: number | null;
   reference_image_id: number | null;
   sky_orientation: StackSkyOrientation | null;
   registration_transform: SimilarityTransform | null;
