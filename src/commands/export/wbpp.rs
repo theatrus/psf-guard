@@ -118,10 +118,28 @@ pub fn common_source_root(plan: &ExportPlan) -> Option<PathBuf> {
 }
 
 /// One frame as the runner names it: below the root, or by its full path
-/// when it sits outside.
-enum ReferencedFile {
+/// when it sits outside. `session` is the flat session the placed layout
+/// would have put in its path, which the script hands WBPP instead.
+struct ReferencedFile {
+    place: ReferencedPlace,
+    session: Option<String>,
+}
+
+enum ReferencedPlace {
     Below(PathBuf),
     Outside(PathBuf),
+}
+
+/// The session label a placed path carries, if any.
+fn session_of(relative_dest: &Path) -> Option<String> {
+    let prefix = format!("{SESSION_KEYWORD}_");
+    relative_dest.components().find_map(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .strip_prefix(&prefix)
+            .map(str::to_string)
+    })
 }
 
 /// The root and each source's place against it, in plan order.
@@ -136,9 +154,12 @@ fn referenced_files(
     let files = plan
         .items
         .iter()
-        .map(|item| match item.source.strip_prefix(&root) {
-            Ok(relative) => ReferencedFile::Below(relative.to_path_buf()),
-            Err(_) => ReferencedFile::Outside(item.source.clone()),
+        .map(|item| ReferencedFile {
+            place: match item.source.strip_prefix(&root) {
+                Ok(relative) => ReferencedPlace::Below(relative.to_path_buf()),
+                Err(_) => ReferencedPlace::Outside(item.source.clone()),
+            },
+            session: session_of(&item.relative_dest),
         })
         .collect();
     Some((root, files))
@@ -324,10 +345,10 @@ fn preamble(comment: &str, files: &WbppFiles) -> String {
         ),
         WbppFiles::Referenced { .. } => format!(
             "{comment}Nothing was copied: {JS_RUNNER} names every frame where it already\n\
-             {comment}is, and WBPP reads each one's type from its IMAGETYP header.\n\
-             {comment}Because the paths are the originals', they carry no session\n\
-             {comment}folder, so WBPP pools a filter's flats from every night into one\n\
-             {comment}master. Export with placed or linked files for per-night flats.\n"
+             {comment}is, and WBPP reads each one's type from its IMAGETYP header. The\n\
+             {comment}script also tells WBPP which night's flats each light calibrates\n\
+             {comment}with, as a {SESSION_KEYWORD} grouping keyword, since the originals'\n\
+             {comment}paths carry none.\n"
         ),
     };
     format!(
@@ -368,7 +389,11 @@ pub fn unusable_destination(dest_root: &Path) -> Option<String> {
 /// makes read-only. The script includes WBPP's entry file inside a function
 /// where a Proxy named `Runtime` answers `jsArguments` with the list built
 /// here and everything else from the real object, then calls WBPP's entry
-/// point the way `WBPP.js` does. `#engine v8` is what `WBPP.js` declares;
+/// point the way `WBPP.js` does. WBPP reads a grouping keyword's value out
+/// of a frame's path, and the originals' paths carry none, so the script
+/// also replaces WBPP's path reader with one that answers `SESSION` for
+/// its own frames; WBPP consults it on every regroup, so the value holds.
+/// `#engine v8` is what `WBPP.js` declares;
 /// without it the core compiles the include with an engine that rejects
 /// WBPP's classes. The core's preprocessor also opens a block comment at
 /// any `/*`, even inside a `//` comment, and closes it at the next `*/`
@@ -392,12 +417,20 @@ pub fn js_runner(plan: &ExportPlan, run: WbppRun, files: &WbppFiles) -> Option<S
         .map(trim_root)
         .map(|root| root.replace('\\', "/"))
         .unwrap_or_else(|| local.clone());
+    let entry = |path: &Path, session: Option<&str>| match session {
+        Some(session) => format!(
+            "{{ path: {}, session: {} }}",
+            js_string(&slashed(path)),
+            js_string(session)
+        ),
+        None => format!("{{ path: {} }}", js_string(&slashed(path))),
+    };
     let mut below = Vec::new();
     let mut outside = Vec::new();
     for file in referenced {
-        match file {
-            ReferencedFile::Below(path) => below.push(js_string(&slashed(&path))),
-            ReferencedFile::Outside(path) => outside.push(js_string(&slashed(&path))),
+        match file.place {
+            ReferencedPlace::Below(path) => below.push(entry(&path, file.session.as_deref())),
+            ReferencedPlace::Outside(path) => outside.push(entry(&path, file.session.as_deref())),
         }
     }
     let load_only = match run {
@@ -412,6 +445,8 @@ pub fn js_runner(plan: &ExportPlan, run: WbppRun, files: &WbppFiles) -> Option<S
          // the #include lines below expect; edit them for another install.\n\
          \n\
          #engine v8\n\
+         #include <pjsr/StdButton.jsh>\n\
+         #include <pjsr/StdIcon.jsh>\n\
          \n\
          // The folder the frames are listed below, as PixInsight sees it. On the\n\
          // machine that made this export it is\n\
@@ -428,7 +463,10 @@ pub fn js_runner(plan: &ExportPlan, run: WbppRun, files: &WbppFiles) -> Option<S
          // loadOnly as an argument overrides it.\n\
          var psfLoadOnly = {load_only};\n\
          \n\
-         // The frames, relative to psfSourceRoot.\n\
+         // The frames, relative to psfSourceRoot. A session is the night a\n\
+         // light's flats were shot; lights and flats of one night share it, and\n\
+         // WBPP calibrates each night with its own flats before integrating\n\
+         // the nights together.\n\
          var psfFrames = [\n",
         source_root = js_string(&source_root),
     ));
@@ -455,9 +493,34 @@ pub fn js_runner(plan: &ExportPlan, run: WbppRun, files: &WbppFiles) -> Option<S
          \x20  var out = given.outputDirectory || psfOutputDirectory || (File.homeDirectory + \"/{OUTPUT_DIRECTORY}\");\n\
          \x20  if (!File.directoryExists(out)) File.createDirectory(out, true);\n\
          \x20  var loadOnly = given.run ? false : given.loadOnly ? true : psfLoadOnly;\n\
+         \x20  var paths = [];\n\
+         \x20  var sessionByPath = {{}};\n\
+         \x20  var withSession = 0;\n\
+         \x20  function take(frame, path) {{\n\
+         \x20     paths.push(path);\n\
+         \x20     if (frame.session) {{ sessionByPath[path] = frame.session; ++withSession; }}\n\
+         \x20  }}\n\
+         \x20  for (var j = 0; j < psfFrames.length; ++j) take(psfFrames[j], root + \"/\" + psfFrames[j].path);\n\
+         \x20  for (var k = 0; k < psfOutsideFrames.length; ++k) take(psfOutsideFrames[k], psfOutsideFrames[k].path);\n\
+         \n\
+         \x20  // WBPP drops a frame it cannot find without a word, and a wrong root\n\
+         \x20  // then opens an empty dialog. Look first, and say what is missing.\n\
+         \x20  var missing = paths.filter(function (path) {{ return !File.exists(path); }});\n\
+         \x20  console.noteln(\"PSF Guard: \" + paths.length + \" frames below \" + root + \", \" + missing.length + \" not found\");\n\
+         \x20  if (missing.length > 0) {{\n\
+         \x20     var report = missing.length + \" of \" + paths.length + \" frames were not found. \" +\n\
+         \x20        \"The list is relative to psfSourceRoot = \" + root + \"; edit it or pass \" +\n\
+         \x20        \"sourceRoot=<folder> so that the first one exists:\\n\" + missing.slice(0, 5).join(\"\\n\");\n\
+         \x20     console.criticalln(report);\n\
+         \x20     if (missing.length == paths.length) {{\n\
+         \x20        if (loadOnly) (new MessageBox(report, \"PSF Guard export\", StdIcon_Error, StdButton_Ok)).execute();\n\
+         \x20        throw new Error(\"No frame found below \" + root);\n\
+         \x20     }}\n\
+         \x20  }}\n\
+         \n\
          \x20  var args = [\"automationMode=true\"];\n\
-         \x20  for (var j = 0; j < psfFrames.length; ++j) args.push(\"file=\" + root + \"/\" + psfFrames[j]);\n\
-         \x20  for (var k = 0; k < psfOutsideFrames.length; ++k) args.push(\"file=\" + psfOutsideFrames[k]);\n\
+         \x20  if (withSession > 0) args.push(\"groupingKeywordsEnabled=true\", \"keywords={SESSION_KEYWORD}\");\n\
+         \x20  for (var m = 0; m < paths.length; ++m) args.push(\"file=\" + paths[m]);\n\
          \x20  args.push(\"outputDirectory=\" + out);\n\
          \x20  if (loadOnly) args.push(\"loadOnly\");\n\
          \n\
@@ -479,6 +542,22 @@ pub fn js_runner(plan: &ExportPlan, run: WbppRun, files: &WbppFiles) -> Option<S
          #include \"/opt/PixInsight/src/scripts/BatchPreprocessing/BPP-Main.js\"\n\
          #endif\n\
          #endif\n\
+         \n\
+         \x20  // WBPP reads a grouping keyword's value out of a frame's path, and\n\
+         \x20  // these paths are the originals', which carry none. So the reader it\n\
+         \x20  // consults answers {SESSION_KEYWORD} for our frames from the list above and\n\
+         \x20  // leaves every other question to WBPP. It is consulted again whenever\n\
+         \x20  // WBPP regroups, so the value stays.\n\
+         \x20  if (withSession > 0) {{\n\
+         \x20     var readKeyFromPath = WBPPUtils.smartNaming.getCustomKeyValueFromPath;\n\
+         \x20     WBPPUtils.smartNaming.getCustomKeyValueFromPath = function (key, filePath) {{\n\
+         \x20        if (key == \"{SESSION_KEYWORD}\") {{\n\
+         \x20           var session = sessionByPath[filePath] || sessionByPath[String(filePath).replace(/\\\\/g, \"/\")];\n\
+         \x20           if (session !== undefined) return session;\n\
+         \x20        }}\n\
+         \x20        return readKeyFromPath.call(this, key, filePath);\n\
+         \x20     }};\n\
+         \x20  }}\n\
          \n\
          \x20  // What WBPP.js itself does after its includes; false is fastMode.\n\
          \x20  CoreApplication.ensureMinimumVersion(1, 9, 4);\n\
@@ -673,12 +752,25 @@ mod tests {
             js.contains("var psfSourceRoot = \"/mnt/nas/astro\";"),
             "{js}"
         );
-        assert!(js.contains("   \"2026/M42/LIGHT/a.fits\",\n"), "{js}");
-        assert!(js.contains("   \"_Calibration/FLAT/f.fits\",\n"), "{js}");
+        assert!(
+            js.contains("   { path: \"2026/M42/LIGHT/a.fits\" },\n"),
+            "{js}"
+        );
+        assert!(
+            js.contains("   { path: \"_Calibration/FLAT/f.fits\" },\n"),
+            "{js}"
+        );
+        // No session in this plan, so no keyword grouping and no hook text
+        // is needed; the script still carries the hook for a plan that has.
+        assert!(js.contains("getCustomKeyValueFromPath"), "{js}");
         assert!(js.contains("var psfLoadOnly = true;"), "{js}");
         assert!(js.contains("new Proxy(psfRealRuntime"), "{js}");
         assert!(js.contains("#ifeq __PI_PLATFORM__ MSWINDOWS"), "{js}");
         assert!(js.contains("BPPmain(false"), "{js}");
+        // A frame WBPP cannot find is dropped without a word, so the script
+        // checks the paths itself and names the missing ones.
+        assert!(js.contains("File.exists(path)"), "{js}");
+        assert!(js.contains("not found"), "{js}");
         // The core's preprocessor treats a `/*` anywhere, comments included,
         // as the start of a block comment.
         assert!(!js.contains("/*"), "{js}");
@@ -708,6 +800,39 @@ mod tests {
         assert!(js_runner(&plan, WbppRun::LoadOnly, &WbppFiles::Placed).is_none());
     }
 
+    /// A frame the placed layout would tag with a session keeps that
+    /// session in the script, so WBPP can pair each night's lights and
+    /// flats although the originals' paths say nothing about it.
+    #[test]
+    fn a_referenced_export_carries_each_frames_session() {
+        let mut plan = plan_with_sources(&[
+            "/mnt/nas/astro/2026/M42/LIGHT/a.fits",
+            "/mnt/nas/astro/_Calibration/FLAT/f.fits",
+            "/mnt/nas/astro/_Calibration/BIAS/b.fits",
+        ]);
+        plan.items[0].relative_dest = PathBuf::from("lights/M42/Ha/SESSION_2026-09-10/a.fits");
+        plan.items[1].relative_dest = PathBuf::from("flats/M42/Ha/SESSION_2026-09-10/f.fits");
+        plan.items[2].relative_dest = PathBuf::from("bias/G100/b.fits");
+        let files = WbppFiles::Referenced {
+            local_root: None,
+            remote_root: None,
+        };
+        let js = js_runner(&plan, WbppRun::LoadOnly, &files).unwrap();
+        assert!(
+            js.contains("{ path: \"2026/M42/LIGHT/a.fits\", session: \"2026-09-10\" }"),
+            "{js}"
+        );
+        assert!(
+            js.contains("{ path: \"_Calibration/FLAT/f.fits\", session: \"2026-09-10\" }"),
+            "{js}"
+        );
+        assert!(
+            js.contains("{ path: \"_Calibration/BIAS/b.fits\" }"),
+            "{js}"
+        );
+        assert!(js.contains("keywords=SESSION"), "{js}");
+    }
+
     /// The person maps a folder they know to what the other machine calls
     /// it, so the given root wins over the frames' common parent, a drive
     /// letter's trailing separator goes, and a frame outside the root keeps
@@ -727,9 +852,12 @@ mod tests {
         let js = js_runner(&plan, WbppRun::LoadOnly, &files).unwrap();
         assert!(js.contains("var psfSourceRoot = \"P:\";"), "{js}");
         assert!(js.contains("//   /mnt/nas/astro\n"), "{js}");
-        assert!(js.contains("   \"2026/M42/LIGHT/b.fits\",\n"), "{js}");
         assert!(
-            js.contains("var psfOutsideFrames = [\n   \"/srv/other/flat.fits\",\n];"),
+            js.contains("   { path: \"2026/M42/LIGHT/b.fits\" },\n"),
+            "{js}"
+        );
+        assert!(
+            js.contains("var psfOutsideFrames = [\n   { path: \"/srv/other/flat.fits\" },\n];"),
             "{js}"
         );
         // The frame list and roots carry no backslash; only the regex that

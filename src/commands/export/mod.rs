@@ -356,8 +356,8 @@ pub enum Placement {
     /// must see the originals at the same paths.
     Symlink,
     /// Place nothing. The WBPP runner lists every frame where it is, so the
-    /// export is the scripts alone. Since the paths are the originals', they
-    /// carry no session component and WBPP pools flats by filter.
+    /// export is the scripts alone. The originals' paths carry no session
+    /// component, so the runner hands WBPP each frame's session itself.
     Reference,
 }
 
