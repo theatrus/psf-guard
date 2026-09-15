@@ -454,12 +454,12 @@ the stack previews do; rejects are never exported) and how the files land:
   that mounts the same share at the same place.
 - **Reference in place** copies nothing. The `run-wbpp` scripts name every
   frame where it already is, below one root the scripts take from
-  `PSF_SOURCE_ROOT`. The dialog asks for that root twice: as the server sees
-  it, prefilled with the folder the database's image directories share, and
-  as the machine running PixInsight sees it, when that is another machine.
-  So `/mnt/barium/astrobin` on the server and `P:\` on a Windows desktop
-  that mounts the same share as drive P: gives `P:\_ByTelescope\...` in the
-  Windows runner. A frame outside the server-side root keeps its full path.
+  `PSF_SOURCE_ROOT`. The dialog's **Server path** is that root on the
+  server, prefilled with the folder the database's image directories share;
+  **PixInsight path** is the same folder on the PixInsight machine, if it
+  differs. Server path `/mnt/barium/astrobin` and PixInsight path `P:\`
+  give `P:\_ByTelescope\...` in the Windows runner. A frame outside the
+  server path keeps its full path.
   Because the paths are the originals', they carry no session folder and
   WBPP pools each filter's flats across nights. The list travels in one
   command-line argument, which holds about a thousand frames on Linux and

@@ -221,11 +221,8 @@ export default function ExportDialog({
             <>
               <label className="export-dialog-remote-root">
                 <span>
-                  Image folder on this server
-                  <small>
-                    The scripts name every frame below this folder. Frames outside it keep
-                    their full path.
-                  </small>
+                  Server path
+                  <small>Frames are listed relative to this folder.</small>
                 </span>
                 <input
                   type="text"
@@ -236,11 +233,8 @@ export default function ExportDialog({
               </label>
               <label className="export-dialog-remote-root">
                 <span>
-                  The same folder as PixInsight sees it
-                  <small>
-                    Leave empty when PixInsight runs on this server. Otherwise the drive
-                    letter or share that folder appears as on that machine.
-                  </small>
+                  PixInsight path
+                  <small>That folder on the PixInsight machine. Empty means the same path.</small>
                 </span>
                 <input
                   type="text"

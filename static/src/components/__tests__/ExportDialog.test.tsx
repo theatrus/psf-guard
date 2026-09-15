@@ -53,10 +53,10 @@ describe('ExportDialog', () => {
     expect(reference).toBeEnabled();
     fireEvent.click(reference);
     // The server side is prefilled from the database's image folders.
-    expect(screen.getByRole('textbox', { name: /Image folder on this server/ })).toHaveValue(
+    expect(screen.getByRole('textbox', { name: /^Server path/ })).toHaveValue(
       '/mnt/nas/astro'
     );
-    fireEvent.change(screen.getByRole('textbox', { name: /as PixInsight sees it/ }), {
+    fireEvent.change(screen.getByRole('textbox', { name: /^PixInsight path/ }), {
       target: { value: 'P:\\' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Start export' }));
