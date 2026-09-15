@@ -2240,11 +2240,11 @@ pub async fn export_archive_route(
             for (name, body) in [
                 (
                     "run-wbpp.sh",
-                    wbpp::shell_script(&plan, wbpp::WbppRun::default()),
+                    wbpp::shell_script(&plan, wbpp::WbppRun::default(), &wbpp::WbppFiles::Placed),
                 ),
                 (
                     "run-wbpp.cmd",
-                    wbpp::batch_script(&plan, wbpp::WbppRun::default()),
+                    wbpp::batch_script(&plan, wbpp::WbppRun::default(), &wbpp::WbppFiles::Placed),
                 ),
             ] {
                 let entry =
@@ -2273,6 +2273,36 @@ pub async fn export_archive_route(
         .map_err(|e| AppError::InternalError(format!("building response: {e}")))
 }
 
+/// How the WBPP runner of an export finds its frames, from the placement
+/// asked for. A referenced export places nothing, so it is only the runner:
+/// that needs the WBPP layout, and the request is refused without it.
+fn wbpp_files(
+    placement: crate::commands::export::Placement,
+    local_root: Option<String>,
+    remote_root: Option<String>,
+    layout: crate::commands::export::ExportLayout,
+) -> Result<crate::commands::export::wbpp::WbppFiles, AppError> {
+    use crate::commands::export::{wbpp::WbppFiles, ExportLayout, Placement};
+    if placement != Placement::Reference {
+        return Ok(WbppFiles::Placed);
+    }
+    if layout != ExportLayout::Wbpp {
+        return Err(AppError::BadRequest(
+            "Referencing frames in place only produces the WBPP runner, so it needs the \
+             WBPP layout."
+                .into(),
+        ));
+    }
+    let given = |root: Option<String>| {
+        root.map(|root| root.trim().to_string())
+            .filter(|root| !root.is_empty())
+    };
+    Ok(WbppFiles::Referenced {
+        local_root: given(local_root).map(std::path::PathBuf::from),
+        remote_root: given(remote_root),
+    })
+}
+
 /// `POST /api/db/{db_id}/export/local` — run the folder export on the
 /// server's own filesystem (copy or hardlink), for desktop/Tauri mode where
 /// server and user share a machine. Same selection and layout as the CLI
@@ -2283,7 +2313,7 @@ pub async fn export_local_route(
     ctx: DbContext,
     Json(req): Json<LocalExportRequest>,
 ) -> Result<Json<ApiResponse<crate::commands::export::ExportSummary>>, AppError> {
-    use crate::commands::export::{execute_plan, plan_export, ExportOptions};
+    use crate::commands::export::{execute_plan_with, plan_export, ExportOptions, Placement};
 
     require_database_management_allowed(&state)?;
     let dest = req.dest.trim().to_string();
@@ -2299,7 +2329,19 @@ pub async fn export_local_route(
         layout: req.layout,
         ..Default::default()
     };
-    let link = req.link.unwrap_or(true);
+    // `placement` supersedes the older `link` flag, whose default was to
+    // hardlink.
+    let placement = req.placement.unwrap_or(if req.link.unwrap_or(true) {
+        Placement::Hardlink
+    } else {
+        Placement::Copy
+    });
+    let files = wbpp_files(
+        placement,
+        req.local_root.clone(),
+        req.remote_root.clone(),
+        options.layout,
+    )?;
     let dry_run = req.dry_run;
 
     // Plan + place on a blocking thread with a dedicated read-only
@@ -2313,14 +2355,27 @@ pub async fn export_local_route(
         )
         .map_err(|e| anyhow::anyhow!("opening {}: {e}", plan_ctx.database_path))?;
         let plan = plan_export(&conn, &plan_ctx.image_dirs, &options)?;
-        let summary = execute_plan(&plan, std::path::Path::new(&dest), link, dry_run);
+        let summary = execute_plan_with(
+            &plan,
+            std::path::Path::new(&dest),
+            placement,
+            dry_run,
+            &mut |_, _| {},
+        );
         if options.layout == crate::commands::export::ExportLayout::Wbpp && !dry_run {
             use crate::commands::export::{wbpp, write_wbpp_scripts};
-            // The frames are already placed; a runner that cannot be written
-            // is worth logging but never worth failing the export over.
-            if let Err(error) =
-                write_wbpp_scripts(&plan, std::path::Path::new(&dest), wbpp::WbppRun::default())
-            {
+            // With frames placed, a runner that cannot be written is worth
+            // logging but never worth failing the export over. A referenced
+            // export IS the runner, so there it is the failure.
+            if let Err(error) = write_wbpp_scripts(
+                &plan,
+                std::path::Path::new(&dest),
+                wbpp::WbppRun::default(),
+                &files,
+            ) {
+                if !placement.places_files() {
+                    return Err(error);
+                }
                 tracing::warn!("No WBPP runner script: {error}");
             }
         }
@@ -2331,11 +2386,13 @@ pub async fn export_local_route(
     .map_err(|e| AppError::InternalError(format!("export: {e}")))?;
 
     tracing::info!(
-        "📤 Local export db={}: planned={} copied={} linked={} skipped={} missing={} errors={}{}",
+        "📤 Local export db={}: planned={} copied={} linked={} symlinked={} referenced={} skipped={} missing={} errors={}{}",
         ctx.id,
         summary.planned,
         summary.copied,
         summary.linked,
+        summary.symlinked,
+        summary.referenced,
         summary.skipped_existing,
         summary.missing,
         summary.errors,
@@ -2385,6 +2442,13 @@ pub async fn start_server_export_route(
         layout: req.layout,
         ..Default::default()
     };
+    let placement = req.placement.unwrap_or(Placement::Reflink);
+    let files = wbpp_files(
+        placement,
+        req.local_root.clone(),
+        req.remote_root.clone(),
+        options.layout,
+    )?;
 
     let store = ctx.0.export_job.clone();
     if !export_job::try_begin(&store, dest.display().to_string(), scope) {
@@ -2410,30 +2474,33 @@ pub async fn start_server_export_route(
                 .map_err(|e| anyhow::anyhow!("creating {}: {e}", dest.display()))?;
             export_job::set_stage(&job_store, "placing");
             export_job::set_placement_totals(&job_store, plan.items.len(), 0);
-            let summary = execute_plan_with(
-                &plan,
-                &dest,
-                Placement::Reflink,
-                false,
-                &mut |placed, total| {
+            let summary =
+                execute_plan_with(&plan, &dest, placement, false, &mut |placed, total| {
                     export_job::set_placement_totals(&job_store, total, placed);
-                },
-            );
+                });
             if options.layout == crate::commands::export::ExportLayout::Wbpp {
                 use crate::commands::export::{wbpp, write_wbpp_scripts};
                 export_job::set_stage(&job_store, "scripts");
-                // The frames are already placed; a runner that cannot be
-                // written is worth logging but never worth failing over.
-                if let Err(error) = write_wbpp_scripts(&plan, &dest, wbpp::WbppRun::default()) {
+                // With frames placed, a runner that cannot be written is
+                // worth logging but never worth failing over. A referenced
+                // export IS the runner, so there it is the failure.
+                if let Err(error) =
+                    write_wbpp_scripts(&plan, &dest, wbpp::WbppRun::default(), &files)
+                {
+                    if !placement.places_files() {
+                        return Err(error);
+                    }
                     tracing::warn!("No WBPP runner script: {error}");
                 }
             }
             tracing::info!(
-                "📤 Server export db={}: planned={} reflinked={} copied={} skipped={} missing={} errors={} -> {}",
+                "📤 Server export db={}: planned={} reflinked={} copied={} symlinked={} referenced={} skipped={} missing={} errors={} -> {}",
                 job_ctx.id,
                 summary.planned,
                 summary.reflinked,
                 summary.copied,
+                summary.symlinked,
+                summary.referenced,
                 summary.skipped_existing,
                 summary.missing,
                 summary.errors,

@@ -797,29 +797,17 @@ export const apiClient = {
       filter_name?: string;
       layout?: ExportLayout;
       link?: boolean;
+      placement?: import('./types').ExportPlacement;
+      local_root?: string;
+      remote_root?: string;
       dry_run?: boolean;
     }
-  ): Promise<{
-    planned: number;
-    copied: number;
-    linked: number;
-    skipped_existing: number;
-    missing: number;
-    errors: number;
-    bytes: number;
-  }> => {
+  ): Promise<import('./types').ExportSummary> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.post<
-      ApiResponse<{
-        planned: number;
-        copied: number;
-        linked: number;
-        skipped_existing: number;
-        missing: number;
-        errors: number;
-        bytes: number;
-      }>
-    >(dbPath(dbId, '/export/local'), req);
+    const { data } = await apiInstance.post<ApiResponse<import('./types').ExportSummary>>(
+      dbPath(dbId, '/export/local'),
+      req
+    );
     if (!data.data) throw new Error(data.error || 'Failed to export');
     return data.data;
   },
@@ -839,6 +827,9 @@ export const apiClient = {
       layout?: ExportLayout;
       subdirectory?: string;
       scope_label?: string;
+      placement?: import('./types').ExportPlacement;
+      local_root?: string;
+      remote_root?: string;
     }
   ): Promise<import('./types').ExportStatus> => {
     const apiInstance = await getApi();

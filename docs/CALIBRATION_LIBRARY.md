@@ -407,7 +407,7 @@ Two layouts are available; the default is unchanged.
 BIAS/
 DARK/<exposure>_G<gain>/
 DARKFLAT/<exposure>_G<gain>/
-<target>/FLAT/<filter>/
+<target>/FLAT/<filter>/SESSION_<night>/
 <target>/LIGHT/<filter>/
 ```
 
@@ -416,22 +416,60 @@ DARKFLAT/<exposure>_G<gain>/
 ```text
 bias/G<gain>/
 darks/<exposure>s_G<gain>/
-flats/<target>/<filter>/
-lights/<target>/<filter>/
+flats/<target>/<filter>/SESSION_<night>/
+lights/<target>/<filter>/SESSION_<night>/
 ```
 
 Dark flats land in `darks/` beside the lights' darks. WBPP has no dark-flat
 type: a dark flat is a dark it pairs to a flat by exposure, so a separate
 folder would only mean adding one to WBPP twice.
 
-Flats stay under their target because PSF Guard matched them to that target's
-lights. Two targets shot on different nights can need different flats for one
-filter, and merging them would have WBPP integrate both into a single master.
+Each light takes the calibration frames a stack would build its masters from:
+the coherent set nearest the light per kind, not everything the library
+matched. Flats stay under their target because PSF Guard matched them to that
+target's lights, and under the night they were shot because two nights of one
+target can need different flats for one filter. Merging either would have WBPP
+integrate both into a single master flat.
+
+In the WBPP layout the light's path names the same night as its flats. The
+runner passes `keywords=SESSION` with keyword grouping on, and WBPP reads the
+value out of the `SESSION_<night>` folder: each night's lights calibrate with
+that night's flats, bias and darks carry no session and serve every night, and
+the nights integrate together afterwards. A light with no flats has no session
+folder. The grouped-by-target layout only sorts the flats by night.
 
 Choose the layout with `--layout wbpp` on the CLI, the `layout` query parameter
 on the export download, or in the dialog every Export action on the overview
 opens. The dialog starts from the **Export** default in Settings → Setups,
 which is server-wide and shared by the desktop and browser apps.
+
+The dialog also asks whether to include ungraded lights (on by default, as
+the stack previews do; rejects are never exported) and how the files land:
+
+- **Copy** stands on its own: a clone or hard link where the filesystem
+  allows, a copy elsewhere.
+- **Link to the originals** writes symbolic links, so the tree costs no space
+  and can point at a network mount. Whatever reads it must see the originals
+  at the same paths, which suits a PixInsight on the same machine or on one
+  that mounts the same share at the same place.
+- **Reference in place** copies nothing. The export is three scripts:
+  `run-wbpp.js` carries the frame list and hands it to WBPP from inside
+  PixInsight, and `run-wbpp.sh` and `run-wbpp.cmd` launch it with the output
+  folder. No frame travels on a command line, so the list has no size limit.
+  The script includes WBPP from its standard install path per platform; edit
+  the `#include` line for an install elsewhere. It can also run from
+  PixInsight's Script > Execute Script File, writing to a `wbpp-out` folder
+  in your home directory. The dialog's **Server path** is the folder the
+  list is relative to, prefilled with what the database's image directories
+  share; **PixInsight path** is the same folder on the PixInsight machine,
+  if it differs. Server path `/mnt/barium/astrobin` and PixInsight path
+  `P:\` list the frames as `P:/_ByTelescope/...`; `psfSourceRoot` at the top
+  of the script is that value and can be edited later. A frame outside the
+  server path keeps its full path. Because the paths are the originals',
+  they carry no session folder and WBPP pools each filter's flats across
+  nights. This mode needs the WBPP layout. On the CLI it is
+  `--placement reference` with `--local-root` and `--remote-root`;
+  `--placement symlink` links.
 
 A WBPP export also carries `run-wbpp.sh` and `run-wbpp.cmd`, which hand it to
 PixInsight. WBPP 3.x is driven from PixInsight's command line rather than
@@ -445,6 +483,14 @@ PixInsight prints nothing to the terminal in this mode, because WBPP writes to
 its own console. A finished run and a failed one look alike from outside, so
 read `wbpp-out/logs/*.log` for what happened; the results land in
 `wbpp-out/master` and `wbpp-out/calibrated`. The scripts say so too.
+
+The reference runner was also verified there: WBPP reads its parameters
+from `Runtime.jsArguments`, which the core makes read-only, so the script
+includes WBPP's entry file inside a function where a Proxy named `Runtime`
+answers `jsArguments` with the list built in the script and everything else
+from the real object, then calls WBPP's entry point as `WBPP.js` does.
+`#engine v8` at the top is what `WBPP.js` declares; without it the core
+compiles the include with an engine that rejects WBPP's classes.
 
 This was verified against WBPP 3.0.1 in PixInsight 1.9.4: the generated
 invocation classified every frame from its `IMAGETYP` header, grouped by

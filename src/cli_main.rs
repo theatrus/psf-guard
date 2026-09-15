@@ -149,11 +149,16 @@ pub fn main() -> Result<()> {
             filter,
             layout,
             link,
+            placement,
+            local_root,
+            remote_root,
             dry_run,
             image_dirs,
             registry,
         } => {
-            use crate::commands::export::{execute_plan, plan_export, ExportOptions};
+            use crate::commands::export::{
+                execute_plan_with, plan_export, wbpp, ExportLayout, ExportOptions, Placement,
+            };
             use crate::db_registry::DbRegistry;
             use rusqlite::OpenFlags;
             use std::path::PathBuf;
@@ -194,30 +199,56 @@ pub fn main() -> Result<()> {
                 layout: layout.into(),
                 ..Default::default()
             };
+            let placement = if link && placement == crate::cli::ExportPlacementArg::Copy {
+                Placement::Hardlink
+            } else {
+                placement.into()
+            };
+            let files = if placement == Placement::Reference {
+                if options.layout != ExportLayout::Wbpp {
+                    return Err(anyhow::anyhow!(
+                        "--placement reference only produces the WBPP runner, so it needs \
+                         --layout wbpp"
+                    ));
+                }
+                wbpp::WbppFiles::Referenced {
+                    local_root: local_root.map(PathBuf::from),
+                    remote_root,
+                }
+            } else {
+                wbpp::WbppFiles::Placed
+            };
             let plan = plan_export(&conn, &dirs, &options)?;
             let dest_root = PathBuf::from(&dest);
-            let summary = execute_plan(&plan, &dest_root, link, dry_run);
-            if options.layout == crate::commands::export::ExportLayout::Wbpp && !dry_run {
-                use crate::commands::export::{wbpp, write_wbpp_scripts};
-                match write_wbpp_scripts(&plan, &dest_root, wbpp::WbppRun::default()) {
+            let summary = execute_plan_with(&plan, &dest_root, placement, dry_run, &mut |_, _| {});
+            if options.layout == ExportLayout::Wbpp && !dry_run {
+                use crate::commands::export::write_wbpp_scripts;
+                match write_wbpp_scripts(&plan, &dest_root, wbpp::WbppRun::default(), &files) {
                     Ok(scripts) => {
                         for script in scripts {
                             println!("Wrote {}", script.display());
                         }
                     }
-                    // The frames are already placed; a missing runner is worth
-                    // reporting but not worth failing the export over.
-                    Err(error) => eprintln!("⚠️  No WBPP runner script: {error}"),
+                    // With frames placed, a missing runner is worth reporting
+                    // but not worth failing the export over. A referenced
+                    // export IS the runner.
+                    Err(error) if placement.places_files() => {
+                        eprintln!("⚠️  No WBPP runner script: {error}")
+                    }
+                    Err(error) => return Err(error),
                 }
             }
 
             println!(
-                "\nExport {}: planned={}, copied={}, linked={}, already_present={}, \
-                 missing_files={}, errors={}, {:.2} GiB",
+                "\nExport {}: planned={}, copied={}, linked={}, reflinked={}, symlinked={}, \
+                 referenced={}, already_present={}, missing_files={}, errors={}, {:.2} GiB",
                 if dry_run { "(dry-run)" } else { "(live)" },
                 summary.planned,
                 summary.copied,
                 summary.linked,
+                summary.reflinked,
+                summary.symlinked,
+                summary.referenced,
                 summary.skipped_existing,
                 summary.missing,
                 summary.errors,

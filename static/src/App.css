@@ -6808,6 +6808,46 @@
   color: var(--color-text-muted);
 }
 
+.export-dialog-option {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  margin: 0 0 0.9rem;
+  cursor: pointer;
+}
+
+.export-dialog-option input {
+  margin-top: 0.2rem;
+}
+
+.export-dialog-option span,
+.export-dialog-remote-root > span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.export-dialog-option small,
+.export-dialog-remote-root small {
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+}
+
+.export-dialog-remote-root {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.4rem 0 0.2rem;
+}
+
+.export-dialog-remote-root input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  font-family: var(--font-mono, monospace);
+}
+
+
 .dialog-footer .export-dialog-download {
   flex: 0 0 auto;
   padding: 0.45rem 0.8rem;

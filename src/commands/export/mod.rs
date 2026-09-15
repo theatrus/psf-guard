@@ -9,13 +9,17 @@
 //! ```
 //!
 //! Rejected frames are never exported. Matching calibration frames from the
-//! PSF Guard library join the same plan under `<target>/FLAT/<filter>/`,
-//! `<dest>/DARK/<exposure>_G<gain>/`, `<dest>/DARKFLAT/...`, and
-//! `<dest>/BIAS/`.
+//! PSF Guard library join the same plan under
+//! `<target>/FLAT/<filter>/SESSION_<night>/`, `<dest>/DARK/<exposure>_G<gain>/`,
+//! `<dest>/DARKFLAT/...`, and `<dest>/BIAS/`. The flats are the coherent set a
+//! master would build from, per light, so two nights that need different
+//! flats get two session folders.
 //!
-//! Placement is copy (default) or hardlink (`--link`, same-filesystem);
-//! existing destination files with matching size are skipped, so re-running
-//! an export after a new night only adds the new subs.
+//! Placement is copy (default), hardlink or reflink (same filesystem),
+//! symlink (the tree points at the originals), or reference (nothing is
+//! placed; the WBPP runner lists the originals where they are). Existing
+//! destination files with matching size are skipped, so re-running an export
+//! after a new night only adds the new subs.
 
 use crate::db::Database;
 use crate::directory_tree::DirectoryTree;
@@ -76,9 +80,29 @@ pub enum ExportLayout {
     Wbpp,
 }
 
+/// The grouping keyword the WBPP layout writes into paths, and hands WBPP
+/// as `keywords=SESSION`. WBPP reads a keyword's value out of a path
+/// component shaped `SESSION_<value>`, and pairs lights with the flats
+/// whose value matches; bias and darks carry no value and serve every
+/// session.
+pub const SESSION_KEYWORD: &str = "SESSION";
+
+/// The path component that carries a session label to WBPP.
+pub fn session_component(label: &str) -> String {
+    format!("{SESSION_KEYWORD}_{}", sanitize_component(label))
+}
+
 impl ExportLayout {
-    /// Where one light frame lands.
-    fn light_destination(self, target: &str, filter: &str, basename: &str) -> PathBuf {
+    /// Where one light frame lands. `session` is the flat session the light
+    /// calibrates in; the WBPP layout tags the light's path with it so WBPP
+    /// pairs the light with that session's flats.
+    fn light_destination(
+        self,
+        target: &str,
+        filter: &str,
+        session: Option<&str>,
+        basename: &str,
+    ) -> PathBuf {
         let (target, filter, basename) = (
             sanitize_component(target),
             sanitize_component(filter),
@@ -89,10 +113,13 @@ impl ExportLayout {
                 .join("LIGHT")
                 .join(filter)
                 .join(basename),
-            Self::Wbpp => PathBuf::from("lights")
-                .join(target)
-                .join(filter)
-                .join(basename),
+            Self::Wbpp => {
+                let mut path = PathBuf::from("lights").join(target).join(filter);
+                if let Some(session) = session {
+                    path.push(session_component(session));
+                }
+                path.join(basename)
+            }
         }
     }
 }
@@ -122,6 +149,12 @@ pub struct ExportSummary {
     /// no time or space on a supporting filesystem yet stays safe to edit.
     #[serde(default)]
     pub reflinked: usize,
+    /// Placed as symbolic links to the originals.
+    #[serde(default)]
+    pub symlinked: usize,
+    /// Left where they are and listed by path in the WBPP runner.
+    #[serde(default)]
+    pub referenced: usize,
     pub skipped_existing: usize,
     pub missing: usize,
     pub errors: usize,
@@ -206,26 +239,29 @@ pub fn plan_export(
         };
         let size_bytes = std::fs::metadata(&source).map(|m| m.len()).unwrap_or(0);
         let light_meta = crate::commands::import::headers::read_frame_meta(&source);
+        let mut flat_session = None;
         if light_meta.readable {
-            calibration_items.extend(
-                crate::calibration::export_destinations(
-                    conn,
-                    &light_meta,
-                    &target_name,
-                    Some(&tree),
-                    options.layout,
-                )
-                .context("matching export calibration frames")?,
-            );
+            let calibration = crate::calibration::export_destinations(
+                conn,
+                &light_meta,
+                &target_name,
+                Some(&tree),
+                options.layout,
+            )
+            .context("matching export calibration frames")?;
+            calibration_items.extend(calibration.items);
+            flat_session = calibration.flat_session;
         }
 
         // The basename comes from the row's metadata JSON; sanitize it too so
         // a degenerate FileName (e.g. "..") can never shift the destination
         // or produce a traversal-shaped archive entry name.
-        let mut relative_dest =
-            options
-                .layout
-                .light_destination(&target_name, &image.filter_name, &basename);
+        let mut relative_dest = options.layout.light_destination(
+            &target_name,
+            &image.filter_name,
+            flat_session.as_deref(),
+            &basename,
+        );
         let clashes = used_dests.entry(relative_dest.clone()).or_insert(0);
         *clashes += 1;
         if *clashes > 1 {
@@ -301,7 +337,8 @@ pub fn plan_export(
 }
 
 /// How planned files land at the destination.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Placement {
     Copy,
     /// Hardlink, falling back to copy across filesystems. The export then
@@ -311,6 +348,24 @@ pub enum Placement {
     /// filesystem cannot clone. Free like a hardlink, independent like a
     /// copy — the right default for a tree another program will consume.
     Reflink,
+    /// Symbolic links to the originals, which can sit on another
+    /// filesystem, such as a network mount. The tree keeps its shape, so a
+    /// stacker still sees the session folders, and costs no space. It never
+    /// falls back to a copy: a link that cannot be made is an error, since
+    /// the point was not to duplicate the frames. Whatever reads the tree
+    /// must see the originals at the same paths.
+    Symlink,
+    /// Place nothing. The WBPP runner lists every frame where it is, so the
+    /// export is the scripts alone. Since the paths are the originals', they
+    /// carry no session component and WBPP pools flats by filter.
+    Reference,
+}
+
+impl Placement {
+    /// Whether this placement writes any frame under the destination.
+    pub fn places_files(self) -> bool {
+        self != Self::Reference
+    }
 }
 
 /// Place the planned files under `dest_root`. `link` uses hardlinks (falling
@@ -346,6 +401,13 @@ pub fn execute_plan_with(
 
     let total = plan.items.len();
     for (index, item) in plan.items.iter().enumerate() {
+        if placement == Placement::Reference {
+            // Nothing lands here; the runner names the original.
+            summary.referenced += 1;
+            summary.bytes += item.size_bytes;
+            progress(index + 1, total);
+            continue;
+        }
         let dest = dest_root.join(&item.relative_dest);
         if let Ok(meta) = std::fs::metadata(&dest)
             && meta.len() == item.size_bytes
@@ -362,6 +424,8 @@ pub fn execute_plan_with(
                 Placement::Copy => summary.copied += 1,
                 Placement::Hardlink => summary.linked += 1,
                 Placement::Reflink => summary.reflinked += 1,
+                Placement::Symlink => summary.symlinked += 1,
+                Placement::Reference => summary.referenced += 1,
             }
             summary.bytes += item.size_bytes;
             progress(index + 1, total);
@@ -372,6 +436,20 @@ pub fn execute_plan_with(
         {
             eprintln!("⚠️  {}: {}", parent.display(), e);
             summary.errors += 1;
+            progress(index + 1, total);
+            continue;
+        }
+        if placement == Placement::Symlink {
+            match place_symlink(&item.source, &dest) {
+                Ok(()) => {
+                    summary.symlinked += 1;
+                    summary.bytes += item.size_bytes;
+                }
+                Err(e) => {
+                    eprintln!("⚠️  {} → {}: {}", item.source.display(), dest.display(), e);
+                    summary.errors += 1;
+                }
+            }
             progress(index + 1, total);
             continue;
         }
@@ -412,6 +490,25 @@ pub fn execute_plan_with(
     summary
 }
 
+/// Link `dest` to `source` as a symbolic link to its absolute path, so the
+/// link resolves from anywhere the tree is opened. A stale link left by an
+/// earlier export (its target moved, so the size check above could not read
+/// it) is replaced rather than reported as already there.
+fn place_symlink(source: &Path, dest: &Path) -> std::io::Result<()> {
+    let target = std::fs::canonicalize(source)?;
+    if std::fs::symlink_metadata(dest).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        std::fs::remove_file(dest)?;
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&target, dest)
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(&target, dest)
+    }
+}
+
 /// Write the WBPP runner scripts beside a finished export.
 ///
 /// Both platforms' scripts are written, because an export is often zipped and
@@ -420,6 +517,7 @@ pub fn write_wbpp_scripts(
     plan: &ExportPlan,
     dest_root: &Path,
     run: wbpp::WbppRun,
+    files: &wbpp::WbppFiles,
 ) -> Result<Vec<PathBuf>> {
     if let Some(reason) = wbpp::unusable_destination(dest_root) {
         anyhow::bail!(reason);
@@ -427,10 +525,14 @@ pub fn write_wbpp_scripts(
     std::fs::create_dir_all(dest_root)
         .with_context(|| format!("creating {}", dest_root.display()))?;
     let mut written = Vec::new();
-    for (name, body) in [
-        ("run-wbpp.sh", wbpp::shell_script(plan, run)),
-        ("run-wbpp.cmd", wbpp::batch_script(plan, run)),
-    ] {
+    let mut scripts = vec![
+        ("run-wbpp.sh", wbpp::shell_script(plan, run, files)),
+        ("run-wbpp.cmd", wbpp::batch_script(plan, run, files)),
+    ];
+    if let Some(body) = wbpp::js_runner(plan, run, files) {
+        scripts.push((wbpp::JS_RUNNER, body));
+    }
+    for (name, body) in scripts {
         let path = dest_root.join(name);
         std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
         #[cfg(unix)]
@@ -456,6 +558,12 @@ mod tests {
     }
 
     fn write_test_fits(path: &Path, kind: &str) {
+        write_test_fits_with(path, kind, &[]);
+    }
+
+    /// A tiny frame whose header carries `extra` cards after the fixed set,
+    /// for a capture time or a filter the test needs.
+    fn write_test_fits_with(path: &Path, kind: &str, extra: &[&str]) {
         let mut header = Vec::new();
         fits_card(&mut header, "SIMPLE  =                    T");
         fits_card(&mut header, "BITPIX  =                   16");
@@ -470,6 +578,9 @@ mod tests {
         fits_card(&mut header, "XBINNING=                    1");
         fits_card(&mut header, "YBINNING=                    1");
         fits_card(&mut header, "INSTRUME= 'TestCam'");
+        for card in extra {
+            fits_card(&mut header, card);
+        }
         fits_card(&mut header, "END");
         header.resize(header.len().div_ceil(2880) * 2880, b' ');
         let mut file = std::fs::File::create(path).unwrap();
@@ -586,10 +697,18 @@ mod tests {
             .map(|item| item.relative_dest.to_string_lossy().replace('\\', "/"))
             .collect();
 
+        // The light has a flat, so it and the flat share a session folder;
+        // a flat without a capture time makes an undated session.
         assert!(
             destinations
                 .iter()
-                .any(|path| path == "lights/M42_Trapezium/Ha/acc_Ha_0001.fits"),
+                .any(|path| path == "lights/M42_Trapezium/Ha/SESSION_undated/acc_Ha_0001.fits"),
+            "{destinations:?}"
+        );
+        assert!(
+            destinations
+                .iter()
+                .any(|path| path == "flats/M42_Trapezium/Ha/SESSION_undated/flat-0.fits"),
             "{destinations:?}"
         );
         assert!(
@@ -603,6 +722,147 @@ mod tests {
                 "the standard tree leaked into a WBPP export: {path}"
             );
         }
+    }
+
+    /// Two nights that need different flats get two session folders, and
+    /// each light's path names the session of the flats it calibrates with.
+    /// Pooling them would have WBPP integrate one master flat for both.
+    #[test]
+    fn each_night_keeps_its_own_flats_in_a_session_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = seed(dir.path());
+        // Lights on two nights, both accepted.
+        write_test_fits_with(
+            &dir.path().join("acc_Ha_0001.fits"),
+            "LIGHT",
+            &["DATE-OBS= '2026-09-11T03:00:00'"],
+        );
+        let second = dir.path().join("acc_Ha_0009.fits");
+        write_test_fits_with(&second, "LIGHT", &["DATE-OBS= '2026-09-13T03:00:00'"]);
+        conn.execute(
+            "INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername,
+             gradingStatus, metadata) VALUES (9, 1, 1, 200, 'Ha', 1, ?1)",
+            [serde_json::json!({ "FileName": second.display().to_string() }).to_string()],
+        )
+        .unwrap();
+        // Two flat sets: one the evening before the first light, one the
+        // morning after the second.
+        let mut calibration = Vec::new();
+        for (name, when) in [
+            ("flat-a1.fits", "2026-09-10T23:45:00"),
+            ("flat-a2.fits", "2026-09-10T23:45:30"),
+            ("flat-b1.fits", "2026-09-13T11:52:00"),
+            ("flat-b2.fits", "2026-09-13T11:52:30"),
+        ] {
+            let path = dir.path().join(name);
+            write_test_fits_with(&path, "FLAT", &[&format!("DATE-OBS= '{when}'")]);
+            calibration.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        {
+            let tx = conn.transaction().unwrap();
+            crate::calibration::import_calibration_frames(&tx, &calibration, Some("p")).unwrap();
+            tx.commit().unwrap();
+        }
+
+        let dirs = vec![dir.path().to_string_lossy().into_owned()];
+        let options = ExportOptions {
+            layout: ExportLayout::Wbpp,
+            ..ExportOptions::default()
+        };
+        let plan = plan_export(&conn, &dirs, &options).unwrap();
+        let destinations: Vec<String> = plan
+            .items
+            .iter()
+            .map(|item| item.relative_dest.to_string_lossy().replace('\\', "/"))
+            .collect();
+        for expected in [
+            "lights/M42_Trapezium/Ha/SESSION_2026-09-10/acc_Ha_0001.fits",
+            "flats/M42_Trapezium/Ha/SESSION_2026-09-10/flat-a1.fits",
+            "flats/M42_Trapezium/Ha/SESSION_2026-09-10/flat-a2.fits",
+            "lights/M42_Trapezium/Ha/SESSION_2026-09-12/acc_Ha_0009.fits",
+            "flats/M42_Trapezium/Ha/SESSION_2026-09-12/flat-b1.fits",
+            "flats/M42_Trapezium/Ha/SESSION_2026-09-12/flat-b2.fits",
+        ] {
+            assert!(
+                destinations.contains(&expected.to_string()),
+                "{expected} in {destinations:?}"
+            );
+        }
+        // Each flat is exported once, in its own session only.
+        assert_eq!(
+            plan.items
+                .iter()
+                .filter(|item| item.kind == FrameKind::Flat)
+                .count(),
+            4,
+            "{destinations:?}"
+        );
+        // And the runner turns the session keyword on.
+        let script = wbpp::shell_script(&plan, wbpp::WbppRun::LoadOnly, &wbpp::WbppFiles::Placed);
+        assert!(script.contains("keywords=SESSION"), "{script}");
+    }
+
+    /// A symlinked export costs no space and can point across filesystems,
+    /// so the tree keeps its shape while the frames stay where they are.
+    #[cfg(unix)]
+    #[test]
+    fn symlink_mode_points_the_tree_at_the_originals() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        let conn = seed(dir.path());
+        let dirs = vec![dir.path().to_string_lossy().into_owned()];
+        let plan = plan_export(&conn, &dirs, &ExportOptions::default()).unwrap();
+
+        let summary = execute_plan_with(
+            &plan,
+            dest.path(),
+            Placement::Symlink,
+            false,
+            &mut |_, _| {},
+        );
+        assert_eq!(
+            (summary.symlinked, summary.copied, summary.errors),
+            (1, 0, 0)
+        );
+        let link = dest.path().join("M42_Trapezium/LIGHT/Ha/acc_Ha_0001.fits");
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read(&link).unwrap(), b"fitsdata");
+
+        // A second run finds the link in place and skips it.
+        let again = execute_plan_with(
+            &plan,
+            dest.path(),
+            Placement::Symlink,
+            false,
+            &mut |_, _| {},
+        );
+        assert_eq!(again.skipped_existing, 1);
+    }
+
+    /// A referenced export places nothing; the plan is only what the runner
+    /// will name.
+    #[test]
+    fn reference_mode_places_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        let conn = seed(dir.path());
+        let dirs = vec![dir.path().to_string_lossy().into_owned()];
+        let plan = plan_export(&conn, &dirs, &ExportOptions::default()).unwrap();
+        let summary = execute_plan_with(
+            &plan,
+            dest.path(),
+            Placement::Reference,
+            false,
+            &mut |_, _| {},
+        );
+        assert_eq!(
+            (summary.referenced, summary.copied, summary.errors),
+            (1, 0, 0)
+        );
+        assert_eq!(std::fs::read_dir(dest.path()).unwrap().count(), 0);
     }
 
     /// The default is untouched, so an existing export folder keeps its shape.

@@ -60,6 +60,24 @@
 
 ## Changed
 
+- Exports keep each night's flats apart. A light takes the calibration
+  frames a stack would build from, its flats land in a `SESSION_<night>`
+  folder, and in the WBPP layout the light's path names the same night. The
+  runner turns WBPP's keyword grouping on so each night's lights calibrate
+  with their own flats before the nights integrate together. Before, every
+  matched flat of a filter shared one folder and WBPP integrated one master
+  flat for all of them.
+- The export dialog offers **Include ungraded lights**, on by default, so
+  a night the grader has not judged yet exports the way the stack previews
+  show it. Rejects stay excluded.
+- Exports can **Link to the originals** (symbolic links, no space, may point
+  at a network mount) or **Reference in place** (nothing copied; a
+  `run-wbpp.js` PixInsight script names every frame where it is, below a
+  server folder you map to what the machine running PixInsight calls it,
+  such as `/mnt/nas/astro` to `P:\`, with no limit on how many frames).
+  On the CLI: `--placement symlink` or
+  `--placement reference --local-root <path> --remote-root <path>`.
+
 - Stack and color previews state integrated exposure in hours and minutes.
   A stack card and its inspector read "2h 5m" instead of "125m 12s", the
   stack panel adds up every remembered channel into a project total, and a

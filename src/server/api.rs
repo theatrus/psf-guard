@@ -782,9 +782,22 @@ pub struct LocalExportRequest {
     #[serde(default)]
     pub layout: crate::commands::export::ExportLayout,
     /// Hardlink instead of copy (instant, no extra disk on the same
-    /// filesystem; automatically falls back to copy). Default true.
+    /// filesystem; automatically falls back to copy). Default true. Older
+    /// spelling of `placement`, which wins when both are given.
     #[serde(default)]
     pub link: Option<bool>,
+    /// How the frames land: copy, hardlink, reflink, symlink, or reference
+    /// (place nothing; the WBPP runner names the originals).
+    #[serde(default)]
+    pub placement: Option<crate::commands::export::Placement>,
+    /// For a referenced export: the folder the runner names frames below,
+    /// as this machine sees it. Absent, the frames' common parent.
+    #[serde(default)]
+    pub local_root: Option<String>,
+    /// For a referenced export: that same folder as the machine running
+    /// PixInsight sees it, when that is not this machine.
+    #[serde(default)]
+    pub remote_root: Option<String>,
     #[serde(default)]
     pub dry_run: bool,
 }
@@ -813,6 +826,19 @@ pub struct ServerExportRequest {
     /// Display label for the progress line ("project Bubble").
     #[serde(default)]
     pub scope_label: Option<String>,
+    /// How the frames land. Default reflink: a clone where the filesystem
+    /// can, a copy elsewhere. Symlink points the tree at the originals;
+    /// reference places nothing and names them in the WBPP runner.
+    #[serde(default)]
+    pub placement: Option<crate::commands::export::Placement>,
+    /// For a referenced export: the folder the runner names frames below,
+    /// as the server sees it. Absent, the frames' common parent.
+    #[serde(default)]
+    pub local_root: Option<String>,
+    /// For a referenced export: that same folder as the machine running
+    /// PixInsight sees it, when that is not the server.
+    #[serde(default)]
+    pub remote_root: Option<String>,
 }
 
 /// Response of both methods on `/api/db/{db_id}/export/server`. On POST,
