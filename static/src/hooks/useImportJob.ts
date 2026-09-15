@@ -1,7 +1,18 @@
 import { useEffect, useRef } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { ImportStatus } from '../api/types';
+
+/**
+ * Hand a job that just started to the poller. The poll interval switches
+ * off once a job reports finished, so a preview that completed leaves the
+ * query idle; without seeding it, the real import that follows is never
+ * polled and the page keeps showing the preview's final state.
+ */
+export function noteImportStarted(queryClient: QueryClient, dbId: string, status: ImportStatus) {
+  queryClient.setQueryData<ImportStatus>(['db', dbId, 'import-job'], status);
+  queryClient.invalidateQueries({ queryKey: ['db', dbId, 'import-job'] });
+}
 
 /**
  * Monitor the singleton per-DB FITS import job (started via

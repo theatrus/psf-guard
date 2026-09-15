@@ -16,7 +16,12 @@ import CalibrationMatchingSettings from './CalibrationMatchingSettings';
 import StackAutomationSettings from './StackAutomationSettings';
 import ExportDefaultsSettings from './ExportDefaultsSettings';
 import type { DatabaseSummary } from '../api/types';
-import { describeImportProgress, importFinishedMessage, useImportJob } from '../hooks/useImportJob';
+import {
+  describeImportProgress,
+  importFinishedMessage,
+  noteImportStarted,
+  useImportJob,
+} from '../hooks/useImportJob';
 import { starMetadataFillEnabled } from '../hooks/useStarMetadataFill';
 import QualityBackfillControls from './QualityBackfillControls';
 import RemotePeerSync from './RemotePeerSync';
@@ -725,6 +730,7 @@ export default function TauriSettings({
       backfill: false,
       ...options,
     });
+    noteImportStarted(queryClient, entry.id, status);
     setImportDbId(entry.id);
     setConfirmImport(entry);
     setStatusMessage(
@@ -786,12 +792,13 @@ export default function TauriSettings({
     setConfirmImport(null);
     setIsApplying(true);
     try {
-      await apiClient.startImport(entry.id, {
+      const status = await apiClient.startImport(entry.id, {
         dry_run: false,
         backfill: importAnalyzeQuality,
         fill_metadata: starMetadataFillEnabled(),
         ...importOptionsOf(entry),
       });
+      noteImportStarted(queryClient, entry.id, status);
       setStatusMessage(`Importing frames into ${entry.name}…`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

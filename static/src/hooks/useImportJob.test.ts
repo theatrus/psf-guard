@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CalibrationImportOutcome, ImportJobProgress, ImportOutcome } from '../api/types';
-import { describeImportProgress, importFinishedMessage } from './useImportJob';
+import { QueryClient } from '@tanstack/react-query';
+import { describeImportProgress, importFinishedMessage, noteImportStarted } from './useImportJob';
 
 function calibration(overrides: Partial<CalibrationImportOutcome> = {}): CalibrationImportOutcome {
   return { imported: 0, updated: 0, skipped_existing: 0, bias: 0, dark: 0, dark_flat: 0, flat: 0, ...overrides };
@@ -79,5 +80,21 @@ describe('importFinishedMessage', () => {
   it('reads a failure as one', () => {
     const progress = { ...complete(outcome()), stage: 'error', error: 'disk full', outcome: null } as ImportJobProgress;
     expect(importFinishedMessage(progress, 'redcat')).toBe('Import failed: disk full');
+  });
+});
+
+describe('noteImportStarted', () => {
+  it('seeds the poller with the running job so polling resumes after a finished preview', () => {
+    const client = new QueryClient();
+    const finished = { started: false, progress: complete(outcome({ dry_run: true })) };
+    client.setQueryData(['db', 'redcat', 'import-job'], finished);
+    const running = {
+      started: true,
+      progress: { ...complete(outcome()), running: true, stage: 'scanning' } as ImportJobProgress,
+    };
+    noteImportStarted(client, 'redcat', running);
+    const seen = client.getQueryData<{ progress: ImportJobProgress }>(['db', 'redcat', 'import-job']);
+    expect(seen?.progress.running).toBe(true);
+    expect(client.getQueryState(['db', 'redcat', 'import-job'])?.isInvalidated).toBe(true);
   });
 });
