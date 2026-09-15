@@ -20,6 +20,11 @@ interface ExportDialogProps {
   request: ExportRequest;
   /** What the layout choice starts from, per the settings panel. */
   defaultLayout: ExportLayout;
+  /**
+   * The folder the database's image directories share, as the server sees
+   * it: what a referenced export names frames below unless told otherwise.
+   */
+  sourceRoot?: string;
   busy: boolean;
   onClose: () => void;
   /** Runs the local or server export with the chosen options. */
@@ -75,6 +80,7 @@ const LOCAL_PLACEMENTS: PlacementOption[] = [
 export default function ExportDialog({
   request,
   defaultLayout,
+  sourceRoot,
   busy,
   onClose,
   onConfirm,
@@ -88,6 +94,7 @@ export default function ExportDialog({
   const [placement, setPlacement] = useState<ExportPlacement>(
     placements[0]?.value ?? 'copy'
   );
+  const [localRoot, setLocalRoot] = useState(sourceRoot ?? '');
   const [remoteRoot, setRemoteRoot] = useState('');
   // Referencing frames in place only produces the runner, which the standard
   // layout has none of.
@@ -109,6 +116,9 @@ export default function ExportDialog({
       ? {}
       : {
           placement: effectivePlacement,
+          ...(effectivePlacement === 'reference' && localRoot.trim()
+            ? { local_root: localRoot.trim() }
+            : {}),
           ...(effectivePlacement === 'reference' && remoteRoot.trim()
             ? { remote_root: remoteRoot.trim() }
             : {}),
@@ -208,21 +218,38 @@ export default function ExportDialog({
             );
           })}
           {effectivePlacement === 'reference' && (
-            <label className="export-dialog-remote-root">
-              <span>
-                PixInsight sees the image folders as
-                <small>
-                  Leave empty when PixInsight runs where the export does. Otherwise the root
-                  of the same folders on that machine, such as a share path.
-                </small>
-              </span>
-              <input
-                type="text"
-                value={remoteRoot}
-                placeholder="\\\\nas\\astro or /Volumes/astro"
-                onChange={(event) => setRemoteRoot(event.target.value)}
-              />
-            </label>
+            <>
+              <label className="export-dialog-remote-root">
+                <span>
+                  Image folder on this server
+                  <small>
+                    The scripts name every frame below this folder. Frames outside it keep
+                    their full path.
+                  </small>
+                </span>
+                <input
+                  type="text"
+                  value={localRoot}
+                  placeholder="/mnt/nas/astro"
+                  onChange={(event) => setLocalRoot(event.target.value)}
+                />
+              </label>
+              <label className="export-dialog-remote-root">
+                <span>
+                  The same folder as PixInsight sees it
+                  <small>
+                    Leave empty when PixInsight runs on this server. Otherwise the drive
+                    letter or share that folder appears as on that machine.
+                  </small>
+                </span>
+                <input
+                  type="text"
+                  value={remoteRoot}
+                  placeholder="P:\\ or \\\\nas\\astro or /Volumes/astro"
+                  onChange={(event) => setRemoteRoot(event.target.value)}
+                />
+              </label>
+            </>
           )}
         </fieldset>
       )}

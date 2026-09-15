@@ -46,11 +46,29 @@ pub enum WbppFiles {
     #[default]
     Placed,
     /// Where they already are: the script names every frame with `file=`,
-    /// below one source root it takes from an environment variable. The
-    /// root defaults to the frames' common parent as this machine sees it,
-    /// or to `remote_root` when the machine running PixInsight mounts that
-    /// folder somewhere else (a Windows share for a Linux server's mount).
-    Referenced { remote_root: Option<String> },
+    /// below one source root it takes from an environment variable.
+    ///
+    /// `local_root` is that root as this machine sees it; absent, the
+    /// frames' common parent. `remote_root` is the same folder as the
+    /// machine running PixInsight sees it, when that is another machine (a
+    /// drive letter or share for a Linux server's mount); absent, the local
+    /// root. A frame outside the local root is named by its full path.
+    Referenced {
+        local_root: Option<PathBuf>,
+        remote_root: Option<String>,
+    },
+}
+
+/// A root as typed by a person, without the separator a drive letter or a
+/// share often ends in, so joining it to a relative path gives one separator.
+fn trim_root(root: &str) -> &str {
+    let trimmed = root.trim().trim_end_matches(['/', '\\']);
+    // "/" alone is a root too, and trimming it would leave nothing.
+    if trimmed.is_empty() && root.trim().starts_with('/') {
+        "/"
+    } else {
+        trimmed
+    }
 }
 
 /// Whether any planned path carries a session component, which is what
@@ -85,17 +103,28 @@ pub fn common_source_root(plan: &ExportPlan) -> Option<PathBuf> {
     (root.components().count() > 0).then_some(root)
 }
 
-/// Each source relative to the common root, in plan order.
-fn referenced_files(plan: &ExportPlan) -> Option<(PathBuf, Vec<PathBuf>)> {
-    let root = common_source_root(plan)?;
+/// One frame as the runner names it: below the root, or by its full path
+/// when it sits outside.
+enum ReferencedFile {
+    Below(PathBuf),
+    Outside(PathBuf),
+}
+
+/// The root and each source's place against it, in plan order.
+fn referenced_files(
+    plan: &ExportPlan,
+    local_root: Option<&Path>,
+) -> Option<(PathBuf, Vec<ReferencedFile>)> {
+    let root = match local_root {
+        Some(root) => root.to_path_buf(),
+        None => common_source_root(plan)?,
+    };
     let files = plan
         .items
         .iter()
-        .map(|item| {
-            item.source
-                .strip_prefix(&root)
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|_| item.source.clone())
+        .map(|item| match item.source.strip_prefix(&root) {
+            Ok(relative) => ReferencedFile::Below(relative.to_path_buf()),
+            Err(_) => ReferencedFile::Outside(item.source.clone()),
         })
         .collect();
     Some((root, files))
@@ -155,25 +184,39 @@ pub fn shell_script(plan: &ExportPlan, run: WbppRun, files: &WbppFiles) -> Strin
                 ));
             }
         }
-        WbppFiles::Referenced { remote_root } => {
-            if let Some((root, relative)) = referenced_files(plan) {
-                // A POSIX root is what this script can use; a Windows share
-                // named for the other runner is not.
+        WbppFiles::Referenced {
+            local_root,
+            remote_root,
+        } => {
+            if let Some((root, files)) = referenced_files(plan, local_root.as_deref()) {
+                let local = root.to_string_lossy().into_owned();
+                // A POSIX root is what this script can use; a drive letter or
+                // share named for the Windows runner is not.
                 let default_root = remote_root
                     .as_deref()
+                    .map(trim_root)
                     .filter(|root| root.starts_with('/'))
                     .map(str::to_string)
-                    .unwrap_or_else(|| root.to_string_lossy().into_owned());
+                    .unwrap_or_else(|| local.clone());
                 script.push_str(&format!(
-                    "\n# The frames stay where they are. If PixInsight runs on another\n\
-                     # machine, set PSF_SOURCE_ROOT to this folder as that machine sees it.\n\
+                    "\n# The frames stay where they are, below\n\
+                     #   {local}\n\
+                     # on the machine that made this export. If PixInsight runs elsewhere,\n\
+                     # set PSF_SOURCE_ROOT to that same folder as it sees it.\n\
                      SRC=\"${{PSF_SOURCE_ROOT:-{default_root}}}\"\n"
                 ));
-                for path in relative {
-                    script.push_str(&format!(
-                        "PARAMS=\"$PARAMS,file=$SRC/{}\"\n",
-                        path.to_string_lossy()
-                    ));
+                for file in files {
+                    match file {
+                        ReferencedFile::Below(path) => script.push_str(&format!(
+                            "PARAMS=\"$PARAMS,file=$SRC/{}\"\n",
+                            path.to_string_lossy()
+                        )),
+                        ReferencedFile::Outside(path) => script.push_str(&format!(
+                            "# Outside the root; adjust by hand if PixInsight runs elsewhere.\n\
+                             PARAMS=\"$PARAMS,file={}\"\n",
+                            path.to_string_lossy()
+                        )),
+                    }
                 }
             }
         }
@@ -233,21 +276,36 @@ pub fn batch_script(plan: &ExportPlan, run: WbppRun, files: &WbppFiles) -> Strin
                 ));
             }
         }
-        WbppFiles::Referenced { remote_root } => {
-            if let Some((root, relative)) = referenced_files(plan) {
+        WbppFiles::Referenced {
+            local_root,
+            remote_root,
+        } => {
+            if let Some((root, files)) = referenced_files(plan, local_root.as_deref()) {
+                let local = root.to_string_lossy().into_owned();
                 let default_root = remote_root
-                    .clone()
-                    .unwrap_or_else(|| root.to_string_lossy().replace('/', "\\"));
+                    .as_deref()
+                    .map(trim_root)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| local.replace('/', "\\"));
                 script.push_str(&format!(
-                    "\r\nREM The frames stay where they are. If this machine mounts them\r\n\
-                     REM somewhere else, set PSF_SOURCE_ROOT to that folder first.\r\n\
+                    "\r\nREM The frames stay where they are, below\r\n\
+                     REM   {local}\r\n\
+                     REM on the machine that made this export. If this machine mounts that\r\n\
+                     REM folder somewhere else, set PSF_SOURCE_ROOT to it first.\r\n\
                      if not defined PSF_SOURCE_ROOT set \"PSF_SOURCE_ROOT={default_root}\"\r\n"
                 ));
-                for path in relative {
-                    script.push_str(&format!(
-                        "set \"PARAMS=%PARAMS%,file=%PSF_SOURCE_ROOT%\\{}\"\r\n",
-                        path.to_string_lossy().replace('/', "\\")
-                    ));
+                for file in files {
+                    match file {
+                        ReferencedFile::Below(path) => script.push_str(&format!(
+                            "set \"PARAMS=%PARAMS%,file=%PSF_SOURCE_ROOT%\\{}\"\r\n",
+                            path.to_string_lossy().replace('/', "\\")
+                        )),
+                        ReferencedFile::Outside(path) => script.push_str(&format!(
+                            "REM Outside the root; adjust by hand if this machine mounts it elsewhere.\r\n\
+                             set \"PARAMS=%PARAMS%,file={}\"\r\n",
+                            path.to_string_lossy().replace('/', "\\")
+                        )),
+                    }
                 }
             }
         }
@@ -527,7 +585,10 @@ mod tests {
             "/mnt/nas/astro/2026/M42/LIGHT/a.fits",
             "/mnt/nas/astro/_Calibration/FLAT/f.fits",
         ]);
-        let files = WbppFiles::Referenced { remote_root: None };
+        let files = WbppFiles::Referenced {
+            local_root: None,
+            remote_root: None,
+        };
         let script = shell_script(&plan, WbppRun::LoadOnly, &files);
         assert!(
             script.contains("SRC=\"${PSF_SOURCE_ROOT:-/mnt/nas/astro}\""),
@@ -546,6 +607,7 @@ mod tests {
 
         // The Windows runner takes the share the other machine mounts.
         let files = WbppFiles::Referenced {
+            local_root: None,
             remote_root: Some("\\\\nas\\astro".into()),
         };
         let batch = batch_script(&plan, WbppRun::LoadOnly, &files);
@@ -569,6 +631,40 @@ mod tests {
     fn a_comma_in_a_referenced_source_is_refused() {
         let plan = plan_with_sources(&["/data/M42, Trapezium/a.fits"]);
         assert!(unusable_sources(&plan, &WbppFiles::Placed).is_none());
-        assert!(unusable_sources(&plan, &WbppFiles::Referenced { remote_root: None }).is_some());
+        let referenced = WbppFiles::Referenced {
+            local_root: None,
+            remote_root: None,
+        };
+        assert!(unusable_sources(&plan, &referenced).is_some());
+    }
+
+    /// The person maps a folder they know to what the other machine calls
+    /// it, so the given root wins over the frames' common parent, a drive
+    /// letter's trailing separator is not doubled, and a frame outside the
+    /// root keeps its full path rather than a wrong relative one.
+    #[test]
+    fn a_given_root_maps_to_the_remote_name_and_leaves_strays_absolute() {
+        let plan = plan_with_sources(&[
+            "/mnt/nas/astro/2026/M42/LIGHT/a.fits",
+            "/mnt/nas/astro/2026/M42/LIGHT/b.fits",
+            "/srv/other/flat.fits",
+        ]);
+        let files = WbppFiles::Referenced {
+            local_root: Some(PathBuf::from("/mnt/nas/astro")),
+            remote_root: Some("P:\\".into()),
+        };
+        let batch = batch_script(&plan, WbppRun::LoadOnly, &files);
+        assert!(batch.contains("set \"PSF_SOURCE_ROOT=P:\""), "{batch}");
+        assert!(
+            batch.contains("file=%PSF_SOURCE_ROOT%\\2026\\M42\\LIGHT\\a.fits"),
+            "{batch}"
+        );
+        assert!(batch.contains("file=\\srv\\other\\flat.fits"), "{batch}");
+        assert!(batch.contains("REM   /mnt/nas/astro"), "{batch}");
+
+        let shell = shell_script(&plan, WbppRun::LoadOnly, &files);
+        assert!(shell.contains("PSF_SOURCE_ROOT:-/mnt/nas/astro"), "{shell}");
+        assert!(shell.contains("file=$SRC/2026/M42/LIGHT/b.fits"), "{shell}");
+        assert!(shell.contains("file=/srv/other/flat.fits"), "{shell}");
     }
 }

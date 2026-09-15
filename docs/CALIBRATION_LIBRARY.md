@@ -454,14 +454,18 @@ the stack previews do; rejects are never exported) and how the files land:
   that mounts the same share at the same place.
 - **Reference in place** copies nothing. The `run-wbpp` scripts name every
   frame where it already is, below one root the scripts take from
-  `PSF_SOURCE_ROOT`; the dialog's "PixInsight sees the image folders as" seeds
-  that root for a machine that mounts the folders elsewhere, such as a
-  Windows share for the server's mount. Because the paths are the originals',
-  they carry no session folder and WBPP pools each filter's flats across
-  nights. The list travels in one command-line argument, which holds about a
-  thousand frames on Linux and macOS and about three hundred on Windows.
-  This mode needs the WBPP layout. On the CLI it is `--placement reference`
-  with `--remote-root`; `--placement symlink` links.
+  `PSF_SOURCE_ROOT`. The dialog asks for that root twice: as the server sees
+  it, prefilled with the folder the database's image directories share, and
+  as the machine running PixInsight sees it, when that is another machine.
+  So `/mnt/barium/astrobin` on the server and `P:\` on a Windows desktop
+  that mounts the same share as drive P: gives `P:\_ByTelescope\...` in the
+  Windows runner. A frame outside the server-side root keeps its full path.
+  Because the paths are the originals', they carry no session folder and
+  WBPP pools each filter's flats across nights. The list travels in one
+  command-line argument, which holds about a thousand frames on Linux and
+  macOS and about three hundred on Windows. This mode needs the WBPP layout.
+  On the CLI it is `--placement reference` with `--local-root` and
+  `--remote-root`; `--placement symlink` links.
 
 A WBPP export also carries `run-wbpp.sh` and `run-wbpp.cmd`, which hand it to
 PixInsight. WBPP 3.x is driven from PixInsight's command line rather than

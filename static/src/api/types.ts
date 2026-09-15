@@ -556,7 +556,9 @@ export interface ExportChoice {
   include_pending: boolean;
   /** Absent for a zip download, which always copies. */
   placement?: ExportPlacement;
-  /** For a referenced export: the image folders' root as PixInsight's machine sees it. */
+  /** For a referenced export: the folder the runner names frames below, as the server sees it. */
+  local_root?: string;
+  /** For a referenced export: that same folder as PixInsight's machine sees it. */
   remote_root?: string;
 }
 

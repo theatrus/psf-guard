@@ -43,6 +43,7 @@ import {
 import ProjectSchedulerDialog from './ProjectSchedulerDialog';
 import CalibrationReportDialog from './CalibrationReportDialog';
 import ExportDialog, { type ExportRequest } from './ExportDialog';
+import { commonDirectory } from '../utils/commonDirectory';
 import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog';
 import { useAccess } from '../auth/access';
 import PreviewImage from './PreviewImage';
@@ -61,6 +62,7 @@ function recentImageKey(dbId: string, projectId: number, imageId: number): strin
 function projectKey(dbId: string, projectId: number): string {
   return `${dbId}:${projectId}`;
 }
+
 
 export default function Overview() {
   const color = useColorPreview();
@@ -1293,6 +1295,9 @@ export default function Overview() {
         <ExportDialog
           request={pendingExport}
           defaultLayout={exportSettings?.default_layout ?? 'standard'}
+          sourceRoot={commonDirectory(
+            databases?.find((db) => db.id === pendingExport.dbId)?.image_directories ?? []
+          )}
           busy={exportBusy}
           onClose={() => setPendingExport(null)}
           onConfirm={(choice) => {

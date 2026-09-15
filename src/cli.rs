@@ -276,9 +276,15 @@ pub enum Commands {
         #[arg(long, value_enum, default_value_t = ExportPlacementArg::Copy)]
         placement: ExportPlacementArg,
 
-        /// For `--placement reference`: the image folders' root as the
-        /// machine running PixInsight sees it, when that is another machine
-        /// (a Windows share for this machine's mount).
+        /// For `--placement reference`: the folder the runner names frames
+        /// below, as this machine sees it. Defaults to the frames' common
+        /// parent.
+        #[arg(long)]
+        local_root: Option<String>,
+
+        /// For `--placement reference`: that same folder as the machine
+        /// running PixInsight sees it, when that is another machine (a
+        /// drive letter or share for this machine's mount).
         #[arg(long)]
         remote_root: Option<String>,
 

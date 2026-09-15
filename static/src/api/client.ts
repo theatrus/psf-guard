@@ -798,6 +798,7 @@ export const apiClient = {
       layout?: ExportLayout;
       link?: boolean;
       placement?: import('./types').ExportPlacement;
+      local_root?: string;
       remote_root?: string;
       dry_run?: boolean;
     }
@@ -827,6 +828,7 @@ export const apiClient = {
       subdirectory?: string;
       scope_label?: string;
       placement?: import('./types').ExportPlacement;
+      local_root?: string;
       remote_root?: string;
     }
   ): Promise<import('./types').ExportStatus> => {

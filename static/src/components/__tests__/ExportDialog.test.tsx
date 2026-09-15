@@ -40,6 +40,7 @@ describe('ExportDialog', () => {
       <ExportDialog
         request={{ ...request, kind: 'server' }}
         defaultLayout="standard"
+        sourceRoot="/mnt/nas/astro"
         busy={false}
         onClose={() => {}}
         onConfirm={onConfirm}
@@ -51,15 +52,20 @@ describe('ExportDialog', () => {
     fireEvent.click(screen.getByRole('radio', { name: /^WBPP/ }));
     expect(reference).toBeEnabled();
     fireEvent.click(reference);
-    fireEvent.change(screen.getByRole('textbox', { name: /PixInsight sees the image folders as/ }), {
-      target: { value: '\\\\nas\\astro' },
+    // The server side is prefilled from the database's image folders.
+    expect(screen.getByRole('textbox', { name: /Image folder on this server/ })).toHaveValue(
+      '/mnt/nas/astro'
+    );
+    fireEvent.change(screen.getByRole('textbox', { name: /as PixInsight sees it/ }), {
+      target: { value: 'P:\\' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Start export' }));
     expect(onConfirm).toHaveBeenLastCalledWith({
       layout: 'wbpp',
       include_pending: true,
       placement: 'reference',
-      remote_root: '\\\\nas\\astro',
+      local_root: '/mnt/nas/astro',
+      remote_root: 'P:\\',
     });
 
     // Back to the standard layout, the reference choice falls back to the
@@ -68,6 +74,7 @@ describe('ExportDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start export' }));
     expect(onConfirm.mock.lastCall?.[0]).toMatchObject({ placement: 'reflink' });
     expect(onConfirm.mock.lastCall?.[0]).not.toHaveProperty('remote_root');
+    expect(onConfirm.mock.lastCall?.[0]).not.toHaveProperty('local_root');
   });
 
   it('offers a zip download only the layout and the ungraded choice', () => {
@@ -85,5 +92,22 @@ describe('ExportDialog', () => {
     expect(download()).toContain('include_pending=true');
     fireEvent.click(screen.getByRole('checkbox', { name: /Include ungraded lights/ }));
     expect(download()).not.toContain('include_pending');
+  });
+});
+
+describe('commonDirectory', () => {
+  it('finds the folder a database\u2019s image directories share', async () => {
+    const { commonDirectory } = await import('../../utils/commonDirectory');
+    expect(
+      commonDirectory([
+        '/mnt/barium/astrobin/_ByTelescope/starfront-ultracat131/_Source',
+        '/mnt/barium/astrobin/_Incoming/starfront-ultracat131',
+        '/mnt/barium/astrobin/_Calibration/starfront-ultracat131',
+      ])
+    ).toBe('/mnt/barium/astrobin');
+    expect(commonDirectory(['/data/a'])).toBe('/data/a');
+    expect(commonDirectory(['/data/a', '/srv/b'])).toBe('');
+    expect(commonDirectory(['D:\\pictures\\a', 'D:\\pictures\\b'])).toBe('D:\\pictures');
+    expect(commonDirectory([])).toBe('');
   });
 });

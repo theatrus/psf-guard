@@ -150,6 +150,7 @@ pub fn main() -> Result<()> {
             layout,
             link,
             placement,
+            local_root,
             remote_root,
             dry_run,
             image_dirs,
@@ -210,7 +211,10 @@ pub fn main() -> Result<()> {
                          --layout wbpp"
                     ));
                 }
-                wbpp::WbppFiles::Referenced { remote_root }
+                wbpp::WbppFiles::Referenced {
+                    local_root: local_root.map(PathBuf::from),
+                    remote_root,
+                }
             } else {
                 wbpp::WbppFiles::Placed
             };

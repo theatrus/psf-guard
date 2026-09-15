@@ -2278,6 +2278,7 @@ pub async fn export_archive_route(
 /// that needs the WBPP layout, and the request is refused without it.
 fn wbpp_files(
     placement: crate::commands::export::Placement,
+    local_root: Option<String>,
     remote_root: Option<String>,
     layout: crate::commands::export::ExportLayout,
 ) -> Result<crate::commands::export::wbpp::WbppFiles, AppError> {
@@ -2292,10 +2293,13 @@ fn wbpp_files(
                 .into(),
         ));
     }
+    let given = |root: Option<String>| {
+        root.map(|root| root.trim().to_string())
+            .filter(|root| !root.is_empty())
+    };
     Ok(WbppFiles::Referenced {
-        remote_root: remote_root
-            .map(|root| root.trim().to_string())
-            .filter(|root| !root.is_empty()),
+        local_root: given(local_root).map(std::path::PathBuf::from),
+        remote_root: given(remote_root),
     })
 }
 
@@ -2332,7 +2336,12 @@ pub async fn export_local_route(
     } else {
         Placement::Copy
     });
-    let files = wbpp_files(placement, req.remote_root.clone(), options.layout)?;
+    let files = wbpp_files(
+        placement,
+        req.local_root.clone(),
+        req.remote_root.clone(),
+        options.layout,
+    )?;
     let dry_run = req.dry_run;
 
     // Plan + place on a blocking thread with a dedicated read-only
@@ -2434,7 +2443,12 @@ pub async fn start_server_export_route(
         ..Default::default()
     };
     let placement = req.placement.unwrap_or(Placement::Reflink);
-    let files = wbpp_files(placement, req.remote_root.clone(), options.layout)?;
+    let files = wbpp_files(
+        placement,
+        req.local_root.clone(),
+        req.remote_root.clone(),
+        options.layout,
+    )?;
 
     let store = ctx.0.export_job.clone();
     if !export_job::try_begin(&store, dest.display().to_string(), scope) {

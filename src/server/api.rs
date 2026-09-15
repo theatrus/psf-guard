@@ -790,8 +790,12 @@ pub struct LocalExportRequest {
     /// (place nothing; the WBPP runner names the originals).
     #[serde(default)]
     pub placement: Option<crate::commands::export::Placement>,
-    /// For a referenced export: the image folders' root as the machine
-    /// running PixInsight sees it, when that is not this machine.
+    /// For a referenced export: the folder the runner names frames below,
+    /// as this machine sees it. Absent, the frames' common parent.
+    #[serde(default)]
+    pub local_root: Option<String>,
+    /// For a referenced export: that same folder as the machine running
+    /// PixInsight sees it, when that is not this machine.
     #[serde(default)]
     pub remote_root: Option<String>,
     #[serde(default)]
@@ -827,8 +831,12 @@ pub struct ServerExportRequest {
     /// reference places nothing and names them in the WBPP runner.
     #[serde(default)]
     pub placement: Option<crate::commands::export::Placement>,
-    /// For a referenced export: the image folders' root as the machine
-    /// running PixInsight sees it, when that is not the server.
+    /// For a referenced export: the folder the runner names frames below,
+    /// as the server sees it. Absent, the frames' common parent.
+    #[serde(default)]
+    pub local_root: Option<String>,
+    /// For a referenced export: that same folder as the machine running
+    /// PixInsight sees it, when that is not the server.
     #[serde(default)]
     pub remote_root: Option<String>,
 }
