@@ -92,6 +92,11 @@
 
 ## Fixed
 
+- Confirming an import after its preview now shows the import's own
+  progress and result. The page had stopped polling when the preview
+  finished, so the panel kept the preview and the footer stayed on
+  "Importing…" until a reload.
+
 - The Settings footer now reports when an import finishes instead of
   staying on "Importing…". A calibration-only import reads "Imported 12
   calibration frame(s)." rather than "0 light frame(s) — nothing new".
