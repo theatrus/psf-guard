@@ -994,7 +994,7 @@ async fn export_streams_zip_of_non_rejected_lights() {
         "the PixInsight root is in the script"
     );
     assert!(
-        has(b"m81_l_0001.fits\","),
+        has(b"{ path: \"m81_l_0001.fits\" }"),
         "the frame is named in the script"
     );
     assert!(
