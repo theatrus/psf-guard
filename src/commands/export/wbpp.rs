@@ -45,18 +45,32 @@ pub enum WbppFiles {
     /// Under the frame roots beside the script, which it scans with `dir=`.
     #[default]
     Placed,
-    /// Where they already are: the script names every frame with `file=`,
-    /// below one source root it takes from an environment variable.
+    /// Where they already are: `run-wbpp.js` carries the list and hands it
+    /// to WBPP from inside PixInsight, so no command line has to hold it.
     ///
-    /// `local_root` is that root as this machine sees it; absent, the
-    /// frames' common parent. `remote_root` is the same folder as the
-    /// machine running PixInsight sees it, when that is another machine (a
-    /// drive letter or share for a Linux server's mount); absent, the local
-    /// root. A frame outside the local root is named by its full path.
+    /// `local_root` is the folder the list is relative to, as this machine
+    /// sees it; absent, the frames' common parent. `remote_root` is the same
+    /// folder as the machine running PixInsight sees it, when that is
+    /// another machine (a drive letter or share for a Linux server's mount);
+    /// absent, the local root. A frame outside the local root is named by
+    /// its full path.
     Referenced {
         local_root: Option<PathBuf>,
         remote_root: Option<String>,
     },
+}
+
+/// The script a referenced export writes beside its runners.
+pub const JS_RUNNER: &str = "run-wbpp.js";
+
+/// A path as PixInsight spells it on every platform: forward slashes.
+fn slashed(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+/// A string as a JavaScript literal.
+fn js_string(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into())
 }
 
 /// A root as typed by a person, without the separator a drive letter or a
@@ -184,41 +198,18 @@ pub fn shell_script(plan: &ExportPlan, run: WbppRun, files: &WbppFiles) -> Strin
                 ));
             }
         }
-        WbppFiles::Referenced {
-            local_root,
-            remote_root,
-        } => {
-            if let Some((root, files)) = referenced_files(plan, local_root.as_deref()) {
-                let local = root.to_string_lossy().into_owned();
-                // A POSIX root is what this script can use; a drive letter or
-                // share named for the Windows runner is not.
-                let default_root = remote_root
-                    .as_deref()
-                    .map(trim_root)
-                    .filter(|root| root.starts_with('/'))
-                    .map(str::to_string)
-                    .unwrap_or_else(|| local.clone());
-                script.push_str(&format!(
-                    "\n# The frames stay where they are, below\n\
-                     #   {local}\n\
-                     # on the machine that made this export. If PixInsight runs elsewhere,\n\
-                     # set PSF_SOURCE_ROOT to that same folder as it sees it.\n\
-                     SRC=\"${{PSF_SOURCE_ROOT:-{default_root}}}\"\n"
-                ));
-                for file in files {
-                    match file {
-                        ReferencedFile::Below(path) => script.push_str(&format!(
-                            "PARAMS=\"$PARAMS,file=$SRC/{}\"\n",
-                            path.to_string_lossy()
-                        )),
-                        ReferencedFile::Outside(path) => script.push_str(&format!(
-                            "# Outside the root; adjust by hand if PixInsight runs elsewhere.\n\
-                             PARAMS=\"$PARAMS,file={}\"\n",
-                            path.to_string_lossy()
-                        )),
-                    }
-                }
-            }
+        WbppFiles::Referenced { .. } => {
+            script.push_str(&format!(
+                "\n# {JS_RUNNER} carries the frame list and hands it to WBPP from inside\n\
+                 # PixInsight; it also decides whether to stop at the dialog. If PixInsight\n\
+                 # sees the frames' folder elsewhere, set PSF_SOURCE_ROOT to it, or edit\n\
+                 # psfSourceRoot in the script.\n\
+                 PARAMS=\"$HERE/{JS_RUNNER},outputDirectory=$HERE/{OUTPUT_DIRECTORY}\"\n\
+                 [ -n \"$PSF_SOURCE_ROOT\" ] && PARAMS=\"$PARAMS,sourceRoot=$PSF_SOURCE_ROOT\"\n\
+                 mkdir -p \"$HERE/{OUTPUT_DIRECTORY}\"\n\
+                 exec \"$PI_BIN\" -n --automation-mode -r=\"$PARAMS\" --force-exit\n"
+            ));
+            return script;
         }
     }
     script.push_str(&format!(
@@ -276,38 +267,18 @@ pub fn batch_script(plan: &ExportPlan, run: WbppRun, files: &WbppFiles) -> Strin
                 ));
             }
         }
-        WbppFiles::Referenced {
-            local_root,
-            remote_root,
-        } => {
-            if let Some((root, files)) = referenced_files(plan, local_root.as_deref()) {
-                let local = root.to_string_lossy().into_owned();
-                let default_root = remote_root
-                    .as_deref()
-                    .map(trim_root)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| local.replace('/', "\\"));
-                script.push_str(&format!(
-                    "\r\nREM The frames stay where they are, below\r\n\
-                     REM   {local}\r\n\
-                     REM on the machine that made this export. If this machine mounts that\r\n\
-                     REM folder somewhere else, set PSF_SOURCE_ROOT to it first.\r\n\
-                     if not defined PSF_SOURCE_ROOT set \"PSF_SOURCE_ROOT={default_root}\"\r\n"
-                ));
-                for file in files {
-                    match file {
-                        ReferencedFile::Below(path) => script.push_str(&format!(
-                            "set \"PARAMS=%PARAMS%,file=%PSF_SOURCE_ROOT%\\{}\"\r\n",
-                            path.to_string_lossy().replace('/', "\\")
-                        )),
-                        ReferencedFile::Outside(path) => script.push_str(&format!(
-                            "REM Outside the root; adjust by hand if this machine mounts it elsewhere.\r\n\
-                             set \"PARAMS=%PARAMS%,file={}\"\r\n",
-                            path.to_string_lossy().replace('/', "\\")
-                        )),
-                    }
-                }
-            }
+        WbppFiles::Referenced { .. } => {
+            script.push_str(&format!(
+                "\r\nREM {JS_RUNNER} carries the frame list and hands it to WBPP from inside\r\n\
+                 REM PixInsight; it also decides whether to stop at the dialog. If this\r\n\
+                 REM machine sees the frames' folder elsewhere, set PSF_SOURCE_ROOT to it,\r\n\
+                 REM or edit psfSourceRoot in the script.\r\n\
+                 set \"PARAMS=%HERE%\\{JS_RUNNER},outputDirectory=%HERE%\\{OUTPUT_DIRECTORY}\"\r\n\
+                 if defined PSF_SOURCE_ROOT set \"PARAMS=%PARAMS%,sourceRoot=%PSF_SOURCE_ROOT%\"\r\n\
+                 if not exist \"%HERE%\\{OUTPUT_DIRECTORY}\" mkdir \"%HERE%\\{OUTPUT_DIRECTORY}\"\r\n\
+                 \"%PI_BIN%\" -n --automation-mode -r=\"%PARAMS%\" --force-exit\r\n"
+            ));
+            return script;
         }
     }
     script.push_str(&format!(
@@ -352,15 +323,11 @@ fn preamble(comment: &str, files: &WbppFiles) -> String {
              {comment}own output.\n"
         ),
         WbppFiles::Referenced { .. } => format!(
-            "{comment}Nothing was copied: every frame is named below where it already\n\
+            "{comment}Nothing was copied: {JS_RUNNER} names every frame where it already\n\
              {comment}is, and WBPP reads each one's type from its IMAGETYP header.\n\
              {comment}Because the paths are the originals', they carry no session\n\
              {comment}folder, so WBPP pools a filter's flats from every night into one\n\
-             {comment}master. Export with placed or linked files for per-night flats.\n\
-             {comment}\n\
-             {comment}The whole list travels in one command-line argument. Linux allows\n\
-             {comment}about a thousand frames there, Windows about three hundred; a\n\
-             {comment}longer list needs a placed export.\n"
+             {comment}master. Export with placed or linked files for per-night flats.\n"
         ),
     };
     format!(
@@ -371,8 +338,8 @@ fn preamble(comment: &str, files: &WbppFiles) -> String {
          {comment}\n\
          {comment}PixInsight prints nothing to the terminal in this mode: WBPP\n\
          {comment}writes to its own console, so a finished run and a failed one\n\
-         {comment}look alike from outside. Read\n\
-         {comment}  {OUTPUT_DIRECTORY}/logs/*.log\n\
+         {comment}look alike from outside. Read the .log files in\n\
+         {comment}  {OUTPUT_DIRECTORY}/logs\n\
          {comment}for what actually happened, and look in {OUTPUT_DIRECTORY}/master\n\
          {comment}and {OUTPUT_DIRECTORY}/calibrated for the results.\n"
     )
@@ -394,23 +361,132 @@ pub fn unusable_destination(dest_root: &Path) -> Option<String> {
     })
 }
 
-/// Whether a referenced export's frames can be named on a WBPP command line.
-/// Placed frames have fixed names under the destination, so only a runner
-/// that names the originals can meet a comma in one of their paths.
-pub fn unusable_sources(plan: &ExportPlan, files: &WbppFiles) -> Option<String> {
-    if *files == WbppFiles::Placed {
+/// The PixInsight script of a referenced export: the frame list, and WBPP
+/// itself, so the list never has to fit a command line.
+///
+/// WBPP reads its parameters from `Runtime.jsArguments`, which the core
+/// makes read-only. The script includes WBPP's entry file inside a function
+/// where a Proxy named `Runtime` answers `jsArguments` with the list built
+/// here and everything else from the real object, then calls WBPP's entry
+/// point the way `WBPP.js` does. `#engine v8` is what `WBPP.js` declares;
+/// without it the core compiles the include with an engine that rejects
+/// WBPP's classes. The core's preprocessor also opens a block comment at
+/// any `/*`, even inside a `//` comment, and closes it at the next `*/`
+/// wherever that is, so the script must not contain one; a glob in a
+/// comment once swallowed everything up to WBPP's own entry call.
+/// Checked against PixInsight 1.9.4 with WBPP 3.0.1.
+///
+/// `None` for a placed export, which scans its roots instead.
+pub fn js_runner(plan: &ExportPlan, run: WbppRun, files: &WbppFiles) -> Option<String> {
+    let WbppFiles::Referenced {
+        local_root,
+        remote_root,
+    } = files
+    else {
         return None;
+    };
+    let (root, referenced) = referenced_files(plan, local_root.as_deref())?;
+    let local = slashed(&root);
+    let source_root = remote_root
+        .as_deref()
+        .map(trim_root)
+        .map(|root| root.replace('\\', "/"))
+        .unwrap_or_else(|| local.clone());
+    let mut below = Vec::new();
+    let mut outside = Vec::new();
+    for file in referenced {
+        match file {
+            ReferencedFile::Below(path) => below.push(js_string(&slashed(&path))),
+            ReferencedFile::Outside(path) => outside.push(js_string(&slashed(&path))),
+        }
     }
-    let offender = plan
-        .items
-        .iter()
-        .find(|item| item.source.to_string_lossy().contains(','))?;
-    Some(format!(
-        "the frame path {} contains a comma, which WBPP's command line uses to \
-         separate parameters; a runner that names the frames where they are \
-         cannot express it, so export with placed or linked files instead",
-        offender.source.display()
-    ))
+    let load_only = match run {
+        WbppRun::LoadOnly => "true",
+        WbppRun::Full => "false",
+    };
+    let mut script = preamble("// ", files);
+    script.push_str(&format!(
+        "//\n\
+         // Run it with run-wbpp.sh or run-wbpp.cmd, which pass the output folder,\n\
+         // or from PixInsight's Script > Execute Script File. WBPP must be where\n\
+         // the #include lines below expect; edit them for another install.\n\
+         \n\
+         #engine v8\n\
+         \n\
+         // The folder the frames are listed below, as PixInsight sees it. On the\n\
+         // machine that made this export it is\n\
+         //   {local}\n\
+         // Edit this, or pass sourceRoot=<folder>, if PixInsight sees it elsewhere.\n\
+         var psfSourceRoot = {source_root};\n\
+         \n\
+         // Where WBPP writes. Passed as outputDirectory=<folder> by the runners;\n\
+         // empty means a {OUTPUT_DIRECTORY} folder in your home directory.\n\
+         var psfOutputDirectory = \"\";\n\
+         \n\
+         // true loads the frames and groups, then stops with the dialog open so\n\
+         // you can check them; false runs the whole pipeline. Passing run or\n\
+         // loadOnly as an argument overrides it.\n\
+         var psfLoadOnly = {load_only};\n\
+         \n\
+         // The frames, relative to psfSourceRoot.\n\
+         var psfFrames = [\n",
+        source_root = js_string(&source_root),
+    ));
+    for path in &below {
+        script.push_str(&format!("   {path},\n"));
+    }
+    script
+        .push_str("];\n\n// Frames outside that folder, by full path.\nvar psfOutsideFrames = [\n");
+    for path in &outside {
+        script.push_str(&format!("   {path},\n"));
+    }
+    script.push_str(&format!(
+        "];\n\
+         \n\
+         var psfRealRuntime = Runtime;\n\
+         (function () {{\n\
+         \x20  var given = {{}};\n\
+         \x20  for (var i = 0; i < psfRealRuntime.jsArguments.length; ++i) {{\n\
+         \x20     var item = psfRealRuntime.jsArguments[i];\n\
+         \x20     var at = item.indexOf(\"=\");\n\
+         \x20     if (at > 0) given[item.slice(0, at)] = item.slice(at + 1); else given[item] = true;\n\
+         \x20  }}\n\
+         \x20  var root = (given.sourceRoot || psfSourceRoot).replace(/\\\\/g, \"/\").replace(/\\/+$/, \"\");\n\
+         \x20  var out = given.outputDirectory || psfOutputDirectory || (File.homeDirectory + \"/{OUTPUT_DIRECTORY}\");\n\
+         \x20  if (!File.directoryExists(out)) File.createDirectory(out, true);\n\
+         \x20  var loadOnly = given.run ? false : given.loadOnly ? true : psfLoadOnly;\n\
+         \x20  var args = [\"automationMode=true\"];\n\
+         \x20  for (var j = 0; j < psfFrames.length; ++j) args.push(\"file=\" + root + \"/\" + psfFrames[j]);\n\
+         \x20  for (var k = 0; k < psfOutsideFrames.length; ++k) args.push(\"file=\" + psfOutsideFrames[k]);\n\
+         \x20  args.push(\"outputDirectory=\" + out);\n\
+         \x20  if (loadOnly) args.push(\"loadOnly\");\n\
+         \n\
+         \x20  // WBPP takes its parameters from Runtime.jsArguments, which is read-only.\n\
+         \x20  // Inside this function, Runtime is a view of the real one that answers\n\
+         \x20  // jsArguments with the list above.\n\
+         \x20  let Runtime = new Proxy(psfRealRuntime, {{\n\
+         \x20     get: function (target, property) {{\n\
+         \x20        return property === \"jsArguments\" ? args : Reflect.get(target, property);\n\
+         \x20     }}\n\
+         \x20  }});\n\
+         \n\
+         #ifeq __PI_PLATFORM__ MSWINDOWS\n\
+         #include \"C:/Program Files/PixInsight/src/scripts/BatchPreprocessing/BPP-Main.js\"\n\
+         #else\n\
+         #ifeq __PI_PLATFORM__ MACOSX\n\
+         #include \"/Applications/PixInsight/src/scripts/BatchPreprocessing/BPP-Main.js\"\n\
+         #else\n\
+         #include \"/opt/PixInsight/src/scripts/BatchPreprocessing/BPP-Main.js\"\n\
+         #endif\n\
+         #endif\n\
+         \n\
+         \x20  // What WBPP.js itself does after its includes; false is fastMode.\n\
+         \x20  CoreApplication.ensureMinimumVersion(1, 9, 4);\n\
+         \x20  BPPmain(false, BPP.Version.WBPP_ID, BPP.Version.WBPP_TITLE,\n\
+         \x20     BPP.Version.WBPP_SETTINGS_KEY_BASE, BPP.Version.WBPP_VERSION);\n\
+         }})();\n"
+    ));
+    Some(script)
 }
 
 #[cfg(test)]
@@ -511,7 +587,7 @@ mod tests {
             &WbppFiles::Placed,
         );
         assert!(
-            script.contains(&format!("{OUTPUT_DIRECTORY}/logs/*.log")),
+            script.contains(&format!("{OUTPUT_DIRECTORY}/logs")),
             "{script}"
         );
     }
@@ -577,10 +653,11 @@ mod tests {
         assert!(batch.contains("keywords=SESSION"), "{batch}");
     }
 
-    /// A referenced export names each frame under one root the reader can
-    /// point elsewhere, and scans no directory of its own.
+    /// A referenced export puts the frame list in the PixInsight script,
+    /// under one root the reader can point elsewhere, and the runners only
+    /// launch that script: no frame travels on a command line.
     #[test]
-    fn a_referenced_export_lists_the_originals_under_a_movable_root() {
+    fn a_referenced_export_lists_the_originals_in_the_script() {
         let plan = plan_with_sources(&[
             "/mnt/nas/astro/2026/M42/LIGHT/a.fits",
             "/mnt/nas/astro/_Calibration/FLAT/f.fits",
@@ -589,59 +666,53 @@ mod tests {
             local_root: None,
             remote_root: None,
         };
-        let script = shell_script(&plan, WbppRun::LoadOnly, &files);
+        let js = js_runner(&plan, WbppRun::LoadOnly, &files).unwrap();
+        assert!(js.starts_with("// "), "{js}");
+        assert!(js.contains("#engine v8"), "{js}");
         assert!(
-            script.contains("SRC=\"${PSF_SOURCE_ROOT:-/mnt/nas/astro}\""),
-            "{script}"
+            js.contains("var psfSourceRoot = \"/mnt/nas/astro\";"),
+            "{js}"
         );
-        assert!(
-            script.contains("file=$SRC/2026/M42/LIGHT/a.fits"),
-            "{script}"
-        );
-        assert!(
-            script.contains("file=$SRC/_Calibration/FLAT/f.fits"),
-            "{script}"
-        );
-        assert!(!script.contains("dir="), "{script}");
-        assert!(!script.contains("keywords="), "{script}");
+        assert!(js.contains("   \"2026/M42/LIGHT/a.fits\",\n"), "{js}");
+        assert!(js.contains("   \"_Calibration/FLAT/f.fits\",\n"), "{js}");
+        assert!(js.contains("var psfLoadOnly = true;"), "{js}");
+        assert!(js.contains("new Proxy(psfRealRuntime"), "{js}");
+        assert!(js.contains("#ifeq __PI_PLATFORM__ MSWINDOWS"), "{js}");
+        assert!(js.contains("BPPmain(false"), "{js}");
+        // The core's preprocessor treats a `/*` anywhere, comments included,
+        // as the start of a block comment.
+        assert!(!js.contains("/*"), "{js}");
+        let full = js_runner(&plan, WbppRun::Full, &files).unwrap();
+        assert!(full.contains("var psfLoadOnly = false;"), "{full}");
 
-        // The Windows runner takes the share the other machine mounts.
-        let files = WbppFiles::Referenced {
-            local_root: None,
-            remote_root: Some("\\\\nas\\astro".into()),
-        };
+        let shell = shell_script(&plan, WbppRun::LoadOnly, &files);
+        assert!(
+            shell.contains(&format!(
+                "$HERE/{JS_RUNNER},outputDirectory=$HERE/{OUTPUT_DIRECTORY}"
+            )),
+            "{shell}"
+        );
+        assert!(!shell.contains("dir="), "{shell}");
+        assert!(!shell.contains("file="), "{shell}");
+        assert!(!shell.contains("keywords="), "{shell}");
         let batch = batch_script(&plan, WbppRun::LoadOnly, &files);
         assert!(
-            batch.contains("set \"PSF_SOURCE_ROOT=\\\\nas\\astro\""),
+            batch.contains(&format!(
+                "%HERE%\\{JS_RUNNER},outputDirectory=%HERE%\\{OUTPUT_DIRECTORY}"
+            )),
             "{batch}"
         );
-        assert!(
-            batch.contains("file=%PSF_SOURCE_ROOT%\\2026\\M42\\LIGHT\\a.fits"),
-            "{batch}"
-        );
-        // A Windows share is no use to the POSIX runner, which keeps the
-        // local root instead.
-        let shell = shell_script(&plan, WbppRun::LoadOnly, &files);
-        assert!(shell.contains("PSF_SOURCE_ROOT:-/mnt/nas/astro"), "{shell}");
-    }
+        assert!(!batch.contains("file="), "{batch}");
 
-    /// Only a runner that names the originals can meet a comma in their
-    /// paths; a placed export's names are its own.
-    #[test]
-    fn a_comma_in_a_referenced_source_is_refused() {
-        let plan = plan_with_sources(&["/data/M42, Trapezium/a.fits"]);
-        assert!(unusable_sources(&plan, &WbppFiles::Placed).is_none());
-        let referenced = WbppFiles::Referenced {
-            local_root: None,
-            remote_root: None,
-        };
-        assert!(unusable_sources(&plan, &referenced).is_some());
+        // A placed export scans its roots and writes no script of its own.
+        assert!(js_runner(&plan, WbppRun::LoadOnly, &WbppFiles::Placed).is_none());
     }
 
     /// The person maps a folder they know to what the other machine calls
     /// it, so the given root wins over the frames' common parent, a drive
-    /// letter's trailing separator is not doubled, and a frame outside the
-    /// root keeps its full path rather than a wrong relative one.
+    /// letter's trailing separator goes, and a frame outside the root keeps
+    /// its full path rather than a wrong relative one. Every path is spelled
+    /// with forward slashes, which PixInsight takes on every platform.
     #[test]
     fn a_given_root_maps_to_the_remote_name_and_leaves_strays_absolute() {
         let plan = plan_with_sources(&[
@@ -653,18 +724,25 @@ mod tests {
             local_root: Some(PathBuf::from("/mnt/nas/astro")),
             remote_root: Some("P:\\".into()),
         };
-        let batch = batch_script(&plan, WbppRun::LoadOnly, &files);
-        assert!(batch.contains("set \"PSF_SOURCE_ROOT=P:\""), "{batch}");
+        let js = js_runner(&plan, WbppRun::LoadOnly, &files).unwrap();
+        assert!(js.contains("var psfSourceRoot = \"P:\";"), "{js}");
+        assert!(js.contains("//   /mnt/nas/astro\n"), "{js}");
+        assert!(js.contains("   \"2026/M42/LIGHT/b.fits\",\n"), "{js}");
         assert!(
-            batch.contains("file=%PSF_SOURCE_ROOT%\\2026\\M42\\LIGHT\\a.fits"),
-            "{batch}"
+            js.contains("var psfOutsideFrames = [\n   \"/srv/other/flat.fits\",\n];"),
+            "{js}"
         );
-        assert!(batch.contains("file=\\srv\\other\\flat.fits"), "{batch}");
-        assert!(batch.contains("REM   /mnt/nas/astro"), "{batch}");
+        // The frame list and roots carry no backslash; only the regex that
+        // normalises a typed root does.
+        let listing =
+            &js[js.find("var psfSourceRoot").unwrap()..js.find("var psfRealRuntime").unwrap()];
+        assert!(!listing.contains('\\'), "{listing}");
 
-        let shell = shell_script(&plan, WbppRun::LoadOnly, &files);
-        assert!(shell.contains("PSF_SOURCE_ROOT:-/mnt/nas/astro"), "{shell}");
-        assert!(shell.contains("file=$SRC/2026/M42/LIGHT/b.fits"), "{shell}");
-        assert!(shell.contains("file=/srv/other/flat.fits"), "{shell}");
+        let share = WbppFiles::Referenced {
+            local_root: None,
+            remote_root: Some("\\\\nas\\astro\\".into()),
+        };
+        let js = js_runner(&plan, WbppRun::LoadOnly, &share).unwrap();
+        assert!(js.contains("var psfSourceRoot = \"//nas/astro\";"), "{js}");
     }
 }

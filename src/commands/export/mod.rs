@@ -522,16 +522,17 @@ pub fn write_wbpp_scripts(
     if let Some(reason) = wbpp::unusable_destination(dest_root) {
         anyhow::bail!(reason);
     }
-    if let Some(reason) = wbpp::unusable_sources(plan, files) {
-        anyhow::bail!(reason);
-    }
     std::fs::create_dir_all(dest_root)
         .with_context(|| format!("creating {}", dest_root.display()))?;
     let mut written = Vec::new();
-    for (name, body) in [
+    let mut scripts = vec![
         ("run-wbpp.sh", wbpp::shell_script(plan, run, files)),
         ("run-wbpp.cmd", wbpp::batch_script(plan, run, files)),
-    ] {
+    ];
+    if let Some(body) = wbpp::js_runner(plan, run, files) {
+        scripts.push((wbpp::JS_RUNNER, body));
+    }
+    for (name, body) in scripts {
         let path = dest_root.join(name);
         std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
         #[cfg(unix)]

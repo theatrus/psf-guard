@@ -71,10 +71,11 @@
   a night the grader has not judged yet exports the way the stack previews
   show it. Rejects stay excluded.
 - Exports can **Link to the originals** (symbolic links, no space, may point
-  at a network mount) or **Reference in place** (nothing copied; the
-  `run-wbpp` scripts name every frame where it is, below a server folder
-  you map to what the machine running PixInsight calls it, such as
-  `/mnt/nas/astro` to `P:\`). On the CLI: `--placement symlink` or
+  at a network mount) or **Reference in place** (nothing copied; a
+  `run-wbpp.js` PixInsight script names every frame where it is, below a
+  server folder you map to what the machine running PixInsight calls it,
+  such as `/mnt/nas/astro` to `P:\`, with no limit on how many frames).
+  On the CLI: `--placement symlink` or
   `--placement reference --local-root <path> --remote-root <path>`.
 
 - Stack and color previews state integrated exposure in hours and minutes.

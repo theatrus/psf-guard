@@ -452,20 +452,24 @@ the stack previews do; rejects are never exported) and how the files land:
   and can point at a network mount. Whatever reads it must see the originals
   at the same paths, which suits a PixInsight on the same machine or on one
   that mounts the same share at the same place.
-- **Reference in place** copies nothing. The `run-wbpp` scripts name every
-  frame where it already is, below one root the scripts take from
-  `PSF_SOURCE_ROOT`. The dialog's **Server path** is that root on the
-  server, prefilled with the folder the database's image directories share;
-  **PixInsight path** is the same folder on the PixInsight machine, if it
-  differs. Server path `/mnt/barium/astrobin` and PixInsight path `P:\`
-  give `P:\_ByTelescope\...` in the Windows runner. A frame outside the
-  server path keeps its full path.
-  Because the paths are the originals', they carry no session folder and
-  WBPP pools each filter's flats across nights. The list travels in one
-  command-line argument, which holds about a thousand frames on Linux and
-  macOS and about three hundred on Windows. This mode needs the WBPP layout.
-  On the CLI it is `--placement reference` with `--local-root` and
-  `--remote-root`; `--placement symlink` links.
+- **Reference in place** copies nothing. The export is three scripts:
+  `run-wbpp.js` carries the frame list and hands it to WBPP from inside
+  PixInsight, and `run-wbpp.sh` and `run-wbpp.cmd` launch it with the output
+  folder. No frame travels on a command line, so the list has no size limit.
+  The script includes WBPP from its standard install path per platform; edit
+  the `#include` line for an install elsewhere. It can also run from
+  PixInsight's Script > Execute Script File, writing to a `wbpp-out` folder
+  in your home directory. The dialog's **Server path** is the folder the
+  list is relative to, prefilled with what the database's image directories
+  share; **PixInsight path** is the same folder on the PixInsight machine,
+  if it differs. Server path `/mnt/barium/astrobin` and PixInsight path
+  `P:\` list the frames as `P:/_ByTelescope/...`; `psfSourceRoot` at the top
+  of the script is that value and can be edited later. A frame outside the
+  server path keeps its full path. Because the paths are the originals',
+  they carry no session folder and WBPP pools each filter's flats across
+  nights. This mode needs the WBPP layout. On the CLI it is
+  `--placement reference` with `--local-root` and `--remote-root`;
+  `--placement symlink` links.
 
 A WBPP export also carries `run-wbpp.sh` and `run-wbpp.cmd`, which hand it to
 PixInsight. WBPP 3.x is driven from PixInsight's command line rather than
@@ -479,6 +483,14 @@ PixInsight prints nothing to the terminal in this mode, because WBPP writes to
 its own console. A finished run and a failed one look alike from outside, so
 read `wbpp-out/logs/*.log` for what happened; the results land in
 `wbpp-out/master` and `wbpp-out/calibrated`. The scripts say so too.
+
+The reference runner was also verified there: WBPP reads its parameters
+from `Runtime.jsArguments`, which the core makes read-only, so the script
+includes WBPP's entry file inside a function where a Proxy named `Runtime`
+answers `jsArguments` with the list built in the script and everything else
+from the real object, then calls WBPP's entry point as `WBPP.js` does.
+`#engine v8` at the top is what `WBPP.js` declares; without it the core
+compiles the include with an engine that rejects WBPP's classes.
 
 This was verified against WBPP 3.0.1 in PixInsight 1.9.4: the generated
 invocation classified every frame from its `IMAGETYP` header, grouped by

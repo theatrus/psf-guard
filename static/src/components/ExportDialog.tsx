@@ -58,7 +58,7 @@ const SERVER_PLACEMENTS: PlacementOption[] = [
   {
     value: 'reference',
     label: 'Reference in place',
-    help: 'Copies nothing. The run-wbpp scripts name every frame where it already is. WBPP then pools each filter\u2019s flats across nights; needs the WBPP layout.',
+    help: 'Copies nothing. A run-wbpp.js PixInsight script names every frame where it already is. WBPP then pools each filter\u2019s flats across nights; needs the WBPP layout.',
   },
 ];
 
